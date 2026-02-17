@@ -1,7 +1,7 @@
-# Project Spec: CharlieBot (Harry Potter Edition)
+# Project Spec: CharityBot (Harry Potter Edition)
 
 ## Project Overview
-**CharlieBot** (named after the friendly household vibe, with a nod to the magical coordination of tasks) is a Python-based system designed to coordinate and manage multiple AI agents (specifically Claude Code/OpenClaw instances) to complete complex tasks. 
+**CharityBot** (C-H-A-R-I-T-Y-B-O-T) is a Python-based system designed to coordinate and manage multiple AI agents (specifically Claude Code/OpenClaw instances) to complete complex tasks. 
 
 ## Objectives
 - **Agent Orchestration**: Enable a "Master" agent to spawn, monitor, and manage "Worker" agents.
@@ -14,10 +14,10 @@
 ### 1. Separation of Code and Configuration
 - **Stateless Application**: The core logic remains in the installation/repository directory and is intended to be shared across multiple instances.
 - **Per-Instance Configuration**: All instance-specific data (database, configs, logs, session state) is stored in a dedicated user-directory, following the pattern of tools like OpenClaw.
-- **Home Directory Path**: Default path will be `~/.charliebot/` (or configurable via environment variable `CHARLIEBOT_HOME`).
+- **Home Directory Path**: Default path will be `~/.charitybot/` (or configurable via environment variable `CHARITYBOT_HOME`).
 - **Structure of Home Directory**:
   ```text
-  ~/.charliebot/
+  ~/.charitybot/
   ├── config.yaml      # Instance-specific configuration (API keys, bot tokens)
   ├── data/            # Persistence (SQLite database)
   └── logs/            # Instance-specific logs

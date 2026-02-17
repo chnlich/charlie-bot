@@ -36,7 +36,11 @@
 - **Agent Orchestration**: Master Agent spawns and monitors Worker Agents.
 - **Sub-Agent Monitoring**: Real-time tracking of what sub-agents are doing (status, logs, output).
 
-### 3. Agent Communication Layer
+### 3. Integrations
+- **GitHub Integration**: Native support for managing Pull Requests (PRs), committing changes, and maintaining task context across different branches/PRs.
+- **Discord Integration**: Robust notifications and command interface for mobile/remote task management.
+
+### 4. Agent Communication Layer
 - **Interface**: Protocol for the Master to send instructions and receive results from sub-agents.
 - **Context Management**: Passing relevant history and file context between agents.
 

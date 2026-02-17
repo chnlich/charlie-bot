@@ -43,8 +43,12 @@
 - **GitHub Integration**: Native support for managing Pull Requests (PRs), committing changes, and maintaining task context across different branches/PRs.
 
 ### 5. Agent Communication Layer
-- **Interface**: Protocol for the Master to send instructions and receive results from sub-agents.
-- **Context Management**: Passing relevant history and file context between agents.
+- **Communication Pattern**:
+  - **Master to Worker**: Master Agent spawns Claude Code via shell/process and passes initial instructions via stdin or CLI arguments.
+  - **Worker to Master (Progress Tracking)**: 
+    - Since Claude Code runs as a separate process, the Master captures stdout/stderr to stream logs to the Web UI.
+    - **Status Signaling**: Master monitors file changes and git commits in the session's Worktree to track progress.
+    - **Inter-Agent Messaging (Optional)**: If sub-agents need to "ask" the Master for clarification, this will be routed through the core state manager and presented as a notification/thread update in the Web UI for user or Master oversight.
 
 ## Technical Stack
 - **Language**: Python 3.10+

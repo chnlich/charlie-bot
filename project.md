@@ -9,9 +9,21 @@ The **Claude Code Manager** is a Python-based system designed to coordinate and 
 - **Task Delegation**: Break down complex user requests into sub-tasks assigned to specialized sub-agents.
 - **Python-Native**: Built entirely in Python for extensibility and ease of integration with AI toolsets.
 
-## Key Components
+## Key Design Principles
 
-### 1. User Interface
+### 1. Separation of Code and Configuration
+- **Stateless Application**: The core logic remains in the installation/repository directory and is intended to be shared across multiple instances.
+- **Per-Instance Configuration**: All instance-specific data (database, configs, logs, session state) is stored in a dedicated user-directory, following the pattern of tools like OpenClaw.
+- **Home Directory Path**: Default path will be `~/.claude-code-manager/` (or configurable via environment variable `CCM_HOME`).
+- **Structure of Home Directory**:
+  ```text
+  ~/.claude-code-manager/
+  ├── config.yaml      # Instance-specific configuration (API keys, bot tokens)
+  ├── data/            # Persistence (SQLite database)
+  └── logs/            # Instance-specific logs
+  ```
+
+### 2. User Interface
 - **Primary Interface**: **Web UI** (Responsive design for both Desktop and Mobile).
 - **Secondary Interface**: Discord Bot (for notifications and quick commands).
 - **Web UI Layout**:

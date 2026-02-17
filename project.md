@@ -19,19 +19,24 @@
   ~/.charliebot/
   ├── config.yaml      # Instance-specific configuration (API keys)
   ├── data/            # Persistence (SQLite database)
+  ├── repos/           # Shared storage for base git repositories
+  ├── worktrees/       # Git worktrees organized by session/task
   └── logs/            # Instance-specific logs
   ```
 
 ### 2. User Interface
 - **Primary Interface**: **Web UI** (Responsive design for both Desktop and Mobile).
 - **Web UI Layout**:
-  - **Sessions (Sidebar)**: Multi-channel organization similar to Slack. Each session represents a separate project or logical work context for isolation.
+  - **Sessions (Sidebar)**: Multi-channel organization similar to Slack. Each session represents a separate project or logical work context.
   - **Chat Interface**: Main area for user interaction with the Master Agent (ChatGPT-like experience).
-  - **Sub-Agent Tracking (Threads)**: Visualization of Claude Code status and history, nested within the session.
+  - **Threads (Sub-Agents)**: Similar to Discord threads, these "hang" under a session. Each thread represents a Claude Code sub-agent task, allowing the user to drill down into specific agent status and history.
 
 ### 3. Core Manager
-- **Session Isolation**: Ensuring task state and file context are isolated per session.
-- **Agent Orchestration**: Master Agent spawns and monitors Worker Claude Code instances.
+- **Session Isolation**: Each session is isolated using **Git Worktrees**.
+- **Repository Management**: 
+  - A shared `repos/` directory caches the base git repositories.
+  - For each session, CharlieBot creates/manages a dedicated worktree in `worktrees/`, allowing multiple Claude Code instances to work on different branches/PRs simultaneously without file system conflicts.
+- **Agent Orchestration**: Master Agent spawns and monitors Worker Claude Code instances within their respective worktree environments.
 - **Sub-Agent Monitoring**: Real-time tracking of what Claude Code instances are doing (status, logs, output).
 
 ### 4. Integrations

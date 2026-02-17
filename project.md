@@ -42,13 +42,12 @@
 ### 4. Integrations
 - **GitHub Integration**: Native support for managing Pull Requests (PRs), committing changes, and maintaining task context across different branches/PRs.
 
-### 5. Agent Communication Layer
-- **Communication Pattern**:
-  - **Master to Worker**: Master Agent spawns Claude Code via shell/process and passes initial instructions via stdin or CLI arguments.
-  - **Worker to Master (Progress Tracking)**: 
-    - Since Claude Code runs as a separate process, the Master captures stdout/stderr to stream logs to the Web UI.
-    - **Status Signaling**: Master monitors file changes and git commits in the session's Worktree to track progress.
-    - **Inter-Agent Messaging (Optional)**: If sub-agents need to "ask" the Master for clarification, this will be routed through the core state manager and presented as a notification/thread update in the Web UI for user or Master oversight.
+### 5. Agent Communication & State Management
+- **Pull-based State Updates**:
+  - Instead of the Master Agent pushing constant updates, sub-agent state (logs, status, progress) is persisted to the **file system** (disk) in real-time by the worker process or its supervisor.
+  - **Web UI Interaction**: When the user accesses a Session/Thread, the frontend issues **HTTP GET requests**.
+  - **Backend Logic**: Upon receiving a GET request, the CharlieBot backend queries the file system/database to retrieve the latest logs and state for that specific sub-agent.
+  - **Benefits**: Reduces overhead on the Master Agent, ensures data persistence across restarts, and simplifies the communication architecture to a standard Request-Response model for the UI.
 
 ## Technical Stack
 - **Language**: Python 3.10+

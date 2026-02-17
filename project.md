@@ -36,12 +36,18 @@ The **Claude Code Manager** is a Python-based system designed to coordinate and 
   - `OpenClaw/Claude Code API`: (Assuming integration via local CLI or API).
 
 ## Proposed Workflow
-1. User sends a command to the Discord bot.
-2. The **Master Agent** analyzes the request.
-3. Master Agent creates a `project.md` or task list.
-4. Master Agent spawns one or more **Worker Agents** via the local system.
-5. Workers report back to Master; Master summarizes progress to Discord.
-6. Task completion notification sent to user.
+1. **Task Initialization**: 
+   - User submits a request via Discord.
+   - For a **new project**, the Master creates a `project.md` or similar specification.
+   - For an **existing project**, the Master identifies the current state from existing documentation/code and updates the task context.
+2. **Context Persistence**: 
+   - Work is managed through Pull Requests (PRs).
+   - The Master Agent tracks the current PR state and ensures sub-agents "inherit" the context of the branch or ongoing work.
+3. **Execution**:
+   - Master Agent spawns Worker Agents to perform specific tasks on the codebase.
+   - Workers update code and documentation incrementally rather than recreating them.
+4. **Review & Summary**:
+   - Master summarizes progress back to Discord, referencing specific PRs or files changed.
 
 ## Initial File Structure
 ```text

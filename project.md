@@ -1,7 +1,7 @@
-# Project Spec: CharlieBot (Harry Potter Edition)
+# Project Spec: CharlieBot
 
 ## Project Overview
-**CharlieBot** (C-H-A-R-L-I-E-B-O-T) is a Python-based system designed to coordinate and manage multiple AI agents (specifically Claude Code/OpenClaw instances) to complete complex tasks. 
+**CharlieBot** (C-H-A-R-L-I-E-B-O-T) is a Python-based system designed to coordinate and manage multiple AI agents (specifically Claude Code/OpenClaw instances) to complete complex tasks. The primary interface for interaction is a responsive Web UI with Discord integration for notifications.
 
 ## Objectives
 - **Agent Orchestration**: Enable a "Master" agent to spawn, monitor, and manage "Worker" agents.

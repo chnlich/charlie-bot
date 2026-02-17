@@ -11,17 +11,18 @@ The **Claude Code Manager** is a Python-based system designed to coordinate and 
 
 ## Key Components
 
-### 1. Discord Interface (Bot)
-- **Library**: `discord.py`
-- **Features**:
-  - Command handling for task submission.
-  - Status updates and notifications via Discord threads/channels.
-  - Interactive buttons/modals for task approval or feedback.
+### 1. User Interface
+- **Primary Interface**: **Web UI** (Responsive design for both Desktop and Mobile).
+- **Secondary Interface**: Discord Bot (for notifications and quick commands).
+- **Web UI Layout**:
+  - **Sessions (Sidebar)**: Multi-channel organization similar to Slack/Discord. Each session represents a separate project or logical work context for isolation.
+  - **Chat Interface**: Main area for user interaction with the Master Agent (ChatGPT-like experience).
+  - **Sub-Agent Tracking (Threads)**: Visualization of sub-agent status and history, nested within the session (e.g., as sidebar threads or detail views).
 
 ### 2. Core Manager
-- **Task Dispatcher**: Logic to parse user intent and determine if a sub-agent is needed.
-- **Process Management**: Monitoring the lifecycle of spawned agent processes.
-- **State Store**: Keeping track of active tasks, agent assignments, and progress.
+- **Session Isolation**: Ensuring task state and file context are isolated per session.
+- **Agent Orchestration**: Master Agent spawns and monitors Worker Agents.
+- **Sub-Agent Monitoring**: Real-time tracking of what sub-agents are doing (status, logs, output).
 
 ### 3. Agent Communication Layer
 - **Interface**: Protocol for the Master to send instructions and receive results from sub-agents.
@@ -29,11 +30,13 @@ The **Claude Code Manager** is a Python-based system designed to coordinate and 
 
 ## Technical Stack
 - **Language**: Python 3.10+
-- **Primary Libraries**:
-  - `discord.py`: For Discord bot functionality.
-  - `pydantic`: For data validation and configuration.
-  - `asyncio`: For handling concurrent agent tasks and bot events.
-  - `OpenClaw/Claude Code API`: (Assuming integration via local CLI or API).
+- **Backend**: 
+  - `FastAPI` or `Flask`: To serve the Web UI and API.
+  - `discord.py`: For Discord bot integration.
+  - `asyncio`: For handling concurrent agents and real-time updates.
+- **Frontend**:
+  - `React` or `Next.js` (or a Python-based alternative like `Streamlit`/`NiceGUI` for rapid development): To build the responsive Web UI.
+- **Storage**: `SQLite` or `PostgreSQL` for session and sub-agent history.
 
 ## Proposed Workflow
 1. **Task Initialization**: 

@@ -56,13 +56,13 @@
   ├── src/                # All Python backend code
   │   ├── api/            # FastAPI backend and API
   │   ├── core/           # Orchestration logic
-  │   ├── agents/         # Agent communication wrappers
-  │   └── server.py       # Entry point
+  │   └── agents/         # Agent communication wrappers
   ├── web/                # All frontend-related code
   │   ├── src/            # React SPA source (Node.js required for development only)
   │   └── static/         # React build output (served by FastAPI at runtime)
   ├── config/             # Default configuration templates (examples only)
   ├── .yapf               # YAPF code style configuration
+  ├── server.py           # Entry point
   └── project.md          # This specification
   ```
 

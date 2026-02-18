@@ -37,6 +37,13 @@
   - Includes: task description, approach taken, files modified, issues encountered, solutions applied
   - Serves as project-specific memory for context when resuming work
   - **Concurrency Guard**: File access must be synchronized to prevent race conditions when multiple Workers or the Master attempt to update the file simultaneously (e.g., file locking or atomic writes).
+- **Concurrent Worker Strategy & Branch Isolation**:
+  - **Default Policy**: Master employs a **concurrent Worker strategy** — multiple related tasks are executed in parallel by spawning multiple Workers (Threads) under the same Session.
+  - **Branch Isolation**: Since all Workers in a Session share the same worktree directory, each Worker must operate on its own **isolated Git branch** to prevent file conflicts:
+    - Master creates a unique branch for each Worker (e.g., `charliebot/task-{timestamp}-{task-id}`)
+    - Worker performs all edits, commits, and operations on its dedicated branch
+    - After completion, Master decides whether to merge, rebase, or keep the branch separate based on task outcome
+  - **Benefits**: Maximizes throughput for independent tasks while maintaining isolation; Master coordinates branch lifecycle (creation, merge, cleanup).
 - **Worker Instructions (CLAUDE.md)**:
   - **Default Shared Instructions**: A default instruction template is stored in the repository (`config/claude-default.md`) containing general guidelines for all Claude Code Workers (e.g., coding standards, YOLO mode behavior, git commit conventions).
   - **Per-Task Instructions**: Each time the Master spawns a Worker, it creates a `CLAUDE.md` file in the session's worktree directory containing:
@@ -125,9 +132,10 @@
    - User submits a request via the Web UI (text or voice).
    - The **Master Agent** (API-based LLM) receives the request and determines if a Claude Code Worker is needed.
 2. **Worker Delegation**:
-   - If coding work is required, the Master spawns a **Claude Code Worker** instance in the appropriate Git Worktree.
-   - The Worker (Claude Code) analyzes the task, plans the implementation, and executes the coding work.
-   - The Master monitors Worker status but does not perform the actual coding analysis.
+   - If coding work is required, the Master analyzes task dependencies and may spawn **one or more Claude Code Worker instances** concurrently.
+   - For concurrent Workers within the same Session, Master creates **isolated Git branches** for each Worker to prevent conflicts.
+   - Each Worker (Claude Code) analyzes its assigned task, plans the implementation, and executes on its dedicated branch.
+   - The Master monitors all Worker statuses but does not perform the actual coding analysis.
 3. **Execution & Persistence**:
    - Workers operate within their designated Git Worktrees and persist all outputs to disk.
    - If the Master restarts, it reloads previous Worker results from disk.

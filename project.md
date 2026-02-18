@@ -27,9 +27,11 @@
   ```text
   charlie-bot/
   ├── src/
-  │   ├── web/            # Web UI and API implementation
+  │   ├── web/            # FastAPI backend and API
   │   ├── core/           # Orchestration logic
   │   └── agents/         # Agent communication wrappers
+  ├── frontend/           # React SPA source (development only)
+  ├── static/             # React build output (served by FastAPI)
   ├── config/             # Default configuration templates (examples only)
   ├── project.md          # This specification
   └── server.py           # Entry point
@@ -88,7 +90,9 @@
   - `WebSockets` or `SSE` (Server-Sent Events): For real-time streaming of Claude Code terminal output to the frontend.
   - `asyncio`: For handling concurrent Claude Code instances and real-time updates.
 - **Frontend**:
-  - `React` or `Next.js`: To build the responsive Web UI.
+  - **React SPA** (Single Page Application) built to static files.
+  - **FastAPI StaticFiles**: The React build output (`dist/` or `build/`) is served as static files by FastAPI.
+  - **Benefits**: Keeps the entire runtime Python-Native; users don't need Node.js to run CharlieBot, only for development.
 - **Storage**:
   - **Agent Output**: JSON files for sub-agent logs, results, and state.
   - **Configuration**: YAML files for manual user configuration.

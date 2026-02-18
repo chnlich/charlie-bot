@@ -27,11 +27,11 @@
   ```text
   charlie-bot/
   ├── src/
-  │   ├── web/            # FastAPI backend and API
+  │   ├── api/            # FastAPI backend and API
   │   ├── core/           # Orchestration logic
   │   └── agents/         # Agent communication wrappers
-  ├── frontend/           # React SPA source (development only)
-  ├── static/             # React build output (served by FastAPI)
+  ├── ui/                 # React SPA source code (Node.js required for development only)
+  ├── static/             # React build output (served by FastAPI at runtime)
   ├── config/             # Default configuration templates (examples only)
   ├── project.md          # This specification
   └── server.py           # Entry point

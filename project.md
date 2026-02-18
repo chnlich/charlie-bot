@@ -20,6 +20,7 @@
   ├── config.yaml      # Instance-specific configuration (API keys)
   ├── MEMORY.md        # Globally shared memory across all sessions (user preferences, facts)
   ├── PAST_TASKS.md    # Global record of all completed tasks across all sessions
+  ├── PROGRESS.md      # Global lessons learned and insights across all sessions
   ├── repos/           # Shared storage for base git repositories
   ├── logs/            # Application logs (server errors, access logs, system events)
   └── sessions/        # All session directories
@@ -62,9 +63,10 @@
     - References to relevant files or previous work (from PAST_TASKS.md)
   - **Workflow**: Claude Code reads `CLAUDE.md` at startup to understand the task context before execution.
 - **Learning & Progress (PROGRESS.md)**:
-  - Each Thread maintains a `PROGRESS.md` file to capture lessons learned, mistakes made, and insights gained during task execution.
-  - At the end of each task, the Worker is instructed to "summarize, refine, and elevate" its experiences into PROGRESS.md.
+  - A **globally shared** `PROGRESS.md` file (stored at `~/.charliebot/PROGRESS.md`) captures lessons learned, mistakes made, and insights gained across all sessions.
+  - At the end of each task, the Worker is instructed to "summarize, refine, and elevate" its experiences into this global file.
   - This prevents repeating the same mistakes across different Workers and Sessions.
+  - **Concurrency Guard**: File access must be synchronized to prevent race conditions when multiple Workers attempt to update the file simultaneously.
   - **Example content**: "When modifying FastAPI routes, always check for circular imports first", "Use asyncio.gather() instead of sequential awaits for independent I/O operations".
 - **Backup Strategy**:
   - **Automatic Hourly Backups**: Critical data (MEMORY.md, PAST_TASKS.md, Session metadata, Thread data) is automatically backed up every hour to a backup directory (`~/.charliebot/backups/`).

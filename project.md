@@ -254,12 +254,22 @@ Each Thread's `CLAUDE.md` contains:
 - All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/voice`, `/api/memory`
 - `MasterAgent` with Gemini (primary) + Kimi (fallback) LLM providers, streaming, conversation summarization
 - `QueueManager` — priority queue (P0 > P1 > P2) with atomic JSON persistence via `os.replace`
+- `SessionDispatcher` — per-session background queue loop that pops tasks, creates threads, and spawns Claude Code workers (`claude -p --dangerously-skip-permissions --output-format stream-json --verbose`)
+- Worker completion handling: dispatcher reads worker's NDJSON event log, asks Master Agent to review and summarize, appends summary to session conversation history, broadcasts via session WebSocket
 - `SessionManager`, `ThreadManager`, `MemoryManager`, `BackupManager`, `GitManager`
 - `init_charliebot_home()` — seeds `~/.charliebot/` on first run, populating API keys from env vars into `config.yaml`
+- Memory updates: Master Agent can include `memory_update` field in any response to persist user preferences/facts to `MEMORY.md`
+
+**WebSocket Endpoints**
+- `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)
+- `/ws/threads/{thread_id}` — thread-level events (live Worker NDJSON output streaming)
 
 **Frontend**
-- React SPA (Vite + TypeScript) built to `web/static/`, served by FastAPI StaticFiles
+- React SPA (Vite + TypeScript) built to `web/static/`, served by FastAPI StaticFiles (Node.js/npm is build-time only)
 - Panels: Sessions sidebar, Chat (SSE streaming), Threads list, Plan review checklist, Voice push-to-talk
+- ChatPanel subscribes to session WebSocket — receives worker summaries and renders them as assistant messages
+- ThreadsPanel polls every 3 seconds for thread status updates
+- No-cache middleware on HTML to prevent stale JS bundles
 
 **Configuration**
 - `~/.charliebot/config.yaml` is the single source of truth for API keys and settings
@@ -280,12 +290,14 @@ Each Thread's `CLAUDE.md` contains:
 | 14 TypeScript build errors blocking frontend | Removed unused imports, fixed `thread.plan_steps` (not on `ThreadMetadata`), added explicit types |
 | Master Agent refused git/shell task delegation | System prompt said "git operations" as off-limits; reworded to delegate ALL actionable tasks |
 | Gemini API key not found at runtime | Config used `CHARLIEBOT_GEMINI_API_KEY` prefix; fixed by seeding key into `config.yaml` at init |
+| Browser served stale JS bundle | Added no-cache middleware for HTML responses in `server.py` |
+| `WorkerEventLog` TypeError on non-string `event.message` | Wrapped with `String()` before calling `.slice()` |
+| Threads not visible in UI after delegation | Thread created inline in `chat.py` before SSE completes; ThreadsPanel polls every 3s |
+| Master Agent silent after worker completion | Added `_notify_completion` in dispatcher → reviews results → pushes summary via session WebSocket |
 
 ### 11.3 Pending / Not Yet Implemented
 
-- Worker spawning: `claude -p --dangerously-skip-permissions` invocation from `QueueManager`
-- PTY streaming: real-time Worker output → SSE to frontend
 - Git worktree isolation per thread (branch creation, checkout)
 - Conflict Resolution Worker
 - Semantic search over `PAST_TASKS.md`
-- Quota exhaustion handling (`PENDING_QUOTA` state)
+- Claude plan usage tracking and Kimi K2.5 fallback for workers when near quota limits

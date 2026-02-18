@@ -183,6 +183,28 @@ class SessionDispatcher:
     except Exception as e:
       log.error("notify_completion_failed", task_id=task.id, error=str(e))
 
+      # Still push a fallback message so the user isn't left with no reply
+      try:
+        fallback = f"Worker finished task: {task.description}\n\n(Unable to generate summary: {e})"
+        history = await self._session_mgr.load_history(self._session_id)
+        assistant_msg = ChatMessage(
+          role=MessageRole.ASSISTANT,
+          content=fallback,
+          thread_id=thread.id,
+        )
+        history.messages.append(assistant_msg)
+        await self._session_mgr.save_history(history)
+
+        await streaming_manager.broadcast(f"session:{self._session_id}", {
+          "type": "worker_summary",
+          "thread_id": thread.id,
+          "task_id": task.id,
+          "content": fallback,
+          "status": "completed" if exit_code == 0 else "failed",
+        })
+      except Exception as inner:
+        log.error("fallback_notify_failed", task_id=task.id, error=str(inner))
+
   async def _read_events_summary(self, thread_id: str, max_lines: int = 80) -> str:
     """Read the last N lines from a thread's events.jsonl for summarization."""
     events_path = await self._thread_mgr.get_events_log_path(self._session_id, thread_id)

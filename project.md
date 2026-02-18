@@ -55,12 +55,21 @@
   - **Benefits**: Maximizes throughput for independent tasks while maintaining isolation; Master coordinates branch lifecycle (creation, merge, cleanup).
 - **Worker Instructions (CLAUDE.md)**:
   - **Default Shared Instructions**: A default instruction template is stored in the repository (`config/claude-default.md`) containing general guidelines for all Claude Code Workers (e.g., coding standards, YOLO mode behavior, git commit conventions).
-  - **Per-Task Instructions**: Each time the Master spawns a Worker, it creates a `CLAUDE.md` file in the session's worktree directory containing:
+  - **Per-Task Instructions**: Each time the Master spawns a Worker, it creates a `CLAUDE.md` file in the Thread's worktree directory containing:
     - The default shared instructions (prepended)
     - Specific task description and objectives
     - Any session-specific context or constraints
     - References to relevant files or previous work (from PAST_TASKS.md)
   - **Workflow**: Claude Code reads `CLAUDE.md` at startup to understand the task context before execution.
+- **Learning & Progress (PROGRESS.md)**:
+  - Each Thread maintains a `PROGRESS.md` file to capture lessons learned, mistakes made, and insights gained during task execution.
+  - At the end of each task, the Worker is instructed to "summarize, refine, and elevate" its experiences into PROGRESS.md.
+  - This prevents repeating the same mistakes across different Workers and Sessions.
+  - **Example content**: "When modifying FastAPI routes, always check for circular imports first", "Use asyncio.gather() instead of sequential awaits for independent I/O operations".
+- **Backup Strategy**:
+  - **Automatic Hourly Backups**: Critical data (MEMORY.md, PAST_TASKS.md, Session metadata, Thread data) is automatically backed up every hour to a backup directory (`~/.charliebot/backups/`).
+  - **Git-based Backup**: For worktree contents, frequent commits ensure code is version controlled.
+  - **Retention Policy**: Backups are retained for 7 days with daily snapshots beyond that.
 - **Repository Code Structure** (Stateless, shared across instances):
   ```text
   charlie-bot/

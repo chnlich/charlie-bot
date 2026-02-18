@@ -177,3 +177,11 @@
   - Once quota is available, the Master automatically resumes the queued task(s) without user intervention.
   - The user is notified when a task is resumed after quota recovery.
   - All task context is persisted to disk, ensuring no progress is lost during the waiting period.
+- **Merge Conflict Resolution**:
+  - When a Worker's branch cannot be auto-merged into the target branch, the conflict is handled by spawning a **dedicated Conflict Resolution Worker**.
+  - The resolution Worker:
+    - Reads the **commit messages** from both conflicting branches to understand what changes were made
+    - Analyzes the conflicted files and the context of each modification
+    - Decides whether to keep one side, merge both, or manually resolve the conflict
+    - Creates a resolution commit with a clear explanation of the decisions made
+  - This approach leverages Claude Code's code understanding capabilities to resolve conflicts intelligently, rather than relying on simple text-based merge algorithms.

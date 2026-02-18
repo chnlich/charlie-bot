@@ -99,9 +99,3 @@ charlie-bot/
 ├── project.md          # This specification
 └── server.py           # Entry point
 ```
-
-## Next Steps
-- [ ] Initialize the project structure and configuration loader.
-- [ ] Set up the FastAPI backend and basic Web UI shell.
-- [ ] Define the internal API for spawning sub-agents.
-- [ ] Create basic task delegation logic.

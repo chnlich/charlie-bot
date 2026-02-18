@@ -37,6 +37,14 @@
   - Includes: task description, approach taken, files modified, issues encountered, solutions applied
   - Serves as project-specific memory for context when resuming work
   - **Concurrency Guard**: File access must be synchronized to prevent race conditions when multiple Workers or the Master attempt to update the file simultaneously (e.g., file locking or atomic writes).
+- **Worker Instructions (CLAUDE.md)**:
+  - **Default Shared Instructions**: A default instruction template is stored in the repository (`config/claude-default.md`) containing general guidelines for all Claude Code Workers (e.g., coding standards, YOLO mode behavior, git commit conventions).
+  - **Per-Task Instructions**: Each time the Master spawns a Worker, it creates a `CLAUDE.md` file in the session's worktree directory containing:
+    - The default shared instructions (prepended)
+    - Specific task description and objectives
+    - Any session-specific context or constraints
+    - References to relevant files or previous work (from PAST_TASKS.md)
+  - **Workflow**: Claude Code reads `CLAUDE.md` at startup to understand the task context before execution.
 - **Repository Code Structure** (Stateless, shared across instances):
   ```text
   charlie-bot/

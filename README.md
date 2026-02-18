@@ -62,9 +62,10 @@ CharlieBot uses an API-based **Master Agent** (Gemini 3 Flash / Kimi k2.5) to ma
 ### Prerequisites
 
 - Python 3.10+
-- Node.js (for frontend development only)
 - Git
 - Claude Code CLI installed locally
+
+> **Note**: Node.js is **not required** to run CharlieBot. The frontend is pre-built as static files. Node.js is only needed if you want to modify the frontend code.
 
 ### Installation
 
@@ -84,7 +85,16 @@ cp config/config.example.yaml ~/.charliebot/config.yaml
 python server.py
 ```
 
-### Development
+### Development (Optional)
+
+To modify the frontend, you'll need Node.js:
+
+```bash
+cd web/
+npm install
+npm run dev    # Development server
+npm run build  # Production build
+```
 
 **Code Style**: Google Code Style (enforced via YAPF)
 ```ini
@@ -92,14 +102,6 @@ python server.py
 based_on_style = google
 indent_width = 2
 column_limit = 120
-```
-
-**Frontend Development**:
-```bash
-cd web/
-npm install
-npm run dev    # Development server
-npm run build  # Production build
 ```
 
 ## How It Works

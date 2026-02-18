@@ -22,6 +22,9 @@
   ├── data/            # JSON persistence (session history, agent states)
   ├── repos/           # Shared storage for base git repositories
   ├── worktrees/       # Git worktrees organized by session
+  │   └── {session_id}/
+  │       ├── PAST_TASKS.md   # Records all completed tasks for this project
+  │       └── ...             # Project files
   └── logs/            # Instance-specific logs
   ```
 - **Global Memory (MEMORY.md)**: A single `MEMORY.md` file shared across all sessions. The Master Agent reads this file at the start of each conversation and updates it whenever:
@@ -29,6 +32,11 @@
   - New facts about the user are revealed (e.g., "I work at Citadel", "My favorite editor is Vim")
   - Important context that should persist across sessions is identified
   - This ensures continuity and personalization across all sessions, regardless of which project the user is working on.
+- **Session Task History (PAST_TASKS.md)**: Each session (project) maintains its own `PAST_TASKS.md` within its worktree directory:
+  - Records all completed tasks with detailed summaries
+  - Includes: task description, approach taken, files modified, issues encountered, solutions applied
+  - Serves as project-specific memory for context when resuming work
+  - **Concurrency Guard**: File access must be synchronized to prevent race conditions when multiple Workers or the Master attempt to update the file simultaneously (e.g., file locking or atomic writes).
 - **Repository Code Structure** (Stateless, shared across instances):
   ```text
   charlie-bot/

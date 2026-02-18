@@ -19,12 +19,10 @@
   ~/.charliebot/
   ├── config.yaml      # Instance-specific configuration (API keys)
   ├── MEMORY.md        # Globally shared memory across all sessions (user preferences, facts)
+  ├── PAST_TASKS.md    # Global record of all completed tasks across all sessions
   ├── data/            # JSON persistence (session history, agent states)
   ├── repos/           # Shared storage for base git repositories
   ├── worktrees/       # Git worktrees organized by session
-  │   └── {session_id}/
-  │       ├── PAST_TASKS.md   # Records all completed tasks for this project
-  │       └── ...             # Project files
   └── logs/            # Instance-specific logs
   ```
 - **Global Memory (MEMORY.md)**: A single `MEMORY.md` file shared across all sessions. The Master Agent reads this file at the start of each conversation and updates it whenever:
@@ -32,10 +30,10 @@
   - New facts about the user are revealed (e.g., "I work at Citadel", "My favorite editor is Vim")
   - Important context that should persist across sessions is identified
   - This ensures continuity and personalization across all sessions, regardless of which project the user is working on.
-- **Session Task History (PAST_TASKS.md)**: Each session (project) maintains its own `PAST_TASKS.md` within its worktree directory:
-  - Records all completed tasks with detailed summaries
-  - Includes: task description, approach taken, files modified, issues encountered, solutions applied
-  - Serves as project-specific memory for context when resuming work
+- **Global Task History (PAST_TASKS.md)**: A single `PAST_TASKS.md` file at the global level, shared across all sessions:
+  - Records all completed tasks across all projects/sessions with detailed summaries
+  - Includes: task description, session context, approach taken, files modified, issues encountered, solutions applied
+  - New sessions can reference this to understand what has been accomplished before
   - **Concurrency Guard**: File access must be synchronized to prevent race conditions when multiple Workers or the Master attempt to update the file simultaneously (e.g., file locking or atomic writes).
 - **Concurrent Worker Strategy & Branch Isolation**:
   - **Default Policy**: Master employs a **concurrent Worker strategy** — multiple related tasks are executed in parallel by spawning multiple Workers (Threads) under the same Session.

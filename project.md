@@ -55,6 +55,7 @@
   - Master maintains conversation history and task state in the database.
 - **Worker State Persistence**:
   - Worker (Claude Code) state (logs, status, progress) is persisted to the **file system** (disk) in real-time by the supervisor process.
+  - **Work Process Persistence**: The entire sub-agent work process (task instructions, intermediate outputs, final results, git commits) is persisted to disk. If the Master is restarted, it can **reload previous results** and resume the workflow from where it left off without losing context.
   - **Completion Notification**: When a Worker (sub-agent) finishes its task, the **Master session that triggered it must be notified**. The Master can then review the results and continue the workflow (e.g., spawn additional Workers, summarize to user, or ask for clarification).
   - **Web UI Interaction**: When the user accesses a Session/Thread, the frontend issues **HTTP GET requests**.
   - **Backend Logic**: Upon receiving a GET request, CharlieBot queries the file system/database to retrieve the latest logs and state for that specific Worker.

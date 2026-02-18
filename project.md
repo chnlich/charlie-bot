@@ -97,7 +97,7 @@ charlie-bot/
 │   └── agents/         # Agent communication wrappers
 ├── config/             # Configuration files (default)
 ├── project.md          # This specification
-└── main.py             # Entry point
+└── server.py           # Entry point
 ```
 
 ## Next Steps

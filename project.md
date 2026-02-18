@@ -49,10 +49,7 @@
   - **Worker Agent**: Always **Claude Code**. The Worker is spawned by the Master to perform actual coding tasks (file edits, git operations, testing) within its designated worktree.
 - **Sub-Agent Monitoring**: Real-time tracking of what Claude Code instances are doing (status, logs, output).
 
-### 4. Integrations
-- **GitHub Integration**: Native support for managing Pull Requests (PRs), committing changes, and maintaining task context across different branches/PRs.
-
-### 5. Agent Communication & State Management
+### 4. Agent Communication & State Management
 - **Master-Agent Communication**:
   - The Master (API-based LLM) receives user requests and generates instructions for Workers.
   - Master maintains conversation history and task state in the database.

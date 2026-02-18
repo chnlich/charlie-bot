@@ -26,6 +26,32 @@ export function ChatPanel({ sessionId }: Props) {
       .catch(console.error)
   }, [sessionId, setMessages])
 
+  // Subscribe to session WebSocket for worker completion summaries
+  useEffect(() => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${proto}//${window.location.host}/ws/sessions/${sessionId}`)
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'worker_summary') {
+          addMessage(sessionId, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: data.content,
+            timestamp: new Date().toISOString(),
+            is_voice: false,
+            thread_id: data.thread_id ?? null,
+          })
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    return () => ws.close()
+  }, [sessionId, addMessage])
+
   const handleSend = useCallback(
     async (content: string, isVoice: boolean) => {
       // Optimistic user message

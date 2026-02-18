@@ -75,6 +75,34 @@ app.include_router(memory.router, prefix="/api/memory", tags=["memory"])
 
 
 # ---------------------------------------------------------------------------
+# WebSocket endpoint for session-level events (worker summaries, etc.)
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/sessions/{session_id}")
+async def session_websocket(websocket: WebSocket, session_id: str):
+  """Push session-level events (worker completion summaries) to the browser."""
+  await websocket.accept()
+  channel = f"session:{session_id}"
+  log.info("session_ws_connected", session_id=session_id)
+
+  await streaming_manager.subscribe(channel, websocket)
+  try:
+    while True:
+      try:
+        await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+      except asyncio.TimeoutError:
+        await websocket.send_json({"type": "ping"})
+  except WebSocketDisconnect:
+    pass
+  except Exception as e:
+    log.info("session_ws_closed", session_id=session_id, reason=str(e))
+  finally:
+    await streaming_manager.unsubscribe(channel, websocket)
+    log.info("session_ws_disconnected", session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket endpoint for live Worker output
 # ---------------------------------------------------------------------------
 

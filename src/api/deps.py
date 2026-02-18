@@ -73,4 +73,5 @@ def get_dispatcher(session_id: str = Path(...)) -> SessionDispatcher:
     get_config(),
     get_session_manager(),
     get_thread_manager(),
+    get_master_agent(),
   )

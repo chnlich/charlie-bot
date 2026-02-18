@@ -139,3 +139,11 @@
    - If the Master restarts, it reloads previous Worker results from disk.
 4. **Completion & Continuation**:
    - When a Worker finishes, the Master is notified and can decide next steps (spawn more Workers, summarize to user, etc.).
+
+## Error Handling & Resilience
+- **Quota Exhaustion Handling**:
+  - If Claude Code returns a quota-exhausted error, the Worker is paused and its task enters a **PENDING_QUOTA** state.
+  - The Master session periodically checks (polls) whether the quota has recovered.
+  - Once quota is available, the Master automatically resumes the queued task(s) without user intervention.
+  - The user is notified when a task is resumed after quota recovery.
+  - All task context is persisted to disk, ensuring no progress is lost during the waiting period.

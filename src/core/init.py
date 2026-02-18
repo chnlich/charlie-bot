@@ -1,0 +1,53 @@
+"""Initialize ~/.charliebot/ directory structure on first run."""
+
+import yaml
+from pathlib import Path
+
+from src.core.config import CharliBotConfig, get_config
+
+
+DEFAULT_CONFIG_YAML = {
+  "gemini_api_key": "",
+  "gemini_model": "gemini-2.0-flash",
+  "kimi_api_key": "",
+  "kimi_base_url": "https://api.moonshot.cn/v1",
+  "kimi_model": "moonshot-v1-8k",
+  "max_concurrent_workers": 3,
+  "worker_timeout_seconds": 3600,
+}
+
+DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
+DEFAULT_PAST_TASKS = "# PAST TASKS\n\nArchive of all completed tasks. Entries separated by ---\n"
+DEFAULT_PROGRESS = "# PROGRESS\n\nLessons learned, best practices, and insights discovered during tasks.\n"
+
+
+async def init_charliebot_home() -> None:
+  """Ensure ~/.charliebot/ directory structure exists and seed default files."""
+  cfg = get_config()
+
+  # Create all required directories
+  dirs = [
+    cfg.charliebot_home,
+    cfg.sessions_dir,
+    cfg.backups_dir,
+    cfg.logs_dir,
+    cfg.repos_dir,
+  ]
+  for d in dirs:
+    d.mkdir(parents=True, exist_ok=True)
+
+  # Seed global knowledge files
+  _seed_if_missing(cfg.memory_file, DEFAULT_MEMORY)
+  _seed_if_missing(cfg.past_tasks_file, DEFAULT_PAST_TASKS)
+  _seed_if_missing(cfg.progress_file, DEFAULT_PROGRESS)
+
+  # Seed config.yaml with placeholders if missing
+  if not cfg.config_file.exists():
+    with open(cfg.config_file, "w") as f:
+      yaml.dump(DEFAULT_CONFIG_YAML, f, default_flow_style=False, sort_keys=False)
+
+
+def _seed_if_missing(path: Path, content: str) -> None:
+  """Write content to path only if the file does not already exist."""
+  if not path.exists():
+    path.write_text(content, encoding="utf-8")

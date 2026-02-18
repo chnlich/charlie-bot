@@ -69,13 +69,15 @@
 - **Master-Agent Communication**:
   - The Master (API-based LLM) receives user requests and generates instructions for Workers.
   - Master maintains conversation history and task state in **JSON files** (persisted to `~/.charliebot/data/`).
+- **Real-Time Worker Output Streaming**:
+  - For **real-time tracking** of Claude Code terminal output, the backend uses **WebSockets** or **Server-Sent Events (SSE)** to stream the PTY output directly from the Worker process to the frontend.
+  - This provides smooth, low-latency log viewing without polling overhead.
 - **Worker State Persistence**:
   - Worker (Claude Code) state (logs, status, progress) is persisted to the **file system** (disk) in real-time by the supervisor process.
   - **Work Process Persistence**: The entire sub-agent work process (task instructions, intermediate outputs, final results, git commits) is persisted to disk. If the Master is restarted, it can **reload previous results** and resume the workflow from where it left off without losing context.
   - **Completion Notification**: When a Worker (sub-agent) finishes its task, the **Master session that triggered it must be notified**. The Master can then review the results and continue the workflow (e.g., spawn additional Workers, summarize to user, or ask for clarification).
-  - **Web UI Interaction**: When the user accesses a Session/Thread, the frontend issues **HTTP GET requests**.
-  - **Backend Logic**: Upon receiving a GET request, CharlieBot queries the **JSON files** on disk to retrieve the latest logs and state for that specific Worker.
-  - **Benefits**: Reduces overhead, ensures data persistence across restarts, and simplifies the communication architecture to a standard Request-Response model.
+  - **History Retrieval**: When loading a Session/Thread history (not real-time), the frontend may use **HTTP GET requests** to fetch past logs from the persisted JSON files.
+  - **Benefits**: Combines real-time streaming (WebSocket/SSE) with durable persistence (JSON files), ensuring both live monitoring and crash recovery capabilities.
 
 ## Technical Stack
 - **Language**: Python 3.10+
@@ -83,6 +85,7 @@
 - **Worker Agent**: Claude Code (local CLI invocation)
 - **Backend**: 
   - `FastAPI` or `Flask`: To serve the Web UI and API.
+  - `WebSockets` or `SSE` (Server-Sent Events): For real-time streaming of Claude Code terminal output to the frontend.
   - `asyncio`: For handling concurrent Claude Code instances and real-time updates.
 - **Frontend**:
   - `React` or `Next.js`: To build the responsive Web UI.

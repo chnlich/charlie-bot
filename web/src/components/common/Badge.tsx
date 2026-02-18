@@ -1,5 +1,5 @@
 import { clsx } from 'clsx'
-import type { Priority, TaskStatus, ThreadStatus } from '../../types'
+import type { Priority } from '../../types'
 
 interface BadgeProps {
   label: string

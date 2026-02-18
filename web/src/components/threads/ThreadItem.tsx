@@ -14,7 +14,7 @@ interface Props {
   active: boolean
 }
 
-export function ThreadItem({ thread, sessionId, onClick, active }: Props) {
+export function ThreadItem({ thread, onClick, active }: Props) {
   const [expanded, setExpanded] = useState(false)
   const { eventsByThread, appendEvent } = useThreadsStore()
   const events = eventsByThread[thread.id] ?? []

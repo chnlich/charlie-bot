@@ -1,20 +1,23 @@
 """Initialize ~/.charliebot/ directory structure on first run."""
 
+import os
 import yaml
 from pathlib import Path
 
 from src.core.config import CharliBotConfig, get_config
 
 
-DEFAULT_CONFIG_YAML = {
-  "gemini_api_key": "",
-  "gemini_model": "gemini-2.0-flash",
-  "kimi_api_key": "",
-  "kimi_base_url": "https://api.moonshot.cn/v1",
-  "kimi_model": "moonshot-v1-8k",
-  "max_concurrent_workers": 3,
-  "worker_timeout_seconds": 3600,
-}
+def _default_config_yaml() -> dict:
+  """Build the default config dict, seeding API keys from env vars if available."""
+  return {
+    "gemini_api_key": os.environ.get("GEMINI_API_KEY", ""),
+    "gemini_model": "gemini-3-flash-preview",
+    "kimi_api_key": os.environ.get("KIMI_API_KEY", ""),
+    "kimi_base_url": "https://api.moonshot.cn/v1",
+    "kimi_model": "kimi-k2.5",
+    "max_concurrent_workers": 3,
+    "worker_timeout_seconds": 3600,
+  }
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
 DEFAULT_PAST_TASKS = "# PAST TASKS\n\nArchive of all completed tasks. Entries separated by ---\n"
@@ -44,7 +47,7 @@ async def init_charliebot_home() -> None:
   # Seed config.yaml with placeholders if missing
   if not cfg.config_file.exists():
     with open(cfg.config_file, "w") as f:
-      yaml.dump(DEFAULT_CONFIG_YAML, f, default_flow_style=False, sort_keys=False)
+      yaml.dump(_default_config_yaml(), f, default_flow_style=False, sort_keys=False)
 
 
 def _seed_if_missing(path: Path, content: str) -> None:

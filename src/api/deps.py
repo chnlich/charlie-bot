@@ -5,6 +5,8 @@ from typing import Annotated
 from fastapi import Depends, Path
 
 from src.core.config import CharliBotConfig, get_config
+from src.core.dispatcher import SessionDispatcher
+from src.core.dispatcher import get_or_create as _get_or_create_dispatcher
 from src.core.git import GitManager
 from src.core.memory import MemoryManager
 from src.core.queue import QueueManager
@@ -62,3 +64,13 @@ def get_queue_manager(session_id: str = Path(...)) -> QueueManager:
 
 def get_memory() -> MemoryManager:
   return _get_memory_manager()
+
+
+def get_dispatcher(session_id: str = Path(...)) -> SessionDispatcher:
+  """Returns the singleton SessionDispatcher for the given session."""
+  return _get_or_create_dispatcher(
+    session_id,
+    get_config(),
+    get_session_manager(),
+    get_thread_manager(),
+  )

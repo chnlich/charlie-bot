@@ -25,9 +25,9 @@ function EventRow({ event }: { event: WorkerEvent }) {
   if (event.type === 'file_write') {
     content = `  ${event.path}${event.lines_added != null ? ` (+${event.lines_added} lines)` : ''}`
   } else if (event.content) {
-    content = `  ${event.content.slice(0, 200)}`
+    content = `  ${String(event.content).slice(0, 200)}`
   } else if (event.message) {
-    content = `  ${event.message.slice(0, 200)}`
+    content = `  ${String(event.message).slice(0, 200)}`
   }
 
   if (event.type === 'catchup_complete' || event.type === 'ping') return null

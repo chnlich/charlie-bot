@@ -14,7 +14,14 @@ export function ThreadsPanel({ sessionId }: Props) {
   const activeThread = threads.find((t) => t.id === activeThreadId) ?? null
 
   useEffect(() => {
-    sessionsApi.listThreads(sessionId).then((ts) => setThreads(sessionId, ts)).catch(console.error)
+    const fetchThreads = () =>
+      sessionsApi.listThreads(sessionId).then((ts) => setThreads(sessionId, ts)).catch(console.error)
+
+    fetchThreads()
+
+    // Poll every 3 seconds so new/updated threads appear without manual refresh
+    const interval = setInterval(fetchThreads, 3000)
+    return () => clearInterval(interval)
   }, [sessionId, setThreads])
 
   if (activeThread) {

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import field_validator, model_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -14,10 +14,10 @@ class CharliBotConfig(BaseSettings):
 
   # LLM
   gemini_api_key: str = ""
-  gemini_model: str = "gemini-2.0-flash"
+  gemini_model: str = "gemini-3-flash-preview"
   kimi_api_key: str = ""
   kimi_base_url: str = "https://api.moonshot.cn/v1"
-  kimi_model: str = "moonshot-v1-8k"
+  kimi_model: str = "kimi-k2.5"
 
   # Worker
   max_concurrent_workers: int = 3
@@ -29,12 +29,6 @@ class CharliBotConfig(BaseSettings):
   class Config:
     env_prefix = "CHARLIEBOT_"
     env_file = ".env"
-
-  @model_validator(mode='after')
-  def _fallback_api_keys(self) -> 'CharliBotConfig':
-    if not self.gemini_api_key:
-      self.gemini_api_key = os.environ.get('GEMINI_API_KEY', '')
-    return self
 
   @property
   def sessions_dir(self) -> Path:

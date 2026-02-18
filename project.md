@@ -242,3 +242,50 @@ Each Thread's `CLAUDE.md` contains:
 2. Specific task description and objectives
 3. Session-specific context/constraints
 4. References to relevant files from PAST_TASKS.md
+
+---
+
+## 11. Implementation Status
+
+### 11.1 Completed (MVP)
+
+**Backend**
+- FastAPI server (`server.py`) with APScheduler hourly backup task
+- All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/voice`, `/api/memory`
+- `MasterAgent` with Gemini (primary) + Kimi (fallback) LLM providers, streaming, conversation summarization
+- `QueueManager` — priority queue (P0 > P1 > P2) with atomic JSON persistence via `os.replace`
+- `SessionManager`, `ThreadManager`, `MemoryManager`, `BackupManager`, `GitManager`
+- `init_charliebot_home()` — seeds `~/.charliebot/` on first run, populating API keys from env vars into `config.yaml`
+
+**Frontend**
+- React SPA (Vite + TypeScript) built to `web/static/`, served by FastAPI StaticFiles
+- Panels: Sessions sidebar, Chat (SSE streaming), Threads list, Plan review checklist, Voice push-to-talk
+
+**Configuration**
+- `~/.charliebot/config.yaml` is the single source of truth for API keys and settings
+- Env vars (`GEMINI_API_KEY`, `KIMI_API_KEY`) used only to seed config on first run — never read at runtime
+- Active models: `gemini-3-flash-preview` (primary), `kimi-k2.5` (fallback)
+
+**Tests**
+- 126 unit tests across: models, config, queue, streaming, memory, backup, sessions, master agent, server utilities
+- 47 UAT tests via Starlette `TestClient` covering all API endpoints end-to-end
+- 3 live Gemini integration tests (skipped if API key absent)
+
+### 11.2 Known Issues / Fixed Bugs
+
+| Bug | Fix |
+|-----|-----|
+| `backup.py` crashed on rapid successive backups | `mkdir()` → `mkdir(exist_ok=True)` |
+| `GET /api/sessions` → 404, `POST /api/sessions` → 405 | StaticFiles mount at `/` intercepts before FastAPI `redirect_slashes`; fixed by adding trailing slashes in `sessions.ts` |
+| 14 TypeScript build errors blocking frontend | Removed unused imports, fixed `thread.plan_steps` (not on `ThreadMetadata`), added explicit types |
+| Master Agent refused git/shell task delegation | System prompt said "git operations" as off-limits; reworded to delegate ALL actionable tasks |
+| Gemini API key not found at runtime | Config used `CHARLIEBOT_GEMINI_API_KEY` prefix; fixed by seeding key into `config.yaml` at init |
+
+### 11.3 Pending / Not Yet Implemented
+
+- Worker spawning: `claude -p --dangerously-skip-permissions` invocation from `QueueManager`
+- PTY streaming: real-time Worker output → SSE to frontend
+- Git worktree isolation per thread (branch creation, checkout)
+- Conflict Resolution Worker
+- Semantic search over `PAST_TASKS.md`
+- Quota exhaustion handling (`PENDING_QUOTA` state)

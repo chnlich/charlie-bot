@@ -12,7 +12,7 @@
 
 ### 1. Separation of Code and Configuration
 - **Stateless Application**: The core logic remains in the installation/repository directory and is intended to be shared across multiple instances.
-- **Per-Instance Configuration**: All instance-specific data (database, configs, logs, session state) is stored in a dedicated user-directory, following the pattern of tools like OpenClaw.
+- **Per-Instance Configuration**: All instance-specific data (configs, logs, session state, JSON files) is stored in a dedicated user-directory, following the pattern of tools like OpenClaw.
 - **Home Directory Path**: Default path will be `~/.charliebot/` (or configurable via environment variable `CHARLIEBOT_HOME`).
 - **Structure of Home Directory**:
   ```text
@@ -123,7 +123,7 @@
 ### 4. Agent Communication & State Management
 - **Master-Agent Communication**:
   - The Master (API-based LLM) receives user requests and generates instructions for Workers.
-  - Master maintains conversation history and task state in **JSON files** (persisted to `~/.charliebot/data/`).
+  - Master maintains conversation history and task state in **JSON files** (persisted to `sessions/{uuid}/data/`).
 - **Real-Time Worker Output Streaming**:
   - For **real-time tracking** of Claude Code terminal output, the backend uses **WebSockets** or **Server-Sent Events (SSE)** to stream the PTY output directly from the Worker process to the frontend.
   - This provides smooth, low-latency log viewing without polling overhead.

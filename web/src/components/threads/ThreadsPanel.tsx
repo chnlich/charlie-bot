@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { sessionsApi } from '../../api/sessions'
 import { useThreadsStore } from '../../store/threads'
-import type { ThreadMetadata } from '../../types'
 import { ThreadItem } from './ThreadItem'
 import { ThreadDetail } from './ThreadDetail'
 

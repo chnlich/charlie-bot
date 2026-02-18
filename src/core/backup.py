@@ -30,7 +30,7 @@ class BackupManager:
 
     # Session state
     sessions_backup = backup_dir / "sessions"
-    sessions_backup.mkdir()
+    sessions_backup.mkdir(exist_ok=True)
     if self._cfg.sessions_dir.exists():
       for session_dir in self._cfg.sessions_dir.iterdir():
         if not session_dir.is_dir():

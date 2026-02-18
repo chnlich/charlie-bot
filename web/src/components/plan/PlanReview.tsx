@@ -14,18 +14,18 @@ export function PlanReview({ thread, sessionId }: Props) {
   const { eventsByThread, updateThread } = useThreadsStore()
   const events = eventsByThread[thread.id] ?? []
 
-  // Build initial steps from thread plan_steps or extract from events
-  const initialSteps = thread.plan_steps ?? extractStepsFromEvents(events)
-  const [steps, setSteps] = useState(initialSteps)
+  // Build initial steps by extracting from worker output events
+  const initialSteps: string[] = extractStepsFromEvents(events)
+  const [steps, setSteps] = useState<string[]>(initialSteps)
   const [checked, setChecked] = useState<boolean[]>(initialSteps.map(() => true))
   const [loading, setLoading] = useState(false)
 
-  const toggleStep = (i: number) => setChecked((prev) => prev.map((v, idx) => (idx === i ? !v : v)))
+  const toggleStep = (i: number) => setChecked((prev: boolean[]) => prev.map((v: boolean, idx: number) => (idx === i ? !v : v)))
   const editStep = (i: number, text: string) =>
-    setSteps((prev) => prev.map((s, idx) => (idx === i ? text : s)))
+    setSteps((prev: string[]) => prev.map((s: string, idx: number) => (idx === i ? text : s)))
 
   const handleApprove = async () => {
-    const approved = steps.filter((_, i) => checked[i])
+    const approved = steps.filter((_: string, i: number) => checked[i])
     if (approved.length === 0) return
     setLoading(true)
     try {
@@ -54,7 +54,7 @@ export function PlanReview({ thread, sessionId }: Props) {
       </p>
 
       <div className="space-y-0 divide-y divide-border/30">
-        {steps.map((step, i) => (
+        {steps.map((step: string, i: number) => (
           <PlanStep key={i} step={step} index={i} checked={checked[i]} onToggle={toggleStep} onEdit={editStep} />
         ))}
       </div>

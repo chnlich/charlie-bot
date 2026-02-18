@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { sessionsApi } from '../../api/sessions'
 import { useSSE } from '../../hooks/useSSE'
 import { useChatStore } from '../../store/chat'
-import { useSessionsStore } from '../../store/sessions'
 import type { ChatMessage, SSEEvent } from '../../types'
 import { ChatInput } from './ChatInput'
 import { MessageList } from './MessageList'
@@ -94,7 +92,7 @@ export function ChatPanel({ sessionId }: Props) {
         console.error('Chat stream error', e)
       }
     },
-    [sessionId, addMessage, setMessages, appendStream, clearStream, stream],
+    [sessionId, addMessage, appendStream, clearStream, stream],
   )
 
   return (

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -29,6 +29,12 @@ class CharliBotConfig(BaseSettings):
   class Config:
     env_prefix = "CHARLIEBOT_"
     env_file = ".env"
+
+  @model_validator(mode='after')
+  def _fallback_api_keys(self) -> 'CharliBotConfig':
+    if not self.gemini_api_key:
+      self.gemini_api_key = os.environ.get('GEMINI_API_KEY', '')
+    return self
 
   @property
   def sessions_dir(self) -> Path:

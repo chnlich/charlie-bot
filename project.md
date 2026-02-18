@@ -26,6 +26,10 @@
 
 ### 2. User Interface
 - **Primary Interface**: **Web UI** (Responsive design for both Desktop and Mobile).
+- **Voice Input (Hard Requirement)**: 
+  - The Web UI must support voice-to-text input.
+  - Interaction Pattern: **Push-to-Talk / Toggle-to-Talk** (Press/click button to start recording, press/click again to stop and send).
+  - Backend Integration: Audio chunks or complete files sent to backend for transcription (e.g., using Whisper or cloud-based STT) before being processed by the Master Agent.
 - **Web UI Layout**:
   - **Sessions (Sidebar)**: Multi-channel organization similar to Slack. Each session represents a separate project or logical work context.
   - **Chat Interface**: Main area for user interaction with the Master Agent (ChatGPT-like experience).

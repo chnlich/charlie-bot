@@ -145,6 +145,7 @@
   - The Master Agent uses **Gemini 3 Flash** as the primary model.
   - If Gemini 3 Flash errors out (API failure, rate limit, etc.), the system automatically **switches to Kimi k2.5** as the fallback model.
   - The switch is transparent to the user and the conversation context is preserved.
+  - **Model Abstraction**: The LLM client is wrapped in an abstract class/interface (e.g., `LLMProvider`), making it straightforward to add or switch to other models (OpenAI, Anthropic, local models, etc.) without modifying core logic.
 - **Quota Exhaustion Handling**:
   - If Claude Code returns a quota-exhausted error, the Worker is paused and its task enters a **PENDING_QUOTA** state.
   - The Master session periodically checks (polls) whether the quota has recovered.

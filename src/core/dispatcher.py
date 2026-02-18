@@ -99,13 +99,13 @@ class SessionDispatcher:
       worktree = await self._thread_mgr.get_worktree_path(self._session_id, thread.id)
       worker = Worker(thread, worktree, events_log, task.description)
 
-      # Store CLI command and worktree path for debug mode
-      cli_str = " ".join(WORKER_COMMAND + [task.description])
-      thread.cli_command = cli_str
-      thread.worktree_path = str(worktree)
-      await self._thread_mgr._save_metadata(thread)
-
       try:
+        # Store CLI command and worktree path for debug mode
+        cli_str = " ".join(WORKER_COMMAND + [task.description])
+        thread.cli_command = cli_str
+        thread.worktree_path = str(worktree)
+        await self._thread_mgr._save_metadata(thread)
+
         exit_code = await worker.run()
         if exit_code == 0:
           await self._queue_mgr.mark_complete(task.id)

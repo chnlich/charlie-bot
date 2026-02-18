@@ -1,8 +1,10 @@
 """Chat API routes — Master Agent interaction with SSE streaming."""
 
 import json
+import traceback
 from typing import AsyncGenerator
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -18,6 +20,8 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
+
+log = structlog.get_logger()
 
 router = APIRouter()
 
@@ -39,51 +43,57 @@ async def send_message(
   history = await session_mgr.load_history(session_id)
 
   async def event_stream() -> AsyncGenerator[str, None]:
-    full_response = ""
+    try:
+      full_response = ""
 
-    # Stream text chunks from Master Agent
-    async for chunk in master.chat_streaming(history, req.content):
-      full_response += chunk
-      event = json.dumps({"type": "chunk", "content": chunk})
-      yield f"data: {event}\n\n"
+      # Stream text chunks from Master Agent
+      async for chunk in master.chat_streaming(history, req.content):
+        full_response += chunk
+        event = json.dumps({"type": "chunk", "content": chunk})
+        yield f"data: {event}\n\n"
 
-    # Parse the complete response to determine action
-    action = master._parse_response(full_response)
+      # Parse the complete response to determine action
+      action = master._parse_response(full_response)
 
-    # Persist any new memory facts/preferences the model identified
-    memory_note = action.get("memory_update", "").strip()
-    if memory_note:
-      await master._memory.append_memory(memory_note)
+      # Persist any new memory facts/preferences the model identified
+      memory_note = action.get("memory_update", "").strip()
+      if memory_note:
+        await master._memory.append_memory(memory_note)
 
-    if action.get("action") == "delegate":
-      # Create task and thread inline so the thread is visible immediately
-      priority_map = {"P0": Priority.P0, "P1": Priority.P1, "P2": Priority.P2}
-      priority = priority_map.get(action.get("priority", "P1"), Priority.P1)
-      task = Task(
-        priority=priority,
-        description=action.get("description", req.content),
-        is_plan_mode=action.get("plan_mode", False),
-      )
+      if action.get("action") == "delegate":
+        # Create task and thread inline so the thread is visible immediately
+        priority_map = {"P0": Priority.P0, "P1": Priority.P1, "P2": Priority.P2}
+        priority = priority_map.get(action.get("priority", "P1"), Priority.P1)
+        task = Task(
+          priority=priority,
+          description=action.get("description", req.content),
+          is_plan_mode=action.get("plan_mode", False),
+        )
 
-      # Create thread NOW (before SSE completes) so it shows in the UI
-      thread = await thread_mgr.create_thread(meta, task)
-      task.thread_id = thread.id
+        # Create thread NOW (before SSE completes) so it shows in the UI
+        thread = await thread_mgr.create_thread(meta, task)
+        task.thread_id = thread.id
 
-      # Hand off to dispatcher to run the worker in the background
-      await dispatcher.enqueue(task)
+        # Hand off to dispatcher to run the worker in the background
+        await dispatcher.enqueue(task)
 
-      delegation_event = json.dumps({
-        "type": "task_delegated",
-        "task_id": task.id,
-        "thread_id": thread.id,
-        "priority": task.priority.value,
-        "description": task.description,
-        "plan_mode": task.is_plan_mode,
-      })
-      yield f"data: {delegation_event}\n\n"
+        delegation_event = json.dumps({
+          "type": "task_delegated",
+          "task_id": task.id,
+          "thread_id": thread.id,
+          "priority": task.priority.value,
+          "description": task.description,
+          "plan_mode": task.is_plan_mode,
+        })
+        yield f"data: {delegation_event}\n\n"
 
-    # Save updated history
-    await session_mgr.save_history(history)
+      # Save updated history
+      await session_mgr.save_history(history)
+
+    except Exception as e:
+      log.error("sse_stream_error", session=session_id, error=str(e), tb=traceback.format_exc())
+      error_event = json.dumps({"type": "chunk", "content": f"\n\n**Error:** {e}"})
+      yield f"data: {error_event}\n\n"
 
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
 

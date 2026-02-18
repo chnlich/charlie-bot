@@ -17,6 +17,7 @@ def _default_config_yaml() -> dict:
     "kimi_model": "kimi-k2.5",
     "max_concurrent_workers": 3,
     "worker_timeout_seconds": 3600,
+    "project_dirs": ["~/workspace"],
   }
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
@@ -34,7 +35,6 @@ async def init_charliebot_home() -> None:
     cfg.sessions_dir,
     cfg.backups_dir,
     cfg.logs_dir,
-    cfg.repos_dir,
   ]
   for d in dirs:
     d.mkdir(parents=True, exist_ok=True)

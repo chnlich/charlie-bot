@@ -27,17 +27,17 @@ All instance-specific data (configs, logs, sessions, worktrees) is stored here:
 
 ```text
 ~/.charliebot/
-├── config.yaml      # API keys and instance-specific settings
+├── config.yaml      # API keys, settings, and project_dirs list
 ├── MEMORY.md        # Globally shared memory (user preferences, facts)
 ├── PAST_TASKS.md    # Global record of all completed tasks
 ├── PROGRESS.md      # Global lessons learned and insights
 ├── backups/         # Automatic hourly snapshots (7-day retention)
-├── repos/           # Shared bare git repository clones
 ├── logs/            # Application logs (server errors, system events)
 └── sessions/        # Session directories
     └── {session_uuid}/
         ├── metadata.json      # Session info (name, repo, branch)
         ├── task_queue.json    # Session's priority task queue
+        ├── repo.git/          # Session-scoped bare git repository
         ├── worktree/          # Session's base Git worktree
         ├── data/              # Session-level JSON data
         └── threads/           # Thread directories
@@ -51,6 +51,8 @@ All instance-specific data (configs, logs, sessions, worktrees) is stored here:
 **Notes:**
 - `logs/`: Stores application-level logs (server errors, HTTP access, Worker spawn/crash events). Individual Worker logs are in `threads/{uuid}/data/`.
 - `backups/`: Hourly snapshots of MEMORY.md, PAST_TASKS.md, Session metadata, and Thread data. 7-day retention with daily snapshots beyond.
+- `repo.git/`: Bare git repository is now session-scoped (previously stored in global `~/.charliebot/repos/`). Legacy repos are lazily migrated on access.
+- `project_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
 
 ### 3.2 Repository Code Structure (Stateless)
 ```text

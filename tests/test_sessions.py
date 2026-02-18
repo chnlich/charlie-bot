@@ -12,7 +12,6 @@ from src.core.sessions import SessionManager
 def session_manager(tmp_home):
     cfg = load_config()
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-    cfg.repos_dir.mkdir(parents=True, exist_ok=True)
     git_manager = MagicMock()
     git_manager.clone_bare = AsyncMock()
     git_manager.link_local_repo = AsyncMock()

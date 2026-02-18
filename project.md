@@ -70,7 +70,8 @@ charlie-bot/
 ### 4.1 Agent Roles
 | Role | Type | Responsibilities |
 |------|------|------------------|
-| **Master Agent** | API LLM (Gemini 3 Flash / Kimi k2.5) | Orchestration, queue management, Worker spawning, user interaction. Does NOT perform code analysis. |
+| **Master Agent** | API LLM (Gemini 3 Flash / Kimi k2.5) | User interaction, task classification (P0/P1/P2), high-level planning decisions, reviewing Worker results. Does NOT perform code analysis or queue operations. |
+| **Queue Manager** | Python (Deterministic) | Hard-coded queue logic: push/pop/reorder tasks, monitor Worker slots, spawn Workers. Stateless, no LLM involvement. |
 | **Worker Agent** | Claude Code CLI | Code analysis, implementation planning, file editing, git operations, testing. Runs in non-interactive mode (`claude -p --dangerously-skip-permissions`). |
 
 **Model Abstraction**: The LLM client is wrapped in an abstract `LLMProvider` class, enabling easy addition of other models without modifying core logic.
@@ -103,26 +104,39 @@ CharlieBot operates in a continuous loop where Workers automatically pull and ex
    - **P1 (Standard)**: Features/bugs — consume when slots available
    - **P2 (Background)**: Refactoring/docs — batch during idle time
 
-2. **Execution Flow**:
-   - Master monitors queue and available Worker slots
-   - When free, Master spawns Worker on the highest priority task
-   - Worker executes and **automatically exits**
-   - Master immediately triggers next iteration
+2. **Task Ingestion** (Master Agent - LLM):
+   - User submits request via chat
+   - Master Agent classifies priority (P0/P1/P2) and generates task description
+   - Python Queue Manager receives the classified task and pushes to queue
 
-3. **Survivability**: On restart, Master reloads queue state and resumes from where it left off
+3. **Execution Flow** (Queue Manager - Python):
+   - Queue Manager (deterministic Python code) monitors available Worker slots
+   - When slot free, Queue Manager pops highest priority task from queue
+   - Queue Manager spawns Worker and passes task context
+   - Worker executes and **automatically exits**
+   - Queue Manager immediately triggers next iteration
+
+4. **Completion Handling** (Master Agent - LLM):
+   - When Worker finishes, Master Agent reviews results
+   - Master summarizes to user and decides if follow-up tasks needed
+   - If new tasks identified, Master classifies and submits to Queue Manager
+
+5. **Survivability**: On restart, Queue Manager reloads queue state and resumes from where it left off
 
 ### 5.2 Plan Mode (Two-Phase Execution)
 For complex tasks, CharlieBot uses a planning phase:
 
-**Phase 1: Planning**
-- Master creates a "Plan Thread" with `--plan-mode` flag
-- Worker analyzes and outputs a detailed execution plan (no file modifications)
-- Plan is displayed in Web UI as an editable checklist
+**Phase 1: Planning** (Master Agent decides, Queue Manager executes)
+- Master Agent determines task requires planning phase
+- Queue Manager creates "Plan Thread" with `--plan-mode` flag
+- Worker analyzes and outputs detailed execution plan (no file modifications)
+- Plan displayed in Web UI as editable checklist
 
-**Phase 2: Execution**
+**Phase 2: Execution** (User approves, Queue Manager schedules)
 - User reviews, edits, or approves the plan
-- Upon approval, plan enters task queue (P0/P1)
-- Execution Workers run the approved steps
+- Upon approval, Master Agent classifies plan steps as P0/P1
+- Queue Manager pushes approved steps into task queue
+- Execution Workers run approved steps (popped by Queue Manager)
 - Multiple plans can execute in parallel across different Threads
 
 ---
@@ -190,8 +204,8 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 
 ### 9.2 Quota Exhaustion Handling
 - Worker enters **PENDING_QUOTA** state on quota error
-- Master periodically polls for recovery
-- Task auto-resumes when quota available; user is notified
+- Queue Manager (Python) periodically polls for quota recovery
+- Task auto-resumes when quota available; Master Agent notified to inform user
 - All context persisted to disk during wait
 
 ### 9.3 Merge Conflict Resolution

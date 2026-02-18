@@ -20,11 +20,21 @@
   ├── config.yaml      # Instance-specific configuration (API keys)
   ├── MEMORY.md        # Globally shared memory across all sessions (user preferences, facts)
   ├── PAST_TASKS.md    # Global record of all completed tasks across all sessions
-  ├── data/            # JSON persistence (session history, agent states)
   ├── repos/           # Shared storage for base git repositories
-  ├── worktrees/       # Git worktrees organized by session
-  └── logs/            # Instance-specific logs
+  ├── logs/            # Application logs (server errors, access logs, system events)
+  └── sessions/        # All session directories
+      └── {session_uuid}/
+          ├── metadata.json    # Session info (name, description, associated repo)
+          ├── worktree/        # Session's base Git worktree
+          ├── data/            # Session-level JSON data
+          └── threads/         # All thread directories
+              └── {thread_uuid}/
+                  ├── metadata.json   # Thread info (task description, Worker status)
+                  ├── worktree/       # Thread's Git worktree (isolated branch)
+                  ├── data/           # Thread-specific JSON data (logs, state)
+                  └── CLAUDE.md       # Worker's task instructions
   ```
+- **logs/**: Stores application-level logs including server errors, HTTP access logs, and system events (e.g., Worker spawn/crash, quota errors). Individual Worker execution logs are stored in their respective `threads/{uuid}/data/` directories.
 - **Global Memory (MEMORY.md)**: A single `MEMORY.md` file shared across all sessions. The Master Agent reads this file at the start of each conversation and updates it whenever:
   - The user expresses a preference (e.g., "I prefer dark mode", "Always use spaces instead of tabs")
   - New facts about the user are revealed (e.g., "I work at Citadel", "My favorite editor is Vim")

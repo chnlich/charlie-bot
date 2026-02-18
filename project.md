@@ -4,8 +4,8 @@
 **CharlieBot** is a Python-based system designed to coordinate and manage multiple **Claude Code** instances to complete complex tasks. The primary interface for interaction is a responsive Web UI for desktop and mobile access.
 
 ## Objectives
-- **Agent Orchestration**: Enable an API-based **Master Agent** (e.g., Gemini 3 Flash, Kimi k2.5) to plan tasks and spawn **Claude Code** Worker instances to execute them.
-- **Task Delegation**: Master breaks down complex user requests and delegates coding sub-tasks to specialized Claude Code Workers.
+- **Agent Orchestration**: Enable an API-based **Master Agent** (e.g., Gemini 3 Flash, Kimi k2.5) to manage and coordinate **Claude Code** Worker instances.
+- **Task Delegation**: Master delegates coding tasks to Claude Code Workers; actual code analysis and implementation planning is performed by the Workers themselves.
 - **Python-Native**: Built entirely in Python for extensibility and ease of integration with AI toolsets.
 
 ## Key Design Principles
@@ -45,8 +45,8 @@
   - A shared `repos/` directory caches the base git repositories.
   - For each session, CharlieBot creates/manages a dedicated worktree in `worktrees/`, allowing multiple Claude Code instances to work on different branches/PRs simultaneously without file system conflicts.
 - **Agent Architecture**:
-  - **Master Agent**: An API-based LLM (e.g., Gemini 3 Flash, Kimi k2.5) responsible for task planning, decision making, and coordinating workflows. The Master does not directly edit code; it orchestrates.
-  - **Worker Agent**: Always **Claude Code**. The Worker is spawned by the Master to perform actual coding tasks (file edits, git operations, testing) within its designated worktree.
+  - **Master Agent**: An API-based LLM (e.g., Gemini 3 Flash, Kimi k2.5) responsible for **managing and coordinating** Claude Code Workers. The Master decides when to spawn Workers and monitors their completion, but does not perform coding analysis or create implementation plans.
+  - **Worker Agent**: Always **Claude Code**. The Worker performs actual coding tasks: analyzing requirements, planning implementation, editing files, git operations, and testing within its designated worktree.
 - **Sub-Agent Monitoring**: Real-time tracking of what Claude Code instances are doing (status, logs, output).
 
 ### 4. Agent Communication & State Management
@@ -77,15 +77,16 @@
 ## Proposed Workflow
 1. **Task Initialization**: 
    - User submits a request via the Web UI (text or voice).
-   - The **Master Agent** (API-based LLM) analyzes the request and creates a task plan.
-2. **Context Persistence**: 
-   - Work is managed through Pull Requests (PRs).
-   - The Master tracks the current PR state and ensures Workers inherit the context of the branch.
-3. **Execution**:
-   - Master spawns **Claude Code Worker** instances via shell to perform specific tasks on the codebase.
-   - Workers operate within their designated Git Worktrees.
-4. **Review & Summary**:
-   - Master summarizes progress back to the Web UI, referencing specific PRs or files changed.
+   - The **Master Agent** (API-based LLM) receives the request and determines if a Claude Code Worker is needed.
+2. **Worker Delegation**:
+   - If coding work is required, the Master spawns a **Claude Code Worker** instance in the appropriate Git Worktree.
+   - The Worker (Claude Code) analyzes the task, plans the implementation, and executes the coding work.
+   - The Master monitors Worker status but does not perform the actual coding analysis.
+3. **Execution & Persistence**:
+   - Workers operate within their designated Git Worktrees and persist all outputs to disk.
+   - If the Master restarts, it reloads previous Worker results from disk.
+4. **Completion & Continuation**:
+   - When a Worker finishes, the Master is notified and can decide next steps (spawn more Workers, summarize to user, etc.).
 
 ## Initial File Structure
 ```text

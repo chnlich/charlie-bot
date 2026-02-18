@@ -62,7 +62,21 @@
   │   ├── src/            # React SPA source (Node.js required for development only)
   │   └── static/         # React build output (served by FastAPI at runtime)
   ├── config/             # Default configuration templates (examples only)
+  ├── .yapf               # YAPF code style configuration
   └── project.md          # This specification
+  ```
+
+## Development Guidelines
+
+### Code Style
+- **All Languages**: Follow **Google Code Style**.
+- **Python**: Enforced via YAPF with the following configuration (`.yapf`):
+  ```ini
+  [style]
+  based_on_style = google
+  indent_width = 2
+  split_before_first_argument = true
+  column_limit = 120
   ```
 
 ### 2. User Interface

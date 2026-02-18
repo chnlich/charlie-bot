@@ -33,7 +33,7 @@
 - **Global Task History (PAST_TASKS.md)**: A single `PAST_TASKS.md` file at the global level, shared across all sessions:
   - Records all completed tasks across all projects/sessions with detailed summaries
   - Includes: task description, session context, approach taken, files modified, issues encountered, solutions applied
-  - New sessions can reference this to understand what has been accomplished before
+  - **On-Demand Access**: Due to its potentially large size, Master Agent **does not read this file at the start of each conversation**. Instead, it serves as a searchable archive — Master queries it on-demand when historical context is needed (e.g., via keyword search or semantic retrieval).
   - **Concurrency Guard**: File access must be synchronized to prevent race conditions when multiple Workers or the Master attempt to update the file simultaneously (e.g., file locking or atomic writes).
 - **Concurrent Worker Strategy & Branch Isolation**:
   - **Default Policy**: Master employs a **concurrent Worker strategy** — multiple related tasks are executed in parallel by spawning multiple Workers (Threads) under the same Session.

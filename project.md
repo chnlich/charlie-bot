@@ -18,11 +18,17 @@
   ```text
   ~/.charliebot/
   ├── config.yaml      # Instance-specific configuration (API keys)
+  ├── MEMORY.md        # Globally shared memory across all sessions (user preferences, facts)
   ├── data/            # JSON persistence (session history, agent states)
   ├── repos/           # Shared storage for base git repositories
   ├── worktrees/       # Git worktrees organized by session
   └── logs/            # Instance-specific logs
   ```
+- **Global Memory (MEMORY.md)**: A single `MEMORY.md` file shared across all sessions. The Master Agent reads this file at the start of each conversation and updates it whenever:
+  - The user expresses a preference (e.g., "I prefer dark mode", "Always use spaces instead of tabs")
+  - New facts about the user are revealed (e.g., "I work at Citadel", "My favorite editor is Vim")
+  - Important context that should persist across sessions is identified
+  - This ensures continuity and personalization across all sessions, regardless of which project the user is working on.
 - **Repository Code Structure** (Stateless, shared across instances):
   ```text
   charlie-bot/

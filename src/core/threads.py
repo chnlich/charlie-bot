@@ -48,7 +48,7 @@ class ThreadManager:
       (thread_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # Set up git branch + worktree if session has a repo
-    bare_path = self._cfg.repos_dir / f"{session_meta.id}.git"
+    bare_path = self._cfg.sessions_dir / session_meta.id / "repo.git"
     if bare_path.exists():
       try:
         worktree_path = thread_dir / "worktree"
@@ -117,7 +117,7 @@ class ThreadManager:
     meta = await self.get_thread(session_id, thread_id)
     if not meta:
       return
-    bare_path = self._cfg.repos_dir / f"{session_id}.git"
+    bare_path = self._cfg.sessions_dir / session_id / "repo.git"
     worktree_path = self._thread_dir(session_id, thread_id) / "worktree"
     if bare_path.exists() and worktree_path.exists():
       try:

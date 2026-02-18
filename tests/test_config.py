@@ -26,11 +26,37 @@ class TestCharliBotConfig:
         assert cfg.sessions_dir == tmp_home / "sessions"
         assert cfg.backups_dir == tmp_home / "backups"
         assert cfg.logs_dir == tmp_home / "logs"
-        assert cfg.repos_dir == tmp_home / "repos"
         assert cfg.memory_file == tmp_home / "MEMORY.md"
         assert cfg.past_tasks_file == tmp_home / "PAST_TASKS.md"
         assert cfg.progress_file == tmp_home / "PROGRESS.md"
         assert cfg.config_file == tmp_home / "config.yaml"
+
+    def test_project_dirs_tilde_expansion(self, tmp_home):
+        import yaml
+        config_file = tmp_home / "config.yaml"
+        config_file.write_text(yaml.dump({"project_dirs": ["~/workspace", "~/code"]}))
+        cfg = load_config()
+        home = str(Path.home())
+        assert cfg.project_dirs == [f"{home}/workspace", f"{home}/code"]
+
+    def test_discover_projects(self, tmp_home):
+        import yaml
+        workspace = tmp_home / "workspace"
+        workspace.mkdir()
+        # Create a git project
+        proj = workspace / "my-project"
+        proj.mkdir()
+        (proj / ".git").mkdir()
+        # Create a non-git directory
+        (workspace / "random-dir").mkdir()
+
+        config_file = tmp_home / "config.yaml"
+        config_file.write_text(yaml.dump({"project_dirs": [str(workspace)]}))
+        cfg = load_config()
+        projects = cfg.discover_projects()
+        assert len(projects) == 1
+        assert projects[0]["name"] == "my-project"
+        assert projects[0]["path"] == str(proj)
 
     def test_load_config_from_yaml(self, tmp_home):
         import yaml

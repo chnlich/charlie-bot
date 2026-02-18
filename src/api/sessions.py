@@ -2,16 +2,17 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from src.core.config import get_config
 from src.core.models import (
   CreateSessionRequest,
   Priority,
   ReorderTaskRequest,
   SessionMetadata,
   TaskQueue,
+  ThreadMetadata,
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.core.models import ThreadMetadata
 from src.api.deps import get_session_manager, get_thread_manager, get_queue_manager
 from src.core.queue import QueueManager
 
@@ -29,6 +30,13 @@ async def create_session(
   session_mgr: SessionManager = Depends(get_session_manager),
 ):
   return await session_mgr.create_session(req)
+
+
+@router.get("/projects")
+async def list_projects():
+  """Return git projects discovered from configured project_dirs."""
+  cfg = get_config()
+  return cfg.discover_projects()
 
 
 @router.get("/{session_id}", response_model=SessionMetadata)

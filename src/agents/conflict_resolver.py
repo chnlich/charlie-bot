@@ -30,7 +30,7 @@ class ConflictResolver:
     Attempt to resolve merge conflicts between two branches.
     Returns True if resolved, False if manual intervention is required.
     """
-    bare_path = self._cfg.repos_dir / f"{session_meta.id}.git"
+    bare_path = self._cfg.sessions_dir / session_meta.id / "repo.git"
 
     # Gather context for the Worker
     try:

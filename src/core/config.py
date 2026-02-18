@@ -26,6 +26,14 @@ class CharliBotConfig(BaseSettings):
   # Paths
   charliebot_home: Path = Path.home() / ".charliebot"
 
+  # Workspace directories to scan for git projects
+  project_dirs: list[str] = []
+
+  @field_validator("project_dirs", mode="before")
+  @classmethod
+  def expand_project_dirs(cls, v: list[str]) -> list[str]:
+    return [os.path.expanduser(p) for p in (v or [])]
+
   class Config:
     env_prefix = "CHARLIEBOT_"
     env_file = ".env"
@@ -43,10 +51,6 @@ class CharliBotConfig(BaseSettings):
     return self.charliebot_home / "logs"
 
   @property
-  def repos_dir(self) -> Path:
-    return self.charliebot_home / "repos"
-
-  @property
   def memory_file(self) -> Path:
     return self.charliebot_home / "MEMORY.md"
 
@@ -61,6 +65,18 @@ class CharliBotConfig(BaseSettings):
   @property
   def config_file(self) -> Path:
     return self.charliebot_home / "config.yaml"
+
+  def discover_projects(self) -> list[dict[str, str]]:
+    """Scan project_dirs for directories containing a .git folder."""
+    projects: list[dict[str, str]] = []
+    for dir_str in self.project_dirs:
+      parent = Path(dir_str)
+      if not parent.is_dir():
+        continue
+      for child in sorted(parent.iterdir()):
+        if child.is_dir() and (child / ".git").exists():
+          projects.append({"name": child.name, "path": str(child)})
+    return projects
 
 
 _config: Optional[CharliBotConfig] = None

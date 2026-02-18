@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Modal } from '../common/Modal'
-import { sessionsApi } from '../../api/sessions'
+import { sessionsApi, type ProjectInfo } from '../../api/sessions'
 import { useSessionsStore } from '../../store/sessions'
 
 interface Props {
@@ -14,8 +14,15 @@ export function CreateSessionModal({ open, onClose }: Props) {
   const [baseBranch, setBaseBranch] = useState('main')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [projects, setProjects] = useState<ProjectInfo[]>([])
   const addSession = useSessionsStore((s) => s.addSession)
   const setActiveSession = useSessionsStore((s) => s.setActiveSession)
+
+  useEffect(() => {
+    if (open) {
+      sessionsApi.listProjects().then(setProjects).catch(() => setProjects([]))
+    }
+  }, [open])
 
   const handleCreate = async () => {
     if (!name.trim()) { setError('Name is required'); return }
@@ -24,7 +31,7 @@ export function CreateSessionModal({ open, onClose }: Props) {
     try {
       const session = await sessionsApi.create({
         name: name.trim(),
-        repo_path: repoPath.trim() || undefined,
+        repo_path: repoPath || undefined,
         base_branch: baseBranch.trim() || 'main',
       })
       addSession(session)
@@ -54,13 +61,28 @@ export function CreateSessionModal({ open, onClose }: Props) {
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Local repo path (optional)</label>
-          <input
-            className="w-full bg-slate-800 border border-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-            placeholder="/home/user/my-project"
-            value={repoPath}
-            onChange={(e) => setRepoPath(e.target.value)}
-          />
+          <label className="block text-xs text-slate-400 mb-1">Project repository</label>
+          {projects.length > 0 ? (
+            <select
+              className="w-full bg-slate-800 border border-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+              value={repoPath}
+              onChange={(e) => setRepoPath(e.target.value)}
+            >
+              <option value="">None (no git repo)</option>
+              {projects.map((p) => (
+                <option key={p.path} value={p.path}>
+                  {p.name} — {p.path}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              className="w-full bg-slate-800 border border-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+              placeholder="/home/user/my-project"
+              value={repoPath}
+              onChange={(e) => setRepoPath(e.target.value)}
+            />
+          )}
         </div>
         <div>
           <label className="block text-xs text-slate-400 mb-1">Base branch</label>

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Optional
 
 import structlog
 
-from src.agents.worker import QuotaExhaustedException, Worker
+from src.agents.worker import WORKER_COMMAND, QuotaExhaustedException, Worker
 from src.core.models import ChatMessage, MessageRole, Task, ThreadStatus
 from src.core.queue import QueueManager
 from src.core.sessions import SessionManager
@@ -98,6 +98,12 @@ class SessionDispatcher:
       events_log = await self._thread_mgr.get_events_log_path(self._session_id, thread.id)
       worktree = await self._thread_mgr.get_worktree_path(self._session_id, thread.id)
       worker = Worker(thread, worktree, events_log, task.description)
+
+      # Store CLI command and worktree path for debug mode
+      cli_str = " ".join(WORKER_COMMAND + [task.description])
+      thread.cli_command = cli_str
+      thread.worktree_path = str(worktree)
+      await self._thread_mgr._save_metadata(thread)
 
       try:
         exit_code = await worker.run()

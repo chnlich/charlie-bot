@@ -1,6 +1,7 @@
 import { clsx } from 'clsx'
 import { Mic } from 'lucide-react'
 import type { ChatMessage } from '../../types'
+import { useDebugStore } from '../../store/debug'
 import { MarkdownRenderer } from './MarkdownRenderer'
 
 interface Props {
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export function MessageItem({ message }: Props) {
+  const debugMode = useDebugStore((s) => s.debugMode)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
@@ -56,6 +58,13 @@ export function MessageItem({ message }: Props) {
           </div>
         )}
       </div>
+
+      {/* Debug footer */}
+      {debugMode && message.thread_id && (
+        <div className={clsx('text-[10px] text-slate-600 mt-0.5 font-mono', isUser ? 'text-right' : 'text-left')}>
+          thread: {message.thread_id} | msg: {message.id}
+        </div>
+      )}
     </div>
   )
 }

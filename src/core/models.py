@@ -90,6 +90,8 @@ class ThreadMetadata(BaseModel):
   completed_at: Optional[datetime] = None
   pid: Optional[int] = None
   exit_code: Optional[int] = None
+  cli_command: Optional[str] = None
+  worktree_path: Optional[str] = None
   is_conflict_resolver: bool = False
 
 

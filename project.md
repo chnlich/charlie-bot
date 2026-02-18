@@ -46,13 +46,13 @@
   - Includes: task description, session context, approach taken, files modified, issues encountered, solutions applied
   - **On-Demand Access**: Due to its potentially large size, Master Agent **does not read this file at the start of each conversation**. Instead, it serves as a searchable archive — Master queries it on-demand when historical context is needed (e.g., via keyword search or semantic retrieval).
   - **Concurrency Guard**: File access must be synchronized to prevent race conditions when multiple Workers or the Master attempt to update the file simultaneously.
-- **Concurrent Worker Strategy & Branch Isolation**:
-  - **Default Policy**: Master employs a **concurrent Worker strategy** — multiple related tasks are executed in parallel by spawning multiple Workers (Threads) under the same Session.
-  - **Branch Isolation**: Since all Workers in a Session share the same worktree directory, each Worker must operate on its own **isolated Git branch** to prevent file conflicts:
+- **Ralph Loop & Branch Isolation**:
+  - **Ralph Loop**: CharlieBot operates in a continuous task consumption loop. Workers automatically pull tasks from the priority queue, execute them, exit, and trigger the next Worker. This ensures high throughput as long as tasks exist in the queue.
+  - **Branch Isolation**: Each Worker operates on its own **isolated Git branch** within the Session's worktree to prevent file conflicts:
     - Master creates a unique branch for each Worker (e.g., `charliebot/task-{timestamp}-{task-id}`)
     - Worker performs all edits, commits, and operations on its dedicated branch
     - After completion, Master decides whether to merge, rebase, or keep the branch separate based on task outcome
-  - **Benefits**: Maximizes throughput for independent tasks while maintaining isolation; Master coordinates branch lifecycle (creation, merge, cleanup).
+  - **Benefits**: Continuous task execution maximizes throughput; branch isolation ensures concurrent Workers don't conflict; Master coordinates the entire lifecycle.
 - **Worker Instructions (CLAUDE.md)**:
   - **Default Shared Instructions**: A default instruction template is stored in the repository (`config/claude-default.md`) containing general guidelines for all Claude Code Workers (e.g., coding standards, YOLO mode behavior, git commit conventions).
   - **Per-Task Instructions**: Each time the Master spawns a Worker, it creates a `CLAUDE.md` file in the Thread's worktree directory containing:

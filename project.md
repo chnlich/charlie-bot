@@ -125,7 +125,7 @@
   - For each session, CharlieBot creates/manages a dedicated worktree in `worktrees/{session_id}/`, allowing multiple sessions to work on different branches simultaneously without file system conflicts.
 - **Agent Architecture**:
   - **Master Agent**: An API-based LLM (e.g., Gemini 3 Flash, Kimi k2.5) responsible for **managing and coordinating** Claude Code Workers. The Master decides when to spawn Workers and monitors their completion, but does not perform coding analysis or create implementation plans.
-  - **Worker Agent**: Always **Claude Code**. The Worker performs actual coding tasks: analyzing requirements, planning implementation, editing files, git operations, and testing within its designated worktree. Claude Code should run in **YOLO mode** (or equivalent flag) to allow all operations without interactive confirmation, enabling fully automated task execution.
+  - **Worker Agent**: Always **Claude Code** running in **non-interactive mode** (`claude -p [prompt] --dangerously-skip-permissions`). The Worker performs actual coding tasks: analyzing requirements, planning implementation, editing files, git operations, and testing within its designated worktree. The non-interactive mode enables fully automated task execution without requiring manual confirmation for each operation.
 - **Concurrent Workers**: A single Session can run **multiple Workers concurrently** (each Worker is a separate Thread under the Session). The Session decides how to orchestrate these Workers (e.g., parallel tasks, sequential steps).
 - **Sub-Agent Monitoring**: Real-time tracking of what Claude Code instances are doing (status, logs, output).
 
@@ -158,6 +158,63 @@
 - **Storage**:
   - **Agent Output**: JSON files for sub-agent logs, results, and state.
   - **Configuration**: YAML files for manual user configuration.
+
+## Advanced Features
+
+### JSON Stream Monitoring
+To enable precise monitoring of Worker execution, Claude Code runs with structured JSON output:
+- **Flag**: `--output-format stream-json --verbose`
+- **Purpose**: Instead of parsing raw terminal text, the Master Agent receives structured events:
+  ```json
+  {"type": "thinking", "content": "Analyzing codebase structure..."}
+  {"type": "file_read", "path": "src/auth.py"}
+  {"type": "file_write", "path": "src/auth.py", "lines_added": 45}
+  {"type": "command_run", "command": "pytest tests/", "exit_code": 0}
+  {"type": "error", "message": "ImportError: No module named 'jwt'"}
+  {"type": "complete", "status": "success"}
+  ```
+- **Benefits**:
+  - Master can distinguish between "Worker is thinking" vs "Worker is stuck"
+  - Precise error detection without text parsing heuristics
+  - Real-time progress tracking (e.g., "3 of 5 files processed")
+- **Implementation**: The Master parses the JSON stream via stdout pipe, updating the Thread's status in real-time.
+
+### Plan Mode Integration
+Claude Code's Plan Mode enables two-phase execution for complex tasks:
+
+**Phase 1: Planning**
+```bash
+claude -p "add payment feature" --plan-mode
+```
+- Worker analyzes requirements and outputs a detailed execution plan
+- **No actual file modifications** occur during planning
+- Output includes: step-by-step breakdown, files to modify, potential risks
+
+**Phase 2: Execution** (after approval)
+- Worker executes the approved plan step-by-step
+
+**Integration with CharlieBot Structure**:
+1. **Plan Thread Creation**: When a complex task is received, Master creates a special "Plan Thread" with `CLAUDE.md` containing:
+   - Task description
+   - Explicit instruction: "Generate a detailed plan only, do not execute"
+   - `--plan-mode` flag enabled
+
+2. **Plan Review UI**: The generated plan is displayed in the Web UI as a structured checklist:
+   - Each step shown with estimated time/risk
+   - User can edit, reorder, or delete steps
+   - "Approve All" or "Approve Partial" options
+
+3. **Execution Thread Creation**: Upon approval:
+   - Master creates new "Execution Thread(s)" with approved plan injected into `CLAUDE.md`
+   - Workers execute the vetted plan
+   - Multiple approved plans can execute in parallel (different Threads)
+
+4. **Storage**: Both the plan and execution results are recorded in `PAST_TASKS.md` for future reference.
+
+**Benefits**:
+- Prevents "AI going off track" on complex multi-step tasks
+- Enables batch review: queue multiple plans, review together, then batch execute
+- Reduces wasted compute on misdirected efforts
 
 ## Proposed Workflow
 1. **Task Initialization**: 

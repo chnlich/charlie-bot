@@ -177,7 +177,7 @@ class SessionDispatcher:
     except Exception as e:
       log.error("notify_completion_failed", task_id=task.id, error=str(e))
 
-  async def _read_events_summary(self, thread_id: str, max_lines: int = 50) -> str:
+  async def _read_events_summary(self, thread_id: str, max_lines: int = 80) -> str:
     """Read the last N lines from a thread's events.jsonl for summarization."""
     events_path = await self._thread_mgr.get_events_log_path(self._session_id, thread_id)
     if not events_path.exists():
@@ -189,12 +189,42 @@ class SessionDispatcher:
       try:
         ev = json.loads(line)
         ev_type = ev.get("type", "unknown")
-        content = ev.get("content", ev.get("message", ""))
-        if ev_type in ("thinking", "assistant", "tool_use", "tool_result", "file_write", "error", "complete"):
-          parts.append(f"[{ev_type}] {str(content)[:200]}")
+        content = self._extract_event_content(ev, ev_type)
+        if content:
+          parts.append(f"[{ev_type}] {content}")
       except json.JSONDecodeError:
         pass
     return "\n".join(parts) if parts else "(empty event log)"
+
+  @staticmethod
+  def _extract_event_content(ev: dict, ev_type: str) -> str:
+    """Extract human-readable content from a Claude Code stream-json event."""
+    if ev_type == "result":
+      # Final output — the most important event
+      return str(ev.get("result", ""))[:500]
+
+    if ev_type == "assistant":
+      # Content blocks nested in message.content[].text
+      msg = ev.get("message", {})
+      blocks = msg.get("content", []) if isinstance(msg, dict) else []
+      texts = []
+      for block in blocks if isinstance(blocks, list) else []:
+        if isinstance(block, dict):
+          if block.get("type") == "text":
+            texts.append(block.get("text", ""))
+          elif block.get("type") == "tool_use":
+            texts.append(f"[tool_use: {block.get('name', '?')}]")
+      return " ".join(texts)[:300] if texts else ""
+
+    if ev_type in ("thinking", "error", "complete", "tool_result", "tool_use", "file_write"):
+      content = ev.get("content", ev.get("message", ""))
+      # tool_result content can be a list of blocks
+      if isinstance(content, list):
+        texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        return " ".join(texts)[:200] if texts else ""
+      return str(content)[:200]
+
+    return ""
 
 
 # ---------------------------------------------------------------------------

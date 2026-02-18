@@ -23,6 +23,17 @@
   ├── worktrees/       # Git worktrees organized by session/task
   └── logs/            # Instance-specific logs
   ```
+- **Repository Code Structure** (Stateless, shared across instances):
+  ```text
+  charlie-bot/
+  ├── src/
+  │   ├── web/            # Web UI and API implementation
+  │   ├── core/           # Orchestration logic
+  │   └── agents/         # Agent communication wrappers
+  ├── config/             # Default configuration templates
+  ├── project.md          # This specification
+  └── server.py           # Entry point
+  ```
 
 ### 2. User Interface
 - **Primary Interface**: **Web UI** (Responsive design for both Desktop and Mobile).
@@ -87,15 +98,3 @@
    - If the Master restarts, it reloads previous Worker results from disk.
 4. **Completion & Continuation**:
    - When a Worker finishes, the Master is notified and can decide next steps (spawn more Workers, summarize to user, etc.).
-
-## Initial File Structure
-```text
-charlie-bot/
-├── src/
-│   ├── web/            # Web UI and API implementation
-│   ├── core/           # Orchestration logic
-│   └── agents/         # Agent communication wrappers
-├── config/             # Configuration files (default)
-├── project.md          # This specification
-└── server.py           # Entry point
-```

@@ -6,6 +6,7 @@ import { StatusBadge } from '../common/Badge'
 import { WorkerEventLog } from './WorkerEventLog'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { useThreadsStore } from '../../store/threads'
+import { useDebugStore } from '../../store/debug'
 
 interface Props {
   thread: ThreadMetadata
@@ -17,6 +18,7 @@ interface Props {
 export function ThreadItem({ thread, onClick, active }: Props) {
   const [expanded, setExpanded] = useState(false)
   const { eventsByThread, appendEvent } = useThreadsStore()
+  const debugMode = useDebugStore((s) => s.debugMode)
   const events = eventsByThread[thread.id] ?? []
 
   const isLive = thread.status === 'running' || thread.status === 'planning'
@@ -56,6 +58,36 @@ export function ThreadItem({ thread, onClick, active }: Props) {
       {expanded && (
         <div className="border-t border-border/50 p-2 bg-slate-900/40">
           <p className="text-xs text-slate-600 mb-1 font-mono">{thread.branch_name}</p>
+          {debugMode && (
+            <div className="mb-2 rounded border border-orange-500/30 bg-orange-500/5 p-2 text-xs space-y-1">
+              {thread.cli_command && (
+                <div>
+                  <span className="text-orange-400 font-semibold">CLI: </span>
+                  <code className="text-slate-300 select-all break-all">{thread.cli_command}</code>
+                </div>
+              )}
+              {thread.worktree_path && (
+                <div>
+                  <span className="text-orange-400 font-semibold">CWD: </span>
+                  <span className="text-slate-400">{thread.worktree_path}</span>
+                </div>
+              )}
+              <div>
+                <span className="text-orange-400 font-semibold">Thread ID: </span>
+                <span className="text-slate-400 font-mono">{thread.id}</span>
+              </div>
+              <div>
+                <span className="text-orange-400 font-semibold">Task ID: </span>
+                <span className="text-slate-400 font-mono">{thread.task_id}</span>
+              </div>
+              {thread.pid && (
+                <div>
+                  <span className="text-orange-400 font-semibold">PID: </span>
+                  <span className="text-slate-400">{thread.pid}</span>
+                </div>
+              )}
+            </div>
+          )}
           <WorkerEventLog events={events} />
         </div>
       )}

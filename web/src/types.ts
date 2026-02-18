@@ -44,6 +44,8 @@ export interface ThreadMetadata {
   completed_at: string | null
   pid: number | null
   exit_code: number | null
+  cli_command: string | null
+  worktree_path: string | null
   is_conflict_resolver: boolean
 }
 

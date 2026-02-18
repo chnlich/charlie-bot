@@ -18,9 +18,9 @@
   ```text
   ~/.charliebot/
   ├── config.yaml      # Instance-specific configuration (API keys)
-  ├── data/            # Persistence (SQLite database)
+  ├── data/            # JSON persistence (session history, agent states)
   ├── repos/           # Shared storage for base git repositories
-  ├── worktrees/       # Git worktrees organized by session/task
+  ├── worktrees/       # Git worktrees organized by session
   └── logs/            # Instance-specific logs
   ```
 - **Repository Code Structure** (Stateless, shared across instances):
@@ -30,7 +30,7 @@
   │   ├── web/            # Web UI and API implementation
   │   ├── core/           # Orchestration logic
   │   └── agents/         # Agent communication wrappers
-  ├── config/             # Default configuration templates
+  ├── config/             # Default configuration templates (examples only)
   ├── project.md          # This specification
   └── server.py           # Entry point
   ```
@@ -51,25 +51,30 @@
   - **Threads (Sub-Agents)**: Similar to Discord threads, these "hang" under a session. Each thread represents a Claude Code sub-agent task, allowing the user to drill down into specific agent status and history.
 
 ### 3. Core Manager
-- **Session Isolation**: Each session is isolated using **Git Worktrees**.
+- **Session Isolation**: Each session is isolated using **Git Worktrees**. Each session gets its own dedicated worktree directory under `~/.charliebot/worktrees/{session_id}/`.
+- **Session Data Model**: 
+  - Each Session corresponds to one Git Worktree (associated with a specific repository and branch).
+  - Sessions are user-named for easy identification in the sidebar.
+  - Session configuration (which repo, which branch) is stored in JSON.
 - **Repository Management**: 
-  - A shared `repos/` directory caches the base git repositories.
-  - For each session, CharlieBot creates/manages a dedicated worktree in `worktrees/`, allowing multiple Claude Code instances to work on different branches/PRs simultaneously without file system conflicts.
+  - A shared `repos/` directory caches the base git repositories (bare clones).
+  - For each session, CharlieBot creates/manages a dedicated worktree in `worktrees/{session_id}/`, allowing multiple sessions to work on different branches simultaneously without file system conflicts.
 - **Agent Architecture**:
   - **Master Agent**: An API-based LLM (e.g., Gemini 3 Flash, Kimi k2.5) responsible for **managing and coordinating** Claude Code Workers. The Master decides when to spawn Workers and monitors their completion, but does not perform coding analysis or create implementation plans.
   - **Worker Agent**: Always **Claude Code**. The Worker performs actual coding tasks: analyzing requirements, planning implementation, editing files, git operations, and testing within its designated worktree.
+- **Concurrent Workers**: A single Session can run **multiple Workers concurrently** (each Worker is a separate Thread under the Session). The Session decides how to orchestrate these Workers (e.g., parallel tasks, sequential steps).
 - **Sub-Agent Monitoring**: Real-time tracking of what Claude Code instances are doing (status, logs, output).
 
 ### 4. Agent Communication & State Management
 - **Master-Agent Communication**:
   - The Master (API-based LLM) receives user requests and generates instructions for Workers.
-  - Master maintains conversation history and task state in the database.
+  - Master maintains conversation history and task state in **JSON files** (persisted to `~/.charliebot/data/`).
 - **Worker State Persistence**:
   - Worker (Claude Code) state (logs, status, progress) is persisted to the **file system** (disk) in real-time by the supervisor process.
   - **Work Process Persistence**: The entire sub-agent work process (task instructions, intermediate outputs, final results, git commits) is persisted to disk. If the Master is restarted, it can **reload previous results** and resume the workflow from where it left off without losing context.
   - **Completion Notification**: When a Worker (sub-agent) finishes its task, the **Master session that triggered it must be notified**. The Master can then review the results and continue the workflow (e.g., spawn additional Workers, summarize to user, or ask for clarification).
   - **Web UI Interaction**: When the user accesses a Session/Thread, the frontend issues **HTTP GET requests**.
-  - **Backend Logic**: Upon receiving a GET request, CharlieBot queries the file system/database to retrieve the latest logs and state for that specific Worker.
+  - **Backend Logic**: Upon receiving a GET request, CharlieBot queries the **JSON files** on disk to retrieve the latest logs and state for that specific Worker.
   - **Benefits**: Reduces overhead, ensures data persistence across restarts, and simplifies the communication architecture to a standard Request-Response model.
 
 ## Technical Stack

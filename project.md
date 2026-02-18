@@ -217,19 +217,45 @@ claude -p "add payment feature" --plan-mode
 - Reduces wasted compute on misdirected efforts
 
 ## Proposed Workflow
-1. **Task Initialization**: 
-   - User submits a request via the Web UI (text or voice).
-   - The **Master Agent** (API-based LLM) receives the request and determines if a Claude Code Worker is needed.
-2. **Worker Delegation**:
-   - If coding work is required, the Master analyzes task dependencies and may spawn **one or more Claude Code Worker instances** concurrently.
-   - For concurrent Workers within the same Session, Master creates **isolated Git branches** for each Worker to prevent conflicts.
-   - Each Worker (Claude Code) analyzes its assigned task, plans the implementation, and executes on its dedicated branch.
-   - The Master monitors all Worker statuses but does not perform the actual coding analysis.
-3. **Execution & Persistence**:
-   - Workers operate within their designated Git Worktrees and persist all outputs to disk.
-   - If the Master restarts, it reloads previous Worker results from disk.
-4. **Completion & Continuation**:
-   - When a Worker finishes, the Master is notified and can decide next steps (spawn more Workers, summarize to user, etc.).
+
+### Ralph Loop Mode (Primary Mode)
+CharlieBot operates in **Ralph Loop** mode — a continuous task consumption pattern where Workers automatically pull and execute tasks from a priority queue:
+
+1. **Task Queue Initialization**:
+   - Each Session maintains a **priority task queue** (`sessions/{uuid}/task_queue.json`)
+   - Tasks are categorized into three priority levels:
+     - **P0 (Immediate)**: User's current conversation thread — execute immediately with dedicated Worker(s)
+     - **P1 (Standard)**: New feature requests, bug fixes — consume when Workers available
+     - **P2 (Background)**: Code refactoring, documentation, tests — batch process during idle time
+
+2. **Continuous Task Consumption**:
+   - Master monitors the task queue and available Worker slots
+   - When a Worker slot is free, Master spawns a new Claude Code Worker to pull the highest priority task
+   - Worker executes the task completely, then **automatically exits**
+   - Master immediately detects Worker completion and spawns next Worker for the next task
+   - This creates a **continuous loop**: as long as tasks exist in queue, Workers keep consuming them
+
+3. **Worker Delegation**:
+   - For complex tasks, Master may first create a **Plan Thread** (see Plan Mode) to generate execution plan
+   - Upon user approval, the plan enters P0/P1 queue for execution
+   - Multiple approved plans can execute in parallel across different Threads (Git branch isolation)
+   - Worker uses `--output-format stream-json` for real-time progress monitoring
+
+4. **Execution & Persistence**:
+   - Workers operate within their designated Git Worktrees (isolated branches) and persist outputs to disk
+   - Task completion updates `PAST_TASKS.md` and `PROGRESS.md`
+   - If Master restarts, it reloads queue state and resumes Ralph Loop from where it left off
+
+5. **Completion & Loop Continuation**:
+   - When a Worker finishes, Master immediately checks queue for next task
+   - If queue empty, Workers idle until new tasks arrive
+   - Master provides summary to user and continues monitoring
+
+### Benefits of Ralph Loop
+- **High Throughput**: Workers run continuously without waiting for manual task assignment
+- **Automatic Parallelization**: Multiple Workers consume independent tasks simultaneously
+- **Survivability**: Interrupted loops resume automatically after restart
+- **Flexibility**: Supports both immediate (P0) and deferred (P1/P2) task execution
 
 ## Error Handling & Resilience
 - **Master Agent Fallback**:

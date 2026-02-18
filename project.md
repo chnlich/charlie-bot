@@ -70,7 +70,9 @@
   - `asyncio`: For handling concurrent Claude Code instances and real-time updates.
 - **Frontend**:
   - `React` or `Next.js`: To build the responsive Web UI.
-- **Storage**: `SQLite` or `PostgreSQL` for session and sub-agent history.
+- **Storage**:
+  - **Agent Output**: JSON files for sub-agent logs, results, and state.
+  - **Configuration**: YAML files for manual user configuration.
 
 ## Proposed Workflow
 1. **Task Initialization**: 

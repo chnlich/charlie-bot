@@ -26,15 +26,16 @@
 - **Repository Code Structure** (Stateless, shared across instances):
   ```text
   charlie-bot/
-  ├── src/
+  ├── src/                # All Python backend code
   │   ├── api/            # FastAPI backend and API
   │   ├── core/           # Orchestration logic
-  │   └── agents/         # Agent communication wrappers
-  ├── ui/                 # React SPA source code (Node.js required for development only)
-  ├── static/             # React build output (served by FastAPI at runtime)
+  │   ├── agents/         # Agent communication wrappers
+  │   └── server.py       # Entry point
+  ├── web/                # All frontend-related code
+  │   ├── src/            # React SPA source (Node.js required for development only)
+  │   └── static/         # React build output (served by FastAPI at runtime)
   ├── config/             # Default configuration templates (examples only)
-  ├── project.md          # This specification
-  └── server.py           # Entry point
+  └── project.md          # This specification
   ```
 
 ### 2. User Interface

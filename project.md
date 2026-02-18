@@ -4,8 +4,8 @@
 **CharlieBot** is a Python-based system designed to coordinate and manage multiple **Claude Code** instances to complete complex tasks. The primary interface for interaction is a responsive Web UI for desktop and mobile access.
 
 ## Objectives
-- **Agent Orchestration**: Enable a "Master" agent to spawn, monitor, and manage "Worker" Claude Code instances.
-- **Task Delegation**: Break down complex user requests into sub-tasks assigned to specialized Claude Code instances.
+- **Agent Orchestration**: Enable an API-based **Master Agent** (e.g., Gemini 3 Flash, Kimi k2.5) to plan tasks and spawn **Claude Code** Worker instances to execute them.
+- **Task Delegation**: Master breaks down complex user requests and delegates coding sub-tasks to specialized Claude Code Workers.
 - **Python-Native**: Built entirely in Python for extensibility and ease of integration with AI toolsets.
 
 ## Key Design Principles
@@ -40,21 +40,28 @@
 - **Repository Management**: 
   - A shared `repos/` directory caches the base git repositories.
   - For each session, CharlieBot creates/manages a dedicated worktree in `worktrees/`, allowing multiple Claude Code instances to work on different branches/PRs simultaneously without file system conflicts.
-- **Agent Orchestration**: Master Agent spawns and monitors Worker Claude Code instances within their respective worktree environments.
+- **Agent Architecture**:
+  - **Master Agent**: An API-based LLM (e.g., Gemini 3 Flash, Kimi k2.5) responsible for task planning, decision making, and coordinating workflows. The Master does not directly edit code; it orchestrates.
+  - **Worker Agent**: Always **Claude Code**. The Worker is spawned by the Master to perform actual coding tasks (file edits, git operations, testing) within its designated worktree.
 - **Sub-Agent Monitoring**: Real-time tracking of what Claude Code instances are doing (status, logs, output).
 
 ### 4. Integrations
 - **GitHub Integration**: Native support for managing Pull Requests (PRs), committing changes, and maintaining task context across different branches/PRs.
 
 ### 5. Agent Communication & State Management
-- **Pull-based State Updates**:
-  - Instead of the Master Agent pushing constant updates, sub-agent state (logs, status, progress) is persisted to the **file system** (disk) in real-time by the worker process or its supervisor.
+- **Master-Agent Communication**:
+  - The Master (API-based LLM) receives user requests and generates instructions for Workers.
+  - Master maintains conversation history and task state in the database.
+- **Worker State Persistence**:
+  - Worker (Claude Code) state (logs, status, progress) is persisted to the **file system** (disk) in real-time by the supervisor process.
   - **Web UI Interaction**: When the user accesses a Session/Thread, the frontend issues **HTTP GET requests**.
-  - **Backend Logic**: Upon receiving a GET request, the CharlieBot backend queries the file system/database to retrieve the latest logs and state for that specific sub-agent.
-  - **Benefits**: Reduces overhead on the Master Agent, ensures data persistence across restarts, and simplifies the communication architecture to a standard Request-Response model for the UI.
+  - **Backend Logic**: Upon receiving a GET request, CharlieBot queries the file system/database to retrieve the latest logs and state for that specific Worker.
+  - **Benefits**: Reduces overhead, ensures data persistence across restarts, and simplifies the communication architecture to a standard Request-Response model.
 
 ## Technical Stack
 - **Language**: Python 3.10+
+- **Master Agent**: API-based LLM (Gemini 3 Flash, Kimi k2.5, etc.)
+- **Worker Agent**: Claude Code (local CLI invocation)
 - **Backend**: 
   - `FastAPI` or `Flask`: To serve the Web UI and API.
   - `asyncio`: For handling concurrent Claude Code instances and real-time updates.
@@ -64,15 +71,14 @@
 
 ## Proposed Workflow
 1. **Task Initialization**: 
-   - User submits a request via the Web UI.
-   - For a **new project**, the Master creates a `project.md` or similar specification.
-   - For an **existing project**, the Master identifies the current state from existing documentation/code and updates the task context.
+   - User submits a request via the Web UI (text or voice).
+   - The **Master Agent** (API-based LLM) analyzes the request and creates a task plan.
 2. **Context Persistence**: 
    - Work is managed through Pull Requests (PRs).
-   - The Master Agent tracks the current PR state and ensures sub-agents "inherit" the context of the branch or ongoing work.
+   - The Master tracks the current PR state and ensures Workers inherit the context of the branch.
 3. **Execution**:
-   - Master Agent spawns Worker Claude Code instances to perform specific tasks on the codebase.
-   - Workers update code and documentation incrementally rather than recreating them.
+   - Master spawns **Claude Code Worker** instances via shell to perform specific tasks on the codebase.
+   - Workers operate within their designated Git Worktrees.
 4. **Review & Summary**:
    - Master summarizes progress back to the Web UI, referencing specific PRs or files changed.
 

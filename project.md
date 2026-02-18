@@ -171,6 +171,24 @@
   - If Gemini 3 Flash errors out (API failure, rate limit, etc.), the system automatically **switches to Kimi k2.5** as the fallback model.
   - The switch is transparent to the user and the conversation context is preserved.
   - **Model Abstraction**: The LLM client is wrapped in an abstract class/interface (e.g., `LLMProvider`), making it straightforward to add or switch to other models (OpenAI, Anthropic, local models, etc.) without modifying core logic.
+
+## Context Management
+To handle context window limitations for both Master and Worker agents:
+
+### Master Agent Layer
+- **Conversation Summarization**: When dialogue history approaches the token limit, early exchanges are compressed into key summary points while retaining recent full context (e.g., last 10 turns).
+- **On-Demand Retrieval**: Instead of loading entire `PAST_TASKS.md`, semantic search retrieves only the Top-K most relevant task records when historical context is needed.
+- **Hierarchical Context**: System prompt > Session summary > Recent full dialogue > Retrieved task snippets.
+
+### Worker (Claude Code) Layer
+- **Task Decomposition**: Master breaks complex tasks into smaller sub-tasks, each handled by a separate Worker to stay within context limits.
+- **File Scoping**: `CLAUDE.md` explicitly defines which files/modules the Worker should focus on, avoiding loading the entire codebase unnecessarily.
+- **Incremental Context**: Workers receive only the task-specific context plus relevant file contents, not the full session history.
+
+### PAST_TASKS.md Retrieval
+- **Semantic Search**: Query embedding matching to find relevant historical tasks without reading the entire file.
+- **Result Summarization**: Retrieved task records are summarized before being passed to the Master, reducing token consumption.
+- **Lazy Loading**: Historical context is only fetched when explicitly needed (e.g., user asks "how did we solve this before?").
 - **Quota Exhaustion Handling**:
   - If Claude Code returns a quota-exhausted error, the Worker is paused and its task enters a **PENDING_QUOTA** state.
   - The Master session periodically checks (polls) whether the quota has recovered.

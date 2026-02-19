@@ -33,8 +33,9 @@ class SessionManager:
 
   async def create_session(self, req: CreateSessionRequest) -> SessionMetadata:
     """Create a new session with optional git worktree setup."""
+    name = req.name or await self._next_session_name()
     meta = SessionMetadata(
-      name=req.name,
+      name=name,
       repo_url=req.repo_url,
       repo_path=req.repo_path,
       base_branch=req.base_branch,
@@ -116,6 +117,11 @@ class SessionManager:
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  async def _next_session_name(self) -> str:
+    """Generate 'Session 0', 'Session 1', etc. based on existing count."""
+    existing = await self.list_sessions()
+    return f"Session {len(existing)}"
 
   def _bare_path(self, session_id: str) -> Path:
     """Return the session-scoped bare repo path."""

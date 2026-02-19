@@ -152,7 +152,7 @@ class WorkerEvent(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
-  name: str
+  name: Optional[str] = None
   repo_url: Optional[str] = None
   repo_path: Optional[str] = None
   base_branch: str = "main"

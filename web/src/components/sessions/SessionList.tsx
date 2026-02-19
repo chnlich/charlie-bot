@@ -3,15 +3,28 @@ import { Plus } from 'lucide-react'
 import { sessionsApi } from '../../api/sessions'
 import { useSessionsStore } from '../../store/sessions'
 import { SessionItem } from './SessionItem'
-import { CreateSessionModal } from './CreateSessionModal'
 
 export function SessionList() {
-  const { sessions, activeSessionId, setSessions, setActiveSession } = useSessionsStore()
-  const [showCreate, setShowCreate] = useState(false)
+  const { sessions, activeSessionId, setSessions, setActiveSession, addSession } = useSessionsStore()
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     sessionsApi.list().then(setSessions).catch(console.error)
   }, [setSessions])
+
+  const handleCreate = async () => {
+    if (creating) return
+    setCreating(true)
+    try {
+      const session = await sessionsApi.create({})
+      addSession(session)
+      setActiveSession(session.id)
+    } catch (e) {
+      console.error('Failed to create session', e)
+    } finally {
+      setCreating(false)
+    }
+  }
 
   const active = sessions.filter((s) => s.status === 'active')
 
@@ -20,8 +33,9 @@ export function SessionList() {
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Sessions</span>
         <button
-          onClick={() => setShowCreate(true)}
-          className="text-slate-500 hover:text-slate-300 transition-colors"
+          onClick={handleCreate}
+          disabled={creating}
+          className="text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-50"
           title="New session"
         >
           <Plus size={14} />
@@ -41,8 +55,6 @@ export function SessionList() {
           <p className="text-xs text-slate-600 px-2 py-1">No sessions yet</p>
         )}
       </div>
-
-      <CreateSessionModal open={showCreate} onClose={() => setShowCreate(false)} />
     </div>
   )
 }

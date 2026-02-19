@@ -134,9 +134,9 @@ class ThreadManager:
 
   async def get_worktree_path(self, session_id: str, thread_id: str) -> Path:
     meta = await self.get_thread(session_id, thread_id)
-    if not meta or not meta.worktree_path:
-      raise ValueError(f"Thread {thread_id} has no worktree_path")
-    return Path(meta.worktree_path)
+    if meta and meta.worktree_path:
+      return Path(meta.worktree_path)
+    return Path.home()
 
   async def get_claude_md_path(self, session_id: str, thread_id: str) -> Path:
     worktree = await self.get_worktree_path(session_id, thread_id)

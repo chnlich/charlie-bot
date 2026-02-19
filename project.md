@@ -23,14 +23,12 @@
 ## 3. Directory Structure
 
 ### 3.1 Home Directory (`~/.charliebot/` or `CHARLIEBOT_HOME`)
-All instance-specific data (configs, logs, sessions) is stored here. The entire `~/.charliebot/` directory is itself a git repository for backup purposes.
+All instance-specific data (configs, logs, sessions) is stored here.
 
 ```text
-~/.charliebot/                  # Git repo (automatic backup via commits)
-├── .git/                # Backup history
+~/.charliebot/
 ├── config.yaml          # API keys, settings, and project_dirs list
 ├── MEMORY.md            # Globally shared memory (user preferences, facts)
-├── PAST_TASKS.md        # Global record of all completed tasks
 ├── PROGRESS.md          # Global lessons learned and insights
 ├── logs/                # Application logs (server errors, system events)
 └── sessions/            # Session directories
@@ -61,7 +59,6 @@ For sessions created with `repo_url` (no local path), worktrees fall back to `~/
 
 **Notes:**
 - `logs/`: Stores application-level logs (server errors, HTTP access, Worker spawn/crash events). Individual Worker logs are in `threads/{uuid}/data/`.
-- **Backup**: `~/.charliebot/` is a git repo. Changes are committed on server startup via `init_backup_repo()`. Use `git log` in `~/.charliebot/` to view backup history.
 - `repo.git/`: Bare git repository is session-scoped.
 - `CLAUDE.md`: Written into each thread's worktree (so Claude Code finds it via cwd).
 - `project_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
@@ -163,13 +160,11 @@ All files use synchronization locks to prevent race conditions:
 | File | Purpose | Access Pattern |
 |------|---------|----------------|
 | **MEMORY.md** | User preferences ("dark mode"), facts ("works at Citadel"), personalization | Read at session start; updated when preferences/facts revealed |
-| **PAST_TASKS.md** | Archive of all completed tasks (description, approach, files, solutions) | **On-demand only** — queried via semantic search when historical context needed |
 | **PROGRESS.md** | Lessons learned, mistakes, best practices | Workers append insights at end of tasks ("summarize, refine, elevate") |
 
 ### 6.2 Context Management Strategies
 - **Master Layer**: Conversation summarization (compress early history, keep last ~10 turns); hierarchical context (System > Session Summary > Recent Dialogue > Retrieved snippets)
 - **Worker Layer**: Task decomposition; file scoping via `CLAUDE.md` (explicitly limit focus to relevant modules)
-- **Retrieval**: Semantic search for `PAST_TASKS.md`; lazy loading (only fetch when explicitly needed)
 
 ---
 
@@ -230,11 +225,6 @@ When auto-merge fails:
 4. Decides: keep one side, merge both, or manual resolve
 5. Creates resolution commit with explanation
 
-### 9.4 Backup Strategy
-- **Git-based**: `~/.charliebot/` is a git repository. All state changes (MEMORY.md, PAST_TASKS.md, session metadata) are committed automatically on server startup.
-- **History**: Use `git log` inside `~/.charliebot/` to view and restore previous states.
-- **Worktree contents**: Backed up via task-branch commits in each session's bare repo.
-
 ---
 
 ## 10. Development Guidelines
@@ -255,7 +245,6 @@ Each Thread's `CLAUDE.md` contains:
 1. Default shared instructions from `config/claude-default.md` (coding standards, YOLO mode, git conventions)
 2. Specific task description and objectives
 3. Session-specific context/constraints
-4. References to relevant files from PAST_TASKS.md
 
 ---
 
@@ -264,14 +253,14 @@ Each Thread's `CLAUDE.md` contains:
 ### 11.1 Completed (MVP)
 
 **Backend**
-- FastAPI server (`server.py`) with git-based backup (commits to `~/.charliebot/` repo on startup)
+- FastAPI server (`server.py`)
 - All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/voice`, `/api/memory`
 - `MasterAgent` with Gemini (primary) + Kimi (fallback) LLM providers, streaming, conversation summarization
 - `QueueManager` — priority queue (P0 > P1 > P2) with atomic JSON persistence via `os.replace`
 - `SessionDispatcher` — per-session background queue loop that pops tasks, creates threads, and spawns Claude Code workers (`claude -p --dangerously-skip-permissions --output-format stream-json --verbose`)
 - Worker completion handling: dispatcher reads worker's NDJSON event log, asks Master Agent to review and summarize, appends summary to session conversation history, broadcasts via session WebSocket
-- `SessionManager`, `ThreadManager`, `MemoryManager`, `BackupManager`, `GitManager`
-- `init_charliebot_home()` — seeds `~/.charliebot/` on first run, populating API keys from env vars into `config.yaml`
+- `SessionManager`, `ThreadManager`, `MemoryManager`, `GitManager`
+- `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
 - Memory updates: Master Agent can include `memory_update` field in any response to persist user preferences/facts to `MEMORY.md`
 
 **WebSocket Endpoints**
@@ -286,31 +275,9 @@ Each Thread's `CLAUDE.md` contains:
 - No-cache middleware on HTML to prevent stale JS bundles
 
 **Configuration**
-- `~/.charliebot/config.yaml` is the single source of truth for API keys and settings
-- Env vars (`GEMINI_API_KEY`, `KIMI_API_KEY`) used only to seed config on first run — never read at runtime
+- `~/.charliebot/config.yaml` is the single source of truth for API keys and settings — no environment variables
 - Active models: `gemini-3-flash-preview` (primary), `kimi-k2.5` (fallback)
 
-**Tests**
-- 126 unit tests across: models, config, queue, streaming, memory, backup, sessions, master agent, server utilities
-- 47 UAT tests via Starlette `TestClient` covering all API endpoints end-to-end
-- 3 live Gemini integration tests (skipped if API key absent)
+### 11.2 Pending / Not Yet Implemented
 
-### 11.2 Known Issues / Fixed Bugs
-
-| Bug | Fix |
-|-----|-----|
-| `backup.py` crashed on rapid successive backups | `mkdir()` → `mkdir(exist_ok=True)` |
-| `GET /api/sessions` → 404, `POST /api/sessions` → 405 | StaticFiles mount at `/` intercepts before FastAPI `redirect_slashes`; fixed by adding trailing slashes in `sessions.ts` |
-| 14 TypeScript build errors blocking frontend | Removed unused imports, fixed `thread.plan_steps` (not on `ThreadMetadata`), added explicit types |
-| Master Agent refused git/shell task delegation | System prompt said "git operations" as off-limits; reworded to delegate ALL actionable tasks |
-| Gemini API key not found at runtime | Config used `CHARLIEBOT_GEMINI_API_KEY` prefix; fixed by seeding key into `config.yaml` at init |
-| Browser served stale JS bundle | Added no-cache middleware for HTML responses in `server.py` |
-| `WorkerEventLog` TypeError on non-string `event.message` | Wrapped with `String()` before calling `.slice()` |
-| Threads not visible in UI after delegation | Thread created inline in `chat.py` before SSE completes; ThreadsPanel polls every 3s |
-| Master Agent silent after worker completion | Added `_notify_completion` in dispatcher → reviews results → pushes summary via session WebSocket |
-
-### 11.3 Pending / Not Yet Implemented
-
-- Conflict Resolution Worker
-- Semantic search over `PAST_TASKS.md`
 - Claude plan usage tracking and Kimi K2.5 fallback for workers when near quota limits

@@ -13,7 +13,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
 from src.api import chat, memory, sessions, threads, voice
-from src.core.backup import init_backup_repo
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
 from src.core.streaming import streaming_manager
@@ -29,9 +28,6 @@ async def lifespan(app: FastAPI):
   # Ensure home directory structure exists
   await init_charliebot_home()
   log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
-
-  # Initialize git-based backup repo in ~/.charliebot/
-  await init_backup_repo(cfg)
 
   yield
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 import structlog
@@ -91,21 +92,20 @@ class SessionDispatcher:
       if not thread:
         thread = await self._thread_mgr.create_thread(session_meta, task)
 
-      await self._thread_mgr.update_status(self._session_id, thread.id, ThreadStatus.RUNNING)
-      log.info("thread_running", thread_id=thread.id, task_id=task.id)
-
       # Build and run Worker
       events_log = await self._thread_mgr.get_events_log_path(self._session_id, thread.id)
       worktree = await self._thread_mgr.get_worktree_path(self._session_id, thread.id)
       worker = Worker(thread, worktree, events_log, task.description)
 
-      try:
-        # Store CLI command and worktree path for debug mode
-        cli_str = " ".join(WORKER_COMMAND + [task.description])
-        thread.cli_command = cli_str
-        thread.worktree_path = str(worktree)
-        await self._thread_mgr._save_metadata(thread)
+      # Store debug metadata and mark as RUNNING in a single save
+      thread.cli_command = " ".join(WORKER_COMMAND + [task.description])
+      thread.worktree_path = str(worktree)
+      thread.status = ThreadStatus.RUNNING
+      thread.started_at = datetime.utcnow()
+      await self._thread_mgr._save_metadata(thread)
+      log.info("thread_running", thread_id=thread.id, task_id=task.id)
 
+      try:
         exit_code = await worker.run()
         if exit_code == 0:
           await self._queue_mgr.mark_complete(task.id)

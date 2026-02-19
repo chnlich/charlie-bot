@@ -9,7 +9,6 @@ import aiofiles
 import structlog
 
 from src.core.config import CharliBotConfig
-from src.core.git import GitError, GitManager
 from src.core.models import (
   ConversationHistory,
   CreateSessionRequest,
@@ -23,23 +22,26 @@ log = structlog.get_logger()
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
-  def __init__(self, cfg: CharliBotConfig, git_manager: GitManager):
+  def __init__(self, cfg: CharliBotConfig):
     self._cfg = cfg
-    self._git = git_manager
 
   # ---------------------------------------------------------------------------
   # Session CRUD
   # ---------------------------------------------------------------------------
 
   async def create_session(self, req: CreateSessionRequest) -> SessionMetadata:
-    """Create a new session with optional git worktree setup."""
+    """Create a new session with optional repo_path."""
     name = req.name or await self._next_session_name()
     meta = SessionMetadata(
       name=name,
-      repo_url=req.repo_url,
       repo_path=req.repo_path,
-      base_branch=req.base_branch,
     )
+
+    # Validate repo_path if provided
+    if req.repo_path:
+      repo = Path(req.repo_path)
+      if not repo.is_dir() or not (repo / ".git").exists():
+        log.warning("invalid_repo_path", path=req.repo_path)
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure
@@ -53,14 +55,6 @@ class SessionManager:
 
     # Initialize empty conversation history
     await self._save_history(ConversationHistory(session_id=meta.id))
-
-    # Set up git if a repo is provided
-    if req.repo_url or req.repo_path:
-      try:
-        await self._setup_git(meta)
-      except GitError as e:
-        log.warning("git_setup_failed", session=meta.id, error=str(e))
-        # Don't fail session creation if git fails; session still usable without git
 
     await self._save_metadata(meta)
     log.info("session_created", session_id=meta.id, name=meta.name)
@@ -122,30 +116,6 @@ class SessionManager:
     """Generate 'Session 0', 'Session 1', etc. based on existing count."""
     existing = await self.list_sessions()
     return f"Session {len(existing)}"
-
-  def _bare_path(self, session_id: str) -> Path:
-    """Return the session-scoped bare repo path."""
-    return self._cfg.sessions_dir / session_id / "repo.git"
-
-  def _worktree_root(self, meta: SessionMetadata) -> Path:
-    """Return the root directory for all worktrees in this session."""
-    if meta.repo_path:
-      return Path(meta.repo_path) / "worktree"
-    return self._session_dir(meta.id) / "worktree"
-
-  async def _setup_git(self, meta: SessionMetadata) -> None:
-    """Set up bare repo + session worktree."""
-    bare_path = self._bare_path(meta.id)
-
-    if meta.repo_url:
-      await self._git.clone_bare(meta.repo_url, bare_path)
-    elif meta.repo_path:
-      await self._git.link_local_repo(Path(meta.repo_path), bare_path)
-
-    worktree_root = self._worktree_root(meta)
-    worktree_root.mkdir(parents=True, exist_ok=True)
-    worktree_path = worktree_root / meta.base_branch
-    await self._git.add_worktree(bare_path, worktree_path, meta.base_branch)
 
   async def _save_metadata(self, meta: SessionMetadata) -> None:
     path = self._metadata_path(meta.id)

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class CharliBotConfig(BaseModel):
@@ -25,13 +25,36 @@ class CharliBotConfig(BaseModel):
   # Paths
   charliebot_home: Path = Path.home() / ".charliebot"
 
-  # Workspace directories to scan for git projects
-  project_dirs: list[str] = []
+  # Workspace directories to scan for git repos
+  workspace_dirs: list[str] = ["~/workspace"]
 
-  @field_validator("project_dirs", mode="before")
+  # Root directory for thread worktrees
+  worktree_dir: str = "~/worktrees"
+
+  @model_validator(mode="before")
   @classmethod
-  def expand_project_dirs(cls, v: list[str]) -> list[str]:
+  def migrate_and_expand(cls, values: dict) -> dict:
+    """Backward compat: rename project_dirs → workspace_dirs, expand ~ in paths."""
+    if "project_dirs" in values and "workspace_dirs" not in values:
+      values["workspace_dirs"] = values.pop("project_dirs")
+    elif "project_dirs" in values:
+      values.pop("project_dirs")
+    # Expand ~ in workspace_dirs and worktree_dir (defaults may not trigger field_validator)
+    ws = values.get("workspace_dirs", ["~/workspace"])
+    values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
+    wd = values.get("worktree_dir", "~/worktrees")
+    values["worktree_dir"] = os.path.expanduser(wd)
+    return values
+
+  @field_validator("workspace_dirs", mode="before")
+  @classmethod
+  def expand_workspace_dirs(cls, v: list[str]) -> list[str]:
     return [os.path.expanduser(p) for p in (v or [])]
+
+  @field_validator("worktree_dir", mode="before")
+  @classmethod
+  def expand_worktree_dir(cls, v: str) -> str:
+    return os.path.expanduser(v)
 
   @property
   def sessions_dir(self) -> Path:
@@ -53,17 +76,17 @@ class CharliBotConfig(BaseModel):
   def config_file(self) -> Path:
     return self.charliebot_home / "config.yaml"
 
-  def discover_projects(self) -> list[dict[str, str]]:
-    """Scan project_dirs for directories containing a .git folder."""
-    projects: list[dict[str, str]] = []
-    for dir_str in self.project_dirs:
+  def discover_repos(self) -> list[dict[str, str]]:
+    """Scan workspace_dirs for directories containing a .git folder."""
+    repos: list[dict[str, str]] = []
+    for dir_str in self.workspace_dirs:
       parent = Path(dir_str)
       if not parent.is_dir():
         continue
       for child in sorted(parent.iterdir()):
         if child.is_dir() and (child / ".git").exists():
-          projects.append({"name": child.name, "path": str(child)})
-    return projects
+          repos.append({"name": child.name, "path": str(child)})
+    return repos
 
 
 _config: Optional[CharliBotConfig] = None

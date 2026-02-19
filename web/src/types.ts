@@ -52,9 +52,7 @@ export interface ThreadMetadata {
 export interface SessionMetadata {
   id: string
   name: string
-  repo_url: string | null
   repo_path: string | null
-  base_branch: string
   status: SessionStatus
   created_at: string
   updated_at: string
@@ -88,9 +86,7 @@ export interface WorkerEvent {
 
 export interface CreateSessionRequest {
   name?: string
-  repo_url?: string
   repo_path?: string
-  base_branch?: string
 }
 
 export interface VoiceTranscriptionResponse {

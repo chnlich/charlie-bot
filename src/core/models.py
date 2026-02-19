@@ -103,9 +103,7 @@ class ThreadMetadata(BaseModel):
 class SessionMetadata(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   name: str
-  repo_url: Optional[str] = None
   repo_path: Optional[str] = None
-  base_branch: str = "main"
   status: SessionStatus = SessionStatus.ACTIVE
   created_at: datetime = Field(default_factory=datetime.utcnow)
   updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -153,9 +151,7 @@ class WorkerEvent(BaseModel):
 
 class CreateSessionRequest(BaseModel):
   name: Optional[str] = None
-  repo_url: Optional[str] = None
   repo_path: Optional[str] = None
-  base_branch: str = "main"
 
 
 class SendMessageRequest(BaseModel):

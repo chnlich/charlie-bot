@@ -30,13 +30,16 @@ class ConflictResolver:
     Attempt to resolve merge conflicts between two branches.
     Returns True if resolved, False if manual intervention is required.
     """
-    bare_path = self._cfg.sessions_dir / session_meta.id / "repo.git"
+    if not session_meta.repo_path:
+      log.error("conflict_resolve_no_repo", session=session_meta.id)
+      return False
+    repo_path = Path(session_meta.repo_path)
 
     # Gather context for the Worker
     try:
-      target_log = await self._git.get_commit_log(bare_path, target_branch, n=10)
-      source_log = await self._git.get_commit_log(bare_path, source_branch, n=10)
-      diff = await self._git.get_diff(bare_path, target_branch, source_branch)
+      target_log = await self._git.get_commit_log(repo_path, target_branch, n=10)
+      source_log = await self._git.get_commit_log(repo_path, source_branch, n=10)
+      diff = await self._git.get_diff(repo_path, target_branch, source_branch)
     except Exception as e:
       log.error("conflict_context_failed", error=str(e))
       return False

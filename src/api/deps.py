@@ -37,7 +37,7 @@ def _get_memory_manager() -> MemoryManager:
 def get_session_manager() -> SessionManager:
   global _session_manager
   if _session_manager is None:
-    _session_manager = SessionManager(get_config(), _get_git_manager())
+    _session_manager = SessionManager(get_config())
   return _session_manager
 
 

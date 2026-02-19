@@ -34,9 +34,9 @@ async def create_session(
 
 @router.get("/projects")
 async def list_projects():
-  """Return git projects discovered from configured project_dirs."""
+  """Return git repos discovered from configured workspace_dirs."""
   cfg = get_config()
-  return cfg.discover_projects()
+  return cfg.discover_repos()
 
 
 @router.get("/{session_id}", response_model=SessionMetadata)

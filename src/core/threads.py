@@ -48,22 +48,25 @@ class ThreadManager:
 
     # Set up git branch + worktree if session has a repo
     claude_md_target = thread_dir  # default if no git
-    bare_path = self._cfg.sessions_dir / session_meta.id / "repo.git"
-    if bare_path.exists():
-      try:
-        worktree_root = self._worktree_root(session_meta)
-        worktree_root.mkdir(parents=True, exist_ok=True)
-        worktree_path = worktree_root / thread.branch_name
-        thread.worktree_path = str(worktree_path)
-        await self._git.create_branch_and_worktree(
-          repo_path=bare_path,
-          worktree_path=worktree_path,
-          branch_name=thread.branch_name,
-          base_branch=session_meta.base_branch,
-        )
-        claude_md_target = worktree_path
-      except GitError as e:
-        log.warning("thread_git_setup_failed", thread=thread.id, error=str(e))
+    if session_meta.repo_path:
+      repo_path = Path(session_meta.repo_path)
+      if repo_path.is_dir() and (repo_path / ".git").exists():
+        try:
+          worktree_root = Path(self._cfg.worktree_dir)
+          worktree_root.mkdir(parents=True, exist_ok=True)
+          worktree_path = worktree_root / thread.branch_name
+          thread.worktree_path = str(worktree_path)
+          # Detect the current branch to use as base
+          base_branch = await self._git.get_current_branch(repo_path)
+          await self._git.create_branch_and_worktree(
+            repo_path=repo_path,
+            worktree_path=worktree_path,
+            branch_name=thread.branch_name,
+            base_branch=base_branch,
+          )
+          claude_md_target = worktree_path
+        except GitError as e:
+          log.warning("thread_git_setup_failed", thread=thread.id, error=str(e))
 
     # Write CLAUDE.md into the worktree so Claude Code finds it
     await self._write_claude_md(claude_md_target, task, session_meta)
@@ -116,16 +119,18 @@ class ThreadManager:
       meta.completed_at = datetime.utcnow()
     await self._save_metadata(meta)
 
-  async def cleanup_worktree(self, session_id: str, thread_id: str) -> None:
+  async def cleanup_worktree(self, session_id: str, thread_id: str, session_meta: SessionMetadata) -> None:
     """Remove the thread's git worktree (but keep metadata)."""
     meta = await self.get_thread(session_id, thread_id)
     if not meta or not meta.worktree_path:
       return
-    bare_path = self._cfg.sessions_dir / session_id / "repo.git"
+    if not session_meta.repo_path:
+      return
+    repo_path = Path(session_meta.repo_path)
     worktree_path = Path(meta.worktree_path)
-    if bare_path.exists() and worktree_path.exists():
+    if repo_path.is_dir() and worktree_path.exists():
       try:
-        await self._git.remove_worktree(bare_path, worktree_path)
+        await self._git.remove_worktree(repo_path, worktree_path)
       except GitError as e:
         log.warning("worktree_cleanup_failed", thread=thread_id, error=str(e))
 
@@ -145,12 +150,6 @@ class ThreadManager:
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
-
-  def _worktree_root(self, session_meta: SessionMetadata) -> Path:
-    """Return the root directory for all worktrees in this session."""
-    if session_meta.repo_path:
-      return Path(session_meta.repo_path) / "worktree"
-    return self._cfg.sessions_dir / session_meta.id / "worktree"
 
   async def _write_claude_md(
     self,
@@ -184,7 +183,6 @@ class ThreadManager:
       f"\n## Session Info\n"
       f"- Session: {session_meta.name}\n"
       f"- Branch: {task.id[:8]}\n"
-      f"- Base branch: {session_meta.base_branch}\n"
     )
 
     claude_md_path = thread_dir / "CLAUDE.md"

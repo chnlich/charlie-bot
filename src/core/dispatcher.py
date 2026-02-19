@@ -96,7 +96,10 @@ class SessionDispatcher:
       # Build and run Worker
       events_log = await self._thread_mgr.get_events_log_path(self._session_id, thread.id)
       worktree = await self._thread_mgr.get_worktree_path(self._session_id, thread.id)
-      worker = Worker(thread, worktree, events_log, task.description)
+      worker = Worker(
+        thread, worktree, events_log, task.description,
+        on_spawned=self._thread_mgr._save_metadata,
+      )
 
       # Store debug metadata and mark as RUNNING in a single save
       thread.cli_command = " ".join(WORKER_COMMAND + [task.description])
@@ -151,6 +154,14 @@ class SessionDispatcher:
           error=str(e), traceback=traceback.format_exc(),
         )
         await self._notify_completion(task, thread, -1, error=str(e))
+
+    except Exception as e:
+      # Catch-all for errors before the inner try (create_thread, get_worktree, etc.)
+      log.error(
+        "run_task_setup_failed", task_id=task.id,
+        error=str(e), traceback=traceback.format_exc(),
+      )
+      await self._queue_mgr.mark_failed(task.id)
 
     finally:
       self._semaphore.release()

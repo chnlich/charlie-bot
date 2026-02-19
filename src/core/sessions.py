@@ -83,6 +83,17 @@ class SessionManager:
     sessions.sort(key=lambda s: s.created_at, reverse=True)
     return sessions
 
+  async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:
+    """Rename a session and return the updated metadata."""
+    meta = await self.get_session(session_id)
+    if not meta:
+      return None
+    meta.name = new_name
+    meta.updated_at = datetime.utcnow()
+    await self._save_metadata(meta)
+    log.info("session_renamed", session_id=session_id, new_name=new_name)
+    return meta
+
   async def archive_session(self, session_id: str) -> None:
     """Mark a session as archived (does not delete files)."""
     meta = await self.get_session(session_id)

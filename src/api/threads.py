@@ -4,7 +4,10 @@ import json
 import os
 import signal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
+
+log = structlog.get_logger()
 
 from src.api.deps import get_thread_manager, get_queue_manager
 from src.core.models import (
@@ -53,7 +56,8 @@ async def get_thread_events(
       try:
         data = json.loads(line)
         events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
-      except Exception:
+      except Exception as e:
+        log.debug("event_parse_failed", error=str(e), line=line[:200])
         events.append(WorkerEvent(type="raw", content=line))
   return events
 
@@ -103,7 +107,7 @@ async def cancel_thread(
     try:
       os.kill(thread.pid, signal.SIGTERM)
     except ProcessLookupError:
-      pass  # Process already finished
+      log.debug("cancel_pid_gone", pid=thread.pid, thread=thread_id)
 
   await thread_mgr.update_status(session_id, thread_id, ThreadStatus.CANCELLED)
   return {"ok": True}

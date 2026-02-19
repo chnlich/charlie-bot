@@ -85,7 +85,8 @@ def _recover_orphaned_threads(cfg) -> None:
         continue
       try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-      except (json.JSONDecodeError, OSError):
+      except (json.JSONDecodeError, OSError) as e:
+        log.warning("thread_meta_unreadable", path=str(meta_path), error=str(e))
         continue
       if meta.get("status") != "running":
         continue
@@ -94,8 +95,8 @@ def _recover_orphaned_threads(cfg) -> None:
       if pid:
         try:
           os.kill(pid, 15)  # SIGTERM
-        except (OSError, ProcessLookupError):
-          pass
+        except (OSError, ProcessLookupError) as e:
+          log.debug("sigterm_failed", pid=pid, error=str(e))
       # Mark as failed
       meta["status"] = "failed"
       meta["exit_code"] = -1
@@ -122,7 +123,8 @@ def _append_recovery_messages(cfg, session_id: str, orphans: list[dict]) -> None
     return
   try:
     conv = json.loads(conv_path.read_text(encoding="utf-8"))
-  except (json.JSONDecodeError, OSError):
+  except (json.JSONDecodeError, OSError) as e:
+    log.warning("conversation_unreadable", session=session_id, error=str(e))
     return
   import uuid
   for meta in orphans:
@@ -146,7 +148,8 @@ def _mark_tasks_failed(cfg, session_id: str, orphans: list[dict]) -> None:
     return
   try:
     queue = json.loads(queue_path.read_text(encoding="utf-8"))
-  except (json.JSONDecodeError, OSError):
+  except (json.JSONDecodeError, OSError) as e:
+    log.warning("task_queue_unreadable", session=session_id, error=str(e))
     return
   orphan_task_ids = {m.get("task_id") for m in orphans}
   for task in queue.get("tasks", []):

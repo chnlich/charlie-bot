@@ -248,8 +248,8 @@ class SessionDispatcher:
         content = self._extract_event_content(ev, ev_type)
         if content:
           parts.append(f"[{ev_type}] {content}")
-      except json.JSONDecodeError:
-        pass
+      except json.JSONDecodeError as e:
+        log.debug("event_line_not_json", error=str(e))
     return "\n".join(parts) if parts else "(empty event log)"
 
   @staticmethod

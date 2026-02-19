@@ -112,7 +112,8 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
           if line:
             try:
               await websocket.send_text(line)
-            except Exception:
+            except Exception as e:
+              log.debug("ws_catchup_send_failed", thread_id=thread_id, error=str(e))
               return
     except Exception as e:
       log.warning("ws_catchup_failed", thread_id=thread_id, error=str(e))
@@ -120,7 +121,8 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   # Signal end of catch-up
   try:
     await websocket.send_json({"type": "catchup_complete"})
-  except Exception:
+  except Exception as e:
+    log.debug("ws_catchup_complete_failed", thread_id=thread_id, error=str(e))
     return
 
   # Subscribe for live events

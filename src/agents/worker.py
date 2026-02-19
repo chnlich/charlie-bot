@@ -127,13 +127,15 @@ class Worker:
       try:
         await asyncio.wait_for(self._proc.wait(), timeout=5.0)
       except asyncio.TimeoutError:
+        log.warning("worker_terminate_timeout", thread=self._thread.id, pid=self._proc.pid)
         self._proc.kill()
 
   async def _process_line(self, line: str, log_file) -> None:
     """Parse a NDJSON line, write to disk log, and broadcast to WebSocket subscribers."""
     try:
       event_data = json.loads(line)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+      log.debug("worker_line_not_json", thread=self._thread.id, error=str(e))
       event_data = {"type": "raw", "content": line}
 
     # Detect quota exhaustion errors

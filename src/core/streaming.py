@@ -4,7 +4,10 @@ import asyncio
 from collections import defaultdict
 from typing import Any
 
+import structlog
 from fastapi import WebSocket
+
+log = structlog.get_logger()
 
 
 class StreamingManager:
@@ -33,7 +36,8 @@ class StreamingManager:
     for ws in sockets:
       try:
         await ws.send_json(event)
-      except Exception:
+      except Exception as e:
+        log.debug("ws_send_failed", channel=thread_id, error=str(e))
         dead.add(ws)
 
     if dead:

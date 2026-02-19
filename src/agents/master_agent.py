@@ -1,6 +1,8 @@
 """Master Agent — orchestrates user interaction and task delegation."""
 
 import json
+import platform
+from datetime import datetime, timezone
 from typing import AsyncGenerator, Optional
 
 import structlog
@@ -53,7 +55,14 @@ For complex multi-step tasks requiring a planning phase:
 For purely conversational responses where no action is needed (greetings, questions about yourself, etc.):
 {"action": "respond", "message": "your response here"}
 
-When in doubt, delegate. Do NOT refuse actionable requests — always produce a delegate action.
+## Direct Responses for System Metadata
+You have access to live system metadata (current time, date, timezone, OS, platform, etc.) injected into \
+your context under "## System Metadata" below. When the user asks simple informational questions that can \
+be answered entirely from this metadata — such as "what time is it?", "what's today's date?", "what OS are \
+we on?", or similar — respond DIRECTLY with {"action": "respond", "message": "..."} using the metadata. \
+Do NOT delegate these to a worker agent. Only delegate when the user needs an actionable task performed.
+
+When in doubt about whether something is a simple info request vs. an actionable task, delegate.
 
 ## Memory Updates
 You have access to a persistent MEMORY.md shown above. Whenever the user reveals a preference, fact, or \
@@ -168,8 +177,26 @@ class MasterAgent:
   # Private helpers
   # ---------------------------------------------------------------------------
 
+  @staticmethod
+  def _get_system_metadata() -> str:
+    """Return a snapshot of current system time, date, and platform info."""
+    now_utc = datetime.now(timezone.utc)
+    now_local = datetime.now().astimezone()
+    tz_name = now_local.tzname() or "Unknown"
+    return (
+      f"- Current UTC time: {now_utc.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+      f"- Current local time: {now_local.strftime('%Y-%m-%d %H:%M:%S %Z')} ({tz_name})\n"
+      f"- Platform: {platform.system()} {platform.release()}\n"
+      f"- Architecture: {platform.machine()}\n"
+      f"- Python version: {platform.python_version()}"
+    )
+
   def _build_system_prompt(self, memory_content: str, summary: Optional[str]) -> str:
     parts = [MASTER_SYSTEM_PROMPT]
+
+    # Inject live system metadata so the agent can answer time/date/env questions directly
+    parts.append(f"\n## System Metadata\n{self._get_system_metadata()}")
+
     if memory_content.strip() and memory_content.strip() != "# MEMORY":
       parts.append(f"\n## User Memory\n{memory_content}")
     if summary:
@@ -187,8 +214,8 @@ class MasterAgent:
       data = json.loads(raw)
       if "action" in data:
         return data
-    except (json.JSONDecodeError, ValueError):
-      pass
+    except (json.JSONDecodeError, ValueError) as e:
+      log.debug("llm_response_not_json", error=str(e), raw=raw[:200])
     return {"action": "respond", "message": raw}
 
   async def _call_with_fallback(self, messages: list[ChatMessage], system_prompt: str) -> str:

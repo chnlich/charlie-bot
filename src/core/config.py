@@ -13,7 +13,7 @@ class CharliBotConfig(BaseModel):
 
   # LLM
   gemini_api_key: str = ""
-  gemini_model: str = "gemini-2.0-flash-thinking-exp-01-21"
+  gemini_model: str = "gemini-3-flash-preview"
   kimi_api_key: str = ""
   kimi_base_url: str = "https://api.moonshot.cn/v1"
   kimi_model: str = "kimi-k2.5"

@@ -288,7 +288,7 @@ Each Thread's `CLAUDE.md` contains:
 **Configuration**
 - `~/.charliebot/config.yaml` is the single source of truth for API keys and settings
 - Env vars (`GEMINI_API_KEY`, `KIMI_API_KEY`) used only to seed config on first run — never read at runtime
-- Active models: `gemini-2.0-flash-thinking-exp-01-21` (primary), `kimi-k2.5` (fallback)
+- Active models: `gemini-3-flash-preview` (primary), `kimi-k2.5` (fallback)
 
 **Tests**
 - 126 unit tests across: models, config, queue, streaming, memory, backup, sessions, master agent, server utilities

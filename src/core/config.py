@@ -46,10 +46,6 @@ class CharliBotConfig(BaseModel):
     return self.charliebot_home / "MEMORY.md"
 
   @property
-  def past_tasks_file(self) -> Path:
-    return self.charliebot_home / "PAST_TASKS.md"
-
-  @property
   def progress_file(self) -> Path:
     return self.charliebot_home / "PROGRESS.md"
 

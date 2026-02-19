@@ -20,7 +20,6 @@ def _default_config_yaml() -> dict:
   }
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
-DEFAULT_PAST_TASKS = "# PAST TASKS\n\nArchive of all completed tasks. Entries separated by ---\n"
 DEFAULT_PROGRESS = "# PROGRESS\n\nLessons learned, best practices, and insights discovered during tasks.\n"
 
 
@@ -39,7 +38,6 @@ async def init_charliebot_home() -> None:
 
   # Seed global knowledge files
   _seed_if_missing(cfg.memory_file, DEFAULT_MEMORY)
-  _seed_if_missing(cfg.past_tasks_file, DEFAULT_PAST_TASKS)
   _seed_if_missing(cfg.progress_file, DEFAULT_PROGRESS)
 
   # Seed config.yaml with placeholders if missing

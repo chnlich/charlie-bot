@@ -11,7 +11,7 @@ def _default_config_yaml() -> dict:
   """Build the default config dict, seeding API keys from env vars if available."""
   return {
     "gemini_api_key": os.environ.get("GEMINI_API_KEY", ""),
-    "gemini_model": "gemini-3-flash-preview",
+    "gemini_model": "gemini-2.0-flash-thinking-exp-01-21",
     "kimi_api_key": os.environ.get("KIMI_API_KEY", ""),
     "kimi_base_url": "https://api.moonshot.cn/v1",
     "kimi_model": "kimi-k2.5",

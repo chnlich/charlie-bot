@@ -87,7 +87,7 @@ export interface WorkerEvent {
 }
 
 export interface CreateSessionRequest {
-  name: string
+  name?: string
   repo_url?: string
   repo_path?: string
   base_branch?: string

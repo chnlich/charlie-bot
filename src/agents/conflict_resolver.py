@@ -79,6 +79,7 @@ class ConflictResolver:
       worktree_path=worktree_path,
       events_log_path=events_log,
       task_description=task_description,
+      on_spawned=self._thread_manager._save_metadata,
     )
 
     try:

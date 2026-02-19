@@ -46,12 +46,14 @@ class Worker:
     events_log_path: Path,
     task_description: str,
     extra_env: Optional[dict[str, str]] = None,
+    on_spawned: Optional[callable] = None,
   ):
     self._thread = thread_metadata
     self._worktree = worktree_path
     self._events_log = events_log_path
     self._task_description = task_description
     self._extra_env = extra_env or {}
+    self._on_spawned = on_spawned
     self._proc: Optional[asyncio.subprocess.Process] = None
 
   async def run(self) -> int:
@@ -77,6 +79,10 @@ class Worker:
 
     self._thread.pid = self._proc.pid
     log.info("worker_spawned", thread=self._thread.id, pid=self._proc.pid)
+
+    # Persist PID to disk so startup recovery can check process liveness
+    if self._on_spawned:
+      await self._on_spawned(self._thread)
 
     # Read stdout (NDJSON) line by line
     self._events_log.parent.mkdir(parents=True, exist_ok=True)

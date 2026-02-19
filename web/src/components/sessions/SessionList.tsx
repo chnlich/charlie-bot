@@ -5,7 +5,8 @@ import { useSessionsStore } from '../../store/sessions'
 import { SessionItem } from './SessionItem'
 
 export function SessionList() {
-  const { sessions, activeSessionId, setSessions, setActiveSession, addSession } = useSessionsStore()
+  const { sessions, activeSessionId, setSessions, setActiveSession, addSession, updateSession } =
+    useSessionsStore()
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
@@ -23,6 +24,15 @@ export function SessionList() {
       console.error('Failed to create session', e)
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleRename = async (id: string, name: string) => {
+    try {
+      const updated = await sessionsApi.rename(id, name)
+      updateSession(updated)
+    } catch (e) {
+      console.error('Failed to rename session', e)
     }
   }
 
@@ -49,6 +59,7 @@ export function SessionList() {
             session={session}
             active={session.id === activeSessionId}
             onClick={() => setActiveSession(session.id)}
+            onRename={handleRename}
           />
         ))}
         {active.length === 0 && (

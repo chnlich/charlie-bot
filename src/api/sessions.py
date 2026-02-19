@@ -6,6 +6,7 @@ from src.core.config import get_config
 from src.core.models import (
   CreateSessionRequest,
   Priority,
+  RenameSessionRequest,
   ReorderTaskRequest,
   SessionMetadata,
   TaskQueue,
@@ -54,6 +55,18 @@ async def archive_session(session_id: str, session_mgr: SessionManager = Depends
     raise HTTPException(status_code=404, detail="Session not found")
   await session_mgr.archive_session(session_id)
   return {"ok": True}
+
+
+@router.patch("/{session_id}", response_model=SessionMetadata)
+async def rename_session(
+  session_id: str,
+  req: RenameSessionRequest,
+  session_mgr: SessionManager = Depends(get_session_manager),
+):
+  meta = await session_mgr.rename_session(session_id, req.name)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  return meta
 
 
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])

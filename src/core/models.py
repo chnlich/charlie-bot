@@ -171,6 +171,10 @@ class PlanApprovalRequest(BaseModel):
   edited_steps: Optional[list[str]] = None
 
 
+class RenameSessionRequest(BaseModel):
+  name: str
+
+
 class ReorderTaskRequest(BaseModel):
   task_id: str
   priority: Priority

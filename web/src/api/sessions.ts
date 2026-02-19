@@ -19,6 +19,9 @@ export const sessionsApi = {
 
   archive: (id: string) => client.delete(`/sessions/${id}`).then((r) => r.data),
 
+  rename: (id: string, name: string) =>
+    client.patch<SessionMetadata>(`/sessions/${id}`, { name }).then((r) => r.data),
+
   listThreads: (sessionId: string) =>
     client.get<ThreadMetadata[]>(`/sessions/${sessionId}/threads`).then((r) => r.data),
 

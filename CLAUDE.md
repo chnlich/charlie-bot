@@ -1,0 +1,1 @@
+/home/user/.charliebot/MEMORY.md

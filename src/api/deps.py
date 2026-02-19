@@ -1,7 +1,5 @@
 """FastAPI dependency injection helpers."""
 
-from typing import Annotated
-
 from fastapi import Depends, Path
 
 from src.core.config import CharliBotConfig, get_config

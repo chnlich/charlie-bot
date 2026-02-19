@@ -5,11 +5,10 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic import BaseModel, field_validator
 
 
-class CharliBotConfig(BaseSettings):
+class CharliBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
 
   # LLM
@@ -33,10 +32,6 @@ class CharliBotConfig(BaseSettings):
   @classmethod
   def expand_project_dirs(cls, v: list[str]) -> list[str]:
     return [os.path.expanduser(p) for p in (v or [])]
-
-  class Config:
-    env_prefix = "CHARLIEBOT_"
-    env_file = ".env"
 
   @property
   def sessions_dir(self) -> Path:
@@ -79,8 +74,8 @@ _config: Optional[CharliBotConfig] = None
 
 
 def load_config() -> CharliBotConfig:
-  """Load config from ~/.charliebot/config.yaml, with env var overrides."""
-  home = Path(os.environ.get("CHARLIEBOT_HOME", Path.home() / ".charliebot"))
+  """Load config from ~/.charliebot/config.yaml."""
+  home = Path.home() / ".charliebot"
   config_path = home / "config.yaml"
 
   yaml_data: dict = {}
@@ -88,9 +83,7 @@ def load_config() -> CharliBotConfig:
     with open(config_path) as f:
       yaml_data = yaml.safe_load(f) or {}
 
-  # charliebot_home from env or default
   yaml_data.setdefault("charliebot_home", str(home))
-
   return CharliBotConfig(**yaml_data)
 
 

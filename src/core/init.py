@@ -1,18 +1,17 @@
 """Initialize ~/.charliebot/ directory structure on first run."""
 
-import os
 import yaml
 from pathlib import Path
 
-from src.core.config import CharliBotConfig, get_config
+from src.core.config import get_config
 
 
 def _default_config_yaml() -> dict:
-  """Build the default config dict, seeding API keys from env vars if available."""
+  """Build the default config dict with placeholder values."""
   return {
-    "gemini_api_key": os.environ.get("GEMINI_API_KEY", ""),
+    "gemini_api_key": "",
     "gemini_model": "gemini-2.0-flash-thinking-exp-01-21",
-    "kimi_api_key": os.environ.get("KIMI_API_KEY", ""),
+    "kimi_api_key": "",
     "kimi_base_url": "https://api.moonshot.cn/v1",
     "kimi_model": "kimi-k2.5",
     "max_concurrent_workers": 3,

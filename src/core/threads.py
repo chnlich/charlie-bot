@@ -119,10 +119,10 @@ class ThreadManager:
   async def cleanup_worktree(self, session_id: str, thread_id: str) -> None:
     """Remove the thread's git worktree (but keep metadata)."""
     meta = await self.get_thread(session_id, thread_id)
-    if not meta:
+    if not meta or not meta.worktree_path:
       return
     bare_path = self._cfg.sessions_dir / session_id / "repo.git"
-    worktree_path = Path(meta.worktree_path) if meta.worktree_path else self._thread_dir(session_id, thread_id) / "worktree"
+    worktree_path = Path(meta.worktree_path)
     if bare_path.exists() and worktree_path.exists():
       try:
         await self._git.remove_worktree(bare_path, worktree_path)
@@ -134,10 +134,9 @@ class ThreadManager:
 
   async def get_worktree_path(self, session_id: str, thread_id: str) -> Path:
     meta = await self.get_thread(session_id, thread_id)
-    if meta and meta.worktree_path:
-      return Path(meta.worktree_path)
-    # Fallback for legacy threads
-    return self._thread_dir(session_id, thread_id) / "worktree"
+    if not meta or not meta.worktree_path:
+      raise ValueError(f"Thread {thread_id} has no worktree_path")
+    return Path(meta.worktree_path)
 
   async def get_claude_md_path(self, session_id: str, thread_id: str) -> Path:
     worktree = await self.get_worktree_path(session_id, thread_id)

@@ -1,0 +1,1 @@
+/home/chnlich/.charliebot/MEMORY.md

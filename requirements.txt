@@ -12,10 +12,6 @@ httpx==0.28.1
 # Configuration & serialization
 pyyaml==6.0.2
 pydantic==2.10.4
-pydantic-settings==2.7.0
-
-# Git operations
-gitpython==3.1.44
 
 # Concurrency
 anyio==4.8.0

@@ -1,5 +1,9 @@
 """Thread management API routes including plan approval."""
 
+import json
+import os
+import signal
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_thread_manager, get_queue_manager
@@ -36,9 +40,6 @@ async def get_thread_events(
   thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Return historical Worker events from the on-disk events.jsonl log."""
-  import json
-  from src.core.models import WorkerEvent
-
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
   if not events_path.exists():
     return []
@@ -99,8 +100,6 @@ async def cancel_thread(
     raise HTTPException(status_code=404, detail="Thread not found")
 
   if thread.pid:
-    import signal
-    import os
     try:
       os.kill(thread.pid, signal.SIGTERM)
     except ProcessLookupError:

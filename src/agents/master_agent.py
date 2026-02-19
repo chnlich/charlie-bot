@@ -14,8 +14,6 @@ from src.core.models import (
   ChatMessage,
   ConversationHistory,
   MessageRole,
-  Priority,
-  Task,
   TaskDelegationResult,
 )
 
@@ -241,12 +239,3 @@ class MasterAgent:
     history.messages = recent
     return history
 
-  def _build_task_from_action(self, action: dict, session_id: str) -> Task:
-    """Convert a delegate action dict into a Task model."""
-    priority_map = {"P0": Priority.P0, "P1": Priority.P1, "P2": Priority.P2}
-    priority = priority_map.get(action.get("priority", "P1"), Priority.P1)
-    return Task(
-      priority=priority,
-      description=action.get("description", ""),
-      is_plan_mode=action.get("plan_mode", False),
-    )

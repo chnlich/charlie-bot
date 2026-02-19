@@ -42,7 +42,7 @@ class SessionManager:
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure
-    for subdir in ["worktree", "data", "threads"]:
+    for subdir in ["data", "threads"]:
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # Initialize empty task queue
@@ -121,6 +121,12 @@ class SessionManager:
     """Return the session-scoped bare repo path."""
     return self._cfg.sessions_dir / session_id / "repo.git"
 
+  def _worktree_root(self, meta: SessionMetadata) -> Path:
+    """Return the root directory for all worktrees in this session."""
+    if meta.repo_path:
+      return Path(meta.repo_path) / "worktree"
+    return self._session_dir(meta.id) / "worktree"
+
   async def _setup_git(self, meta: SessionMetadata) -> None:
     """Set up bare repo + session worktree."""
     bare_path = self._bare_path(meta.id)
@@ -130,7 +136,9 @@ class SessionManager:
     elif meta.repo_path:
       await self._git.link_local_repo(Path(meta.repo_path), bare_path)
 
-    worktree_path = self._session_dir(meta.id) / "worktree"
+    worktree_root = self._worktree_root(meta)
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    worktree_path = worktree_root / meta.base_branch
     await self._git.add_worktree(bare_path, worktree_path, meta.base_branch)
 
   async def _save_metadata(self, meta: SessionMetadata) -> None:

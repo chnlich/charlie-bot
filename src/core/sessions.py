@@ -1,7 +1,6 @@
 """Session management for CharlieBot."""
 
 import json
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -122,18 +121,8 @@ class SessionManager:
     """Return the session-scoped bare repo path."""
     return self._cfg.sessions_dir / session_id / "repo.git"
 
-  def _migrate_bare_repo(self, session_id: str) -> None:
-    """Lazily migrate bare repo from old ~/.charliebot/repos/ to session dir."""
-    old_path = self._cfg.charliebot_home / "repos" / f"{session_id}.git"
-    new_path = self._bare_path(session_id)
-    if old_path.exists() and not new_path.exists():
-      new_path.parent.mkdir(parents=True, exist_ok=True)
-      shutil.move(str(old_path), str(new_path))
-      log.info("migrated_bare_repo", session_id=session_id, old=str(old_path), new=str(new_path))
-
   async def _setup_git(self, meta: SessionMetadata) -> None:
     """Set up bare repo + session worktree."""
-    self._migrate_bare_repo(meta.id)
     bare_path = self._bare_path(meta.id)
 
     if meta.repo_url:

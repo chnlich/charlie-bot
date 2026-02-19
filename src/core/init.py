@@ -73,7 +73,8 @@ def _recover_orphaned_threads(cfg) -> None:
   """
   if not cfg.sessions_dir.exists():
     return
-  recovered = 0
+  # Collect orphans per session so we can update conversation history
+  orphans_by_session: dict[str, list[dict]] = {}
   for session_dir in cfg.sessions_dir.iterdir():
     threads_dir = session_dir / "threads"
     if not threads_dir.is_dir():
@@ -100,7 +101,56 @@ def _recover_orphaned_threads(cfg) -> None:
       meta["exit_code"] = -1
       meta["completed_at"] = datetime.utcnow().isoformat()
       meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-      recovered += 1
       log.warning("recovered_orphaned_thread", thread=meta.get("id"), pid=pid)
-  if recovered:
-    log.info("orphaned_thread_recovery_done", count=recovered)
+      session_id = meta.get("session_id", session_dir.name)
+      orphans_by_session.setdefault(session_id, []).append(meta)
+
+  # Append failure messages to conversation history and fix task queues
+  for session_id, orphans in orphans_by_session.items():
+    _append_recovery_messages(cfg, session_id, orphans)
+    _mark_tasks_failed(cfg, session_id, orphans)
+
+  total = sum(len(v) for v in orphans_by_session.values())
+  if total:
+    log.info("orphaned_thread_recovery_done", count=total)
+
+
+def _append_recovery_messages(cfg, session_id: str, orphans: list[dict]) -> None:
+  """Append failure messages to the session's conversation so the user sees feedback."""
+  conv_path = cfg.sessions_dir / session_id / "data" / "conversation.json"
+  if not conv_path.exists():
+    return
+  try:
+    conv = json.loads(conv_path.read_text(encoding="utf-8"))
+  except (json.JSONDecodeError, OSError):
+    return
+  import uuid
+  for meta in orphans:
+    desc = meta.get("description", "unknown task")
+    msg = {
+      "id": str(uuid.uuid4()),
+      "role": "assistant",
+      "content": f"Worker task was interrupted by a server restart: **{desc}**\n\nThe task did not complete. You can re-send the request to try again.",
+      "timestamp": datetime.utcnow().isoformat(),
+      "is_voice": False,
+      "thread_id": meta.get("id"),
+    }
+    conv.setdefault("messages", []).append(msg)
+  conv_path.write_text(json.dumps(conv, indent=2), encoding="utf-8")
+
+
+def _mark_tasks_failed(cfg, session_id: str, orphans: list[dict]) -> None:
+  """Mark corresponding tasks in the queue as failed."""
+  queue_path = cfg.sessions_dir / session_id / "task_queue.json"
+  if not queue_path.exists():
+    return
+  try:
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+  except (json.JSONDecodeError, OSError):
+    return
+  orphan_task_ids = {m.get("task_id") for m in orphans}
+  for task in queue.get("tasks", []):
+    if task.get("id") in orphan_task_ids and task.get("status") == "running":
+      task["status"] = "failed"
+  queue["updated_at"] = datetime.utcnow().isoformat()
+  queue_path.write_text(json.dumps(queue, indent=2), encoding="utf-8")

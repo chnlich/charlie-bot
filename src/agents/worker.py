@@ -87,8 +87,21 @@ class Worker:
           continue
         await self._process_line(line, log_file)
 
+    # Capture any stderr output (crash messages, missing command, etc.)
+    assert self._proc.stderr is not None
+    stderr_bytes = await self._proc.stderr.read()
+
     await self._proc.wait()
     exit_code = self._proc.returncode or 0
+
+    if stderr_bytes:
+      stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+      if stderr_text:
+        stderr_event = json.dumps({"type": "error", "content": stderr_text})
+        async with aiofiles.open(self._events_log, "a", encoding="utf-8") as f:
+          await f.write(stderr_event + "\n")
+        await streaming_manager.broadcast(self._thread.id, {"type": "error", "content": stderr_text})
+        log.warning("worker_stderr", thread=self._thread.id, stderr=stderr_text[:500])
 
     # Emit final completion event
     final_event = {

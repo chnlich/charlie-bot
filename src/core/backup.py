@@ -1,7 +1,6 @@
-"""Hourly backup system for critical CharlieBot state."""
+"""Git-based backup for CharlieBot state (~/.charliebot/ as a git repo)."""
 
-import shutil
-from datetime import datetime, timedelta
+import asyncio
 
 import structlog
 
@@ -10,54 +9,51 @@ from src.core.config import CharliBotConfig
 log = structlog.get_logger()
 
 
-class BackupManager:
-  """Creates timestamped backups and prunes old ones."""
+async def _run(cmd: list[str], cwd: str) -> tuple[int, str]:
+  proc = await asyncio.create_subprocess_exec(
+    *cmd,
+    cwd=cwd,
+    stdout=asyncio.subprocess.PIPE,
+    stderr=asyncio.subprocess.PIPE,
+  )
+  stdout, stderr = await proc.communicate()
+  return proc.returncode or 0, (stdout or stderr).decode().strip()
 
-  def __init__(self, cfg: CharliBotConfig):
-    self._cfg = cfg
-    self._retention_days = 7
 
-  async def run_backup(self) -> None:
-    """Create a snapshot of all critical state files."""
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%S")
-    backup_dir = self._cfg.backups_dir / timestamp
-    backup_dir.mkdir(parents=True, exist_ok=True)
+async def init_backup_repo(cfg: CharliBotConfig) -> None:
+  """Ensure ~/.charliebot/ is a git repo for backup purposes."""
+  home = str(cfg.charliebot_home)
+  git_dir = cfg.charliebot_home / ".git"
+  if git_dir.exists():
+    return
 
-    # Global knowledge files
-    for src_file in [self._cfg.memory_file, self._cfg.past_tasks_file, self._cfg.progress_file]:
-      if src_file.exists():
-        shutil.copy2(src_file, backup_dir / src_file.name)
+  code, out = await _run(["git", "init"], cwd=home)
+  if code != 0:
+    log.error("backup_git_init_failed", output=out)
+    return
 
-    # Session state
-    sessions_backup = backup_dir / "sessions"
-    sessions_backup.mkdir(exist_ok=True)
-    if self._cfg.sessions_dir.exists():
-      for session_dir in self._cfg.sessions_dir.iterdir():
-        if not session_dir.is_dir():
-          continue
-        s_backup = sessions_backup / session_dir.name
-        s_backup.mkdir()
-        for fname in ["metadata.json", "task_queue.json"]:
-          src = session_dir / fname
-          if src.exists():
-            shutil.copy2(src, s_backup / fname)
+  # Initial commit so the repo has a valid HEAD
+  await _run(["git", "add", "-A"], cwd=home)
+  await _run(["git", "commit", "-m", "chore: initial backup snapshot", "--allow-empty"], cwd=home)
+  log.info("backup_repo_initialized", path=home)
 
-    log.info("backup_created", path=str(backup_dir))
-    await self._prune_old_backups()
 
-  async def _prune_old_backups(self) -> None:
-    """Delete backup directories older than retention_days."""
-    cutoff = datetime.utcnow() - timedelta(days=self._retention_days)
-    if not self._cfg.backups_dir.exists():
-      return
+async def run_backup(cfg: CharliBotConfig) -> None:
+  """Stage all changes in ~/.charliebot/ and commit if there are diffs."""
+  home = str(cfg.charliebot_home)
 
-    for d in self._cfg.backups_dir.iterdir():
-      if not d.is_dir():
-        continue
-      try:
-        dt = datetime.strptime(d.name, "%Y-%m-%dT%H-%M-%S")
-        if dt < cutoff:
-          shutil.rmtree(d)
-          log.info("backup_pruned", path=str(d))
-      except ValueError:
-        pass  # Skip directories with unexpected names
+  await _run(["git", "add", "-A"], cwd=home)
+
+  # Check if there is anything to commit
+  code, _ = await _run(["git", "diff", "--cached", "--quiet"], cwd=home)
+  if code == 0:
+    return  # Nothing changed
+
+  code, out = await _run(
+    ["git", "commit", "-m", "chore: automatic backup snapshot"],
+    cwd=home,
+  )
+  if code != 0:
+    log.error("backup_commit_failed", output=out)
+  else:
+    log.info("backup_committed")

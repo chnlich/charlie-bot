@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import structlog
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -14,14 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
 from src.api import chat, memory, sessions, threads, voice
-from src.core.backup import BackupManager
+from src.core.backup import init_backup_repo
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
-
-_scheduler = AsyncIOScheduler()
 
 
 @asynccontextmanager
@@ -33,20 +30,11 @@ async def lifespan(app: FastAPI):
   await init_charliebot_home()
   log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
 
-  # Schedule hourly backups
-  backup_manager = BackupManager(cfg)
-  _scheduler.add_job(
-    lambda: asyncio.create_task(backup_manager.run_backup()),
-    "interval",
-    hours=1,
-    id="hourly_backup",
-  )
-  _scheduler.start()
-  log.info("backup_scheduler_started")
+  # Initialize git-based backup repo in ~/.charliebot/
+  await init_backup_repo(cfg)
 
   yield
 
-  _scheduler.shutdown(wait=False)
   log.info("charliebot_shutdown")
 
 

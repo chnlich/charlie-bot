@@ -33,7 +33,6 @@ async def init_charliebot_home() -> None:
   dirs = [
     cfg.charliebot_home,
     cfg.sessions_dir,
-    cfg.backups_dir,
     cfg.logs_dir,
   ]
   for d in dirs:

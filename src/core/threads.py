@@ -44,25 +44,29 @@ class ThreadManager:
     thread.branch_name = f"{prefix}{ts}-{thread.id[:8]}"
 
     thread_dir = self._thread_dir(session_meta.id, thread.id)
-    for subdir in ["worktree", "data"]:
-      (thread_dir / subdir).mkdir(parents=True, exist_ok=True)
+    (thread_dir / "data").mkdir(parents=True, exist_ok=True)
 
     # Set up git branch + worktree if session has a repo
+    claude_md_target = thread_dir  # default if no git
     bare_path = self._cfg.sessions_dir / session_meta.id / "repo.git"
     if bare_path.exists():
       try:
-        worktree_path = thread_dir / "worktree"
+        worktree_root = self._worktree_root(session_meta)
+        worktree_root.mkdir(parents=True, exist_ok=True)
+        worktree_path = worktree_root / thread.branch_name
+        thread.worktree_path = str(worktree_path)
         await self._git.create_branch_and_worktree(
           repo_path=bare_path,
           worktree_path=worktree_path,
           branch_name=thread.branch_name,
           base_branch=session_meta.base_branch,
         )
+        claude_md_target = worktree_path
       except GitError as e:
         log.warning("thread_git_setup_failed", thread=thread.id, error=str(e))
 
-    # Write CLAUDE.md
-    await self._write_claude_md(thread_dir, task, session_meta)
+    # Write CLAUDE.md into the worktree so Claude Code finds it
+    await self._write_claude_md(claude_md_target, task, session_meta)
 
     await self._save_metadata(thread)
     log.info("thread_created", thread_id=thread.id, branch=thread.branch_name)
@@ -118,7 +122,7 @@ class ThreadManager:
     if not meta:
       return
     bare_path = self._cfg.sessions_dir / session_id / "repo.git"
-    worktree_path = self._thread_dir(session_id, thread_id) / "worktree"
+    worktree_path = Path(meta.worktree_path) if meta.worktree_path else self._thread_dir(session_id, thread_id) / "worktree"
     if bare_path.exists() and worktree_path.exists():
       try:
         await self._git.remove_worktree(bare_path, worktree_path)
@@ -129,14 +133,25 @@ class ThreadManager:
     return self._thread_dir(session_id, thread_id) / "data" / "events.jsonl"
 
   async def get_worktree_path(self, session_id: str, thread_id: str) -> Path:
+    meta = await self.get_thread(session_id, thread_id)
+    if meta and meta.worktree_path:
+      return Path(meta.worktree_path)
+    # Fallback for legacy threads
     return self._thread_dir(session_id, thread_id) / "worktree"
 
   async def get_claude_md_path(self, session_id: str, thread_id: str) -> Path:
-    return self._thread_dir(session_id, thread_id) / "CLAUDE.md"
+    worktree = await self.get_worktree_path(session_id, thread_id)
+    return worktree / "CLAUDE.md"
 
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  def _worktree_root(self, session_meta: SessionMetadata) -> Path:
+    """Return the root directory for all worktrees in this session."""
+    if session_meta.repo_path:
+      return Path(session_meta.repo_path) / "worktree"
+    return self._cfg.sessions_dir / session_meta.id / "worktree"
 
   async def _write_claude_md(
     self,

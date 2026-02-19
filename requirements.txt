@@ -17,8 +17,7 @@ pydantic-settings==2.7.0
 # Git operations
 gitpython==3.1.44
 
-# Scheduling & concurrency
-apscheduler==3.11.0
+# Concurrency
 anyio==4.8.0
 
 # Utilities

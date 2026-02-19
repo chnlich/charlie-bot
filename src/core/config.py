@@ -43,10 +43,6 @@ class CharliBotConfig(BaseSettings):
     return self.charliebot_home / "sessions"
 
   @property
-  def backups_dir(self) -> Path:
-    return self.charliebot_home / "backups"
-
-  @property
   def logs_dir(self) -> Path:
     return self.charliebot_home / "logs"
 

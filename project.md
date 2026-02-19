@@ -23,35 +23,47 @@
 ## 3. Directory Structure
 
 ### 3.1 Home Directory (`~/.charliebot/` or `CHARLIEBOT_HOME`)
-All instance-specific data (configs, logs, sessions, worktrees) is stored here:
+All instance-specific data (configs, logs, sessions) is stored here. The entire `~/.charliebot/` directory is itself a git repository for backup purposes.
 
 ```text
-~/.charliebot/
-├── config.yaml      # API keys, settings, and project_dirs list
-├── MEMORY.md        # Globally shared memory (user preferences, facts)
-├── PAST_TASKS.md    # Global record of all completed tasks
-├── PROGRESS.md      # Global lessons learned and insights
-├── backups/         # Automatic hourly snapshots (7-day retention)
-├── logs/            # Application logs (server errors, system events)
-└── sessions/        # Session directories
+~/.charliebot/                  # Git repo (automatic backup via commits)
+├── .git/                # Backup history
+├── config.yaml          # API keys, settings, and project_dirs list
+├── MEMORY.md            # Globally shared memory (user preferences, facts)
+├── PAST_TASKS.md        # Global record of all completed tasks
+├── PROGRESS.md          # Global lessons learned and insights
+├── logs/                # Application logs (server errors, system events)
+└── sessions/            # Session directories
     └── {session_uuid}/
         ├── metadata.json      # Session info (name, repo, branch)
         ├── task_queue.json    # Session's priority task queue
         ├── repo.git/          # Session-scoped bare git repository
-        ├── worktree/          # Session's base Git worktree
         ├── data/              # Session-level JSON data
         └── threads/           # Thread directories
             └── {thread_uuid}/
                 ├── metadata.json    # Thread info (task description, status)
-                ├── worktree/        # Thread's Git worktree (isolated branch)
-                ├── data/            # Thread-specific JSON data (logs, state)
-                └── CLAUDE.md        # Worker's task instructions
+                └── data/            # Thread-specific JSON data (logs, state)
 ```
+
+**Worktrees** are stored in the repository root, not under `~/.charliebot/`:
+
+```text
+<repo_path>/
+├── .git/
+├── worktree/                           # Overall worktree directory
+│   ├── main/                           # Session's base branch worktree
+│   ├── charliebot/task-{ts}-{id}/      # Thread worktree (isolated branch)
+│   └── charliebot/conflict-{ts}-{id}/  # Conflict resolver worktree
+└── src/
+```
+
+For sessions created with `repo_url` (no local path), worktrees fall back to `~/.charliebot/sessions/{uuid}/worktree/`.
 
 **Notes:**
 - `logs/`: Stores application-level logs (server errors, HTTP access, Worker spawn/crash events). Individual Worker logs are in `threads/{uuid}/data/`.
-- `backups/`: Hourly snapshots of MEMORY.md, PAST_TASKS.md, Session metadata, and Thread data. 7-day retention with daily snapshots beyond.
-- `repo.git/`: Bare git repository is now session-scoped (previously stored in global `~/.charliebot/repos/`). Legacy repos are lazily migrated on access.
+- **Backup**: `~/.charliebot/` is a git repo. Changes are committed on server startup via `init_backup_repo()`. Use `git log` in `~/.charliebot/` to view backup history.
+- `repo.git/`: Bare git repository is session-scoped.
+- `CLAUDE.md`: Written into each thread's worktree (so Claude Code finds it via cwd).
 - `project_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
 
 ### 3.2 Repository Code Structure (Stateless)
@@ -86,8 +98,8 @@ charlie-bot/
   
 - **Thread**: Represents a single Worker task. Each Thread has:
   - Its own isolated Git branch (e.g., `charliebot/task-{timestamp}-{id}`)
-  - A dedicated worktree directory
-  - A `CLAUDE.md` file with task instructions
+  - A dedicated worktree under `<repo_path>/worktree/<branch_name>/`
+  - A `CLAUDE.md` file written into the worktree with task instructions
 
 ### 4.3 Git Isolation Strategy
 - **Session Worktree**: Base working directory for the project
@@ -219,9 +231,9 @@ When auto-merge fails:
 5. Creates resolution commit with explanation
 
 ### 9.4 Backup Strategy
-- **Hourly automatic backups**: Critical data (MEMORY.md, PAST_TASKS.md, metadata) to `~/.charliebot/backups/`
-- **Git-based**: Worktree contents backed up via frequent commits
-- **Retention**: 7 days with daily snapshots beyond
+- **Git-based**: `~/.charliebot/` is a git repository. All state changes (MEMORY.md, PAST_TASKS.md, session metadata) are committed automatically on server startup.
+- **History**: Use `git log` inside `~/.charliebot/` to view and restore previous states.
+- **Worktree contents**: Backed up via task-branch commits in each session's bare repo.
 
 ---
 
@@ -252,7 +264,7 @@ Each Thread's `CLAUDE.md` contains:
 ### 11.1 Completed (MVP)
 
 **Backend**
-- FastAPI server (`server.py`) with APScheduler hourly backup task
+- FastAPI server (`server.py`) with git-based backup (commits to `~/.charliebot/` repo on startup)
 - All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/voice`, `/api/memory`
 - `MasterAgent` with Gemini (primary) + Kimi (fallback) LLM providers, streaming, conversation summarization
 - `QueueManager` — priority queue (P0 > P1 > P2) with atomic JSON persistence via `os.replace`
@@ -299,7 +311,6 @@ Each Thread's `CLAUDE.md` contains:
 
 ### 11.3 Pending / Not Yet Implemented
 
-- Git worktree isolation per thread (branch creation, checkout)
 - Conflict Resolution Worker
 - Semantic search over `PAST_TASKS.md`
 - Claude plan usage tracking and Kimi K2.5 fallback for workers when near quota limits

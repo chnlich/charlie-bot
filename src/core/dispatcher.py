@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
@@ -124,15 +125,31 @@ class SessionDispatcher:
         await self._notify_completion(task, thread, exit_code)
 
       except QuotaExhaustedException:
+        await worker.terminate()
         await self._queue_mgr.mark_pending_quota(task.id)
         await self._thread_mgr.update_status(self._session_id, thread.id, ThreadStatus.FAILED)
         log.warning("task_quota_exhausted", task_id=task.id)
         await self._notify_completion(task, thread, -1, quota_exhausted=True)
 
-      except Exception as e:
+      except asyncio.CancelledError:
+        await worker.terminate()
         await self._queue_mgr.mark_failed(task.id)
-        await self._thread_mgr.update_status(self._session_id, thread.id, ThreadStatus.FAILED)
-        log.error("task_failed", task_id=task.id, error=str(e))
+        await self._thread_mgr.update_status(
+          self._session_id, thread.id, ThreadStatus.CANCELLED, exit_code=-1
+        )
+        log.warning("task_cancelled", task_id=task.id, thread_id=thread.id)
+        raise  # Re-raise so the asyncio task is properly cancelled
+
+      except Exception as e:
+        await worker.terminate()
+        await self._queue_mgr.mark_failed(task.id)
+        await self._thread_mgr.update_status(
+          self._session_id, thread.id, ThreadStatus.FAILED, exit_code=-1
+        )
+        log.error(
+          "task_failed", task_id=task.id,
+          error=str(e), traceback=traceback.format_exc(),
+        )
         await self._notify_completion(task, thread, -1, error=str(e))
 
     finally:

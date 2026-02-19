@@ -76,6 +76,7 @@ class Worker:
     )
 
     self._thread.pid = self._proc.pid
+    log.info("worker_spawned", thread=self._thread.id, pid=self._proc.pid)
 
     # Read stdout (NDJSON) line by line
     self._events_log.parent.mkdir(parents=True, exist_ok=True)

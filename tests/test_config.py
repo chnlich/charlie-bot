@@ -12,7 +12,7 @@ from src.core.config import CharliBotConfig, load_config, get_config
 class TestCharliBotConfig:
     def test_default_values(self, tmp_home):
         cfg = load_config()
-        assert cfg.gemini_model == "gemini-2.0-flash"
+        assert cfg.gemini_model == "gemini-2.0-flash-thinking-exp-01-21"
         assert cfg.kimi_model == "moonshot-v1-8k"
         assert cfg.max_concurrent_workers == 3
         assert cfg.worker_timeout_seconds == 3600

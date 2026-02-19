@@ -59,6 +59,7 @@ class Worker:
   async def run(self) -> int:
     """Spawn the Worker and stream its output. Returns exit code."""
     env = {**os.environ, **self._extra_env}
+    env.pop("CLAUDECODE", None)  # Allow worker to spawn Claude Code subprocess
 
     # Claude reads CLAUDE.md from cwd automatically; pass task via stdin prompt
     cmd = WORKER_COMMAND + [self._task_description]

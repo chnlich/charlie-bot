@@ -14,8 +14,8 @@ Do NOT ask clarifying questions — make your best judgment and proceed.
 ## Git Conventions
 - Commit frequently with descriptive messages
 - Format: `type(scope): description` (feat, fix, refactor, test, docs)
-- Do NOT push branches — the orchestrator manages merges
 - Make atomic commits (one logical change per commit)
+- Do NOT push branches to remote
 
 ## Output
 - Stream progress as you work so the user can see what is happening

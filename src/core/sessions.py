@@ -94,6 +94,23 @@ class SessionManager:
     log.info("session_renamed", session_id=session_id, new_name=new_name)
     return meta
 
+  async def mark_read(self, session_id: str) -> Optional[SessionMetadata]:
+    """Clear the unread flag for a session."""
+    meta = await self.get_session(session_id)
+    if not meta or not meta.has_unread:
+      return meta
+    meta.has_unread = False
+    await self._save_metadata(meta)
+    return meta
+
+  async def mark_unread(self, session_id: str) -> None:
+    """Set the unread flag for a session (called when workers complete)."""
+    meta = await self.get_session(session_id)
+    if not meta or meta.has_unread:
+      return
+    meta.has_unread = True
+    await self._save_metadata(meta)
+
   async def archive_session(self, session_id: str) -> None:
     """Mark a session as archived (does not delete files)."""
     meta = await self.get_session(session_id)

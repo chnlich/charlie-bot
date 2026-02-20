@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSSE } from '../../hooks/useSSE'
 import { useChatStore } from '../../store/chat'
+import { useSessionsStore } from '../../store/sessions'
+import { sessionsApi } from '../../api/sessions'
 import type { ChatMessage, SSEEvent } from '../../types'
 import { ChatInput } from './ChatInput'
 import { MessageList } from './MessageList'
@@ -18,12 +20,15 @@ export function ChatPanel({ sessionId }: Props) {
   const messages = messagesBySession[sessionId] ?? []
   const currentStream = streamingContent[sessionId] ?? ''
 
-  // Load history on mount
+  // Load history on mount and clear unread
   useEffect(() => {
     fetch(`/api/chat/${sessionId}/history`)
       .then((r) => r.json())
       .then((h) => setMessages(sessionId, h.messages ?? []))
       .catch(console.error)
+    // Clear unread when this session becomes active
+    useSessionsStore.getState().markSessionRead(sessionId)
+    sessionsApi.markRead(sessionId).catch(console.error)
   }, [sessionId, setMessages])
 
   // Subscribe to session WebSocket for worker completion summaries

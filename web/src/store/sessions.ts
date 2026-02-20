@@ -8,6 +8,8 @@ interface SessionsStore {
   addSession: (session: SessionMetadata) => void
   updateSession: (updated: SessionMetadata) => void
   setActiveSession: (id: string | null) => void
+  markSessionUnread: (sessionId: string) => void
+  markSessionRead: (sessionId: string) => void
 }
 
 export const useSessionsStore = create<SessionsStore>((set) => ({
@@ -23,4 +25,16 @@ export const useSessionsStore = create<SessionsStore>((set) => ({
       sessions: s.sessions.map((x) => (x.id === updated.id ? updated : x)),
     })),
   setActiveSession: (id) => set({ activeSessionId: id }),
+  markSessionUnread: (sessionId) =>
+    set((s) => ({
+      sessions: s.sessions.map((x) =>
+        x.id === sessionId ? { ...x, has_unread: true } : x,
+      ),
+    })),
+  markSessionRead: (sessionId) =>
+    set((s) => ({
+      sessions: s.sessions.map((x) =>
+        x.id === sessionId ? { ...x, has_unread: false } : x,
+      ),
+    })),
 }))

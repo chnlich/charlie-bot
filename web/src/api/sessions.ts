@@ -22,6 +22,9 @@ export const sessionsApi = {
   rename: (id: string, name: string) =>
     client.patch<SessionMetadata>(`/sessions/${id}`, { name }).then((r) => r.data),
 
+  markRead: (id: string) =>
+    client.post(`/sessions/${id}/read`).then((r) => r.data),
+
   listThreads: (sessionId: string) =>
     client.get<ThreadMetadata[]>(`/sessions/${sessionId}/threads`).then((r) => r.data),
 

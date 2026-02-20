@@ -5,12 +5,17 @@ import { useSessionsStore } from '../../store/sessions'
 import { SessionItem } from './SessionItem'
 
 export function SessionList() {
-  const { sessions, activeSessionId, setSessions, setActiveSession, addSession, updateSession } =
+  const { sessions, activeSessionId, setSessions, setActiveSession, addSession, updateSession, markSessionRead } =
     useSessionsStore()
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     sessionsApi.list().then(setSessions).catch(console.error)
+    // Poll for unread status updates from background workers
+    const interval = setInterval(() => {
+      sessionsApi.list().then(setSessions).catch(console.error)
+    }, 5000)
+    return () => clearInterval(interval)
   }, [setSessions])
 
   const handleCreate = async () => {
@@ -58,7 +63,14 @@ export function SessionList() {
             key={session.id}
             session={session}
             active={session.id === activeSessionId}
-            onClick={() => setActiveSession(session.id)}
+            hasUnread={session.has_unread && session.id !== activeSessionId}
+            onClick={() => {
+              setActiveSession(session.id)
+              if (session.has_unread) {
+                markSessionRead(session.id)
+                sessionsApi.markRead(session.id).catch(console.error)
+              }
+            }}
             onRename={handleRename}
           />
         ))}

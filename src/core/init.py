@@ -19,11 +19,7 @@ def _default_config_yaml() -> dict:
   return {
     "gemini_api_key": "",
     "gemini_model": "gemini-3.1-pro-preview",
-    "kimi_api_key": "",
-    "kimi_base_url": "https://api.moonshot.cn/v1",
-    "kimi_model": "kimi-k2.5",
     "max_concurrent_workers": 3,
-    "worker_timeout_seconds": 3600,
     "workspace_dirs": ["~/workspace"],
     "worktree_dir": "~/worktrees",
   }

@@ -11,7 +11,6 @@ import structlog
 from src.agents.master_cc import ensure_master_claude_md
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  ConversationHistory,
   CreateSessionRequest,
   SessionMetadata,
   SessionStatus,
@@ -39,9 +38,6 @@ class SessionManager:
     # Create directory structure
     for subdir in ["data", "threads"]:
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
-
-    # Initialize empty conversation history
-    await self._save_history(ConversationHistory(session_id=meta.id))
 
     await self._save_metadata(meta)
 
@@ -160,22 +156,6 @@ class SessionManager:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"
 
   # ---------------------------------------------------------------------------
-  # Conversation history
-  # ---------------------------------------------------------------------------
-
-  async def load_history(self, session_id: str) -> ConversationHistory:
-    """Load conversation history for a session."""
-    path = self._history_path(session_id)
-    if not path.exists():
-      return ConversationHistory(session_id=session_id)
-    async with aiofiles.open(path, "r") as f:
-      raw = await f.read()
-    return ConversationHistory.model_validate_json(raw)
-
-  async def save_history(self, history: ConversationHistory) -> None:
-    await self._save_history(history)
-
-  # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
 
@@ -207,17 +187,8 @@ class SessionManager:
     async with aiofiles.open(path, "w") as f:
       await f.write(meta.model_dump_json(indent=2))
 
-  async def _save_history(self, history: ConversationHistory) -> None:
-    path = self._history_path(history.session_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiofiles.open(path, "w") as f:
-      await f.write(history.model_dump_json(indent=2))
-
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id
 
   def _metadata_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "metadata.json"
-
-  def _history_path(self, session_id: str) -> Path:
-    return self._session_dir(session_id) / "data" / "conversation.json"

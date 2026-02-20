@@ -26,11 +26,6 @@ class SessionStatus(str, Enum):
   ARCHIVED = "archived"
 
 
-class MessageRole(str, Enum):
-  USER = "user"
-  ASSISTANT = "assistant"
-  SYSTEM = "system"
-
 
 # ---------------------------------------------------------------------------
 # Thread Models
@@ -71,20 +66,6 @@ class SessionMetadata(BaseModel):
 # Chat Models
 # ---------------------------------------------------------------------------
 
-
-class ChatMessage(BaseModel):
-  id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-  role: MessageRole
-  content: str
-  timestamp: datetime = Field(default_factory=datetime.utcnow)
-  is_voice: bool = False
-  thread_id: Optional[str] = None
-
-
-class ConversationHistory(BaseModel):
-  session_id: str
-  messages: list[ChatMessage] = Field(default_factory=list)
-  summary: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

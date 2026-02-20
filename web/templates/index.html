@@ -394,6 +394,11 @@
         appendMessage('system', `Task delegated: ${ev.description || ''}`);
       } else if (t === 'worker_summary') {
         appendMessage('system', ev.content || '');
+      } else if (t === 'session_renamed') {
+        const link = document.getElementById('session-' + SESSION_ID);
+        if (link) link.querySelector('.session-name').textContent = ev.name;
+        const header = document.getElementById('header-session-name');
+        if (header) header.textContent = ev.name;
       }
     }
 

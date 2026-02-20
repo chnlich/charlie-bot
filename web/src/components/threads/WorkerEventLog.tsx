@@ -25,16 +25,16 @@ function EventRow({ event }: { event: WorkerEvent }) {
   if (event.type === 'file_write') {
     content = `  ${event.path}${event.lines_added != null ? ` (+${event.lines_added} lines)` : ''}`
   } else if (event.content) {
-    content = `  ${String(event.content).slice(0, 200)}`
+    content = `  ${String(event.content)}`
   } else if (event.message) {
-    content = `  ${String(event.message).slice(0, 200)}`
+    content = `  ${String(event.message)}`
   }
 
   if (event.type === 'catchup_complete' || event.type === 'ping') return null
 
   return (
     <div className={clsx('font-mono text-xs leading-5', colorClass)}>
-      <span className="text-slate-600 select-none">[{event.type}]</span>
+      <span className="text-slate-600">[{event.type}]</span>
       {content && <span>{content}</span>}
     </div>
   )

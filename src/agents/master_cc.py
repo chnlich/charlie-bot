@@ -15,6 +15,10 @@ from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
 
+# Per-session counter of concurrently running run_message tasks.
+# Only clear thinking_since when the count drops to zero.
+_active_tasks: dict[str, int] = {}
+
 MASTER_CC_COMMAND = [
   "claude",
   "-p",
@@ -88,10 +92,12 @@ async def run_message(
   await save_chat_event(session_meta.id, user_event)
   await streaming_manager.broadcast(channel, user_event)
 
-  # Record when thinking started so the frontend timer survives page refresh
-  session_meta.thinking_since = datetime.now(timezone.utc)
-  if save_metadata:
-    await save_metadata(session_meta)
+  # Track concurrent tasks; only set thinking_since on the first one
+  _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1
+  if _active_tasks[session_meta.id] == 1:
+    session_meta.thinking_since = datetime.now(timezone.utc)
+    if save_metadata:
+      await save_metadata(session_meta)
 
   cmd = list(MASTER_CC_COMMAND)
   if session_meta.cc_session_id:
@@ -100,6 +106,7 @@ async def run_message(
 
   env = {**os.environ}
   env.pop("CLAUDECODE", None)
+  env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
 
   log.info("master_cc_starting", session=session_meta.id, cwd=cwd)
 
@@ -114,6 +121,7 @@ async def run_message(
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
       env=env,
+      limit=cfg.subprocess_buffer_limit,
     )
 
     log.info("master_cc_spawned", session=session_meta.id, pid=proc.pid)
@@ -157,20 +165,24 @@ async def run_message(
     error_msg = str(e)
 
   finally:
-    # Always clear thinking and emit master_done, even on crash
-    session_meta.thinking_since = None
-    if save_metadata:
-      await save_metadata(session_meta)
+    # Decrement active-task counter; only clear thinking when ALL tasks finish
+    _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
+    still_thinking = _active_tasks.get(session_meta.id, 0) > 0
+
+    if not still_thinking:
+      session_meta.thinking_since = None
+      if save_metadata:
+        await save_metadata(session_meta)
 
     if error_msg:
       err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
       await streaming_manager.broadcast(channel, err_event)
       await save_chat_event(session_meta.id, err_event)
 
-    done_event = {"type": "master_done", "exit_code": exit_code}
+    done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
     await streaming_manager.broadcast(channel, done_event)
     await save_chat_event(session_meta.id, done_event)
 
-    log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code)
+    log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code, still_thinking=still_thinking)
 
   return cc_session_id

@@ -9,6 +9,7 @@ from typing import Optional
 import aiofiles
 import structlog
 
+from src.core.config import get_config
 from src.core.models import ThreadMetadata, WorkerEvent
 from src.core.streaming import streaming_manager
 
@@ -76,7 +77,7 @@ class Worker:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
       env=env,
-      limit=10 * 1024 * 1024,
+      limit=get_config().subprocess_buffer_limit,
     )
 
     self._thread.pid = self._proc.pid

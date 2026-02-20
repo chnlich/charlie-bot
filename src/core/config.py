@@ -27,6 +27,9 @@ class CharlieBotConfig(BaseModel):
   # Root directory for worker worktrees
   worktree_dir: str = "~/worktrees"
 
+  # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
+  subprocess_buffer_limit_mb: int = 1024
+
   @model_validator(mode="before")
   @classmethod
   def migrate_and_expand(cls, values: dict) -> dict:
@@ -53,6 +56,11 @@ class CharlieBotConfig(BaseModel):
   @classmethod
   def expand_worktree_dir(cls, v: str) -> str:
     return os.path.expanduser(v)
+
+  @property
+  def subprocess_buffer_limit(self) -> int:
+    """Return the subprocess buffer limit in bytes."""
+    return self.subprocess_buffer_limit_mb * 1024 * 1024
 
   @property
   def sessions_dir(self) -> Path:

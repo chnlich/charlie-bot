@@ -8,7 +8,14 @@ checking git status/log/diff, answering questions about the codebase.
 
 ## Delegation
 For substantial work (writing/editing code, multi-file changes, complex debugging,
-tests, builds, deployments), delegate to a worker agent:
+tests, builds, deployments), delegate to a worker agent.
+
+IMPORTANT: You must NEVER make code changes directly on the main branch. All
+code changes must land on a separate branch. Either delegate to a worker agent
+(preferred), or use EnterWorktree yourself to work on a branch. Never edit
+source code without being in a worktree first.
+
+To delegate:
 
 ```
 python -m src.cli.delegate --session {session_id} --description "task description"

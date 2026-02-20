@@ -219,6 +219,8 @@
     // ---------------------------------------------------------------------------
     const SESSION_ID = {{ (active_session.id|tojson) if active_session else 'null' }};
     const THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
+    // Number of events already rendered server-side; used as cursor for WS catch-up.
+    const LAST_EVENT_INDEX = {{ event_count }};
 
     // ---------------------------------------------------------------------------
     // Tabs
@@ -328,6 +330,9 @@
       ws.onopen = () => {
         console.log('WS connected');
         reconnectDelay = 1000;
+        // Tell the server how many events were already rendered server-side
+        // so it only sends events beyond that index during catch-up.
+        ws.send(JSON.stringify({type: 'cursor', index: LAST_EVENT_INDEX}));
       };
 
       ws.onmessage = (e) => {
@@ -390,7 +395,7 @@
           appendMessage('assistant', streamBuf);
           streamBuf = '';
         }
-        stopThinking();
+        if (!ev.still_thinking) stopThinking();
       } else if (t === 'assistant_error') {
         hideStreaming();
         if (streamBuf) {
@@ -398,7 +403,6 @@
           streamBuf = '';
         }
         appendMessage('system', 'Error: ' + (ev.content || ''));
-        stopThinking();
       } else if (t === 'task_delegated') {
         appendMessage('system', `Task delegated: ${ev.description || ''}`);
       } else if (t === 'worker_summary') {

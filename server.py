@@ -62,18 +62,38 @@ async def session_websocket(websocket: WebSocket, session_id: str):
   channel = f"session:{session_id}"
   log.info("session_ws_connected", session_id=session_id)
 
-  # Send catch-up events from chat_events.jsonl
+  # Wait for the client to send a cursor (index of events already rendered
+  # server-side) so we only replay events the browser hasn't seen yet.
+  cursor = 0
+  try:
+    raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+    msg = json.loads(raw)
+    if msg.get("type") == "cursor":
+      cursor = int(msg.get("index", 0))
+  except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
+    log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
+    # Fall back to sending all events (cursor stays 0)
+
+  # Send catch-up events from chat_events.jsonl, skipping those the client
+  # already has from the server-side render.
   cfg = get_config()
   session_mgr = SessionManager(cfg)
   try:
     events = session_mgr.load_chat_events_sync(session_id)
-    for event in events:
+    for event in events[cursor:]:
       try:
         await websocket.send_json(event)
       except Exception as e:
         log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
         return
     await websocket.send_json({"type": "catchup_complete"})
+    log.debug(
+      "session_ws_catchup_sent",
+      session_id=session_id,
+      cursor=cursor,
+      total=len(events),
+      sent=max(0, len(events) - cursor),
+    )
   except Exception as e:
     log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
 

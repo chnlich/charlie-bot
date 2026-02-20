@@ -90,6 +90,7 @@ async def index(
   active_session = None
   messages: list[dict] = []
   threads = []
+  raw_events: list[dict] = []
   if session:
     active_session = await session_mgr.get_session(session)
     if active_session:
@@ -111,4 +112,5 @@ async def index(
     "active_session": active_session,
     "messages": messages,
     "threads": threads,
+    "event_count": len(raw_events),
   })

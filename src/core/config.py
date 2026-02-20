@@ -69,11 +69,11 @@ class CharliBotConfig(BaseModel):
 
   @property
   def claude_md_file(self) -> Path:
-    """The canonical CLAUDE.md location: ~/.charliebot/CLAUDE.md."""
-    return self.charliebot_home / "CLAUDE.md"
+    """The master agent prompt: ~/.charliebot/MASTER_AGENT_PROMPT.md."""
+    return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
 
   def session_claude_md_symlink(self, session_id: str) -> Path:
-    """Per-session symlink: ~/.charliebot/sessions/{id}/CLAUDE.md -> ../../CLAUDE.md."""
+    """Per-session symlink: ~/.charliebot/sessions/{id}/CLAUDE.md -> ../../MASTER_AGENT_PROMPT.md."""
     return self.sessions_dir / session_id / "CLAUDE.md"
 
   @property

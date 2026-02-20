@@ -27,7 +27,7 @@ _MASTER_TEMPLATE_PATH = Path(__file__).parent.parent.parent / "config" / "master
 
 
 def _ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig) -> None:
-  """Write the master CLAUDE.md into ~/.charliebot/ and symlink into the session dir."""
+  """Write MASTER_AGENT_PROMPT.md into ~/.charliebot/ and symlink into the session dir."""
   claude_md = cfg.claude_md_file
 
   # Only write if there's no CLAUDE.md yet (don't clobber user's)
@@ -39,14 +39,14 @@ def _ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig
     template = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
     content = template.replace("{session_id}", session_meta.id)
     claude_md.write_text(content, encoding="utf-8")
-    log.info("master_claude_md_written", path=str(claude_md))
+    log.info("master_agent_prompt_written", path=str(claude_md))
 
   # Ensure symlink in session directory
   symlink = cfg.session_claude_md_symlink(session_meta.id)
   if not symlink.exists():
     symlink.parent.mkdir(parents=True, exist_ok=True)
     symlink.symlink_to(os.path.relpath(claude_md, symlink.parent))
-    log.info("master_claude_md_symlinked", link=str(symlink), target=str(claude_md))
+    log.info("master_agent_prompt_symlinked", link=str(symlink), target=str(claude_md))
 
 
 async def run_message(
@@ -71,7 +71,7 @@ async def run_message(
   session_dir.mkdir(parents=True, exist_ok=True)
   cwd = str(session_dir)
 
-  # Ensure master CLAUDE.md exists in the working directory
+  # Ensure MASTER_AGENT_PROMPT.md exists and is symlinked into the session dir
   _ensure_master_claude_md(session_meta, cfg)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)

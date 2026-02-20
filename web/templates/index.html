@@ -72,6 +72,10 @@
           {% if s.has_unread %}
           <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0"></span>
           {% endif %}
+          <button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '{{ s.id }}', '{{ s.name|e }}')"
+                  class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0" title="Rename">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+          </button>
           <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('{{ s.id }}')"
                   class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0" title="Archive">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
@@ -91,7 +95,10 @@
       <!-- Tab bar -->
       <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4">
         <div class="flex-1 min-w-0 py-3">
-          <h2 class="text-sm font-semibold truncate">{{ active_session.name }}</h2>
+          <h2 class="text-sm font-semibold truncate cursor-pointer hover:text-blue-300 transition-colors"
+              onclick="startRename(event, '{{ active_session.id }}', '{{ active_session.name|e }}')"
+              title="Click to rename"
+              id="header-session-name">{{ active_session.name }}</h2>
           {% if active_session.repo_path %}
           <p class="text-xs text-slate-500 truncate">{{ active_session.repo_path }}</p>
           {% endif %}
@@ -531,9 +538,11 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: newName }),
         });
-        // Update DOM
+        // Update DOM — sidebar and header
         const link = document.getElementById('session-' + renameSessionId);
         if (link) link.querySelector('.session-name').textContent = newName;
+        const header = document.getElementById('header-session-name');
+        if (header && renameSessionId === SESSION_ID) header.textContent = newName;
       } catch (err) {
         console.error('Rename failed:', err);
       }

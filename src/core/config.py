@@ -59,10 +59,6 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "sessions"
 
   @property
-  def logs_dir(self) -> Path:
-    return self.charliebot_home / "logs"
-
-  @property
   def claude_md_file(self) -> Path:
     """The master agent prompt: ~/.charliebot/MASTER_AGENT_PROMPT.md."""
     return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
@@ -74,10 +70,6 @@ class CharlieBotConfig(BaseModel):
   @property
   def memory_file(self) -> Path:
     return self.charliebot_home / "MEMORY.md"
-
-  @property
-  def progress_file(self) -> Path:
-    return self.charliebot_home / "PROGRESS.md"
 
   @property
   def config_file(self) -> Path:

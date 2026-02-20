@@ -24,7 +24,6 @@ def _default_config_yaml() -> dict:
   }
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
-DEFAULT_PROGRESS = "# PROGRESS\n\nLessons learned, best practices, and insights discovered during tasks.\n"
 
 
 async def init_charliebot_home() -> None:
@@ -35,14 +34,12 @@ async def init_charliebot_home() -> None:
   dirs = [
     cfg.charliebot_home,
     cfg.sessions_dir,
-    cfg.logs_dir,
   ]
   for d in dirs:
     d.mkdir(parents=True, exist_ok=True)
 
   # Seed global knowledge files
   _seed_if_missing(cfg.memory_file, DEFAULT_MEMORY)
-  _seed_if_missing(cfg.progress_file, DEFAULT_PROGRESS)
 
   # Seed config.yaml with placeholders if missing
   if not cfg.config_file.exists():

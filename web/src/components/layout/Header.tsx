@@ -1,4 +1,4 @@
-import { Bug, LayoutList, Users } from 'lucide-react'
+import { Bug, LayoutList, Menu, Users } from 'lucide-react'
 import type { SessionMetadata } from '../../types'
 import { useDebugStore } from '../../store/debug'
 
@@ -8,21 +8,31 @@ interface Props {
   showQueue: boolean
   onToggleThreads: () => void
   onToggleQueue: () => void
+  onToggleSidebar: () => void
 }
 
-export function Header({ session, showThreads, showQueue, onToggleThreads, onToggleQueue }: Props) {
+export function Header({ session, showThreads, showQueue, onToggleThreads, onToggleQueue, onToggleSidebar }: Props) {
   const { debugMode, toggleDebug } = useDebugStore()
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-surface shrink-0">
-      <div>
-        <h1 className="text-sm font-semibold text-white">
-          {session ? session.name : 'CharlieBot'}
-        </h1>
-        {session?.repo_path && (
-          <p className="text-xs text-slate-500 truncate max-w-xs">{session.repo_path}</p>
-        )}
+      <div className="flex items-center gap-2 min-w-0">
+        <button
+          onClick={onToggleSidebar}
+          title="Toggle sidebar"
+          className="p-1.5 rounded transition-colors text-slate-500 hover:text-slate-300 lg:hidden shrink-0"
+        >
+          <Menu size={16} />
+        </button>
+        <div className="min-w-0">
+          <h1 className="text-sm font-semibold text-white truncate">
+            {session ? session.name : 'CharlieBot'}
+          </h1>
+          {session?.repo_path && (
+            <p className="text-xs text-slate-500 truncate max-w-xs">{session.repo_path}</p>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 shrink-0">
         <button
           onClick={toggleDebug}
           title="Debug mode"

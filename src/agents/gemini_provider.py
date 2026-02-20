@@ -28,3 +28,17 @@ class GeminiProvider(LLMProvider):
       return response.text
 
     return await asyncio.to_thread(_call)
+
+  async def generate_session_name(self, user_message: str) -> str:
+    """Generate a short session name from the first user message."""
+    prompt = (
+      "Generate a very short title (3-6 words, no quotes) summarizing this user request. "
+      "The title should capture the main intent. Reply with ONLY the title, nothing else.\n\n"
+      f"User message: {user_message}"
+    )
+
+    def _call():
+      response = self._model.generate_content(prompt)
+      return response.text.strip().strip('"\'')
+
+    return await asyncio.to_thread(_call)

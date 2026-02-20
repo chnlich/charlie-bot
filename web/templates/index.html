@@ -306,6 +306,7 @@
       if (!content || !SESSION_ID) return;
 
       // Optimistic UI: append user message
+      pendingUserMsg = true;
       appendMessage('user', content);
       input.value = '';
       input.style.height = 'auto';
@@ -362,6 +363,7 @@
     let streamBuf = '';
     let reconnectDelay = 1000;
     let catchupDone = false;
+    let pendingUserMsg = false;
 
     function connectWS() {
       if (!SESSION_ID) return;
@@ -401,11 +403,16 @@
       if (!catchupDone) return;
 
       if (t === 'user') {
-        // Another tab sent a message — show it
-        appendMessage('user', ev.content || '', ev.is_voice);
+        // Only show if sent from another tab (this tab already added it optimistically)
+        if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice);
+        pendingUserMsg = false;
       } else if (t === 'assistant') {
-        streamBuf += ev.content || '';
-        showStreaming(streamBuf);
+        // Claude Code nests text in message.content[].text
+        const blocks = (ev.message || {}).content || [];
+        for (const b of blocks) {
+          if (b.type === 'text') streamBuf += b.text || '';
+        }
+        if (streamBuf) showStreaming(streamBuf);
       } else if (t === 'master_done') {
         if (streamBuf) {
           hideStreaming();

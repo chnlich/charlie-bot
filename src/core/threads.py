@@ -142,7 +142,7 @@ class ThreadManager:
     meta = await self.get_thread(session_id, thread_id)
     if meta and meta.worktree_path:
       return Path(meta.worktree_path)
-    return Path.home()
+    return self._thread_dir(session_id, thread_id)
 
   async def get_claude_md_path(self, session_id: str, thread_id: str) -> Path:
     worktree = await self.get_worktree_path(session_id, thread_id)

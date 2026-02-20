@@ -27,22 +27,26 @@ _MASTER_TEMPLATE_PATH = Path(__file__).parent.parent.parent / "config" / "master
 
 
 def _ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig) -> None:
-  """Write the master CLAUDE.md into the session's repo directory if not already present."""
-  cwd = Path(session_meta.repo_path) if session_meta.repo_path else Path.home()
-  claude_md = cwd / "CLAUDE.md"
+  """Write the master CLAUDE.md into ~/.charliebot/ and symlink into the session dir."""
+  claude_md = cfg.claude_md_file
 
-  # Only write if there's no CLAUDE.md yet (don't clobber user's or worker's)
-  if claude_md.exists():
-    return
+  # Only write if there's no CLAUDE.md yet (don't clobber user's)
+  if not claude_md.exists():
+    if not _MASTER_TEMPLATE_PATH.exists():
+      log.warning("master_claude_md_template_missing", path=str(_MASTER_TEMPLATE_PATH))
+      return
 
-  if not _MASTER_TEMPLATE_PATH.exists():
-    log.warning("master_claude_md_template_missing", path=str(_MASTER_TEMPLATE_PATH))
-    return
+    template = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
+    content = template.replace("{session_id}", session_meta.id)
+    claude_md.write_text(content, encoding="utf-8")
+    log.info("master_claude_md_written", path=str(claude_md))
 
-  template = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
-  content = template.replace("{session_id}", session_meta.id)
-  claude_md.write_text(content, encoding="utf-8")
-  log.info("master_claude_md_written", path=str(claude_md))
+  # Ensure symlink in session directory
+  symlink = cfg.session_claude_md_symlink(session_meta.id)
+  if not symlink.exists():
+    symlink.parent.mkdir(parents=True, exist_ok=True)
+    symlink.symlink_to(os.path.relpath(claude_md, symlink.parent))
+    log.info("master_claude_md_symlinked", link=str(symlink), target=str(claude_md))
 
 
 async def run_message(
@@ -63,10 +67,17 @@ async def run_message(
     The CC session ID (for --resume on subsequent messages), or None.
   """
   channel = f"session:{session_meta.id}"
-  cwd = session_meta.repo_path or str(Path.home())
+  session_dir = cfg.sessions_dir / session_meta.id
+  session_dir.mkdir(parents=True, exist_ok=True)
+  cwd = str(session_dir)
 
   # Ensure master CLAUDE.md exists in the working directory
   _ensure_master_claude_md(session_meta, cfg)
+
+  # Persist the user message so it survives page refresh (WebSocket catch-up)
+  user_event = {"type": "user", "content": user_content}
+  await save_chat_event(session_meta.id, user_event)
+  await streaming_manager.broadcast(channel, user_event)
 
   cmd = list(MASTER_CC_COMMAND)
   if session_meta.cc_session_id:

@@ -6,6 +6,7 @@ interface SessionsStore {
   activeSessionId: string | null
   setSessions: (sessions: SessionMetadata[]) => void
   addSession: (session: SessionMetadata) => void
+  removeSession: (sessionId: string) => void
   updateSession: (updated: SessionMetadata) => void
   setActiveSession: (id: string | null) => void
   markSessionUnread: (sessionId: string) => void
@@ -19,6 +20,11 @@ export const useSessionsStore = create<SessionsStore>((set) => ({
   addSession: (session) =>
     set((s) => ({
       sessions: [session, ...s.sessions.filter((x) => x.id !== session.id)],
+    })),
+  removeSession: (sessionId) =>
+    set((s) => ({
+      sessions: s.sessions.filter((x) => x.id !== sessionId),
+      activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId,
     })),
   updateSession: (updated) =>
     set((s) => ({

@@ -17,7 +17,13 @@ export const sessionsApi = {
 
   get: (id: string) => client.get<SessionMetadata>(`/sessions/${id}`).then((r) => r.data),
 
-  archive: (id: string) => client.delete(`/sessions/${id}`).then((r) => r.data),
+  archive: (id: string) => client.delete<SessionMetadata>(`/sessions/${id}`).then((r) => r.data),
+
+  unarchive: (id: string) =>
+    client.post<SessionMetadata>(`/sessions/${id}/unarchive`).then((r) => r.data),
+
+  listArchived: () =>
+    client.get<SessionMetadata[]>('/sessions/archived').then((r) => r.data),
 
   rename: (id: string, name: string) =>
     client.patch<SessionMetadata>(`/sessions/${id}`, { name }).then((r) => r.data),

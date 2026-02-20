@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import { sessionsApi } from '../../api/sessions'
 import { useSessionsStore } from '../../store/sessions'
 import { SessionItem } from './SessionItem'
+import type { SessionMetadata } from '../../types'
 
 export function SessionList() {
-  const { sessions, activeSessionId, setSessions, setActiveSession, addSession, updateSession, markSessionRead } =
+  const { sessions, activeSessionId, setSessions, setActiveSession, addSession, removeSession, updateSession, markSessionRead } =
     useSessionsStore()
   const [creating, setCreating] = useState(false)
+  const [archivedSessions, setArchivedSessions] = useState<SessionMetadata[]>([])
+  const [showArchived, setShowArchived] = useState(false)
 
   useEffect(() => {
     sessionsApi.list().then(setSessions).catch(console.error)
@@ -17,6 +20,12 @@ export function SessionList() {
     }, 5000)
     return () => clearInterval(interval)
   }, [setSessions])
+
+  useEffect(() => {
+    if (showArchived) {
+      sessionsApi.listArchived().then(setArchivedSessions).catch(console.error)
+    }
+  }, [showArchived])
 
   const handleCreate = async () => {
     if (creating) return
@@ -38,6 +47,28 @@ export function SessionList() {
       updateSession(updated)
     } catch (e) {
       console.error('Failed to rename session', e)
+    }
+  }
+
+  const handleArchive = async (id: string) => {
+    try {
+      const archived = await sessionsApi.archive(id)
+      removeSession(id)
+      if (showArchived) {
+        setArchivedSessions((prev) => [archived, ...prev])
+      }
+    } catch (e) {
+      console.error('Failed to archive session', e)
+    }
+  }
+
+  const handleUnarchive = async (id: string) => {
+    try {
+      const restored = await sessionsApi.unarchive(id)
+      addSession(restored)
+      setArchivedSessions((prev) => prev.filter((s) => s.id !== id))
+    } catch (e) {
+      console.error('Failed to unarchive session', e)
     }
   }
 
@@ -72,10 +103,43 @@ export function SessionList() {
               }
             }}
             onRename={handleRename}
+            onArchive={handleArchive}
           />
         ))}
         {active.length === 0 && (
           <p className="text-xs text-slate-600 px-2 py-1">No sessions yet</p>
+        )}
+      </div>
+
+      {/* Archived section */}
+      <div className="mt-2 border-t border-border pt-1">
+        <button
+          onClick={() => setShowArchived(!showArchived)}
+          className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider hover:text-slate-400 transition-colors"
+        >
+          {showArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          Archived
+          {archivedSessions.length > 0 && showArchived && (
+            <span className="text-slate-600 normal-case font-normal">({archivedSessions.length})</span>
+          )}
+        </button>
+        {showArchived && (
+          <div className="space-y-0.5 px-1">
+            {archivedSessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                active={session.id === activeSessionId}
+                hasUnread={false}
+                onClick={() => setActiveSession(session.id)}
+                onRename={handleRename}
+                onUnarchive={handleUnarchive}
+              />
+            ))}
+            {archivedSessions.length === 0 && (
+              <p className="text-xs text-slate-600 px-2 py-1">No archived sessions</p>
+            )}
+          </div>
         )}
       </div>
     </div>

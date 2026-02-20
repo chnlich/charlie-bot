@@ -69,8 +69,8 @@ class SessionManager:
       raw = await f.read()
     return SessionMetadata.model_validate_json(raw)
 
-  async def list_sessions(self) -> list[SessionMetadata]:
-    """List all sessions, newest first."""
+  async def list_sessions(self, status: Optional[SessionStatus] = None) -> list[SessionMetadata]:
+    """List sessions, newest first. Optionally filter by status."""
     sessions: list[SessionMetadata] = []
     if not self._cfg.sessions_dir.exists():
       return sessions
@@ -78,7 +78,7 @@ class SessionManager:
       if not d.is_dir():
         continue
       meta = await self.get_session(d.name)
-      if meta:
+      if meta and (status is None or meta.status == status):
         sessions.append(meta)
     sessions.sort(key=lambda s: s.created_at, reverse=True)
     return sessions
@@ -111,14 +111,27 @@ class SessionManager:
     meta.has_unread = True
     await self._save_metadata(meta)
 
-  async def archive_session(self, session_id: str) -> None:
+  async def archive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Mark a session as archived (does not delete files)."""
     meta = await self.get_session(session_id)
     if not meta:
-      return
+      return None
     meta.status = SessionStatus.ARCHIVED
     meta.updated_at = datetime.utcnow()
     await self._save_metadata(meta)
+    log.info("session_archived", session_id=session_id)
+    return meta
+
+  async def unarchive_session(self, session_id: str) -> Optional[SessionMetadata]:
+    """Restore an archived session back to active."""
+    meta = await self.get_session(session_id)
+    if not meta:
+      return None
+    meta.status = SessionStatus.ACTIVE
+    meta.updated_at = datetime.utcnow()
+    await self._save_metadata(meta)
+    log.info("session_unarchived", session_id=session_id)
+    return meta
 
   async def save_metadata(self, meta: SessionMetadata) -> None:
     """Public wrapper for _save_metadata."""

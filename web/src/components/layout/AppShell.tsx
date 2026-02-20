@@ -43,7 +43,7 @@ export function AppShell() {
           {/* Main chat area */}
           <div className="flex-1 min-w-0">
             {activeSessionId ? (
-              <ChatPanel sessionId={activeSessionId} />
+              <ChatPanel key={activeSessionId} sessionId={activeSessionId} />
             ) : (
               <div className="flex items-center justify-center h-full text-slate-600 text-sm">
                 Select or create a session to get started

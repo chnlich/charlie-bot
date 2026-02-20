@@ -55,6 +55,8 @@ export interface SessionMetadata {
   repo_path: string | null
   status: SessionStatus
   has_unread: boolean
+  has_running_tasks: boolean
+  thinking_since: string | null
   created_at: string
   updated_at: string
 }

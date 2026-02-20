@@ -61,6 +61,7 @@ async def run_message(
   session_meta: SessionMetadata,
   user_content: str,
   save_chat_event,
+  save_metadata=None,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -69,6 +70,7 @@ async def run_message(
     session_meta: The session to run in.
     user_content: The user's message text.
     save_chat_event: Coroutine to persist each event to chat_events.jsonl.
+    save_metadata: Coroutine to persist session metadata updates.
 
   Returns:
     The CC session ID (for --resume on subsequent messages), or None.
@@ -85,6 +87,11 @@ async def run_message(
   user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat()}
   await save_chat_event(session_meta.id, user_event)
   await streaming_manager.broadcast(channel, user_event)
+
+  # Record when thinking started so the frontend timer survives page refresh
+  session_meta.thinking_since = datetime.now(timezone.utc)
+  if save_metadata:
+    await save_metadata(session_meta)
 
   cmd = list(MASTER_CC_COMMAND)
   if session_meta.cc_session_id:
@@ -140,7 +147,11 @@ async def run_message(
     if stderr_text:
       log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text[:500])
 
-  # Emit master_done so the frontend knows the response is complete
+  # Clear thinking timestamp and emit master_done
+  session_meta.thinking_since = None
+  if save_metadata:
+    await save_metadata(session_meta)
+
   done_event = {"type": "master_done", "exit_code": exit_code}
   await streaming_manager.broadcast(channel, done_event)
   await save_chat_event(session_meta.id, done_event)

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Archive, ArchiveRestore, Hash } from 'lucide-react'
+import { Archive, ArchiveRestore, Hash, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SessionMetadata } from '../../types'
 
@@ -78,7 +78,11 @@ export function SessionItem({ session, active, hasUnread, onClick, onRename, onA
               : 'text-slate-400 hover:bg-slate-700/40 hover:text-slate-200',
         )}
       >
-        <Hash size={14} className="shrink-0" />
+        {session.has_running_tasks ? (
+          <Loader2 size={14} className="shrink-0 animate-spin text-blue-400" />
+        ) : (
+          <Hash size={14} className="shrink-0" />
+        )}
         <span className="truncate">{session.name}</span>
         {hasUnread && (
           <span className="relative ml-auto shrink-0 flex h-2 w-2">

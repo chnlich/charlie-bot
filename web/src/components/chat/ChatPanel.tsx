@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { useChatStore } from '../../store/chat'
 import { useSessionsStore } from '../../store/sessions'
@@ -31,15 +31,11 @@ export function ChatPanel({ sessionId }: Props) {
 
   const messages = messagesBySession[sessionId] ?? []
 
-  // Derive the thinking start time from the last user message timestamp.
-  // This survives page refreshes and session switches because messages are
-  // replayed from persisted chat_events.jsonl during WebSocket catch-up.
-  const thinkingStartedAt = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') return messages[i].timestamp
-    }
-    return null
-  }, [messages])
+  // thinking_since is persisted on the backend session metadata, so it
+  // survives page refreshes. The sessions store is polled every 5s.
+  const thinkingStartedAt = useSessionsStore(
+    (s) => s.sessions.find((x) => x.id === sessionId)?.thinking_since ?? null,
+  )
 
   // Clear unread when this session becomes active
   useEffect(() => {
@@ -199,8 +195,8 @@ export function ChatPanel({ sessionId }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <MessageList messages={messages} isStreaming={isStreaming} thinkingStartedAt={thinkingStartedAt} />
-      <ChatInput sessionId={sessionId} onSend={handleSend} disabled={isStreaming} />
+      <MessageList messages={messages} thinkingStartedAt={thinkingStartedAt} />
+      <ChatInput sessionId={sessionId} onSend={handleSend} disabled={isStreaming || !!thinkingStartedAt} />
     </div>
   )
 }

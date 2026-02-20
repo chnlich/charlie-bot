@@ -32,7 +32,7 @@ async def send_message(
   # Fire-and-forget: spawn master CC in a background task
   async def _run():
     try:
-      cc_session_id = await run_message(cfg, meta, req.content, session_mgr.save_chat_event)
+      cc_session_id = await run_message(cfg, meta, req.content, session_mgr.save_chat_event, session_mgr.save_metadata)
       # Persist CC session ID if newly assigned
       if cc_session_id and cc_session_id != meta.cc_session_id:
         meta.cc_session_id = cc_session_id

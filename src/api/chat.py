@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from src.agents.master_cc import run_message
 from src.api.deps import get_session_manager
 from src.core.config import CharlieBotConfig, get_config
-from src.core.models import ConversationHistory, SendMessageRequest
+from src.core.models import SendMessageRequest
 from src.core.sessions import SessionManager
 
 log = structlog.get_logger()
@@ -43,11 +43,3 @@ async def send_message(
   asyncio.create_task(_run())
 
   return JSONResponse(status_code=202, content={"status": "accepted"})
-
-
-@router.get("/{session_id}/history", response_model=ConversationHistory)
-async def get_history(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-  return await session_mgr.load_history(session_id)

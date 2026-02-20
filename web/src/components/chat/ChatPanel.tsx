@@ -26,11 +26,10 @@ function extractAssistantText(event: Record<string, unknown>): string {
 export function ChatPanel({ sessionId }: Props) {
   const [isStreaming, setIsStreaming] = useState(false)
   const catchupDoneRef = useRef(false)
-  const { messagesBySession, streamingContent, addMessage, setMessages, appendStream, clearStream } =
+  const { messagesBySession, addMessage, setMessages, appendStream, clearStream } =
     useChatStore()
 
   const messages = messagesBySession[sessionId] ?? []
-  const currentStream = streamingContent[sessionId] ?? ''
 
   // Clear unread when this session becomes active
   useEffect(() => {
@@ -173,7 +172,7 @@ export function ChatPanel({ sessionId }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <MessageList messages={messages} streamingContent={currentStream} isStreaming={isStreaming} />
+      <MessageList messages={messages} isStreaming={isStreaming} />
       <ChatInput sessionId={sessionId} onSend={handleSend} disabled={isStreaming} />
     </div>
   )

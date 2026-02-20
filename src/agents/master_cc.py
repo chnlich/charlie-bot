@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -81,7 +82,7 @@ async def run_message(
   _ensure_master_claude_md(session_meta, cfg)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)
-  user_event = {"type": "user", "content": user_content}
+  user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat()}
   await save_chat_event(session_meta.id, user_event)
   await streaming_manager.broadcast(channel, user_event)
 

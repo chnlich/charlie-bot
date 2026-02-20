@@ -81,7 +81,7 @@ export function ChatPanel({ sessionId }: Props) {
             id: crypto.randomUUID(),
             role: 'user',
             content: event.content as string,
-            timestamp: new Date().toISOString(),
+            timestamp: (event.timestamp as string) || new Date().toISOString(),
             is_voice: false,
             thread_id: null,
           })

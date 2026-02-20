@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { ChatMessage } from '../../types'
 import { MessageItem } from './MessageItem'
-import { Spinner } from '../common/Spinner'
+import { ThinkingIndicator } from './ThinkingIndicator'
 
 interface Props {
   messages: ChatMessage[]
@@ -28,7 +28,7 @@ export function MessageList({ messages, isStreaming }: Props) {
             C
           </div>
           <div className="max-w-[75%] bg-slate-700 text-slate-100 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm">
-            <Spinner size="sm" />
+            <ThinkingIndicator />
           </div>
         </div>
       )}

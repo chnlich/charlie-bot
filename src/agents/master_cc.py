@@ -46,6 +46,11 @@ def _ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig
 
   session_claude_md = cfg.session_claude_md(session_meta.id)
   session_claude_md.parent.mkdir(parents=True, exist_ok=True)
+
+  # Remove stale symlink (from pre-refactor sessions) so we write a real file
+  if session_claude_md.is_symlink():
+    session_claude_md.unlink()
+
   session_claude_md.write_text("\n\n".join(parts), encoding="utf-8")
   log.debug("session_claude_md_written", path=str(session_claude_md))
 

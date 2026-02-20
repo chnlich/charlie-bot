@@ -95,22 +95,37 @@ export interface VoiceTranscriptionResponse {
   disclaimer: string
 }
 
-// SSE event types from chat endpoint
-export interface SSEChunkEvent {
-  type: 'chunk'
-  content: string
+// WebSocket event types from session channel
+export interface WsAssistantEvent {
+  type: 'assistant'
+  message: { content: Array<{ type: string; text?: string }> }
 }
 
-export interface SSETaskDelegatedEvent {
+export interface WsTaskDelegatedEvent {
   type: 'task_delegated'
   task_id: string
+  thread_id: string
   priority: Priority
   description: string
   plan_mode: boolean
 }
 
-export interface SSEDoneEvent {
-  type: 'done'
+export interface WsMasterDoneEvent {
+  type: 'master_done'
+  exit_code: number
 }
 
-export type SSEEvent = SSEChunkEvent | SSETaskDelegatedEvent | SSEDoneEvent | { type: string }
+export interface WsWorkerSummaryEvent {
+  type: 'worker_summary'
+  thread_id: string
+  task_id: string
+  content: string
+  status: string
+}
+
+export type WsSessionEvent =
+  | WsAssistantEvent
+  | WsTaskDelegatedEvent
+  | WsMasterDoneEvent
+  | WsWorkerSummaryEvent
+  | { type: string }

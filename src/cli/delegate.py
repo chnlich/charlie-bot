@@ -1,0 +1,50 @@
+"""CLI script for master CC to delegate tasks to worker agents.
+
+Called by the master Claude Code instance via its run_command tool:
+
+  python -m src.cli.delegate \
+    --session SESSION_ID \
+    --description "implement feature X" \
+    --priority P1 \
+    --plan-mode
+"""
+
+import argparse
+import json
+import sys
+
+import requests
+
+from src.core.config import get_config
+
+
+def main() -> None:
+  parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
+  parser.add_argument("--session", required=True, help="Session ID")
+  parser.add_argument("--description", required=True, help="Task description")
+  parser.add_argument("--priority", default="P1", choices=["P0", "P1", "P2"], help="Task priority")
+  parser.add_argument("--plan-mode", action="store_true", help="Enable plan mode for multi-step tasks")
+  args = parser.parse_args()
+
+  cfg = get_config()
+  port = cfg.server_port
+
+  payload = {
+    "session_id": args.session,
+    "description": args.description,
+    "priority": args.priority,
+    "plan_mode": args.plan_mode,
+  }
+
+  try:
+    resp = requests.post(f"http://localhost:{port}/api/internal/delegate", json=payload, timeout=30)
+    resp.raise_for_status()
+    result = resp.json()
+    print(json.dumps(result, indent=2))
+  except requests.RequestException as e:
+    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+  main()

@@ -120,6 +120,40 @@ class SessionManager:
     meta.updated_at = datetime.utcnow()
     await self._save_metadata(meta)
 
+  async def save_metadata(self, meta: SessionMetadata) -> None:
+    """Public wrapper for _save_metadata."""
+    await self._save_metadata(meta)
+
+  # ---------------------------------------------------------------------------
+  # Chat event persistence (NDJSON — for WebSocket catch-up)
+  # ---------------------------------------------------------------------------
+
+  async def save_chat_event(self, session_id: str, event: dict) -> None:
+    """Append a single NDJSON event line to chat_events.jsonl."""
+    path = self._chat_events_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    async with aiofiles.open(path, "a", encoding="utf-8") as f:
+      await f.write(json.dumps(event) + "\n")
+
+  def load_chat_events_sync(self, session_id: str) -> list[dict]:
+    """Read all chat events for catch-up (sync, for WebSocket handler)."""
+    path = self._chat_events_path(session_id)
+    if not path.exists():
+      return []
+    events = []
+    with open(path, "r", encoding="utf-8") as f:
+      for line in f:
+        line = line.strip()
+        if line:
+          try:
+            events.append(json.loads(line))
+          except json.JSONDecodeError:
+            pass
+    return events
+
+  def _chat_events_path(self, session_id: str) -> Path:
+    return self._session_dir(session_id) / "data" / "chat_events.jsonl"
+
   # ---------------------------------------------------------------------------
   # Conversation history
   # ---------------------------------------------------------------------------

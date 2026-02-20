@@ -109,6 +109,7 @@ class SessionMetadata(BaseModel):
   has_unread: bool = False
   created_at: datetime = Field(default_factory=datetime.utcnow)
   updated_at: datetime = Field(default_factory=datetime.utcnow)
+  cc_session_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -189,3 +190,11 @@ class TaskDelegationResult(BaseModel):
   description: str
   plan_mode: bool
   message: str
+
+
+class DelegateRequest(BaseModel):
+  """Request body for the internal delegation endpoint."""
+  session_id: str
+  description: str
+  priority: Priority = Priority.P1
+  plan_mode: bool = False

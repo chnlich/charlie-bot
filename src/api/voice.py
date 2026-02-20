@@ -1,9 +1,9 @@
 """Voice transcription API route."""
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from src.agents.master_agent import MasterAgent
-from src.api.deps import get_master_agent
+from src.agents.master_agent import AudioTranscriber
+from src.core.config import get_config
 from src.core.models import VoiceTranscriptionResponse
 
 router = APIRouter()
@@ -18,12 +18,20 @@ SUPPORTED_MIME_TYPES = {
   "audio/x-m4a",
 }
 
+_transcriber: AudioTranscriber | None = None
+
+
+def _get_transcriber() -> AudioTranscriber:
+  global _transcriber
+  if _transcriber is None:
+    _transcriber = AudioTranscriber(get_config())
+  return _transcriber
+
 
 @router.post("/transcribe", response_model=VoiceTranscriptionResponse)
 async def transcribe_audio(
   audio: UploadFile = File(...),
   session_id: str = Form(...),
-  master: MasterAgent = Depends(get_master_agent),
 ):
   """Transcribe uploaded audio using Gemini."""
   content_type = audio.content_type or "audio/webm"
@@ -36,7 +44,8 @@ async def transcribe_audio(
     raise HTTPException(status_code=400, detail="Empty audio file")
 
   try:
-    transcription = await master.transcribe_audio(audio_bytes, content_type)
+    transcriber = _get_transcriber()
+    transcription = await transcriber.transcribe_audio(audio_bytes, content_type)
   except NotImplementedError:
     raise HTTPException(status_code=503, detail="Audio transcription requires Gemini API key")
   except Exception as e:

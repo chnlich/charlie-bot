@@ -6,7 +6,7 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import structlog
 
@@ -17,9 +17,6 @@ from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 from src.core.threads import ThreadManager
 from src.core.config import CharliBotConfig
-
-if TYPE_CHECKING:
-  from src.agents.master_agent import MasterAgent
 
 log = structlog.get_logger()
 
@@ -39,13 +36,11 @@ class SessionDispatcher:
     cfg: CharliBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-    master_agent: MasterAgent,
   ):
     self._session_id = session_id
     self._queue_mgr = QueueManager(session_id, cfg)
     self._session_mgr = session_mgr
     self._thread_mgr = thread_mgr
-    self._master_agent = master_agent
     self._semaphore = asyncio.Semaphore(cfg.max_concurrent_workers)
     self._loop_task: Optional[asyncio.Task] = None
 
@@ -124,7 +119,7 @@ class SessionDispatcher:
           )
           log.warning("task_failed_nonzero", task_id=task.id, exit_code=exit_code)
 
-        # Ask master to review and summarize the worker's output
+        # Broadcast completion directly (no LLM summarization)
         await self._notify_completion(task, thread, exit_code)
 
       except QuotaExhaustedException:
@@ -174,60 +169,39 @@ class SessionDispatcher:
     quota_exhausted: bool = False,
     error: str = "",
   ) -> None:
-    """Ask Master Agent to summarize the result and push it to chat + WebSocket."""
+    """Broadcast worker_summary event directly (no LLM summarization)."""
     try:
-      # Build a short events summary from the on-disk log
       events_summary = await self._read_events_summary(thread.id)
+
+      status = "completed" if exit_code == 0 else "failed"
+      summary = f"**Worker finished: {task.description}**\n\n{events_summary}"
       if quota_exhausted:
-        events_summary += "\n[Worker stopped: API quota exhausted]"
+        summary += "\n\n*Worker stopped: API quota exhausted.*"
       elif error:
-        events_summary += f"\n[Worker error: {error}]"
+        summary += f"\n\n*Worker error: {error}*"
       elif exit_code != 0:
-        events_summary += f"\n[Worker exited with code {exit_code}]"
-
-      # Ask master to review
-      summary = await self._master_agent.review_worker_result(task.description, events_summary)
-
-      # Append to session conversation history
-      history = await self._session_mgr.load_history(self._session_id)
-      assistant_msg = ChatMessage(
-        role=MessageRole.ASSISTANT,
-        content=summary,
-        thread_id=thread.id,
-      )
-      history.messages.append(assistant_msg)
-      await self._session_mgr.save_history(history)
+        summary += f"\n\n*Worker exited with code {exit_code}.*"
 
       # Mark session as having unread activity
       await self._session_mgr.mark_unread(self._session_id)
 
-      # Broadcast to session WebSocket subscribers so the frontend picks it up
+      # Broadcast to session WebSocket subscribers
       await streaming_manager.broadcast(f"session:{self._session_id}", {
         "type": "worker_summary",
         "thread_id": thread.id,
         "task_id": task.id,
         "content": summary,
-        "status": "completed" if exit_code == 0 else "failed",
+        "status": status,
       })
       log.info("worker_summary_sent", session=self._session_id, thread=thread.id)
 
     except Exception as e:
       log.error("notify_completion_failed", task_id=task.id, error=str(e))
 
-      # Still push a fallback message so the user isn't left with no reply
+      # Still push a fallback message
       try:
         fallback = f"Worker finished task: {task.description}\n\n(Unable to generate summary: {e})"
-        history = await self._session_mgr.load_history(self._session_id)
-        assistant_msg = ChatMessage(
-          role=MessageRole.ASSISTANT,
-          content=fallback,
-          thread_id=thread.id,
-        )
-        history.messages.append(assistant_msg)
-        await self._session_mgr.save_history(history)
-
         await self._session_mgr.mark_unread(self._session_id)
-
         await streaming_manager.broadcast(f"session:{self._session_id}", {
           "type": "worker_summary",
           "thread_id": thread.id,
@@ -261,11 +235,9 @@ class SessionDispatcher:
   def _extract_event_content(ev: dict, ev_type: str) -> str:
     """Extract human-readable content from a Claude Code stream-json event."""
     if ev_type == "result":
-      # Final output — the most important event
       return str(ev.get("result", ""))[:500]
 
     if ev_type == "assistant":
-      # Content blocks nested in message.content[].text
       msg = ev.get("message", {})
       blocks = msg.get("content", []) if isinstance(msg, dict) else []
       texts = []
@@ -279,7 +251,6 @@ class SessionDispatcher:
 
     if ev_type in ("thinking", "error", "complete", "tool_result", "tool_use", "file_write"):
       content = ev.get("content", ev.get("message", ""))
-      # tool_result content can be a list of blocks
       if isinstance(content, list):
         texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
         return " ".join(texts)[:200] if texts else ""
@@ -300,10 +271,9 @@ def get_or_create(
   cfg: CharliBotConfig,
   session_mgr: SessionManager,
   thread_mgr: ThreadManager,
-  master_agent: MasterAgent,
 ) -> SessionDispatcher:
   if session_id not in _dispatchers:
     _dispatchers[session_id] = SessionDispatcher(
-      session_id, cfg, session_mgr, thread_mgr, master_agent
+      session_id, cfg, session_mgr, thread_mgr,
     )
   return _dispatchers[session_id]

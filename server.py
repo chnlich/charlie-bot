@@ -12,9 +12,10 @@ from fastapi.staticfiles import StaticFiles
 
 from starlette.responses import Response
 
-from src.api import chat, memory, sessions, threads, voice
+from src.api import chat, internal, memory, sessions, threads, voice
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
+from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
@@ -56,19 +57,35 @@ app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 app.include_router(memory.router, prefix="/api/memory", tags=["memory"])
+app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 
 
 # ---------------------------------------------------------------------------
-# WebSocket endpoint for session-level events (worker summaries, etc.)
+# WebSocket endpoint for session-level events (master CC + worker summaries)
 # ---------------------------------------------------------------------------
 
 
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str):
-  """Push session-level events (worker completion summaries) to the browser."""
+  """Push session-level events (master CC output, worker summaries) to the browser."""
   await websocket.accept()
   channel = f"session:{session_id}"
   log.info("session_ws_connected", session_id=session_id)
+
+  # Send catch-up events from chat_events.jsonl
+  cfg = get_config()
+  session_mgr = SessionManager(cfg)
+  try:
+    events = session_mgr.load_chat_events_sync(session_id)
+    for event in events:
+      try:
+        await websocket.send_json(event)
+      except Exception as e:
+        log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
+        return
+    await websocket.send_json({"type": "catchup_complete"})
+  except Exception as e:
+    log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
 
   await streaming_manager.subscribe(channel, websocket)
   try:
@@ -182,10 +199,11 @@ if _static_dir.exists():
 if __name__ == "__main__":
   import uvicorn
 
+  cfg = get_config()
   uvicorn.run(
     "server:app",
     host="0.0.0.0",
-    port=8000,
+    port=cfg.server_port,
     reload=False,
     log_level="info",
   )

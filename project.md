@@ -4,7 +4,7 @@
 **CharlieBot** is a Python-based system designed to coordinate and manage multiple **Claude Code** instances (Workers) to complete complex tasks. The primary interface is a responsive Web UI for desktop and mobile access.
 
 ### 1.1 Objectives
-- **Agent Orchestration**: Enable an API-based **Master Agent** (Gemini 3 Flash, Kimi k2.5) to manage and coordinate **Claude Code** Worker instances.
+- **Agent Orchestration**: Enable an API-based **Master Agent** (Gemini 3.1 Pro, Kimi k2.5) to manage and coordinate **Claude Code** Worker instances.
 - **Task Delegation**: Master delegates coding tasks to Workers; actual code analysis and implementation planning is performed by the Workers themselves.
 - **Python-Native**: Built entirely in Python for extensibility and ease of integration with AI toolsets.
 
@@ -12,7 +12,7 @@
 
 ## 2. Technical Stack
 - **Language**: Python 3.10+
-- **Master Agent**: API-based LLM (Gemini 3 Flash primary, Kimi k2.5 fallback)
+- **Master Agent**: API-based LLM (Gemini 3.1 Pro primary, Kimi k2.5 fallback)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
 - **Backend**: FastAPI (or Flask), WebSockets/SSE for real-time streaming, asyncio for concurrency
 - **Frontend**: React SPA built to static files, served by FastAPI
@@ -81,7 +81,7 @@ charlie-bot/
 ### 4.1 Agent Roles
 | Role | Type | Responsibilities |
 |------|------|------------------|
-| **Master Agent** | API LLM (Gemini 3 Flash / Kimi k2.5) | User interaction, task classification (P0/P1/P2), high-level planning decisions, reviewing Worker results. Does NOT perform code analysis or queue operations. |
+| **Master Agent** | API LLM (Gemini 3.1 Pro / Kimi k2.5) | User interaction, task classification (P0/P1/P2), high-level planning decisions, reviewing Worker results. Does NOT perform code analysis or queue operations. |
 | **Queue Manager** | Python (Deterministic) | Hard-coded queue logic: push/pop/reorder tasks, monitor Worker slots, spawn Workers. Stateless, no LLM involvement. |
 | **Worker Agent** | Claude Code CLI | Code analysis, implementation planning, file editing, git operations, testing. Runs in non-interactive mode (`claude -p --dangerously-skip-permissions`). |
 
@@ -180,7 +180,7 @@ All files use synchronization locks to prevent race conditions:
 1. User presses/clicks button to start recording
 2. Presses/clicks again to stop and send
 3. Audio uploaded to backend
-4. **Gemini 3 Flash** transcribes (supports Chinese, English, mixed)
+4. **Gemini 3.1 Pro** transcribes (supports Chinese, English, mixed)
 5. Transcription displayed in UI first
 6. Passed to Master with disclaimer: *"This is a voice-transcribed message and may not be exactly accurate. Please ask clarifying questions if anything is unclear."*
 
@@ -208,7 +208,7 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 ## 9. Error Handling & Resilience
 
 ### 9.1 Model Fallback
-- Primary: **Gemini 3 Flash**
+- Primary: **Gemini 3.1 Pro**
 - Fallback: **Kimi k2.5** (automatic switch on API failure, transparent to user)
 
 ### 9.2 Quota Exhaustion Handling
@@ -276,7 +276,7 @@ Each Thread's `CLAUDE.md` contains:
 
 **Configuration**
 - `~/.charliebot/config.yaml` is the single source of truth for API keys and settings — no environment variables
-- Active models: `gemini-3-flash-preview` (primary), `kimi-k2.5` (fallback)
+- Active models: `gemini-3.1-pro-preview` (primary), `kimi-k2.5` (fallback)
 
 ### 11.2 Pending / Not Yet Implemented
 

@@ -42,4 +42,6 @@ User preferences, facts, and personalization notes are recorded here.
 
 ## Notes
 
+**Worker worktree workflow**: Each worker subagent (NOT the master agent) must work in a git worktree to avoid interfering with parallel workers. The spawner builds the prompt with concrete `git worktree add`, rebase, and merge-back commands. The worker agent executes these git steps itself — no Python worktree management code. The worktree_dir is configured in `~/.charliebot/config.yaml`.
+
 **Session CLAUDE.md**: Each session gets a real `CLAUDE.md` file (not a symlink) at `~/.charliebot/sessions/{id}/CLAUDE.md`, created by concatenating `MASTER_AGENT_PROMPT.md` + `MEMORY.md`. This is done in `_ensure_master_claude_md()` (master_cc.py), called on every `run_message()`. Stale symlinks from the old approach are auto-removed before writing.

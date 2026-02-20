@@ -54,9 +54,8 @@ export function SessionList() {
     try {
       const archived = await sessionsApi.archive(id)
       removeSession(id)
-      if (showArchived) {
-        setArchivedSessions((prev) => [archived, ...prev])
-      }
+      setArchivedSessions((prev) => [archived, ...prev])
+      setShowArchived(true)
     } catch (e) {
       console.error('Failed to archive session', e)
     }
@@ -119,7 +118,7 @@ export function SessionList() {
         >
           {showArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           Archived
-          {archivedSessions.length > 0 && showArchived && (
+          {archivedSessions.length > 0 && (
             <span className="text-slate-600 normal-case font-normal">({archivedSessions.length})</span>
           )}
         </button>

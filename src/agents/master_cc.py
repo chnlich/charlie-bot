@@ -27,7 +27,7 @@ MASTER_CC_COMMAND = [
 _MASTER_TEMPLATE_PATH = Path(__file__).parent.parent.parent / "config" / "master-claude.md"
 
 
-def _ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig) -> None:
+def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig) -> None:
   """Write session CLAUDE.md by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md."""
   # Write MASTER_AGENT_PROMPT.md from template if it doesn't exist yet
   prompt_file = cfg.claude_md_file
@@ -79,7 +79,7 @@ async def run_message(
   cwd = str(session_dir)
 
   # Write session CLAUDE.md (prompt + memory) so Claude Code picks it up
-  _ensure_master_claude_md(session_meta, cfg)
+  ensure_master_claude_md(session_meta, cfg)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)
   user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat()}

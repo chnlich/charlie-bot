@@ -27,26 +27,27 @@ _MASTER_TEMPLATE_PATH = Path(__file__).parent.parent.parent / "config" / "master
 
 
 def _ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig) -> None:
-  """Write MASTER_AGENT_PROMPT.md into ~/.charliebot/ and symlink into the session dir."""
-  claude_md = cfg.claude_md_file
+  """Write session CLAUDE.md by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md."""
+  # Write MASTER_AGENT_PROMPT.md from template if it doesn't exist yet
+  prompt_file = cfg.claude_md_file
+  if not prompt_file.exists():
+    if not _MASTER_TEMPLATE_PATH.exists():
+      log.warning("master_agent_prompt_template_missing", path=str(_MASTER_TEMPLATE_PATH))
+      return
+    content = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
+    content = content.replace("{session_id}", session_meta.id)
+    prompt_file.write_text(content, encoding="utf-8")
+    log.info("master_agent_prompt_written", path=str(prompt_file))
 
-  if not _MASTER_TEMPLATE_PATH.exists():
-    log.warning("master_agent_prompt_template_missing", path=str(_MASTER_TEMPLATE_PATH))
-    return
+  # Concatenate prompt + memory → session CLAUDE.md (rewritten each time)
+  parts = [prompt_file.read_text(encoding="utf-8")]
+  if cfg.memory_file.exists():
+    parts.append(cfg.memory_file.read_text(encoding="utf-8"))
 
-  # Always rewrite so inlined MEMORY.md content stays fresh
-  template = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
-  memory = cfg.memory_file.read_text(encoding="utf-8") if cfg.memory_file.exists() else ""
-  content = template.replace("{session_id}", session_meta.id).replace("{memory}", memory)
-  claude_md.write_text(content, encoding="utf-8")
-  log.debug("master_agent_prompt_written", path=str(claude_md))
-
-  # Ensure symlink in session directory
-  symlink = cfg.session_claude_md_symlink(session_meta.id)
-  if not symlink.exists():
-    symlink.parent.mkdir(parents=True, exist_ok=True)
-    symlink.symlink_to(os.path.relpath(claude_md, symlink.parent))
-    log.info("master_agent_prompt_symlinked", link=str(symlink), target=str(claude_md))
+  session_claude_md = cfg.session_claude_md(session_meta.id)
+  session_claude_md.parent.mkdir(parents=True, exist_ok=True)
+  session_claude_md.write_text("\n\n".join(parts), encoding="utf-8")
+  log.debug("session_claude_md_written", path=str(session_claude_md))
 
 
 async def run_message(

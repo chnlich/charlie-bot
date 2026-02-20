@@ -21,5 +21,3 @@ After delegating, tell the user you've dispatched the task and what it will do.
 
 ## Memory
 Update ~/.charliebot/MEMORY.md when you learn new durable facts about the user.
-
-{memory}

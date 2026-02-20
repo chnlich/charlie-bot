@@ -103,59 +103,74 @@ async def run_message(
 
   log.info("master_cc_starting", session=session_meta.id, cwd=cwd)
 
-  proc = await asyncio.create_subprocess_exec(
-    *cmd,
-    cwd=cwd,
-    stdout=asyncio.subprocess.PIPE,
-    stderr=asyncio.subprocess.PIPE,
-    env=env,
-  )
-
-  log.info("master_cc_spawned", session=session_meta.id, pid=proc.pid)
-
   cc_session_id: Optional[str] = session_meta.cc_session_id
+  exit_code = 1
+  error_msg: Optional[str] = None
 
-  assert proc.stdout is not None
-  async for raw_line in proc.stdout:
-    line = raw_line.decode("utf-8", errors="replace").strip()
-    if not line:
-      continue
-    try:
-      event = json.loads(line)
-    except json.JSONDecodeError as e:
-      log.debug("master_cc_line_not_json", error=str(e))
-      continue
+  try:
+    proc = await asyncio.create_subprocess_exec(
+      *cmd,
+      cwd=cwd,
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+      env=env,
+    )
 
-    # Capture the CC session ID from the first event that has one
-    if not cc_session_id:
-      sid = event.get("session_id")
-      if sid:
-        cc_session_id = sid
+    log.info("master_cc_spawned", session=session_meta.id, pid=proc.pid)
 
-    # Broadcast to WebSocket subscribers and persist
-    await streaming_manager.broadcast(channel, event)
-    await save_chat_event(session_meta.id, event)
+    assert proc.stdout is not None
+    async for raw_line in proc.stdout:
+      line = raw_line.decode("utf-8", errors="replace").strip()
+      if not line:
+        continue
+      try:
+        event = json.loads(line)
+      except json.JSONDecodeError as e:
+        log.debug("master_cc_line_not_json", error=str(e))
+        continue
 
-  # Read stderr
-  assert proc.stderr is not None
-  stderr_bytes = await proc.stderr.read()
-  await proc.wait()
-  exit_code = proc.returncode or 0
+      # Capture the CC session ID from the first event that has one
+      if not cc_session_id:
+        sid = event.get("session_id")
+        if sid:
+          cc_session_id = sid
 
-  if stderr_bytes:
-    stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
-    if stderr_text:
-      log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text[:500])
+      # Broadcast to WebSocket subscribers and persist
+      await streaming_manager.broadcast(channel, event)
+      await save_chat_event(session_meta.id, event)
 
-  # Clear thinking timestamp and emit master_done
-  session_meta.thinking_since = None
-  if save_metadata:
-    await save_metadata(session_meta)
+    # Read stderr
+    assert proc.stderr is not None
+    stderr_bytes = await proc.stderr.read()
+    await proc.wait()
+    exit_code = proc.returncode or 0
 
-  done_event = {"type": "master_done", "exit_code": exit_code}
-  await streaming_manager.broadcast(channel, done_event)
-  await save_chat_event(session_meta.id, done_event)
+    if stderr_bytes:
+      stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+      if stderr_text:
+        log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text[:500])
+        if exit_code != 0:
+          error_msg = stderr_text[:500]
 
-  log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code)
+  except Exception as e:
+    log.error("master_cc_crashed", session=session_meta.id, error=str(e))
+    error_msg = str(e)
+
+  finally:
+    # Always clear thinking and emit master_done, even on crash
+    session_meta.thinking_since = None
+    if save_metadata:
+      await save_metadata(session_meta)
+
+    if error_msg:
+      err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
+      await streaming_manager.broadcast(channel, err_event)
+      await save_chat_event(session_meta.id, err_event)
+
+    done_event = {"type": "master_done", "exit_code": exit_code}
+    await streaming_manager.broadcast(channel, done_event)
+    await save_chat_event(session_meta.id, done_event)
+
+    log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code)
 
   return cc_session_id

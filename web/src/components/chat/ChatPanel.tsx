@@ -94,6 +94,18 @@ export function ChatPanel({ sessionId }: Props) {
         return
       }
 
+      if (type === 'assistant_error') {
+        addMessage(sessionId, {
+          id: crypto.randomUUID(),
+          role: 'system',
+          content: (event.content as string) || 'Agent encountered an error',
+          timestamp: new Date().toISOString(),
+          is_voice: false,
+          thread_id: null,
+        })
+        return
+      }
+
       if (type === 'master_done') {
         const content = clearStream(sessionId)
         if (content.trim()) {

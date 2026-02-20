@@ -185,15 +185,6 @@ class ReorderTaskRequest(BaseModel):
   priority: Priority
 
 
-class TaskDelegationResult(BaseModel):
-  """Returned when Master Agent delegates a task to the queue."""
-  task_id: str
-  priority: Priority
-  description: str
-  plan_mode: bool
-  message: str
-
-
 class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str

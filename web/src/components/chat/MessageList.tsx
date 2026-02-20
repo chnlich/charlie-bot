@@ -5,11 +5,10 @@ import { ThinkingIndicator } from './ThinkingIndicator'
 
 interface Props {
   messages: ChatMessage[]
-  isStreaming: boolean
   thinkingStartedAt: string | null
 }
 
-export function MessageList({ messages, isStreaming, thinkingStartedAt }: Props) {
+export function MessageList({ messages, thinkingStartedAt }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -22,8 +21,8 @@ export function MessageList({ messages, isStreaming, thinkingStartedAt }: Props)
         <MessageItem key={msg.id} message={msg} />
       ))}
 
-      {/* Thinking indicator — content appears only after the response is complete */}
-      {isStreaming && thinkingStartedAt && (
+      {/* Thinking indicator — driven by backend thinking_since timestamp */}
+      {thinkingStartedAt && (
         <div className="flex gap-3">
           <div className="shrink-0 w-7 h-7 rounded-full bg-slate-600 flex items-center justify-center text-xs font-bold text-white">
             C

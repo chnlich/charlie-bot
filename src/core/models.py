@@ -107,6 +107,8 @@ class SessionMetadata(BaseModel):
   repo_path: Optional[str] = None
   status: SessionStatus = SessionStatus.ACTIVE
   has_unread: bool = False
+  has_running_tasks: bool = False
+  thinking_since: Optional[datetime] = None
   created_at: datetime = Field(default_factory=datetime.utcnow)
   updated_at: datetime = Field(default_factory=datetime.utcnow)
   cc_session_id: Optional[str] = None

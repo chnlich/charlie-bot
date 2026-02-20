@@ -32,25 +32,9 @@ class SessionManager:
   # ---------------------------------------------------------------------------
 
   async def create_session(self, req: CreateSessionRequest) -> SessionMetadata:
-    """Create a new session with optional repo_path."""
-    # Default repo_path to first discovered repo if not provided.
-    repo_path = req.repo_path
-    if not repo_path:
-      repos = self._cfg.discover_repos()
-      if repos:
-        repo_path = repos[0]["path"]
-
+    """Create a new session."""
     name = req.name or await self._next_session_name()
-    meta = SessionMetadata(
-      name=name,
-      repo_path=repo_path,
-    )
-
-    # Validate repo_path if provided
-    if repo_path:
-      repo = Path(repo_path)
-      if not repo.is_dir() or not (repo / ".git").exists():
-        log.warning("invalid_repo_path", path=repo_path)
+    meta = SessionMetadata(name=name)
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure

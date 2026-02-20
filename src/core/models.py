@@ -104,7 +104,6 @@ class ThreadMetadata(BaseModel):
 class SessionMetadata(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   name: str
-  repo_path: Optional[str] = None
   status: SessionStatus = SessionStatus.ACTIVE
   has_unread: bool = False
   has_running_tasks: bool = False
@@ -156,7 +155,6 @@ class WorkerEvent(BaseModel):
 
 class CreateSessionRequest(BaseModel):
   name: Optional[str] = None
-  repo_path: Optional[str] = None
 
 
 class SendMessageRequest(BaseModel):

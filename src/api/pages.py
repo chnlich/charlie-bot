@@ -82,8 +82,6 @@ async def index(
   messages: list[dict] = []
   threads = []
   queue_tasks = []
-  projects = cfg.discover_repos()
-
   if session:
     active_session = await session_mgr.get_session(session)
     if active_session:
@@ -111,5 +109,4 @@ async def index(
     "messages": messages,
     "threads": threads,
     "queue_tasks": queue_tasks,
-    "projects": projects,
   })

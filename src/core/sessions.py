@@ -33,17 +33,24 @@ class SessionManager:
 
   async def create_session(self, req: CreateSessionRequest) -> SessionMetadata:
     """Create a new session with optional repo_path."""
-    name = req.name or await self._next_session_name()
+    # Default repo_path to first discovered repo if not provided.
+    repo_path = req.repo_path
+    if not repo_path:
+      repos = self._cfg.discover_repos()
+      if repos:
+        repo_path = repos[0]["path"]
+
+    name = req.name or await self._next_session_name(repo_path)
     meta = SessionMetadata(
       name=name,
-      repo_path=req.repo_path,
+      repo_path=repo_path,
     )
 
     # Validate repo_path if provided
-    if req.repo_path:
-      repo = Path(req.repo_path)
+    if repo_path:
+      repo = Path(repo_path)
       if not repo.is_dir() or not (repo / ".git").exists():
-        log.warning("invalid_repo_path", path=req.repo_path)
+        log.warning("invalid_repo_path", path=repo_path)
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure
@@ -207,10 +214,18 @@ class SessionManager:
     except Exception:
       return False
 
-  async def _next_session_name(self) -> str:
-    """Generate 'Session 0', 'Session 1', etc. based on existing count."""
+  async def _next_session_name(self, repo_path: str | None = None) -> str:
+    """Generate a default session name.
+
+    If *repo_path* is given the name is based on the repo directory name
+    (e.g. ``charlie-bot #3``), otherwise falls back to ``Session N``.
+    """
     existing = await self.list_sessions()
-    return f"Session {len(existing)}"
+    n = len(existing)
+    if repo_path:
+      repo_name = Path(repo_path).name
+      return f"{repo_name} #{n}"
+    return f"Session {n}"
 
   async def _save_metadata(self, meta: SessionMetadata) -> None:
     path = self._metadata_path(meta.id)

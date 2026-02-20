@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useSSE } from '../../hooks/useSSE'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useWebSocket } from '../../hooks/useWebSocket'
 import { useChatStore } from '../../store/chat'
 import { useSessionsStore } from '../../store/sessions'
 import { sessionsApi } from '../../api/sessions'
-import type { ChatMessage, SSEEvent } from '../../types'
+import type { ChatMessage } from '../../types'
 import { ChatInput } from './ChatInput'
 import { MessageList } from './MessageList'
 
@@ -11,51 +11,136 @@ interface Props {
   sessionId: string
 }
 
+/** Extract text from an assistant-type CC event's message.content blocks. */
+function extractAssistantText(event: Record<string, unknown>): string {
+  const msg = event.message as Record<string, unknown> | undefined
+  if (!msg) return ''
+  const blocks = msg.content as Array<Record<string, unknown>> | undefined
+  if (!Array.isArray(blocks)) return ''
+  return blocks
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text as string)
+    .join('')
+}
+
 export function ChatPanel({ sessionId }: Props) {
   const [isStreaming, setIsStreaming] = useState(false)
-  const { stream } = useSSE()
+  const catchupDoneRef = useRef(false)
   const { messagesBySession, streamingContent, addMessage, setMessages, appendStream, clearStream } =
     useChatStore()
 
   const messages = messagesBySession[sessionId] ?? []
   const currentStream = streamingContent[sessionId] ?? ''
 
-  // Load history on mount and clear unread
+  // Clear unread when this session becomes active
   useEffect(() => {
-    fetch(`/api/chat/${sessionId}/history`)
-      .then((r) => r.json())
-      .then((h) => setMessages(sessionId, h.messages ?? []))
-      .catch(console.error)
-    // Clear unread when this session becomes active
     useSessionsStore.getState().markSessionRead(sessionId)
     sessionsApi.markRead(sessionId).catch(console.error)
-  }, [sessionId, setMessages])
+  }, [sessionId])
 
-  // Subscribe to session WebSocket for worker completion summaries
-  useEffect(() => {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${proto}//${window.location.host}/ws/sessions/${sessionId}`)
+  // Handle WebSocket messages (master CC events + worker summaries)
+  const handleWsMessage = useCallback(
+    (data: unknown) => {
+      const event = data as Record<string, unknown>
+      const type = event.type as string
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'worker_summary') {
+      if (type === 'catchup_complete') {
+        catchupDoneRef.current = true
+        // Finalize any streaming content accumulated during catch-up
+        const content = clearStream(sessionId)
+        if (content.trim()) {
           addMessage(sessionId, {
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: data.content,
+            content,
             timestamp: new Date().toISOString(),
             is_voice: false,
-            thread_id: data.thread_id ?? null,
+            thread_id: null,
           })
         }
-      } catch {
-        // ignore parse errors
+        return
       }
-    }
 
-    return () => ws.close()
-  }, [sessionId, addMessage])
+      if (type === 'ping') return
+
+      if (type === 'assistant') {
+        const text = extractAssistantText(event)
+        if (text) {
+          appendStream(sessionId, text)
+          if (!isStreaming) setIsStreaming(true)
+        }
+        return
+      }
+
+      if (type === 'master_done') {
+        const content = clearStream(sessionId)
+        if (content.trim()) {
+          addMessage(sessionId, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content,
+            timestamp: new Date().toISOString(),
+            is_voice: false,
+            thread_id: null,
+          })
+        }
+        setIsStreaming(false)
+        return
+      }
+
+      if (type === 'task_delegated') {
+        // Flush any pending streaming content first
+        const content = clearStream(sessionId)
+        if (content.trim()) {
+          addMessage(sessionId, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content,
+            timestamp: new Date().toISOString(),
+            is_voice: false,
+            thread_id: null,
+          })
+        }
+        const systemMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'system',
+          content: `Task queued [${event.priority}]: ${event.description}`,
+          timestamp: new Date().toISOString(),
+          is_voice: false,
+          thread_id: (event.task_id as string) ?? null,
+        }
+        addMessage(sessionId, systemMsg)
+        return
+      }
+
+      if (type === 'worker_summary') {
+        addMessage(sessionId, {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: event.content as string,
+          timestamp: new Date().toISOString(),
+          is_voice: false,
+          thread_id: (event.thread_id as string) ?? null,
+        })
+        return
+      }
+    },
+    [sessionId, addMessage, appendStream, clearStream, isStreaming],
+  )
+
+  // Connect to the session WebSocket — handles both master CC events and worker summaries
+  useWebSocket(`/ws/sessions/${sessionId}`, {
+    onMessage: handleWsMessage,
+    enabled: true,
+  })
+
+  // Reset state when session changes
+  useEffect(() => {
+    catchupDoneRef.current = false
+    setMessages(sessionId, [])
+    clearStream(sessionId)
+    setIsStreaming(false)
+  }, [sessionId, setMessages, clearStream])
 
   const handleSend = useCallback(
     async (content: string, isVoice: boolean) => {
@@ -71,59 +156,19 @@ export function ChatPanel({ sessionId }: Props) {
       addMessage(sessionId, userMsg)
       setIsStreaming(true)
 
+      // Fire-and-forget POST — response streams via WebSocket
       try {
-        await stream(
-          `/api/chat/${sessionId}/message`,
-          { content },
-          (event: unknown) => {
-            const e = event as SSEEvent
-            if (e.type === 'chunk') {
-              appendStream(sessionId, (e as { type: 'chunk'; content: string }).content)
-            } else if (e.type === 'task_delegated') {
-              const ev = e as { type: string; task_id: string; priority: string; description: string }
-              const systemMsg: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: 'system',
-                content: `Task queued [${ev.priority}]: ${ev.description}`,
-                timestamp: new Date().toISOString(),
-                is_voice: false,
-                thread_id: ev.task_id,
-              }
-              const assistantContent = clearStream(sessionId)
-              if (assistantContent.trim()) {
-                addMessage(sessionId, {
-                  id: crypto.randomUUID(),
-                  role: 'assistant',
-                  content: assistantContent,
-                  timestamp: new Date().toISOString(),
-                  is_voice: false,
-                  thread_id: null,
-                })
-              }
-              addMessage(sessionId, systemMsg)
-            } else if (e.type === 'done') {
-              const assistantContent = clearStream(sessionId)
-              if (assistantContent.trim()) {
-                addMessage(sessionId, {
-                  id: crypto.randomUUID(),
-                  role: 'assistant',
-                  content: assistantContent,
-                  timestamp: new Date().toISOString(),
-                  is_voice: false,
-                  thread_id: null,
-                })
-              }
-              setIsStreaming(false)
-            }
-          },
-        )
+        await fetch(`/api/chat/${sessionId}/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        })
       } catch (e) {
-        clearStream(sessionId)
+        console.error('Failed to send message', e)
         setIsStreaming(false)
-        console.error('Chat stream error', e)
       }
     },
-    [sessionId, addMessage, appendStream, clearStream, stream],
+    [sessionId, addMessage],
   )
 
   return (

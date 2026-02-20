@@ -18,6 +18,9 @@ class CharliBotConfig(BaseModel):
   kimi_base_url: str = "https://api.moonshot.cn/v1"
   kimi_model: str = "kimi-k2.5"
 
+  # Server
+  server_port: int = 8000
+
   # Worker
   max_concurrent_workers: int = 3
   worker_timeout_seconds: int = 3600

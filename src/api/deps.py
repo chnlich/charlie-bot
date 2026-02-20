@@ -1,6 +1,6 @@
 """FastAPI dependency injection helpers."""
 
-from fastapi import Depends, Path
+from fastapi import Path
 
 from src.core.config import CharliBotConfig, get_config
 from src.core.dispatcher import SessionDispatcher
@@ -10,14 +10,12 @@ from src.core.memory import MemoryManager
 from src.core.queue import QueueManager
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.agents.master_agent import MasterAgent
 
 # Module-level singletons (created once per process)
 _git_manager: GitManager | None = None
 _memory_manager: MemoryManager | None = None
 _session_manager: SessionManager | None = None
 _thread_manager: ThreadManager | None = None
-_master_agent: MasterAgent | None = None
 
 
 def _get_git_manager() -> GitManager:
@@ -48,13 +46,6 @@ def get_thread_manager() -> ThreadManager:
   return _thread_manager
 
 
-def get_master_agent() -> MasterAgent:
-  global _master_agent
-  if _master_agent is None:
-    _master_agent = MasterAgent(get_config(), _get_memory_manager())
-  return _master_agent
-
-
 def get_queue_manager(session_id: str = Path(...)) -> QueueManager:
   """Returns a QueueManager bound to the given session_id."""
   return QueueManager(session_id, get_config())
@@ -71,5 +62,4 @@ def get_dispatcher(session_id: str = Path(...)) -> SessionDispatcher:
     get_config(),
     get_session_manager(),
     get_thread_manager(),
-    get_master_agent(),
   )

@@ -6,11 +6,12 @@ import type { SessionMetadata } from '../../types'
 interface Props {
   session: SessionMetadata
   active: boolean
+  hasUnread: boolean
   onClick: () => void
   onRename: (id: string, name: string) => Promise<void>
 }
 
-export function SessionItem({ session, active, onClick, onRename }: Props) {
+export function SessionItem({ session, active, hasUnread, onClick, onRename }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(session.name)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -72,6 +73,12 @@ export function SessionItem({ session, active, onClick, onRename }: Props) {
     >
       <Hash size={14} className="shrink-0" />
       <span className="truncate">{session.name}</span>
+      {hasUnread && (
+        <span className="relative ml-auto shrink-0 flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-400" />
+        </span>
+      )}
     </button>
   )
 }

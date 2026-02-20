@@ -198,6 +198,9 @@ class SessionDispatcher:
       history.messages.append(assistant_msg)
       await self._session_mgr.save_history(history)
 
+      # Mark session as having unread activity
+      await self._session_mgr.mark_unread(self._session_id)
+
       # Broadcast to session WebSocket subscribers so the frontend picks it up
       await streaming_manager.broadcast(f"session:{self._session_id}", {
         "type": "worker_summary",
@@ -222,6 +225,8 @@ class SessionDispatcher:
         )
         history.messages.append(assistant_msg)
         await self._session_mgr.save_history(history)
+
+        await self._session_mgr.mark_unread(self._session_id)
 
         await streaming_manager.broadcast(f"session:{self._session_id}", {
           "type": "worker_summary",

@@ -92,6 +92,7 @@ class ThreadMetadata(BaseModel):
   exit_code: Optional[int] = None
   cli_command: Optional[str] = None
   worktree_path: Optional[str] = None
+  base_branch: Optional[str] = None
   is_conflict_resolver: bool = False
 
 
@@ -105,6 +106,7 @@ class SessionMetadata(BaseModel):
   name: str
   repo_path: Optional[str] = None
   status: SessionStatus = SessionStatus.ACTIVE
+  has_unread: bool = False
   created_at: datetime = Field(default_factory=datetime.utcnow)
   updated_at: datetime = Field(default_factory=datetime.utcnow)
 

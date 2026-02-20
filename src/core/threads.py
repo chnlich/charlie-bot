@@ -58,6 +58,7 @@ class ThreadManager:
           thread.worktree_path = str(worktree_path)
           # Detect the current branch to use as base
           base_branch = await self._git.get_current_branch(repo_path)
+          thread.base_branch = base_branch
           await self._git.create_branch_and_worktree(
             repo_path=repo_path,
             worktree_path=worktree_path,
@@ -69,7 +70,7 @@ class ThreadManager:
           log.warning("thread_git_setup_failed", thread=thread.id, error=str(e))
 
     # Write CLAUDE.md into the worktree so Claude Code finds it
-    await self._write_claude_md(claude_md_target, task, session_meta)
+    await self._write_claude_md(claude_md_target, task, session_meta, thread)
 
     await self._save_metadata(thread)
     log.info("thread_created", thread_id=thread.id, branch=thread.branch_name)
@@ -156,6 +157,7 @@ class ThreadManager:
     thread_dir: Path,
     task: Task,
     session_meta: SessionMetadata,
+    thread: ThreadMetadata,
   ) -> None:
     """Concatenate default instructions + task-specific content."""
     default_content = ""
@@ -175,11 +177,30 @@ class ThreadManager:
     if task.context:
       context_note = "\n## Additional Context\n" + "\n".join(f"- {k}: {v}" for k, v in task.context.items()) + "\n"
 
+    merge_note = ""
+    if thread.base_branch and not task.is_plan_mode and not thread.is_conflict_resolver:
+      merge_note = (
+        f"\n## Post-Implementation: Rebase and Merge\n"
+        f"After you finish all implementation work and all commits are done, you MUST perform these steps:\n"
+        f"1. Rebase your current branch onto `{thread.base_branch}`:\n"
+        f"   ```\n"
+        f"   git rebase {thread.base_branch}\n"
+        f"   ```\n"
+        f"2. If there are rebase conflicts, resolve them (fix conflict markers, `git add`, `git rebase --continue`).\n"
+        f"3. Switch to the base branch in the main repo and fast-forward merge:\n"
+        f"   ```\n"
+        f"   git -C {session_meta.repo_path} merge --ff-only {thread.branch_name}\n"
+        f"   ```\n"
+        f"4. If the fast-forward merge fails (e.g. main advanced), re-rebase and retry.\n"
+        f"5. Do NOT delete the worktree or branch — the orchestrator handles cleanup.\n"
+      )
+
     content = (
       f"{default_content}\n"
       f"## Task Description\n\n{task.description}\n"
       f"{plan_note}"
       f"{context_note}"
+      f"{merge_note}"
       f"\n## Session Info\n"
       f"- Session: {session_meta.name}\n"
       f"- Branch: {task.id[:8]}\n"

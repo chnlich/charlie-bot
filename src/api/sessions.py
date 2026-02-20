@@ -69,6 +69,14 @@ async def rename_session(
   return meta
 
 
+@router.post("/{session_id}/read")
+async def mark_session_read(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+  meta = await session_mgr.mark_read(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  return {"ok": True}
+
+
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])
 async def list_threads(session_id: str, thread_mgr: ThreadManager = Depends(get_thread_manager)):
   return await thread_mgr.list_threads(session_id)

@@ -354,6 +354,15 @@
       }
       if (t === 'ping') return;
 
+      // Session rename can arrive at any time — handle before catchup guard
+      if (t === 'session_renamed') {
+        const link = document.getElementById('session-' + SESSION_ID);
+        if (link) link.querySelector('.session-name').textContent = ev.name;
+        const header = document.getElementById('header-session-name');
+        if (header) header.textContent = ev.name;
+        return;
+      }
+
       // During catch-up, ignore events (page already rendered them)
       if (!catchupDone) return;
 

@@ -63,9 +63,10 @@ export function ChatPanel({ sessionId }: Props) {
       if (type === 'ping') return
 
       if (type === 'user') {
-        // Only add user messages during catch-up (page refresh).
-        // During a live session, the optimistic message in handleSend already covers this.
-        if (!catchupDoneRef.current) {
+        // Our custom user events have a top-level string `content`.
+        // Claude Code tool-result events also have type "user" but carry
+        // `message` instead — skip those.
+        if (!catchupDoneRef.current && typeof event.content === 'string') {
           addMessage(sessionId, {
             id: crypto.randomUUID(),
             role: 'user',

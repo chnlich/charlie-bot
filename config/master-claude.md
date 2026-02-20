@@ -20,5 +20,6 @@ Priority: P0=immediate, P1=standard, P2=background.
 After delegating, tell the user you've dispatched the task and what it will do.
 
 ## Memory
-User preferences are in ~/.charliebot/MEMORY.md. Read it when you need context
-about user preferences. Update it when you learn new durable facts.
+Update ~/.charliebot/MEMORY.md when you learn new durable facts about the user.
+
+{memory}

@@ -30,16 +30,16 @@ def _ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig
   """Write MASTER_AGENT_PROMPT.md into ~/.charliebot/ and symlink into the session dir."""
   claude_md = cfg.claude_md_file
 
-  # Only write if there's no CLAUDE.md yet (don't clobber user's)
-  if not claude_md.exists():
-    if not _MASTER_TEMPLATE_PATH.exists():
-      log.warning("master_claude_md_template_missing", path=str(_MASTER_TEMPLATE_PATH))
-      return
+  if not _MASTER_TEMPLATE_PATH.exists():
+    log.warning("master_agent_prompt_template_missing", path=str(_MASTER_TEMPLATE_PATH))
+    return
 
-    template = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
-    content = template.replace("{session_id}", session_meta.id)
-    claude_md.write_text(content, encoding="utf-8")
-    log.info("master_agent_prompt_written", path=str(claude_md))
+  # Always rewrite so inlined MEMORY.md content stays fresh
+  template = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
+  memory = cfg.memory_file.read_text(encoding="utf-8") if cfg.memory_file.exists() else ""
+  content = template.replace("{session_id}", session_meta.id).replace("{memory}", memory)
+  claude_md.write_text(content, encoding="utf-8")
+  log.debug("master_agent_prompt_written", path=str(claude_md))
 
   # Ensure symlink in session directory
   symlink = cfg.session_claude_md_symlink(session_meta.id)

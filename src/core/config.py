@@ -68,6 +68,15 @@ class CharliBotConfig(BaseModel):
     return self.charliebot_home / "logs"
 
   @property
+  def claude_md_file(self) -> Path:
+    """The canonical CLAUDE.md location: ~/.charliebot/CLAUDE.md."""
+    return self.charliebot_home / "CLAUDE.md"
+
+  def session_claude_md_symlink(self, session_id: str) -> Path:
+    """Per-session symlink: ~/.charliebot/sessions/{id}/CLAUDE.md -> ../../CLAUDE.md."""
+    return self.sessions_dir / session_id / "CLAUDE.md"
+
+  @property
   def memory_file(self) -> Path:
     return self.charliebot_home / "MEMORY.md"
 

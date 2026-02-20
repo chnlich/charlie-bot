@@ -62,6 +62,22 @@ export function ChatPanel({ sessionId }: Props) {
 
       if (type === 'ping') return
 
+      if (type === 'user') {
+        // Only add user messages during catch-up (page refresh).
+        // During a live session, the optimistic message in handleSend already covers this.
+        if (!catchupDoneRef.current) {
+          addMessage(sessionId, {
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: event.content as string,
+            timestamp: new Date().toISOString(),
+            is_voice: false,
+            thread_id: null,
+          })
+        }
+        return
+      }
+
       if (type === 'assistant') {
         const text = extractAssistantText(event)
         if (text) {

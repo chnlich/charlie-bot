@@ -46,31 +46,8 @@ class ThreadManager:
     thread_dir = self._thread_dir(session_meta.id, thread.id)
     (thread_dir / "data").mkdir(parents=True, exist_ok=True)
 
-    # Set up git branch + worktree if session has a repo
-    claude_md_target = thread_dir  # default if no git
-    if session_meta.repo_path:
-      repo_path = Path(session_meta.repo_path)
-      if repo_path.is_dir() and (repo_path / ".git").exists():
-        try:
-          worktree_root = Path(self._cfg.worktree_dir)
-          worktree_root.mkdir(parents=True, exist_ok=True)
-          worktree_path = worktree_root / thread.branch_name
-          thread.worktree_path = str(worktree_path)
-          # Detect the current branch to use as base
-          base_branch = await self._git.get_current_branch(repo_path)
-          thread.base_branch = base_branch
-          await self._git.create_branch_and_worktree(
-            repo_path=repo_path,
-            worktree_path=worktree_path,
-            branch_name=thread.branch_name,
-            base_branch=base_branch,
-          )
-          claude_md_target = worktree_path
-        except GitError as e:
-          log.warning("thread_git_setup_failed", thread=thread.id, error=str(e))
-
-    # Write CLAUDE.md into the worktree so Claude Code finds it
-    await self._write_claude_md(claude_md_target, task, session_meta, thread)
+    # Write CLAUDE.md into the thread directory so Claude Code finds it
+    await self._write_claude_md(thread_dir, task, session_meta, thread)
 
     await self._save_metadata(thread)
     log.info("thread_created", thread_id=thread.id, branch=thread.branch_name)
@@ -120,18 +97,16 @@ class ThreadManager:
       meta.completed_at = datetime.utcnow()
     await self._save_metadata(meta)
 
-  async def cleanup_worktree(self, session_id: str, thread_id: str, session_meta: SessionMetadata) -> None:
+  async def cleanup_worktree(self, session_id: str, thread_id: str) -> None:
     """Remove the thread's git worktree (but keep metadata)."""
     meta = await self.get_thread(session_id, thread_id)
     if not meta or not meta.worktree_path:
       return
-    if not session_meta.repo_path:
-      return
-    repo_path = Path(session_meta.repo_path)
     worktree_path = Path(meta.worktree_path)
-    if repo_path.is_dir() and worktree_path.exists():
+    if worktree_path.exists():
       try:
-        await self._git.remove_worktree(repo_path, worktree_path)
+        # Use the worktree's parent repo to remove it
+        await self._git.remove_worktree(worktree_path.parent, worktree_path)
       except GitError as e:
         log.warning("worktree_cleanup_failed", thread=thread_id, error=str(e))
 
@@ -177,30 +152,11 @@ class ThreadManager:
     if task.context:
       context_note = "\n## Additional Context\n" + "\n".join(f"- {k}: {v}" for k, v in task.context.items()) + "\n"
 
-    merge_note = ""
-    if thread.base_branch and not task.is_plan_mode and not thread.is_conflict_resolver:
-      merge_note = (
-        f"\n## Post-Implementation: Rebase and Merge\n"
-        f"After you finish all implementation work and all commits are done, you MUST perform these steps:\n"
-        f"1. Rebase your current branch onto `{thread.base_branch}`:\n"
-        f"   ```\n"
-        f"   git rebase {thread.base_branch}\n"
-        f"   ```\n"
-        f"2. If there are rebase conflicts, resolve them (fix conflict markers, `git add`, `git rebase --continue`).\n"
-        f"3. Switch to the base branch in the main repo and fast-forward merge:\n"
-        f"   ```\n"
-        f"   git -C {session_meta.repo_path} merge --ff-only {thread.branch_name}\n"
-        f"   ```\n"
-        f"4. If the fast-forward merge fails (e.g. main advanced), re-rebase and retry.\n"
-        f"5. Do NOT delete the worktree or branch — the orchestrator handles cleanup.\n"
-      )
-
     content = (
       f"{default_content}\n"
       f"## Task Description\n\n{task.description}\n"
       f"{plan_note}"
       f"{context_note}"
-      f"{merge_note}"
       f"\n## Session Info\n"
       f"- Session: {session_meta.name}\n"
       f"- Branch: {task.id[:8]}\n"

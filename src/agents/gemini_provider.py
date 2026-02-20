@@ -28,3 +28,13 @@ class GeminiProvider(LLMProvider):
       return response.text
 
     return await asyncio.to_thread(_call)
+
+  async def generate_text(self, prompt: str) -> str:
+    """Generate text using Gemini."""
+    model = genai.GenerativeModel(self._model_id)
+
+    def _call():
+      response = model.generate_content(prompt)
+      return response.text
+
+    return await asyncio.to_thread(_call)

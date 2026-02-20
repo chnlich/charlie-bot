@@ -38,7 +38,12 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
         "is_voice": ev.get("is_voice", False),
       })
     elif t == "assistant":
-      assistant_buf += ev.get("content", "")
+      # Claude Code events nest text in message.content[].text
+      msg = ev.get("message") or {}
+      blocks = msg.get("content") or []
+      for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "text":
+          assistant_buf += block.get("text", "")
     elif t == "master_done":
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})

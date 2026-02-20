@@ -364,6 +364,11 @@
         if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice);
         pendingUserMsg = false;
       } else if (t === 'assistant') {
+        // Each assistant event is a separate turn — flush any prior buffer first
+        if (streamBuf) {
+          appendMessage('assistant', streamBuf);
+          streamBuf = '';
+        }
         // Claude Code nests text in message.content[].text
         const blocks = (ev.message || {}).content || [];
         for (const b of blocks) {

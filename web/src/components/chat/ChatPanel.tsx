@@ -26,6 +26,9 @@ function extractAssistantText(event: Record<string, unknown>): string {
 export function ChatPanel({ sessionId }: Props) {
   const [isStreaming, setIsStreaming] = useState(false)
   const catchupDoneRef = useRef(false)
+  // Track whether the last conversation turn during catch-up is still open
+  // (user event without a following master_done).
+  const pendingTurnRef = useRef(false)
   const { messagesBySession, addMessage, setMessages, appendStream, clearStream } =
     useChatStore()
 
@@ -67,6 +70,11 @@ export function ChatPanel({ sessionId }: Props) {
             thread_id: null,
           })
         }
+        // If the last conversation turn is still open (user sent a message
+        // but no master_done arrived yet), the agent is still thinking.
+        if (pendingTurnRef.current) {
+          setIsStreaming(true)
+        }
         return
       }
 
@@ -77,6 +85,7 @@ export function ChatPanel({ sessionId }: Props) {
         // Claude Code tool-result events also have type "user" but carry
         // `message` instead — skip those.
         if (!catchupDoneRef.current && typeof event.content === 'string') {
+          pendingTurnRef.current = true
           addMessage(sessionId, {
             id: crypto.randomUUID(),
             role: 'user',
@@ -99,6 +108,7 @@ export function ChatPanel({ sessionId }: Props) {
       }
 
       if (type === 'master_done') {
+        pendingTurnRef.current = false
         const content = clearStream(sessionId)
         if (content.trim()) {
           addMessage(sessionId, {
@@ -163,6 +173,7 @@ export function ChatPanel({ sessionId }: Props) {
   // Reset state when session changes
   useEffect(() => {
     catchupDoneRef.current = false
+    pendingTurnRef.current = false
     setMessages(sessionId, [])
     clearStream(sessionId)
     setIsStreaming(false)

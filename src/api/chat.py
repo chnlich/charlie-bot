@@ -1,5 +1,6 @@
 """Chat API routes — Master Agent interaction with SSE streaming."""
 
+import asyncio
 import json
 import traceback
 from typing import AsyncGenerator
@@ -12,7 +13,9 @@ from src.agents.master_agent import MasterAgent
 from src.api.deps import get_dispatcher, get_master_agent, get_session_manager, get_thread_manager
 from src.core.dispatcher import SessionDispatcher
 from src.core.models import (
+  ChatMessage,
   ConversationHistory,
+  MessageRole,
   Priority,
   SendMessageRequest,
   Task,
@@ -60,7 +63,38 @@ async def send_message(
       if memory_note:
         await master._memory.append_memory(memory_note)
 
-      if action.get("action") == "delegate":
+      if action.get("action") == "execute":
+        # Master handles small tasks directly by running a shell command
+        command = action.get("command", "")
+        cwd = meta.repo_path or "."
+        try:
+          proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=cwd,
+          )
+          stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+          output = stdout.decode("utf-8", errors="replace") if stdout else ""
+          # Cap output to avoid huge payloads
+          if len(output) > 50_000:
+            output = output[:50_000] + "\n... (truncated)"
+          result_text = f"```\n$ {command}\n{output}```"
+        except asyncio.TimeoutError:
+          result_text = f"```\n$ {command}\n(command timed out after 30s)\n```"
+        except Exception as e:
+          log.warning("execute_command_failed", command=command, error=str(e))
+          result_text = f"```\n$ {command}\nError: {e}\n```"
+
+        # Stream the command output as a chunk
+        exec_event = json.dumps({"type": "chunk", "content": "\n\n" + result_text})
+        yield f"data: {exec_event}\n\n"
+
+        # Append the command output to conversation history
+        exec_msg = ChatMessage(role=MessageRole.ASSISTANT, content=result_text)
+        history.messages.append(exec_msg)
+
+      elif action.get("action") == "delegate":
         # Create task and thread inline so the thread is visible immediately
         priority_map = {"P0": Priority.P0, "P1": Priority.P1, "P2": Priority.P2}
         priority = priority_map.get(action.get("priority", "P1"), Priority.P1)

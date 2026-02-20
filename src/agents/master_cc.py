@@ -72,7 +72,7 @@ async def run_message(
   session_dir.mkdir(parents=True, exist_ok=True)
   cwd = str(session_dir)
 
-  # Ensure MASTER_AGENT_PROMPT.md exists and is symlinked into the session dir
+  # Write session CLAUDE.md (prompt + memory) so Claude Code picks it up
   _ensure_master_claude_md(session_meta, cfg)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)

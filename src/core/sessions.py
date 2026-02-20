@@ -8,12 +8,14 @@ from typing import Optional
 import aiofiles
 import structlog
 
+from src.agents.master_cc import ensure_master_claude_md
 from src.core.config import CharliBotConfig
 from src.core.models import (
   ConversationHistory,
   CreateSessionRequest,
   SessionMetadata,
   SessionStatus,
+  TaskQueue,
 )
 
 log = structlog.get_logger()
@@ -57,6 +59,10 @@ class SessionManager:
     await self._save_history(ConversationHistory(session_id=meta.id))
 
     await self._save_metadata(meta)
+
+    # Write CLAUDE.md immediately so it's ready before the first message
+    ensure_master_claude_md(meta, self._cfg)
+
     log.info("session_created", session_id=meta.id, name=meta.name)
     return meta
 
@@ -79,6 +85,7 @@ class SessionManager:
         continue
       meta = await self.get_session(d.name)
       if meta and (status is None or meta.status == status):
+        meta.has_running_tasks = await self._has_running_tasks(meta.id)
         sessions.append(meta)
     sessions.sort(key=lambda s: s.created_at, reverse=True)
     return sessions
@@ -186,6 +193,19 @@ class SessionManager:
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  async def _has_running_tasks(self, session_id: str) -> bool:
+    """Check if a session has any tasks with status 'running'."""
+    queue_path = self._session_dir(session_id) / "task_queue.json"
+    if not queue_path.exists():
+      return False
+    try:
+      async with aiofiles.open(queue_path, "r") as f:
+        raw = await f.read()
+      queue = TaskQueue.model_validate_json(raw)
+      return any(t.status == "running" for t in queue.tasks)
+    except Exception:
+      return False
 
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. based on existing count."""

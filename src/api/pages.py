@@ -26,6 +26,10 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
   for ev in events:
     t = ev.get("type")
     if t == "user":
+      # Skip CC-internal user events (tool results) — they have a "message" field
+      # but no top-level "content". Only real user messages have "content".
+      if "message" in ev and "content" not in ev:
+        continue
       # Flush any pending assistant buffer
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})

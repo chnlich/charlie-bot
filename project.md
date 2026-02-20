@@ -29,8 +29,6 @@ All instance-specific data (configs, logs, sessions) is stored here.
 ~/.charliebot/
 ├── config.yaml          # API keys, settings, and project_dirs list
 ├── MEMORY.md            # Globally shared memory (user preferences, facts)
-├── PROGRESS.md          # Global lessons learned and insights
-├── logs/                # Application logs (server errors, system events)
 └── sessions/            # Session directories
     └── {session_uuid}/
         ├── metadata.json      # Session info (name, repo, branch)
@@ -160,7 +158,6 @@ All files use synchronization locks to prevent race conditions:
 | File | Purpose | Access Pattern |
 |------|---------|----------------|
 | **MEMORY.md** | User preferences ("dark mode"), facts ("works at Citadel"), personalization | Read at session start; updated when preferences/facts revealed |
-| **PROGRESS.md** | Lessons learned, mistakes, best practices | Workers append insights at end of tasks ("summarize, refine, elevate") |
 
 ### 6.2 Context Management Strategies
 - **Master Layer**: Conversation summarization (compress early history, keep last ~10 turns); hierarchical context (System > Session Summary > Recent Dialogue > Retrieved snippets)

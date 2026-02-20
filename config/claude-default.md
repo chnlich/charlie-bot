@@ -37,7 +37,6 @@ in the task prompt. Follow the worktree steps exactly:
 ## Output
 - Stream progress as you work so the user can see what is happening
 - When done, output a final summary of all files changed and why
-- Append lessons learned to PROGRESS.md if you discovered anything non-obvious
 - Do NOT ask for confirmation before acting on clear instructions
 
 ## Task Context

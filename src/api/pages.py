@@ -8,9 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.deps import get_session_manager, get_thread_manager
-from src.core.config import get_config
 from src.core.models import SessionStatus
-from src.core.queue import QueueManager
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
@@ -58,8 +56,7 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
         messages.append({"role": "assistant", "content": assistant_buf})
         assistant_buf = ""
       desc = ev.get("description", "")
-      pri = ev.get("priority", "P1")
-      messages.append({"role": "system", "content": f"Task queued [{pri}]: {desc}"})
+      messages.append({"role": "system", "content": f"Task delegated: {desc}"})
     elif t == "worker_summary":
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})
@@ -81,12 +78,10 @@ async def index(
   thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Render the full page. All data loaded here."""
-  cfg = get_config()
   sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
   active_session = None
   messages: list[dict] = []
   threads = []
-  queue_tasks = []
   if session:
     active_session = await session_mgr.get_session(session)
     if active_session:
@@ -96,11 +91,6 @@ async def index(
 
       # Load threads
       threads = await thread_mgr.list_threads(session)
-
-      # Load queue
-      queue_mgr = QueueManager(session, cfg)
-      queue = await queue_mgr.get_queue()
-      queue_tasks = queue.tasks
 
       # Mark session as read
       await session_mgr.mark_read(session)
@@ -113,5 +103,4 @@ async def index(
     "active_session": active_session,
     "messages": messages,
     "threads": threads,
-    "queue_tasks": queue_tasks,
   })

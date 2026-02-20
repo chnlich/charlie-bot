@@ -1,35 +1,12 @@
 """FastAPI dependency injection helpers."""
 
-from fastapi import Path
-
-from src.core.config import CharlieBotConfig, get_config
-from src.core.dispatcher import SessionDispatcher
-from src.core.dispatcher import get_or_create as _get_or_create_dispatcher
-from src.core.git import GitManager
-from src.core.memory import MemoryManager
-from src.core.queue import QueueManager
+from src.core.config import get_config
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
 # Module-level singletons (created once per process)
-_git_manager: GitManager | None = None
-_memory_manager: MemoryManager | None = None
 _session_manager: SessionManager | None = None
 _thread_manager: ThreadManager | None = None
-
-
-def _get_git_manager() -> GitManager:
-  global _git_manager
-  if _git_manager is None:
-    _git_manager = GitManager()
-  return _git_manager
-
-
-def _get_memory_manager() -> MemoryManager:
-  global _memory_manager
-  if _memory_manager is None:
-    _memory_manager = MemoryManager(get_config())
-  return _memory_manager
 
 
 def get_session_manager() -> SessionManager:
@@ -42,24 +19,5 @@ def get_session_manager() -> SessionManager:
 def get_thread_manager() -> ThreadManager:
   global _thread_manager
   if _thread_manager is None:
-    _thread_manager = ThreadManager(get_config(), _get_git_manager())
+    _thread_manager = ThreadManager(get_config())
   return _thread_manager
-
-
-def get_queue_manager(session_id: str = Path(...)) -> QueueManager:
-  """Returns a QueueManager bound to the given session_id."""
-  return QueueManager(session_id, get_config())
-
-
-def get_memory() -> MemoryManager:
-  return _get_memory_manager()
-
-
-def get_dispatcher(session_id: str = Path(...)) -> SessionDispatcher:
-  """Returns the singleton SessionDispatcher for the given session."""
-  return _get_or_create_dispatcher(
-    session_id,
-    get_config(),
-    get_session_manager(),
-    get_thread_manager(),
-  )

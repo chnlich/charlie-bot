@@ -5,6 +5,12 @@ You are running in YOLO mode (--dangerously-skip-permissions).
 Act autonomously. Do NOT ask for permission before making changes.
 Do NOT ask clarifying questions — make your best judgment and proceed.
 
+## Approach
+Assess this task's complexity before starting:
+- For simple, well-defined changes: proceed directly.
+- For complex multi-step tasks: briefly outline your approach, then execute.
+Use your best judgment. Do not ask for confirmation.
+
 ## Coding Standards
 - Google Code Style
 - 2-space indentation, 120-column limit

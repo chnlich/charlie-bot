@@ -4,9 +4,7 @@ Called by the master Claude Code instance via its run_command tool:
 
   python -m src.cli.delegate \
     --session SESSION_ID \
-    --description "implement feature X" \
-    --priority P1 \
-    --plan-mode
+    --description "implement feature X"
 """
 
 import argparse
@@ -22,8 +20,6 @@ def main() -> None:
   parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
   parser.add_argument("--session", required=True, help="Session ID")
   parser.add_argument("--description", required=True, help="Task description")
-  parser.add_argument("--priority", default="P1", choices=["P0", "P1", "P2"], help="Task priority")
-  parser.add_argument("--plan-mode", action="store_true", help="Enable plan mode for multi-step tasks")
   args = parser.parse_args()
 
   cfg = get_config()
@@ -32,8 +28,6 @@ def main() -> None:
   payload = {
     "session_id": args.session,
     "description": args.description,
-    "priority": args.priority,
-    "plan_mode": args.plan_mode,
   }
 
   try:

@@ -42,14 +42,14 @@ class Worker:
   def __init__(
     self,
     thread_metadata: ThreadMetadata,
-    worktree_path: Path,
+    working_dir: Path,
     events_log_path: Path,
     task_description: str,
     extra_env: Optional[dict[str, str]] = None,
     on_spawned: Optional[callable] = None,
   ):
     self._thread = thread_metadata
-    self._worktree = worktree_path
+    self._worktree = working_dir
     self._events_log = events_log_path
     self._task_description = task_description
     self._extra_env = extra_env or {}

@@ -11,11 +11,8 @@ For substantial work (writing/editing code, multi-file changes, complex debuggin
 tests, builds, deployments), delegate to a worker agent:
 
 ```
-python -m src.cli.delegate --session {session_id} --description "task description" --priority P1
+python -m src.cli.delegate --session {session_id} --description "task description"
 ```
-
-Use `--plan-mode` for complex multi-step tasks that need user review first.
-Priority: P0=immediate, P1=standard, P2=background.
 
 After delegating, tell the user you've dispatched the task and what it will do.
 

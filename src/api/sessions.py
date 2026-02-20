@@ -2,21 +2,16 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.core.config import get_config
 from src.core.models import (
   CreateSessionRequest,
-  Priority,
   RenameSessionRequest,
-  ReorderTaskRequest,
   SessionMetadata,
   SessionStatus,
-  TaskQueue,
   ThreadMetadata,
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.api.deps import get_session_manager, get_thread_manager, get_queue_manager
-from src.core.queue import QueueManager
+from src.api.deps import get_session_manager, get_thread_manager
 
 router = APIRouter()
 
@@ -37,6 +32,7 @@ async def create_session(
 @router.get("/projects")
 async def list_projects():
   """Return git repos discovered from configured workspace_dirs."""
+  from src.core.config import get_config
   cfg = get_config()
   return cfg.discover_repos()
 
@@ -97,28 +93,3 @@ async def mark_session_read(session_id: str, session_mgr: SessionManager = Depen
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])
 async def list_threads(session_id: str, thread_mgr: ThreadManager = Depends(get_thread_manager)):
   return await thread_mgr.list_threads(session_id)
-
-
-@router.get("/{session_id}/queue", response_model=TaskQueue)
-async def get_queue(session_id: str, queue_mgr: QueueManager = Depends(get_queue_manager)):
-  return await queue_mgr.get_queue()
-
-
-@router.post("/{session_id}/queue/reorder")
-async def reorder_task(
-  session_id: str,
-  req: ReorderTaskRequest,
-  queue_mgr: QueueManager = Depends(get_queue_manager),
-):
-  await queue_mgr.reorder(req.task_id, req.priority)
-  return {"ok": True}
-
-
-@router.delete("/{session_id}/queue/{task_id}")
-async def cancel_task(
-  session_id: str,
-  task_id: str,
-  queue_mgr: QueueManager = Depends(get_queue_manager),
-):
-  await queue_mgr.cancel(task_id)
-  return {"ok": True}

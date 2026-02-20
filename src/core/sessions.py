@@ -15,7 +15,6 @@ from src.core.models import (
   CreateSessionRequest,
   SessionMetadata,
   SessionStatus,
-  TaskQueue,
 )
 
 log = structlog.get_logger()
@@ -40,11 +39,6 @@ class SessionManager:
     # Create directory structure
     for subdir in ["data", "threads"]:
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
-
-    # Initialize empty task queue
-    queue_path = session_dir / "task_queue.json"
-    async with aiofiles.open(queue_path, "w") as f:
-      await f.write(json.dumps({"session_id": meta.id, "tasks": [], "updated_at": datetime.utcnow().isoformat()}))
 
     # Initialize empty conversation history
     await self._save_history(ConversationHistory(session_id=meta.id))
@@ -186,17 +180,21 @@ class SessionManager:
   # ---------------------------------------------------------------------------
 
   async def _has_running_tasks(self, session_id: str) -> bool:
-    """Check if a session has any tasks with status 'running'."""
-    queue_path = self._session_dir(session_id) / "task_queue.json"
-    if not queue_path.exists():
+    """Check if a session has any threads with status 'running'."""
+    threads_dir = self._session_dir(session_id) / "threads"
+    if not threads_dir.exists():
       return False
-    try:
-      async with aiofiles.open(queue_path, "r") as f:
-        raw = await f.read()
-      queue = TaskQueue.model_validate_json(raw)
-      return any(t.status == "running" for t in queue.tasks)
-    except Exception:
-      return False
+    for thread_dir in threads_dir.iterdir():
+      meta_path = thread_dir / "metadata.json"
+      if not meta_path.exists():
+        continue
+      try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if meta.get("status") == "running":
+          return True
+      except (json.JSONDecodeError, OSError):
+        continue
+    return False
 
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. based on existing count."""

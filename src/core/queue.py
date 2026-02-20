@@ -14,7 +14,7 @@ from typing import Optional
 import aiofiles
 import structlog
 
-from src.core.config import CharliBotConfig
+from src.core.config import CharlieBotConfig
 from src.core.models import Priority, Task, TaskQueue, TaskStatus
 
 log = structlog.get_logger()
@@ -29,7 +29,7 @@ class QueueManager:
   Handles push/pop/reorder and spawns Workers via the provided factory.
   """
 
-  def __init__(self, session_id: str, cfg: CharliBotConfig):
+  def __init__(self, session_id: str, cfg: CharlieBotConfig):
     self.session_id = session_id
     self._queue_path = cfg.sessions_dir / session_id / "task_queue.json"
     self._lock = asyncio.Lock()

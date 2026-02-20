@@ -2,7 +2,7 @@
 
 from fastapi import Path
 
-from src.core.config import CharliBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config
 from src.core.dispatcher import SessionDispatcher
 from src.core.dispatcher import get_or_create as _get_or_create_dispatcher
 from src.core.git import GitManager

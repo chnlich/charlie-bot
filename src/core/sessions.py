@@ -9,7 +9,7 @@ import aiofiles
 import structlog
 
 from src.agents.master_cc import ensure_master_claude_md
-from src.core.config import CharliBotConfig
+from src.core.config import CharlieBotConfig
 from src.core.models import (
   ConversationHistory,
   CreateSessionRequest,
@@ -24,7 +24,7 @@ log = structlog.get_logger()
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
-  def __init__(self, cfg: CharliBotConfig):
+  def __init__(self, cfg: CharlieBotConfig):
     self._cfg = cfg
 
   # ---------------------------------------------------------------------------

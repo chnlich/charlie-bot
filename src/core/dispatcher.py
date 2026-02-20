@@ -16,7 +16,7 @@ from src.core.queue import QueueManager
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 from src.core.threads import ThreadManager
-from src.core.config import CharliBotConfig
+from src.core.config import CharlieBotConfig
 
 log = structlog.get_logger()
 
@@ -33,7 +33,7 @@ class SessionDispatcher:
   def __init__(
     self,
     session_id: str,
-    cfg: CharliBotConfig,
+    cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
   ):
@@ -268,7 +268,7 @@ _dispatchers: dict[str, SessionDispatcher] = {}
 
 def get_or_create(
   session_id: str,
-  cfg: CharliBotConfig,
+  cfg: CharlieBotConfig,
   session_mgr: SessionManager,
   thread_mgr: ThreadManager,
 ) -> SessionDispatcher:

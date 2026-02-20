@@ -358,6 +358,8 @@
       if (!catchupDone) return;
 
       if (t === 'user') {
+        // Skip CC-internal user events (tool results) — they have "message" but no "content"
+        if (ev.message && !ev.content) return;
         // Only show if sent from another tab (this tab already added it optimistically)
         if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice);
         pendingUserMsg = false;

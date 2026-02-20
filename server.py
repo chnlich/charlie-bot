@@ -7,12 +7,9 @@ from pathlib import Path
 
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from starlette.responses import Response
-
-from src.api import chat, internal, memory, sessions, threads, voice
+from src.api import chat, internal, memory, pages, sessions, threads, voice
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
 from src.core.sessions import SessionManager
@@ -42,14 +39,8 @@ app = FastAPI(
   lifespan=lifespan,
 )
 
-# CORS for local development (React dev server on :5173)
-app.add_middleware(
-  CORSMiddleware,
-  allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-  allow_credentials=True,
-  allow_methods=["*"],
-  allow_headers=["*"],
-)
+# Page router (GET / — Jinja2 rendered)
+app.include_router(pages.router, tags=["pages"])
 
 # API routers
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
@@ -175,21 +166,12 @@ def _find_events_file(thread_id: str, cfg) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# Serve React SPA (static files)
+# Static files (CSS, JS, images — NOT the SPA)
 # ---------------------------------------------------------------------------
 
 _static_dir = Path(__file__).parent / "web" / "static"
 if _static_dir.exists():
-  _static_app = StaticFiles(directory=str(_static_dir), html=True)
-
-  @app.middleware("http")
-  async def no_cache_html(request, call_next):
-    response: Response = await call_next(request)
-    if request.url.path == "/" or request.url.path.endswith(".html"):
-      response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return response
-
-  app.mount("/", _static_app, name="static")
+  app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 # ---------------------------------------------------------------------------

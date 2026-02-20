@@ -6,9 +6,10 @@ import { ThinkingIndicator } from './ThinkingIndicator'
 interface Props {
   messages: ChatMessage[]
   isStreaming: boolean
+  thinkingStartedAt: string | null
 }
 
-export function MessageList({ messages, isStreaming }: Props) {
+export function MessageList({ messages, isStreaming, thinkingStartedAt }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -22,13 +23,13 @@ export function MessageList({ messages, isStreaming }: Props) {
       ))}
 
       {/* Thinking indicator — content appears only after the response is complete */}
-      {isStreaming && (
+      {isStreaming && thinkingStartedAt && (
         <div className="flex gap-3">
           <div className="shrink-0 w-7 h-7 rounded-full bg-slate-600 flex items-center justify-center text-xs font-bold text-white">
             C
           </div>
           <div className="max-w-[75%] bg-slate-700 text-slate-100 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm">
-            <ThinkingIndicator />
+            <ThinkingIndicator startedAt={thinkingStartedAt} />
           </div>
         </div>
       )}

@@ -19,9 +19,7 @@ def _default_config_yaml() -> dict:
   return {
     "gemini_api_key": "",
     "gemini_model": "gemini-3.1-pro-preview",
-    "max_concurrent_workers": 3,
     "workspace_dirs": ["~/workspace"],
-    "worktree_dir": "~/worktrees",
   }
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
@@ -64,7 +62,7 @@ def _recover_orphaned_threads(cfg) -> None:
   """Mark all threads stuck in 'running' as 'failed'.
 
   On server startup, no thread should be running — they are always spawned
-  by the dispatcher. Any 'running' thread is orphaned from a previous server
+  by the spawner. Any 'running' thread is orphaned from a previous server
   lifecycle (crash, reload, or restart). Kill any lingering worker processes.
   """
   if not cfg.sessions_dir.exists():
@@ -102,10 +100,9 @@ def _recover_orphaned_threads(cfg) -> None:
       session_id = meta.get("session_id", session_dir.name)
       orphans_by_session.setdefault(session_id, []).append(meta)
 
-  # Append failure messages to conversation history and fix task queues
+  # Append failure messages to conversation history
   for session_id, orphans in orphans_by_session.items():
     _append_recovery_messages(cfg, session_id, orphans)
-    _mark_tasks_failed(cfg, session_id, orphans)
 
   total = sum(len(v) for v in orphans_by_session.values())
   if total:
@@ -135,21 +132,3 @@ def _append_recovery_messages(cfg, session_id: str, orphans: list[dict]) -> None
     }
     conv.setdefault("messages", []).append(msg)
   conv_path.write_text(json.dumps(conv, indent=2), encoding="utf-8")
-
-
-def _mark_tasks_failed(cfg, session_id: str, orphans: list[dict]) -> None:
-  """Mark corresponding tasks in the queue as failed."""
-  queue_path = cfg.sessions_dir / session_id / "task_queue.json"
-  if not queue_path.exists():
-    return
-  try:
-    queue = json.loads(queue_path.read_text(encoding="utf-8"))
-  except (json.JSONDecodeError, OSError) as e:
-    log.warning("task_queue_unreadable", session=session_id, error=str(e))
-    return
-  orphan_task_ids = {m.get("task_id") for m in orphans}
-  for task in queue.get("tasks", []):
-    if task.get("id") in orphan_task_ids and task.get("status") == "running":
-      task["status"] = "failed"
-  queue["updated_at"] = datetime.utcnow().isoformat()
-  queue_path.write_text(json.dumps(queue, indent=2), encoding="utf-8")

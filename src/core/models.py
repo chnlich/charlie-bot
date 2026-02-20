@@ -13,29 +13,11 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
-class Priority(str, Enum):
-  P0 = "P0"  # Immediate
-  P1 = "P1"  # Standard
-  P2 = "P2"  # Background
-
-
-class TaskStatus(str, Enum):
-  PENDING = "pending"
-  RUNNING = "running"
-  COMPLETED = "completed"
-  FAILED = "failed"
-  PENDING_QUOTA = "pending_quota"
-  CANCELLED = "cancelled"
-
-
 class ThreadStatus(str, Enum):
   IDLE = "idle"
-  PLANNING = "planning"
   RUNNING = "running"
-  AWAITING_APPROVAL = "awaiting_approval"
   COMPLETED = "completed"
   FAILED = "failed"
-  CONFLICT = "conflict"
   CANCELLED = "cancelled"
 
 
@@ -51,29 +33,6 @@ class MessageRole(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Task Queue Models
-# ---------------------------------------------------------------------------
-
-
-class Task(BaseModel):
-  id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-  priority: Priority
-  description: str
-  created_at: datetime = Field(default_factory=datetime.utcnow)
-  status: TaskStatus = TaskStatus.PENDING
-  thread_id: Optional[str] = None
-  plan_steps: Optional[list[str]] = None
-  is_plan_mode: bool = False
-  context: dict[str, Any] = Field(default_factory=dict)
-
-
-class TaskQueue(BaseModel):
-  session_id: str
-  tasks: list[Task] = Field(default_factory=list)
-  updated_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-# ---------------------------------------------------------------------------
 # Thread Models
 # ---------------------------------------------------------------------------
 
@@ -81,9 +40,7 @@ class TaskQueue(BaseModel):
 class ThreadMetadata(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   session_id: str
-  task_id: str
   description: str
-  branch_name: str
   status: ThreadStatus = ThreadStatus.IDLE
   created_at: datetime = Field(default_factory=datetime.utcnow)
   started_at: Optional[datetime] = None
@@ -91,9 +48,6 @@ class ThreadMetadata(BaseModel):
   pid: Optional[int] = None
   exit_code: Optional[int] = None
   cli_command: Optional[str] = None
-  worktree_path: Optional[str] = None
-  base_branch: Optional[str] = None
-  is_conflict_resolver: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -169,23 +123,11 @@ class VoiceTranscriptionResponse(BaseModel):
   )
 
 
-class PlanApprovalRequest(BaseModel):
-  approved_steps: list[str]
-  edited_steps: Optional[list[str]] = None
-
-
 class RenameSessionRequest(BaseModel):
   name: str
-
-
-class ReorderTaskRequest(BaseModel):
-  task_id: str
-  priority: Priority
 
 
 class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str
   description: str
-  priority: Priority = Priority.P1
-  plan_mode: bool = False

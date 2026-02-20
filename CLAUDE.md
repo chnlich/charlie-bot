@@ -11,11 +11,8 @@ For substantial work (writing/editing code, multi-file changes, complex debuggin
 tests, builds, deployments), delegate to a worker agent:
 
 ```
-python -m src.cli.delegate --session b0447450-b2aa-4934-8906-3d4188e3a3cc --description "task description" --priority P1
+python -m src.cli.delegate --session b0447450-b2aa-4934-8906-3d4188e3a3cc --description "task description"
 ```
-
-Use `--plan-mode` for complex multi-step tasks that need user review first.
-Priority: P0=immediate, P1=standard, P2=background.
 
 After delegating, tell the user you've dispatched the task and what it will do.
 
@@ -44,7 +41,5 @@ User preferences, facts, and personalization notes are recorded here.
 
 
 ## Notes
-
-**Worker worktree workflow**: Each Claude Code subagent runs in a new worktree branch. After implementation, the subagent must rebase onto the base branch and fast-forward merge back. This is handled via prompt instructions in `_write_claude_md()` (threads.py), not Python merge logic. The base branch is stored in `ThreadMetadata.base_branch`. Merge instructions are skipped for plan-mode and conflict-resolver tasks.
 
 **Session CLAUDE.md**: Each session gets a real `CLAUDE.md` file (not a symlink) at `~/.charliebot/sessions/{id}/CLAUDE.md`, created by concatenating `MASTER_AGENT_PROMPT.md` + `MEMORY.md`. This is done in `_ensure_master_claude_md()` (master_cc.py), called on every `run_message()`. Stale symlinks from the old approach are auto-removed before writing.

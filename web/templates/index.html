@@ -106,10 +106,6 @@
             Workers
             {% if threads %}<span class="ml-1 text-xs bg-slate-600 px-1.5 py-0.5 rounded-full">{{ threads|length }}</span>{% endif %}
           </button>
-          <button onclick="switchTab('queue')" id="btn-queue" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">
-            Queue
-            {% if queue_tasks %}<span class="ml-1 text-xs bg-slate-600 px-1.5 py-0.5 rounded-full">{{ queue_tasks|length }}</span>{% endif %}
-          </button>
         </div>
       </header>
 
@@ -175,28 +171,20 @@
             <!-- Status badge -->
             {% set status_colors = {
               'running': 'bg-blue-500',
-              'planning': 'bg-purple-500',
               'completed': 'bg-green-500',
               'failed': 'bg-red-500',
-              'awaiting_approval': 'bg-yellow-500',
               'cancelled': 'bg-slate-500',
-              'conflict': 'bg-orange-500',
               'idle': 'bg-slate-500'
             } %}
             <span class="w-2 h-2 rounded-full flex-shrink-0 {{ status_colors.get(t.status.value, 'bg-slate-500') }} {% if t.status.value == 'running' %}animate-pulse{% endif %}"></span>
             <div class="flex-1 min-w-0">
               <p class="text-sm truncate">{{ t.description }}</p>
-              <p class="text-xs text-slate-500">{{ t.status.value }} &middot; {{ t.branch_name }}</p>
+              <p class="text-xs text-slate-500">{{ t.status.value }}</p>
             </div>
             <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-{{ t.id }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
           </div>
           <!-- Expandable detail -->
           <div id="thread-detail-{{ t.id }}" class="hidden border-t border-slate-700">
-            {% if t.status.value == 'awaiting_approval' %}
-            <div id="plan-review-{{ t.id }}" class="p-4">
-              <p class="text-sm text-slate-400 mb-2">Loading plan steps...</p>
-            </div>
-            {% endif %}
             <div id="thread-events-{{ t.id }}" class="p-4 max-h-96 overflow-y-auto">
               <p class="text-xs text-slate-500">Loading events...</p>
             </div>
@@ -205,36 +193,6 @@
         {% endfor %}
         {% else %}
         <div class="flex items-center justify-center h-full text-slate-500 text-sm">No worker threads</div>
-        {% endif %}
-      </div>
-
-      <!-- ===== QUEUE TAB ===== -->
-      <div id="tab-queue" class="flex-1 overflow-y-auto p-4 space-y-2 hidden">
-        {% if queue_tasks %}
-        {% for task in queue_tasks %}
-        <div class="flex items-center gap-3 bg-slate-800 rounded-xl border border-slate-700 px-4 py-3" id="queue-task-{{ task.id }}">
-          <!-- Priority badge -->
-          {% set pri_colors = {'P0': 'bg-red-500/20 text-red-300', 'P1': 'bg-blue-500/20 text-blue-300', 'P2': 'bg-slate-500/20 text-slate-300'} %}
-          <span class="text-xs font-mono font-bold px-1.5 py-0.5 rounded {{ pri_colors.get(task.priority.value, 'bg-slate-600 text-slate-300') }}">{{ task.priority.value }}</span>
-          <!-- Status badge -->
-          {% set stat_colors = {
-            'pending': 'text-yellow-400',
-            'running': 'text-blue-400',
-            'completed': 'text-green-400',
-            'failed': 'text-red-400',
-            'cancelled': 'text-slate-500',
-            'pending_quota': 'text-orange-400'
-          } %}
-          <span class="text-xs {{ stat_colors.get(task.status.value, 'text-slate-400') }}">{{ task.status.value }}</span>
-          {% if task.is_plan_mode %}<span class="text-xs text-purple-400">plan</span>{% endif %}
-          <span class="flex-1 text-sm truncate">{{ task.description }}</span>
-          {% if task.status.value == 'pending' %}
-          <button onclick="cancelTask('{{ active_session.id }}', '{{ task.id }}')" class="text-xs text-red-400 hover:text-red-300">Cancel</button>
-          {% endif %}
-        </div>
-        {% endfor %}
-        {% else %}
-        <div class="flex items-center justify-center h-full text-slate-500 text-sm">Queue is empty</div>
         {% endif %}
       </div>
 
@@ -266,7 +224,7 @@
     // Tabs
     // ---------------------------------------------------------------------------
     function switchTab(tab) {
-      ['chat', 'workers', 'queue'].forEach(t => {
+      ['chat', 'workers'].forEach(t => {
         document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab);
         const btn = document.getElementById('btn-' + t);
         if (t === tab) {
@@ -426,7 +384,7 @@
         appendMessage('system', 'Error: ' + (ev.content || ''));
         stopThinking();
       } else if (t === 'task_delegated') {
-        appendMessage('system', `Task queued [${ev.priority || 'P1'}]: ${ev.description || ''}`);
+        appendMessage('system', `Task delegated: ${ev.description || ''}`);
       } else if (t === 'worker_summary') {
         appendMessage('system', ev.content || '');
       }
@@ -577,12 +535,6 @@
           const res = await fetch(`/api/threads/${sessionId}/threads/${threadId}/events`);
           const events = await res.json();
           renderThreadEvents(threadId, events);
-
-          // If awaiting approval, extract plan steps
-          const planEl = document.getElementById('plan-review-' + threadId);
-          if (planEl) {
-            renderPlanReview(threadId, sessionId, events);
-          }
         } catch (err) {
           document.getElementById('thread-events-' + threadId).innerHTML =
             '<p class="text-xs text-red-400">Failed to load events</p>';
@@ -615,91 +567,6 @@
           const text = e.content || e.message || e.path || e.type;
           return `<div class="text-xs py-0.5 ${cls}"><span class="text-slate-600 mr-2">${e.type}</span>${escapeHtml(String(text).substring(0, 500))}</div>`;
         }).join('');
-    }
-
-    // ---------------------------------------------------------------------------
-    // Plan approval
-    // ---------------------------------------------------------------------------
-    function renderPlanReview(threadId, sessionId, events) {
-      // Extract plan steps from assistant events containing numbered lists
-      const steps = [];
-      for (const ev of events) {
-        if (ev.type === 'assistant' && ev.content) {
-          const matches = ev.content.match(/^\d+\.\s+.+$/gm);
-          if (matches) {
-            for (const m of matches) {
-              steps.push(m.replace(/^\d+\.\s+/, ''));
-            }
-          }
-        }
-      }
-
-      const container = document.getElementById('plan-review-' + threadId);
-      if (!steps.length) {
-        container.innerHTML = '<p class="text-sm text-slate-400">No plan steps found in events.</p>';
-        return;
-      }
-
-      container.innerHTML = `
-        <p class="text-sm text-slate-300 mb-3 font-medium">Review plan steps:</p>
-        <div class="space-y-2 mb-4">
-          ${steps.map((s, i) => `
-            <label class="flex items-start gap-2 text-sm">
-              <input type="checkbox" checked class="mt-1 plan-step-check" data-thread="${threadId}" data-idx="${i}">
-              <span contenteditable="true" class="plan-step-text flex-1 bg-transparent focus:outline-none focus:bg-slate-700/50 rounded px-1 -mx-1">${escapeHtml(s)}</span>
-            </label>
-          `).join('')}
-        </div>
-        <button onclick="approvePlan('${sessionId}', '${threadId}')"
-                class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors">
-          Approve &amp; Run (${steps.length} steps)
-        </button>
-      `;
-    }
-
-    async function approvePlan(sessionId, threadId) {
-      const checks = document.querySelectorAll(`input.plan-step-check[data-thread="${threadId}"]`);
-      const texts = document.querySelectorAll(`.plan-step-text`);
-      const approved = [];
-      const edited = [];
-      let anyEdited = false;
-
-      checks.forEach((cb, i) => {
-        if (cb.checked) {
-          const original = cb.parentElement.querySelector('.plan-step-text');
-          const text = original?.textContent?.trim() || '';
-          approved.push(text);
-          edited.push(text);
-        }
-      });
-
-      if (!approved.length) return;
-
-      try {
-        const res = await fetch(`/api/threads/${sessionId}/threads/${threadId}/approve-plan`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approved_steps: approved, edited_steps: edited }),
-        });
-        if (res.ok) {
-          const container = document.getElementById('plan-review-' + threadId);
-          container.innerHTML = '<p class="text-sm text-green-400">Plan approved! Tasks queued.</p>';
-        }
-      } catch (err) {
-        console.error('Plan approval failed:', err);
-      }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Queue management
-    // ---------------------------------------------------------------------------
-    async function cancelTask(sessionId, taskId) {
-      try {
-        await fetch(`/api/sessions/${sessionId}/queue/${taskId}`, { method: 'DELETE' });
-        document.getElementById('queue-task-' + taskId)?.remove();
-      } catch (err) {
-        console.error('Cancel task failed:', err);
-      }
     }
 
     // ---------------------------------------------------------------------------

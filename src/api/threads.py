@@ -1,4 +1,4 @@
-"""Thread management API routes including plan approval."""
+"""Thread management API routes."""
 
 import json
 import os
@@ -9,16 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 log = structlog.get_logger()
 
-from src.api.deps import get_thread_manager, get_queue_manager
+from src.api.deps import get_thread_manager
 from src.core.models import (
-  PlanApprovalRequest,
-  Priority,
-  Task,
   ThreadMetadata,
   ThreadStatus,
   WorkerEvent,
 )
-from src.core.queue import QueueManager
 from src.core.threads import ThreadManager
 
 router = APIRouter()
@@ -60,36 +56,6 @@ async def get_thread_events(
         log.debug("event_parse_failed", error=str(e), line=line[:200])
         events.append(WorkerEvent(type="raw", content=line))
   return events
-
-
-@router.post("/{session_id}/threads/{thread_id}/approve-plan")
-async def approve_plan(
-  session_id: str,
-  thread_id: str,
-  req: PlanApprovalRequest,
-  thread_mgr: ThreadManager = Depends(get_thread_manager),
-  queue_mgr: QueueManager = Depends(get_queue_manager),
-):
-  """User approved a plan. Push approved steps as P0/P1 tasks into the queue."""
-  thread = await thread_mgr.get_thread(session_id, thread_id)
-  if not thread:
-    raise HTTPException(status_code=404, detail="Thread not found")
-  if thread.status != ThreadStatus.AWAITING_APPROVAL:
-    raise HTTPException(status_code=400, detail="Thread is not awaiting plan approval")
-
-  steps = req.edited_steps or req.approved_steps
-  queued_tasks = []
-  for i, step in enumerate(steps):
-    task = Task(
-      priority=Priority.P0 if i == 0 else Priority.P1,
-      description=step,
-      context={"plan_thread_id": thread_id, "step_index": i},
-    )
-    await queue_mgr.push(task)
-    queued_tasks.append(task.id)
-
-  await thread_mgr.update_status(session_id, thread_id, ThreadStatus.COMPLETED)
-  return {"ok": True, "queued_tasks": queued_tasks}
 
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")

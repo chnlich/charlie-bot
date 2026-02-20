@@ -18,42 +18,32 @@ class CharlieBotConfig(BaseModel):
   # Server
   server_port: int = 8000
 
-  # Worker
-  max_concurrent_workers: int = 3
-
   # Paths
   charliebot_home: Path = Path.home() / ".charliebot"
 
   # Workspace directories to scan for git repos
   workspace_dirs: list[str] = ["~/workspace"]
 
-  # Root directory for thread worktrees
-  worktree_dir: str = "~/worktrees"
-
   @model_validator(mode="before")
   @classmethod
   def migrate_and_expand(cls, values: dict) -> dict:
-    """Backward compat: rename project_dirs → workspace_dirs, expand ~ in paths."""
+    """Backward compat: rename project_dirs -> workspace_dirs, expand ~ in paths."""
     if "project_dirs" in values and "workspace_dirs" not in values:
       values["workspace_dirs"] = values.pop("project_dirs")
     elif "project_dirs" in values:
       values.pop("project_dirs")
-    # Expand ~ in workspace_dirs and worktree_dir (defaults may not trigger field_validator)
+    # Remove deprecated fields silently
+    values.pop("max_concurrent_workers", None)
+    values.pop("worktree_dir", None)
+    # Expand ~ in workspace_dirs
     ws = values.get("workspace_dirs", ["~/workspace"])
     values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
-    wd = values.get("worktree_dir", "~/worktrees")
-    values["worktree_dir"] = os.path.expanduser(wd)
     return values
 
   @field_validator("workspace_dirs", mode="before")
   @classmethod
   def expand_workspace_dirs(cls, v: list[str]) -> list[str]:
     return [os.path.expanduser(p) for p in (v or [])]
-
-  @field_validator("worktree_dir", mode="before")
-  @classmethod
-  def expand_worktree_dir(cls, v: str) -> str:
-    return os.path.expanduser(v)
 
   @property
   def sessions_dir(self) -> Path:

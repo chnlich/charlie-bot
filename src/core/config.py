@@ -24,6 +24,9 @@ class CharlieBotConfig(BaseModel):
   # Workspace directories to scan for git repos
   workspace_dirs: list[str] = ["~/workspace"]
 
+  # Root directory for worker worktrees
+  worktree_dir: str = "~/worktrees"
+
   @model_validator(mode="before")
   @classmethod
   def migrate_and_expand(cls, values: dict) -> dict:
@@ -34,16 +37,22 @@ class CharlieBotConfig(BaseModel):
       values.pop("project_dirs")
     # Remove deprecated fields silently
     values.pop("max_concurrent_workers", None)
-    values.pop("worktree_dir", None)
-    # Expand ~ in workspace_dirs
+    # Expand ~ in workspace_dirs and worktree_dir
     ws = values.get("workspace_dirs", ["~/workspace"])
     values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
+    wd = values.get("worktree_dir", "~/worktrees")
+    values["worktree_dir"] = os.path.expanduser(wd)
     return values
 
   @field_validator("workspace_dirs", mode="before")
   @classmethod
   def expand_workspace_dirs(cls, v: list[str]) -> list[str]:
     return [os.path.expanduser(p) for p in (v or [])]
+
+  @field_validator("worktree_dir", mode="before")
+  @classmethod
+  def expand_worktree_dir(cls, v: str) -> str:
+    return os.path.expanduser(v)
 
   @property
   def sessions_dir(self) -> Path:

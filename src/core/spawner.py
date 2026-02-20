@@ -1,8 +1,11 @@
-"""Direct worker spawner — replaces the queue+dispatcher with a single function."""
+"""Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
+import asyncio
 import json
+import time
 import traceback
 from datetime import datetime
+from pathlib import Path
 
 import structlog
 
@@ -14,6 +17,39 @@ from src.core.threads import ThreadManager
 from src.core.config import CharlieBotConfig
 
 log = structlog.get_logger()
+
+
+def _build_worker_prompt(description: str, repo_path: Path, base_branch: str, worktree_dir: str, thread_id: str) -> str:
+  """Build the full worker prompt including worktree workflow instructions."""
+  ts = int(time.time())
+  branch_name = f"charliebot/task-{ts}-{thread_id[:8]}"
+  wt_path = str(Path(worktree_dir) / branch_name.replace("/", "-"))
+
+  return (
+    f"## Worktree Workflow\n"
+    f"You MUST isolate your work in a git worktree. Follow these steps exactly:\n"
+    f"1. Create worktree: `git worktree add -b {branch_name} {wt_path} {base_branch}`\n"
+    f"2. `cd {wt_path}` — do ALL your work inside this worktree.\n"
+    f"3. Commit your changes with descriptive messages.\n"
+    f"4. Rebase onto base branch: `git rebase {base_branch}`\n"
+    f"5. Merge back: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
+    f"6. Clean up: `git worktree remove {wt_path}`\n\n"
+    f"## Task\n{description}"
+  )
+
+
+async def _git_current_branch(repo_path: Path) -> str:
+  """Get the current branch of the repo."""
+  proc = await asyncio.create_subprocess_exec(
+    "git", "rev-parse", "--abbrev-ref", "HEAD",
+    cwd=str(repo_path),
+    stdout=asyncio.subprocess.PIPE,
+    stderr=asyncio.subprocess.PIPE,
+  )
+  stdout, stderr = await proc.communicate()
+  if proc.returncode != 0:
+    raise RuntimeError(f"git rev-parse failed: {stderr.decode().strip()}")
+  return stdout.decode().strip()
 
 
 async def spawn_worker(
@@ -31,17 +67,26 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    # Determine working directory: first discovered repo, or thread dir
+    # Determine repo (first discovered repo from config)
     repos = cfg.discover_repos()
-    working_dir = thread_mgr.get_thread_dir(session_id, thread_id)
-    if repos:
-      from pathlib import Path
-      working_dir = Path(repos[0]["path"])
+    if not repos:
+      log.error("spawn_worker_no_repos", session=session_id)
+      return
+    repo_path = Path(repos[0]["path"])
+
+    # Get current branch as the base for the worktree
+    base_branch = await _git_current_branch(repo_path)
+
+    # Build enriched prompt with worktree workflow instructions
+    worker_prompt = _build_worker_prompt(description, repo_path, base_branch, cfg.worktree_dir, thread.id)
+
+    # Ensure worktree parent dir exists
+    Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
 
     # Build and run Worker
     events_log = await thread_mgr.get_events_log_path(session_id, thread_id)
     worker = Worker(
-      thread, working_dir, events_log, description,
+      thread, repo_path, events_log, worker_prompt,
       on_spawned=thread_mgr._save_metadata,
     )
 

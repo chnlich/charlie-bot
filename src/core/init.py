@@ -20,6 +20,7 @@ def _default_config_yaml() -> dict:
     "gemini_api_key": "",
     "gemini_model": "gemini-3.1-pro-preview",
     "workspace_dirs": ["~/workspace"],
+    "worktree_dir": "~/worktrees",
   }
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"

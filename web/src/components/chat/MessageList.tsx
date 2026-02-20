@@ -1,21 +1,19 @@
 import { useEffect, useRef } from 'react'
 import type { ChatMessage } from '../../types'
 import { MessageItem } from './MessageItem'
-import { MarkdownRenderer } from './MarkdownRenderer'
 import { Spinner } from '../common/Spinner'
 
 interface Props {
   messages: ChatMessage[]
-  streamingContent: string
   isStreaming: boolean
 }
 
-export function MessageList({ messages, streamingContent, isStreaming }: Props) {
+export function MessageList({ messages, isStreaming }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamingContent])
+  }, [messages])
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
@@ -23,20 +21,14 @@ export function MessageList({ messages, streamingContent, isStreaming }: Props) 
         <MessageItem key={msg.id} message={msg} />
       ))}
 
-      {/* Streaming bubble */}
+      {/* Thinking indicator — content appears only after the response is complete */}
       {isStreaming && (
         <div className="flex gap-3">
           <div className="shrink-0 w-7 h-7 rounded-full bg-slate-600 flex items-center justify-center text-xs font-bold text-white">
             C
           </div>
           <div className="max-w-[75%] bg-slate-700 text-slate-100 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm">
-            {streamingContent ? (
-              <div className="prose prose-invert prose-sm max-w-none">
-                <MarkdownRenderer content={streamingContent} />
-              </div>
-            ) : (
-              <Spinner size="sm" />
-            )}
+            <Spinner size="sm" />
           </div>
         </div>
       )}

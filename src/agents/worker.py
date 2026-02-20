@@ -76,6 +76,7 @@ class Worker:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
       env=env,
+      limit=10 * 1024 * 1024,
     )
 
     self._thread.pid = self._proc.pid

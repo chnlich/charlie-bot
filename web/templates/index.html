@@ -99,9 +99,6 @@
               onclick="startRename(event, '{{ active_session.id }}', '{{ active_session.name|e }}')"
               title="Click to rename"
               id="header-session-name">{{ active_session.name }}</h2>
-          {% if active_session.repo_path %}
-          <p class="text-xs text-slate-500 truncate">{{ active_session.repo_path }}</p>
-          {% endif %}
         </div>
         <div class="flex gap-1">
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>

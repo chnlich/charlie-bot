@@ -9,6 +9,7 @@ from src.core.models import (
   RenameSessionRequest,
   ReorderTaskRequest,
   SessionMetadata,
+  SessionStatus,
   TaskQueue,
   ThreadMetadata,
 )
@@ -40,6 +41,12 @@ async def list_projects():
   return cfg.discover_repos()
 
 
+@router.get("/archived", response_model=list[SessionMetadata])
+async def list_archived_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+  """List archived sessions, newest first."""
+  return await session_mgr.list_sessions(status=SessionStatus.ARCHIVED)
+
+
 @router.get("/{session_id}", response_model=SessionMetadata)
 async def get_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
   meta = await session_mgr.get_session(session_id)
@@ -48,13 +55,23 @@ async def get_session(session_id: str, session_mgr: SessionManager = Depends(get
   return meta
 
 
-@router.delete("/{session_id}")
+@router.delete("/{session_id}", response_model=SessionMetadata)
 async def archive_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+  meta = await session_mgr.archive_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  return meta
+
+
+@router.post("/{session_id}/unarchive", response_model=SessionMetadata)
+async def unarchive_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  await session_mgr.archive_session(session_id)
-  return {"ok": True}
+  if meta.status != SessionStatus.ARCHIVED:
+    raise HTTPException(status_code=409, detail="Session is not archived")
+  meta = await session_mgr.unarchive_session(session_id)
+  return meta
 
 
 @router.patch("/{session_id}", response_model=SessionMetadata)

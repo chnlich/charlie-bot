@@ -40,7 +40,7 @@ class SessionManager:
       if repos:
         repo_path = repos[0]["path"]
 
-    name = req.name or await self._next_session_name(repo_path)
+    name = req.name or await self._next_session_name()
     meta = SessionMetadata(
       name=name,
       repo_path=repo_path,
@@ -214,18 +214,10 @@ class SessionManager:
     except Exception:
       return False
 
-  async def _next_session_name(self, repo_path: str | None = None) -> str:
-    """Generate a default session name.
-
-    If *repo_path* is given the name is based on the repo directory name
-    (e.g. ``charlie-bot #3``), otherwise falls back to ``Session N``.
-    """
+  async def _next_session_name(self) -> str:
+    """Generate 'Session 0', 'Session 1', etc. based on existing count."""
     existing = await self.list_sessions()
-    n = len(existing)
-    if repo_path:
-      repo_name = Path(repo_path).name
-      return f"{repo_name} #{n}"
-    return f"Session {n}"
+    return f"Session {len(existing)}"
 
   async def _save_metadata(self, meta: SessionMetadata) -> None:
     path = self._metadata_path(meta.id)

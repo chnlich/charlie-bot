@@ -36,7 +36,7 @@ class ThreadManager:
     thread_dir = self._thread_dir(session_meta.id, thread.id)
     (thread_dir / "data").mkdir(parents=True, exist_ok=True)
 
-    await self._write_claude_md(thread_dir, description, session_meta)
+    await self._write_claude_md(thread_dir, session_meta)
 
     await self._save_metadata(thread)
     log.info("thread_created", thread_id=thread.id)
@@ -99,18 +99,16 @@ class ThreadManager:
   async def _write_claude_md(
     self,
     thread_dir: Path,
-    description: str,
     session_meta: SessionMetadata,
   ) -> None:
-    """Concatenate default instructions + task-specific content."""
+    """Write default instructions + session info (task is passed via -p)."""
     default_content = ""
     if _CLAUDE_DEFAULT_PATH.exists():
       default_content = _CLAUDE_DEFAULT_PATH.read_text(encoding="utf-8")
 
     content = (
       f"{default_content}\n"
-      f"## Task Description\n\n{description}\n"
-      f"\n## Session Info\n"
+      f"## Session Info\n"
       f"- Session: {session_meta.name}\n"
     )
 

@@ -8,7 +8,7 @@ from typing import Optional
 import aiofiles
 import structlog
 
-from src.core.config import CharliBotConfig
+from src.core.config import CharlieBotConfig
 from src.core.git import GitError, GitManager
 from src.core.models import SessionMetadata, Task, ThreadMetadata, ThreadStatus
 
@@ -20,7 +20,7 @@ _CLAUDE_DEFAULT_PATH = Path(__file__).parent.parent.parent / "config" / "claude-
 class ThreadManager:
   """Creates and manages Worker threads (isolated git branches + worktrees)."""
 
-  def __init__(self, cfg: CharliBotConfig, git_manager: GitManager):
+  def __init__(self, cfg: CharlieBotConfig, git_manager: GitManager):
     self._cfg = cfg
     self._git = git_manager
 

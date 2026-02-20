@@ -9,7 +9,7 @@ from typing import Optional
 
 import structlog
 
-from src.core.config import CharliBotConfig
+from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.streaming import streaming_manager
 
@@ -27,7 +27,7 @@ MASTER_CC_COMMAND = [
 _MASTER_TEMPLATE_PATH = Path(__file__).parent.parent.parent / "config" / "master-claude.md"
 
 
-def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig) -> None:
+def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
   """Write session CLAUDE.md by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md."""
   # Write MASTER_AGENT_PROMPT.md from template if it doesn't exist yet
   prompt_file = cfg.claude_md_file
@@ -57,7 +57,7 @@ def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharliBotConfig)
 
 
 async def run_message(
-  cfg: CharliBotConfig,
+  cfg: CharlieBotConfig,
   session_meta: SessionMetadata,
   user_content: str,
   save_chat_event,

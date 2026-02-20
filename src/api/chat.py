@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from src.agents.master_cc import run_message
 from src.api.deps import get_session_manager
-from src.core.config import CharliBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config
 from src.core.models import ConversationHistory, SendMessageRequest
 from src.core.sessions import SessionManager
 
@@ -22,7 +22,7 @@ async def send_message(
   session_id: str,
   req: SendMessageRequest,
   session_mgr: SessionManager = Depends(get_session_manager),
-  cfg: CharliBotConfig = Depends(get_config),
+  cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   meta = await session_mgr.get_session(session_id)

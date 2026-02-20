@@ -8,7 +8,7 @@ import yaml
 from pydantic import BaseModel, field_validator, model_validator
 
 
-class CharliBotConfig(BaseModel):
+class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
 
   # LLM
@@ -97,10 +97,10 @@ class CharliBotConfig(BaseModel):
     return repos
 
 
-_config: Optional[CharliBotConfig] = None
+_config: Optional[CharlieBotConfig] = None
 
 
-def load_config() -> CharliBotConfig:
+def load_config() -> CharlieBotConfig:
   """Load config from ~/.charliebot/config.yaml."""
   home = Path.home() / ".charliebot"
   config_path = home / "config.yaml"
@@ -111,10 +111,10 @@ def load_config() -> CharliBotConfig:
       yaml_data = yaml.safe_load(f) or {}
 
   yaml_data.setdefault("charliebot_home", str(home))
-  return CharliBotConfig(**yaml_data)
+  return CharlieBotConfig(**yaml_data)
 
 
-def get_config() -> CharliBotConfig:
+def get_config() -> CharlieBotConfig:
   """Return the singleton config instance."""
   global _config
   if _config is None:

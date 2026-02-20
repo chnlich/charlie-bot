@@ -2,13 +2,13 @@
 
 import asyncio
 
-from src.core.config import CharliBotConfig
+from src.core.config import CharlieBotConfig
 
 
 class MemoryManager:
   """Manages MEMORY.md and PROGRESS.md with concurrency guards."""
 
-  def __init__(self, cfg: CharliBotConfig):
+  def __init__(self, cfg: CharlieBotConfig):
     self._cfg = cfg
     self._memory_lock = asyncio.Lock()
     self._progress_lock = asyncio.Lock()

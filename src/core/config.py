@@ -27,6 +27,10 @@ class CharlieBotConfig(BaseModel):
   # Root directory for worker worktrees
   worktree_dir: str = "~/worktrees"
 
+  # SSL
+  ssl_certfile: Optional[str] = None
+  ssl_keyfile: Optional[str] = None
+
   # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
   subprocess_buffer_limit_mb: int = 1024
 
@@ -45,6 +49,10 @@ class CharlieBotConfig(BaseModel):
     values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
     wd = values.get("worktree_dir", "~/worktrees")
     values["worktree_dir"] = os.path.expanduser(wd)
+    if values.get("ssl_certfile"):
+      values["ssl_certfile"] = os.path.expanduser(values["ssl_certfile"])
+    if values.get("ssl_keyfile"):
+      values["ssl_keyfile"] = os.path.expanduser(values["ssl_keyfile"])
     return values
 
   @field_validator("workspace_dirs", mode="before")

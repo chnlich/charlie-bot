@@ -927,7 +927,7 @@
         document.getElementById('voice-btn').classList.remove('bg-slate-800', 'border-slate-600');
       } catch (err) {
         console.error('Mic access failed:', err);
-        alert('Could not access microphone: ' + err.message);
+        alert('Microphone access failed. Make sure you are using HTTPS and have granted microphone permission.');
       }
     }
 

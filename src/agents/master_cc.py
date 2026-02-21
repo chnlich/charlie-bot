@@ -52,6 +52,7 @@ async def run_message(
   save_metadata=None,
   mark_unread=None,
   skip_user_event: bool = False,
+  is_voice: bool = False,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -78,7 +79,7 @@ async def run_message(
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)
   if not skip_user_event:
-    user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat()}
+    user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat(), "is_voice": is_voice}
     await save_chat_event(session_meta.id, user_event)
     await streaming_manager.broadcast(channel, user_event)
     session_meta.updated_at = datetime.now(timezone.utc)

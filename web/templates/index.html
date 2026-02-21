@@ -1051,8 +1051,9 @@
         const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form });
         const data = await res.json();
         if (data.transcription) {
-          document.getElementById('msg-input').value = data.transcription;
-          autoResize(document.getElementById('msg-input'));
+          pendingUserMsg = true;
+          appendMessage('user', data.transcription, true);
+          startThinking();
         }
       } catch (err) {
         console.error('Transcription failed:', err);

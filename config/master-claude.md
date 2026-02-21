@@ -15,10 +15,11 @@ code changes must land on a separate branch. Either delegate to a worker agent
 (preferred), or use EnterWorktree yourself to work on a branch. Never edit
 source code without being in a worktree first.
 
-To delegate:
+To delegate, you MUST specify --repo with the absolute path to the git repo
+the worker should operate on:
 
 ```
-python -m src.cli.delegate --session {session_id} --description "task description"
+python -m src.cli.delegate --session {session_id} --repo /absolute/path/to/repo --description "task description"
 ```
 
 After delegating, tell the user you've dispatched the task and what it will do.

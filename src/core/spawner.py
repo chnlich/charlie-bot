@@ -59,7 +59,7 @@ async def spawn_worker(
   cfg: CharlieBotConfig,
   session_mgr: SessionManager,
   thread_mgr: ThreadManager,
-  repo_path: str | None = None,
+  repo_path: str,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   try:
@@ -68,16 +68,7 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    # Use explicit repo_path if provided, otherwise fall back to discovery
-    if repo_path:
-      resolved_repo = Path(repo_path)
-    else:
-      repos = cfg.discover_repos()
-      if not repos:
-        log.error("spawn_worker_no_repos", session=session_id)
-        return
-      resolved_repo = Path(repos[0]["path"])
-      log.warning("spawn_worker_repo_fallback", session=session_id, repo=str(resolved_repo))
+    resolved_repo = Path(repo_path)
 
     # Get current branch as the base for the worktree
     base_branch = await _git_current_branch(resolved_repo)

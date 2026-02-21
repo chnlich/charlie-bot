@@ -1,12 +1,20 @@
 """Voice transcription API route."""
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+import asyncio
 
+import structlog
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+
+from src.agents.master_cc import run_message
 from src.agents.master_agent import AudioTranscriber
-from src.core.config import get_config
+from src.api.deps import get_session_manager
+from src.core.config import CharlieBotConfig, get_config
 from src.core.models import VoiceTranscriptionResponse
+from src.core.sessions import SessionManager
 
 router = APIRouter()
+
+log = structlog.get_logger()
 
 SUPPORTED_MIME_TYPES = {
   "audio/webm",
@@ -32,6 +40,8 @@ def _get_transcriber() -> AudioTranscriber:
 async def transcribe_audio(
   audio: UploadFile = File(...),
   session_id: str = Form(...),
+  session_mgr: SessionManager = Depends(get_session_manager),
+  cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Transcribe uploaded audio using Gemini."""
   content_type = audio.content_type or "audio/webm"
@@ -50,5 +60,24 @@ async def transcribe_audio(
     raise HTTPException(status_code=503, detail="Audio transcription requires Gemini API key")
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+  meta = await session_mgr.get_session(session_id)
+  if meta:
+
+    async def _run():
+      try:
+        await run_message(
+          cfg,
+          meta,
+          transcription,
+          session_mgr.save_chat_event,
+          session_mgr.save_metadata,
+          mark_unread=session_mgr.mark_unread,
+          is_voice=True,
+        )
+      except Exception as e:
+        log.error("voice_run_message_failed", session=session_id, error=str(e))
+
+    asyncio.create_task(_run())
 
   return VoiceTranscriptionResponse(transcription=transcription)

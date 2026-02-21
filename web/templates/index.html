@@ -220,6 +220,7 @@
     // Tracks how many events the client has seen; used as cursor for WS catch-up.
     // Starts at the server-rendered count and increments as live events arrive.
     let eventCursor = {{ event_count }};
+    let masterThinking = !!THINKING_SINCE;
 
     // ---------------------------------------------------------------------------
     // Tabs
@@ -441,7 +442,7 @@
       try {
         const res = await fetch(`/api/sessions/${SESSION_ID}/threads`);
         const threads = await res.json();
-        const hasRunning = threads.some(t => t.status === 'running');
+        const hasRunning = masterThinking || threads.some(t => t.status === 'running');
         const spinner = document.getElementById('spinner-' + SESSION_ID);
         if (spinner) spinner.classList.toggle('hidden', !hasRunning);
       } catch (err) {
@@ -456,20 +457,24 @@
     let thinkingStart = null;
 
     function startThinking() {
+      masterThinking = true;
       thinkingStart = Date.now();
       document.getElementById('thinking').classList.remove('hidden');
       updateThinkingTime();
       thinkingInterval = setInterval(updateThinkingTime, 1000);
       document.getElementById('send-btn').disabled = true;
       document.getElementById('send-btn').classList.add('opacity-50');
+      document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
     }
 
     function stopThinking() {
+      masterThinking = false;
       document.getElementById('thinking').classList.add('hidden');
       if (thinkingInterval) { clearInterval(thinkingInterval); thinkingInterval = null; }
       thinkingStart = null;
       document.getElementById('send-btn').disabled = false;
       document.getElementById('send-btn').classList.remove('opacity-50');
+      updateSpinner();
     }
 
     function updateThinkingTime() {
@@ -698,6 +703,7 @@
         thinkingInterval = setInterval(updateThinkingTime, 1000);
         document.getElementById('send-btn')?.classList.add('opacity-50');
         if (document.getElementById('send-btn')) document.getElementById('send-btn').disabled = true;
+        document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
       }
 
     });

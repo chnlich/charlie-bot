@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import yaml
 from pathlib import Path
@@ -91,7 +91,7 @@ def _recover_orphaned_threads(cfg) -> None:
       # Mark as failed
       meta["status"] = "failed"
       meta["exit_code"] = -1
-      meta["completed_at"] = datetime.utcnow().isoformat()
+      meta["completed_at"] = datetime.now(timezone.utc).isoformat()
       meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
       log.warning("recovered_orphaned_thread", thread=meta.get("id"), pid=pid)
       recovered += 1

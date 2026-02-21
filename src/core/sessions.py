@@ -1,7 +1,7 @@
 """Session management for CharlieBot."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -78,7 +78,7 @@ class SessionManager:
     if not meta:
       return None
     meta.name = new_name
-    meta.updated_at = datetime.utcnow()
+    meta.updated_at = datetime.now(timezone.utc)
     await self._save_metadata(meta)
     log.info("session_renamed", session_id=session_id, new_name=new_name)
     return meta
@@ -116,7 +116,7 @@ class SessionManager:
     if not meta:
       return None
     meta.status = SessionStatus.ARCHIVED
-    meta.updated_at = datetime.utcnow()
+    meta.updated_at = datetime.now(timezone.utc)
     await self._save_metadata(meta)
     log.info("session_archived", session_id=session_id)
     return meta
@@ -127,7 +127,7 @@ class SessionManager:
     if not meta:
       return None
     meta.status = SessionStatus.ACTIVE
-    meta.updated_at = datetime.utcnow()
+    meta.updated_at = datetime.now(timezone.utc)
     await self._save_metadata(meta)
     log.info("session_unarchived", session_id=session_id)
     return meta

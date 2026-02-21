@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
@@ -90,7 +90,7 @@ async def spawn_worker(
     # Mark RUNNING
     thread.cli_command = " ".join(WORKER_COMMAND + [description])
     thread.status = ThreadStatus.RUNNING
-    thread.started_at = datetime.utcnow()
+    thread.started_at = datetime.now(timezone.utc)
     await thread_mgr._save_metadata(thread)
     log.info("worker_running", thread_id=thread.id, session=session_id)
 

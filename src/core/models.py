@@ -1,7 +1,7 @@
 """All Pydantic models for CharlieBot."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
@@ -37,7 +37,7 @@ class ThreadMetadata(BaseModel):
   session_id: str
   description: str
   status: ThreadStatus = ThreadStatus.IDLE
-  created_at: datetime = Field(default_factory=datetime.utcnow)
+  created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   started_at: Optional[datetime] = None
   completed_at: Optional[datetime] = None
   pid: Optional[int] = None
@@ -57,8 +57,8 @@ class SessionMetadata(BaseModel):
   has_unread: bool = False
   has_running_tasks: bool = False
   thinking_since: Optional[datetime] = None
-  created_at: datetime = Field(default_factory=datetime.utcnow)
-  updated_at: datetime = Field(default_factory=datetime.utcnow)
+  created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   cc_session_id: Optional[str] = None
 
 
@@ -80,7 +80,7 @@ class WorkerEvent(BaseModel):
   lines_added: Optional[int] = None
   message: Optional[str] = None
   status: Optional[str] = None
-  timestamp: datetime = Field(default_factory=datetime.utcnow)
+  timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Thread management for CharlieBot Worker tasks."""
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -79,9 +79,9 @@ class ThreadManager:
     if exit_code is not None:
       meta.exit_code = exit_code
     if status == ThreadStatus.RUNNING and not meta.started_at:
-      meta.started_at = datetime.utcnow()
+      meta.started_at = datetime.now(timezone.utc)
     if status in (ThreadStatus.COMPLETED, ThreadStatus.FAILED, ThreadStatus.CANCELLED):
-      meta.completed_at = datetime.utcnow()
+      meta.completed_at = datetime.now(timezone.utc)
     await self._save_metadata(meta)
 
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:

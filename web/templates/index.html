@@ -66,6 +66,11 @@
     .file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-chip button { background: transparent; border: none; cursor: pointer; color: #64748b; padding: 0; line-height: 1; flex-shrink: 0; }
     .file-chip button:hover { color: #e2e8f0; }
+    @media (max-width: 640px) {
+      .input-row { flex-wrap: wrap; }
+      .input-row textarea { width: 100% !important; min-width: 100% !important; flex-basis: 100%; }
+      .input-buttons { display: flex; gap: 0.5rem; margin-left: auto; }
+    }
   </style>
 </head>
 <body class="dark bg-slate-900 text-slate-100 h-dvh overflow-hidden">
@@ -219,32 +224,34 @@
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
-          <div class="flex gap-2 items-end">
+          <div class="flex gap-2 items-end input-row">
             <textarea id="msg-input"
                       rows="1"
                       placeholder="Send a message..."
                       class="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-sm resize-none focus:outline-none focus:border-blue-500 placeholder-slate-500"
                       onkeydown="handleInputKey(event)"
                       oninput="autoResize(this)"></textarea>
-            {% if active_session and backend_options %}
-            <select id="backend-select"
-                    onchange="switchBackend(this.value)"
-                    data-current="{{ active_backend }}"
-                    class="text-xs bg-slate-800 border border-slate-600 rounded-xl px-2 py-2.5 text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:border-slate-500 transition-colors">
-              {% for opt in backend_options %}
-              <option value="{{ opt.id }}" {% if opt.id == active_backend %}selected{% endif %}>{{ opt.label }}</option>
-              {% endfor %}
-            </select>
-            {% endif %}
-            <button id="voice-btn" onclick="toggleVoice()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Voice input">
-              <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"/></svg>
-            </button>
-            <button onclick="document.getElementById('file-input').click()" id="upload-btn" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Attach files">
-              <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
-            </button>
-            <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
-            </button>
+            <div class="input-buttons flex gap-2">
+              {% if active_session and backend_options %}
+              <select id="backend-select"
+                      onchange="switchBackend(this.value)"
+                      data-current="{{ active_backend }}"
+                      class="text-xs bg-slate-800 border border-slate-600 rounded-xl px-2 py-2.5 text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:border-slate-500 transition-colors">
+                {% for opt in backend_options %}
+                <option value="{{ opt.id }}" {% if opt.id == active_backend %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+              </select>
+              {% endif %}
+              <button id="voice-btn" onclick="toggleVoice()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Voice input">
+                <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"/></svg>
+              </button>
+              <button onclick="document.getElementById('file-input').click()" id="upload-btn" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Attach files">
+                <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
+              </button>
+              <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
+              </button>
+            </div>
           </div>
         </div>
       </div>

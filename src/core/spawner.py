@@ -9,6 +9,7 @@ from pathlib import Path
 
 import structlog
 
+from src.agents.master_cc import run_message
 from src.agents.worker import WORKER_COMMAND, QuotaExhaustedException, Worker
 from src.core.models import ThreadStatus
 from src.core.sessions import SessionManager
@@ -102,22 +103,48 @@ async def spawn_worker(
         await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
         log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
-      await _notify_completion(session_id, description, thread, exit_code, thread_mgr, session_mgr)
+      await _notify_completion(session_id, description, thread, exit_code, thread_mgr, session_mgr, cfg)
 
     except QuotaExhaustedException:
       await worker.terminate()
       await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED)
       log.warning("worker_quota_exhausted", thread_id=thread.id)
-      await _notify_completion(session_id, description, thread, -1, thread_mgr, session_mgr, quota_exhausted=True)
+      await _notify_completion(session_id, description, thread, -1, thread_mgr, session_mgr, cfg, quota_exhausted=True)
 
     except Exception as e:
       await worker.terminate()
       await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1)
       log.error("worker_failed", thread_id=thread.id, error=str(e), traceback=traceback.format_exc())
-      await _notify_completion(session_id, description, thread, -1, thread_mgr, session_mgr, error=str(e))
+      await _notify_completion(session_id, description, thread, -1, thread_mgr, session_mgr, cfg, error=str(e))
 
   except Exception as e:
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
+
+
+async def _trigger_master(
+  session_id: str,
+  summary: str,
+  cfg: CharlieBotConfig,
+  session_mgr: SessionManager,
+) -> None:
+  """Best-effort trigger of the master agent to process a worker result."""
+  try:
+    session_meta = await session_mgr.get_session(session_id)
+    if not session_meta or not session_meta.cc_session_id:
+      log.debug("trigger_master_skipped", session=session_id, reason="no cc_session_id")
+      return
+
+    new_cc_session_id = await run_message(
+      cfg, session_meta, summary,
+      session_mgr.save_chat_event, session_mgr.save_metadata,
+      skip_user_event=True,
+    )
+
+    if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:
+      session_meta.cc_session_id = new_cc_session_id
+      await session_mgr.save_metadata(session_meta)
+  except Exception as e:
+    log.error("trigger_master_failed", session=session_id, error=str(e))
 
 
 async def _notify_completion(
@@ -127,10 +154,11 @@ async def _notify_completion(
   exit_code: int,
   thread_mgr: ThreadManager,
   session_mgr: SessionManager,
+  cfg: CharlieBotConfig,
   quota_exhausted: bool = False,
   error: str = "",
 ) -> None:
-  """Broadcast worker_summary event to the session WebSocket."""
+  """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
     events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
 
@@ -143,26 +171,32 @@ async def _notify_completion(
     elif exit_code != 0:
       summary += f"\n\n*Worker exited with code {exit_code}.*"
 
-    await session_mgr.mark_unread(session_id)
-    await streaming_manager.broadcast(f"session:{session_id}", {
+    worker_event = {
       "type": "worker_summary",
       "thread_id": thread.id,
       "content": summary,
       "status": status,
-    })
+    }
+    await session_mgr.mark_unread(session_id)
+    await session_mgr.save_chat_event(session_id, worker_event)
+    await streaming_manager.broadcast(f"session:{session_id}", worker_event)
     log.info("worker_summary_sent", session=session_id, thread=thread.id)
+
+    await _trigger_master(session_id, summary, cfg, session_mgr)
 
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
       fallback = f"Worker finished task: {description}\n\n(Unable to generate summary: {e})"
-      await session_mgr.mark_unread(session_id)
-      await streaming_manager.broadcast(f"session:{session_id}", {
+      fallback_event = {
         "type": "worker_summary",
         "thread_id": thread.id,
         "content": fallback,
         "status": "completed" if exit_code == 0 else "failed",
-      })
+      }
+      await session_mgr.mark_unread(session_id)
+      await session_mgr.save_chat_event(session_id, fallback_event)
+      await streaming_manager.broadcast(f"session:{session_id}", fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner))
 

@@ -5,8 +5,8 @@ import asyncio
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from src.agents.master_cc import run_message
 from src.agents.master_agent import AudioTranscriber
+from src.api.chat import run_and_finalize
 from src.api.deps import get_session_manager
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import VoiceTranscriptionResponse
@@ -63,21 +63,6 @@ async def transcribe_audio(
 
   meta = await session_mgr.get_session(session_id)
   if meta:
-
-    async def _run():
-      try:
-        await run_message(
-          cfg,
-          meta,
-          transcription,
-          session_mgr.save_chat_event,
-          session_mgr.save_metadata,
-          mark_unread=session_mgr.mark_unread,
-          is_voice=True,
-        )
-      except Exception as e:
-        log.error("voice_run_message_failed", session=session_id, error=str(e))
-
-    asyncio.create_task(_run())
+    asyncio.create_task(run_and_finalize(cfg, meta, transcription, session_mgr, is_voice=True))
 
   return VoiceTranscriptionResponse(transcription=transcription)

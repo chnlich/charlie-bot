@@ -76,35 +76,8 @@ async def send_message(
   if req.uploaded_files:
     content += "\n\n[Attached files]\n" + "\n".join(f"- {p}" for p in req.uploaded_files)
 
-  # Resolve backend option for this session
-  backend_id = meta.backend
-  backend_option = next((o for o in cfg.backend_options if o.id == backend_id), None)
-
   # Fire-and-forget: spawn master CC in a background task
-  async def _run():
-    try:
-      cc_session_id = await run_message(
-        cfg, meta, content, session_mgr.save_chat_event,
-        session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
-        backend_option=backend_option,
-      )
-      # Persist CC session ID if newly assigned.
-      # Re-read fresh metadata from disk to avoid overwriting has_unread
-      # (or other fields) that mark_unread() set during run_message().
-      if cc_session_id and cc_session_id != meta.cc_session_id:
-        fresh = await session_mgr.get_session(meta.id)
-        if fresh:
-          fresh.cc_session_id = cc_session_id
-          await session_mgr.save_metadata(fresh)
-        meta.cc_session_id = cc_session_id
-
-      # Auto-name session after first turn if still using default name
-      if _DEFAULT_NAME_RE.match(meta.name):
-        asyncio.create_task(_auto_name(cfg, meta, req.content, session_mgr))
-    except Exception as e:
-      log.error("master_cc_run_failed", session=session_id, error=str(e))
-
-  asyncio.create_task(_run())
+  asyncio.create_task(run_and_finalize(cfg, meta, content, session_mgr))
 
   return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -150,6 +123,41 @@ async def switch_backend(
 
   log.info("backend_switched", session=session_id, backend=req.backend)
   return {"ok": True, "backend": req.backend}
+
+
+async def run_and_finalize(
+  cfg: CharlieBotConfig,
+  meta,
+  content: str,
+  session_mgr: SessionManager,
+  *,
+  is_voice: bool = False,
+) -> None:
+  """Run master CC, persist cc_session_id, and auto-name the session."""
+  backend_id = meta.backend
+  backend_option = next((o for o in cfg.backend_options if o.id == backend_id), None)
+  try:
+    cc_session_id = await run_message(
+      cfg, meta, content, session_mgr.save_chat_event,
+      session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
+      backend_option=backend_option,
+      is_voice=is_voice,
+    )
+    # Persist CC session ID if newly assigned.
+    # Re-read fresh metadata from disk to avoid overwriting has_unread
+    # (or other fields) that mark_unread() set during run_message().
+    if cc_session_id and cc_session_id != meta.cc_session_id:
+      fresh = await session_mgr.get_session(meta.id)
+      if fresh:
+        fresh.cc_session_id = cc_session_id
+        await session_mgr.save_metadata(fresh)
+      meta.cc_session_id = cc_session_id
+
+    # Auto-name session after first turn if still using default name
+    if _DEFAULT_NAME_RE.match(meta.name):
+      asyncio.create_task(_auto_name(cfg, meta, content, session_mgr))
+  except Exception as e:
+    log.error("master_cc_run_failed", session=meta.id, error=str(e))
 
 
 async def _auto_name(

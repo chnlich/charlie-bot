@@ -59,6 +59,7 @@ async def spawn_worker(
   cfg: CharlieBotConfig,
   session_mgr: SessionManager,
   thread_mgr: ThreadManager,
+  repo_path: str | None = None,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   try:
@@ -67,18 +68,22 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    # Determine repo (first discovered repo from config)
-    repos = cfg.discover_repos()
-    if not repos:
-      log.error("spawn_worker_no_repos", session=session_id)
-      return
-    repo_path = Path(repos[0]["path"])
+    # Use explicit repo_path if provided, otherwise fall back to discovery
+    if repo_path:
+      resolved_repo = Path(repo_path)
+    else:
+      repos = cfg.discover_repos()
+      if not repos:
+        log.error("spawn_worker_no_repos", session=session_id)
+        return
+      resolved_repo = Path(repos[0]["path"])
+      log.warning("spawn_worker_repo_fallback", session=session_id, repo=str(resolved_repo))
 
     # Get current branch as the base for the worktree
-    base_branch = await _git_current_branch(repo_path)
+    base_branch = await _git_current_branch(resolved_repo)
 
     # Build enriched prompt with worktree workflow instructions
-    worker_prompt = _build_worker_prompt(description, repo_path, base_branch, cfg.worktree_dir, thread.id)
+    worker_prompt = _build_worker_prompt(description, resolved_repo, base_branch, cfg.worktree_dir, thread.id)
 
     # Ensure worktree parent dir exists
     Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
@@ -86,7 +91,7 @@ async def spawn_worker(
     # Build and run Worker
     events_log = await thread_mgr.get_events_log_path(session_id, thread_id)
     worker = Worker(
-      thread, repo_path, events_log, worker_prompt,
+      thread, resolved_repo, events_log, worker_prompt,
       on_spawned=thread_mgr._save_metadata,
     )
 

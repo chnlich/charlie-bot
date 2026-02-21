@@ -68,6 +68,8 @@
     .file-chip button:hover { color: #e2e8f0; }
     .overflow-toggle { display: none; }
     .input-buttons { position: relative; }
+      .sidebar-overlay { display: none; }
+      .hamburger-btn { display: none !important; }
     @media (max-width: 768px) {
       .input-row { flex-wrap: wrap; }
       .input-row textarea { width: 100% !important; min-width: 100% !important; flex-basis: 100%; }
@@ -75,6 +77,11 @@
       .input-buttons .overflow-toggle { display: inline-flex; }
       .input-buttons .collapsible { display: none; }
       .input-buttons .collapsible.show { display: flex; position: absolute; bottom: 100%; right: 0; background: #1e293b; border: 1px solid #475569; border-radius: 0.75rem; padding: 0.5rem; gap: 0.5rem; margin-bottom: 0.5rem; z-index: 50; }
+        #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: 320px !important; }
+        #sidebar.open { display: flex; }
+        #resize-handle { display: none; }
+        .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
+        .hamburger-btn { display: inline-flex !important; }
     }
   </style>
 </head>
@@ -142,6 +149,7 @@
         {% endif %}
       </nav>
     </aside>
+      <div id="sidebar-overlay" class="sidebar-overlay" onclick="toggleMobileSidebar()"></div>
     <div id="resize-handle" class="resize-handle"></div>
 
     <!-- ==================== MAIN AREA ==================== -->
@@ -150,6 +158,9 @@
 
       <!-- Tab bar -->
       <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4">
+        <button class="hamburger-btn p-2 -ml-2 mr-1 rounded-lg hover:bg-slate-700 transition-colors" onclick="toggleMobileSidebar()" title="Menu">
+          <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
         <div class="flex-1 min-w-0 py-3">
           <h2 class="text-sm font-semibold truncate cursor-pointer hover:text-blue-300 transition-colors"
               onclick="startRename(event, '{{ active_session.id }}', '{{ active_session.name|e }}')"
@@ -343,6 +354,31 @@
       };
       marked.use({ renderer });
     })();
+
+      function toggleMobileSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        const isOpen = sidebar.classList.contains('open');
+        if (isOpen) {
+          sidebar.classList.remove('open');
+          overlay.classList.remove('active');
+        } else {
+          sidebar.classList.add('open');
+          overlay.classList.add('active');
+        }
+      }
+
+      // Close sidebar on navigation (mobile)
+      document.querySelectorAll('#sidebar a[href]').forEach(function(a) {
+        a.addEventListener('click', function() {
+          if (window.innerWidth <= 768) {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            sidebar.classList.remove('open');
+            overlay.classList.remove('active');
+          }
+        });
+      });
 
     function copyCode(btn) {
       const pre = btn.closest('.code-block').querySelector('pre');

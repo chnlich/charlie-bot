@@ -55,6 +55,9 @@ class SessionManager:
       return None
     async with aiofiles.open(path, "r") as f:
       raw = await f.read()
+    if not raw.strip():
+      log.warning("session_metadata_empty", session_id=session_id, path=str(path))
+      return None
     return SessionMetadata.model_validate_json(raw)
 
   async def list_sessions(

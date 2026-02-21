@@ -37,6 +37,7 @@ async def delegate_task(
   asyncio.create_task(spawn_worker(
     req.session_id, req.description, thread.id,
     cfg, session_mgr, thread_mgr,
+    repo_path=req.repo_path,
   ))
 
   # Broadcast task_delegated event on the session WebSocket

@@ -7,7 +7,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from src.agents.master_cc import run_message
+from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager
 from src.core.autonamer import maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
@@ -59,6 +59,21 @@ async def send_message(
   asyncio.create_task(_run())
 
   return JSONResponse(status_code=202, content={"status": "accepted"})
+
+
+@router.post("/{session_id}/cancel")
+async def cancel_master_agent(
+  session_id: str,
+  session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Send SIGTERM to the running master CC agent for this session."""
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  found = cancel_master(session_id)
+  if not found:
+    raise HTTPException(status_code=404, detail="No active master agent")
+  return {"ok": True}
 
 
 async def _auto_name(

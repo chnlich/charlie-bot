@@ -6,9 +6,10 @@ from typing import Optional
 
 import structlog
 
+from src.agents.backends.base import AgentBackend
 from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata
+from src.core.models import BackendOption, SessionMetadata
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
@@ -18,7 +19,7 @@ log = structlog.get_logger()
 _active_tasks: dict[str, int] = {}
 
 # Per-session running backend reference for external cancellation.
-_active_procs: dict[str, ClaudeCodeBackend] = {}
+_active_procs: dict[str, AgentBackend] = {}
 
 
 def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
@@ -53,6 +54,7 @@ async def run_message(
   mark_unread=None,
   skip_user_event: bool = False,
   is_voice: bool = False,
+  backend_option: Optional[BackendOption] = None,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -108,7 +110,16 @@ async def run_message(
   async def _on_spawn(pid: int) -> None:
     log.info("master_cc_spawned", session=session_meta.id, pid=pid)
 
-  backend = ClaudeCodeBackend(
+  from src.agents.backends.registry import build_backend
+  option = backend_option or BackendOption(
+    id="claude-opus-4.6",
+    label="CC \u00b7 Opus 4.6",
+    type="cc-claude",
+    model="claude-opus-4-6",
+  )
+  backend = build_backend(
+    option,
+    cfg,
     extra_flags=extra_flags or None,
     buffer_limit=cfg.subprocess_buffer_limit,
     on_spawn=_on_spawn,

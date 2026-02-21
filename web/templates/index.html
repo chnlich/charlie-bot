@@ -218,6 +218,15 @@
                       class="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-sm resize-none focus:outline-none focus:border-blue-500 placeholder-slate-500"
                       onkeydown="handleInputKey(event)"
                       oninput="autoResize(this)"></textarea>
+            {% if active_session and backend_options %}
+            <select id="backend-select"
+                    onchange="switchBackend(this.value)"
+                    class="text-xs bg-slate-800 border border-slate-600 rounded-xl px-2 py-2.5 text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:border-slate-500 transition-colors">
+              {% for opt in backend_options %}
+              <option value="{{ opt.id }}" {% if opt.id == active_backend %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
             <button id="voice-btn" onclick="toggleVoice()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Voice input">
               <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"/></svg>
             </button>
@@ -326,6 +335,54 @@
 
     // Running totals for usage tracking (updated from result events)
     let usageTotalCost = {{ session_usage.total_cost_usd if session_usage else 0 }};
+
+    // Backend options (label lookup for toast)
+    const BACKEND_OPTIONS = {
+      {% for opt in backend_options %}
+      {{ opt.id|tojson }}: {{ opt.label|tojson }},
+      {% endfor %}
+    };
+
+    // ---------------------------------------------------------------------------
+    // Backend switcher
+    // ---------------------------------------------------------------------------
+    async function switchBackend(id) {
+      if (!SESSION_ID) return;
+      const select = document.getElementById('backend-select');
+      if (select) select.disabled = true;
+      try {
+        const res = await fetch(`/api/chat/${SESSION_ID}/backend`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ backend: id }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showToast('Switch failed: ' + (err.detail || res.status), true);
+          // Revert select to previous value by re-fetching current value would require state;
+          // simplest: reload page to sync state
+          return;
+        }
+        showToast('Switched to ' + (BACKEND_OPTIONS[id] || id));
+      } catch (err) {
+        console.error('switchBackend failed:', err);
+        showToast('Switch failed: ' + err.message, true);
+      } finally {
+        if (select) select.disabled = masterThinking;
+      }
+    }
+
+    function showToast(msg, isError) {
+      const existing = document.getElementById('backend-toast');
+      if (existing) existing.remove();
+      const toast = document.createElement('div');
+      toast.id = 'backend-toast';
+      toast.textContent = msg;
+      toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-xs font-medium shadow-lg z-50 transition-opacity '
+        + (isError ? 'bg-red-700 text-red-100' : 'bg-slate-700 text-slate-100');
+      document.body.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2000);
+    }
 
     // ---------------------------------------------------------------------------
     // Tabs
@@ -695,6 +752,8 @@
       document.getElementById('send-btn').disabled = true;
       document.getElementById('send-btn').classList.add('opacity-50');
       document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
+      const sel = document.getElementById('backend-select');
+      if (sel) sel.disabled = true;
     }
 
     function stopThinking() {
@@ -704,6 +763,8 @@
       thinkingStart = null;
       document.getElementById('send-btn').disabled = false;
       document.getElementById('send-btn').classList.remove('opacity-50');
+      const sel = document.getElementById('backend-select');
+      if (sel) sel.disabled = false;
       updateSpinner();
     }
 
@@ -1163,6 +1224,8 @@
         document.getElementById('send-btn')?.classList.add('opacity-50');
         if (document.getElementById('send-btn')) document.getElementById('send-btn').disabled = true;
         document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
+        const sel = document.getElementById('backend-select');
+        if (sel) sel.disabled = true;
       }
 
     });

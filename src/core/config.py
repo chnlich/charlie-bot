@@ -7,6 +7,8 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, field_validator, model_validator
 
+from src.core.models import BackendOption
+
 
 class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
@@ -40,6 +42,12 @@ class CharlieBotConfig(BaseModel):
 
   # Voice transcription: custom vocabulary hints for Gemini
   voice_custom_words: list[str] = []
+
+  # Backend options available for model switching
+  backend_options: list[BackendOption] = [
+    BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6"),
+    BackendOption(id="kimi-k2.5", label="CC \u00b7 Kimi K2.5", type="cc-kimi", model="kimi-k2.5"),
+  ]
 
   @model_validator(mode="before")
   @classmethod

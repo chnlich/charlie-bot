@@ -753,6 +753,21 @@
         + (usage.cache_creation_input_tokens || 0)
         + (usage.cache_read_input_tokens || 0);
 
+      // Accumulate cost even for zero-token results
+      usageTotalCost += (ev.total_cost_usd || 0);
+
+      // Skip token/bar update when Claude Code emits a result with zero usage
+      if (contextTokens === 0) {
+        // Still update cost display
+        const cost = document.getElementById('usage-cost');
+        if (cost) cost.textContent = '$' + usageTotalCost.toFixed(2);
+        const sidebarUsage = document.getElementById('sidebar-usage-' + SESSION_ID);
+        if (sidebarUsage) {
+          sidebarUsage.textContent = sidebarUsage.textContent.replace(/\$[\d.]+/, '$' + usageTotalCost.toFixed(2));
+        }
+        return;
+      }
+
       // Extract context limit from modelUsage
       const modelUsage = ev.modelUsage || {};
       let contextLimit = 200000;
@@ -760,9 +775,6 @@
         contextLimit = modelUsage[m].contextWindow || 200000;
         break;
       }
-
-      // Accumulate cost
-      usageTotalCost += (ev.total_cost_usd || 0);
 
       const pct = contextLimit > 0 ? (contextTokens / contextLimit * 100) : 0;
 

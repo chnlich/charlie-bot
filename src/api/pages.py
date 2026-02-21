@@ -35,9 +35,9 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
         messages.append({"role": "assistant", "content": assistant_buf})
         assistant_buf = ""
       messages.append({
-        "role": "user",
-        "content": ev.get("content", ""),
-        "is_voice": ev.get("is_voice", False),
+          "role": "user",
+          "content": ev.get("content", ""),
+          "is_voice": ev.get("is_voice", False),
       })
     elif t == "assistant":
       # Each assistant event is a separate turn — flush prior buffer first
@@ -80,10 +80,10 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
 
 @router.get("/", response_class=HTMLResponse)
 async def index(
-  request: Request,
-  session: str | None = None,
-  session_mgr: SessionManager = Depends(get_session_manager),
-  thread_mgr: ThreadManager = Depends(get_thread_manager),
+    request: Request,
+    session: str | None = None,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Render the full page. All data loaded here."""
   sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
@@ -91,6 +91,7 @@ async def index(
   messages: list[dict] = []
   threads = []
   raw_events: list[dict] = []
+  session_usage = None
   if session:
     active_session = await session_mgr.get_session(session)
     if active_session:
@@ -101,16 +102,29 @@ async def index(
       # Load threads
       threads = await thread_mgr.list_threads(session)
 
+      # Load token usage for active session
+      session_usage = session_mgr.get_session_usage(session)
+
       # Mark session as read
       await session_mgr.mark_read(session)
   elif sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
-  return templates.TemplateResponse("index.html", {
-    "request": request,
-    "sessions": sessions,
-    "active_session": active_session,
-    "messages": messages,
-    "threads": threads,
-    "event_count": len(raw_events),
-  })
+  # Compute usage for each sidebar session
+  all_usage: dict[str, dict] = {}
+  for s in sessions:
+    u = session_mgr.get_session_usage(s.id)
+    if u:
+      all_usage[s.id] = u
+
+  return templates.TemplateResponse(
+      "index.html", {
+          "request": request,
+          "sessions": sessions,
+          "active_session": active_session,
+          "messages": messages,
+          "threads": threads,
+          "event_count": len(raw_events),
+          "session_usage": session_usage,
+          "all_usage": all_usage,
+      })

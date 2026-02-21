@@ -40,11 +40,7 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
           "is_voice": ev.get("is_voice", False),
       })
     elif t == "assistant":
-      # Each assistant event is a separate turn — flush prior buffer first
-      if assistant_buf:
-        messages.append({"role": "assistant", "content": assistant_buf})
-        assistant_buf = ""
-      # Claude Code events nest text in message.content[].text
+      # Accumulate text from all assistant events; only flush at turn boundaries
       msg = ev.get("message") or {}
       blocks = msg.get("content") or []
       for block in blocks:

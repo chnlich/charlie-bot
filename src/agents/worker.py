@@ -15,6 +15,15 @@ from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
 
+WORKER_COMMAND: list[str] = [
+  "claude",
+  "-p",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--dangerously-skip-permissions",
+]
+
 QUOTA_ERROR_PATTERNS = [
   "quota exceeded",
   "rate limit",

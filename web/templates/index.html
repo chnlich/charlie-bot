@@ -592,16 +592,27 @@
     // ---------------------------------------------------------------------------
     // Sidebar spinner (running tasks indicator)
     // ---------------------------------------------------------------------------
-    async function updateSpinner() {
-      if (!SESSION_ID) return;
-      try {
-        const res = await fetch(`/api/sessions/${SESSION_ID}/threads`);
-        const threads = await res.json();
-        const hasRunning = masterThinking || threads.some(t => t.status === 'running');
-        const spinner = document.getElementById('spinner-' + SESSION_ID);
-        if (spinner) spinner.classList.toggle('hidden', !hasRunning);
-      } catch (err) {
-        console.error('Failed to update spinner:', err);
+    function updateSpinner() {
+      var anyRunning = Array.from(document.querySelectorAll('[id^="thread-status-"]'))
+        .some(function(el) { return el.textContent === 'running'; });
+      var spinner = document.getElementById('spinner-' + SESSION_ID);
+      if (spinner) spinner.classList.toggle('hidden', !masterThinking && !anyRunning);
+    }
+
+    function updateWorkersTabBadge() {
+      var btn = document.getElementById('btn-workers');
+      if (!btn) return;
+      var count = document.querySelectorAll('[id^="thread-dot-"]').length;
+      var badge = btn.querySelector('span');
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'ml-1 text-xs bg-slate-600 px-1.5 py-0.5 rounded-full';
+          btn.appendChild(badge);
+        }
+        badge.textContent = count;
+      } else if (badge) {
+        badge.remove();
       }
     }
 
@@ -649,6 +660,7 @@
           </div>
         </div>`;
       container.prepend(card);
+      updateWorkersTabBadge();
     }
 
     // ---------------------------------------------------------------------------

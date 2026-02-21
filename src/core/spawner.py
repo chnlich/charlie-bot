@@ -137,7 +137,7 @@ async def _trigger_master(
     new_cc_session_id = await run_message(
       cfg, session_meta, summary,
       session_mgr.save_chat_event, session_mgr.save_metadata,
-      skip_user_event=True,
+      mark_unread=session_mgr.mark_unread, skip_user_event=True,
     )
 
     if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:

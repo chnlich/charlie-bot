@@ -98,6 +98,13 @@
               title="Click to rename"
               id="header-session-name">{{ active_session.name }}</h2>
         </div>
+        <a href="/api/sessions/{{ active_session.id }}/events.jsonl" target="_blank"
+           class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="Raw JSONL events">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+        </a>
         <div class="flex gap-1">
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
           <button onclick="switchTab('workers')" id="btn-workers" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">

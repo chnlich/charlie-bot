@@ -1,6 +1,7 @@
 """Session management API routes."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 
 from src.core.models import (
   CreateSessionRequest,
@@ -88,6 +89,17 @@ async def mark_session_read(session_id: str, session_mgr: SessionManager = Depen
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
   return {"ok": True}
+
+
+@router.get("/{session_id}/events.jsonl")
+async def get_events_jsonl(session_id: str):
+  """Serve the raw chat_events.jsonl file for a session."""
+  from src.core.config import get_config
+  cfg = get_config()
+  path = cfg.sessions_dir / session_id / "data" / "chat_events.jsonl"
+  if not path.exists():
+    raise HTTPException(status_code=404, detail="Events file not found")
+  return FileResponse(path, media_type="application/x-ndjson")
 
 
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])

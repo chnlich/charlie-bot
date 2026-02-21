@@ -29,6 +29,7 @@ async def lifespan(app: FastAPI):
 
   yield
 
+  await streaming_manager.close_all()
   log.info("charliebot_shutdown")
 
 
@@ -213,5 +214,6 @@ if __name__ == "__main__":
     port=cfg.server_port,
     reload=False,
     log_level="info",
+    timeout_graceful_shutdown=5,
     **ssl_kwargs,
   )

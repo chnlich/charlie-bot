@@ -12,7 +12,8 @@ from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
 
-_DEFAULT_NAME_RE = re.compile(r"^Session \d+$")
+_DEFAULT_NAME_RE = re.compile(r"^(Session \d+$|\d+: )")
+_SESSION_NUMBER_RE = re.compile(r"^Session (\d+)$")
 
 _NAMING_PROMPT = (
   "Generate a short, descriptive title (3-6 words) for this conversation. "
@@ -52,6 +53,11 @@ async def maybe_auto_name(
       return
     if len(name) > 60:
       name = name[:57] + "..."
+
+    # Prefix with session number extracted from 'Session N'
+    m = _SESSION_NUMBER_RE.match(session_meta.name)
+    if m:
+      name = f"{m.group(1)}: {name}"
 
     await session_mgr.rename_session(session_meta.id, name)
 

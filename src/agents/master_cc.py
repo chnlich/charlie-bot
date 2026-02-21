@@ -84,12 +84,12 @@ async def run_message(
     user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat()}
     await save_chat_event(session_meta.id, user_event)
     await streaming_manager.broadcast(channel, user_event)
+    session_meta.updated_at = datetime.now(timezone.utc)
 
   # Track concurrent tasks; only set thinking_since on the first one
   _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1
   if _active_tasks[session_meta.id] == 1:
     session_meta.thinking_since = datetime.now(timezone.utc)
-  session_meta.updated_at = datetime.now(timezone.utc)
   if save_metadata:
     await save_metadata(session_meta)
 

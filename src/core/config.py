@@ -15,6 +15,10 @@ class CharlieBotConfig(BaseModel):
   gemini_api_key: str = ""
   gemini_model: str = "gemini-3.1-pro-preview"
 
+  # Kimi (Moonshot) — optional, not wired in by default
+  moonshot_api_key: Optional[str] = None
+  kimi_model: str = "kimi-k2.5"
+
   # Server
   server_port: int = 8000
 

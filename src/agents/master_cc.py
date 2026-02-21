@@ -89,8 +89,9 @@ async def run_message(
   _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1
   if _active_tasks[session_meta.id] == 1:
     session_meta.thinking_since = datetime.now(timezone.utc)
-    if save_metadata:
-      await save_metadata(session_meta)
+  session_meta.updated_at = datetime.now(timezone.utc)
+  if save_metadata:
+    await save_metadata(session_meta)
 
   cmd = list(MASTER_CC_COMMAND)
   if session_meta.cc_session_id:

@@ -6,6 +6,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import structlog
 
@@ -60,7 +61,7 @@ async def spawn_worker(
   cfg: CharlieBotConfig,
   session_mgr: SessionManager,
   thread_mgr: ThreadManager,
-  repo_path: str,
+  repo_path: Optional[str] = None,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   try:
@@ -68,6 +69,14 @@ async def spawn_worker(
     if not thread:
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
+
+    if repo_path is None:
+      repos = cfg.discover_repos()
+      if not repos:
+        log.error("spawn_worker_no_repo", session=session_id, detail="no repos found in workspace_dirs")
+        return
+      repo_path = repos[0]["path"]
+      log.info("spawn_worker_repo_defaulted", session=session_id, repo=repo_path)
 
     resolved_repo = Path(repo_path)
 

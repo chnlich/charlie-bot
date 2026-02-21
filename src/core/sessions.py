@@ -69,7 +69,7 @@ class SessionManager:
       if meta and (status is None or meta.status == status):
         meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
         sessions.append(meta)
-    sessions.sort(key=lambda s: s.created_at, reverse=True)
+    sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 
   async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:

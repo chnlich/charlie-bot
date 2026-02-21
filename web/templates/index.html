@@ -123,7 +123,7 @@
            onclick="markSessionRead('{{ s.id }}')"
            id="session-{{ s.id }}">
           <svg id="spinner-{{ s.id }}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 {% if not s.has_running_tasks %}hidden{% endif %}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-          <span id="unread-{{ s.id }}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 {% if not s.has_unread %}hidden{% endif %}"></span>
+          <span id="unread-{{ s.id }}" data-has-unread="{{ s.has_unread|int }}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 {% if not s.has_unread or s.has_running_tasks %}hidden{% endif %}"></span>
           <span class="flex-1 min-w-0">
             <span class="truncate block session-name">{{ s.name }}</span>
             <span class="block text-xs text-slate-500 session-time" data-time="{{ s.updated_at.isoformat() }}">{{ s.updated_at.strftime('%b %d, %H:%M') }}</span>
@@ -1139,7 +1139,7 @@
            onclick="markSessionRead('${s.id}')"
            id="session-${s.id}">
           <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-          <span id="unread-${s.id}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread ? '' : 'hidden'}"></span>
+          <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
           <span class="flex-1 min-w-0">
             <span class="truncate block session-name">${escapeHtml(s.name)}</span>
             <span class="block text-xs text-slate-500 session-time" data-time="${timeIso}">${timeStr}</span>
@@ -1525,7 +1525,7 @@
       initSidebarResize();
       // Seed sessionUnread from server-rendered unread dots
       document.querySelectorAll('[id^="unread-"]').forEach(el => {
-        sessionUnread[el.id.replace('unread-', '')] = !el.classList.contains('hidden');
+        sessionUnread[el.id.replace('unread-', '')] = el.dataset.hasUnread === '1';
       });
       const urlFilter = new URLSearchParams(location.search).get('filter');
       if (['all', 'starred', 'archived'].includes(urlFilter)) { switchSidebarFilter(urlFilter); }

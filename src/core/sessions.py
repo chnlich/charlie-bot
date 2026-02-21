@@ -66,7 +66,7 @@ class SessionManager:
         continue
       meta = await self.get_session(d.name)
       if meta and (status is None or meta.status == status):
-        meta.has_running_tasks = await self._has_running_tasks(meta.id)
+        meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
         sessions.append(meta)
     sessions.sort(key=lambda s: s.created_at, reverse=True)
     return sessions

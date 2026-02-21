@@ -44,6 +44,12 @@ async def list_archived_sessions(session_mgr: SessionManager = Depends(get_sessi
   return await session_mgr.list_sessions(status=SessionStatus.ARCHIVED)
 
 
+@router.get("/starred", response_model=list[SessionMetadata])
+async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+  """List starred sessions, newest first."""
+  return await session_mgr.list_sessions(starred=True)
+
+
 @router.get("/{session_id}", response_model=SessionMetadata)
 async def get_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
   meta = await session_mgr.get_session(session_id)
@@ -68,6 +74,22 @@ async def unarchive_session(session_id: str, session_mgr: SessionManager = Depen
   if meta.status != SessionStatus.ARCHIVED:
     raise HTTPException(status_code=409, detail="Session is not archived")
   meta = await session_mgr.unarchive_session(session_id)
+  return meta
+
+
+@router.post("/{session_id}/star", response_model=SessionMetadata)
+async def star_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+  meta = await session_mgr.star_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  return meta
+
+
+@router.post("/{session_id}/unstar", response_model=SessionMetadata)
+async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+  meta = await session_mgr.unstar_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
   return meta
 
 

@@ -86,36 +86,60 @@ async def index(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Render the full page. All data loaded here."""
-  sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  try:
+    sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  except Exception:
+    log.exception("list_sessions_failed")
+    sessions = []
+
   active_session = None
   messages: list[dict] = []
   threads = []
   raw_events: list[dict] = []
   session_usage = None
   if session:
-    active_session = await session_mgr.get_session(session)
+    try:
+      active_session = await session_mgr.get_session(session)
+    except Exception:
+      log.exception("get_session_failed", session_id=session)
+
     if active_session:
       # Load chat messages from events
-      raw_events = session_mgr.load_chat_events_sync(session)
-      messages = _events_to_messages(raw_events)
+      try:
+        raw_events = session_mgr.load_chat_events_sync(session)
+        messages = _events_to_messages(raw_events)
+      except Exception:
+        log.exception("load_chat_events_failed", session_id=session)
 
       # Load threads
-      threads = await thread_mgr.list_threads(session)
+      try:
+        threads = await thread_mgr.list_threads(session)
+      except Exception:
+        log.exception("list_threads_failed", session_id=session)
 
       # Load token usage for active session
-      session_usage = session_mgr.get_session_usage(session)
+      try:
+        session_usage = session_mgr.get_session_usage(session)
+      except Exception:
+        log.exception("get_session_usage_failed", session_id=session)
 
       # Mark session as read
-      await session_mgr.mark_read(session)
+      try:
+        await session_mgr.mark_read(session)
+      except Exception:
+        log.exception("mark_read_failed", session_id=session)
   elif sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
   # Compute usage for each sidebar session
   all_usage: dict[str, dict] = {}
   for s in sessions:
-    u = session_mgr.get_session_usage(s.id)
-    if u:
-      all_usage[s.id] = u
+    try:
+      u = session_mgr.get_session_usage(s.id)
+      if u:
+        all_usage[s.id] = u
+    except Exception:
+      log.debug("sidebar_usage_failed", session_id=s.id)
 
   return templates.TemplateResponse(
       "index.html", {

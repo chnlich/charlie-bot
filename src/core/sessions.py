@@ -69,6 +69,10 @@ class SessionManager:
       if meta and (status is None or meta.status == status):
         meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
         sessions.append(meta)
+    # Normalise to offset-aware (UTC) so naive vs aware datetimes don't explode
+    for s in sessions:
+      if s.updated_at.tzinfo is None:
+        s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 

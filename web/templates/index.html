@@ -83,7 +83,7 @@
           <span class="flex-1 min-w-0">
             <span class="truncate block session-name">{{ s.name }}</span>
             <span class="block text-xs text-slate-500 session-time" data-time="{{ s.updated_at.isoformat() }}">{{ s.updated_at.strftime('%b %d, %H:%M') }}</span>
-            {% if all_usage.get(s.id) %}
+            {% if all_usage is defined and all_usage.get(s.id) %}
             <span class="block text-xs text-slate-600 session-usage" id="sidebar-usage-{{ s.id }}">{{ '%dk' % (all_usage[s.id].context_tokens // 1000) }} tokens &middot; ${{ '%.2f' % all_usage[s.id].total_cost_usd }}</span>
             {% else %}
             <span class="block text-xs text-slate-600 session-usage hidden" id="sidebar-usage-{{ s.id }}"></span>

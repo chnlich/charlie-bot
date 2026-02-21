@@ -37,13 +37,25 @@
     .prose-msg th { background: #1e293b; font-weight: 600; }
     @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+    /* Sidebar resize handle */
+    .resize-handle {
+      width: 4px;
+      cursor: col-resize;
+      background: transparent;
+      transition: background 0.15s;
+      flex-shrink: 0;
+    }
+    .resize-handle:hover, .resize-handle.active {
+      background: #3b82f6;
+    }
+    body.resizing { cursor: col-resize; user-select: none; }
   </style>
 </head>
 <body class="dark bg-slate-900 text-slate-100 h-dvh overflow-hidden">
   <div class="flex h-dvh">
 
     <!-- ==================== SIDEBAR ==================== -->
-    <aside class="w-64 flex-shrink-0 bg-slate-850 border-r border-slate-700 flex flex-col">
+    <aside id="sidebar" class="flex-shrink-0 bg-slate-850 border-r border-slate-700 flex flex-col" style="width: 320px">
       <!-- Logo -->
       <div class="p-4 border-b border-slate-700">
         <h1 class="text-lg font-bold text-blue-400">CharlieBot</h1>
@@ -84,6 +96,7 @@
         {% endif %}
       </nav>
     </aside>
+    <div id="resize-handle" class="resize-handle"></div>
 
     <!-- ==================== MAIN AREA ==================== -->
     <main class="flex-1 flex flex-col min-w-0">
@@ -701,9 +714,43 @@
     }
 
     // ---------------------------------------------------------------------------
+    // Sidebar resize
+    // ---------------------------------------------------------------------------
+    function initSidebarResize() {
+      const sidebar = document.getElementById('sidebar');
+      const handle = document.getElementById('resize-handle');
+      const saved = localStorage.getItem('sidebar-width');
+      if (saved) sidebar.style.width = saved + 'px';
+
+      let startX, startW;
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startW = sidebar.offsetWidth;
+        handle.classList.add('active');
+        document.body.classList.add('resizing');
+
+        function onMove(e) {
+          const w = Math.min(Math.max(startW + e.clientX - startX, 200), 600);
+          sidebar.style.width = w + 'px';
+        }
+        function onUp() {
+          handle.classList.remove('active');
+          document.body.classList.remove('resizing');
+          localStorage.setItem('sidebar-width', sidebar.offsetWidth);
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    // ---------------------------------------------------------------------------
     // Init
     // ---------------------------------------------------------------------------
     document.addEventListener('DOMContentLoaded', () => {
+      initSidebarResize();
       // Render markdown for server-rendered assistant messages
       document.querySelectorAll('[data-md]').forEach(el => {
         el.innerHTML = marked.parse(el.textContent);

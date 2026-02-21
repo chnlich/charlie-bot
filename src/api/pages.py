@@ -128,7 +128,7 @@ async def index(
         await session_mgr.mark_read(session)
       except Exception:
         log.exception("mark_read_failed", session_id=session)
-  elif sessions:
+  elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
   # Compute usage for each sidebar session

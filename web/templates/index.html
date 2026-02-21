@@ -690,7 +690,7 @@
       try {
         await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
         if (SESSION_ID === id) {
-          location.href = '/';
+          location.href = '/?session=';
         } else {
           document.getElementById('session-' + id)?.remove();
         }

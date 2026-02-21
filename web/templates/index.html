@@ -83,6 +83,11 @@
           <span class="flex-1 min-w-0">
             <span class="truncate block session-name">{{ s.name }}</span>
             <span class="block text-xs text-slate-500 session-time" data-time="{{ s.updated_at.isoformat() }}">{{ s.updated_at.strftime('%b %d, %H:%M') }}</span>
+            {% if all_usage.get(s.id) %}
+            <span class="block text-xs text-slate-600 session-usage" id="sidebar-usage-{{ s.id }}">{{ '%dk' % (all_usage[s.id].context_tokens // 1000) }} tokens &middot; ${{ '%.2f' % all_usage[s.id].total_cost_usd }}</span>
+            {% else %}
+            <span class="block text-xs text-slate-600 session-usage hidden" id="sidebar-usage-{{ s.id }}"></span>
+            {% endif %}
           </span>
           <button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '{{ s.id }}', '{{ s.name|e }}')"
                   class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0" title="Rename">
@@ -112,6 +117,21 @@
               onclick="startRename(event, '{{ active_session.id }}', '{{ active_session.name|e }}')"
               title="Click to rename"
               id="header-session-name">{{ active_session.name }}</h2>
+        </div>
+        <!-- Context usage indicator -->
+        <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 {% if not session_usage %}hidden{% endif %}">
+          <div class="flex items-center gap-1.5" title="Context window usage">
+            <div class="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+              <div id="usage-bar" class="h-full rounded-full transition-all duration-300
+                {% if session_usage %}
+                  {% set pct = (session_usage.context_tokens / session_usage.context_limit * 100) if session_usage.context_limit else 0 %}
+                  {% if pct > 80 %}bg-red-500{% elif pct > 50 %}bg-yellow-500{% else %}bg-blue-500{% endif %}
+                {% else %}bg-blue-500{% endif %}"
+                style="width: {% if session_usage %}{{ (session_usage.context_tokens / session_usage.context_limit * 100)|round(1) }}%{% else %}0%{% endif %}"></div>
+            </div>
+            <span id="usage-text" class="text-xs text-slate-400 whitespace-nowrap">{% if session_usage %}{{ '%dk' % (session_usage.context_tokens // 1000) }} / {{ '%dk' % (session_usage.context_limit // 1000) }}{% endif %}</span>
+          </div>
+          <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap">{% if session_usage %}${{ '%.2f' % session_usage.total_cost_usd }}{% endif %}</span>
         </div>
         <a href="/api/sessions/{{ active_session.id }}/events.jsonl" target="_blank"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="Raw JSONL events">
@@ -243,6 +263,9 @@
     // Starts at the server-rendered count and increments as live events arrive.
     let eventCursor = {{ event_count }};
     let masterThinking = !!THINKING_SINCE;
+
+    // Running totals for usage tracking (updated from result events)
+    let usageTotalCost = {{ session_usage.total_cost_usd if session_usage else 0 }};
 
     // ---------------------------------------------------------------------------
     // Tabs
@@ -441,11 +464,61 @@
       } else if (t === 'worker_summary') {
         appendMessage('system', ev.content || '');
         updateSpinner();
+      } else if (t === 'result') {
+        updateUsageDisplay(ev);
       } else if (t === 'session_renamed') {
         const link = document.getElementById('session-' + SESSION_ID);
         if (link) link.querySelector('.session-name').textContent = ev.name;
         const header = document.getElementById('header-session-name');
         if (header) header.textContent = ev.name;
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Usage display helpers
+    // ---------------------------------------------------------------------------
+    function formatTokens(n) {
+      return Math.round(n / 1000) + 'k';
+    }
+
+    function updateUsageDisplay(ev) {
+      const usage = ev.usage || {};
+      const contextTokens = (usage.input_tokens || 0)
+        + (usage.cache_creation_input_tokens || 0)
+        + (usage.cache_read_input_tokens || 0);
+
+      // Extract context limit from modelUsage
+      const modelUsage = ev.modelUsage || {};
+      let contextLimit = 200000;
+      for (const m in modelUsage) {
+        contextLimit = modelUsage[m].contextWindow || 200000;
+        break;
+      }
+
+      // Accumulate cost
+      usageTotalCost += (ev.total_cost_usd || 0);
+
+      const pct = contextLimit > 0 ? (contextTokens / contextLimit * 100) : 0;
+
+      // Update header indicator
+      const indicator = document.getElementById('usage-indicator');
+      const bar = document.getElementById('usage-bar');
+      const text = document.getElementById('usage-text');
+      const cost = document.getElementById('usage-cost');
+      if (indicator) {
+        indicator.classList.remove('hidden');
+        bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
+        bar.className = 'h-full rounded-full transition-all duration-300 '
+          + (pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500');
+        text.textContent = formatTokens(contextTokens) + ' / ' + formatTokens(contextLimit);
+        cost.textContent = '$' + usageTotalCost.toFixed(2);
+      }
+
+      // Update sidebar for current session
+      const sidebarUsage = document.getElementById('sidebar-usage-' + SESSION_ID);
+      if (sidebarUsage) {
+        sidebarUsage.textContent = formatTokens(contextTokens) + ' tokens \u00b7 $' + usageTotalCost.toFixed(2);
+        sidebarUsage.classList.remove('hidden');
       }
     }
 

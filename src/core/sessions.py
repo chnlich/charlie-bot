@@ -11,9 +11,9 @@ import structlog
 from src.agents.master_cc import ensure_master_claude_md
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
-  SessionMetadata,
-  SessionStatus,
+    CreateSessionRequest,
+    SessionMetadata,
+    SessionStatus,
 )
 from src.core.streaming import streaming_manager
 
@@ -90,11 +90,12 @@ class SessionManager:
       return meta
     meta.has_unread = False
     await self._save_metadata(meta)
-    await streaming_manager.broadcast("sidebar", {
-      "type": "unread_changed",
-      "session_id": session_id,
-      "has_unread": False,
-    })
+    await streaming_manager.broadcast(
+        "sidebar", {
+            "type": "unread_changed",
+            "session_id": session_id,
+            "has_unread": False,
+        })
     return meta
 
   async def mark_unread(self, session_id: str) -> None:
@@ -104,11 +105,12 @@ class SessionManager:
       return
     meta.has_unread = True
     await self._save_metadata(meta)
-    await streaming_manager.broadcast("sidebar", {
-      "type": "unread_changed",
-      "session_id": session_id,
-      "has_unread": True,
-    })
+    await streaming_manager.broadcast(
+        "sidebar", {
+            "type": "unread_changed",
+            "session_id": session_id,
+            "has_unread": True,
+        })
 
   async def archive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Mark a session as archived (does not delete files)."""
@@ -165,6 +167,65 @@ class SessionManager:
 
   def _chat_events_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"
+
+  # ---------------------------------------------------------------------------
+  # Usage / token tracking
+  # ---------------------------------------------------------------------------
+
+  def get_session_usage(self, session_id: str) -> dict | None:
+    """Extract context-window token usage from the last result event.
+
+    Scans chat_events.jsonl backwards for the most recent 'result' event and
+    accumulates total_cost_usd across ALL result events.
+
+    Returns a dict with:
+      context_tokens  – input + cache_creation + cache_read from last result
+      context_limit   – from modelUsage contextWindow (default 200000)
+      total_cost_usd  – sum across every result event
+      model           – primary model name
+    Returns None if no result events exist.
+    """
+    path = self._chat_events_path(session_id)
+    if not path.exists():
+      return None
+
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    last_result: dict | None = None
+    total_cost = 0.0
+
+    for line in lines:
+      try:
+        ev = json.loads(line)
+      except json.JSONDecodeError:
+        continue
+      if ev.get("type") != "result":
+        continue
+      last_result = ev
+      total_cost += ev.get("total_cost_usd", 0.0)
+
+    if last_result is None:
+      return None
+
+    usage = last_result.get("usage", {})
+    context_tokens = (
+        usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
+        usage.get("cache_read_input_tokens", 0))
+
+    # Extract context limit and model from modelUsage
+    model_usage = last_result.get("modelUsage", {})
+    context_limit = 200_000
+    model = ""
+    for model_name, info in model_usage.items():
+      model = model_name
+      context_limit = info.get("contextWindow", 200_000)
+      break  # use the first (primary) model
+
+    return {
+        "context_tokens": context_tokens,
+        "context_limit": context_limit,
+        "total_cost_usd": round(total_cost, 4),
+        "model": model,
+    }
 
   # ---------------------------------------------------------------------------
   # Private helpers

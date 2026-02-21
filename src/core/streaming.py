@@ -44,6 +44,16 @@ class StreamingManager:
       async with self._lock:
         self._connections[thread_id] -= dead
 
+  async def close_all(self) -> None:
+    """Close all active WebSocket connections (called during server shutdown)."""
+    async with self._lock:
+      all_sockets = {ws for sockets in self._connections.values() for ws in sockets}
+    for ws in all_sockets:
+      try:
+        await ws.close()
+      except Exception as e:
+        log.debug("ws_close_on_shutdown_failed", error=str(e))
+
   def subscriber_count(self, thread_id: str) -> int:
     return len(self._connections.get(thread_id, set()))
 

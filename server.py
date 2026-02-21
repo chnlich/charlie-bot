@@ -9,7 +9,7 @@ import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
-from src.api import chat, internal, pages, sessions, threads, voice
+from src.api import chat, internal, latex, pages, sessions, threads, voice
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
 from src.core.sessions import SessionManager
@@ -48,6 +48,7 @@ app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
+app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
 app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 
 

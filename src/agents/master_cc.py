@@ -18,6 +18,9 @@ log = structlog.get_logger()
 # Only clear thinking_since when the count drops to zero.
 _active_tasks: dict[str, int] = {}
 
+# Per-session running subprocess reference for external cancellation.
+_active_procs: dict[str, asyncio.subprocess.Process] = {}
+
 MASTER_CC_COMMAND = [
   "claude",
   "-p",
@@ -119,6 +122,7 @@ async def run_message(
       limit=cfg.subprocess_buffer_limit,
     )
 
+    _active_procs[session_meta.id] = proc
     log.info("master_cc_spawned", session=session_meta.id, pid=proc.pid)
 
     assert proc.stdout is not None
@@ -160,6 +164,7 @@ async def run_message(
     error_msg = str(e)
 
   finally:
+    _active_procs.pop(session_meta.id, None)
     # Decrement active-task counter; only clear thinking when ALL tasks finish
     _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
     still_thinking = _active_tasks.get(session_meta.id, 0) > 0
@@ -185,3 +190,18 @@ async def run_message(
     log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code, still_thinking=still_thinking)
 
   return cc_session_id
+
+
+def cancel_master(session_id: str) -> bool:
+  """Send SIGTERM to the running master CC process for this session.
+
+  Returns True if a process was found and signaled, False otherwise.
+  """
+  proc = _active_procs.get(session_id)
+  if proc is None:
+    return False
+  try:
+    proc.terminate()
+  except ProcessLookupError:
+    log.debug("cancel_master_pid_gone", session=session_id)
+  return True

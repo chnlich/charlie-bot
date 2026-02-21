@@ -19,7 +19,7 @@ router = APIRouter()
 
 @router.get("/", response_model=list[SessionMetadata])
 async def list_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
-  return await session_mgr.list_sessions()
+  return await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
 
 
 @router.post("/", response_model=SessionMetadata)

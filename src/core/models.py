@@ -46,6 +46,18 @@ class ThreadMetadata(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Backend Models
+# ---------------------------------------------------------------------------
+
+
+class BackendOption(BaseModel):
+  id: str
+  label: str
+  type: str  # 'cc-claude' | 'cc-kimi'
+  model: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Session Models
 # ---------------------------------------------------------------------------
 
@@ -61,6 +73,7 @@ class SessionMetadata(BaseModel):
   created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   cc_session_id: Optional[str] = None
+  backend: str = "claude-opus-4.6"  # must match an id in cfg.backend_options
 
 
 # ---------------------------------------------------------------------------

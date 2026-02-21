@@ -6,6 +6,7 @@ import re
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager
@@ -21,6 +22,10 @@ router = APIRouter()
 _DEFAULT_NAME_RE = re.compile(r"^Session \d+$")
 
 
+class SwitchBackendRequest(BaseModel):
+  backend: str
+
+
 @router.post("/{session_id}/message")
 async def send_message(
   session_id: str,
@@ -33,12 +38,17 @@ async def send_message(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
+  # Resolve backend option for this session
+  backend_id = meta.backend
+  backend_option = next((o for o in cfg.backend_options if o.id == backend_id), None)
+
   # Fire-and-forget: spawn master CC in a background task
   async def _run():
     try:
       cc_session_id = await run_message(
         cfg, meta, req.content, session_mgr.save_chat_event,
         session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
+        backend_option=backend_option,
       )
       # Persist CC session ID if newly assigned.
       # Re-read fresh metadata from disk to avoid overwriting has_unread
@@ -74,6 +84,34 @@ async def cancel_master_agent(
   if not found:
     raise HTTPException(status_code=404, detail="No active master agent")
   return {"ok": True}
+
+
+@router.patch("/{session_id}/backend")
+async def switch_backend(
+  session_id: str,
+  req: SwitchBackendRequest,
+  session_mgr: SessionManager = Depends(get_session_manager),
+  cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Switch the active backend for a session."""
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  option = next((o for o in cfg.backend_options if o.id == req.backend), None)
+  if option is None:
+    raise HTTPException(status_code=400, detail=f"Unknown backend id: {req.backend!r}")
+
+  if option.type == "cc-kimi" and not cfg.moonshot_api_key:
+    raise HTTPException(status_code=400, detail="moonshot_api_key not set in config")
+
+  # Resuming across backends is invalid — clear the CC session ID.
+  meta.cc_session_id = None
+  meta.backend = req.backend
+  await session_mgr.save_metadata(meta)
+
+  log.info("backend_switched", session=session_id, backend=req.backend)
+  return {"ok": True, "backend": req.backend}
 
 
 async def _auto_name(

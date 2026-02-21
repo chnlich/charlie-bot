@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.deps import get_session_manager, get_thread_manager
+from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -105,6 +106,7 @@ async def index(
     session: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Render the full page. All data loaded here."""
   try:
@@ -162,6 +164,10 @@ async def index(
     except Exception:
       log.debug("sidebar_usage_failed", session_id=s.id)
 
+  active_backend = active_session.backend if active_session else (
+      cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
+  )
+
   return templates.TemplateResponse(
       "index.html", {
           "request": request,
@@ -172,4 +178,6 @@ async def index(
           "event_count": len(raw_events),
           "session_usage": session_usage,
           "all_usage": all_usage,
+          "backend_options": cfg.backend_options,
+          "active_backend": active_backend,
       })

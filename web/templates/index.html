@@ -221,6 +221,7 @@
             {% if active_session and backend_options %}
             <select id="backend-select"
                     onchange="switchBackend(this.value)"
+                    data-current="{{ active_backend }}"
                     class="text-xs bg-slate-800 border border-slate-600 rounded-xl px-2 py-2.5 text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:border-slate-500 transition-colors">
               {% for opt in backend_options %}
               <option value="{{ opt.id }}" {% if opt.id == active_backend %}selected{% endif %}>{{ opt.label }}</option>
@@ -349,6 +350,7 @@
     async function switchBackend(id) {
       if (!SESSION_ID) return;
       const select = document.getElementById('backend-select');
+      const prevId = select ? select.dataset.current : id;
       if (select) select.disabled = true;
       try {
         const res = await fetch(`/api/chat/${SESSION_ID}/backend`, {
@@ -359,14 +361,15 @@
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           showToast('Switch failed: ' + (err.detail || res.status), true);
-          // Revert select to previous value by re-fetching current value would require state;
-          // simplest: reload page to sync state
+          if (select) select.value = prevId;  // revert to previous selection
           return;
         }
+        if (select) select.dataset.current = id;
         showToast('Switched to ' + (BACKEND_OPTIONS[id] || id));
       } catch (err) {
         console.error('switchBackend failed:', err);
         showToast('Switch failed: ' + err.message, true);
+        if (select) select.value = prevId;
       } finally {
         if (select) select.disabled = masterThinking;
       }

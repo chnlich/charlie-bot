@@ -66,7 +66,7 @@ For sessions created with `repo_url` (no local path), worktrees fall back to `~/
 charlie-bot/
 ├── src/                # Python backend (api/, core/, agents/)
 ├── web/                # React frontend (src/ for dev, static/ for runtime)
-├── config/             # Default templates (claude-default.md, examples)
+├── config/             # Default templates (master-claude.md, examples)
 ├── .yapf               # YAPF code style configuration
 ├── server.py           # Entry point
 └── project.md          # This specification
@@ -239,7 +239,7 @@ When auto-merge fails:
 
 ### 10.2 Worker Instructions (CLAUDE.md)
 Each Thread's `CLAUDE.md` contains:
-1. Default shared instructions from `config/claude-default.md` (coding standards, YOLO mode, git conventions)
+1. Default shared instructions from `~/.charliebot/SUBAGENT_PROMPT.md` (coding standards, YOLO mode, git conventions)
 2. Specific task description and objectives
 3. Session-specific context/constraints
 

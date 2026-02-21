@@ -54,6 +54,7 @@ async def run_message(
   user_content: str,
   save_chat_event,
   save_metadata=None,
+  skip_user_event: bool = False,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -63,6 +64,8 @@ async def run_message(
     user_content: The user's message text.
     save_chat_event: Coroutine to persist each event to chat_events.jsonl.
     save_metadata: Coroutine to persist session metadata updates.
+    skip_user_event: If True, skip persisting/broadcasting the user event
+      (used when the master is triggered by a worker completion, not a real user message).
 
   Returns:
     The CC session ID (for --resume on subsequent messages), or None.
@@ -76,9 +79,10 @@ async def run_message(
   ensure_master_claude_md(session_meta, cfg)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)
-  user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat()}
-  await save_chat_event(session_meta.id, user_event)
-  await streaming_manager.broadcast(channel, user_event)
+  if not skip_user_event:
+    user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat()}
+    await save_chat_event(session_meta.id, user_event)
+    await streaming_manager.broadcast(channel, user_event)
 
   # Track concurrent tasks; only set thinking_since on the first one
   _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1

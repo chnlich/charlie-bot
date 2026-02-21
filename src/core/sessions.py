@@ -229,6 +229,7 @@ class SessionManager:
 
     lines = path.read_text(encoding="utf-8").strip().splitlines()
     last_result: dict | None = None
+    last_usage_result: dict | None = None
     total_cost = 0.0
 
     for line in lines:
@@ -240,17 +241,24 @@ class SessionManager:
         continue
       last_result = ev
       total_cost += ev.get("total_cost_usd", 0.0)
+      # Track last result with actual token data (Claude Code sometimes emits
+      # result events with all-zero usage).
+      u = ev.get("usage", {})
+      if u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0) > 0:
+        last_usage_result = ev
 
     if last_result is None:
       return None
 
-    usage = last_result.get("usage", {})
+    # Prefer the last result that has real token data; fall back to last_result.
+    usage_source = last_usage_result or last_result
+    usage = usage_source.get("usage", {})
     context_tokens = (
         usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
         usage.get("cache_read_input_tokens", 0))
 
     # Extract context limit and model from modelUsage
-    model_usage = last_result.get("modelUsage", {})
+    model_usage = usage_source.get("modelUsage", {})
     context_limit = 200_000
     model = ""
     for model_name, info in model_usage.items():

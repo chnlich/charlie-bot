@@ -4,7 +4,7 @@ import asyncio
 import re
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -26,6 +26,39 @@ class SwitchBackendRequest(BaseModel):
   backend: str
 
 
+@router.post("/{session_id}/upload")
+async def upload_file(
+  session_id: str,
+  file: UploadFile = File(...),
+  session_mgr: SessionManager = Depends(get_session_manager),
+  cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Upload a file to the session's uploads directory. Returns {filename, path, size}."""
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  uploads_dir = cfg.sessions_dir / session_id / "uploads"
+  uploads_dir.mkdir(parents=True, exist_ok=True)
+
+  dest = uploads_dir / (file.filename or "upload")
+  size = 0
+  try:
+    with dest.open("wb") as out:
+      while True:
+        chunk = await file.read(1024 * 1024)  # 1 MB chunks
+        if not chunk:
+          break
+        out.write(chunk)
+        size += len(chunk)
+  except Exception as e:
+    log.warning("file_upload_failed", session=session_id, filename=file.filename, error=str(e))
+    raise HTTPException(status_code=500, detail="Failed to save uploaded file") from e
+
+  log.info("file_uploaded", session=session_id, filename=file.filename, size=size)
+  return {"filename": file.filename, "path": str(dest.resolve()), "size": size}
+
+
 @router.post("/{session_id}/message")
 async def send_message(
   session_id: str,
@@ -38,6 +71,11 @@ async def send_message(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
+  # Build content, appending any uploaded file paths.
+  content = req.content
+  if req.uploaded_files:
+    content += "\n\n[Attached files]\n" + "\n".join(f"- {p}" for p in req.uploaded_files)
+
   # Resolve backend option for this session
   backend_id = meta.backend
   backend_option = next((o for o in cfg.backend_options if o.id == backend_id), None)
@@ -46,7 +84,7 @@ async def send_message(
   async def _run():
     try:
       cc_session_id = await run_message(
-        cfg, meta, req.content, session_mgr.save_chat_event,
+        cfg, meta, content, session_mgr.save_chat_event,
         session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
         backend_option=backend_option,
       )

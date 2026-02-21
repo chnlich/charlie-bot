@@ -61,6 +61,11 @@
       background: #3b82f6;
     }
     body.resizing { cursor: col-resize; user-select: none; }
+    /* File upload chips */
+    .file-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 0.375rem; padding: 0.125rem 0.5rem; font-size: 0.75rem; max-width: 160px; }
+    .file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-chip button { background: transparent; border: none; cursor: pointer; color: #64748b; padding: 0; line-height: 1; flex-shrink: 0; }
+    .file-chip button:hover { color: #e2e8f0; }
   </style>
 </head>
 <body class="dark bg-slate-900 text-slate-100 h-dvh overflow-hidden">
@@ -211,6 +216,9 @@
 
         <!-- Input -->
         <div class="border-t border-slate-700 p-4">
+          <!-- Uploaded file chips -->
+          <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
+          <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
           <div class="flex gap-2 items-end">
             <textarea id="msg-input"
                       rows="1"
@@ -230,6 +238,9 @@
             {% endif %}
             <button id="voice-btn" onclick="toggleVoice()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Voice input">
               <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"/></svg>
+            </button>
+            <button onclick="document.getElementById('file-input').click()" id="upload-btn" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Attach files">
+              <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
             </button>
             <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
@@ -420,6 +431,59 @@
     }
 
     // ---------------------------------------------------------------------------
+    // File upload
+    // ---------------------------------------------------------------------------
+    let uploadedFiles = []; // Array of {filename, path, size}
+
+    async function handleFiles(input) {
+      const files = Array.from(input.files);
+      input.value = ''; // Reset so the same file can be re-selected
+      for (const file of files) {
+        await uploadFile(file);
+      }
+    }
+
+    async function uploadFile(file) {
+      if (!SESSION_ID) return;
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const res = await fetch(`/api/chat/${SESSION_ID}/upload`, { method: 'POST', body: form });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showToast('Upload failed: ' + (err.detail || res.status), true);
+          return;
+        }
+        const data = await res.json();
+        uploadedFiles.push(data);
+        renderFileChips();
+      } catch (err) {
+        console.error('Upload failed:', err);
+        showToast('Upload failed: ' + err.message, true);
+      }
+    }
+
+    function renderFileChips() {
+      const container = document.getElementById('file-chips');
+      if (!container) return;
+      if (!uploadedFiles.length) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+      }
+      container.classList.remove('hidden');
+      container.innerHTML = uploadedFiles.map((f, i) =>
+        `<span class="file-chip"><span title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>` +
+        `<button onclick="removeFile(${i})" title="Remove">&#x2715;</button></span>`
+      ).join('');
+    }
+
+    function removeFile(i) {
+      uploadedFiles.splice(i, 1);
+      renderFileChips();
+    }
+
+    // ---------------------------------------------------------------------------
     // Send message
     // ---------------------------------------------------------------------------
     function bumpCurrentSessionToTop() {
@@ -438,11 +502,17 @@
     async function sendMessage() {
       const input = document.getElementById('msg-input');
       const content = input.value.trim();
-      if (!content || !SESSION_ID) return;
+      if ((!content && !uploadedFiles.length) || !SESSION_ID) return;
+
+      // Snapshot and clear uploaded files before sending
+      const filePaths = uploadedFiles.map(f => f.path);
+      uploadedFiles = [];
+      renderFileChips();
 
       // Optimistic UI: append user message and bump session to top
       pendingUserMsg = true;
-      appendMessage('user', content);
+      const displayContent = content || '[Files attached]';
+      appendMessage('user', displayContent);
       bumpCurrentSessionToTop();
       input.value = '';
       input.style.height = 'auto';
@@ -454,7 +524,7 @@
         await fetch(`/api/chat/${SESSION_ID}/message`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({ content, uploaded_files: filePaths }),
         });
       } catch (err) {
         console.error('Send failed:', err);

@@ -36,7 +36,10 @@ def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig
   prompt_file = cfg.claude_md_file
 
   # Concatenate prompt + memory → session CLAUDE.md (rewritten each time)
-  parts = [prompt_file.read_text(encoding="utf-8")]
+  prompt_text = prompt_file.read_text(encoding="utf-8")
+  # Substitute the session UUID placeholder so the agent can call delegate correctly
+  prompt_text = prompt_text.replace("YOUR_SESSION_UUID", session_meta.id)
+  parts = [prompt_text]
   if cfg.memory_file.exists():
     parts.append(cfg.memory_file.read_text(encoding="utf-8"))
 

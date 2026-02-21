@@ -113,4 +113,4 @@ class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str
   description: str
-  repo_path: str
+  repo_path: Optional[str] = None

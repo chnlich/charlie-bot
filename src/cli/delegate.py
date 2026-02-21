@@ -20,7 +20,7 @@ from src.core.config import get_config
 def main() -> None:
   parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
   parser.add_argument("--session", required=True, help="Session ID")
-  parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
+  parser.add_argument("--repo", required=False, default=None, help="Path to the git repo the worker should operate on (defaults to first discovered repo)")
   parser.add_argument("--description", required=True, help="Task description")
   args = parser.parse_args()
 
@@ -30,11 +30,12 @@ def main() -> None:
   payload = {
     "session_id": args.session,
     "description": args.description,
-    "repo_path": args.repo,
   }
+  if args.repo is not None:
+    payload["repo_path"] = args.repo
 
   try:
-    resp = requests.post(f"http://localhost:{port}/api/internal/delegate", json=payload, timeout=30)
+    resp = requests.post(f"https://localhost:{port}/api/internal/delegate", json=payload, timeout=30, verify=False)
     resp.raise_for_status()
     result = resp.json()
     print(json.dumps(result, indent=2))

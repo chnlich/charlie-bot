@@ -98,6 +98,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
 
   await streaming_manager.subscribe(channel, websocket)
+  await streaming_manager.subscribe("sidebar", websocket)
   try:
     while True:
       try:
@@ -110,6 +111,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     log.info("session_ws_closed", session_id=session_id, reason=str(e))
   finally:
     await streaming_manager.unsubscribe(channel, websocket)
+    await streaming_manager.unsubscribe("sidebar", websocket)
     log.info("session_ws_disconnected", session_id=session_id)
 
 

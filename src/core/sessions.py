@@ -15,6 +15,7 @@ from src.core.models import (
   SessionMetadata,
   SessionStatus,
 )
+from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
 
@@ -89,15 +90,25 @@ class SessionManager:
       return meta
     meta.has_unread = False
     await self._save_metadata(meta)
+    await streaming_manager.broadcast("sidebar", {
+      "type": "unread_changed",
+      "session_id": session_id,
+      "has_unread": False,
+    })
     return meta
 
   async def mark_unread(self, session_id: str) -> None:
-    """Set the unread flag for a session (called when workers complete)."""
+    """Set the unread flag for a session (called when master/workers produce output)."""
     meta = await self.get_session(session_id)
     if not meta or meta.has_unread:
       return
     meta.has_unread = True
     await self._save_metadata(meta)
+    await streaming_manager.broadcast("sidebar", {
+      "type": "unread_changed",
+      "session_id": session_id,
+      "has_unread": True,
+    })
 
   async def archive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Mark a session as archived (does not delete files)."""

@@ -54,6 +54,7 @@ async def run_message(
   user_content: str,
   save_chat_event,
   save_metadata=None,
+  mark_unread=None,
   skip_user_event: bool = False,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
@@ -171,6 +172,10 @@ async def run_message(
       err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
       await streaming_manager.broadcast(channel, err_event)
       await save_chat_event(session_meta.id, err_event)
+
+    # Mark session unread so other viewers see the new output
+    if mark_unread:
+      await mark_unread(session_meta.id)
 
     done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
     await streaming_manager.broadcast(channel, done_event)

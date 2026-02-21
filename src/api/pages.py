@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -76,6 +76,31 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
     messages.append({"role": "assistant", "content": assistant_buf})
 
   return messages
+
+
+@router.get("/sessions/{session_id}/events", response_class=HTMLResponse)
+async def events_viewer(
+    request: Request,
+    session_id: str,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Render the JSONL events viewer page for a session."""
+  try:
+    session = await session_mgr.get_session(session_id)
+  except Exception:
+    log.exception("get_session_failed", session_id=session_id)
+    session = None
+
+  if not session:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  return templates.TemplateResponse(
+      "events_viewer.html", {
+          "request": request,
+          "session": session,
+          "session_id": session_id,
+          "events_url": f"/api/sessions/{session_id}/events.jsonl",
+      })
 
 
 @router.get("/", response_class=HTMLResponse)

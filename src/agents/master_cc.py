@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -28,21 +27,10 @@ MASTER_CC_COMMAND = [
   "--dangerously-skip-permissions",
 ]
 
-_MASTER_TEMPLATE_PATH = Path(__file__).parent.parent.parent / "config" / "master-claude.md"
-
 
 def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
   """Write session CLAUDE.md by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md."""
-  # Write MASTER_AGENT_PROMPT.md from template if it doesn't exist yet
   prompt_file = cfg.claude_md_file
-  if not prompt_file.exists():
-    if not _MASTER_TEMPLATE_PATH.exists():
-      log.warning("master_agent_prompt_template_missing", path=str(_MASTER_TEMPLATE_PATH))
-      return
-    content = _MASTER_TEMPLATE_PATH.read_text(encoding="utf-8")
-    content = content.replace("{session_id}", session_meta.id)
-    prompt_file.write_text(content, encoding="utf-8")
-    log.info("master_agent_prompt_written", path=str(prompt_file))
 
   # Concatenate prompt + memory → session CLAUDE.md (rewritten each time)
   parts = [prompt_file.read_text(encoding="utf-8")]

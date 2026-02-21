@@ -7,7 +7,7 @@ class LLMProvider(ABC):
   """Abstract base class for LLM providers."""
 
   @abstractmethod
-  async def transcribe_audio(self, audio_bytes: bytes, mime_type: str) -> str:
+  async def transcribe_audio(self, audio_bytes: bytes, mime_type: str, custom_words: list[str] | None = None) -> str:
     """Transcribe audio bytes to text. Not all providers support this."""
 
   @abstractmethod

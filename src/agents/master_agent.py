@@ -10,6 +10,6 @@ class AudioTranscriber:
   def __init__(self, cfg: CharlieBotConfig):
     self._provider = GeminiProvider(cfg.gemini_api_key, cfg.gemini_model)
 
-  async def transcribe_audio(self, audio_bytes: bytes, mime_type: str) -> str:
+  async def transcribe_audio(self, audio_bytes: bytes, mime_type: str, custom_words: list[str] | None = None) -> str:
     """Transcribe audio bytes using Gemini."""
-    return await self._provider.transcribe_audio(audio_bytes, mime_type)
+    return await self._provider.transcribe_audio(audio_bytes, mime_type, custom_words)

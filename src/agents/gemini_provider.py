@@ -18,13 +18,19 @@ class GeminiProvider(LLMProvider):
     self._model_id = model
     self._model = genai.GenerativeModel(model)
 
-  async def transcribe_audio(self, audio_bytes: bytes, mime_type: str) -> str:
+  async def transcribe_audio(self, audio_bytes: bytes, mime_type: str, custom_words: list[str] | None = None) -> str:
     """Transcribe audio using Gemini's multimodal capabilities."""
     model = genai.GenerativeModel(self._model_id)
 
     def _call():
       part = {"inline_data": {"data": audio_bytes, "mime_type": mime_type}}
-      response = model.generate_content(["Transcribe this audio exactly, word for word.", part])
+      prompt = (
+        "Transcribe this audio exactly, word for word. "
+        "The speaker may use English, Chinese, or mix both languages — preserve the original language(s) used. Do not translate."
+      )
+      if custom_words:
+        prompt += " Pay special attention to these terms and spell them exactly: " + ", ".join(custom_words) + "."
+      response = model.generate_content([prompt, part])
       return response.text
 
     return await asyncio.to_thread(_call)

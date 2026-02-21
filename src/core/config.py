@@ -38,6 +38,9 @@ class CharlieBotConfig(BaseModel):
   # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
   subprocess_buffer_limit_mb: int = 1024
 
+  # Voice transcription: custom vocabulary hints for Gemini
+  voice_custom_words: list[str] = []
+
   @model_validator(mode="before")
   @classmethod
   def migrate_and_expand(cls, values: dict) -> dict:

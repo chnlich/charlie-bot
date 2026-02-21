@@ -362,14 +362,28 @@
     // ---------------------------------------------------------------------------
     // Send message
     // ---------------------------------------------------------------------------
+    function bumpCurrentSessionToTop() {
+      const nav = document.getElementById('session-list');
+      const el = document.getElementById('session-' + SESSION_ID);
+      if (!nav || !el || nav.firstElementChild === el) return;
+      nav.insertBefore(el, nav.firstElementChild);
+      const timeEl = el.querySelector('.session-time');
+      if (timeEl) {
+        const now = new Date().toISOString();
+        timeEl.dataset.time = now;
+        timeEl.textContent = relativeTime(now);
+      }
+    }
+
     async function sendMessage() {
       const input = document.getElementById('msg-input');
       const content = input.value.trim();
       if (!content || !SESSION_ID) return;
 
-      // Optimistic UI: append user message
+      // Optimistic UI: append user message and bump session to top
       pendingUserMsg = true;
       appendMessage('user', content);
+      bumpCurrentSessionToTop();
       input.value = '';
       input.style.height = 'auto';
 

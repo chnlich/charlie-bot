@@ -55,7 +55,7 @@ async def transcribe_audio(
 
   try:
     transcriber = _get_transcriber()
-    transcription = await transcriber.transcribe_audio(audio_bytes, content_type)
+    transcription = await transcriber.transcribe_audio(audio_bytes, content_type, cfg.voice_custom_words or None)
   except NotImplementedError:
     raise HTTPException(status_code=503, detail="Audio transcription requires Gemini API key")
   except Exception as e:

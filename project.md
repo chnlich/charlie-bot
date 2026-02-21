@@ -66,7 +66,7 @@ For sessions created with `repo_url` (no local path), worktrees fall back to `~/
 charlie-bot/
 ├── src/                # Python backend (api/, core/, agents/)
 ├── web/                # React frontend (src/ for dev, static/ for runtime)
-├── config/             # Default templates (master-claude.md, examples)
+├── config/             # Default templates and examples
 ├── .yapf               # YAPF code style configuration
 ├── server.py           # Entry point
 └── project.md          # This specification

@@ -13,8 +13,6 @@ from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
 
 log = structlog.get_logger()
 
-_CLAUDE_DEFAULT_PATH = Path(__file__).parent.parent.parent / "config" / "claude-default.md"
-
 
 class ThreadManager:
   """Creates and manages Worker threads."""
@@ -103,8 +101,11 @@ class ThreadManager:
   ) -> None:
     """Write default instructions + session info (task is passed via -p)."""
     default_content = ""
-    if _CLAUDE_DEFAULT_PATH.exists():
-      default_content = _CLAUDE_DEFAULT_PATH.read_text(encoding="utf-8")
+    prompt_file = self._cfg.subagent_prompt_file
+    if prompt_file.exists():
+      default_content = prompt_file.read_text(encoding="utf-8")
+    else:
+      log.warning("subagent_prompt_file_missing", path=str(prompt_file))
 
     content = (
       f"{default_content}\n"

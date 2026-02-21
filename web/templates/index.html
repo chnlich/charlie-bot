@@ -259,15 +259,15 @@
                   {% endfor %}
                 </select>
                 {% endif %}
-                <button id="voice-btn" onclick="toggleVoice()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Voice input">
-                  <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"/></svg>
-                </button>
                 <button onclick="document.getElementById('file-input').click()" id="upload-btn" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Attach files">
                   <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
                 </button>
               </div>
               <button class="overflow-toggle p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="More options" onclick="document.getElementById('overflow-menu').classList.toggle('show')">
                 <svg class="w-5 h-5 text-slate-400" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+              </button>
+              <button id="voice-btn" onclick="toggleVoice()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Voice input">
+                <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8m-4-18a3 3 0 00-3 3v4a3 3 0 006 0V7a3 3 0 00-3-3z"/></svg>
               </button>
               <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>

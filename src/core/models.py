@@ -108,6 +108,7 @@ class CreateSessionRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
   content: str
+  uploaded_files: list[str] = []
 
 
 class VoiceTranscriptionResponse(BaseModel):

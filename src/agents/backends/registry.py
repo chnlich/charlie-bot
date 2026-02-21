@@ -29,5 +29,5 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
   elif option.type == "cc-kimi":
     if not cfg.moonshot_api_key:
       raise ValueError("moonshot_api_key not set in config")
-    return KimiBackend(api_key=cfg.moonshot_api_key, model=option.model or "kimi-k2.5", **kwargs)
+    return KimiBackend(api_key=cfg.moonshot_api_key, model=option.model or cfg.kimi_model, **kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

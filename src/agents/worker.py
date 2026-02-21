@@ -8,21 +8,12 @@ from typing import Optional
 import aiofiles
 import structlog
 
-from src.agents.backends.claude_code import ClaudeCodeBackend
+from src.agents.backends.claude_code import BASE_COMMAND as WORKER_COMMAND, ClaudeCodeBackend
 from src.core.config import get_config
 from src.core.models import ThreadMetadata
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
-
-WORKER_COMMAND: list[str] = [
-  "claude",
-  "-p",
-  "--output-format",
-  "stream-json",
-  "--verbose",
-  "--dangerously-skip-permissions",
-]
 
 QUOTA_ERROR_PATTERNS = [
   "quota exceeded",

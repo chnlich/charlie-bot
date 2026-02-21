@@ -1275,11 +1275,11 @@
       const form = new FormData();
       form.append('audio', blob, 'recording' + (blob._ext || '.webm'));
       form.append('session_id', SESSION_ID);
+      pendingUserMsg = true;
       try {
         const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form });
         const data = await res.json();
         if (data.transcription) {
-          pendingUserMsg = true;
           appendMessage('user', data.transcription, true);
           startThinking();
         }

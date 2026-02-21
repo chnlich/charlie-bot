@@ -61,6 +61,9 @@
       background: #3b82f6;
     }
     body.resizing { cursor: col-resize; user-select: none; }
+    /* LaTeX panel */
+    .latex-panel { border-left: 1px solid #334155; }
+    .latex-toggle-active { background: rgba(37, 99, 235, 0.2); color: #93c5fd; }
     /* File upload chips */
     .file-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 0.375rem; padding: 0.125rem 0.5rem; font-size: 0.75rem; max-width: 160px; }
     .file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -189,6 +192,9 @@
                   d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0121 9.414V19a2 2 0 01-2 2z" />
           </svg>
         </a>
+        <button onclick="toggleLatexPanel()" id="btn-latex-toggle" class="text-slate-500 hover:text-slate-300 transition-colors ml-1 mr-1" title="Toggle LaTeX panel">
+          <span class="text-sm font-medium">TeX</span>
+        </button>
         <div class="flex gap-1">
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
           <button onclick="switchTab('workers')" id="btn-workers" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">
@@ -198,6 +204,8 @@
         </div>
       </header>
 
+      <!-- Tab content wrapper (chat + workers + latex panel side by side) -->
+      <div class="flex-1 flex min-h-0">
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0">
         <!-- Messages -->
@@ -310,6 +318,32 @@
         <div id="no-workers-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">No worker threads</div>
         {% endif %}
       </div>
+
+      <!-- ===== LATEX PANEL ===== -->
+      <div id="latex-panel" class="hidden latex-panel flex flex-col" style="width: 60%">
+        <!-- Panel header -->
+        <div class="flex items-center gap-2 px-4 py-2 border-b border-slate-700 bg-slate-800/50">
+          <div class="flex gap-1 bg-slate-800 rounded-lg p-0.5">
+            <button onclick="switchLatexView('pdf')" id="btn-latex-pdf" class="px-3 py-1 text-xs rounded-md font-medium transition-colors latex-toggle-active">PDF</button>
+            <button onclick="switchLatexView('tex')" id="btn-latex-tex" class="px-3 py-1 text-xs rounded-md font-medium transition-colors text-slate-400 hover:text-slate-200">TeX</button>
+          </div>
+          <button onclick="compileLatex()" id="btn-compile" class="px-3 py-1.5 text-xs rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Compile</button>
+          <span id="compile-status" class="text-xs text-slate-500"></span>
+          <div class="flex-1"></div>
+          <button onclick="toggleLatexPanel()" class="text-slate-500 hover:text-slate-300 p-1" title="Close panel">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <!-- PDF view -->
+        <div id="latex-pdf-view" class="flex-1 min-h-0">
+          <iframe id="latex-pdf-frame" class="w-full h-full border-0" src=""></iframe>
+        </div>
+        <!-- TeX source view -->
+        <div id="latex-tex-view" class="flex-1 min-h-0 hidden overflow-auto">
+          <textarea id="latex-editor" class="w-full h-full bg-slate-900 text-slate-200 font-mono text-sm p-4 resize-none focus:outline-none" spellcheck="false"></textarea>
+        </div>
+      </div>
+      </div><!-- end tab content wrapper -->
 
       {% else %}
       <!-- No active session -->
@@ -470,6 +504,127 @@
           btn.classList.add('text-slate-400');
         }
       });
+      // Show/hide latex panel based on active tab
+      const panel = document.getElementById('latex-panel');
+      if (panel) {
+        panel.classList.toggle('hidden', tab !== 'chat' || !latexPanelOpen);
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // LaTeX panel
+    // ---------------------------------------------------------------------------
+    let latexPanelOpen = false;
+    let latexView = 'pdf'; // 'pdf' or 'tex'
+    let latexEditorDirty = false;
+
+    function toggleLatexPanel() {
+      latexPanelOpen = !latexPanelOpen;
+      const panel = document.getElementById('latex-panel');
+      const toggleBtn = document.getElementById('btn-latex-toggle');
+      if (latexPanelOpen) {
+        panel.classList.remove('hidden');
+        toggleBtn.classList.add('text-blue-400');
+        toggleBtn.classList.remove('text-slate-500');
+        loadLatexPdf();
+      } else {
+        panel.classList.add('hidden');
+        toggleBtn.classList.remove('text-blue-400');
+        toggleBtn.classList.add('text-slate-500');
+      }
+    }
+
+    function switchLatexView(view) {
+      latexView = view;
+      const pdfView = document.getElementById('latex-pdf-view');
+      const texView = document.getElementById('latex-tex-view');
+      const pdfBtn = document.getElementById('btn-latex-pdf');
+      const texBtn = document.getElementById('btn-latex-tex');
+      if (view === 'pdf') {
+        pdfView.classList.remove('hidden');
+        texView.classList.add('hidden');
+        pdfBtn.classList.add('latex-toggle-active');
+        pdfBtn.classList.remove('text-slate-400');
+        texBtn.classList.remove('latex-toggle-active');
+        texBtn.classList.add('text-slate-400');
+        loadLatexPdf();
+      } else {
+        pdfView.classList.add('hidden');
+        texView.classList.remove('hidden');
+        texBtn.classList.add('latex-toggle-active');
+        texBtn.classList.remove('text-slate-400');
+        pdfBtn.classList.remove('latex-toggle-active');
+        pdfBtn.classList.add('text-slate-400');
+        loadLatexSource();
+      }
+    }
+
+    function loadLatexPdf() {
+      const frame = document.getElementById('latex-pdf-frame');
+      frame.src = '/api/latex/pdf?t=' + Date.now();
+    }
+
+    async function loadLatexSource() {
+      try {
+        const res = await fetch('/api/latex/source');
+        if (!res.ok) { showToast('Failed to load source', true); return; }
+        const text = await res.text();
+        document.getElementById('latex-editor').value = text;
+        latexEditorDirty = false;
+      } catch (err) {
+        console.error('Load source failed:', err);
+        showToast('Failed to load source: ' + err.message, true);
+      }
+    }
+
+    async function saveLatexSource() {
+      try {
+        const res = await fetch('/api/latex/source', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: document.getElementById('latex-editor').value }),
+        });
+        if (!res.ok) { showToast('Failed to save source', true); return false; }
+        latexEditorDirty = false;
+        return true;
+      } catch (err) {
+        console.error('Save source failed:', err);
+        showToast('Failed to save: ' + err.message, true);
+        return false;
+      }
+    }
+
+    async function compileLatex() {
+      const btn = document.getElementById('btn-compile');
+      const status = document.getElementById('compile-status');
+      btn.disabled = true;
+      btn.textContent = 'Compiling...';
+      status.textContent = '';
+      if (latexView === 'tex' && latexEditorDirty) {
+        const saved = await saveLatexSource();
+        if (!saved) { btn.disabled = false; btn.textContent = 'Compile'; return; }
+      }
+      try {
+        const res = await fetch('/api/latex/compile', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = 'Done';
+          status.className = 'text-xs text-green-400';
+          if (latexView === 'pdf') loadLatexPdf();
+        } else {
+          status.textContent = 'Failed (see console)';
+          status.className = 'text-xs text-red-400';
+          console.error('LaTeX compilation log:', data.log);
+        }
+      } catch (err) {
+        status.textContent = 'Error';
+        status.className = 'text-xs text-red-400';
+        console.error('Compile failed:', err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Compile';
+        setTimeout(() => { status.textContent = ''; status.className = 'text-xs text-slate-500'; }, 5000);
+      }
     }
 
     // ---------------------------------------------------------------------------
@@ -1301,6 +1456,123 @@
     }
 
     // ---------------------------------------------------------------------------
+    // LaTeX panel
+    // ---------------------------------------------------------------------------
+    let latexPanelOpen = false;
+    let latexView = 'pdf'; // 'pdf' or 'tex'
+    let latexEditorDirty = false;
+
+    function toggleLatexPanel() {
+      latexPanelOpen = !latexPanelOpen;
+      const panel = document.getElementById('latex-panel');
+      const toggleBtn = document.getElementById('btn-latex-toggle');
+      if (latexPanelOpen) {
+        panel.classList.remove('hidden');
+        toggleBtn.classList.add('text-blue-400');
+        toggleBtn.classList.remove('text-slate-500');
+        loadLatexPdf();
+      } else {
+        panel.classList.add('hidden');
+        toggleBtn.classList.remove('text-blue-400');
+        toggleBtn.classList.add('text-slate-500');
+      }
+    }
+
+    function switchLatexView(view) {
+      latexView = view;
+      const pdfView = document.getElementById('latex-pdf-view');
+      const texView = document.getElementById('latex-tex-view');
+      const pdfBtn = document.getElementById('btn-latex-pdf');
+      const texBtn = document.getElementById('btn-latex-tex');
+      if (view === 'pdf') {
+        pdfView.classList.remove('hidden');
+        texView.classList.add('hidden');
+        pdfBtn.classList.add('latex-toggle-active');
+        pdfBtn.classList.remove('text-slate-400');
+        texBtn.classList.remove('latex-toggle-active');
+        texBtn.classList.add('text-slate-400');
+        loadLatexPdf();
+      } else {
+        pdfView.classList.add('hidden');
+        texView.classList.remove('hidden');
+        texBtn.classList.add('latex-toggle-active');
+        texBtn.classList.remove('text-slate-400');
+        pdfBtn.classList.remove('latex-toggle-active');
+        pdfBtn.classList.add('text-slate-400');
+        loadLatexSource();
+      }
+    }
+
+    function loadLatexPdf() {
+      const frame = document.getElementById('latex-pdf-frame');
+      if (frame) frame.src = '/api/latex/pdf?t=' + Date.now();
+    }
+
+    async function loadLatexSource() {
+      try {
+        const res = await fetch('/api/latex/source');
+        if (!res.ok) { showToast('Failed to load source', true); return; }
+        const text = await res.text();
+        const editor = document.getElementById('latex-editor');
+        if (editor) { editor.value = text; latexEditorDirty = false; }
+      } catch (err) {
+        console.error('Load source failed:', err);
+        showToast('Failed to load source: ' + err.message, true);
+      }
+    }
+
+    async function saveLatexSource() {
+      const editor = document.getElementById('latex-editor');
+      try {
+        const res = await fetch('/api/latex/source', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: editor.value }),
+        });
+        if (!res.ok) { showToast('Failed to save source', true); return false; }
+        latexEditorDirty = false;
+        return true;
+      } catch (err) {
+        console.error('Save source failed:', err);
+        showToast('Failed to save: ' + err.message, true);
+        return false;
+      }
+    }
+
+    async function compileLatex() {
+      const btn = document.getElementById('btn-compile');
+      const status = document.getElementById('compile-status');
+      btn.disabled = true;
+      btn.textContent = 'Compiling...';
+      status.textContent = '';
+      if (latexView === 'tex' && latexEditorDirty) {
+        const saved = await saveLatexSource();
+        if (!saved) { btn.disabled = false; btn.textContent = 'Compile'; return; }
+      }
+      try {
+        const res = await fetch('/api/latex/compile', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = 'Done';
+          status.className = 'text-xs text-green-400';
+          if (latexView === 'pdf') loadLatexPdf();
+        } else {
+          status.textContent = 'Failed (see console)';
+          status.className = 'text-xs text-red-400';
+          console.error('LaTeX compilation log:', data.log);
+        }
+      } catch (err) {
+        status.textContent = 'Error';
+        status.className = 'text-xs text-red-400';
+        console.error('Compile failed:', err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Compile';
+        setTimeout(() => { status.textContent = ''; status.className = 'text-xs text-slate-500'; }, 5000);
+      }
+    }
+
+    // ---------------------------------------------------------------------------
     // Sidebar resize
     // ---------------------------------------------------------------------------
     function initSidebarResize() {
@@ -1377,6 +1649,18 @@
       // Scroll to bottom of messages
       const msgs = document.getElementById('messages');
       if (msgs) msgs.scrollTop = msgs.scrollHeight;
+
+      // LaTeX editor: track dirty state + Ctrl+S to compile
+      const latexEditor = document.getElementById('latex-editor');
+      if (latexEditor) {
+        latexEditor.addEventListener('input', () => { latexEditorDirty = true; });
+        latexEditor.addEventListener('keydown', (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+            e.preventDefault();
+            compileLatex();
+          }
+        });
+      }
 
       // Connect WebSocket
       connectWS();

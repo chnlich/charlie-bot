@@ -380,7 +380,9 @@
 
     function connectWS() {
       if (!SESSION_ID) return;
-      catchupDone = false;  // Reset so catch-up events are ignored on reconnect
+      catchupDone = false;
+      streamBuf = '';
+      hideStreaming();
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(`${proto}//${location.host}/ws/sessions/${SESSION_ID}`);
 
@@ -411,6 +413,7 @@
 
       if (t === 'catchup_complete') {
         catchupDone = true;
+        if (streamBuf) showStreaming(streamBuf);
         return;
       }
       if (t === 'ping') return;
@@ -437,9 +440,6 @@
       // Track every substantive event for the reconnection cursor
       eventCursor++;
 
-      // During catch-up, ignore events (page already rendered them)
-      if (!catchupDone) return;
-
       if (t === 'user') {
         // Skip CC-internal user events (tool results) — they have "message" but no "content"
         if (ev.message && !ev.content) return;
@@ -457,16 +457,16 @@
         for (const b of blocks) {
           if (b.type === 'text') streamBuf += b.text || '';
         }
-        if (streamBuf) showStreaming(streamBuf);
+        if (catchupDone && streamBuf) showStreaming(streamBuf);
       } else if (t === 'master_done') {
         if (streamBuf) {
-          hideStreaming();
+          if (catchupDone) hideStreaming();
           appendMessage('assistant', streamBuf);
           streamBuf = '';
         }
         if (!ev.still_thinking) stopThinking();
       } else if (t === 'assistant_error') {
-        hideStreaming();
+        if (catchupDone) hideStreaming();
         if (streamBuf) {
           appendMessage('assistant', streamBuf);
           streamBuf = '';

@@ -178,8 +178,8 @@ async def _notify_completion(
       "status": status,
     }
     await session_mgr.mark_unread(session_id)
-    await session_mgr.save_chat_event(session_id, worker_event)
     await streaming_manager.broadcast(f"session:{session_id}", worker_event)
+    await session_mgr.save_chat_event(session_id, worker_event)
     log.info("worker_summary_sent", session=session_id, thread=thread.id)
 
     await _trigger_master(session_id, summary, cfg, session_mgr)
@@ -195,8 +195,8 @@ async def _notify_completion(
         "status": "completed" if exit_code == 0 else "failed",
       }
       await session_mgr.mark_unread(session_id)
-      await session_mgr.save_chat_event(session_id, fallback_event)
       await streaming_manager.broadcast(f"session:{session_id}", fallback_event)
+      await session_mgr.save_chat_event(session_id, fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner))
 

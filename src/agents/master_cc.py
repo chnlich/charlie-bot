@@ -106,6 +106,7 @@ async def run_message(
     proc = await asyncio.create_subprocess_exec(
       *cmd,
       cwd=cwd,
+      stdin=asyncio.subprocess.DEVNULL,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
       env=env,

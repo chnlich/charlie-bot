@@ -74,6 +74,7 @@ class Worker:
     self._proc = await asyncio.create_subprocess_exec(
       *cmd,
       cwd=str(self._worktree),
+      stdin=asyncio.subprocess.DEVNULL,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
       env=env,

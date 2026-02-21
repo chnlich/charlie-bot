@@ -40,12 +40,14 @@ async def delegate_task(
     repo_path=req.repo_path,
   ))
 
-  # Broadcast task_delegated event on the session WebSocket
-  await streaming_manager.broadcast(f"session:{req.session_id}", {
+  # Save and broadcast task_delegated event so cursor stays in sync on reconnect
+  task_event = {
     "type": "task_delegated",
     "thread_id": thread.id,
     "description": req.description,
-  })
+  }
+  await session_mgr.save_chat_event(req.session_id, task_event)
+  await streaming_manager.broadcast(f"session:{req.session_id}", task_event)
 
   log.info("task_delegated_internal", session=req.session_id, thread_id=thread.id)
 

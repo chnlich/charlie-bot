@@ -520,8 +520,8 @@
         if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '');
       } else if (t === 'worker_summary') {
         appendMessage('system', ev.content || '');
-        updateSpinner();
         if (catchupDone) updateWorkerStatus(ev.thread_id, ev.status || 'completed');
+        updateSpinner();
       } else if (t === 'result') {
         updateUsageDisplay(ev);
       }

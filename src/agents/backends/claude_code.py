@@ -11,7 +11,7 @@ from src.agents.backends.base import AgentBackend
 
 log = structlog.get_logger()
 
-_BASE_COMMAND: list[str] = [
+BASE_COMMAND: list[str] = [
   "claude",
   "-p",
   "--output-format",
@@ -50,7 +50,7 @@ class ClaudeCodeBackend(AgentBackend):
       on_spawn: Async callable invoked with the subprocess PID immediately
         after the process is created, before any output is read.
     """
-    self._cmd: list[str] = list(_BASE_COMMAND)
+    self._cmd: list[str] = list(BASE_COMMAND)
     if model:
       self._cmd += ["--model", model]
     if system_prompt_path:

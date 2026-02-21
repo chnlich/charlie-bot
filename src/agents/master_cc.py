@@ -111,12 +111,7 @@ async def run_message(
     log.info("master_cc_spawned", session=session_meta.id, pid=pid)
 
   from src.agents.backends.registry import build_backend
-  option = backend_option or BackendOption(
-    id="claude-opus-4.6",
-    label="CC \u00b7 Opus 4.6",
-    type="cc-claude",
-    model="claude-opus-4-6",
-  )
+  option = backend_option or cfg.backend_options[0]
   backend = build_backend(
     option,
     cfg,

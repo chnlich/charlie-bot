@@ -70,7 +70,7 @@ async def cancel_master_agent(
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  found = cancel_master(session_id)
+  found = await cancel_master(session_id)
   if not found:
     raise HTTPException(status_code=404, detail="No active master agent")
   return {"ok": True}

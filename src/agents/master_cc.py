@@ -1,13 +1,12 @@
 """Master CC — spawns a Claude Code subprocess for the master agent."""
 
-import asyncio
-import json
 import os
 from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
 
+from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.streaming import streaming_manager
@@ -18,17 +17,8 @@ log = structlog.get_logger()
 # Only clear thinking_since when the count drops to zero.
 _active_tasks: dict[str, int] = {}
 
-# Per-session running subprocess reference for external cancellation.
-_active_procs: dict[str, asyncio.subprocess.Process] = {}
-
-MASTER_CC_COMMAND = [
-  "claude",
-  "-p",
-  "--output-format",
-  "stream-json",
-  "--verbose",
-  "--dangerously-skip-permissions",
-]
+# Per-session running backend reference for external cancellation.
+_active_procs: dict[str, ClaudeCodeBackend] = {}
 
 
 def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
@@ -71,6 +61,7 @@ async def run_message(
     user_content: The user's message text.
     save_chat_event: Coroutine to persist each event to chat_events.jsonl.
     save_metadata: Coroutine to persist session metadata updates.
+    mark_unread: Coroutine to mark the session unread for other viewers.
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
 
@@ -99,10 +90,9 @@ async def run_message(
   if save_metadata:
     await save_metadata(session_meta)
 
-  cmd = list(MASTER_CC_COMMAND)
+  extra_flags: list[str] = []
   if session_meta.cc_session_id:
-    cmd += ["--resume", session_meta.cc_session_id]
-  cmd.append(user_content)
+    extra_flags = ["--resume", session_meta.cc_session_id]
 
   env = {**os.environ}
   env.pop("CLAUDECODE", None)
@@ -114,31 +104,19 @@ async def run_message(
   exit_code = 1
   error_msg: Optional[str] = None
 
+  async def _on_spawn(pid: int) -> None:
+    log.info("master_cc_spawned", session=session_meta.id, pid=pid)
+
+  backend = ClaudeCodeBackend(
+    extra_flags=extra_flags or None,
+    buffer_limit=cfg.subprocess_buffer_limit,
+    on_spawn=_on_spawn,
+  )
+
   try:
-    proc = await asyncio.create_subprocess_exec(
-      *cmd,
-      cwd=cwd,
-      stdin=asyncio.subprocess.DEVNULL,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-      env=env,
-      limit=cfg.subprocess_buffer_limit,
-    )
+    _active_procs[session_meta.id] = backend
 
-    _active_procs[session_meta.id] = proc
-    log.info("master_cc_spawned", session=session_meta.id, pid=proc.pid)
-
-    assert proc.stdout is not None
-    async for raw_line in proc.stdout:
-      line = raw_line.decode("utf-8", errors="replace").strip()
-      if not line:
-        continue
-      try:
-        event = json.loads(line)
-      except json.JSONDecodeError as e:
-        log.debug("master_cc_line_not_json", error=str(e))
-        continue
-
+    async for event in backend.run(user_content, cwd, env):
       # Capture the CC session ID from the first event that has one
       if not cc_session_id:
         sid = event.get("session_id")
@@ -149,18 +127,11 @@ async def run_message(
       await streaming_manager.broadcast(channel, event)
       await save_chat_event(session_meta.id, event)
 
-    # Read stderr
-    assert proc.stderr is not None
-    stderr_bytes = await proc.stderr.read()
-    await proc.wait()
-    exit_code = proc.returncode or 0
-
-    if stderr_bytes:
-      stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
-      if stderr_text:
-        log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text[:500])
-        if exit_code != 0:
-          error_msg = stderr_text[:500]
+    exit_code = backend.exit_code
+    if backend.stderr_text:
+      log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text[:500])
+      if exit_code != 0:
+        error_msg = backend.stderr_text[:500]
 
   except Exception as e:
     log.error("master_cc_crashed", session=session_meta.id, error=str(e))
@@ -195,16 +166,13 @@ async def run_message(
   return cc_session_id
 
 
-def cancel_master(session_id: str) -> bool:
-  """Send SIGTERM to the running master CC process for this session.
+async def cancel_master(session_id: str) -> bool:
+  """Terminate the running master CC backend for this session.
 
-  Returns True if a process was found and signaled, False otherwise.
+  Returns True if a backend was found and terminate() was called, False otherwise.
   """
-  proc = _active_procs.get(session_id)
-  if proc is None:
+  backend = _active_procs.get(session_id)
+  if backend is None:
     return False
-  try:
-    proc.terminate()
-  except ProcessLookupError:
-    log.debug("cancel_master_pid_gone", session=session_id)
+  await backend.terminate()
   return True

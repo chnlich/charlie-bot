@@ -227,10 +227,10 @@
               'cancelled': 'bg-slate-500',
               'idle': 'bg-slate-500'
             } %}
-            <span class="w-2 h-2 rounded-full flex-shrink-0 {{ status_colors.get(t.status.value, 'bg-slate-500') }} {% if t.status.value == 'running' %}animate-pulse{% endif %}"></span>
+            <span id="thread-dot-{{ t.id }}" class="w-2 h-2 rounded-full flex-shrink-0 {{ status_colors.get(t.status.value, 'bg-slate-500') }} {% if t.status.value == 'running' %}animate-pulse{% endif %}"></span>
             <div class="flex-1 min-w-0">
               <p class="text-sm truncate">{{ t.description }}</p>
-              <p class="text-xs text-slate-500">{{ t.status.value }}</p>
+              <p id="thread-status-{{ t.id }}" class="text-xs text-slate-500">{{ t.status.value }}</p>
             </div>
             <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-{{ t.id }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
           </div>
@@ -243,7 +243,7 @@
         </div>
         {% endfor %}
         {% else %}
-        <div class="flex items-center justify-center h-full text-slate-500 text-sm">No worker threads</div>
+        <div id="no-workers-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">No worker threads</div>
         {% endif %}
       </div>
 
@@ -475,9 +475,11 @@
       } else if (t === 'task_delegated') {
         appendMessage('system', `Task delegated: ${ev.description || ''}`);
         document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
+        if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '');
       } else if (t === 'worker_summary') {
         appendMessage('system', ev.content || '');
         updateSpinner();
+        if (catchupDone) updateWorkerStatus(ev.thread_id, ev.status || 'completed');
       } else if (t === 'result') {
         updateUsageDisplay(ev);
       } else if (t === 'session_renamed') {
@@ -567,6 +569,52 @@
       } catch (err) {
         console.error('Failed to update spinner:', err);
       }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Workers tab live updates
+    // ---------------------------------------------------------------------------
+    const STATUS_DOT_COLORS = {
+      running: 'bg-blue-500', completed: 'bg-green-500',
+      failed: 'bg-red-500', cancelled: 'bg-slate-500', idle: 'bg-slate-500',
+    };
+
+    function updateWorkerStatus(threadId, status) {
+      const dot = document.getElementById('thread-dot-' + threadId);
+      const text = document.getElementById('thread-status-' + threadId);
+      if (!dot || !text) return;
+      dot.className = 'w-2 h-2 rounded-full flex-shrink-0 ' + (STATUS_DOT_COLORS[status] || 'bg-slate-500');
+      text.textContent = status;
+    }
+
+    function addWorkerCard(threadId, description) {
+      const container = document.getElementById('tab-workers');
+      if (!container) return;
+      // Remove placeholder if present
+      document.getElementById('no-workers-placeholder')?.remove();
+      // Don't add duplicate
+      if (document.getElementById('thread-dot-' + threadId)) return;
+      const card = document.createElement('div');
+      card.className = 'bg-slate-800 rounded-xl border border-slate-700 overflow-hidden';
+      card.innerHTML = `
+        <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750"
+             onclick="toggleThreadDetail('${threadId}', '${SESSION_ID}')">
+          <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 bg-blue-500 animate-pulse"></span>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm truncate">${escapeHtml(description)}</p>
+            <p id="thread-status-${threadId}" class="text-xs text-slate-500">running</p>
+          </div>
+          <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-${threadId}"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+        </div>
+        <div id="thread-detail-${threadId}" class="hidden border-t border-slate-700">
+          <div id="thread-events-${threadId}" class="p-4 max-h-96 overflow-y-auto">
+            <p class="text-xs text-slate-500">Loading events...</p>
+          </div>
+        </div>`;
+      container.prepend(card);
     }
 
     // ---------------------------------------------------------------------------

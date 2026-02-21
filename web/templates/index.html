@@ -555,8 +555,17 @@
 
       // Sidebar unread indicator — handle before catchup guard
       if (t === 'unread_changed') {
+        sessionUnread[ev.session_id] = ev.has_unread;
+        const spinner = document.getElementById('spinner-' + ev.session_id);
+        const spinnerVisible = spinner && !spinner.classList.contains('hidden');
         const dot = document.getElementById('unread-' + ev.session_id);
-        if (dot) dot.classList.toggle('hidden', !ev.has_unread);
+        if (dot) dot.classList.toggle('hidden', !ev.has_unread || spinnerVisible);
+        return;
+      }
+
+      // Sidebar spinner update for non-current sessions — handle before catchup guard
+      if (t === 'running_changed') {
+        if (ev.session_id !== SESSION_ID) setSessionSpinner(ev.session_id, ev.has_running_tasks);
         return;
       }
 
@@ -593,7 +602,7 @@
         appendMessage('system', 'Error: ' + (ev.content || ''));
       } else if (t === 'task_delegated') {
         appendMessage('system', `Task delegated: ${ev.description || ''}`);
-        document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
+        setSessionSpinner(SESSION_ID, true);
         if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '');
       } else if (t === 'worker_summary') {
         appendMessage('system', ev.content || '');
@@ -669,11 +678,22 @@
     // ---------------------------------------------------------------------------
     // Sidebar spinner (running tasks indicator)
     // ---------------------------------------------------------------------------
+    // Tracks server-reported unread state per session so we can restore the
+    // unread dot after the spinner hides.
+    const sessionUnread = {};
+
+    function setSessionSpinner(sid, visible) {
+      const spinner = document.getElementById('spinner-' + sid);
+      if (spinner) spinner.classList.toggle('hidden', !visible);
+      // While spinner is visible, suppress the unread dot; restore when hidden.
+      const dot = document.getElementById('unread-' + sid);
+      if (dot) dot.classList.toggle('hidden', visible || !sessionUnread[sid]);
+    }
+
     function updateSpinner() {
       var anyRunning = Array.from(document.querySelectorAll('[id^="thread-status-"]'))
         .some(function(el) { return el.textContent === 'running'; });
-      var spinner = document.getElementById('spinner-' + SESSION_ID);
-      if (spinner) spinner.classList.toggle('hidden', !masterThinking && !anyRunning);
+      setSessionSpinner(SESSION_ID, masterThinking || anyRunning);
     }
 
     function updateWorkersTabBadge() {
@@ -754,7 +774,7 @@
       thinkingInterval = setInterval(updateThinkingTime, 1000);
       document.getElementById('send-btn').disabled = true;
       document.getElementById('send-btn').classList.add('opacity-50');
-      document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
+      setSessionSpinner(SESSION_ID, true);
       const sel = document.getElementById('backend-select');
       if (sel) sel.disabled = true;
     }
@@ -1202,6 +1222,10 @@
     // ---------------------------------------------------------------------------
     document.addEventListener('DOMContentLoaded', () => {
       initSidebarResize();
+      // Seed sessionUnread from server-rendered unread dots
+      document.querySelectorAll('[id^="unread-"]').forEach(el => {
+        sessionUnread[el.id.replace('unread-', '')] = !el.classList.contains('hidden');
+      });
       const urlFilter = new URLSearchParams(location.search).get('filter');
       if (['all', 'starred', 'archived'].includes(urlFilter)) { switchSidebarFilter(urlFilter); }
       updateRelativeTimes();
@@ -1226,7 +1250,7 @@
         thinkingInterval = setInterval(updateThinkingTime, 1000);
         document.getElementById('send-btn')?.classList.add('opacity-50');
         if (document.getElementById('send-btn')) document.getElementById('send-btn').disabled = true;
-        document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
+        setSessionSpinner(SESSION_ID, true);
         const sel = document.getElementById('backend-select');
         if (sel) sel.disabled = true;
       }

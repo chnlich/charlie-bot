@@ -159,6 +159,12 @@ async def run_message(
       session_meta.thinking_since = None
       if save_metadata:
         await save_metadata(session_meta)
+      await streaming_manager.broadcast(
+          "sidebar", {
+              "type": "running_changed",
+              "session_id": session_meta.id,
+              "has_running_tasks": False,
+          })
 
     if error_msg:
       err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}

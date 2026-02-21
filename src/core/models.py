@@ -56,6 +56,7 @@ class SessionMetadata(BaseModel):
   status: SessionStatus = SessionStatus.ACTIVE
   has_unread: bool = False
   has_running_tasks: bool = False
+  starred: bool = False
   thinking_since: Optional[datetime] = None
   created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

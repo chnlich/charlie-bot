@@ -57,8 +57,12 @@ class SessionManager:
       raw = await f.read()
     return SessionMetadata.model_validate_json(raw)
 
-  async def list_sessions(self, status: Optional[SessionStatus] = None) -> list[SessionMetadata]:
-    """List sessions, newest first. Optionally filter by status."""
+  async def list_sessions(
+      self,
+      status: Optional[SessionStatus] = None,
+      starred: Optional[bool] = None,
+  ) -> list[SessionMetadata]:
+    """List sessions, newest first. Optionally filter by status and/or starred."""
     sessions: list[SessionMetadata] = []
     if not self._cfg.sessions_dir.exists():
       return sessions
@@ -66,9 +70,14 @@ class SessionManager:
       if not d.is_dir():
         continue
       meta = await self.get_session(d.name)
-      if meta and (status is None or meta.status == status):
-        meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
-        sessions.append(meta)
+      if not meta:
+        continue
+      if status is not None and meta.status != status:
+        continue
+      if starred is not None and meta.starred != starred:
+        continue
+      meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
+      sessions.append(meta)
     # Normalise to offset-aware (UTC) so naive vs aware datetimes don't explode
     for s in sessions:
       if s.updated_at.tzinfo is None:
@@ -136,6 +145,28 @@ class SessionManager:
     meta.updated_at = datetime.now(timezone.utc)
     await self._save_metadata(meta)
     log.info("session_unarchived", session_id=session_id)
+    return meta
+
+  async def star_session(self, session_id: str) -> Optional[SessionMetadata]:
+    """Star a session."""
+    meta = await self.get_session(session_id)
+    if not meta:
+      return None
+    meta.starred = True
+    meta.updated_at = datetime.now(timezone.utc)
+    await self._save_metadata(meta)
+    log.info("session_starred", session_id=session_id)
+    return meta
+
+  async def unstar_session(self, session_id: str) -> Optional[SessionMetadata]:
+    """Unstar a session."""
+    meta = await self.get_session(session_id)
+    if not meta:
+      return None
+    meta.starred = False
+    meta.updated_at = datetime.now(timezone.utc)
+    await self._save_metadata(meta)
+    log.info("session_unstarred", session_id=session_id)
     return meta
 
   async def save_metadata(self, meta: SessionMetadata) -> None:

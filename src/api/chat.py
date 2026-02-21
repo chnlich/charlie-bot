@@ -40,10 +40,15 @@ async def send_message(
         cfg, meta, req.content, session_mgr.save_chat_event,
         session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
       )
-      # Persist CC session ID if newly assigned
+      # Persist CC session ID if newly assigned.
+      # Re-read fresh metadata from disk to avoid overwriting has_unread
+      # (or other fields) that mark_unread() set during run_message().
       if cc_session_id and cc_session_id != meta.cc_session_id:
+        fresh = await session_mgr.get_session(meta.id)
+        if fresh:
+          fresh.cc_session_id = cc_session_id
+          await session_mgr.save_metadata(fresh)
         meta.cc_session_id = cc_session_id
-        await session_mgr.save_metadata(meta)
 
       # Auto-name session after first turn if still using default name
       if _DEFAULT_NAME_RE.match(meta.name):

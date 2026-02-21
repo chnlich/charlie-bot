@@ -66,6 +66,11 @@ async def maybe_auto_name(
       "type": "session_renamed",
       "name": name,
     })
+    await streaming_manager.broadcast("sidebar", {
+      "type": "session_renamed",
+      "session_id": session_meta.id,
+      "name": name,
+    })
 
     log.info("session_auto_named", session_id=session_meta.id, name=name)
 

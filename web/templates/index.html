@@ -66,9 +66,7 @@
            ondblclick="startRename(event, '{{ s.id }}', '{{ s.name|e }}')"
            id="session-{{ s.id }}">
           <span class="truncate flex-1 session-name">{{ s.name }}</span>
-          {% if s.has_running_tasks %}
-          <svg class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-          {% endif %}
+          <svg id="spinner-{{ s.id }}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 {% if not s.has_running_tasks %}hidden{% endif %}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
           {% if s.has_unread %}
           <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0"></span>
           {% endif %}
@@ -409,8 +407,10 @@
         appendMessage('system', 'Error: ' + (ev.content || ''));
       } else if (t === 'task_delegated') {
         appendMessage('system', `Task delegated: ${ev.description || ''}`);
+        document.getElementById('spinner-' + SESSION_ID)?.classList.remove('hidden');
       } else if (t === 'worker_summary') {
         appendMessage('system', ev.content || '');
+        updateSpinner();
       } else if (t === 'session_renamed') {
         const link = document.getElementById('session-' + SESSION_ID);
         if (link) link.querySelector('.session-name').textContent = ev.name;
@@ -431,6 +431,22 @@
     function hideStreaming() {
       document.getElementById('streaming-msg').classList.add('hidden');
       document.getElementById('streaming-content').innerHTML = '';
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sidebar spinner (running tasks indicator)
+    // ---------------------------------------------------------------------------
+    async function updateSpinner() {
+      if (!SESSION_ID) return;
+      try {
+        const res = await fetch(`/api/sessions/${SESSION_ID}/threads`);
+        const threads = await res.json();
+        const hasRunning = threads.some(t => t.status === 'running');
+        const spinner = document.getElementById('spinner-' + SESSION_ID);
+        if (spinner) spinner.classList.toggle('hidden', !hasRunning);
+      } catch (err) {
+        console.error('Failed to update spinner:', err);
+      }
     }
 
     // ---------------------------------------------------------------------------

@@ -320,6 +320,10 @@
         const displayLang = lang || 'text';
         return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
       };
+      renderer.link = function(token) {
+        const title = token.title ? ` title="${token.title}"` : '';
+        return `<a href="${token.href}" target="_blank" rel="noopener noreferrer"${title}>${token.text}</a>`;
+      };
       marked.use({ renderer });
     })();
 

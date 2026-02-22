@@ -119,6 +119,7 @@ async def run_and_finalize(
   session_mgr: SessionManager,
   *,
   is_voice: bool = False,
+  extra_cc_flags: list[str] | None = None,
 ) -> None:
   """Run master CC, persist cc_session_id, and auto-name the session."""
   backend_id = meta.backend
@@ -129,6 +130,7 @@ async def run_and_finalize(
       session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
       backend_option=backend_option,
       is_voice=is_voice,
+      extra_cc_flags=extra_cc_flags,
     )
     # Persist CC session ID if newly assigned.
     # Re-read fresh metadata from disk to avoid overwriting has_unread

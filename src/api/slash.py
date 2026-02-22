@@ -96,7 +96,7 @@ async def execute_command(
       return {'error': f'Command /{name} has no prompt template configured'}
 
     substituted = cmd.prompt.replace('{args}', req.args)
-    asyncio.create_task(run_and_finalize(cfg, meta, substituted, session_mgr))
+    asyncio.create_task(run_and_finalize(cfg, meta, substituted, session_mgr, extra_cc_flags=cmd.claude_code_flags or None))
     return JSONResponse(status_code=202, content={'type': 'prompt_dispatched', 'command': name})
 
   log.warning('slash_unknown_scope', name=name, scope=cmd.scope)

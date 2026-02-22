@@ -258,7 +258,7 @@
                       placeholder="Send a message..."
                       class="flex-1 bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-sm resize-none focus:outline-none focus:border-blue-500 placeholder-slate-500"
                       onkeydown="handleInputKey(event)"
-                      oninput="autoResize(this)"></textarea>
+                      oninput="autoResize(this); saveDraft()"></textarea>
             <div class="input-buttons flex gap-2">
               <div id="overflow-menu" class="collapsible">
                 {% if active_session and backend_options %}
@@ -443,6 +443,17 @@
     // Config
     // ---------------------------------------------------------------------------
     const SESSION_ID = {{ (active_session.id|tojson) if active_session else 'null' }};
+    const DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
+    let _draftTimer = null;
+    function saveDraft() {
+      if (!DRAFT_KEY) return;
+      clearTimeout(_draftTimer);
+      _draftTimer = setTimeout(() => {
+        const v = document.getElementById('msg-input').value;
+        if (v) localStorage.setItem(DRAFT_KEY, v);
+        else localStorage.removeItem(DRAFT_KEY);
+      }, 300);
+    }
     const THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     // Tracks how many events the client has seen; used as cursor for WS catch-up.
     // Starts at the server-rendered count and increments as live events arrive.
@@ -641,6 +652,7 @@
       bumpCurrentSessionToTop();
       input.value = '';
       input.style.height = 'auto';
+      if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
 
       // Start thinking indicator
       startThinking();
@@ -1623,6 +1635,16 @@
       // Scroll to bottom of messages
       const msgs = document.getElementById('messages');
       if (msgs) msgs.scrollTop = msgs.scrollHeight;
+
+      // Restore draft message from localStorage
+      if (DRAFT_KEY) {
+        const draft = localStorage.getItem(DRAFT_KEY);
+        if (draft) {
+          const inp = document.getElementById('msg-input');
+          inp.value = draft;
+          autoResize(inp);
+        }
+      }
 
       // LaTeX editor: track dirty state + Ctrl+S to compile
       const latexEditor = document.getElementById('latex-editor');

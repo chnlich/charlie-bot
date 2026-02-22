@@ -270,6 +270,7 @@ Each Thread's `CLAUDE.md` contains:
 - ChatPanel subscribes to session WebSocket — receives worker summaries and renders them as assistant messages
 - ThreadsPanel polls every 3 seconds for thread status updates
 - No-cache middleware on HTML to prevent stale JS bundles
+- Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
 
 **Configuration**
 - `~/.charliebot/config.yaml` is the single source of truth for API keys and settings — no environment variables

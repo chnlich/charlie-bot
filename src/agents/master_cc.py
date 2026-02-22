@@ -9,6 +9,7 @@ import structlog
 from src.agents.backends.base import AgentBackend
 from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.core.config import CharlieBotConfig
+from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
 from src.core.models import BackendOption, SessionMetadata
 from src.core.streaming import streaming_manager
 
@@ -78,6 +79,11 @@ async def run_message(
 
   # Write session CLAUDE.md (prompt + memory) so Claude Code picks it up
   ensure_master_claude_md(session_meta, cfg)
+
+  tex_path = get_tex_path()
+  should_check_tex = tex_path.exists()
+  if should_check_tex:
+    snapshot_tex()
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)
   if not skip_user_event:
@@ -173,6 +179,16 @@ async def run_message(
     done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
     await streaming_manager.broadcast(channel, done_event)
     await save_chat_event(session_meta.id, done_event)
+
+    if should_check_tex:
+      proposal = check_tex_changed()
+      if proposal:
+        tex_event = {'type': 'tex_edit_proposed'}
+        await streaming_manager.broadcast(channel, tex_event)
+        await save_chat_event(session_meta.id, tex_event)
+        log.info('tex_edit_proposed', session=session_meta.id)
+      else:
+        clear_snapshot()
 
     log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code, still_thinking=still_thinking)
 

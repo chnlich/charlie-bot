@@ -5,7 +5,15 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from src.core.latex import compile_latex, get_git_info, get_pdf_path, get_tex_path
+from src.core.latex import (
+    accept_proposal,
+    compile_latex,
+    get_git_info,
+    get_pdf_path,
+    get_pending_proposal,
+    get_tex_path,
+    reject_proposal,
+)
 
 log = structlog.get_logger()
 
@@ -57,3 +65,30 @@ async def put_source(req: TexSourceRequest):
   tex.write_text(req.content, encoding='utf-8')
   log.info('latex_source_saved', path=str(tex), size=len(req.content))
   return {'ok': True}
+
+
+@router.get('/diff')
+async def get_diff():
+  """Return pending AI-proposed diff {old, new}."""
+  proposal = get_pending_proposal()
+  if proposal is None:
+    return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)
+  return JSONResponse(content={'old': proposal['old'], 'new': proposal['new']})
+
+
+@router.post('/accept')
+async def accept_edit():
+  """Accept the pending AI-proposed TeX edit."""
+  if accept_proposal():
+    log.info('latex_proposal_accepted')
+    return {'ok': True}
+  return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)
+
+
+@router.post('/reject')
+async def reject_edit():
+  """Reject the pending AI-proposed TeX edit."""
+  if reject_proposal():
+    log.info('latex_proposal_rejected')
+    return {'ok': True}
+  return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)

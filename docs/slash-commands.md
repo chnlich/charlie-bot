@@ -161,7 +161,7 @@ commands:
     description: "Run a git command"
     args: "<git args>"
     command: "git {args}"
-    cwd: "/home/chnlich/workspace/charlie-bot"
+    cwd: "/path/to/your/project"
     timeout: 15
 ```
 

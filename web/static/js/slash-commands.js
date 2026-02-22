@@ -1,6 +1,9 @@
 // ---------------------------------------------------------------------------
 // Slash command popup
 // ---------------------------------------------------------------------------
+function isMobile() {
+  return /Android|iPhone|iPad/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth <= 768);
+}
 let slashCommands = [];
 let slashPopupIdx = -1;
 
@@ -114,7 +117,7 @@ function handleInputKey(e) {
     }
     if (e.key === 'Escape') { e.preventDefault(); hideSlashPopup(); return; }
   }
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !isMobile()) {
     e.preventDefault();
     const input = document.getElementById('msg-input');
     const val = input ? input.value.trim() : '';

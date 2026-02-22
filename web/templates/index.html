@@ -1714,6 +1714,7 @@
           panel.style.width = pct + '%';
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
+          if (latexView === 'pdf') loadLatexPdf();
         }
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);

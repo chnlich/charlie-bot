@@ -227,6 +227,10 @@
           <div class="flex justify-center">
             <div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate">{{ msg.content }}</div>
           </div>
+          {% elif msg.role == 'worker_summary' %}
+          <div class="flex justify-start">
+            <div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg" data-md>{{ msg.content }}</div>
+          </div>
           {% endif %}
           {% endfor %}
           <!-- Streaming target -->
@@ -778,7 +782,12 @@
         setSessionSpinner(SESSION_ID, true);
         if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '');
       } else if (t === 'worker_summary') {
-        appendMessage('system', ev.content || '');
+        const wDiv = document.createElement('div');
+        wDiv.className = 'flex justify-start';
+        wDiv.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg">${marked.parse(ev.content || '')}</div>`;
+        const streamEl = document.getElementById('streaming-msg');
+        document.getElementById('messages').insertBefore(wDiv, streamEl);
+        document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
         updateWorkerStatus(ev.thread_id, ev.status || 'completed');
         updateSpinner();
       } else if (t === 'result') {

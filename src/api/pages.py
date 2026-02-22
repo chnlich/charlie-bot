@@ -41,12 +41,13 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
           "is_voice": ev.get("is_voice", False),
       })
     elif t == "assistant":
-      # Accumulate text from all assistant events; only flush at turn boundaries
       msg = ev.get("message") or {}
       blocks = msg.get("content") or []
-      for block in blocks:
-        if isinstance(block, dict) and block.get("type") == "text":
-          assistant_buf += block.get("text", "")
+      text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+      if text and assistant_buf:
+        messages.append({"role": "assistant", "content": assistant_buf})
+        assistant_buf = ""
+      assistant_buf += text
     elif t == "master_done":
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})

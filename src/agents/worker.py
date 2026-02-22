@@ -11,6 +11,7 @@ import structlog
 from src.agents.backends.claude_code import BASE_COMMAND as WORKER_COMMAND, ClaudeCodeBackend
 from src.core.config import get_config
 from src.core.models import ThreadMetadata
+from src.core.ndjson import append_ndjson
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
@@ -76,8 +77,7 @@ class Worker:
 
     if self._backend.stderr_text:
       stderr_event = {"type": "error", "content": self._backend.stderr_text}
-      async with aiofiles.open(self._events_log, "a", encoding="utf-8") as f:
-        await f.write(json.dumps(stderr_event) + "\n")
+      await append_ndjson(self._events_log, stderr_event)
       await streaming_manager.broadcast(self._thread.id, stderr_event)
       log.warning("worker_stderr", thread=self._thread.id, stderr=self._backend.stderr_text[:500])
 

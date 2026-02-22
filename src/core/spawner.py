@@ -1,7 +1,6 @@
 """Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
 import asyncio
-import json
 import time
 import traceback
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ import structlog
 from src.agents.master_cc import run_message
 from src.agents.worker import WORKER_COMMAND, QuotaExhaustedException, Worker
 from src.core.models import ThreadStatus
+from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 from src.core.threads import ThreadManager
@@ -60,6 +60,17 @@ def _short_desc(description: str, limit: int = 120) -> str:
   if len(first_line) > limit:
     return first_line[:limit] + '...'
   return first_line
+
+
+def _build_worker_event(thread_id: str, content: str, status: str) -> dict:
+  """Build a worker_summary event dict."""
+  return {"type": "worker_summary", "thread_id": thread_id, "content": content, "status": status}
+
+
+async def broadcast_and_persist(session_id: str, event: dict, session_mgr: SessionManager) -> None:
+  """Broadcast an event to the session WebSocket channel and persist it to NDJSON."""
+  await streaming_manager.broadcast(f"session:{session_id}", event)
+  await session_mgr.save_chat_event(session_id, event)
 
 
 async def spawn_worker(
@@ -111,14 +122,9 @@ async def spawn_worker(
     await thread_mgr._save_metadata(thread)
     log.info("worker_running", thread_id=thread.id, session=session_id)
 
-    started_event = {
-      'type': 'worker_summary',
-      'thread_id': thread.id,
-      'content': f'Worker `{thread.id[:8]}` started: {_short_desc(description)}',
-      'status': 'running',
-    }
-    await streaming_manager.broadcast(f'session:{session_id}', started_event)
-    await session_mgr.save_chat_event(session_id, started_event)
+    started_event = _build_worker_event(
+      thread.id, f'Worker `{thread.id[:8]}` started: {_short_desc(description)}', 'running')
+    await broadcast_and_persist(session_id, started_event, session_mgr)
 
     try:
       exit_code = await worker.run()
@@ -202,15 +208,9 @@ async def _notify_completion(
     chat_summary += suffix
     full_summary += suffix
 
-    worker_event = {
-      "type": "worker_summary",
-      "thread_id": thread.id,
-      "content": chat_summary,
-      "status": status,
-    }
+    worker_event = _build_worker_event(thread.id, chat_summary, status)
     await session_mgr.mark_unread(session_id)
-    await streaming_manager.broadcast(f"session:{session_id}", worker_event)
-    await session_mgr.save_chat_event(session_id, worker_event)
+    await broadcast_and_persist(session_id, worker_event, session_mgr)
     log.info("worker_summary_sent", session=session_id, thread=thread.id)
 
     await _trigger_master(session_id, full_summary, cfg, session_mgr)
@@ -219,15 +219,10 @@ async def _notify_completion(
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
       fallback = f'Worker `{thread.id[:8]}` finished: {_short_desc(description)}\n\n*(summary unavailable: {e})*'
-      fallback_event = {
-        "type": "worker_summary",
-        "thread_id": thread.id,
-        "content": fallback,
-        "status": "completed" if exit_code == 0 else "failed",
-      }
+      fallback_event = _build_worker_event(
+        thread.id, fallback, "completed" if exit_code == 0 else "failed")
       await session_mgr.mark_unread(session_id)
-      await streaming_manager.broadcast(f"session:{session_id}", fallback_event)
-      await session_mgr.save_chat_event(session_id, fallback_event)
+      await broadcast_and_persist(session_id, fallback_event, session_mgr)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner))
 
@@ -235,20 +230,16 @@ async def _notify_completion(
 async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:
   """Read the last N lines from a thread's events.jsonl for summarization."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  if not events_path.exists():
+  events = parse_ndjson_file(events_path)
+  if not events:
     return "(no events recorded)"
-  lines = events_path.read_text(encoding="utf-8").strip().splitlines()
-  tail = lines[-max_lines:] if len(lines) > max_lines else lines
+  tail = events[-max_lines:]
   parts = []
-  for line in tail:
-    try:
-      ev = json.loads(line)
-      ev_type = ev.get("type", "unknown")
-      content = _extract_event_content(ev, ev_type)
-      if content:
-        parts.append(f"[{ev_type}] {content}")
-    except json.JSONDecodeError as e:
-      log.debug("event_line_not_json", error=str(e))
+  for ev in tail:
+    ev_type = ev.get("type", "unknown")
+    content = _extract_event_content(ev, ev_type)
+    if content:
+      parts.append(f"[{ev_type}] {content}")
   return "\n".join(parts) if parts else "(empty event log)"
 
 

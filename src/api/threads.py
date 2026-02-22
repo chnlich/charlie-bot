@@ -1,13 +1,10 @@
 """Thread management API routes."""
 
-import json
 import os
 import signal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
-
-log = structlog.get_logger()
 
 from src.api.deps import get_thread_manager
 from src.core.models import (
@@ -15,7 +12,10 @@ from src.core.models import (
   ThreadStatus,
   WorkerEvent,
 )
+from src.core.ndjson import parse_ndjson_file
 from src.core.threads import ThreadManager
+
+log = structlog.get_logger()
 
 router = APIRouter()
 
@@ -40,21 +40,14 @@ async def get_thread_events(
 ):
   """Return historical Worker events from the on-disk events.jsonl log."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  if not events_path.exists():
-    return []
-
+  raw_events = parse_ndjson_file(events_path)
   events: list[WorkerEvent] = []
-  with open(events_path, "r", encoding="utf-8") as f:
-    for line in f:
-      line = line.strip()
-      if not line:
-        continue
-      try:
-        data = json.loads(line)
-        events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
-      except Exception as e:
-        log.debug("event_parse_failed", error=str(e), line=line[:200])
-        events.append(WorkerEvent(type="raw", content=line))
+  for data in raw_events:
+    try:
+      events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
+    except Exception as e:
+      log.debug("event_parse_failed", error=str(e))
+      events.append(WorkerEvent(type="raw", content=str(data)))
   return events
 
 

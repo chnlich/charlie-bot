@@ -9,10 +9,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.agents.master_cc import cancel_master, run_message
-from src.api.deps import get_session_manager
+from src.api.deps import get_session_manager, require_session
 from src.core.autonamer import maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
-from src.core.models import SendMessageRequest
+from src.core.models import SendMessageRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
 log = structlog.get_logger()
@@ -30,14 +30,10 @@ class SwitchBackendRequest(BaseModel):
 async def upload_file(
   session_id: str,
   file: UploadFile = File(...),
-  session_mgr: SessionManager = Depends(get_session_manager),
+  _meta: SessionMetadata = Depends(require_session),
   cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Upload a file to the session's uploads directory. Returns {filename, path, size}."""
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-
   uploads_dir = cfg.sessions_dir / session_id / "uploads"
   uploads_dir.mkdir(parents=True, exist_ok=True)
 
@@ -63,14 +59,11 @@ async def upload_file(
 async def send_message(
   session_id: str,
   req: SendMessageRequest,
+  meta: SessionMetadata = Depends(require_session),
   session_mgr: SessionManager = Depends(get_session_manager),
   cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-
   # Build content, appending any uploaded file paths.
   content = req.content
   if req.uploaded_files:
@@ -85,12 +78,9 @@ async def send_message(
 @router.post("/{session_id}/cancel")
 async def cancel_master_agent(
   session_id: str,
-  session_mgr: SessionManager = Depends(get_session_manager),
+  _meta: SessionMetadata = Depends(require_session),
 ):
   """Send SIGTERM to the running master CC agent for this session."""
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   found = await cancel_master(session_id)
   if not found:
     raise HTTPException(status_code=404, detail="No active master agent")
@@ -101,14 +91,11 @@ async def cancel_master_agent(
 async def switch_backend(
   session_id: str,
   req: SwitchBackendRequest,
+  meta: SessionMetadata = Depends(require_session),
   session_mgr: SessionManager = Depends(get_session_manager),
   cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Switch the active backend for a session."""
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-
   option = next((o for o in cfg.backend_options if o.id == req.backend), None)
   if option is None:
     raise HTTPException(status_code=400, detail=f"Unknown backend id: {req.backend!r}")

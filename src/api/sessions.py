@@ -12,7 +12,7 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.api.deps import get_session_manager, get_thread_manager
+from src.api.deps import get_session_manager, get_thread_manager, require_session
 
 router = APIRouter()
 
@@ -51,10 +51,7 @@ async def list_starred_sessions(session_mgr: SessionManager = Depends(get_sessio
 
 
 @router.get("/{session_id}", response_model=SessionMetadata)
-async def get_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
+async def get_session(meta: SessionMetadata = Depends(require_session)):
   return meta
 
 
@@ -67,14 +64,14 @@ async def archive_session(session_id: str, session_mgr: SessionManager = Depends
 
 
 @router.post("/{session_id}/unarchive", response_model=SessionMetadata)
-async def unarchive_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
+async def unarchive_session(
+    session_id: str,
+    meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
   if meta.status != SessionStatus.ARCHIVED:
     raise HTTPException(status_code=409, detail="Session is not archived")
-  meta = await session_mgr.unarchive_session(session_id)
-  return meta
+  return await session_mgr.unarchive_session(session_id)
 
 
 @router.post("/{session_id}/star", response_model=SessionMetadata)

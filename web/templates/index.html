@@ -52,9 +52,9 @@
     .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
     /* Sidebar resize handle */
     .resize-handle {
-      width: 4px;
+      width: 6px;
       cursor: col-resize;
-      background: transparent;
+      background: #334155;
       transition: background 0.15s;
       flex-shrink: 0;
     }
@@ -1537,6 +1537,8 @@
         startW = panel.offsetWidth;
         handle.classList.add('active');
         document.body.classList.add('resizing');
+        const iframe = document.getElementById('latex-pdf-frame');
+        if (iframe) iframe.style.pointerEvents = 'none';
 
         function onMove(e) {
           // Panel is on the RIGHT, so dragging left = bigger panel
@@ -1545,6 +1547,7 @@
           panel.style.width = w + 'px';
         }
         function onUp() {
+          if (iframe) iframe.style.pointerEvents = '';
           handle.classList.remove('active');
           document.body.classList.remove('resizing');
           const pct = (panel.offsetWidth / container.offsetWidth * 100).toFixed(1);

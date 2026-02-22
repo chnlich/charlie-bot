@@ -210,7 +210,7 @@
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0">
         <!-- Messages -->
-        <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-3">
+        <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           {% for msg in messages %}
           {% if msg.role == 'user' %}
           <div class="flex justify-end">

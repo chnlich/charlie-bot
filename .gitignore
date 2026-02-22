@@ -13,7 +13,6 @@ env/
 
 # Frontend
 web/node_modules/
-web/static/
 
 # Environment & secrets
 .env

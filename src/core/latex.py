@@ -24,6 +24,65 @@ def get_pdf_path() -> Path:
   return LATEX_PROJECT['project_dir'] / LATEX_PROJECT['pdf_file']
 
 
+# Proposal state — stores snapshot and pending AI edit for user review.
+_pending_proposal: dict | None = None
+_tex_snapshot: str | None = None
+
+
+def snapshot_tex() -> None:
+  """Read the current .tex file into _tex_snapshot."""
+  global _tex_snapshot
+  _tex_snapshot = get_tex_path().read_text(encoding='utf-8')
+
+
+def check_tex_changed() -> dict | None:
+  """Compare on-disk .tex with _tex_snapshot.
+
+  If different: revert file to snapshot, store {old, new} in _pending_proposal,
+  and return the proposal dict. If unchanged: return None.
+  """
+  global _pending_proposal, _tex_snapshot
+  if _tex_snapshot is None:
+    return None
+  current = get_tex_path().read_text(encoding='utf-8')
+  if current == _tex_snapshot:
+    return None
+  # Revert file to snapshot so the UI still shows the old content
+  get_tex_path().write_text(_tex_snapshot, encoding='utf-8')
+  _pending_proposal = {'old': _tex_snapshot, 'new': current}
+  return _pending_proposal
+
+
+def get_pending_proposal() -> dict | None:
+  """Return the current pending proposal, or None."""
+  return _pending_proposal
+
+
+def accept_proposal() -> bool:
+  """Write the proposed new content to disk and clear the proposal."""
+  global _pending_proposal
+  if _pending_proposal is None:
+    return False
+  get_tex_path().write_text(_pending_proposal['new'], encoding='utf-8')
+  _pending_proposal = None
+  return True
+
+
+def reject_proposal() -> bool:
+  """Clear the pending proposal (keep reverted on-disk content)."""
+  global _pending_proposal
+  if _pending_proposal is None:
+    return False
+  _pending_proposal = None
+  return True
+
+
+def clear_snapshot() -> None:
+  """Clear _tex_snapshot (called when no change was detected)."""
+  global _tex_snapshot
+  _tex_snapshot = None
+
+
 async def get_git_info() -> dict | None:
   """Return git repo info for the project dir, or None if not a git repo."""
   project_dir = str(LATEX_PROJECT['project_dir'])

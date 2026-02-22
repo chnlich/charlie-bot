@@ -54,6 +54,14 @@ async def _git_current_branch(repo_path: Path) -> str:
   return stdout.decode().strip()
 
 
+def _short_desc(description: str, limit: int = 120) -> str:
+  """First line of description, truncated."""
+  first_line = description.split('\n', 1)[0].strip()
+  if len(first_line) > limit:
+    return first_line[:limit] + '...'
+  return first_line
+
+
 async def spawn_worker(
   session_id: str,
   description: str,
@@ -102,6 +110,15 @@ async def spawn_worker(
     thread.started_at = datetime.now(timezone.utc)
     await thread_mgr._save_metadata(thread)
     log.info("worker_running", thread_id=thread.id, session=session_id)
+
+    started_event = {
+      'type': 'worker_summary',
+      'thread_id': thread.id,
+      'content': f'Worker `{thread.id[:8]}` started: {_short_desc(description)}',
+      'status': 'running',
+    }
+    await streaming_manager.broadcast(f'session:{session_id}', started_event)
+    await session_mgr.save_chat_event(session_id, started_event)
 
     try:
       exit_code = await worker.run()
@@ -170,10 +187,9 @@ async def _notify_completion(
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
     events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
-    result_text = await _read_result_text(session_id, thread.id, thread_mgr)
 
     status = "completed" if exit_code == 0 else "failed"
-    chat_summary = f"**Worker finished: {description}**\n\n{result_text}"
+    chat_summary = f'Worker `{thread.id[:8]}` finished: {_short_desc(description)}'
     full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
 
     suffix = ""
@@ -202,7 +218,7 @@ async def _notify_completion(
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
-      fallback = f"Worker finished task: {description}\n\n(Unable to generate summary: {e})"
+      fallback = f'Worker `{thread.id[:8]}` finished: {_short_desc(description)}\n\n*(summary unavailable: {e})*'
       fallback_event = {
         "type": "worker_summary",
         "thread_id": thread.id,
@@ -214,35 +230,6 @@ async def _notify_completion(
       await session_mgr.save_chat_event(session_id, fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner))
-
-
-async def _read_result_text(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
-  """Extract only the final result text from a thread's events.jsonl."""
-  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  if not events_path.exists():
-    return "(no events recorded)"
-  lines = events_path.read_text(encoding="utf-8").strip().splitlines()
-  # Walk backwards to find the last 'result' event
-  for line in reversed(lines):
-    try:
-      ev = json.loads(line)
-      if ev.get("type") == "result":
-        return str(ev.get("result", ""))[:1000]
-    except json.JSONDecodeError:
-      continue
-  # Fallback: find the last assistant text
-  for line in reversed(lines):
-    try:
-      ev = json.loads(line)
-      if ev.get("type") == "assistant":
-        msg = ev.get("message", {})
-        blocks = msg.get("content", []) if isinstance(msg, dict) else []
-        texts = [b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
-        if texts:
-          return " ".join(texts)[:1000]
-    except json.JSONDecodeError:
-      continue
-  return "(no result found)"
 
 
 async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:

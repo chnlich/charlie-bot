@@ -56,7 +56,7 @@ async def run_message(
   skip_user_event: bool = False,
   is_voice: bool = False,
   backend_option: Optional[BackendOption] = None,
-  extra_cc_flags: Optional[list[str]] = None,
+  extra_claude_flags: Optional[list[str]] = None,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -103,8 +103,8 @@ async def run_message(
   extra_flags: list[str] = []
   if session_meta.cc_session_id:
     extra_flags = ["--resume", session_meta.cc_session_id]
-  if extra_cc_flags:
-    extra_flags.extend(extra_cc_flags)
+  if extra_claude_flags:
+    extra_flags.extend(extra_claude_flags)
 
   env = {**os.environ}
   env.pop("CLAUDECODE", None)
@@ -132,7 +132,15 @@ async def run_message(
   try:
     _active_procs[session_meta.id] = backend
 
-    async for event in backend.run(user_content, cwd, env):
+    prompt = user_content
+    if is_voice:
+      prompt = (
+        "[The following message is from voice transcription and might not be accurate. "
+        "Please ask the user first for any words that are unclear or might be wrong.]\n"
+        f"{user_content}"
+      )
+
+    async for event in backend.run(prompt, cwd, env):
       # Capture the CC session ID from the first event that has one
       if not cc_session_id:
         sid = event.get("session_id")

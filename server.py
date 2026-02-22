@@ -79,6 +79,9 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     msg = json.loads(raw)
     if msg.get("type") == "cursor":
       cursor = int(msg.get("index", 0))
+  except WebSocketDisconnect:
+    log.debug("session_ws_early_disconnect", session_id=session_id)
+    return
   except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
     log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
     # Fall back to sending all events (cursor stays 0)

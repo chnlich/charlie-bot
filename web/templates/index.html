@@ -120,7 +120,11 @@
     .diff-modal-body .d2h-file-diff { border-color: #475569; }
     .diff-modal-body .d2h-code-side-line { background: #0f172a; }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
+  <script type="module">
+    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs';
+    window.pdfjsLib = pdfjsLib;
+  </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 h-dvh overflow-hidden">
   <div class="flex h-dvh">
@@ -408,9 +412,6 @@
 
   <!-- ==================== JAVASCRIPT ==================== -->
   <script>
-    if (typeof pdfjsLib !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js';
-    }
     // ---------------------------------------------------------------------------
     // Marked.js renderer: highlight.js syntax highlighting + code block headers
     // ---------------------------------------------------------------------------
@@ -817,6 +818,12 @@
       if (t === 'user') {
         // Skip CC-internal user events (tool results) — they have "message" but no "content"
         if (ev.message && !ev.content) return;
+        // Flush pending assistant text before showing user message (matches backend)
+        if (streamBuf) {
+          if (catchupDone) hideStreaming();
+          appendMessage('assistant', streamBuf);
+          streamBuf = '';
+        }
         // Only show if sent from another tab (this tab already added it optimistically)
         if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice);
         pendingUserMsg = false;
@@ -849,10 +856,22 @@
         stopThinking();
         appendMessage('system', 'Error: ' + (ev.content || ''));
       } else if (t === 'task_delegated') {
+        // Flush pending assistant text before system message (matches backend)
+        if (streamBuf) {
+          if (catchupDone) hideStreaming();
+          appendMessage('assistant', streamBuf);
+          streamBuf = '';
+        }
         appendMessage('system', `Task delegated: ${ev.description || ''}`);
         setSessionSpinner(SESSION_ID, true);
         if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '');
       } else if (t === 'worker_summary') {
+        // Flush pending assistant text before worker summary (matches backend)
+        if (streamBuf) {
+          if (catchupDone) hideStreaming();
+          appendMessage('assistant', streamBuf);
+          streamBuf = '';
+        }
         const wDiv = document.createElement('div');
         wDiv.className = 'flex justify-start';
         wDiv.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg">${marked.parse(ev.content || '')}</div>`;

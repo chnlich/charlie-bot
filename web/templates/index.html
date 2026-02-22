@@ -1498,16 +1498,21 @@
         const pdf = await pdfjsLib.getDocument({data}).promise;
         container.innerHTML = '';
         const containerWidth = container.clientWidth - 16;
+        const dpr = window.devicePixelRatio || 1;
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const scale = containerWidth / page.getViewport({scale: 1}).width;
           const viewport = page.getViewport({scale});
           const canvas = document.createElement('canvas');
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
+          canvas.width = viewport.width * dpr;
+          canvas.height = viewport.height * dpr;
+          canvas.style.width = viewport.width + 'px';
+          canvas.style.height = viewport.height + 'px';
           canvas.className = 'shadow-lg';
+          const ctx = canvas.getContext('2d');
+          ctx.scale(dpr, dpr);
           container.appendChild(canvas);
-          await page.render({canvasContext: canvas.getContext('2d'), viewport}).promise;
+          await page.render({canvasContext: ctx, viewport}).promise;
         }
       } catch (err) {
         console.error('PDF render failed:', err);

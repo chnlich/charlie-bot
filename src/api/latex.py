@@ -30,7 +30,7 @@ async def get_pdf():
   pdf = get_pdf_path()
   if not pdf.exists():
     return JSONResponse(content={'error': 'PDF not found. Compile first.'}, status_code=404)
-  return FileResponse(str(pdf), media_type='application/pdf', filename=pdf.name)
+  return FileResponse(str(pdf), media_type='application/pdf')
 
 
 @router.get('/source')

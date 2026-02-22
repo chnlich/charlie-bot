@@ -120,6 +120,7 @@
     .diff-modal-body .d2h-file-diff { border-color: #475569; }
     .diff-modal-body .d2h-code-side-line { background: #0f172a; }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 h-dvh overflow-hidden">
   <div class="flex h-dvh">
@@ -374,7 +375,7 @@
         </div>
         <!-- PDF view -->
         <div id="latex-pdf-view" class="flex-1 min-h-0">
-          <iframe id="latex-pdf-frame" class="w-full h-full border-0" src=""></iframe>
+          <div id="latex-pdf-canvas-container" class="w-full h-full overflow-auto bg-slate-900 flex flex-col items-center gap-2 p-2"></div>
         </div>
         <!-- TeX source view -->
         <div id="latex-tex-view" class="flex-1 min-h-0 hidden overflow-auto">
@@ -407,6 +408,9 @@
 
   <!-- ==================== JAVASCRIPT ==================== -->
   <script>
+    if (typeof pdfjsLib !== 'undefined') {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js';
+    }
     // ---------------------------------------------------------------------------
     // Marked.js renderer: highlight.js syntax highlighting + code block headers
     // ---------------------------------------------------------------------------
@@ -1464,9 +1468,32 @@
       }
     }
 
-    function loadLatexPdf() {
-      const frame = document.getElementById('latex-pdf-frame');
-      if (frame) frame.src = '/api/latex/pdf?t=' + Date.now();
+    async function loadLatexPdf() {
+      const container = document.getElementById('latex-pdf-canvas-container');
+      if (!container) return;
+      container.innerHTML = '<p class="text-slate-500 text-sm">Loading PDF...</p>';
+      try {
+        const resp = await fetch('/api/latex/pdf?t=' + Date.now());
+        if (!resp.ok) { container.innerHTML = '<p class="text-red-400 text-sm">PDF not found. Compile first.</p>'; return; }
+        const data = await resp.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({data}).promise;
+        container.innerHTML = '';
+        const containerWidth = container.clientWidth - 16;
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const scale = containerWidth / page.getViewport({scale: 1}).width;
+          const viewport = page.getViewport({scale});
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.className = 'shadow-lg';
+          container.appendChild(canvas);
+          await page.render({canvasContext: canvas.getContext('2d'), viewport}).promise;
+        }
+      } catch (err) {
+        console.error('PDF render failed:', err);
+        container.innerHTML = '<p class="text-red-400 text-sm">Failed to render PDF: ' + err.message + '</p>';
+      }
     }
 
     async function loadLatexGitInfo() {
@@ -1647,8 +1674,8 @@
         startW = panel.offsetWidth;
         handle.classList.add('active');
         document.body.classList.add('resizing');
-        const iframe = document.getElementById('latex-pdf-frame');
-        if (iframe) iframe.style.pointerEvents = 'none';
+        const pdfContainer = document.getElementById('latex-pdf-canvas-container');
+        if (pdfContainer) pdfContainer.style.pointerEvents = 'none';
 
         function onMove(e) {
           // Panel is on the RIGHT, so dragging left = bigger panel
@@ -1657,7 +1684,7 @@
           panel.style.width = w + 'px';
         }
         function onUp() {
-          if (iframe) iframe.style.pointerEvents = '';
+          if (pdfContainer) pdfContainer.style.pointerEvents = '';
           handle.classList.remove('active');
           document.body.classList.remove('resizing');
           const pct = (panel.offsetWidth / container.offsetWidth * 100).toFixed(1);

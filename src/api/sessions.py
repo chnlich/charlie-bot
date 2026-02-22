@@ -1,8 +1,13 @@
 """Session management API routes."""
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from src.core.config import CharlieBotConfig, get_config
 from src.core.models import (
   CreateSessionRequest,
   RenameSessionRequest,
@@ -51,9 +56,25 @@ async def list_starred_sessions(session_mgr: SessionManager = Depends(get_sessio
 
 
 @router.get("/scheduled", response_model=list[SessionMetadata])
-async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+async def list_scheduled_sessions(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
   """List sessions with a scheduled task, newest first."""
-  return await session_mgr.list_sessions(scheduled=True)
+  sessions = await session_mgr.list_sessions(scheduled=True)
+  task_map = {t.name: t for t in cfg.scheduled_tasks}
+  for s in sessions:
+    task = task_map.get(s.scheduled_task)
+    if task:
+      s.schedule_cron = task.cron
+      s.schedule_enabled = task.enabled
+      s.schedule_timezone = task.timezone
+      tz = ZoneInfo(task.timezone)
+      now = datetime.now(tz)
+      s.schedule_next_run = croniter(task.cron, now).get_next(datetime).isoformat()
+    else:
+      s.schedule_enabled = False
+  return sessions
 
 
 @router.get("/{session_id}", response_model=SessionMetadata)

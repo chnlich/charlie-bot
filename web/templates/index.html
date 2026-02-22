@@ -193,10 +193,8 @@
                   d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0121 9.414V19a2 2 0 01-2 2z" />
           </svg>
         </a>
-        <button onclick="toggleLatexPanel()" id="btn-latex-toggle" class="text-slate-500 hover:text-slate-300 transition-colors ml-1 mr-1" title="Toggle LaTeX panel">
-          <span class="text-sm font-medium">TeX</span>
-        </button>
         <div class="flex gap-1">
+          <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
           <button onclick="switchTab('workers')" id="btn-workers" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">
             Workers
@@ -504,8 +502,24 @@
     // Tabs
     // ---------------------------------------------------------------------------
     function switchTab(tab) {
-      ['chat', 'workers'].forEach(t => {
-        document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab);
+      const allTabs = ['chat-tex', 'chat', 'workers'];
+      // Both chat-tex and chat show the chat content, workers shows workers content
+      const showChat = (tab === 'chat-tex' || tab === 'chat');
+      document.getElementById('tab-chat').classList.toggle('hidden', !showChat);
+      document.getElementById('tab-workers').classList.toggle('hidden', tab !== 'workers');
+      // LaTeX panel visible only in chat-tex
+      const panel = document.getElementById('latex-panel');
+      if (panel) {
+        panel.classList.toggle('hidden', tab !== 'chat-tex');
+      }
+      if (tab === 'chat-tex') {
+        latexPanelOpen = true;
+        loadLatexPdf();
+      } else {
+        latexPanelOpen = false;
+      }
+      // Highlight active tab button
+      allTabs.forEach(t => {
         const btn = document.getElementById('btn-' + t);
         if (t === tab) {
           btn.classList.add('bg-blue-600/20', 'text-blue-300');
@@ -515,11 +529,6 @@
           btn.classList.add('text-slate-400');
         }
       });
-      // Show/hide latex panel based on active tab
-      const panel = document.getElementById('latex-panel');
-      if (panel) {
-        panel.classList.toggle('hidden', tab !== 'chat' || !latexPanelOpen);
-      }
     }
 
     // ---------------------------------------------------------------------------
@@ -1363,19 +1372,10 @@
     let latexEditorDirty = false;
 
     function toggleLatexPanel() {
-      latexPanelOpen = !latexPanelOpen;
-      const panel = document.getElementById('latex-panel');
-      const toggleBtn = document.getElementById('btn-latex-toggle');
       if (latexPanelOpen) {
-        switchTab("chat");
-        panel.classList.remove('hidden');
-        toggleBtn.classList.add('text-blue-400');
-        toggleBtn.classList.remove('text-slate-500');
-        loadLatexPdf();
+        switchTab('chat');
       } else {
-        panel.classList.add('hidden');
-        toggleBtn.classList.remove('text-blue-400');
-        toggleBtn.classList.add('text-slate-500');
+        switchTab('chat-tex');
       }
     }
 

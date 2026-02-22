@@ -15,6 +15,7 @@ from src.core.models import (
     SessionMetadata,
     SessionStatus,
 )
+from src.core.ndjson import append_ndjson, parse_ndjson_file
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
@@ -182,26 +183,11 @@ class SessionManager:
 
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     """Append a single NDJSON event line to chat_events.jsonl."""
-    path = self._chat_events_path(session_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiofiles.open(path, "a", encoding="utf-8") as f:
-      await f.write(json.dumps(event) + "\n")
+    await append_ndjson(self._chat_events_path(session_id), event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up (sync, for WebSocket handler)."""
-    path = self._chat_events_path(session_id)
-    if not path.exists():
-      return []
-    events = []
-    with open(path, "r", encoding="utf-8") as f:
-      for line in f:
-        line = line.strip()
-        if line:
-          try:
-            events.append(json.loads(line))
-          except json.JSONDecodeError:
-            pass
-    return events
+    return parse_ndjson_file(self._chat_events_path(session_id))
 
   def _chat_events_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"
@@ -223,20 +209,15 @@ class SessionManager:
       model           – primary model name
     Returns None if no result events exist.
     """
-    path = self._chat_events_path(session_id)
-    if not path.exists():
+    events = parse_ndjson_file(self._chat_events_path(session_id))
+    if not events:
       return None
 
-    lines = path.read_text(encoding="utf-8").strip().splitlines()
     last_result: dict | None = None
     last_usage_result: dict | None = None
     total_cost = 0.0
 
-    for line in lines:
-      try:
-        ev = json.loads(line)
-      except json.JSONDecodeError:
-        continue
+    for ev in events:
       if ev.get("type") != "result":
         continue
       last_result = ev

@@ -9,8 +9,7 @@ from src.api.deps import get_session_manager, get_thread_manager
 from src.core.config import get_config
 from src.core.models import DelegateRequest
 from src.core.sessions import SessionManager
-from src.core.spawner import spawn_worker
-from src.core.streaming import streaming_manager
+from src.core.spawner import broadcast_and_persist, spawn_worker
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -46,8 +45,7 @@ async def delegate_task(
     "thread_id": thread.id,
     "description": req.description,
   }
-  await session_mgr.save_chat_event(req.session_id, task_event)
-  await streaming_manager.broadcast(f"session:{req.session_id}", task_event)
+  await broadcast_and_persist(req.session_id, task_event, session_mgr)
 
   log.info("task_delegated_internal", session=req.session_id, thread_id=thread.id)
 

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from src.api import chat, internal, latex, pages, sessions, slash, threads, voice
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
+from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 
@@ -27,8 +28,13 @@ async def lifespan(app: FastAPI):
   await init_charliebot_home()
   log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
 
+  scheduler = Scheduler(cfg)
+  app.state.scheduler = scheduler
+  await scheduler.start()
+
   yield
 
+  await scheduler.stop()
   await streaming_manager.close_all()
   log.info("charliebot_shutdown")
 

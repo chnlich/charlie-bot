@@ -56,6 +56,7 @@ async def run_message(
   skip_user_event: bool = False,
   is_voice: bool = False,
   backend_option: Optional[BackendOption] = None,
+  extra_cc_flags: Optional[list[str]] = None,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -102,6 +103,8 @@ async def run_message(
   extra_flags: list[str] = []
   if session_meta.cc_session_id:
     extra_flags = ["--resume", session_meta.cc_session_id]
+  if extra_cc_flags:
+    extra_flags.extend(extra_cc_flags)
 
   env = {**os.environ}
   env.pop("CLAUDECODE", None)

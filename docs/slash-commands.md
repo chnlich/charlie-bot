@@ -58,6 +58,17 @@ Substitutes template variables in `prompt` and feeds the result to the master CC
 |-------|----------|-------------|
 | `prompt` | Yes | Prompt text; may contain `{args}` |
 | `args` | No | Description string shown in the help popup |
+| `claude_code_flags` | No | List of extra CLI flags passed to the Claude Code subprocess |
+
+#### `claude_code_flags`
+
+An optional list of CLI flags forwarded directly to the `claude` subprocess when this command runs. Only applies to `scope: prompt`.
+
+```yaml
+claude_code_flags: ['--permission-mode', 'plan']
+```
+
+Use this to run a command in a restricted permission mode, enable/disable specific tools, or pass any other flag that `claude` accepts.
 
 ---
 

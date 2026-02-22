@@ -43,6 +43,14 @@ commands:
   #   scope: prompt
   #   description: "Summarize conversation"
   #   prompt: "Summarize our conversation in bullet points."
+  #
+  # Example prompt command with claude_code_flags (runs in plan-only mode):
+  # plan:
+  #   scope: prompt
+  #   description: 'Plan without implementing'
+  #   args: '<what to plan>'
+  #   prompt: '{args}'
+  #   claude_code_flags: ['--permission-mode', 'plan']
 """
 
 

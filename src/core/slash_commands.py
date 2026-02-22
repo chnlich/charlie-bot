@@ -22,6 +22,7 @@ class SlashCommand(BaseModel):
   timeout: int = 10
   args: Optional[str] = None  # Description string for help text
   cwd: Optional[str] = None
+  claude_code_flags: list[str] = []  # Extra CLI flags passed to Claude Code subprocess (scope=prompt only)
 
 
 def load_slash_commands() -> list[SlashCommand]:

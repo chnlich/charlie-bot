@@ -170,20 +170,26 @@ async def _notify_completion(
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
     events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
+    result_text = await _read_result_text(session_id, thread.id, thread_mgr)
 
     status = "completed" if exit_code == 0 else "failed"
-    summary = f"**Worker finished: {description}**\n\n{events_summary}"
+    chat_summary = f"**Worker finished: {description}**\n\n{result_text}"
+    full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
+
+    suffix = ""
     if quota_exhausted:
-      summary += "\n\n*Worker stopped: API quota exhausted.*"
+      suffix = "\n\n*Worker stopped: API quota exhausted.*"
     elif error:
-      summary += f"\n\n*Worker error: {error}*"
+      suffix = f"\n\n*Worker error: {error}*"
     elif exit_code != 0:
-      summary += f"\n\n*Worker exited with code {exit_code}.*"
+      suffix = f"\n\n*Worker exited with code {exit_code}.*"
+    chat_summary += suffix
+    full_summary += suffix
 
     worker_event = {
       "type": "worker_summary",
       "thread_id": thread.id,
-      "content": summary,
+      "content": chat_summary,
       "status": status,
     }
     await session_mgr.mark_unread(session_id)
@@ -191,7 +197,7 @@ async def _notify_completion(
     await session_mgr.save_chat_event(session_id, worker_event)
     log.info("worker_summary_sent", session=session_id, thread=thread.id)
 
-    await _trigger_master(session_id, summary, cfg, session_mgr)
+    await _trigger_master(session_id, full_summary, cfg, session_mgr)
 
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
@@ -208,6 +214,35 @@ async def _notify_completion(
       await session_mgr.save_chat_event(session_id, fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner))
+
+
+async def _read_result_text(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
+  """Extract only the final result text from a thread's events.jsonl."""
+  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
+  if not events_path.exists():
+    return "(no events recorded)"
+  lines = events_path.read_text(encoding="utf-8").strip().splitlines()
+  # Walk backwards to find the last 'result' event
+  for line in reversed(lines):
+    try:
+      ev = json.loads(line)
+      if ev.get("type") == "result":
+        return str(ev.get("result", ""))[:1000]
+    except json.JSONDecodeError:
+      continue
+  # Fallback: find the last assistant text
+  for line in reversed(lines):
+    try:
+      ev = json.loads(line)
+      if ev.get("type") == "assistant":
+        msg = ev.get("message", {})
+        blocks = msg.get("content", []) if isinstance(msg, dict) else []
+        texts = [b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
+        if texts:
+          return " ".join(texts)[:1000]
+    except json.JSONDecodeError:
+      continue
+  return "(no result found)"
 
 
 async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:

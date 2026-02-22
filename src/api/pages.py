@@ -66,7 +66,7 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})
         assistant_buf = ""
-      messages.append({"role": "system", "content": ev.get("content", "")})
+      messages.append({"role": "worker_summary", "content": ev.get("content", "")})
 
   # Flush trailing assistant content (if stream was interrupted)
   if assistant_buf:

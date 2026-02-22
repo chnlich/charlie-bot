@@ -43,6 +43,14 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
     elif t == "assistant":
       msg = ev.get("message") or {}
       blocks = msg.get("content") or []
+      for b in blocks:
+        if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'ExitPlanMode':
+          plan_text = (b.get('input') or {}).get('plan', '')
+          if plan_text:
+            if assistant_buf:
+              messages.append({'role': 'assistant', 'content': assistant_buf})
+              assistant_buf = ''
+            messages.append({'role': 'plan', 'content': plan_text})
       text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
       if text and assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})

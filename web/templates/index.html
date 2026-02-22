@@ -266,6 +266,16 @@
           <div class="flex justify-start">
             <div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg" data-md>{{ msg.content }}</div>
           </div>
+          {% elif msg.role == 'plan' %}
+          <div class="flex justify-start">
+            <div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm prose-msg" data-md>
+              <div class="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                Plan
+              </div>
+              {{ msg.content }}
+            </div>
+          </div>
           {% endif %}
           {% endfor %}
           <!-- Streaming target -->
@@ -718,6 +728,14 @@
       } else if (role === 'assistant') {
         div.className = 'flex justify-start';
         div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg">${marked.parse(content)}</div>`;
+      } else if (role === 'plan') {
+        div.className = 'flex justify-start';
+        div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm prose-msg">
+          <div class="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            Plan
+          </div>
+          ${marked.parse(content)}</div>`;
       } else {
         div.className = 'flex justify-center';
         div.innerHTML = `<div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate">${escapeHtml(content)}</div>`;
@@ -829,6 +847,12 @@
         pendingUserMsg = false;
       } else if (t === 'assistant') {
         const blocks = (ev.message || {}).content || [];
+        for (const b of blocks) {
+          if (b.type === 'tool_use' && b.name === 'ExitPlanMode' && b.input && b.input.plan) {
+            if (streamBuf) { if (catchupDone) hideStreaming(); appendMessage('assistant', streamBuf); streamBuf = ''; }
+            appendMessage('plan', b.input.plan);
+          }
+        }
         let text = '';
         for (const b of blocks) {
           if (b.type === 'text') text += b.text || '';

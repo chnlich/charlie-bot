@@ -63,7 +63,7 @@
     }
     body.resizing { cursor: col-resize; user-select: none; }
     /* LaTeX panel */
-    .latex-panel { border-left: 1px solid #334155; }
+    .latex-panel { border-left: none; }
     .latex-toggle-active { background: rgba(37, 99, 235, 0.2); color: #93c5fd; }
     /* File upload chips */
     .file-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #1e293b; border: 1px solid #475569; color: #94a3b8; border-radius: 0.375rem; padding: 0.125rem 0.5rem; font-size: 0.75rem; max-width: 160px; }
@@ -84,6 +84,7 @@
         #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: 320px !important; }
         #sidebar.open { display: flex; }
         #resize-handle { display: none; }
+        #latex-resize-handle { display: none !important; }
         .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
         .hamburger-btn { display: inline-flex !important; }
     }
@@ -322,6 +323,8 @@
         {% endif %}
       </div>
 
+      <div id="latex-resize-handle" class="resize-handle" style="display:none"></div>
+
       <!-- ===== LATEX PANEL ===== -->
       <div id="latex-panel" class="hidden latex-panel flex flex-col" style="width: 60%">
         <!-- Panel header -->
@@ -511,6 +514,10 @@
       const panel = document.getElementById('latex-panel');
       if (panel) {
         panel.classList.toggle('hidden', tab !== 'chat-tex');
+      }
+      const latexHandle = document.getElementById('latex-resize-handle');
+      if (latexHandle) {
+        latexHandle.style.display = (tab === 'chat-tex') ? '' : 'none';
       }
       if (tab === 'chat-tex') {
         latexPanelOpen = true;
@@ -1513,6 +1520,45 @@
     }
 
     // ---------------------------------------------------------------------------
+    // LaTeX panel resize
+    // ---------------------------------------------------------------------------
+    function initLatexResize() {
+      const handle = document.getElementById('latex-resize-handle');
+      const panel = document.getElementById('latex-panel');
+      const container = panel.parentElement;
+      const saved = localStorage.getItem('latex-panel-pct');
+      if (saved) panel.style.width = saved + '%';
+
+      let startX, startW, containerW;
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        containerW = container.offsetWidth;
+        startW = panel.offsetWidth;
+        handle.classList.add('active');
+        document.body.classList.add('resizing');
+
+        function onMove(e) {
+          // Panel is on the RIGHT, so dragging left = bigger panel
+          const delta = startX - e.clientX;
+          const w = Math.min(Math.max(startW + delta, containerW * 0.2), containerW * 0.8);
+          panel.style.width = w + 'px';
+        }
+        function onUp() {
+          handle.classList.remove('active');
+          document.body.classList.remove('resizing');
+          const pct = (panel.offsetWidth / container.offsetWidth * 100).toFixed(1);
+          localStorage.setItem('latex-panel-pct', pct);
+          panel.style.width = pct + '%';
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    // ---------------------------------------------------------------------------
     // Relative time formatting
     // ---------------------------------------------------------------------------
     function relativeTime(isoStr) {
@@ -1540,6 +1586,7 @@
     // ---------------------------------------------------------------------------
     document.addEventListener('DOMContentLoaded', () => {
       initSidebarResize();
+      initLatexResize();
       // Seed sessionUnread from server-rendered unread dots
       document.querySelectorAll('[id^="unread-"]').forEach(el => {
         sessionUnread[el.id.replace('unread-', '')] = el.dataset.hasUnread === '1';

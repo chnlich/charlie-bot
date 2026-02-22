@@ -193,7 +193,12 @@ function switchSidebarFilter(filter) {
     active.classList.remove('text-slate-400');
   }
   // Fetch sessions for this filter
-  const urls = { all: '/api/sessions/', starred: '/api/sessions/starred', archived: '/api/sessions/archived' };
+  const urls = {
+    all: '/api/sessions/',
+    starred: '/api/sessions/starred',
+    archived: '/api/sessions/archived',
+    scheduled: '/api/sessions/scheduled',
+  };
   fetch(urls[filter])
     .then(res => res.json())
     .then(sessions => renderSessionList(sessions, filter))
@@ -232,7 +237,12 @@ async function toggleSessionStar(id, currentlyStarred) {
 function renderSessionList(sessions, filter) {
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
-    const labels = { all: 'No sessions yet', starred: 'No starred sessions', archived: 'No archived sessions' };
+    const labels = {
+      all: 'No sessions yet',
+      starred: 'No starred sessions',
+      archived: 'No archived sessions',
+      scheduled: 'No scheduled sessions',
+    };
     nav.innerHTML = `<p class="text-slate-500 text-sm px-3 py-2">${labels[filter]}</p>`;
     return;
   }

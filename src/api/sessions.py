@@ -50,6 +50,12 @@ async def list_starred_sessions(session_mgr: SessionManager = Depends(get_sessio
   return await session_mgr.list_sessions(starred=True)
 
 
+@router.get("/scheduled", response_model=list[SessionMetadata])
+async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+  """List sessions with a scheduled task, newest first."""
+  return await session_mgr.list_sessions(scheduled=True)
+
+
 @router.get("/{session_id}", response_model=SessionMetadata)
 async def get_session(meta: SessionMetadata = Depends(require_session)):
   return meta

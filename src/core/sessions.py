@@ -65,8 +65,9 @@ class SessionManager:
       self,
       status: Optional[SessionStatus] = None,
       starred: Optional[bool] = None,
+      scheduled: Optional[bool] = None,
   ) -> list[SessionMetadata]:
-    """List sessions, newest first. Optionally filter by status and/or starred."""
+    """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
     sessions: list[SessionMetadata] = []
     if not self._cfg.sessions_dir.exists():
       return sessions
@@ -79,6 +80,8 @@ class SessionManager:
       if status is not None and meta.status != status:
         continue
       if starred is not None and meta.starred != starred:
+        continue
+      if scheduled is not None and bool(meta.scheduled_task) != scheduled:
         continue
       meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
       sessions.append(meta)

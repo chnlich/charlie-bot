@@ -25,6 +25,26 @@ def _default_config_yaml() -> dict:
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
 
+DEFAULT_SLASH_COMMANDS = """\
+commands:
+  # Initially empty — /help is built-in, not defined here.
+  #
+  # Example shell command:
+  # git:
+  #   scope: shell
+  #   description: "Run git command"
+  #   args: "<git args>"
+  #   command: "git {args}"
+  #   cwd: "/home/chnlich/workspace/charlie-bot"
+  #   timeout: 10
+  #
+  # Example prompt command:
+  # summarize:
+  #   scope: prompt
+  #   description: "Summarize conversation"
+  #   prompt: "Summarize our conversation in bullet points."
+"""
+
 
 async def init_charliebot_home() -> None:
   """Ensure ~/.charliebot/ directory structure exists and seed default files."""
@@ -40,6 +60,7 @@ async def init_charliebot_home() -> None:
 
   # Seed global knowledge files
   _seed_if_missing(cfg.memory_file, DEFAULT_MEMORY)
+  _seed_if_missing(cfg.charliebot_home / 'slash_commands.yaml', DEFAULT_SLASH_COMMANDS)
 
   # Seed config.yaml with placeholders if missing
   if not cfg.config_file.exists():

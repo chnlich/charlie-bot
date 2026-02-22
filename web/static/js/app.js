@@ -1,0 +1,77 @@
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+document.addEventListener('DOMContentLoaded', () => {
+  initSidebarResize();
+  initLatexResize();
+  fetchSlashCommands();
+  // Seed sessionUnread from server-rendered unread dots
+  document.querySelectorAll('[id^="unread-"]').forEach(el => {
+    sessionUnread[el.id.replace('unread-', '')] = el.dataset.hasUnread === '1';
+  });
+  const urlFilter = new URLSearchParams(location.search).get('filter');
+  if (['all', 'starred', 'archived'].includes(urlFilter)) { switchSidebarFilter(urlFilter); }
+  updateRelativeTimes();
+  setInterval(updateRelativeTimes, 60000);
+  // Render markdown for server-rendered assistant messages
+  document.querySelectorAll('[data-md]').forEach(el => {
+    el.innerHTML = marked.parse(el.textContent);
+  });
+
+  // Scroll to bottom of messages
+  const msgs = document.getElementById('messages');
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+
+  // Restore draft message from localStorage
+  if (DRAFT_KEY) {
+    const draft = localStorage.getItem(DRAFT_KEY);
+    if (draft) {
+      const inp = document.getElementById('msg-input');
+      inp.value = draft;
+      autoResize(inp);
+    }
+  }
+
+  // LaTeX editor: track dirty state + Ctrl+S to compile
+  const latexEditor = document.getElementById('latex-editor');
+  if (latexEditor) {
+    latexEditor.addEventListener('input', () => { latexEditorDirty = true; });
+    latexEditor.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        compileLatex();
+      }
+    });
+  }
+
+  // Connect WebSocket
+  connectWS();
+
+  // Resume thinking indicator if session was mid-thought
+  if (THINKING_SINCE) {
+    thinkingStart = new Date(THINKING_SINCE).getTime();
+    document.getElementById('thinking')?.classList.remove('hidden');
+    updateThinkingTime();
+    thinkingInterval = setInterval(updateThinkingTime, 1000);
+    document.getElementById('send-btn')?.classList.add('opacity-50');
+    if (document.getElementById('send-btn')) document.getElementById('send-btn').disabled = true;
+    setSessionSpinner(SESSION_ID, true);
+    const sel = document.getElementById('backend-select');
+    if (sel) sel.disabled = true;
+  }
+
+});
+
+document.addEventListener('click', function(e) {
+  const menu = document.getElementById('overflow-menu');
+  const toggle = document.querySelector('.overflow-toggle');
+  if (menu && toggle && !menu.contains(e.target) && !toggle.contains(e.target)) {
+    menu.classList.remove('show');
+  }
+  // Hide slash popup on outside click
+  const popup = document.getElementById('slash-popup');
+  const input = document.getElementById('msg-input');
+  if (popup && input && !popup.contains(e.target) && e.target !== input) {
+    hideSlashPopup();
+  }
+});

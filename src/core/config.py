@@ -10,6 +10,17 @@ from pydantic import BaseModel, field_validator, model_validator
 from src.core.models import BackendOption
 
 
+class ScheduledTaskConfig(BaseModel):
+  """Configuration for a single scheduled (cron-like) task."""
+
+  name: str
+  cron: str
+  prompt: str
+  repo: Optional[str] = None
+  timezone: str = "America/New_York"
+  enabled: bool = True
+
+
 class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
 
@@ -43,6 +54,9 @@ class CharlieBotConfig(BaseModel):
   # Voice transcription: custom vocabulary hints for Gemini
   voice_custom_words: list[str] = []
 
+  # Scheduled (cron-like) tasks
+  scheduled_tasks: list[ScheduledTaskConfig] = []
+
   # Backend options available for model switching
   backend_options: list[BackendOption] = [
     BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6"),
@@ -68,6 +82,10 @@ class CharlieBotConfig(BaseModel):
       values["ssl_certfile"] = os.path.expanduser(values["ssl_certfile"])
     if values.get("ssl_keyfile"):
       values["ssl_keyfile"] = os.path.expanduser(values["ssl_keyfile"])
+    # Expand ~ in scheduled_tasks[*].repo
+    for task in values.get("scheduled_tasks", []):
+      if isinstance(task, dict) and task.get("repo"):
+        task["repo"] = os.path.expanduser(task["repo"])
     return values
 
   @field_validator("workspace_dirs", mode="before")

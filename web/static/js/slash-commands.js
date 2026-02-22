@@ -87,6 +87,8 @@ async function executeSlashCommand(name, args) {
     } else if (data.type === 'prompt_dispatched') {
       appendMessage('user', displayText);
       startThinking();
+    } else if (data.type === 'task_triggered') {
+      appendMessage('system', `Scheduled task "${data.task}" triggered — session ${data.session_id.slice(0, 8)}, thread ${data.thread_id.slice(0, 8)}`);
     }
   } catch (err) {
     console.error('executeSlashCommand failed:', err);

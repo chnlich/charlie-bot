@@ -3,7 +3,7 @@
 import asyncio
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -19,7 +19,7 @@ log = structlog.get_logger()
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Built-in /help command descriptor
+# Built-in command descriptors
 # ---------------------------------------------------------------------------
 
 _HELP_ENTRY = {
@@ -28,12 +28,20 @@ _HELP_ENTRY = {
   'description': 'Show available slash commands',
 }
 
+_RUN_ENTRY = {
+  'name': 'run',
+  'scope': 'builtin',
+  'description': 'Manually trigger a scheduled task',
+  'args': '<task-name>',
+}
+
 
 def _build_command_list() -> list[dict]:
-  """Return the full command list: YAML commands + built-in /help."""
+  """Return the full command list: YAML commands + built-ins."""
   cmds = load_slash_commands()
   result = [{'name': c.name, 'scope': c.scope, 'description': c.description, 'args': c.args} for c in cmds]
   result.append(_HELP_ENTRY)
+  result.append(_RUN_ENTRY)
   return result
 
 
@@ -50,6 +58,7 @@ async def list_commands():
 
 @router.post('/{session_id}/execute')
 async def execute_command(
+  request: Request,
   session_id: str,
   req: SlashExecuteRequest,
   meta: SessionMetadata = Depends(require_session),
@@ -62,6 +71,28 @@ async def execute_command(
   # Built-in /help
   if name == 'help':
     return {'type': 'help', 'commands': _build_command_list()}
+
+  # Built-in /run <task-name>
+  if name == 'run':
+    task_name = req.args.strip()
+    if not task_name:
+      return {'error': 'Usage: /run <task-name>'}
+    scheduler = getattr(request.app.state, 'scheduler', None)
+    if scheduler is None:
+      return {'error': 'Scheduler not available'}
+    try:
+      result = await scheduler.run_task_now(task_name)
+    except ValueError as e:
+      return {'error': str(e)}
+    return JSONResponse(
+      status_code=202,
+      content={
+        'type': 'task_triggered',
+        'task': task_name,
+        'session_id': result['session_id'],
+        'thread_id': result['thread_id'],
+      },
+    )
 
   # Look up in YAML registry
   commands = {c.name: c for c in load_slash_commands()}

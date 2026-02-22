@@ -74,6 +74,8 @@ class SessionMetadata(BaseModel):
   updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   cc_session_id: Optional[str] = None
   backend: str = "claude-opus-4.6"  # must match an id in cfg.backend_options
+  scheduled_task: Optional[str] = None  # task name; None = regular session
+  last_scheduled_run: Optional[str] = None  # ISO datetime of last scheduler execution
 
 
 # ---------------------------------------------------------------------------

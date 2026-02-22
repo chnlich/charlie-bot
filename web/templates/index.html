@@ -1367,6 +1367,7 @@
       const panel = document.getElementById('latex-panel');
       const toggleBtn = document.getElementById('btn-latex-toggle');
       if (latexPanelOpen) {
+        switchTab("chat");
         panel.classList.remove('hidden');
         toggleBtn.classList.add('text-blue-400');
         toggleBtn.classList.remove('text-slate-500');

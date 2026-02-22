@@ -335,6 +335,7 @@
           </div>
           <button onclick="compileLatex()" id="btn-compile" class="px-3 py-1.5 text-xs rounded-lg bg-green-700 hover:bg-green-600 font-medium transition-colors">Compile</button>
           <span id="compile-status" class="text-xs text-slate-500"></span>
+          <span id="latex-git-info" class="text-xs text-slate-400 font-mono" title=""></span>
           <div class="flex-1"></div>
           <button onclick="toggleLatexPanel()" class="text-slate-500 hover:text-slate-300 p-1" title="Close panel">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -522,6 +523,7 @@
       if (tab === 'chat-tex') {
         latexPanelOpen = true;
         loadLatexPdf();
+        loadLatexGitInfo();
       } else {
         latexPanelOpen = false;
       }
@@ -1420,6 +1422,21 @@
     function loadLatexPdf() {
       const frame = document.getElementById('latex-pdf-frame');
       if (frame) frame.src = '/api/latex/pdf?t=' + Date.now();
+    }
+
+    async function loadLatexGitInfo() {
+      const el = document.getElementById('latex-git-info');
+      if (!el) return;
+      try {
+        const resp = await fetch('/api/latex/git-info');
+        if (!resp.ok) { el.textContent = ''; el.title = ''; return; }
+        const info = await resp.json();
+        el.textContent = `${info.repo_name} (${info.branch})`;
+        el.title = info.repo_path;
+      } catch (e) {
+        el.textContent = '';
+        el.title = '';
+      }
     }
 
     async function loadLatexSource() {

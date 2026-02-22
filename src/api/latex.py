@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from src.core.latex import compile_latex, get_pdf_path, get_tex_path
+from src.core.latex import compile_latex, get_git_info, get_pdf_path, get_tex_path
 
 log = structlog.get_logger()
 
@@ -14,6 +14,14 @@ router = APIRouter()
 
 class TexSourceRequest(BaseModel):
   content: str
+
+
+@router.get('/git-info')
+async def get_git_info_endpoint():
+  info = await get_git_info()
+  if info is None:
+    return JSONResponse(content={'error': 'Not a git repo'}, status_code=404)
+  return JSONResponse(content=info)
 
 
 @router.post('/compile')

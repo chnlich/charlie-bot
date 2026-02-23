@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from croniter import croniter
 
+from src.core.backup import BACKUP_DIR, apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
@@ -19,6 +20,19 @@ from src.core.threads import ThreadManager
 log = structlog.get_logger()
 
 _TICK_INTERVAL = 60  # seconds between scheduler ticks
+
+
+async def _backup_handler() -> None:
+  """Built-in handler: create a backup and apply retention policy."""
+  loop = asyncio.get_running_loop()
+  archive = await loop.run_in_executor(None, create_backup)
+  await loop.run_in_executor(None, apply_retention, BACKUP_DIR)
+  log.info('backup_handler_done', archive=str(archive))
+
+
+TASK_HANDLERS: dict[str, callable] = {
+    'backup': _backup_handler,
+}
 
 
 class Scheduler:
@@ -99,6 +113,29 @@ class Scheduler:
   # ---------------------------------------------------------------------------
 
   async def _execute_task(self, task_cfg: ScheduledTaskConfig) -> dict:
+    """Route to handler or prompt execution based on task config."""
+    if task_cfg.handler:
+      return await self._execute_handler_task(task_cfg)
+    return await self._execute_prompt_task(task_cfg)
+
+  async def _execute_handler_task(self, task_cfg: ScheduledTaskConfig) -> dict:
+    """Run a built-in handler inline; track last_scheduled_run via session."""
+    handler = TASK_HANDLERS.get(task_cfg.handler)
+    if handler is None:
+      raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
+    cfg = self._reload_config()
+    session_mgr = SessionManager(cfg)
+    session = await self._get_or_create_session(task_cfg.name, session_mgr)
+    tz = ZoneInfo(task_cfg.timezone)
+    now = datetime.now(tz)
+    session.last_scheduled_run = now.isoformat()
+    session.updated_at = datetime.now(timezone.utc)
+    await session_mgr.save_metadata(session)
+    log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
+    asyncio.create_task(handler(), name=f'handler_{task_cfg.name}')
+    return {'session_id': session.id, 'thread_id': None}
+
+  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
     cfg = self._reload_config()
     session_mgr = SessionManager(cfg)

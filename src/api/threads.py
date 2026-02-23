@@ -1,6 +1,5 @@
 """Thread management API routes."""
 
-import json
 import os
 import signal
 
@@ -43,27 +42,41 @@ async def get_thread_events(
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
   raw_events = parse_ndjson_file(events_path)
   events: list[WorkerEvent] = []
+  tool_id_to_name: dict[str, str] = {}
   for data in raw_events:
-    event_type = data.get("type", "")
-    if event_type == "assistant" and isinstance(data.get("message"), dict):
-      for block in data["message"].get("content", []):
-        if block.get("type") == "text":
-          events.append(WorkerEvent(type="assistant", content=block["text"]))
-        elif block.get("type") == "tool_use":
+    event_type = data.get('type', '')
+    if event_type == 'assistant' and isinstance(data.get('message'), dict):
+      for block in data['message'].get('content', []):
+        if block.get('type') == 'text':
+          events.append(WorkerEvent(type='assistant', content=block['text']))
+        elif block.get('type') == 'tool_use':
+          tool_id_to_name[block['id']] = block['name']
           events.append(
               WorkerEvent(
-                  type="tool_use",
-                  tool_name=block["name"],
-                  content=json.dumps(block.get("input", {}))[:200],
+                  type='tool_use',
+                  tool_name=block['name'],
+                  input=block.get('input', {}),
               ))
-    elif event_type == "result":
-      events.append(WorkerEvent(type="result", content=str(data.get("result", ""))))
+    elif event_type == 'user' and isinstance(data.get('message'), dict):
+      for block in data['message'].get('content', []):
+        if block.get('type') == 'tool_result':
+          tool_use_id = block.get('tool_use_id', '')
+          name = tool_id_to_name.get(tool_use_id, '')
+          raw_content = block.get('content', '')
+          if isinstance(raw_content, list):
+            text_parts = [p.get('text', '') for p in raw_content if p.get('type') == 'text']
+            result_text = '\n'.join(text_parts)
+          else:
+            result_text = str(raw_content)
+          events.append(WorkerEvent(type='tool_result', tool_name=name, content=result_text))
+    elif event_type == 'result':
+      events.append(WorkerEvent(type='result', content=str(data.get('result', ''))))
     else:
       try:
         events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
       except Exception as e:
-        log.debug("event_parse_failed", error=str(e))
-        events.append(WorkerEvent(type="raw", content=str(data)))
+        log.debug('event_parse_failed', error=str(e))
+        events.append(WorkerEvent(type='raw', content=str(data)))
   return events
 
 

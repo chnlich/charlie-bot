@@ -116,7 +116,11 @@ function handleWSEvent(ev) {
       appendMessage('assistant', streamBuf);
       streamBuf = '';
     }
-    if (!ev.still_thinking) stopThinking();
+    if (!ev.still_thinking) {
+      const elapsed = thinkingStart ? Math.floor((Date.now() - thinkingStart) / 1000) : null;
+      stopThinking();
+      if (catchupDone) appendSeparator(elapsed);
+    }
   } else if (t === 'assistant_error') {
     if (catchupDone) hideStreaming();
     if (streamBuf) {

@@ -80,6 +80,19 @@ function appendMessage(role, content, isVoice) {
   container.scrollTop = container.scrollHeight;
 }
 
+function appendSeparator(seconds) {
+  const container = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'flex items-center gap-3 py-2 px-4 separator-line';
+  const timeStr = seconds != null ? ' · ' + seconds + 's' : '';
+  div.innerHTML = '<div class="flex-1 border-t border-slate-600/40"></div>'
+    + '<span class="text-xs text-slate-500 whitespace-nowrap">response complete' + timeStr + '</span>'
+    + '<div class="flex-1 border-t border-slate-600/40"></div>';
+  const streamEl = document.getElementById('streaming-msg');
+  container.insertBefore(div, streamEl);
+  container.scrollTop = container.scrollHeight;
+}
+
 function escapeHtml(str) {
   const d = document.createElement('div');
   d.textContent = str;

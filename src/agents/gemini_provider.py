@@ -25,10 +25,9 @@ class GeminiProvider(LLMProvider):
     def _call():
       part = {"inline_data": {"data": audio_bytes, "mime_type": mime_type}}
       prompt = (
-        "Transcribe this audio exactly, word for word. "
-        "The speaker may use English, Chinese, or mix both languages — preserve the original language(s) used. Do not translate. "
-        "For Chinese, always output simplified Chinese (简体字), never traditional Chinese."
-      )
+          "Transcribe this audio exactly, word for word. "
+          "The speaker may use English, Chinese, or mix both languages — preserve the original language(s) used. Do not translate. "
+          "For Chinese, always output simplified Chinese (简体字), never traditional Chinese.")
       if custom_words:
         prompt += " Pay special attention to these terms and spell them exactly: " + ", ".join(custom_words) + "."
       response = model.generate_content([prompt, part])

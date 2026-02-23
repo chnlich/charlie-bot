@@ -31,10 +31,10 @@ class SwitchBackendRequest(BaseModel):
 
 @router.post("/{session_id}/upload")
 async def upload_file(
-  session_id: str,
-  file: UploadFile = File(...),
-  _meta: SessionMetadata = Depends(require_session),
-  cfg: CharlieBotConfig = Depends(get_config),
+    session_id: str,
+    file: UploadFile = File(...),
+    _meta: SessionMetadata = Depends(require_session),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Upload a file to the session's uploads directory. Returns {filename, path, size}."""
   uploads_dir = cfg.sessions_dir / session_id / "uploads"
@@ -60,11 +60,11 @@ async def upload_file(
 
 @router.post("/{session_id}/message")
 async def send_message(
-  session_id: str,
-  req: SendMessageRequest,
-  meta: SessionMetadata = Depends(require_session),
-  session_mgr: SessionManager = Depends(get_session_manager),
-  cfg: CharlieBotConfig = Depends(get_config),
+    session_id: str,
+    req: SendMessageRequest,
+    meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   # Build content, appending any uploaded file paths.
@@ -95,8 +95,13 @@ async def send_message(
       if cmd.scope == 'prompt':
         substituted = cmd.prompt.replace('{args}', args) if cmd.prompt else args
         asyncio.create_task(
-            run_and_finalize(cfg, meta, substituted, session_mgr, extra_claude_flags=cmd.claude_code_flags or None,
-                             skip_user_event=True))
+            run_and_finalize(
+                cfg,
+                meta,
+                substituted,
+                session_mgr,
+                extra_claude_flags=cmd.claude_code_flags or None,
+                skip_user_event=True))
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
       elif cmd.scope == 'shell' and cmd.command:
@@ -124,8 +129,8 @@ async def send_message(
 
 @router.post("/{session_id}/cancel")
 async def cancel_master_agent(
-  session_id: str,
-  _meta: SessionMetadata = Depends(require_session),
+    session_id: str,
+    _meta: SessionMetadata = Depends(require_session),
 ):
   """Send SIGTERM to the running master CC agent for this session."""
   found = await cancel_master(session_id)
@@ -136,11 +141,11 @@ async def cancel_master_agent(
 
 @router.patch("/{session_id}/backend")
 async def switch_backend(
-  session_id: str,
-  req: SwitchBackendRequest,
-  meta: SessionMetadata = Depends(require_session),
-  session_mgr: SessionManager = Depends(get_session_manager),
-  cfg: CharlieBotConfig = Depends(get_config),
+    session_id: str,
+    req: SwitchBackendRequest,
+    meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Switch the active backend for a session."""
   option = next((o for o in cfg.backend_options if o.id == req.backend), None)
@@ -160,26 +165,30 @@ async def switch_backend(
 
 
 async def run_and_finalize(
-  cfg: CharlieBotConfig,
-  meta,
-  content: str,
-  session_mgr: SessionManager,
-  *,
-  is_voice: bool = False,
-  extra_claude_flags: list[str] | None = None,
-  skip_user_event: bool = False,
+    cfg: CharlieBotConfig,
+    meta,
+    content: str,
+    session_mgr: SessionManager,
+    *,
+    is_voice: bool = False,
+    extra_claude_flags: list[str] | None = None,
+    skip_user_event: bool = False,
 ) -> None:
   """Run master CC, persist cc_session_id, and auto-name the session."""
   backend_id = meta.backend
   backend_option = next((o for o in cfg.backend_options if o.id == backend_id), None)
   try:
     cc_session_id = await run_message(
-      cfg, meta, content, session_mgr.save_chat_event,
-      session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
-      skip_user_event=skip_user_event,
-      backend_option=backend_option,
-      is_voice=is_voice,
-      extra_claude_flags=extra_claude_flags,
+        cfg,
+        meta,
+        content,
+        session_mgr.save_chat_event,
+        session_mgr.save_metadata,
+        mark_unread=session_mgr.mark_unread,
+        skip_user_event=skip_user_event,
+        backend_option=backend_option,
+        is_voice=is_voice,
+        extra_claude_flags=extra_claude_flags,
     )
     # Persist CC session ID if newly assigned.
     # Re-read fresh metadata from disk to avoid overwriting has_unread
@@ -199,10 +208,10 @@ async def run_and_finalize(
 
 
 async def _auto_name(
-  cfg: CharlieBotConfig,
-  session_meta,
-  user_message: str,
-  session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    session_meta,
+    user_message: str,
+    session_mgr: SessionManager,
 ) -> None:
   """Extract assistant response from saved events and auto-name the session."""
   events = session_mgr.load_chat_events_sync(session_meta.id)

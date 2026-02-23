@@ -88,7 +88,11 @@ async def get_git_info() -> dict | None:
   project_dir = str(LATEX_PROJECT['project_dir'])
   try:
     root_proc = await asyncio.create_subprocess_exec(
-        'git', '-C', project_dir, 'rev-parse', '--show-toplevel',
+        'git',
+        '-C',
+        project_dir,
+        'rev-parse',
+        '--show-toplevel',
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
@@ -98,7 +102,12 @@ async def get_git_info() -> dict | None:
     repo_path = root_out.decode().strip()
 
     branch_proc = await asyncio.create_subprocess_exec(
-        'git', '-C', project_dir, 'rev-parse', '--abbrev-ref', 'HEAD',
+        'git',
+        '-C',
+        project_dir,
+        'rev-parse',
+        '--abbrev-ref',
+        'HEAD',
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )

@@ -23,16 +23,16 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 _HELP_ENTRY = {
-  'name': 'help',
-  'scope': 'builtin',
-  'description': 'Show available slash commands',
+    'name': 'help',
+    'scope': 'builtin',
+    'description': 'Show available slash commands',
 }
 
 _RUN_ENTRY = {
-  'name': 'run',
-  'scope': 'builtin',
-  'description': 'Manually trigger a scheduled task',
-  'args': '<task-name>',
+    'name': 'run',
+    'scope': 'builtin',
+    'description': 'Manually trigger a scheduled task',
+    'args': '<task-name>',
 }
 
 
@@ -58,12 +58,12 @@ async def list_commands():
 
 @router.post('/{session_id}/execute')
 async def execute_command(
-  request: Request,
-  session_id: str,
-  req: SlashExecuteRequest,
-  meta: SessionMetadata = Depends(require_session),
-  session_mgr: SessionManager = Depends(get_session_manager),
-  cfg: CharlieBotConfig = Depends(get_config),
+    request: Request,
+    session_id: str,
+    req: SlashExecuteRequest,
+    meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Execute a slash command for a session."""
   name = req.command.lstrip('/')
@@ -88,13 +88,13 @@ async def execute_command(
     except ValueError as e:
       return {'error': str(e)}
     return JSONResponse(
-      status_code=202,
-      content={
-        'type': 'task_triggered',
-        'task': task_name,
-        'session_id': result['session_id'],
-        'thread_id': result['thread_id'],
-      },
+        status_code=202,
+        content={
+            'type': 'task_triggered',
+            'task': task_name,
+            'session_id': result['session_id'],
+            'thread_id': result['thread_id'],
+        },
     )
 
   # Look up in YAML registry
@@ -110,18 +110,18 @@ async def execute_command(
 
     session_dir = str(cfg.sessions_dir / session_id)
     result = await execute_shell_command(
-      cmd_template=cmd.command,
-      args=req.args,
-      session_dir=session_dir,
-      timeout=cmd.timeout,
-      cwd=cmd.cwd,
+        cmd_template=cmd.command,
+        args=req.args,
+        session_dir=session_dir,
+        timeout=cmd.timeout,
+        cwd=cmd.cwd,
     )
     return {
-      'type': 'shell_result',
-      'command': name,
-      'stdout': result['stdout'],
-      'stderr': result['stderr'],
-      'exit_code': result['exit_code'],
+        'type': 'shell_result',
+        'command': name,
+        'stdout': result['stdout'],
+        'stderr': result['stderr'],
+        'exit_code': result['exit_code'],
     }
 
   if cmd.scope == 'prompt':
@@ -130,7 +130,8 @@ async def execute_command(
       return {'error': f'Command /{name} has no prompt template configured'}
 
     substituted = cmd.prompt.replace('{args}', req.args)
-    asyncio.create_task(run_and_finalize(cfg, meta, substituted, session_mgr, extra_claude_flags=cmd.claude_code_flags or None))
+    asyncio.create_task(
+        run_and_finalize(cfg, meta, substituted, session_mgr, extra_claude_flags=cmd.claude_code_flags or None))
     return JSONResponse(status_code=202, content={'type': 'prompt_dispatched', 'command': name})
 
   log.warning('slash_unknown_scope', name=name, scope=cmd.scope)

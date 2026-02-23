@@ -17,11 +17,11 @@ from src.core.streaming import streaming_manager
 log = structlog.get_logger()
 
 QUOTA_ERROR_PATTERNS = [
-  "quota exceeded",
-  "rate limit",
-  "resource_exhausted",
-  "429",
-  "quota",
+    "quota exceeded",
+    "rate limit",
+    "resource_exhausted",
+    "429",
+    "quota",
 ]
 
 
@@ -33,13 +33,13 @@ class Worker:
   """Manages a single Claude Code Worker subprocess for one task."""
 
   def __init__(
-    self,
-    thread_metadata: ThreadMetadata,
-    working_dir: Path,
-    events_log_path: Path,
-    task_description: str,
-    extra_env: Optional[dict[str, str]] = None,
-    on_spawned: Optional[callable] = None,
+      self,
+      thread_metadata: ThreadMetadata,
+      working_dir: Path,
+      events_log_path: Path,
+      task_description: str,
+      extra_env: Optional[dict[str, str]] = None,
+      on_spawned: Optional[callable] = None,
   ):
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -61,8 +61,8 @@ class Worker:
         await self._on_spawned(self._thread)
 
     self._backend = ClaudeCodeBackend(
-      buffer_limit=get_config().subprocess_buffer_limit,
-      on_spawn=_on_spawn,
+        buffer_limit=get_config().subprocess_buffer_limit,
+        on_spawn=_on_spawn,
     )
 
     log.info("worker_starting", thread=self._thread.id, cwd=str(self._worktree))
@@ -83,9 +83,9 @@ class Worker:
 
     # Emit final completion event
     final_event = {
-      "type": "complete" if exit_code == 0 else "error",
-      "status": "success" if exit_code == 0 else "failed",
-      "exit_code": exit_code,
+        "type": "complete" if exit_code == 0 else "error",
+        "status": "success" if exit_code == 0 else "failed",
+        "exit_code": exit_code,
     }
     await streaming_manager.broadcast(self._thread.id, final_event)
     log.info("worker_finished", thread=self._thread.id, exit_code=exit_code)

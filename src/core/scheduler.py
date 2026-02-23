@@ -115,23 +115,23 @@ class Scheduler:
     thread = await thread_mgr.create_thread(session, task_cfg.prompt)
 
     asyncio.create_task(
-      spawn_worker(
-        session_id=session.id,
-        description=task_cfg.prompt,
-        thread_id=thread.id,
-        cfg=cfg,
-        session_mgr=session_mgr,
-        thread_mgr=thread_mgr,
-        repo_path=task_cfg.repo,
-      ),
-      name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
+        spawn_worker(
+            session_id=session.id,
+            description=task_cfg.prompt,
+            thread_id=thread.id,
+            cfg=cfg,
+            session_mgr=session_mgr,
+            thread_mgr=thread_mgr,
+            repo_path=task_cfg.repo,
+        ),
+        name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
     )
 
     event = {
-      "type": "task_delegated",
-      "task": task_cfg.name,
-      "session_id": session.id,
-      "thread_id": thread.id,
+        "type": "task_delegated",
+        "task": task_cfg.name,
+        "session_id": session.id,
+        "thread_id": thread.id,
     }
     await streaming_manager.broadcast("sidebar", event)
     log.info("scheduled_task_fired", task=task_cfg.name, session=session.id, thread=thread.id)
@@ -142,9 +142,7 @@ class Scheduler:
   # Session helpers
   # ---------------------------------------------------------------------------
 
-  async def _get_or_create_session(
-    self, task_name: str, session_mgr: SessionManager
-  ) -> SessionMetadata:
+  async def _get_or_create_session(self, task_name: str, session_mgr: SessionManager) -> SessionMetadata:
     """Return the existing dedicated session for task_name, or create one."""
     sessions = await session_mgr.list_sessions()
     for s in sessions:
@@ -157,9 +155,7 @@ class Scheduler:
     log.info("scheduled_session_created", task=task_name, session=meta.id)
     return meta
 
-  async def _get_last_run(
-    self, task_name: str, session_mgr: SessionManager
-  ) -> Optional[datetime]:
+  async def _get_last_run(self, task_name: str, session_mgr: SessionManager) -> Optional[datetime]:
     """Return last_scheduled_run from the dedicated session, or None."""
     sessions = await session_mgr.list_sessions()
     for s in sessions:

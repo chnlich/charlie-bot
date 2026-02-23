@@ -17,13 +17,13 @@ router = APIRouter()
 log = structlog.get_logger()
 
 SUPPORTED_MIME_TYPES = {
-  "audio/webm",
-  "audio/ogg",
-  "audio/mp4",
-  "audio/mpeg",
-  "audio/wav",
-  "audio/flac",
-  "audio/x-m4a",
+    "audio/webm",
+    "audio/ogg",
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/wav",
+    "audio/flac",
+    "audio/x-m4a",
 }
 
 _transcriber: AudioTranscriber | None = None
@@ -38,10 +38,10 @@ def _get_transcriber() -> AudioTranscriber:
 
 @router.post("/transcribe", response_model=VoiceTranscriptionResponse)
 async def transcribe_audio(
-  audio: UploadFile = File(...),
-  session_id: str = Form(...),
-  session_mgr: SessionManager = Depends(get_session_manager),
-  cfg: CharlieBotConfig = Depends(get_config),
+    audio: UploadFile = File(...),
+    session_id: str = Form(...),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Transcribe uploaded audio using Gemini."""
   content_type = audio.content_type or "audio/webm"

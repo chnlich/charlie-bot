@@ -28,8 +28,8 @@ def main() -> None:
   port = cfg.server_port
 
   payload = {
-    "session_id": args.session,
-    "description": args.description,
+      "session_id": args.session,
+      "description": args.description,
   }
   if args.repo is not None:
     payload["repo_path"] = args.repo

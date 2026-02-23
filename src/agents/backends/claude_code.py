@@ -12,12 +12,12 @@ from src.agents.backends.base import AgentBackend
 log = structlog.get_logger()
 
 BASE_COMMAND: list[str] = [
-  "claude",
-  "-p",
-  "--output-format",
-  "stream-json",
-  "--verbose",
-  "--dangerously-skip-permissions",
+    "claude",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--dangerously-skip-permissions",
 ]
 
 _DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
@@ -32,12 +32,12 @@ class ClaudeCodeBackend(AgentBackend):
   """
 
   def __init__(
-    self,
-    model: Optional[str] = None,
-    system_prompt_path: Optional[str] = None,
-    extra_flags: Optional[list[str]] = None,
-    buffer_limit: Optional[int] = None,
-    on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
+      self,
+      model: Optional[str] = None,
+      system_prompt_path: Optional[str] = None,
+      extra_flags: Optional[list[str]] = None,
+      buffer_limit: Optional[int] = None,
+      on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
   ):
     """Initialise the backend.
 
@@ -84,13 +84,13 @@ class ClaudeCodeBackend(AgentBackend):
     """
     cmd = self._cmd + [prompt]
     self._proc = await asyncio.create_subprocess_exec(
-      *cmd,
-      cwd=cwd,
-      stdin=asyncio.subprocess.DEVNULL,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-      env=env,
-      limit=self._buffer_limit,
+        *cmd,
+        cwd=cwd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        limit=self._buffer_limit,
     )
     if self._on_spawn is not None:
       await self._on_spawn(self._proc.pid)

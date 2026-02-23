@@ -47,16 +47,16 @@ def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig
 
 
 async def run_message(
-  cfg: CharlieBotConfig,
-  session_meta: SessionMetadata,
-  user_content: str,
-  save_chat_event,
-  save_metadata=None,
-  mark_unread=None,
-  skip_user_event: bool = False,
-  is_voice: bool = False,
-  backend_option: Optional[BackendOption] = None,
-  extra_claude_flags: Optional[list[str]] = None,
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    user_content: str,
+    save_chat_event,
+    save_metadata=None,
+    mark_unread=None,
+    skip_user_event: bool = False,
+    is_voice: bool = False,
+    backend_option: Optional[BackendOption] = None,
+    extra_claude_flags: Optional[list[str]] = None,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -88,7 +88,12 @@ async def run_message(
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)
   if not skip_user_event:
-    user_event = {"type": "user", "content": user_content, "timestamp": datetime.now(timezone.utc).isoformat(), "is_voice": is_voice}
+    user_event = {
+        "type": "user",
+        "content": user_content,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "is_voice": is_voice
+    }
     await save_chat_event(session_meta.id, user_event)
     await streaming_manager.broadcast(channel, user_event)
     session_meta.updated_at = datetime.now(timezone.utc)
@@ -122,11 +127,11 @@ async def run_message(
   from src.agents.backends.registry import build_backend
   option = backend_option or cfg.backend_options[0]
   backend = build_backend(
-    option,
-    cfg,
-    extra_flags=extra_flags or None,
-    buffer_limit=cfg.subprocess_buffer_limit,
-    on_spawn=_on_spawn,
+      option,
+      cfg,
+      extra_flags=extra_flags or None,
+      buffer_limit=cfg.subprocess_buffer_limit,
+      on_spawn=_on_spawn,
   )
 
   try:
@@ -135,10 +140,9 @@ async def run_message(
     prompt = user_content
     if is_voice:
       prompt = (
-        "[The following message is from voice transcription and might not be accurate. "
-        "Please ask the user first for any words that are unclear or might be wrong.]\n"
-        f"{user_content}"
-      )
+          "[The following message is from voice transcription and might not be accurate. "
+          "Please ask the user first for any words that are unclear or might be wrong.]\n"
+          f"{user_content}")
 
     async for event in backend.run(prompt, cwd, env):
       # Capture the CC session ID from the first event that has one

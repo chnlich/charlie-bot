@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_thread_manager
 from src.core.models import (
-  ThreadMetadata,
-  ThreadStatus,
-  WorkerEvent,
+    ThreadMetadata,
+    ThreadStatus,
+    WorkerEvent,
 )
 from src.core.ndjson import parse_ndjson_file
 from src.core.threads import ThreadManager
@@ -23,9 +23,9 @@ router = APIRouter()
 
 @router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadata)
 async def get_thread(
-  session_id: str,
-  thread_id: str,
-  thread_mgr: ThreadManager = Depends(get_thread_manager),
+    session_id: str,
+    thread_id: str,
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   meta = await thread_mgr.get_thread(session_id, thread_id)
   if not meta:
@@ -35,9 +35,9 @@ async def get_thread(
 
 @router.get("/{session_id}/threads/{thread_id}/events", response_model=list[WorkerEvent])
 async def get_thread_events(
-  session_id: str,
-  thread_id: str,
-  thread_mgr: ThreadManager = Depends(get_thread_manager),
+    session_id: str,
+    thread_id: str,
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Return historical Worker events from the on-disk events.jsonl log."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
@@ -50,11 +50,12 @@ async def get_thread_events(
         if block.get("type") == "text":
           events.append(WorkerEvent(type="assistant", content=block["text"]))
         elif block.get("type") == "tool_use":
-          events.append(WorkerEvent(
-            type="tool_use",
-            tool_name=block["name"],
-            content=json.dumps(block.get("input", {}))[:200],
-          ))
+          events.append(
+              WorkerEvent(
+                  type="tool_use",
+                  tool_name=block["name"],
+                  content=json.dumps(block.get("input", {}))[:200],
+              ))
     elif event_type == "result":
       events.append(WorkerEvent(type="result", content=str(data.get("result", ""))))
     else:
@@ -68,9 +69,9 @@ async def get_thread_events(
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")
 async def cancel_thread(
-  session_id: str,
-  thread_id: str,
-  thread_mgr: ThreadManager = Depends(get_thread_manager),
+    session_id: str,
+    thread_id: str,
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager)."""
   thread = await thread_mgr.get_thread(session_id, thread_id)

@@ -16,19 +16,18 @@ _DEFAULT_NAME_RE = re.compile(r"^(Session \d+$|\d+: )")
 _SESSION_NUMBER_RE = re.compile(r"^Session (\d+)$")
 
 _NAMING_PROMPT = (
-  "Generate a short, descriptive title (3-6 words) for this conversation. "
-  "Return ONLY the title, no quotes, no punctuation at the end, no explanation.\n\n"
-  "User: {user_message}\n\n"
-  "Assistant: {assistant_response}"
-)
+    "Generate a short, descriptive title (3-6 words) for this conversation. "
+    "Return ONLY the title, no quotes, no punctuation at the end, no explanation.\n\n"
+    "User: {user_message}\n\n"
+    "Assistant: {assistant_response}")
 
 
 async def maybe_auto_name(
-  cfg: CharlieBotConfig,
-  session_meta: SessionMetadata,
-  user_message: str,
-  assistant_response: str,
-  session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    user_message: str,
+    assistant_response: str,
+    session_mgr: SessionManager,
 ) -> None:
   """If the session still has a default name, generate a descriptive one via Gemini."""
   if not _DEFAULT_NAME_RE.match(session_meta.name):
@@ -40,8 +39,8 @@ async def maybe_auto_name(
 
   try:
     prompt = _NAMING_PROMPT.format(
-      user_message=user_message[:500],
-      assistant_response=assistant_response[:1000],
+        user_message=user_message[:500],
+        assistant_response=assistant_response[:1000],
     )
 
     provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
@@ -63,14 +62,15 @@ async def maybe_auto_name(
 
     channel = f"session:{session_meta.id}"
     await streaming_manager.broadcast(channel, {
-      "type": "session_renamed",
-      "name": name,
+        "type": "session_renamed",
+        "name": name,
     })
-    await streaming_manager.broadcast("sidebar", {
-      "type": "session_renamed",
-      "session_id": session_meta.id,
-      "name": name,
-    })
+    await streaming_manager.broadcast(
+        "sidebar", {
+            "type": "session_renamed",
+            "session_id": session_meta.id,
+            "name": name,
+        })
 
     log.info("session_auto_named", session_id=session_meta.id, name=name)
 

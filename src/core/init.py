@@ -17,11 +17,12 @@ log = structlog.get_logger()
 def _default_config_yaml() -> dict:
   """Build the default config dict with placeholder values."""
   return {
-    "gemini_api_key": "",
-    "gemini_model": "gemini-3.1-pro-preview",
-    "workspace_dirs": ["~/workspace"],
-    "worktree_dir": "~/worktrees",
+      "gemini_api_key": "",
+      "gemini_model": "gemini-3.1-pro-preview",
+      "workspace_dirs": ["~/workspace"],
+      "worktree_dir": "~/worktrees",
   }
+
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
 
@@ -60,9 +61,9 @@ async def init_charliebot_home() -> None:
 
   # Create all required directories
   dirs = [
-    cfg.charliebot_home,
-    cfg.sessions_dir,
-    cfg.config_d_dir,
+      cfg.charliebot_home,
+      cfg.sessions_dir,
+      cfg.config_d_dir,
   ]
   for d in dirs:
     d.mkdir(parents=True, exist_ok=True)

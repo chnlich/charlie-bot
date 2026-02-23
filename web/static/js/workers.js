@@ -95,6 +95,26 @@ function renderThreadEvents(threadId, events) {
       </div>`;
     }
 
+    if (e.type === 'tool_result') {
+      const text = String(e.content || '');
+      const short = text.substring(0, 500);
+      const hasMore = text.length > 500;
+      const id = 'tr-more-' + Math.random().toString(36).slice(2);
+      return `<div class="py-1 px-3 ml-6 my-0.5 border-l-2 border-slate-700">
+        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${escapeHtml(short)}${hasMore ? `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline">Show more</button></span><span id="${id}-full" style="display:none">${escapeHtml(text.substring(500))}</span>` : ''}</pre>
+      </div>`;
+    }
+
+    if (e.type === 'result') {
+      const text = String(e.content || '');
+      const short = text.substring(0, 500);
+      const hasMore = text.length > 500;
+      const id = 'res-more-' + Math.random().toString(36).slice(2);
+      return `<div class="py-1 px-3 ml-6 my-0.5 border-l-2 border-slate-700">
+        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${escapeHtml(short)}${hasMore ? `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline">Show more</button></span><span id="${id}-full" style="display:none">${escapeHtml(text.substring(500))}</span>` : ''}</pre>
+      </div>`;
+    }
+
     if (e.type === 'file_write') {
       const lines = e.lines_added != null ? ` +${e.lines_added}` : '';
       return `<div class="py-1.5 px-3 my-0.5 flex items-center gap-2">

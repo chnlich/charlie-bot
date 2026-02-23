@@ -4,13 +4,14 @@
 let ws = null;
 let streamBuf = '';
 let reconnectDelay = 1000;
+let reconnectTimer = null;
 let catchupDone = false;
 let pendingUserMsg = false;
 
 function connectWS() {
   if (!SESSION_ID) return;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   catchupDone = false;
-  streamBuf = '';
   hideStreaming();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/sessions/${SESSION_ID}`);
@@ -30,7 +31,7 @@ function connectWS() {
 
   ws.onclose = () => {
     console.log('WS closed, reconnecting in', reconnectDelay, 'ms');
-    setTimeout(connectWS, reconnectDelay);
+    reconnectTimer = setTimeout(connectWS, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
   };
 

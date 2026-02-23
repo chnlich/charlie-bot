@@ -47,6 +47,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Connect WebSocket
   connectWS();
 
+  // Reconnect immediately on tab becoming visible (mobile Chrome background kills WS)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)) {
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      reconnectDelay = 1000;
+      connectWS();
+    }
+  });
+
   // Resume thinking indicator if session was mid-thought
   if (THINKING_SINCE) {
     thinkingStart = new Date(THINKING_SINCE).getTime();

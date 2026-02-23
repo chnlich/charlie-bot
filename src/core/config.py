@@ -18,10 +18,19 @@ class ScheduledTaskConfig(BaseModel):
 
   name: str
   cron: str
-  prompt: str
+  prompt: Optional[str] = None
+  handler: Optional[str] = None
   repo: Optional[str] = None
   timezone: str = "America/New_York"
   enabled: bool = True
+
+  @model_validator(mode='after')
+  def check_prompt_or_handler(self) -> 'ScheduledTaskConfig':
+    has_prompt = bool(self.prompt)
+    has_handler = bool(self.handler)
+    if has_prompt == has_handler:
+      raise ValueError("task must have exactly one of 'prompt' or 'handler'")
+    return self
 
 
 class CharlieBotConfig(BaseModel):

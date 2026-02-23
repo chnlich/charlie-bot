@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+import structlog
 from pydantic import BaseModel, field_validator, model_validator
+
+log = structlog.get_logger()
 
 from src.core.models import BackendOption
 
@@ -54,9 +57,6 @@ class CharlieBotConfig(BaseModel):
   # Voice transcription: custom vocabulary hints for Gemini
   voice_custom_words: list[str] = []
 
-  # Scheduled (cron-like) tasks
-  scheduled_tasks: list[ScheduledTaskConfig] = []
-
   # Backend options available for model switching
   backend_options: list[BackendOption] = [
     BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6"),
@@ -82,10 +82,6 @@ class CharlieBotConfig(BaseModel):
       values["ssl_certfile"] = os.path.expanduser(values["ssl_certfile"])
     if values.get("ssl_keyfile"):
       values["ssl_keyfile"] = os.path.expanduser(values["ssl_keyfile"])
-    # Expand ~ in scheduled_tasks[*].repo
-    for task in values.get("scheduled_tasks", []):
-      if isinstance(task, dict) and task.get("repo"):
-        task["repo"] = os.path.expanduser(task["repo"])
     return values
 
   @field_validator("workspace_dirs", mode="before")
@@ -129,6 +125,10 @@ class CharlieBotConfig(BaseModel):
   def config_file(self) -> Path:
     return self.charliebot_home / "config.yaml"
 
+  @property
+  def config_d_dir(self) -> Path:
+    return self.charliebot_home / "config.d"
+
   def discover_repos(self) -> list[dict[str, str]]:
     """Scan workspace_dirs for directories containing a .git folder."""
     repos: list[dict[str, str]] = []
@@ -143,6 +143,7 @@ class CharlieBotConfig(BaseModel):
 
 
 _config: Optional[CharlieBotConfig] = None
+_config_mtime: float = 0.0
 
 
 def load_config() -> CharlieBotConfig:
@@ -160,8 +161,45 @@ def load_config() -> CharlieBotConfig:
 
 
 def get_config() -> CharlieBotConfig:
-  """Return the singleton config instance."""
-  global _config
-  if _config is None:
-    _config = load_config()
+  """Return cached config, auto-reloading when config.yaml changes."""
+  global _config, _config_mtime
+  config_path = Path.home() / ".charliebot" / "config.yaml"
+  try:
+    mtime = config_path.stat().st_mtime
+  except OSError:
+    mtime = 0.0
+  if _config is None or mtime != _config_mtime:
+    try:
+      _config = load_config()
+      _config_mtime = mtime
+    except Exception as e:
+      log.warning("config_reload_failed", error=str(e))
+      if _config is None:
+        raise
   return _config
+
+
+_cron_tasks: list[ScheduledTaskConfig] = []
+_cron_mtime: float = 0.0
+
+
+def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
+  """Load scheduled tasks from config.d/cron.yaml, with mtime cache."""
+  global _cron_tasks, _cron_mtime
+  cron_path = Path.home() / ".charliebot" / "config.d" / "cron.yaml"
+  try:
+    mtime = cron_path.stat().st_mtime
+  except OSError:
+    return _cron_tasks
+  if mtime != _cron_mtime:
+    try:
+      data = yaml.safe_load(cron_path.read_text()) or {}
+      raw_tasks = data.get("scheduled_tasks", [])
+      for t in raw_tasks:
+        if isinstance(t, dict) and t.get("repo"):
+          t["repo"] = os.path.expanduser(t["repo"])
+      _cron_tasks = [ScheduledTaskConfig(**t) for t in raw_tasks]
+      _cron_mtime = mtime
+    except Exception as e:
+      log.warning("cron_config_reload_failed", error=str(e))
+  return _cron_tasks

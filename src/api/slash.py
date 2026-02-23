@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from src.api.chat import run_and_finalize
 from src.api.deps import get_session_manager, require_session
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.slash_commands import execute_shell_command, load_slash_commands
@@ -76,7 +76,10 @@ async def execute_command(
   if name == 'run':
     task_name = req.args.strip()
     if not task_name:
-      return {'error': 'Usage: /run <task-name>'}
+      names = [t.name for t in get_scheduled_tasks() if t.enabled]
+      if not names:
+        return {'error': 'No scheduled tasks configured'}
+      return {'error': f'Usage: /run <task-name>. Available: {", ".join(names)}'}
     scheduler = getattr(request.app.state, 'scheduler', None)
     if scheduler is None:
       return {'error': 'Scheduler not available'}

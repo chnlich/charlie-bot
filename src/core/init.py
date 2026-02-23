@@ -62,6 +62,7 @@ async def init_charliebot_home() -> None:
   dirs = [
     cfg.charliebot_home,
     cfg.sessions_dir,
+    cfg.config_d_dir,
   ]
   for d in dirs:
     d.mkdir(parents=True, exist_ok=True)

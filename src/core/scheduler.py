@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from croniter import croniter
 
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig, load_config
+from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.spawner import broadcast_and_persist, spawn_worker
@@ -44,7 +44,7 @@ class Scheduler:
   async def run_task_now(self, task_name: str) -> dict:
     """Manually trigger a task by name. Returns session_id and thread_id."""
     cfg = self._reload_config()
-    task_map = {t.name: t for t in cfg.scheduled_tasks}
+    task_map = {t.name: t for t in get_scheduled_tasks()}
     task_cfg = task_map.get(task_name)
     if task_cfg is None:
       raise ValueError(f"No scheduled task named '{task_name}'")
@@ -66,12 +66,13 @@ class Scheduler:
 
   async def _tick(self) -> None:
     cfg = self._reload_config()
-    if not cfg.scheduled_tasks:
+    tasks = get_scheduled_tasks()
+    if not tasks:
       return
 
     session_mgr = SessionManager(cfg)
 
-    for task_cfg in cfg.scheduled_tasks:
+    for task_cfg in tasks:
       if not task_cfg.enabled:
         continue
       try:

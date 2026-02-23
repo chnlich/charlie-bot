@@ -7,7 +7,7 @@ from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
   CreateSessionRequest,
   RenameSessionRequest,
@@ -62,7 +62,7 @@ async def list_scheduled_sessions(
 ):
   """List sessions with a scheduled task, newest first."""
   sessions = await session_mgr.list_sessions(scheduled=True)
-  task_map = {t.name: t for t in cfg.scheduled_tasks}
+  task_map = {t.name: t for t in get_scheduled_tasks()}
   for s in sessions:
     task = task_map.get(s.scheduled_task)
     if task:

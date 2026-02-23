@@ -101,6 +101,8 @@ class WorkerEvent(BaseModel):
   lines_added: Optional[int] = None
   message: Optional[str] = None
   status: Optional[str] = None
+  tool_name: Optional[str] = None
+  input: Optional[dict] = None
   timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

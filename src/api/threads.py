@@ -1,5 +1,6 @@
 """Thread management API routes."""
 
+import json
 import os
 import signal
 
@@ -43,11 +44,25 @@ async def get_thread_events(
   raw_events = parse_ndjson_file(events_path)
   events: list[WorkerEvent] = []
   for data in raw_events:
-    try:
-      events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
-    except Exception as e:
-      log.debug("event_parse_failed", error=str(e))
-      events.append(WorkerEvent(type="raw", content=str(data)))
+    event_type = data.get("type", "")
+    if event_type == "assistant" and isinstance(data.get("message"), dict):
+      for block in data["message"].get("content", []):
+        if block.get("type") == "text":
+          events.append(WorkerEvent(type="assistant", content=block["text"]))
+        elif block.get("type") == "tool_use":
+          events.append(WorkerEvent(
+            type="tool_use",
+            tool_name=block["name"],
+            content=json.dumps(block.get("input", {}))[:200],
+          ))
+    elif event_type == "result":
+      events.append(WorkerEvent(type="result", content=str(data.get("result", ""))))
+    else:
+      try:
+        events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
+      except Exception as e:
+        log.debug("event_parse_failed", error=str(e))
+        events.append(WorkerEvent(type="raw", content=str(data)))
   return events
 
 

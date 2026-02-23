@@ -59,14 +59,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Resume thinking indicator if session was mid-thought
   if (THINKING_SINCE) {
     thinkingStart = new Date(THINKING_SINCE).getTime();
-    document.getElementById('thinking')?.classList.remove('hidden');
-    updateThinkingTime();
-    thinkingInterval = setInterval(updateThinkingTime, 1000);
-    document.getElementById('send-btn')?.classList.add('opacity-50');
-    if (document.getElementById('send-btn')) document.getElementById('send-btn').disabled = true;
-    setSessionSpinner(SESSION_ID, true);
-    const sel = document.getElementById('backend-select');
-    if (sel) sel.disabled = true;
+    startThinking();
+  } else if (document.querySelectorAll('#messages > div:not(#streaming-msg)').length > 0) {
+    appendSeparator(null);
   }
 
 });

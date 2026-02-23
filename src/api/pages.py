@@ -174,8 +174,7 @@ async def index(
       log.debug("sidebar_usage_failed", session_id=s.id)
 
   active_backend = active_session.backend if active_session else (
-      cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
-  )
+      cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
 
   return templates.TemplateResponse(
       "index.html", {

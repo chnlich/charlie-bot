@@ -9,11 +9,11 @@ from fastapi.responses import FileResponse
 
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
-  CreateSessionRequest,
-  RenameSessionRequest,
-  SessionMetadata,
-  SessionStatus,
-  ThreadMetadata,
+    CreateSessionRequest,
+    RenameSessionRequest,
+    SessionMetadata,
+    SessionStatus,
+    ThreadMetadata,
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -29,8 +29,8 @@ async def list_sessions(session_mgr: SessionManager = Depends(get_session_manage
 
 @router.post("/", response_model=SessionMetadata)
 async def create_session(
-  req: CreateSessionRequest,
-  session_mgr: SessionManager = Depends(get_session_manager),
+    req: CreateSessionRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
 ):
   return await session_mgr.create_session(req)
 
@@ -119,9 +119,9 @@ async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(
 
 @router.patch("/{session_id}", response_model=SessionMetadata)
 async def rename_session(
-  session_id: str,
-  req: RenameSessionRequest,
-  session_mgr: SessionManager = Depends(get_session_manager),
+    session_id: str,
+    req: RenameSessionRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
 ):
   meta = await session_mgr.rename_session(session_id, req.name)
   if not meta:

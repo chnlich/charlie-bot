@@ -7,7 +7,6 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -24,7 +23,6 @@ class ThreadStatus(str, Enum):
 class SessionStatus(str, Enum):
   ACTIVE = "active"
   ARCHIVED = "archived"
-
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +85,6 @@ class SessionMetadata(BaseModel):
 # Chat Models
 # ---------------------------------------------------------------------------
 
-
-
 # ---------------------------------------------------------------------------
 # Worker Output Models
 # ---------------------------------------------------------------------------
@@ -123,9 +119,8 @@ class SendMessageRequest(BaseModel):
 class VoiceTranscriptionResponse(BaseModel):
   transcription: str
   disclaimer: str = (
-    "This is a voice-transcribed message and may not be exactly accurate. "
-    "Please ask clarifying questions if anything is unclear."
-  )
+      "This is a voice-transcribed message and may not be exactly accurate. "
+      "Please ask clarifying questions if anything is unclear.")
 
 
 class RenameSessionRequest(BaseModel):

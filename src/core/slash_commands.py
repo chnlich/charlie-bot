@@ -50,11 +50,11 @@ def load_slash_commands() -> list[SlashCommand]:
 
 
 async def execute_shell_command(
-  cmd_template: str,
-  args: str = '',
-  session_dir: str = '',
-  timeout: int = 10,
-  cwd: Optional[str] = None,
+    cmd_template: str,
+    args: str = '',
+    session_dir: str = '',
+    timeout: int = 10,
+    cwd: Optional[str] = None,
 ) -> dict:
   """Run a shell command template and return {stdout, stderr, exit_code}.
 
@@ -66,10 +66,10 @@ async def execute_shell_command(
 
   try:
     proc = await asyncio.create_subprocess_shell(
-      cmd,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-      cwd=cwd or None,
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd or None,
     )
   except Exception as e:
     log.warning('slash_shell_spawn_failed', cmd=cmd, error=str(e))
@@ -86,7 +86,7 @@ async def execute_shell_command(
     return {'stdout': '', 'stderr': 'Command timed out', 'exit_code': -1}
 
   return {
-    'stdout': stdout_bytes.decode('utf-8', errors='replace'),
-    'stderr': stderr_bytes.decode('utf-8', errors='replace'),
-    'exit_code': proc.returncode,
+      'stdout': stdout_bytes.decode('utf-8', errors='replace'),
+      'stderr': stderr_bytes.decode('utf-8', errors='replace'),
+      'exit_code': proc.returncode,
   }

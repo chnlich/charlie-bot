@@ -17,12 +17,12 @@ class KimiBackend(ClaudeCodeBackend):
   """
 
   def __init__(
-    self,
-    api_key: str,
-    model: str = "kimi-k2.5",
-    extra_flags: Optional[list[str]] = None,
-    buffer_limit: Optional[int] = None,
-    on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
+      self,
+      api_key: str,
+      model: str = "kimi-k2.5",
+      extra_flags: Optional[list[str]] = None,
+      buffer_limit: Optional[int] = None,
+      on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
   ):
     super().__init__(extra_flags=extra_flags, buffer_limit=buffer_limit, on_spawn=on_spawn)
     self._api_key = api_key
@@ -30,14 +30,14 @@ class KimiBackend(ClaudeCodeBackend):
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
     kimi_env = {
-      **env,
-      "ANTHROPIC_BASE_URL": _MOONSHOT_BASE_URL,
-      "ANTHROPIC_AUTH_TOKEN": self._api_key,
-      "ANTHROPIC_MODEL": self._kimi_model,
-      "ANTHROPIC_DEFAULT_OPUS_MODEL": self._kimi_model,
-      "ANTHROPIC_DEFAULT_SONNET_MODEL": self._kimi_model,
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL": self._kimi_model,
-      "CLAUDE_CODE_SUBAGENT_MODEL": self._kimi_model,
+        **env,
+        "ANTHROPIC_BASE_URL": _MOONSHOT_BASE_URL,
+        "ANTHROPIC_AUTH_TOKEN": self._api_key,
+        "ANTHROPIC_MODEL": self._kimi_model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": self._kimi_model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": self._kimi_model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": self._kimi_model,
+        "CLAUDE_CODE_SUBAGENT_MODEL": self._kimi_model,
     }
     async for event in super().run(prompt, cwd, kimi_env):
       yield event

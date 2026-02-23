@@ -19,9 +19,9 @@ router = APIRouter()
 
 @router.post("/delegate")
 async def delegate_task(
-  req: DelegateRequest,
-  session_mgr: SessionManager = Depends(get_session_manager),
-  thread_mgr: ThreadManager = Depends(get_thread_manager),
+    req: DelegateRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Create a thread and spawn a worker agent directly."""
   meta = await session_mgr.get_session(req.session_id)
@@ -33,23 +33,28 @@ async def delegate_task(
 
   # Fire-and-forget: spawn worker in background
   cfg = get_config()
-  asyncio.create_task(spawn_worker(
-    req.session_id, req.description, thread.id,
-    cfg, session_mgr, thread_mgr,
-    repo_path=req.repo_path,
-  ))
+  asyncio.create_task(
+      spawn_worker(
+          req.session_id,
+          req.description,
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          repo_path=req.repo_path,
+      ))
 
   # Save and broadcast task_delegated event so cursor stays in sync on reconnect
   task_event = {
-    "type": "task_delegated",
-    "thread_id": thread.id,
-    "description": req.description,
+      "type": "task_delegated",
+      "thread_id": thread.id,
+      "description": req.description,
   }
   await broadcast_and_persist(req.session_id, task_event, session_mgr)
 
   log.info("task_delegated_internal", session=req.session_id, thread_id=thread.id)
 
   return {
-    "thread_id": thread.id,
-    "description": req.description,
+      "thread_id": thread.id,
+      "description": req.description,
   }

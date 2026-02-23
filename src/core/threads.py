@@ -21,14 +21,14 @@ class ThreadManager:
     self._cfg = cfg
 
   async def create_thread(
-    self,
-    session_meta: SessionMetadata,
-    description: str,
+      self,
+      session_meta: SessionMetadata,
+      description: str,
   ) -> ThreadMetadata:
     """Create a new thread with a CLAUDE.md for the worker."""
     thread = ThreadMetadata(
-      session_id=session_meta.id,
-      description=description,
+        session_id=session_meta.id,
+        description=description,
     )
 
     thread_dir = self._thread_dir(session_meta.id, thread.id)
@@ -63,12 +63,12 @@ class ThreadManager:
     return threads
 
   async def update_status(
-    self,
-    session_id: str,
-    thread_id: str,
-    status: ThreadStatus,
-    pid: Optional[int] = None,
-    exit_code: Optional[int] = None,
+      self,
+      session_id: str,
+      thread_id: str,
+      status: ThreadStatus,
+      pid: Optional[int] = None,
+      exit_code: Optional[int] = None,
   ) -> None:
     meta = await self.get_thread(session_id, thread_id)
     if not meta:
@@ -95,9 +95,9 @@ class ThreadManager:
   # ---------------------------------------------------------------------------
 
   async def _write_claude_md(
-    self,
-    thread_dir: Path,
-    session_meta: SessionMetadata,
+      self,
+      thread_dir: Path,
+      session_meta: SessionMetadata,
   ) -> None:
     """Write default instructions + session info (task is passed via -p)."""
     default_content = ""
@@ -107,11 +107,9 @@ class ThreadManager:
     else:
       log.warning("subagent_prompt_file_missing", path=str(prompt_file))
 
-    content = (
-      f"{default_content}\n"
-      f"## Session Info\n"
-      f"- Session: {session_meta.name}\n"
-    )
+    content = (f"{default_content}\n"
+               f"## Session Info\n"
+               f"- Session: {session_meta.name}\n")
 
     claude_md_path = thread_dir / "CLAUDE.md"
     async with aiofiles.open(claude_md_path, "w", encoding="utf-8") as f:

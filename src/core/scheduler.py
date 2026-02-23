@@ -2,7 +2,7 @@
 
 import asyncio
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -110,6 +110,7 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     session.last_scheduled_run = now.isoformat()
+    session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
 
     thread = await thread_mgr.create_thread(session, task_cfg.prompt)

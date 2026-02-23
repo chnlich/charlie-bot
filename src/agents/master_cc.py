@@ -171,7 +171,10 @@ async def run_message(
     _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
     still_thinking = _active_tasks.get(session_meta.id, 0) > 0
 
+    thinking_seconds = None
     if not still_thinking:
+      if session_meta.thinking_since:
+        thinking_seconds = int((datetime.now(timezone.utc) - session_meta.thinking_since).total_seconds())
       session_meta.thinking_since = None
       if save_metadata:
         await save_metadata(session_meta)
@@ -192,6 +195,8 @@ async def run_message(
       await mark_unread(session_meta.id)
 
     done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
+    if thinking_seconds is not None:
+      done_event["thinking_seconds"] = thinking_seconds
     await streaming_manager.broadcast(channel, done_event)
     await save_chat_event(session_meta.id, done_event)
 

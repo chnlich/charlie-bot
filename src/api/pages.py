@@ -60,6 +60,8 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})
         assistant_buf = ""
+      if not ev.get("still_thinking"):
+        messages.append({"role": "separator", "thinking_seconds": ev.get("thinking_seconds")})
     elif t == "assistant_error":
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf})

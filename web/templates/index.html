@@ -57,11 +57,12 @@
       </div>
 
       <!-- Sidebar filter tabs -->
-      <div class="px-3 py-2 border-b border-slate-700 flex gap-1">
+      <div class="px-3 py-2 border-b border-slate-700 flex gap-1 items-center">
         <button onclick="switchSidebarFilter('all')" id="filter-all" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300">All</button>
         <button onclick="switchSidebarFilter('starred')" id="filter-starred" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200">Starred</button>
         <button onclick="switchSidebarFilter('archived')" id="filter-archived" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200">Archived</button>
         <button onclick="switchSidebarFilter('scheduled')" id="filter-scheduled" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200">Scheduled</button>
+        <button onclick="openCronAdder()" id="cron-add-btn" class="ml-auto px-2 py-0.5 text-sm rounded font-medium text-slate-400 hover:text-slate-200 hidden" title="New scheduled task">+</button>
       </div>
 
       <!-- Session list -->
@@ -357,6 +358,49 @@
   <script src="/static/js/voice-input.js"></script>
   <script src="/static/js/latex-panel.js"></script>
   <script src="/static/js/app.js"></script>
+
+  <div id="cron-modal" class="diff-modal-overlay hidden">
+    <div class="diff-modal" style="max-width: 600px;">
+      <div class="diff-modal-header">
+        <span class="text-sm font-semibold text-slate-200" id="cron-modal-title">Edit Scheduled Task</span>
+        <button onclick="closeCronModal()" class="text-slate-500 hover:text-slate-300 p-1">✕</button>
+      </div>
+      <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto;">
+        <form id="cron-form" class="space-y-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Name</label>
+            <input id="cron-name" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Cron Expression</label>
+            <input id="cron-expr" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200 font-mono" placeholder="0 2 * * *" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Prompt</label>
+            <textarea id="cron-prompt" rows="5" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200"></textarea>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Repo (optional)</label>
+            <input id="cron-repo" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" placeholder="~/workspace/my-repo" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Timezone</label>
+            <input id="cron-timezone" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" value="America/New_York" />
+          </div>
+          <div class="flex items-center gap-2">
+            <input id="cron-enabled" type="checkbox" checked class="rounded bg-slate-800 border-slate-600" />
+            <label for="cron-enabled" class="text-xs text-slate-400">Enabled</label>
+          </div>
+        </form>
+      </div>
+      <div class="diff-modal-footer">
+        <button onclick="deleteCronTask()" id="cron-delete-btn" class="px-4 py-1.5 text-sm rounded-lg bg-red-800 hover:bg-red-700 text-slate-200 font-medium hidden">Delete</button>
+        <div class="flex-1"></div>
+        <button onclick="closeCronModal()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 text-slate-200 font-medium">Cancel</button>
+        <button onclick="saveCronTask()" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-slate-200 font-medium">Save</button>
+      </div>
+    </div>
+  </div>
 
   <div id="diff-modal" class="diff-modal-overlay hidden">
     <div class="diff-modal">

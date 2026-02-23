@@ -219,6 +219,8 @@ function switchSidebarFilter(filter) {
     archived: '/api/sessions/archived',
     scheduled: '/api/sessions/scheduled',
   };
+  const addBtn = document.getElementById('cron-add-btn');
+  if (addBtn) addBtn.classList.toggle('hidden', filter !== 'scheduled');
   fetch(urls[filter])
     .then(res => res.json())
     .then(sessions => renderSessionList(sessions, filter))
@@ -288,6 +290,11 @@ function renderSessionList(sessions, filter) {
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/></svg>
         </button>`;
     } else {
+      const gearBtn = (filter === 'scheduled' && s.scheduled_task) ? `
+        <button onclick="event.stopPropagation(); openCronEditor('${escapeHtml(s.scheduled_task)}')"
+                class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Edit task config">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>` : '';
       actions = `
         <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
                 class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
@@ -300,7 +307,8 @@ function renderSessionList(sessions, filter) {
         <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
                 class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-        </button>`;
+        </button>
+        ${gearBtn}`;
     }
     return `<a href="/?session=${s.id}&filter=${filter}"
        class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
@@ -405,4 +413,112 @@ function initSidebarResize() {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Cron task editor modal
+// ---------------------------------------------------------------------------
+let cronEditMode = null; // 'edit' or 'add'
+let cronOriginalName = null;
+
+async function openCronEditor(taskName) {
+  let task;
+  try {
+    const res = await fetch('/api/cron/tasks');
+    if (!res.ok) throw new Error(await res.text());
+    const tasks = await res.json();
+    task = tasks.find(t => t.name === taskName);
+  } catch (err) {
+    console.error('Failed to load cron tasks:', err);
+    alert('Failed to load task: ' + err);
+    return;
+  }
+  if (!task) {
+    alert('Task "' + taskName + '" not found');
+    return;
+  }
+  cronEditMode = 'edit';
+  cronOriginalName = taskName;
+  document.getElementById('cron-modal-title').textContent = 'Edit Scheduled Task';
+  document.getElementById('cron-name').value = task.name;
+  document.getElementById('cron-name').readOnly = true;
+  document.getElementById('cron-expr').value = task.cron || '';
+  document.getElementById('cron-prompt').value = task.prompt || '';
+  document.getElementById('cron-repo').value = task.repo || '';
+  document.getElementById('cron-timezone').value = task.timezone || 'America/New_York';
+  document.getElementById('cron-enabled').checked = task.enabled !== false;
+  document.getElementById('cron-delete-btn').classList.remove('hidden');
+  document.getElementById('cron-modal').classList.remove('hidden');
+}
+
+function openCronAdder() {
+  cronEditMode = 'add';
+  cronOriginalName = null;
+  document.getElementById('cron-modal-title').textContent = 'New Scheduled Task';
+  document.getElementById('cron-name').value = '';
+  document.getElementById('cron-name').readOnly = false;
+  document.getElementById('cron-expr').value = '';
+  document.getElementById('cron-prompt').value = '';
+  document.getElementById('cron-repo').value = '';
+  document.getElementById('cron-timezone').value = 'America/New_York';
+  document.getElementById('cron-enabled').checked = true;
+  document.getElementById('cron-delete-btn').classList.add('hidden');
+  document.getElementById('cron-modal').classList.remove('hidden');
+}
+
+function closeCronModal() {
+  document.getElementById('cron-modal').classList.add('hidden');
+}
+
+async function saveCronTask() {
+  const name = document.getElementById('cron-name').value.trim();
+  const cron = document.getElementById('cron-expr').value.trim();
+  const prompt = document.getElementById('cron-prompt').value.trim();
+  const repo = document.getElementById('cron-repo').value.trim() || null;
+  const timezone = document.getElementById('cron-timezone').value.trim();
+  const enabled = document.getElementById('cron-enabled').checked;
+
+  let res;
+  try {
+    if (cronEditMode === 'edit') {
+      res = await fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({cron, prompt, repo, timezone, enabled}),
+      });
+    } else {
+      res = await fetch('/api/cron/tasks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, cron, prompt, repo, timezone, enabled}),
+      });
+    }
+  } catch (err) {
+    alert('Failed: ' + err);
+    return;
+  }
+  if (!res.ok) {
+    alert('Failed: ' + await res.text());
+    return;
+  }
+  closeCronModal();
+  switchSidebarFilter('scheduled');
+}
+
+async function deleteCronTask() {
+  const name = cronOriginalName;
+  if (!confirm(`Delete task "${name}"?`)) return;
+  let res;
+  try {
+    res = await fetch(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
+  } catch (err) {
+    alert('Failed: ' + err);
+    return;
+  }
+  if (!res.ok) {
+    alert('Failed: ' + await res.text());
+    return;
+  }
+  closeCronModal();
+  switchSidebarFilter('scheduled');
 }

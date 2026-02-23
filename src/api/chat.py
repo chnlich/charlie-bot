@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -14,6 +15,8 @@ from src.core.autonamer import maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SendMessageRequest, SessionMetadata
 from src.core.sessions import SessionManager
+from src.core.slash_commands import execute_shell_command, load_slash_commands
+from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
 
@@ -69,6 +72,50 @@ async def send_message(
   if req.uploaded_files:
     content += "\n\n[Attached files]\n" + "\n".join(f"- {p}" for p in req.uploaded_files)
 
+  # Slash command interception
+  if content.startswith('/'):
+    space_idx = content.find(' ')
+    name = content[1:space_idx] if space_idx != -1 else content[1:]
+    args = content[space_idx + 1:].strip() if space_idx != -1 else ''
+
+    commands = {c.name: c for c in load_slash_commands()}
+    cmd = commands.get(name)
+
+    if cmd is not None:
+      channel = f"session:{session_id}"
+      user_event = {
+          "type": "user",
+          "content": content,
+          "timestamp": datetime.now(timezone.utc).isoformat(),
+          "is_voice": False,
+      }
+      await session_mgr.save_chat_event(session_id, user_event)
+      await streaming_manager.broadcast(channel, user_event)
+
+      if cmd.scope == 'prompt':
+        substituted = cmd.prompt.replace('{args}', args) if cmd.prompt else args
+        asyncio.create_task(
+            run_and_finalize(cfg, meta, substituted, session_mgr, extra_claude_flags=cmd.claude_code_flags or None,
+                             skip_user_event=True))
+        return JSONResponse(status_code=202, content={"status": "accepted"})
+
+      elif cmd.scope == 'shell' and cmd.command:
+        session_dir = str(cfg.sessions_dir / session_id)
+        result = await execute_shell_command(
+            cmd_template=cmd.command, args=args, session_dir=session_dir, timeout=cmd.timeout, cwd=cmd.cwd)
+        out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
+            result['stdout'] or result['stderr'] or '(no output)')
+        md_out = '```\n' + out + '\n```'
+        asst_event = {"type": "assistant", "message": {"content": [{"type": "text", "text": md_out}]}}
+        await session_mgr.save_chat_event(session_id, asst_event)
+        await streaming_manager.broadcast(channel, asst_event)
+        done_event = {"type": "master_done", "exit_code": 0, "still_thinking": False}
+        await session_mgr.save_chat_event(session_id, done_event)
+        await streaming_manager.broadcast(channel, done_event)
+        return JSONResponse(status_code=202, content={"status": "accepted"})
+
+    # Unknown /xxx — fall through to normal run_and_finalize (e.g. /compact)
+
   # Fire-and-forget: spawn master CC in a background task
   asyncio.create_task(run_and_finalize(cfg, meta, content, session_mgr))
 
@@ -120,6 +167,7 @@ async def run_and_finalize(
   *,
   is_voice: bool = False,
   extra_claude_flags: list[str] | None = None,
+  skip_user_event: bool = False,
 ) -> None:
   """Run master CC, persist cc_session_id, and auto-name the session."""
   backend_id = meta.backend
@@ -128,6 +176,7 @@ async def run_and_finalize(
     cc_session_id = await run_message(
       cfg, meta, content, session_mgr.save_chat_event,
       session_mgr.save_metadata, mark_unread=session_mgr.mark_unread,
+      skip_user_event=skip_user_event,
       backend_option=backend_option,
       is_voice=is_voice,
       extra_claude_flags=extra_claude_flags,

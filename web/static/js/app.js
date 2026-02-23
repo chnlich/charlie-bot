@@ -12,7 +12,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const urlFilter = new URLSearchParams(location.search).get('filter');
   if (['all', 'starred', 'archived', 'scheduled'].includes(urlFilter)) { switchSidebarFilter(urlFilter); }
   updateRelativeTimes();
-  setInterval(updateRelativeTimes, 60000);
   // Render markdown for server-rendered assistant messages
   document.querySelectorAll('[data-md]').forEach(el => {
     el.innerHTML = marked.parse(el.textContent);

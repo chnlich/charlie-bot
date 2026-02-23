@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionUnread[el.id.replace('unread-', '')] = el.dataset.hasUnread === '1';
   });
   const urlFilter = new URLSearchParams(location.search).get('filter');
-  if (['all', 'starred', 'archived'].includes(urlFilter)) { switchSidebarFilter(urlFilter); }
+  if (['all', 'starred', 'archived', 'scheduled'].includes(urlFilter)) { switchSidebarFilter(urlFilter); }
   updateRelativeTimes();
   setInterval(updateRelativeTimes, 60000);
   // Render markdown for server-rendered assistant messages

@@ -87,6 +87,10 @@ class Scheduler:
     session_mgr = SessionManager(cfg)
 
     for task_cfg in tasks:
+      if task_cfg.enabled:
+        self._get_or_create_session(task_cfg.name, session_mgr)
+
+    for task_cfg in tasks:
       if not task_cfg.enabled:
         continue
       try:

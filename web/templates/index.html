@@ -191,6 +191,12 @@
               <div data-md>{{ msg.content }}</div>
             </div>
           </div>
+          {% elif msg.role == 'separator' %}
+          <div class="flex items-center gap-3 py-2 px-4 separator-line">
+            <div class="flex-1 border-t border-slate-600/40"></div>
+            <span class="text-xs text-slate-500 whitespace-nowrap">response complete{% if msg.thinking_seconds is not none %} &middot; {{ msg.thinking_seconds }}s{% endif %}</span>
+            <div class="flex-1 border-t border-slate-600/40"></div>
+          </div>
           {% endif %}
           {% endfor %}
           <!-- Streaming target -->

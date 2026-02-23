@@ -60,8 +60,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (THINKING_SINCE) {
     thinkingStart = new Date(THINKING_SINCE).getTime();
     startThinking();
-  } else if (document.querySelectorAll('#messages > div:not(#streaming-msg)').length > 0) {
-    appendSeparator(null);
   }
 
 });

@@ -26,7 +26,7 @@ def _should_exclude(arcname: str) -> bool:
   """Return True if the archive member (relative path) should be excluded."""
   parts = Path(arcname).parts
   for part in parts:
-    if part in ('.git', 'credentials', '__pycache__') or part.endswith('.pyc'):
+    if part in ('.git', '.claude', 'credentials', '__pycache__') or part.endswith('.pyc'):
       return True
   # Exclude sessions/*/threads and everything under it
   if len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == 'threads':

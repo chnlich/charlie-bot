@@ -269,8 +269,13 @@
             <span id="thread-dot-{{ t.id }}" class="w-2 h-2 rounded-full flex-shrink-0 {{ status_colors.get(t.status.value, 'bg-slate-500') }} {% if t.status.value == 'running' %}animate-pulse{% endif %}"></span>
             <div class="flex-1 min-w-0">
               <p class="text-sm truncate">{{ t.description }}</p>
-              <p id="thread-status-{{ t.id }}" class="text-xs text-slate-500">{{ t.status.value }}</p>
+              <p id="thread-status-{{ t.id }}" class="text-xs text-slate-500">{{ t.status.value }} · {{ t.created_at.strftime("%m/%d %H:%M") }}{% if t.completed_at %} · {{ ((t.completed_at - t.created_at).total_seconds()|int // 60) }}m{{ ((t.completed_at - t.created_at).total_seconds()|int % 60) }}s{% endif %}</p>
             </div>
+            {% if t.status.value == 'running' %}
+            <button onclick="event.stopPropagation(); cancelThread('{{ t.id }}', '{{ active_session.id }}')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+            {% endif %}
             <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-{{ t.id }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
           </div>
           <!-- Expandable detail -->

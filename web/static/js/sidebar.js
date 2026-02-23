@@ -49,7 +49,13 @@ function updateWorkerStatus(threadId, status) {
   const text = document.getElementById('thread-status-' + threadId);
   if (!dot || !text) return;
   dot.className = 'w-2 h-2 rounded-full flex-shrink-0 ' + (STATUS_DOT_COLORS[status] || 'bg-slate-500');
-  text.textContent = status;
+  // preserve timestamp portion if present
+  const cur = text.textContent;
+  const dotIdx = cur.indexOf(' · ');
+  const suffix = dotIdx !== -1 ? cur.substring(dotIdx) : '';
+  text.textContent = status + suffix;
+  const cancelBtn = document.getElementById('cancel-btn-' + threadId);
+  if (cancelBtn) cancelBtn.style.display = status === 'running' ? '' : 'none';
 }
 
 function addWorkerCard(threadId, description) {
@@ -61,14 +67,28 @@ function addWorkerCard(threadId, description) {
   if (document.getElementById('thread-dot-' + threadId)) return;
   const card = document.createElement('div');
   card.className = 'bg-slate-800 rounded-xl border border-slate-700 overflow-hidden';
+  const nowStr = (() => {
+    const d = new Date();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}/${dd} ${hh}:${mi}`;
+  })();
   card.innerHTML = `
     <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750"
          onclick="toggleThreadDetail('${threadId}', '${SESSION_ID}')">
       <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 bg-blue-500 animate-pulse"></span>
       <div class="flex-1 min-w-0">
         <p class="text-sm truncate">${escapeHtml(description)}</p>
-        <p id="thread-status-${threadId}" class="text-xs text-slate-500">running</p>
+        <p id="thread-status-${threadId}" class="text-xs text-slate-500">running · ${nowStr}</p>
       </div>
+      <button id="cancel-btn-${threadId}" onclick="event.stopPropagation(); cancelThread('${threadId}', '${SESSION_ID}')"
+              class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
       <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-${threadId}"
            fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>

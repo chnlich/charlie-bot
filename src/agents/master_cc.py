@@ -165,6 +165,19 @@ async def run_message(
       await streaming_manager.broadcast(channel, event)
       await save_chat_event(session_meta.id, event)
 
+      if event.get("type") == "system" and event.get("subtype") == "compact_boundary":
+        meta = event.get("compact_metadata", {})
+        trigger = meta.get("trigger", "unknown")
+        pre_tokens = meta.get("pre_tokens")
+        log.info("cc_context_compacted", session=session_meta.id, trigger=trigger, pre_tokens=pre_tokens)
+        compact_event = {
+            "type": "context_compacted",
+            "trigger": trigger,
+            "pre_tokens": pre_tokens,
+        }
+        await streaming_manager.broadcast(channel, compact_event)
+        await save_chat_event(session_meta.id, compact_event)
+
     exit_code = backend.exit_code
     if backend.stderr_text:
       log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text)

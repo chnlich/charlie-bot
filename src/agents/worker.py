@@ -114,3 +114,17 @@ class Worker:
 
     # Broadcast to WebSocket subscribers
     await streaming_manager.broadcast(self._thread.id, event_data)
+
+    if event_data.get("type") == "system" and event_data.get("subtype") == "compact_boundary":
+      meta = event_data.get("compact_metadata", {})
+      trigger = meta.get("trigger", "unknown")
+      pre_tokens = meta.get("pre_tokens")
+      log.info("cc_context_compacted", thread=self._thread.id, trigger=trigger, pre_tokens=pre_tokens)
+      compact_event = {
+          "type": "context_compacted",
+          "trigger": trigger,
+          "pre_tokens": pre_tokens,
+      }
+      await log_file.write(json.dumps(compact_event) + "\n")
+      await log_file.flush()
+      await streaming_manager.broadcast(self._thread.id, compact_event)

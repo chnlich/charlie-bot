@@ -185,7 +185,7 @@ async def _trigger_master(
       session_meta.cc_session_id = new_cc_session_id
       await session_mgr.save_metadata(session_meta)
   except Exception as e:
-    log.error("trigger_master_failed", session=session_id, error=str(e))
+    log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
 
 
 async def _notify_completion(
@@ -232,7 +232,7 @@ async def _notify_completion(
       await session_mgr.mark_unread(session_id)
       await broadcast_and_persist(session_id, fallback_event, session_mgr)
     except Exception as inner:
-      log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner))
+      log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
 
 
 async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:

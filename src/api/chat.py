@@ -204,7 +204,7 @@ async def run_and_finalize(
     if _DEFAULT_NAME_RE.match(meta.name):
       asyncio.create_task(_auto_name(cfg, meta, content, session_mgr))
   except Exception as e:
-    log.error("master_cc_run_failed", session=meta.id, error=str(e))
+    log.exception("master_cc_run_failed", session=meta.id)
 
 
 async def _auto_name(

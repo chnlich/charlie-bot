@@ -4,6 +4,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   initSidebarResize();
   initLatexResize();
+  initBacklogResize();
   fetchSlashCommands();
   // Seed sessionUnread from server-rendered unread dots
   document.querySelectorAll('[id^="unread-"]').forEach(el => {

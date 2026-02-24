@@ -56,6 +56,10 @@ class CharlieBotConfig(BaseModel):
   # Root directory for worker worktrees
   worktree_dir: str = "~/worktrees"
 
+  # Backlog panel
+  backlog_repo: Optional[str] = None
+  backlog_label: str = 'Project Backlog'
+
   # SSL
   ssl_certfile: Optional[str] = None
   ssl_keyfile: Optional[str] = None
@@ -91,6 +95,8 @@ class CharlieBotConfig(BaseModel):
       values["ssl_certfile"] = os.path.expanduser(values["ssl_certfile"])
     if values.get("ssl_keyfile"):
       values["ssl_keyfile"] = os.path.expanduser(values["ssl_keyfile"])
+    if values.get("backlog_repo"):
+      values["backlog_repo"] = os.path.expanduser(values["backlog_repo"])
     return values
 
   @field_validator("workspace_dirs", mode="before")

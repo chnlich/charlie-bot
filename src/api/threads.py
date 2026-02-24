@@ -69,8 +69,6 @@ async def get_thread_events(
           else:
             result_text = str(raw_content)
           events.append(WorkerEvent(type='tool_result', tool_name=name, content=result_text))
-    elif event_type == 'result':
-      events.append(WorkerEvent(type='result', content=str(data.get('result', ''))))
     else:
       try:
         events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))

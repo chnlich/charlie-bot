@@ -172,10 +172,11 @@ class Scheduler:
     event = {
         "type": "task_delegated",
         "task": task_cfg.name,
+        "description": task_cfg.prompt,
         "session_id": session.id,
         "thread_id": thread.id,
     }
-    await streaming_manager.broadcast("sidebar", event)
+    await broadcast_and_persist(session.id, event, session_mgr)
     log.info("scheduled_task_fired", task=task_cfg.name, session=session.id, thread=thread.id)
 
     return {"session_id": session.id, "thread_id": thread.id}

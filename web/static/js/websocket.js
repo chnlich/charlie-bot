@@ -158,5 +158,12 @@ function handleWSEvent(ev) {
     updateUsageDisplay(ev);
   } else if (t === 'tex_edit_proposed') {
     showDiffModal();
+  } else if (t === 'context_compacted') {
+    const trigger = ev.trigger || 'auto';
+    const preTokens = ev.pre_tokens;
+    let msg = 'Context compacted';
+    if (trigger) msg += ' (' + trigger + ')';
+    if (preTokens) msg += ' — was ' + Math.round(preTokens / 1000) + 'k tokens';
+    appendMessage('system', msg);
   }
 }

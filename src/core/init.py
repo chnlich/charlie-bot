@@ -79,6 +79,8 @@ async def init_charliebot_home() -> None:
 
   # Recover orphaned threads from previous server crash/restart
   _recover_orphaned_threads(cfg)
+  # Clear stale thinking_since from sessions left over from a crash
+  _clear_stale_thinking(cfg)
 
 
 def _seed_if_missing(path: Path, content: str) -> None:
@@ -129,3 +131,32 @@ def _recover_orphaned_threads(cfg) -> None:
 
   if recovered:
     log.info("orphaned_thread_recovery_done", count=recovered)
+
+
+def _clear_stale_thinking(cfg) -> None:
+  """Set thinking_since=null on all session metadata files.
+
+  On server startup no master task is running, so any non-null thinking_since
+  is stale from a previous crash or unclean shutdown.
+  """
+  if not cfg.sessions_dir.exists():
+    return
+  cleared = 0
+  for session_dir in cfg.sessions_dir.iterdir():
+    meta_path = session_dir / "metadata.json"
+    if not meta_path.exists():
+      continue
+    try:
+      meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+      log.warning("session_meta_unreadable", path=str(meta_path), error=str(e))
+      continue
+    if meta.get("thinking_since") is None:
+      continue
+    meta["thinking_since"] = None
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    log.debug("cleared_stale_thinking_since", session=meta.get("id"))
+    cleared += 1
+
+  if cleared:
+    log.info("stale_thinking_since_cleared", count=cleared)

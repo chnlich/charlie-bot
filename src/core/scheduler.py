@@ -22,12 +22,13 @@ log = structlog.get_logger()
 _TICK_INTERVAL = 60  # seconds between scheduler ticks
 
 
-async def _backup_handler() -> None:
+async def _backup_handler() -> str:
   """Built-in handler: create a backup and apply retention policy."""
   loop = asyncio.get_running_loop()
   archive = await loop.run_in_executor(None, create_backup)
   await loop.run_in_executor(None, apply_retention, BACKUP_DIR)
   log.info('backup_handler_done', archive=str(archive))
+  return str(archive)
 
 
 TASK_HANDLERS: dict[str, callable] = {
@@ -136,7 +137,23 @@ class Scheduler:
     session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
-    asyncio.create_task(handler(), name=f'handler_{task_cfg.name}')
+    try:
+      result = await handler()
+      event = {
+          'type': 'handler_result',
+          'task': task_cfg.name,
+          'status': 'ok',
+          'message': str(result) if result is not None else 'done',
+      }
+    except Exception as e:
+      log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
+      event = {
+          'type': 'handler_result',
+          'task': task_cfg.name,
+          'status': 'error',
+          'message': str(e),
+      }
+    await broadcast_and_persist(session.id, event, session_mgr)
     return {'session_id': session.id, 'thread_id': None}
 
   async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig) -> dict:

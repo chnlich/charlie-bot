@@ -154,6 +154,9 @@ function handleWSEvent(ev) {
     document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
     updateWorkerStatus(ev.thread_id, ev.status || 'completed');
     updateSpinner();
+  } else if (t === 'handler_result') {
+    const icon = ev.status === 'ok' ? '✓' : '✗';
+    appendMessage('system', `${icon} ${ev.task}: ${ev.message || ''}`);
   } else if (t === 'result') {
     updateUsageDisplay(ev);
   } else if (t === 'tex_edit_proposed') {

@@ -157,12 +157,12 @@ async def run_message(
 
     exit_code = backend.exit_code
     if backend.stderr_text:
-      log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text[:500])
+      log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text)
       if exit_code != 0:
         error_msg = backend.stderr_text[:500]
 
   except Exception as e:
-    log.error("master_cc_crashed", session=session_meta.id, error=str(e))
+    log.exception("master_cc_crashed", session=session_meta.id)
     error_msg = str(e)
 
   finally:

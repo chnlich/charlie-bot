@@ -86,6 +86,7 @@ async def execute_command(
     try:
       result = await scheduler.run_task_now(task_name)
     except ValueError as e:
+      log.debug("slash_command_value_error", error=str(e))
       return {'error': str(e)}
     return JSONResponse(
         status_code=202,

@@ -1,4 +1,4 @@
-"""Backlog API routes — read/write alpha-lab backlog.yaml and history.yaml."""
+"""Backlog API routes — read/write project backlog.yaml and history.yaml."""
 
 import asyncio
 from pathlib import Path
@@ -13,13 +13,15 @@ log = structlog.get_logger()
 
 router = APIRouter()
 
-_DEFAULT_REPO = Path('~/workspace/alpha-lab').expanduser()
-
 
 def _repo_path(repo: str | None) -> Path:
   if repo:
     return Path(repo).expanduser()
-  return _DEFAULT_REPO
+  from src.core.config import get_config
+  cfg = get_config()
+  if not cfg.backlog_repo:
+    raise ValueError('backlog_repo not configured in config.yaml')
+  return Path(cfg.backlog_repo)
 
 
 @router.get('')

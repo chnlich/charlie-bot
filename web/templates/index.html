@@ -343,7 +343,7 @@
       <!-- ===== BACKLOG PANEL ===== -->
       <div id="backlog-panel" class="hidden flex flex-col bg-gray-900 border-l border-gray-700 overflow-hidden" style="width: 40%">
         <div class="flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800">
-          <span class="text-sm font-medium text-gray-300">Alpha-Lab Backlog</span>
+          <span class="text-sm font-medium text-gray-300">{{ backlog_label }}</span>
           <div class="flex gap-2 items-center">
             <button onclick="backlogPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors">Refresh</button>
             <select id="backlog-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">

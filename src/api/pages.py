@@ -193,4 +193,5 @@ async def index(
           "all_usage": all_usage,
           "backend_options": cfg.backend_options,
           "active_backend": active_backend,
+          "backlog_label": cfg.backlog_label,
       })

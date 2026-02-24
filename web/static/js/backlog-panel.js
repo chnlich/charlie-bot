@@ -86,7 +86,7 @@ const backlogPanel = (() => {
           <span class="px-1.5 py-0.5 rounded text-xs font-medium ${categoryCls}">${item.category || ''}</span>
           <span class="px-1.5 py-0.5 rounded text-xs font-medium ${statusCls}">${item.status || ''}</span>
         </div>
-        <p class="text-sm font-semibold text-gray-100 mb-1">${_esc(item.title || '')}</p>
+        <p class="text-sm font-semibold text-gray-100 mb-1"><span class="text-gray-500 font-mono">#${_esc(item.id)}</span> ${_esc(item.title || '')}</p>
         <p id="${descId}" class="text-xs text-gray-400 line-clamp-2 cursor-pointer select-none"
            onclick="this.classList.toggle('line-clamp-2')">${_esc(item.description || '')}</p>
         <p class="text-xs text-gray-600 mt-1">${_fmtDate(item.created)}</p>

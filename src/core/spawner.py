@@ -52,7 +52,11 @@ async def _git_current_branch(repo_path: Path) -> str:
   )
   stdout, stderr = await proc.communicate()
   if proc.returncode != 0:
-    raise RuntimeError(f"git rev-parse failed: {stderr.decode().strip()}")
+    err_msg = stderr.decode().strip()
+    if 'unknown revision' in err_msg:
+      log.warning('git_empty_repo_fallback', repo=str(repo_path), detail='no commits yet, defaulting to main')
+      return 'main'
+    raise RuntimeError(f'git rev-parse failed: {err_msg}')
   return stdout.decode().strip()
 
 

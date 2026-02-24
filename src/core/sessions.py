@@ -125,6 +125,60 @@ class SessionManager:
     results.sort(key=lambda s: s.updated_at, reverse=True)
     return results
 
+  async def rewind_session(self, parent_id: str, event_index: int) -> Optional[SessionMetadata]:
+    """Create a new session by rewinding an existing one to a specific event index.
+
+    Copies chat_events.jsonl lines 0..event_index (inclusive) from the parent session,
+    generates a context summary, and creates a new session with the rewound history.
+    """
+    parent = await self.get_session(parent_id)
+    if not parent:
+      return None
+
+    # Read parent events and slice up to event_index (inclusive)
+    parent_events_path = self._chat_events_path(parent_id)
+    if not parent_events_path.exists():
+      return None
+    lines = parent_events_path.read_text(encoding='utf-8').splitlines()
+    kept_lines = lines[:event_index + 1]
+
+    # Generate a text summary from user+assistant messages for CC context
+    summary_parts = []
+    for line_text in kept_lines:
+      try:
+        ev = json.loads(line_text)
+      except (json.JSONDecodeError, ValueError):
+        continue
+      t = ev.get('type')
+      if t == 'user' and 'content' in ev:
+        summary_parts.append(f'User: {ev["content"]}')
+      elif t == 'assistant':
+        msg = ev.get('message') or {}
+        blocks = msg.get('content') or []
+        text = ''.join(b.get('text', '') for b in blocks if isinstance(b, dict) and b.get('type') == 'text')
+        if text:
+          summary_parts.append(f'Assistant: {text}')
+    summary = '\n\n'.join(summary_parts)
+    if len(summary) > 4000:
+      summary = summary[:4000] + '\n\n[... truncated]'
+
+    # Create the new session
+    meta = SessionMetadata(name=f'Rewind: {parent.name}', parent_session_id=parent_id, rewind_summary=summary)
+    session_dir = self._session_dir(meta.id)
+    for subdir in ['data', 'threads']:
+      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    # Write the truncated chat events
+    events_path = self._chat_events_path(meta.id)
+    events_path.write_text('\n'.join(kept_lines) + '\n', encoding='utf-8')
+
+    await self._save_metadata(meta)
+
+    ensure_master_claude_md(meta, self._cfg)
+
+    log.info('session_rewound', new_session=meta.id, parent=parent_id, event_index=event_index)
+    return meta
+
   async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:
     """Rename a session and return the updated metadata."""
     meta = await self.get_session(session_id)

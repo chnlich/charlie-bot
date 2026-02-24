@@ -92,6 +92,39 @@ class SessionManager:
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 
+  async def search_sessions(self, query: str) -> list[SessionMetadata]:
+    """Search active sessions by name and chat event content (case-insensitive)."""
+    query_lower = query.lower()
+    results: list[SessionMetadata] = []
+    if not self._cfg.sessions_dir.exists():
+      return results
+    for d in self._cfg.sessions_dir.iterdir():
+      if not d.is_dir():
+        continue
+      meta = await self.get_session(d.name)
+      if not meta or meta.status != SessionStatus.ACTIVE:
+        continue
+      # Check session name first
+      if query_lower in (meta.name or '').lower():
+        meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
+        results.append(meta)
+        continue
+      # Check chat events
+      events_path = self._chat_events_path(meta.id)
+      if events_path.exists():
+        try:
+          text = events_path.read_text(encoding='utf-8').lower()
+          if query_lower in text:
+            meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
+            results.append(meta)
+        except OSError as e:
+          log.debug('search_read_failed', session_id=meta.id, error=str(e))
+    for s in results:
+      if s.updated_at.tzinfo is None:
+        s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
+    results.sort(key=lambda s: s.updated_at, reverse=True)
+    return results
+
   async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:
     """Rename a session and return the updated metadata."""
     meta = await self.get_session(session_id)

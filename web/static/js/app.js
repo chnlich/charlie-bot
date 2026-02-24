@@ -9,8 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[id^="unread-"]').forEach(el => {
     sessionUnread[el.id.replace('unread-', '')] = el.dataset.hasUnread === '1';
   });
-  const urlFilter = new URLSearchParams(location.search).get('filter');
-  if (['all', 'starred', 'archived', 'scheduled'].includes(urlFilter)) { switchSidebarFilter(urlFilter); }
+  const params = new URLSearchParams(location.search);
+  const urlFilter = params.get('filter');
+  const urlQuery = params.get('q');
+  if (urlQuery) {
+    const searchInput = document.getElementById('sidebar-search');
+    if (searchInput) { searchInput.value = urlQuery; handleSidebarSearch(urlQuery); }
+  } else if (['all', 'starred', 'archived', 'scheduled'].includes(urlFilter)) {
+    switchSidebarFilter(urlFilter);
+  }
   updateRelativeTimes();
   // Render markdown for server-rendered assistant messages
   document.querySelectorAll('[data-md]').forEach(el => {

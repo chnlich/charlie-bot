@@ -227,6 +227,31 @@ function switchSidebarFilter(filter) {
     .catch(err => console.error('Filter fetch failed:', err));
 }
 
+// ---------------------------------------------------------------------------
+// Session search
+// ---------------------------------------------------------------------------
+let searchDebounceTimer = null;
+
+function handleSidebarSearch(query) {
+  clearTimeout(searchDebounceTimer);
+  const pills = document.querySelector('.filter-pill')?.parentElement;
+  const addBtn = document.getElementById('cron-add-btn');
+  if (query.trim()) {
+    // Hide filter pills while searching
+    if (pills) pills.style.display = 'none';
+    searchDebounceTimer = setTimeout(() => {
+      fetch('/api/sessions/search?q=' + encodeURIComponent(query.trim()))
+        .then(res => res.json())
+        .then(sessions => renderSessionList(sessions, 'search'))
+        .catch(err => console.error('Search failed:', err));
+    }, 300);
+  } else {
+    // Restore filter pills and current filter
+    if (pills) pills.style.display = '';
+    switchSidebarFilter(currentFilter);
+  }
+}
+
 async function toggleSessionStar(id, currentlyStarred) {
   const endpoint = currentlyStarred ? 'unstar' : 'star';
   // Optimistic UI update
@@ -264,6 +289,7 @@ function renderSessionList(sessions, filter) {
       starred: 'No starred sessions',
       archived: 'No archived sessions',
       scheduled: 'No scheduled sessions',
+      search: 'No matching sessions',
     };
     nav.innerHTML = `<p class="text-slate-500 text-sm px-3 py-2">${labels[filter]}</p>`;
     return;

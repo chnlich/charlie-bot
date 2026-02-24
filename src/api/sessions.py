@@ -77,6 +77,14 @@ async def list_scheduled_sessions(
   return sessions
 
 
+@router.get('/search', response_model=list[SessionMetadata])
+async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
+  """Full-text search across session names and chat content."""
+  if not q.strip():
+    return await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  return await session_mgr.search_sessions(q.strip())
+
+
 @router.get("/{session_id}", response_model=SessionMetadata)
 async def get_session(meta: SessionMetadata = Depends(require_session)):
   return meta

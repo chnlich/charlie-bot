@@ -67,7 +67,9 @@ function renderThreadEvents(threadId, events) {
       return escapeHtml((input.pattern || '') + (input.path ? ' in ' + input.path : ''));
     }
     const first = Object.values(input)[0];
-    return first ? escapeHtml(String(first).substring(0, 60)) : '';
+    if (!first) return '';
+    const display = typeof first === 'object' ? JSON.stringify(first) : String(first);
+    return escapeHtml(display.substring(0, 60));
   }
 
   const parts = filtered.map(e => {

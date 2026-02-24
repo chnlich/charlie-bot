@@ -85,6 +85,22 @@ async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get
   return await session_mgr.search_sessions(q.strip())
 
 
+@router.post('/{session_id}/rewind', response_model=SessionMetadata)
+async def rewind_session(
+    session_id: str,
+    body: dict,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Create a new session by rewinding to a specific event index."""
+  event_index = body.get('event_index')
+  if event_index is None:
+    raise HTTPException(status_code=400, detail='event_index is required')
+  meta = await session_mgr.rewind_session(session_id, int(event_index))
+  if not meta:
+    raise HTTPException(status_code=404, detail='Session not found')
+  return meta
+
+
 @router.get("/{session_id}", response_model=SessionMetadata)
 async def get_session(meta: SessionMetadata = Depends(require_session)):
   return meta

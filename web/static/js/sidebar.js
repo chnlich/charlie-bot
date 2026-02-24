@@ -548,3 +548,23 @@ async function deleteCronTask() {
   closeCronModal();
   switchSidebarFilter('scheduled');
 }
+
+// ---------------------------------------------------------------------------
+// Session rewind
+// ---------------------------------------------------------------------------
+async function rewindSession(sessionId, eventIndex) {
+  if (!confirm('Rewind session to this point? A new session will be created.')) return;
+  try {
+    const res = await fetch("/api/sessions/" + sessionId + "/rewind", {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({event_index: eventIndex}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    location.href = '/?session=' + data.id;
+  } catch (err) {
+    console.error('Rewind failed:', err);
+    alert('Rewind failed: ' + err.message);
+  }
+}

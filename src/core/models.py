@@ -79,6 +79,9 @@ class SessionMetadata(BaseModel):
   schedule_enabled: Optional[bool] = None
   schedule_next_run: Optional[str] = None
   schedule_timezone: Optional[str] = None
+  # Rewind fields
+  parent_session_id: Optional[str] = None  # original session this was rewound from
+  rewind_summary: Optional[str] = None  # context summary from parent session
 
 
 # ---------------------------------------------------------------------------

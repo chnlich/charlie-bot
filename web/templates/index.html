@@ -154,6 +154,7 @@
         </a>
         <div class="flex gap-1">
           <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
+          <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
           <button onclick="switchTab('workers')" id="btn-workers" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">
             Workers
@@ -312,6 +313,7 @@
       <div id="latex-resize-handle" class="resize-handle" style="display:none"></div>
 
       <!-- ===== LATEX PANEL ===== -->
+
       <div id="latex-panel" class="hidden latex-panel flex flex-col" style="width: 60%">
         <!-- Panel header -->
         <div class="flex items-center gap-2 px-4 py-2 border-b border-slate-700 bg-slate-800/50">
@@ -335,6 +337,24 @@
         <div id="latex-tex-view" class="flex-1 min-h-0 hidden overflow-auto">
           <textarea id="latex-editor" class="w-full h-full bg-slate-900 text-slate-200 font-mono text-sm p-4 resize-none focus:outline-none" spellcheck="false"></textarea>
         </div>
+      </div>
+      <div id="backlog-resize-handle" class="resize-handle" style="display:none"></div>
+
+      <!-- ===== BACKLOG PANEL ===== -->
+      <div id="backlog-panel" class="hidden flex flex-col bg-gray-900 border-l border-gray-700 overflow-hidden" style="width: 40%">
+        <div class="flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800">
+          <span class="text-sm font-medium text-gray-300">Alpha-Lab Backlog</span>
+          <div class="flex gap-2 items-center">
+            <button onclick="backlogPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors">Refresh</button>
+            <select id="backlog-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
+              <option value="pending">Pending</option>
+              <option value="all">All</option>
+              <option value="done">Done</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+        </div>
+        <div id="backlog-list" class="flex-1 overflow-y-auto p-3 space-y-3"></div>
       </div>
       </div><!-- end tab content wrapper -->
 
@@ -374,6 +394,7 @@
   <script src="/static/js/workers.js"></script>
   <script src="/static/js/voice-input.js"></script>
   <script src="/static/js/latex-panel.js"></script>
+  <script src="/static/js/backlog-panel.js"></script>
   <script src="/static/js/app.js"></script>
 
   <div id="cron-modal" class="diff-modal-overlay hidden">

@@ -37,7 +37,8 @@ def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig
 
   # Inject rewind context if this session was rewound from another
   if session_meta.rewind_summary:
-    parts.append(f"""# Session Rewind Context
+    parts.append(
+        f"""# Session Rewind Context
 
 This session was rewound from a previous conversation. Here is the conversation summary up to the rewind point:
 

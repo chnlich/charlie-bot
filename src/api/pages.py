@@ -36,12 +36,13 @@ def _events_to_messages(events: list[dict]) -> list[dict]:
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
         assistant_buf = ""
-      messages.append({
-          "role": "user",
-          "content": ev.get("content", ""),
-          "is_voice": ev.get("is_voice", False),
-          "event_index": idx,
-      })
+      messages.append(
+          {
+              "role": "user",
+              "content": ev.get("content", ""),
+              "is_voice": ev.get("is_voice", False),
+              "event_index": idx,
+          })
     elif t == "assistant":
       last_event_idx = idx
       msg = ev.get("message") or {}

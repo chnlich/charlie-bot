@@ -32,6 +32,11 @@ const backlogPanel = (() => {
     return map[key] || fallback || 'bg-gray-700 text-gray-400';
   }
 
+  function _moduleLabel(source) {
+    if (!source) return '';
+    return source.replace(/^alpha-lab-/, '');
+  }
+
   function _fmtDate(raw) {
     if (!raw) return '';
     const d = new Date(raw);
@@ -51,6 +56,7 @@ const backlogPanel = (() => {
     const priorityCls = _badge(PRIORITY_BADGE, item.priority);
     const categoryCls = _badge(CATEGORY_BADGE, item.category);
     const statusCls   = _badge(STATUS_BADGE, item.status);
+    const modLabel    = _moduleLabel(item._source);
 
     let actions = '';
     if (item.status === 'pending') {
@@ -78,6 +84,10 @@ const backlogPanel = (() => {
       backtestHtml = `<div class="mt-2 text-xs font-mono text-gray-400 bg-gray-900 rounded px-2 py-1">${pairs}</div>`;
     }
 
+    const modBadge = modLabel
+      ? `<span class="px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-900 text-indigo-300">${_esc(modLabel)}</span>`
+      : '';
+
     const descId = `backlog-desc-${item.id}`;
     return `
       <div class="bg-gray-800 rounded-lg p-3 border border-gray-700 hover:border-gray-600 transition-colors">
@@ -85,10 +95,12 @@ const backlogPanel = (() => {
           <span class="px-1.5 py-0.5 rounded text-xs font-medium ${priorityCls}">${item.priority || 'low'}</span>
           <span class="px-1.5 py-0.5 rounded text-xs font-medium ${categoryCls}">${item.category || ''}</span>
           <span class="px-1.5 py-0.5 rounded text-xs font-medium ${statusCls}">${item.status || ''}</span>
+          ${modBadge}
         </div>
         <p class="text-sm font-semibold text-gray-100 mb-1"><span class="text-gray-500 font-mono">#${_esc(item.id)}</span> ${_esc(item.title || '')}</p>
         <p id="${descId}" class="text-xs text-gray-400 line-clamp-2 cursor-pointer select-none"
            onclick="this.classList.toggle('line-clamp-2')">${_esc(item.description || '')}</p>
+        ${item.rejected_reason ? `<p class="text-xs text-red-400 mt-1">Rejected${item.rejected_at ? ' ' + _fmtDate(item.rejected_at) : ''}: ${_esc(item.rejected_reason)}</p>` : ''}
         <p class="text-xs text-gray-600 mt-1">${_fmtDate(item.created)}</p>
         ${backtestHtml}
         ${actions ? `<div class="flex gap-2 mt-2">${actions}</div>` : ''}
@@ -103,6 +115,16 @@ const backlogPanel = (() => {
       .replace(/"/g, '&quot;');
   }
 
+  function _populateModuleFilter() {
+    const sel = document.getElementById('backlog-module-filter');
+    if (!sel) return;
+    const sources = [...new Set(_items.map(i => i._source).filter(Boolean))].sort();
+    const prev = sel.value;
+    sel.innerHTML = '<option value="all">All modules</option>' +
+      sources.map(s => `<option value="${_esc(s)}">${_esc(_moduleLabel(s))}</option>`).join('');
+    if (sources.includes(prev)) sel.value = prev;
+  }
+
   async function refresh() {
     const list = document.getElementById('backlog-list');
     if (list) list.innerHTML = '<p class="text-xs text-gray-500">Loading...</p>';
@@ -111,26 +133,34 @@ const backlogPanel = (() => {
         fetch('/api/backlog'),
         fetch('/api/backlog/history'),
       ]);
-      _items   = bResp.ok   ? await bResp.json()   : [];
-      _history = hResp.ok   ? await hResp.json()   : [];
+      _items   = bResp.ok ? await bResp.json() : [];
+      _history = hResp.ok ? await hResp.json() : [];
       _loaded = true;
     } catch (e) {
       console.error('backlog refresh failed:', e);
       _items = [];
       _history = [];
     }
+    _populateModuleFilter();
     render();
   }
 
   function render() {
     const list = document.getElementById('backlog-list');
     if (!list) return;
-    const filter = (document.getElementById('backlog-filter') || {}).value || 'pending';
+    const statusFilter = (document.getElementById('backlog-filter') || {}).value || 'pending';
+    const moduleFilter = (document.getElementById('backlog-module-filter') || {}).value || 'all';
+
     let visible = _items;
-    if (filter === 'pending')  visible = _items.filter(i => i.status === 'pending');
-    else if (filter === 'done') visible = _items.filter(i => i.status === 'done');
-    else if (filter === 'rejected') visible = _items.filter(i => i.status === 'rejected');
-    // 'all' → no filter
+    if (statusFilter === 'pending')  visible = visible.filter(i => i.status === 'pending');
+    else if (statusFilter === 'done') visible = visible.filter(i => i.status === 'done');
+    else if (statusFilter === 'rejected') visible = visible.filter(i => i.status === 'rejected');
+    // 'all' → no status filter
+
+    if (moduleFilter !== 'all') {
+      visible = visible.filter(i => i._source === moduleFilter);
+    }
+
     if (!visible.length) {
       list.innerHTML = '<p class="text-xs text-gray-500">No items.</p>';
       return;

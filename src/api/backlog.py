@@ -84,22 +84,33 @@ async def _git_commit_push(repo_path: Path, item_id: str, status: str):
   """Fire-and-forget: git add + commit + push backlog.yaml."""
   try:
     add = await asyncio.create_subprocess_exec(
-      'git', '-C', str(repo_path), 'add', 'loop/backlog.yaml',
-      stdout=asyncio.subprocess.DEVNULL,
-      stderr=asyncio.subprocess.DEVNULL,
+        'git',
+        '-C',
+        str(repo_path),
+        'add',
+        'loop/backlog.yaml',
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
     await add.wait()
     commit = await asyncio.create_subprocess_exec(
-      'git', '-C', str(repo_path), 'commit', '-m',
-      f'backlog: update {item_id} status to {status}',
-      stdout=asyncio.subprocess.DEVNULL,
-      stderr=asyncio.subprocess.DEVNULL,
+        'git',
+        '-C',
+        str(repo_path),
+        'commit',
+        '-m',
+        f'backlog: update {item_id} status to {status}',
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
     await commit.wait()
     push = await asyncio.create_subprocess_exec(
-      'git', '-C', str(repo_path), 'push',
-      stdout=asyncio.subprocess.DEVNULL,
-      stderr=asyncio.subprocess.DEVNULL,
+        'git',
+        '-C',
+        str(repo_path),
+        'push',
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
     )
     await push.wait()
   except Exception as e:

@@ -346,6 +346,9 @@
           <span class="text-sm font-medium text-gray-300">{{ backlog_label }}</span>
           <div class="flex gap-2 items-center">
             <button onclick="backlogPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors">Refresh</button>
+            <select id="backlog-module-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
+              <option value="all">All modules</option>
+            </select>
             <select id="backlog-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
               <option value="pending">Pending</option>
               <option value="all">All</option>

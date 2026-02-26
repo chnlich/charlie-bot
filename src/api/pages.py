@@ -169,16 +169,6 @@ async def index(
   elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
-  # Compute usage for each sidebar session
-  all_usage: dict[str, dict] = {}
-  for s in sessions:
-    try:
-      u = session_mgr.get_session_usage(s.id)
-      if u:
-        all_usage[s.id] = u
-    except Exception:
-      log.debug("sidebar_usage_failed", session_id=s.id)
-
   active_backend = active_session.backend if active_session else (
       cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
 
@@ -191,7 +181,7 @@ async def index(
           "threads": threads,
           "event_count": len(raw_events),
           "session_usage": session_usage,
-          "all_usage": all_usage,
+          "all_usage": {},
           "backend_options": cfg.backend_options,
           "active_backend": active_backend,
           "backlog_label": cfg.backlog_label,

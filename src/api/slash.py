@@ -36,9 +36,9 @@ _RUN_ENTRY = {
 }
 
 
-def _build_command_list() -> list[dict]:
+async def _build_command_list() -> list[dict]:
   """Return the full command list: YAML commands + built-ins."""
-  cmds = load_slash_commands()
+  cmds = await asyncio.to_thread(load_slash_commands)
   result = [{'name': c.name, 'scope': c.scope, 'description': c.description, 'args': c.args} for c in cmds]
   result.append(_HELP_ENTRY)
   result.append(_RUN_ENTRY)
@@ -53,7 +53,7 @@ class SlashExecuteRequest(BaseModel):
 @router.get('/commands')
 async def list_commands():
   """Return all available slash commands including built-in /help."""
-  return _build_command_list()
+  return await _build_command_list()
 
 
 @router.post('/{session_id}/execute')
@@ -70,7 +70,7 @@ async def execute_command(
 
   # Built-in /help
   if name == 'help':
-    return {'type': 'help', 'commands': _build_command_list()}
+    return {'type': 'help', 'commands': await _build_command_list()}
 
   # Built-in /run <task-name>
   if name == 'run':
@@ -99,7 +99,7 @@ async def execute_command(
     )
 
   # Look up in YAML registry
-  commands = {c.name: c for c in load_slash_commands()}
+  commands = {c.name: c for c in await asyncio.to_thread(load_slash_commands)}
   cmd = commands.get(name)
   if cmd is None:
     return {'error': f'Unknown command: /{name}'}

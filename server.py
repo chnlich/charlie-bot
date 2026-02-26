@@ -146,7 +146,7 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   # Send catch-up events from on-disk log
   cfg = get_config()
   # Find the events.jsonl for this thread (search across all sessions)
-  events_file = _find_events_file(thread_id, cfg)
+  events_file = await asyncio.to_thread(_find_events_file, thread_id, cfg)
   if events_file and events_file.exists():
     try:
       with open(events_file, "r", encoding="utf-8") as f:

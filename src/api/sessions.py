@@ -1,5 +1,6 @@
 """Session management API routes."""
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -40,7 +41,7 @@ async def list_projects():
   """Return git repos discovered from configured workspace_dirs."""
   from src.core.config import get_config
   cfg = get_config()
-  return cfg.discover_repos()
+  return await asyncio.to_thread(cfg.discover_repos)
 
 
 @router.get("/archived", response_model=list[SessionMetadata])

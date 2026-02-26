@@ -78,7 +78,7 @@ async def send_message(
     name = content[1:space_idx] if space_idx != -1 else content[1:]
     args = content[space_idx + 1:].strip() if space_idx != -1 else ''
 
-    commands = {c.name: c for c in load_slash_commands()}
+    commands = {c.name: c for c in await asyncio.to_thread(load_slash_commands)}
     cmd = commands.get(name)
 
     if cmd is not None:

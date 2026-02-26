@@ -592,6 +592,26 @@ async function deleteCronTask() {
 }
 
 // ---------------------------------------------------------------------------
+// Lazy-load sidebar usage badges
+// ---------------------------------------------------------------------------
+function fetchSidebarUsage() {
+  fetch('/api/sessions/usage')
+    .then(res => res.json())
+    .then(data => {
+      for (const [sid, u] of Object.entries(data)) {
+        const el = document.getElementById('sidebar-usage-' + sid);
+        if (el) {
+          const tokens = Math.round((u.context_tokens || 0) / 1000) + 'k';
+          const cost = '$' + (u.total_cost_usd || 0).toFixed(2);
+          el.textContent = tokens + ' tokens \u00b7 ' + cost;
+          el.classList.remove('hidden');
+        }
+      }
+    })
+    .catch(err => console.debug('Sidebar usage fetch failed:', err));
+}
+
+// ---------------------------------------------------------------------------
 // Session rewind
 // ---------------------------------------------------------------------------
 async function rewindSession(sessionId, eventIndex) {

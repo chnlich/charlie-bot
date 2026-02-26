@@ -84,6 +84,21 @@ async def list_scheduled_sessions(
   return sessions
 
 
+@router.get('/usage')
+async def all_sessions_usage(session_mgr: SessionManager = Depends(get_session_manager)):
+  """Return {session_id: usage_dict} for all active sessions (lazy-loaded by frontend)."""
+  sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  result: dict[str, dict] = {}
+  for s in sessions:
+    try:
+      u = await asyncio.to_thread(session_mgr.get_session_usage, s.id)
+      if u:
+        result[s.id] = u
+    except Exception:
+      pass
+  return result
+
+
 @router.get('/search', response_model=list[SessionMetadata])
 async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
   """Full-text search across session names and chat content."""

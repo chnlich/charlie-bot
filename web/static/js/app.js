@@ -51,6 +51,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Lazy-load sidebar usage badges (non-blocking)
+  fetchSidebarUsage();
+
   // Connect WebSocket
   connectWS();
 

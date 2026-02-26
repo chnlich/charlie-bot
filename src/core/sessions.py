@@ -102,7 +102,7 @@ class SessionManager:
       if not d.is_dir():
         continue
       meta = await self.get_session(d.name)
-      if not meta or meta.status != SessionStatus.ACTIVE:
+      if not meta or meta.status not in (SessionStatus.ACTIVE, SessionStatus.WAITING):
         continue
       # Check session name first
       if query_lower in (meta.name or '').lower():
@@ -239,6 +239,28 @@ class SessionManager:
     meta.updated_at = datetime.now(timezone.utc)
     await self._save_metadata(meta)
     log.info("session_unarchived", session_id=session_id)
+    return meta
+
+  async def mark_waiting(self, session_id: str) -> Optional[SessionMetadata]:
+    """Mark a session as waiting for confirmation."""
+    meta = await self.get_session(session_id)
+    if not meta:
+      return None
+    meta.status = SessionStatus.WAITING
+    meta.updated_at = datetime.now(timezone.utc)
+    await self._save_metadata(meta)
+    log.info("session_mark_waiting", session_id=session_id)
+    return meta
+
+  async def unmark_waiting(self, session_id: str) -> Optional[SessionMetadata]:
+    """Restore a waiting session back to active."""
+    meta = await self.get_session(session_id)
+    if not meta:
+      return None
+    meta.status = SessionStatus.ACTIVE
+    meta.updated_at = datetime.now(timezone.utc)
+    await self._save_metadata(meta)
+    log.info("session_unmark_waiting", session_id=session_id)
     return meta
 
   async def star_session(self, session_id: str) -> Optional[SessionMetadata]:

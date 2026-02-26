@@ -87,6 +87,7 @@ async def get_history(repo: str | None = None):
 class BacklogPatch(BaseModel):
   status: str | None = None
   priority: str | None = None
+  rejected_reason: str | None = None
 
 
 @router.patch('/{item_id}')
@@ -104,6 +105,10 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
         item['status'] = patch.status
         if patch.status == 'rejected':
           item['rejected_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+          if patch.rejected_reason:
+            item['rejected_reason'] = patch.rejected_reason
+          else:
+            item.pop('rejected_reason', None)
         elif patch.status == 'pending':
           item.pop('rejected_reason', None)
           item.pop('rejected_at', None)

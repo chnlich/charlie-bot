@@ -63,7 +63,7 @@ const backlogPanel = (() => {
       actions = `
         <button onclick="backlogPanel.updateStatus('${item.id}','approved')"
                 class="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-200 transition-colors">Approve</button>
-        <button onclick="backlogPanel.updateStatus('${item.id}','rejected')"
+        <button onclick="backlogPanel.rejectWithReason('${item.id}')"
                 class="px-2 py-1 text-xs rounded bg-red-800 hover:bg-red-700 text-red-200 transition-colors">Reject</button>`;
     } else if (item.status === 'approved') {
       actions = `
@@ -168,12 +168,12 @@ const backlogPanel = (() => {
     list.innerHTML = visible.map(_renderCard).join('');
   }
 
-  async function updateStatus(id, newStatus) {
+  async function updateStatus(id, newStatus, extra) {
     try {
       const resp = await fetch(`/api/backlog/${id}`, {
         method: 'PATCH',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({status: newStatus}),
+        body: JSON.stringify({status: newStatus, ...extra}),
       });
       if (!resp.ok) {
         console.error('backlog PATCH failed:', await resp.text());
@@ -186,11 +186,17 @@ const backlogPanel = (() => {
     await refresh();
   }
 
+  async function rejectWithReason(id) {
+    const reason = prompt('Rejection reason (optional):');
+    if (reason === null) return;  // user cancelled
+    await updateStatus(id, 'rejected', {rejected_reason: reason || null});
+  }
+
   function init() {
     // Resize handle init happens in app.js via initBacklogResize()
   }
 
-  return {init, refresh, render, updateStatus};
+  return {init, refresh, render, updateStatus, rejectWithReason};
 })();
 
 // ---------------------------------------------------------------------------

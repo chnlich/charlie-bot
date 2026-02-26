@@ -195,6 +195,28 @@ async function unarchiveSession(id) {
   }
 }
 
+async function waitSession(id) {
+  try {
+    await fetch(`/api/sessions/${id}/wait`, { method: 'POST' });
+    if (SESSION_ID === id) {
+      location.href = '/?session=';
+    } else {
+      document.getElementById('session-' + id)?.remove();
+    }
+  } catch (err) {
+    console.error('Wait failed:', err);
+  }
+}
+
+async function unwaitSession(id) {
+  try {
+    await fetch(`/api/sessions/${id}/unwait`, { method: 'POST' });
+    document.getElementById('session-' + id)?.remove();
+  } catch (err) {
+    console.error('Unwait failed:', err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar filter & star
 // ---------------------------------------------------------------------------
@@ -217,6 +239,7 @@ function switchSidebarFilter(filter) {
     all: '/api/sessions/',
     starred: '/api/sessions/starred',
     archived: '/api/sessions/archived',
+    waiting: '/api/sessions/waiting',
     scheduled: '/api/sessions/scheduled',
   };
   const addBtn = document.getElementById('cron-add-btn');
@@ -288,6 +311,7 @@ function renderSessionList(sessions, filter) {
       all: 'No sessions yet',
       starred: 'No starred sessions',
       archived: 'No archived sessions',
+      waiting: 'No waiting sessions',
       scheduled: 'No scheduled sessions',
       search: 'No matching sessions',
     };
@@ -315,6 +339,20 @@ function renderSessionList(sessions, filter) {
                 class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Unarchive">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/></svg>
         </button>`;
+    } else if (filter === 'waiting') {
+      actions = `
+        <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
+                class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
+          <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
+        </button>
+        <button onclick="event.preventDefault(); event.stopPropagation(); unwaitSession('${s.id}')"
+                class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Reactivate">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        </button>
+        <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
+                class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        </button>`;
     } else {
       const gearBtn = (filter === 'scheduled' && s.scheduled_task) ? `
         <button onclick="event.preventDefault(); event.stopPropagation(); openCronEditor('${escapeHtml(s.scheduled_task)}')"
@@ -329,6 +367,10 @@ function renderSessionList(sessions, filter) {
         <button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
                 class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Rename">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+        </button>
+        <button onclick="event.preventDefault(); event.stopPropagation(); waitSession('${s.id}')"
+                class="opacity-0 group-hover:opacity-100 p-1 hover:text-amber-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Mark waiting">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
         </button>
         <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
                 class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">

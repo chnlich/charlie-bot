@@ -23,6 +23,7 @@ class ThreadStatus(str, Enum):
 class SessionStatus(str, Enum):
   ACTIVE = "active"
   ARCHIVED = "archived"
+  WAITING = "waiting"
 
 
 # ---------------------------------------------------------------------------

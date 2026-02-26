@@ -50,6 +50,12 @@ async def list_archived_sessions(session_mgr: SessionManager = Depends(get_sessi
   return await session_mgr.list_sessions(status=SessionStatus.ARCHIVED)
 
 
+@router.get("/waiting", response_model=list[SessionMetadata])
+async def list_waiting_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+  """List waiting sessions, newest first."""
+  return await session_mgr.list_sessions(status=SessionStatus.WAITING)
+
+
 @router.get("/starred", response_model=list[SessionMetadata])
 async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List starred sessions, newest first."""
@@ -140,6 +146,28 @@ async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
   return meta
+
+
+@router.post("/{session_id}/wait", response_model=SessionMetadata)
+async def wait_session(
+    session_id: str,
+    meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  if meta.status != SessionStatus.ACTIVE:
+    raise HTTPException(status_code=409, detail="Session is not active")
+  return await session_mgr.mark_waiting(session_id)
+
+
+@router.post("/{session_id}/unwait", response_model=SessionMetadata)
+async def unwait_session(
+    session_id: str,
+    meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  if meta.status != SessionStatus.WAITING:
+    raise HTTPException(status_code=409, detail="Session is not waiting")
+  return await session_mgr.unmark_waiting(session_id)
 
 
 @router.patch("/{session_id}", response_model=SessionMetadata)

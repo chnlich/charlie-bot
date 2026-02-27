@@ -322,7 +322,7 @@ class SessionManager:
     await append_ndjson(self._chat_events_path(session_id), event)
     # Update usage.json cache whenever a result event is persisted.
     if event.get("type") == "result":
-      await self._update_usage_cache(session_id, event)
+      self._update_usage_cache(session_id, event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up (sync, for WebSocket handler)."""
@@ -343,7 +343,15 @@ class SessionManager:
         return json.loads(cache_path.read_text(encoding="utf-8"))
       except (json.JSONDecodeError, OSError) as e:
         log.debug("usage_cache_read_failed", session_id=session_id, error=str(e))
-    return self._parse_usage_from_events(session_id)
+    result = self._parse_usage_from_events(session_id)
+    if result is not None:
+      # Backfill usage.json so future calls skip the full NDJSON parse.
+      cache_path.parent.mkdir(parents=True, exist_ok=True)
+      try:
+        cache_path.write_text(json.dumps(result), encoding="utf-8")
+      except OSError:
+        pass
+    return result
 
   def _parse_usage_from_events(self, session_id: str) -> dict | None:
     """Full NDJSON parse fallback for get_session_usage."""
@@ -388,7 +396,7 @@ class SessionManager:
         "model": model,
     }
 
-  async def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
+  def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
     """Incrementally update usage.json cache from a new result event."""
     cache_path = self._usage_cache_path(session_id)
     prev: dict = {}
@@ -428,8 +436,7 @@ class SessionManager:
         "model": model,
     }
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiofiles.open(cache_path, "w", encoding="utf-8") as f:
-      await f.write(json.dumps(data))
+    cache_path.write_text(json.dumps(data), encoding="utf-8")
 
   def _usage_cache_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "usage.json"

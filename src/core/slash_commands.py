@@ -6,7 +6,7 @@ from typing import Optional
 
 import structlog
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 log = structlog.get_logger()
 

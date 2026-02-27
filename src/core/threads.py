@@ -1,6 +1,5 @@
 """Thread management for CharlieBot Worker tasks."""
 
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional

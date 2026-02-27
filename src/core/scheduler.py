@@ -14,7 +14,6 @@ from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.spawner import broadcast_and_persist, spawn_worker
-from src.core.streaming import streaming_manager
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()

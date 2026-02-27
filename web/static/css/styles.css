@@ -68,6 +68,7 @@ body.resizing { cursor: col-resize; user-select: none; }
     #latex-resize-handle { display: none !important; }
     .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
     .hamburger-btn { display: inline-flex !important; }
+    #backlog-panel:not(.hidden) { width: 100% !important; }
 }
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);

@@ -68,9 +68,9 @@ def _short_desc(description: str, limit: int = 120) -> str:
   return first_line
 
 
-def _build_worker_event(thread_id: str, content: str, status: str) -> dict:
+def _build_worker_event(thread_id: str, content: str, status: str, full_content: str = '') -> dict:
   """Build a worker_summary event dict."""
-  return {"type": "worker_summary", "thread_id": thread_id, "content": content, "status": status}
+  return {"type": "worker_summary", "thread_id": thread_id, "content": content, "status": status, "full_content": full_content}
 
 
 async def broadcast_and_persist(session_id: str, event: dict, session_mgr: SessionManager) -> None:
@@ -221,7 +221,7 @@ async def _notify_completion(
     chat_summary += suffix
     full_summary += suffix
 
-    worker_event = _build_worker_event(thread.id, chat_summary, status)
+    worker_event = _build_worker_event(thread.id, chat_summary, status, full_content=full_summary)
     await session_mgr.mark_unread(session_id)
     await broadcast_and_persist(session_id, worker_event, session_mgr)
     log.info("worker_summary_sent", session=session_id, thread=thread.id)
@@ -232,7 +232,7 @@ async def _notify_completion(
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
       fallback = f'Worker `{thread.id[:8]}` finished: {_short_desc(description)}\n\n*(summary unavailable: {e})*'
-      fallback_event = _build_worker_event(thread.id, fallback, "completed" if exit_code == 0 else "failed")
+      fallback_event = _build_worker_event(thread.id, fallback, "completed" if exit_code == 0 else "failed", full_content=fallback)
       await session_mgr.mark_unread(session_id)
       await broadcast_and_persist(session_id, fallback_event, session_mgr)
     except Exception as inner:

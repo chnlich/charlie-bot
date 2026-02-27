@@ -224,6 +224,10 @@ async def _spawn_review_worker(
     thread_mgr: ThreadManager,
 ) -> None:
   """Spawn a review worker for a successfully completed worker's branch."""
+  if not original_thread.repo_path:
+    log.error("spawn_review_no_repo_path", session=session_id, thread=original_thread.id,
+              detail="original thread missing repo_path")
+    return
   repo_path = Path(original_thread.repo_path)
 
   base_branch = await _git_current_branch(repo_path)

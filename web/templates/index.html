@@ -192,7 +192,9 @@
           </div>
           {% elif msg.role == 'worker_summary' %}
           <div class="flex justify-start">
-            <div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg" data-md>{{ msg.content }}</div>
+            <div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer"
+                 data-md data-full="{{ msg.full_content | e }}"
+                 onclick="showTextModal('Worker Result', this.dataset.full)">{{ msg.content }}</div>
           </div>
           {% elif msg.role == 'plan' %}
           <div class="flex justify-start">

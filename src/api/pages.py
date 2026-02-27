@@ -125,7 +125,7 @@ async def index(
 ):
   """Render the full page. All data loaded here."""
   try:
-    sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+    sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False)
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []

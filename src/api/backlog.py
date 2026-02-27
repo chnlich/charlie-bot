@@ -47,11 +47,18 @@ def _load_all_items(repo_path: Path) -> list[dict]:
   return items
 
 
-def _find_item_file(repo_path: Path, item_id: str) -> tuple[Path | None, list | None]:
-  """Return (yaml_path, items) for the file containing item_id, or (None, None)."""
+def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) -> tuple[Path | None, list | None]:
+  """Return (yaml_path, items) for the file containing item_id, or (None, None).
+
+  If *source* is given (e.g. 'alpha-lab-backtest'), only search that file —
+  this disambiguates duplicate IDs across per-module backlogs.
+  """
   backlogs_dir = repo_path / 'loop' / 'backlogs'
   if backlogs_dir.is_dir():
-    for yaml_file in sorted(backlogs_dir.glob('*.yaml')):
+    files = sorted(backlogs_dir.glob('*.yaml'))
+    if source:
+      files = [f for f in files if f.stem == source]
+    for yaml_file in files:
       items = yaml.safe_load(yaml_file.read_text(encoding='utf-8')) or []
       if any(str(i.get('id')) == item_id for i in items):
         return yaml_file, items
@@ -70,7 +77,7 @@ def _find_item_file(repo_path: Path, item_id: str) -> tuple[Path | None, list | 
 async def get_backlog(repo: str | None = None):
   """Return backlog items from loop/backlogs/*.yaml or fallback loop/backlog.yaml."""
   repo_path = _repo_path(repo)
-  items = _load_all_items(repo_path)
+  items = await asyncio.to_thread(_load_all_items, repo_path)
   return JSONResponse(content=items)
 
 
@@ -80,7 +87,7 @@ async def get_history(repo: str | None = None):
   path = _repo_path(repo) / 'loop' / 'history.yaml'
   if not path.exists():
     return JSONResponse(content=[], status_code=200)
-  items = yaml.safe_load(path.read_text(encoding='utf-8')) or []
+  items = await asyncio.to_thread(lambda: yaml.safe_load(path.read_text(encoding='utf-8')) or [])
   return JSONResponse(content=items)
 
 
@@ -91,10 +98,10 @@ class BacklogPatch(BaseModel):
 
 
 @router.patch('/{item_id}')
-async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = None):
+async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = None, source: str | None = None):
   """Update status/priority of a backlog item, then git commit+push."""
   repo_path = _repo_path(repo)
-  yaml_path, items = _find_item_file(repo_path, item_id)
+  yaml_path, items = await asyncio.to_thread(_find_item_file, repo_path, item_id, source)
   if yaml_path is None:
     return JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)
 
@@ -120,7 +127,8 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
   if updated is None:
     return JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)
 
-  yaml_path.write_text(yaml.safe_dump(items, allow_unicode=True, sort_keys=False), encoding='utf-8')
+  await asyncio.to_thread(
+      yaml_path.write_text, yaml.safe_dump(items, allow_unicode=True, sort_keys=False), encoding='utf-8')
   log.info('backlog_updated', item_id=item_id, file=str(yaml_path), **patch.model_dump(exclude_none=True))
 
   git_rel = str(yaml_path.relative_to(repo_path))

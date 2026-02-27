@@ -1,5 +1,6 @@
 """Thread management API routes."""
 
+import asyncio
 import os
 import signal
 
@@ -40,7 +41,7 @@ async def get_thread_events(
 ):
   """Return historical Worker events from the on-disk events.jsonl log."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  raw_events = parse_ndjson_file(events_path)
+  raw_events = await asyncio.to_thread(parse_ndjson_file, events_path)
   events: list[WorkerEvent] = []
   tool_id_to_name: dict[str, str] = {}
   for data in raw_events:

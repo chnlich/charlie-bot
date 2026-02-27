@@ -292,7 +292,7 @@
             } %}
             <span id="thread-dot-{{ t.id }}" class="w-2 h-2 rounded-full flex-shrink-0 {{ status_colors.get(t.status.value, 'bg-slate-500') }} {% if t.status.value == 'running' %}animate-pulse{% endif %}"></span>
             <div class="flex-1 min-w-0">
-              <p class="text-sm truncate">{{ t.description }}</p>
+              <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="{{ t.description }}">{{ t.description }}</p>
               <p id="thread-status-{{ t.id }}" class="text-xs text-slate-500">{{ t.status.value }} · {{ t.created_at.strftime("%m/%d %H:%M") }}{% if t.completed_at %} · {{ ((t.completed_at - t.created_at).total_seconds()|int // 60) }}m{{ ((t.completed_at - t.created_at).total_seconds()|int % 60) }}s{% endif %}</p>
             </div>
             {% if t.status.value == 'running' %}
@@ -355,7 +355,7 @@
               <option value="all">All modules</option>
             </select>
             <select id="backlog-filter" onchange="backlogPanel.render()" class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none">
-              <option value="pending">Pending</option>
+              <option value="pending">Active</option>
               <option value="all">All</option>
               <option value="done">Done</option>
               <option value="rejected">Rejected</option>
@@ -430,6 +430,10 @@
             <input id="cron-repo" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" placeholder="~/workspace/my-repo" />
           </div>
           <div>
+            <label class="block text-xs text-slate-400 mb-1">Project (optional)</label>
+            <input id="cron-project" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" placeholder="e.g. alpha-lab" />
+          </div>
+          <div>
             <label class="block text-xs text-slate-400 mb-1">Timezone</label>
             <input id="cron-timezone" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" value="America/New_York" />
           </div>
@@ -444,6 +448,18 @@
         <div class="flex-1"></div>
         <button onclick="closeCronModal()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 text-slate-200 font-medium">Cancel</button>
         <button onclick="saveCronTask()" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-slate-200 font-medium">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="text-modal-overlay" class="diff-modal-overlay" style="display:none" onclick="closeTextModal()">
+    <div class="diff-modal" style="max-width:700px" onclick="event.stopPropagation()">
+      <div class="diff-modal-header">
+        <span id="text-modal-title" class="text-sm font-semibold text-slate-200">Worker Description</span>
+        <button onclick="closeTextModal()" class="text-slate-500 hover:text-slate-300 p-1" title="Close">&#x2715;</button>
+      </div>
+      <div class="diff-modal-body p-4">
+        <pre id="text-modal-content" class="text-sm text-slate-300 whitespace-pre-wrap break-words"></pre>
       </div>
     </div>
   </div>

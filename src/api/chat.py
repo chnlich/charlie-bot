@@ -4,6 +4,7 @@ import asyncio
 import re
 from datetime import datetime, timezone
 
+import aiofiles
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -43,12 +44,12 @@ async def upload_file(
   dest = uploads_dir / (file.filename or "upload")
   size = 0
   try:
-    with dest.open("wb") as out:
+    async with aiofiles.open(dest, "wb") as out:
       while True:
         chunk = await file.read(1024 * 1024)  # 1 MB chunks
         if not chunk:
           break
-        out.write(chunk)
+        await out.write(chunk)
         size += len(chunk)
   except Exception as e:
     log.warning("file_upload_failed", session=session_id, filename=file.filename, error=str(e))
@@ -214,7 +215,7 @@ async def _auto_name(
     session_mgr: SessionManager,
 ) -> None:
   """Extract assistant response from saved events and auto-name the session."""
-  events = session_mgr.load_chat_events_sync(session_meta.id)
+  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_meta.id)
   assistant_text = ""
   for ev in events:
     if ev.get("type") == "assistant":

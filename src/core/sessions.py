@@ -27,6 +27,9 @@ class SessionManager:
 
   def __init__(self, cfg: CharlieBotConfig):
     self._cfg = cfg
+    # In-memory cache: session_id -> list[dict] of parsed NDJSON events.
+    # Populated on first read, kept in sync by save_chat_event().
+    self._events_cache: dict[str, list[dict]] = {}
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -45,7 +48,7 @@ class SessionManager:
     await self._save_metadata(meta)
 
     # Write CLAUDE.md immediately so it's ready before the first message
-    ensure_master_claude_md(meta, self._cfg)
+    await asyncio.to_thread(ensure_master_claude_md, meta, self._cfg)
 
     log.info("session_created", session_id=meta.id, name=meta.name)
     return meta
@@ -110,12 +113,12 @@ class SessionManager:
         meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
         results.append(meta)
         continue
-      # Check chat events
+      # Check chat events (offload sync I/O to thread pool)
       events_path = self._chat_events_path(meta.id)
       if events_path.exists():
         try:
-          text = events_path.read_text(encoding='utf-8').lower()
-          if query_lower in text:
+          text = await asyncio.to_thread(events_path.read_text, encoding='utf-8')
+          if query_lower in text.lower():
             meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
             results.append(meta)
         except OSError as e:
@@ -140,7 +143,8 @@ class SessionManager:
     parent_events_path = self._chat_events_path(parent_id)
     if not parent_events_path.exists():
       return None
-    lines = parent_events_path.read_text(encoding='utf-8').splitlines()
+    lines_text = await asyncio.to_thread(parent_events_path.read_text, encoding='utf-8')
+    lines = lines_text.splitlines()
     kept_lines = lines[:event_index + 1]
 
     # Generate a text summary from user+assistant messages for CC context
@@ -171,11 +175,11 @@ class SessionManager:
 
     # Write the truncated chat events
     events_path = self._chat_events_path(meta.id)
-    events_path.write_text('\n'.join(kept_lines) + '\n', encoding='utf-8')
+    await asyncio.to_thread(events_path.write_text, '\n'.join(kept_lines) + '\n', encoding='utf-8')
 
     await self._save_metadata(meta)
 
-    ensure_master_claude_md(meta, self._cfg)
+    await asyncio.to_thread(ensure_master_claude_md, meta, self._cfg)
 
     log.info('session_rewound', new_session=meta.id, parent=parent_id, event_index=event_index)
     return meta
@@ -228,6 +232,7 @@ class SessionManager:
     meta.status = SessionStatus.ARCHIVED
     meta.updated_at = datetime.now(timezone.utc)
     await self._save_metadata(meta)
+    self._events_cache.pop(session_id, None)
     log.info("session_archived", session_id=session_id)
     return meta
 
@@ -320,13 +325,20 @@ class SessionManager:
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     """Append a single NDJSON event line to chat_events.jsonl."""
     await append_ndjson(self._chat_events_path(session_id), event)
+    # Keep in-memory cache in sync
+    if session_id in self._events_cache:
+      self._events_cache[session_id].append(event)
     # Update usage.json cache whenever a result event is persisted.
     if event.get("type") == "result":
       self._update_usage_cache(session_id, event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
-    """Read all chat events for catch-up (sync, for WebSocket handler)."""
-    return parse_ndjson_file(self._chat_events_path(session_id))
+    """Read all chat events for catch-up. Uses in-memory cache after first read."""
+    if session_id in self._events_cache:
+      return self._events_cache[session_id]
+    events = parse_ndjson_file(self._chat_events_path(session_id))
+    self._events_cache[session_id] = events
+    return events
 
   def _chat_events_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"
@@ -343,7 +355,7 @@ class SessionManager:
         return json.loads(cache_path.read_text(encoding="utf-8"))
       except (json.JSONDecodeError, OSError) as e:
         log.debug("usage_cache_read_failed", session_id=session_id, error=str(e))
-    result = self._parse_usage_from_events(session_id)
+    result = self.usage_from_events(self.load_chat_events_sync(session_id))
     if result is not None:
       # Backfill usage.json so future calls skip the full NDJSON parse.
       cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,9 +365,20 @@ class SessionManager:
         pass
     return result
 
-  def _parse_usage_from_events(self, session_id: str) -> dict | None:
-    """Full NDJSON parse fallback for get_session_usage."""
-    events = parse_ndjson_file(self._chat_events_path(session_id))
+  @staticmethod
+  def usage_from_events(events: list[dict]) -> dict | None:
+    """Extract context-window token usage from pre-loaded events.
+
+    Scans for the most recent 'result' event and accumulates total_cost_usd
+    across ALL result events.
+
+    Returns a dict with:
+      context_tokens  – input + cache_creation + cache_read from last result
+      context_limit   – from modelUsage contextWindow (default 200000)
+      total_cost_usd  – sum across every result event
+      model           – primary model name
+    Returns None if no result events exist.
+    """
     if not events:
       return None
 
@@ -447,20 +470,24 @@ class SessionManager:
 
   async def _has_running_tasks(self, session_id: str) -> bool:
     """Check if a session has any threads with status 'running'."""
-    threads_dir = self._session_dir(session_id) / "threads"
-    if not threads_dir.exists():
+
+    def _check():
+      threads_dir = self._session_dir(session_id) / "threads"
+      if not threads_dir.exists():
+        return False
+      for thread_dir in threads_dir.iterdir():
+        meta_path = thread_dir / "metadata.json"
+        if not meta_path.exists():
+          continue
+        try:
+          meta = json.loads(meta_path.read_text(encoding="utf-8"))
+          if meta.get("status") == "running":
+            return True
+        except (json.JSONDecodeError, OSError):
+          continue
       return False
-    for thread_dir in threads_dir.iterdir():
-      meta_path = thread_dir / "metadata.json"
-      if not meta_path.exists():
-        continue
-      try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if meta.get("status") == "running":
-          return True
-      except (json.JSONDecodeError, OSError):
-        continue
-    return False
+
+    return await asyncio.to_thread(_check)
 
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. based on existing count."""

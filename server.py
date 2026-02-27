@@ -93,7 +93,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
   cfg = get_config()
   session_mgr = SessionManager(cfg)
   try:
-    events = session_mgr.load_chat_events_sync(session_id)
+    events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
     for event in events[cursor:]:
       try:
         await websocket.send_json(event)
@@ -149,15 +149,15 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   events_file = await asyncio.to_thread(_find_events_file, thread_id, cfg)
   if events_file and events_file.exists():
     try:
-      with open(events_file, "r", encoding="utf-8") as f:
-        for line in f:
-          line = line.strip()
-          if line:
-            try:
-              await websocket.send_text(line)
-            except Exception as e:
-              log.debug("ws_catchup_send_failed", thread_id=thread_id, error=str(e))
-              return
+      lines = await asyncio.to_thread(events_file.read_text, "utf-8")
+      for line in lines.splitlines():
+        line = line.strip()
+        if line:
+          try:
+            await websocket.send_text(line)
+          except Exception as e:
+            log.debug("ws_catchup_send_failed", thread_id=thread_id, error=str(e))
+            return
     except Exception as e:
       log.warning("ws_catchup_failed", thread_id=thread_id, error=str(e))
 

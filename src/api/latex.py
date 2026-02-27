@@ -1,5 +1,7 @@
 """LaTeX API routes — compile, serve PDF, read/write .tex source."""
 
+import asyncio
+
 import structlog
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -55,14 +57,15 @@ async def get_source():
   tex = get_tex_path()
   if not tex.exists():
     return JSONResponse(content={'error': 'Source file not found'}, status_code=404)
-  return PlainTextResponse(tex.read_text(encoding='utf-8'))
+  content = await asyncio.to_thread(tex.read_text, encoding='utf-8')
+  return PlainTextResponse(content)
 
 
 @router.put('/source')
 async def put_source(req: TexSourceRequest):
   """Write the .tex source file."""
   tex = get_tex_path()
-  tex.write_text(req.content, encoding='utf-8')
+  await asyncio.to_thread(tex.write_text, req.content, encoding='utf-8')
   log.info('latex_source_saved', path=str(tex), size=len(req.content))
   return {'ok': True}
 
@@ -79,7 +82,7 @@ async def get_diff():
 @router.post('/accept')
 async def accept_edit():
   """Accept the pending AI-proposed TeX edit."""
-  if accept_proposal():
+  if await asyncio.to_thread(accept_proposal):
     log.info('latex_proposal_accepted')
     return {'ok': True}
   return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)
@@ -88,7 +91,7 @@ async def accept_edit():
 @router.post('/reject')
 async def reject_edit():
   """Reject the pending AI-proposed TeX edit."""
-  if reject_proposal():
+  if await asyncio.to_thread(reject_proposal):
     log.info('latex_proposal_rejected')
     return {'ok': True}
   return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)

@@ -23,6 +23,7 @@ class ScheduledTaskConfig(BaseModel):
   repo: Optional[str] = None
   timezone: str = "America/New_York"
   enabled: bool = True
+  project: Optional[str] = None
 
   @model_validator(mode='after')
   def check_prompt_or_handler(self) -> 'ScheduledTaskConfig':

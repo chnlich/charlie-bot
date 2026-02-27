@@ -61,17 +61,17 @@ const backlogPanel = (() => {
     let actions = '';
     if (item.status === 'pending') {
       actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','approved')"
+        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}')"
                 class="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-200 transition-colors">Approve</button>
-        <button onclick="backlogPanel.rejectWithReason('${item.id}')"
+        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}')"
                 class="px-2 py-1 text-xs rounded bg-red-800 hover:bg-red-700 text-red-200 transition-colors">Reject</button>`;
     } else if (item.status === 'approved') {
       actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','pending')"
+        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}')"
                 class="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Revoke</button>`;
     } else if (item.status === 'rejected') {
       actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','pending')"
+        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}')"
                 class="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Reopen</button>`;
     }
 
@@ -163,7 +163,7 @@ const backlogPanel = (() => {
     const moduleFilter = (document.getElementById('backlog-module-filter') || {}).value || 'all';
 
     let visible = _items;
-    if (statusFilter === 'pending')  visible = visible.filter(i => i.status === 'pending');
+    if (statusFilter === 'pending')  visible = visible.filter(i => i.status === 'pending' || i.status === 'in_progress');
     else if (statusFilter === 'done') visible = visible.filter(i => i.status === 'done');
     else if (statusFilter === 'rejected') visible = visible.filter(i => i.status === 'rejected');
     // 'all' → no status filter
@@ -179,9 +179,10 @@ const backlogPanel = (() => {
     list.innerHTML = visible.map(_renderCard).join('');
   }
 
-  async function updateStatus(id, newStatus, extra) {
+  async function updateStatus(id, newStatus, source, extra) {
+    const qs = source ? `?source=${encodeURIComponent(source)}` : '';
     try {
-      const resp = await fetch(`/api/backlog/${id}`, {
+      const resp = await fetch(`/api/backlog/${id}${qs}`, {
         method: 'PATCH',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({status: newStatus, ...extra}),
@@ -197,10 +198,10 @@ const backlogPanel = (() => {
     await refresh();
   }
 
-  async function rejectWithReason(id) {
+  async function rejectWithReason(id, source) {
     const reason = prompt('Rejection reason (optional):');
     if (reason === null) return;  // user cancelled
-    await updateStatus(id, 'rejected', {rejected_reason: reason || null});
+    await updateStatus(id, 'rejected', source, {rejected_reason: reason || null});
   }
 
   function init() {

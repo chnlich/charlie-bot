@@ -78,10 +78,21 @@ const backlogPanel = (() => {
     let backtestHtml = '';
     if (item.status === 'done' && hist && hist.backtest_result) {
       const br = hist.backtest_result;
-      const pairs = Object.entries(br).map(([k, v]) =>
-        `<span class="text-gray-400">${k}:</span> <span class="text-gray-200">${v}</span>`
-      ).join(' &middot; ');
-      backtestHtml = `<div class="mt-2 text-xs font-mono text-gray-400 bg-gray-900 rounded px-2 py-1">${pairs}</div>`;
+      if (br.before && br.after && typeof br.before === 'object' && typeof br.after === 'object') {
+        const metrics = [...new Set([...Object.keys(br.before), ...Object.keys(br.after)])];
+        const rows = metrics.map(m => {
+          const bv = br.before[m] ?? '—';
+          const av = br.after[m] ?? '—';
+          return `<span class="text-gray-400">${m}:</span> <span class="text-gray-200">${bv}</span>` +
+            `<span class="text-gray-500">→</span><span class="text-gray-200">${av}</span>`;
+        }).join(' &middot; ');
+        backtestHtml = `<div class="mt-2 text-xs font-mono text-gray-400 bg-gray-900 rounded px-2 py-1">${rows}</div>`;
+      } else {
+        const pairs = Object.entries(br).map(([k, v]) =>
+          `<span class="text-gray-400">${k}:</span> <span class="text-gray-200">${typeof v === 'object' ? JSON.stringify(v) : v}</span>`
+        ).join(' &middot; ');
+        backtestHtml = `<div class="mt-2 text-xs font-mono text-gray-400 bg-gray-900 rounded px-2 py-1">${pairs}</div>`;
+      }
     }
 
     const modBadge = modLabel

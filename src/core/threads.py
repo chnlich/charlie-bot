@@ -23,11 +23,15 @@ class ThreadManager:
       self,
       session_meta: SessionMetadata,
       description: str,
+      branch_name: Optional[str] = None,
+      review_of: Optional[str] = None,
   ) -> ThreadMetadata:
     """Create a new thread with a CLAUDE.md for the worker."""
     thread = ThreadMetadata(
         session_id=session_meta.id,
         description=description,
+        branch_name=branch_name,
+        review_of=review_of,
     )
 
     thread_dir = self._thread_dir(session_meta.id, thread.id)

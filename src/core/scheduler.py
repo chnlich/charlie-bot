@@ -209,9 +209,8 @@ class Scheduler:
       if s.scheduled_task == task_name:
         return s
 
-    meta = await session_mgr.create_session(CreateSessionRequest(name=f"Scheduled: {task_name}"))
-    meta.scheduled_task = task_name
-    await session_mgr.save_metadata(meta)
+    meta = await session_mgr.create_session(
+        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name))
     log.info("scheduled_session_created", task=task_name, session=meta.id)
     return meta
 

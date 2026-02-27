@@ -34,7 +34,7 @@ class SessionManager:
   async def create_session(self, req: CreateSessionRequest) -> SessionMetadata:
     """Create a new session."""
     name = req.name or await self._next_session_name()
-    meta = SessionMetadata(name=name)
+    meta = SessionMetadata(name=name, scheduled_task=req.scheduled_task)
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure

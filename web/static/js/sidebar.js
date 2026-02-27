@@ -80,7 +80,7 @@ function addWorkerCard(threadId, description) {
          onclick="toggleThreadDetail('${threadId}', '${SESSION_ID}')">
       <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 bg-blue-500 animate-pulse"></span>
       <div class="flex-1 min-w-0">
-        <p class="text-sm truncate">${escapeHtml(description)}</p>
+        <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="${escapeHtml(description)}">${escapeHtml(description)}</p>
         <p id="thread-status-${threadId}" class="text-xs text-slate-500">running · ${nowStr}</p>
       </div>
       <button id="cancel-btn-${threadId}" onclick="event.stopPropagation(); cancelThread('${threadId}', '${SESSION_ID}')"
@@ -111,7 +111,7 @@ let thinkingStart = null;
 
 function startThinking() {
   masterThinking = true;
-  thinkingStart = Date.now();
+  thinkingStart = thinkingStart || Date.now();
   document.getElementById('thinking').classList.remove('hidden');
   updateThinkingTime();
   thinkingInterval = setInterval(updateThinkingTime, 1000);
@@ -304,7 +304,124 @@ async function toggleSessionStar(id, currentlyStarred) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Grouped scheduled task rendering
+// ---------------------------------------------------------------------------
+function renderScheduledSessionItem(s) {
+  const isActive = SESSION_ID === s.id;
+  const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
+  const starFill = s.starred ? 'currentColor' : 'none';
+  const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
+  const activeBtnClass = isActive ? '!opacity-100' : '';
+  const starSvg = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
+  const gearBtn = s.scheduled_task ? `
+    <button onclick="event.preventDefault(); event.stopPropagation(); openCronEditor('${escapeHtml(s.scheduled_task)}')"
+            class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Edit task config">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>` : '';
+  const actions = `
+    <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
+            class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
+      <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
+    </button>
+    <button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+            class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Rename">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+    </button>
+    <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
+            class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+    </button>
+    ${gearBtn}`;
+  return `<a href="/?session=${s.id}&filter=scheduled"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
+     ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+     onclick="markSessionRead('${s.id}')"
+     id="session-${s.id}">
+    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
+    <svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>
+    <span class="flex-1 min-w-0">
+      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
+      ${s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : ''}
+      <span class="block text-xs text-slate-600 session-usage hidden" id="sidebar-usage-${s.id}"></span>
+    </span>
+    ${actions}
+  </a>`;
+}
+
+function renderGroupedScheduledList(sessions) {
+  const nav = document.getElementById('session-list');
+  if (!sessions.length) {
+    nav.innerHTML = '<p class="text-slate-500 text-sm px-3 py-2">No scheduled sessions</p>';
+    return;
+  }
+  // Group by project
+  const groups = {};
+  sessions.forEach(s => {
+    const key = s.schedule_project || '';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(s);
+  });
+  // Sort: named groups alphabetically, '' (no project) last
+  const sortedKeys = Object.keys(groups).sort((a, b) => {
+    if (a === '') return 1;
+    if (b === '') return -1;
+    return a.localeCompare(b);
+  });
+  // Load collapsed state from localStorage (collapsed by default)
+  let collapsedState = {};
+  try { collapsedState = JSON.parse(localStorage.getItem('cron-group-collapsed') || '{}'); } catch (e) {}
+
+  let html = '';
+  for (const key of sortedKeys) {
+    const label = key || '(No project)';
+    const groupSessions = groups[key];
+    const enabledCount = groupSessions.filter(s => s.schedule_enabled !== false).length;
+    const totalCount = groupSessions.length;
+    const isCollapsed = collapsedState[key] !== false; // collapsed by default
+    const chevronClass = isCollapsed ? '' : 'rotate-90';
+    const safeKey = escapeHtml(key);
+
+    html += `<div class="cron-group" data-group-key="${safeKey}">
+      <div class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-700/30 rounded-lg select-none"
+           onclick="toggleCronGroup('${safeKey}')">
+        <svg class="w-3 h-3 text-slate-500 transition-transform cron-group-chevron ${chevronClass}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+        <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
+        <span class="text-xs text-slate-500 ml-auto">${enabledCount}/${totalCount} enabled</span>
+      </div>
+      <div class="cron-group-items ${isCollapsed ? 'hidden' : ''}" data-group-items="${safeKey}">
+        ${groupSessions.map(s => renderScheduledSessionItem(s)).join('')}
+      </div>
+    </div>`;
+  }
+  nav.innerHTML = html;
+  updateRelativeTimes();
+}
+
+function toggleCronGroup(key) {
+  let collapsedState = {};
+  try { collapsedState = JSON.parse(localStorage.getItem('cron-group-collapsed') || '{}'); } catch (e) {}
+  const wasCollapsed = collapsedState[key] !== false;
+  collapsedState[key] = !wasCollapsed;
+  localStorage.setItem('cron-group-collapsed', JSON.stringify(collapsedState));
+
+  const items = document.querySelector(`[data-group-items="${key}"]`);
+  if (items) items.classList.toggle('hidden');
+  const group = document.querySelector(`[data-group-key="${key}"]`);
+  if (group) {
+    const chevron = group.querySelector('.cron-group-chevron');
+    if (chevron) chevron.classList.toggle('rotate-90');
+  }
+}
+
 function renderSessionList(sessions, filter) {
+  if (filter === 'scheduled') {
+    renderGroupedScheduledList(sessions);
+    return;
+  }
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
     const labels = {
@@ -513,6 +630,7 @@ async function openCronEditor(taskName) {
   document.getElementById('cron-expr').value = task.cron || '';
   document.getElementById('cron-prompt').value = task.prompt || '';
   document.getElementById('cron-repo').value = task.repo || '';
+  document.getElementById('cron-project').value = task.project || '';
   document.getElementById('cron-timezone').value = task.timezone || 'America/New_York';
   document.getElementById('cron-enabled').checked = task.enabled !== false;
   document.getElementById('cron-delete-btn').classList.remove('hidden');
@@ -528,6 +646,7 @@ function openCronAdder() {
   document.getElementById('cron-expr').value = '';
   document.getElementById('cron-prompt').value = '';
   document.getElementById('cron-repo').value = '';
+  document.getElementById('cron-project').value = '';
   document.getElementById('cron-timezone').value = 'America/New_York';
   document.getElementById('cron-enabled').checked = true;
   document.getElementById('cron-delete-btn').classList.add('hidden');
@@ -543,6 +662,7 @@ async function saveCronTask() {
   const cron = document.getElementById('cron-expr').value.trim();
   const prompt = document.getElementById('cron-prompt').value.trim();
   const repo = document.getElementById('cron-repo').value.trim() || null;
+  const project = document.getElementById('cron-project').value.trim() || null;
   const timezone = document.getElementById('cron-timezone').value.trim();
   const enabled = document.getElementById('cron-enabled').checked;
 
@@ -552,13 +672,13 @@ async function saveCronTask() {
       res = await fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({cron, prompt, repo, timezone, enabled}),
+        body: JSON.stringify({cron, prompt, repo, project, timezone, enabled}),
       });
     } else {
       res = await fetch('/api/cron/tasks', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name, cron, prompt, repo, timezone, enabled}),
+        body: JSON.stringify({name, cron, prompt, repo, project, timezone, enabled}),
       });
     }
   } catch (err) {

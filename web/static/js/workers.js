@@ -152,6 +152,16 @@ function renderThreadEvents(threadId, events) {
   container.innerHTML = parts.join('');
 }
 
+function showTextModal(title, text) {
+  document.getElementById('text-modal-title').textContent = title;
+  document.getElementById('text-modal-content').textContent = text;
+  document.getElementById('text-modal-overlay').style.display = 'flex';
+}
+
+function closeTextModal() {
+  document.getElementById('text-modal-overlay').style.display = 'none';
+}
+
 async function cancelThread(threadId, sessionId) {
   try {
     await fetch('/api/threads/' + sessionId + '/threads/' + threadId + '/cancel', { method: 'POST' });

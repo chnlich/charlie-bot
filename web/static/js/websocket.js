@@ -117,7 +117,9 @@ function handleWSEvent(ev) {
       streamBuf = '';
     }
     if (!ev.still_thinking) {
-      const elapsed = thinkingStart ? Math.floor((Date.now() - thinkingStart) / 1000) : null;
+      const elapsed = ev.thinking_seconds != null
+        ? ev.thinking_seconds
+        : (thinkingStart ? Math.floor((Date.now() - thinkingStart) / 1000) : null);
       stopThinking();
       if (catchupDone) appendSeparator(elapsed);
     }

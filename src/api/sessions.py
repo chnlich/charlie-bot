@@ -25,7 +25,7 @@ router = APIRouter()
 
 @router.get("/", response_model=list[SessionMetadata])
 async def list_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
-  return await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  return await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False)
 
 
 @router.post("/", response_model=SessionMetadata)
@@ -76,6 +76,7 @@ async def list_scheduled_sessions(
       s.schedule_cron = task.cron
       s.schedule_enabled = task.enabled
       s.schedule_timezone = task.timezone
+      s.schedule_project = task.project
       tz = ZoneInfo(task.timezone)
       now = datetime.now(tz)
       s.schedule_next_run = croniter(task.cron, now).get_next(datetime).isoformat()

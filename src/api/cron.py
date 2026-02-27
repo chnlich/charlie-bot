@@ -1,5 +1,6 @@
 """CRUD API for scheduled cron task configs (~/.charliebot/config.d/cron.yaml)."""
 
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,7 @@ class TaskUpdate(BaseModel):
   repo: Optional[str] = None
   timezone: Optional[str] = None
   enabled: Optional[bool] = None
+  project: Optional[str] = None
 
 
 class TaskCreate(BaseModel):
@@ -41,6 +43,7 @@ class TaskCreate(BaseModel):
   repo: Optional[str] = None
   timezone: str = 'America/New_York'
   enabled: bool = True
+  project: Optional[str] = None
 
 
 @router.get('/tasks')
@@ -52,7 +55,7 @@ async def list_cron_tasks():
 @router.put('/tasks/{name}')
 async def update_cron_task(name: str, req: TaskUpdate):
   """Update an existing task by name (name is immutable)."""
-  data = _read_cron_yaml()
+  data = await asyncio.to_thread(_read_cron_yaml)
   tasks = data.get('scheduled_tasks', [])
   for task in tasks:
     if task.get('name') == name:
@@ -66,8 +69,10 @@ async def update_cron_task(name: str, req: TaskUpdate):
         task['timezone'] = req.timezone
       if req.enabled is not None:
         task['enabled'] = req.enabled
+      if req.project is not None:
+        task['project'] = req.project or None
       data['scheduled_tasks'] = tasks
-      _write_cron_yaml(data)
+      await asyncio.to_thread(_write_cron_yaml, data)
       log.debug('cron_task_updated', name=name)
       return task
   raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
@@ -76,14 +81,14 @@ async def update_cron_task(name: str, req: TaskUpdate):
 @router.post('/tasks')
 async def create_cron_task(req: TaskCreate):
   """Add a new scheduled task."""
-  data = _read_cron_yaml()
+  data = await asyncio.to_thread(_read_cron_yaml)
   tasks = data.get('scheduled_tasks', [])
   if any(t.get('name') == req.name for t in tasks):
     raise HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')
   new_task = {k: v for k, v in req.model_dump().items() if v is not None or k in ('name', 'cron', 'prompt', 'enabled')}
   tasks.append(new_task)
   data['scheduled_tasks'] = tasks
-  _write_cron_yaml(data)
+  await asyncio.to_thread(_write_cron_yaml, data)
   log.debug('cron_task_created', name=req.name)
   return new_task
 
@@ -91,12 +96,12 @@ async def create_cron_task(req: TaskCreate):
 @router.delete('/tasks/{name}')
 async def delete_cron_task(name: str):
   """Remove a task by name."""
-  data = _read_cron_yaml()
+  data = await asyncio.to_thread(_read_cron_yaml)
   tasks = data.get('scheduled_tasks', [])
   filtered = [t for t in tasks if t.get('name') != name]
   if len(filtered) == len(tasks):
     raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
   data['scheduled_tasks'] = filtered
-  _write_cron_yaml(data)
+  await asyncio.to_thread(_write_cron_yaml, data)
   log.debug('cron_task_deleted', name=name)
   return {'ok': True}

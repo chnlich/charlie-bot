@@ -1,5 +1,6 @@
 """Master CC — spawns a Claude Code subprocess for the master agent."""
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -24,7 +25,11 @@ _active_procs: dict[str, AgentBackend] = {}
 
 
 def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
-  """Write session CLAUDE.md by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md."""
+  """Write session CLAUDE.md by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md.
+
+  Intentionally synchronous — called from both sync and async contexts.
+  Callers in async contexts should wrap with asyncio.to_thread().
+  """
   prompt_file = cfg.claude_md_file
 
   # Concatenate prompt + memory → session CLAUDE.md (rewritten each time)
@@ -90,12 +95,12 @@ async def run_message(
   cwd = str(session_dir)
 
   # Write session CLAUDE.md (prompt + memory) so Claude Code picks it up
-  ensure_master_claude_md(session_meta, cfg)
+  await asyncio.to_thread(ensure_master_claude_md, session_meta, cfg)
 
   tex_path = get_tex_path()
   should_check_tex = tex_path.exists()
   if should_check_tex:
-    snapshot_tex()
+    await asyncio.to_thread(snapshot_tex)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up)
   if not skip_user_event:
@@ -225,7 +230,7 @@ async def run_message(
     await save_chat_event(session_meta.id, done_event)
 
     if should_check_tex:
-      proposal = check_tex_changed()
+      proposal = await asyncio.to_thread(check_tex_changed)
       if proposal:
         tex_event = {'type': 'tex_edit_proposed'}
         await streaming_manager.broadcast(channel, tex_event)

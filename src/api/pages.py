@@ -1,5 +1,6 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
+import asyncio
 from pathlib import Path
 
 import structlog
@@ -142,26 +143,17 @@ async def index(
       log.exception("get_session_failed", session_id=session)
 
     if active_session:
-      # Load chat messages from events
+      # Load events + threads in parallel; derive usage from already-loaded events
+      events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session)
+      threads_task = thread_mgr.list_threads(session)
       try:
-        raw_events = session_mgr.load_chat_events_sync(session)
+        raw_events, threads = await asyncio.gather(events_task, threads_task)
         messages = _events_to_messages(raw_events)
+        session_usage = session_mgr.usage_from_events(raw_events)
       except Exception:
-        log.exception("load_chat_events_failed", session_id=session)
+        log.exception("load_session_data_failed", session_id=session)
 
-      # Load threads
-      try:
-        threads = await thread_mgr.list_threads(session)
-      except Exception:
-        log.exception("list_threads_failed", session_id=session)
-
-      # Load token usage for active session
-      try:
-        session_usage = session_mgr.get_session_usage(session)
-      except Exception:
-        log.exception("get_session_usage_failed", session_id=session)
-
-      # Mark session as read
+      # Mark session as read (fire-and-forget, don't block response)
       try:
         await session_mgr.mark_read(session)
       except Exception:

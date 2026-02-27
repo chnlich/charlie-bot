@@ -1,1 +1,56 @@
-[]
+- id: "001"
+  title: "Extract shared session-view loader"
+  description: >
+    api/pages.py:index (L76-95) and api/sessions.py:get_session_view (L115-142) duplicate
+    the same load-events → load-threads → events_to_messages → usage_from_events → mark_read
+    pipeline. Extract a shared helper (e.g. build_session_view_data()) in api/message_utils.py
+    or a new api/helpers.py that both endpoints call. Reduces ~30 duplicate lines to ~2 call sites.
+  category: duplication
+  status: pending
+  created: "2026-02-27T12:00:00Z"
+  priority: medium
+
+- id: "002"
+  title: "Collapse 6 session-toggle methods into generic helper"
+  description: >
+    core/sessions.py has archive/unarchive/star/unstar/mark_waiting/unmark_waiting (L227-292)
+    all following identical get→mutate→save→log pattern. Introduce _update_field(session_id,
+    field, value, log_event) and reduce each to a one-liner. Saves ~50 lines, lowers
+    maintenance surface.
+  category: duplication
+  status: pending
+  created: "2026-02-27T12:00:00Z"
+  priority: low
+
+- id: "003"
+  title: "Split run_message into smaller functions"
+  description: >
+    agents/master_cc.py:run_message is 180 lines — by far the longest function. Extract
+    logical phases: _build_prompt() for voice prefix, _handle_event() for the event loop body
+    (compact_boundary detection), _finalize_session() for the finally block (thinking state,
+    error broadcast, tex check). Each becomes a testable unit.
+  category: architecture
+  status: pending
+  created: "2026-02-27T12:00:00Z"
+  priority: high
+
+- id: "004"
+  title: "Remove unused ClaudeCodeBackend import in master_cc.py"
+  description: >
+    agents/master_cc.py:11 imports ClaudeCodeBackend but never uses it (backend construction
+    goes through build_backend from registry). Delete the import line.
+  category: imports
+  status: pending
+  created: "2026-02-27T12:00:00Z"
+  priority: low
+
+- id: "005"
+  title: "Fix yapf formatting violations in spawner.py and message_utils.py"
+  description: >
+    yapf --diff found formatting issues in core/spawner.py (3 hunks: long dict literal on L80,
+    multi-arg log.error on L228, long _build_worker_event call on L315) and
+    api/message_utils.py (1 hunk: dict append indentation on L66). Run yapf -i on both files.
+  category: formatting
+  status: pending
+  created: "2026-02-27T12:00:00Z"
+  priority: low

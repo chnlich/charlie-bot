@@ -1,5 +1,6 @@
 """Session management for CharlieBot."""
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -289,6 +290,29 @@ class SessionManager:
     """Public wrapper for _save_metadata."""
     await self._save_metadata(meta)
 
+  def list_active_session_ids(self) -> list[str]:
+    """Return IDs of active sessions by reading only metadata.json status.
+
+    Sync method — skips _has_running_tasks and full SessionMetadata hydration,
+    much cheaper than list_sessions() for the /usage endpoint.
+    """
+    if not self._cfg.sessions_dir.exists():
+      return []
+    ids: list[str] = []
+    for d in self._cfg.sessions_dir.iterdir():
+      if not d.is_dir():
+        continue
+      meta_path = d / "metadata.json"
+      if not meta_path.exists():
+        continue
+      try:
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        if raw.get("status") == SessionStatus.ACTIVE:
+          ids.append(d.name)
+      except (json.JSONDecodeError, OSError) as e:
+        log.debug("list_active_ids_skip", dir=d.name, error=str(e))
+    return ids
+
   # ---------------------------------------------------------------------------
   # Chat event persistence (NDJSON — for WebSocket catch-up)
   # ---------------------------------------------------------------------------
@@ -296,6 +320,9 @@ class SessionManager:
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     """Append a single NDJSON event line to chat_events.jsonl."""
     await append_ndjson(self._chat_events_path(session_id), event)
+    # Update usage.json cache whenever a result event is persisted.
+    if event.get("type") == "result":
+      await self._update_usage_cache(session_id, event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up (sync, for WebSocket handler)."""
@@ -309,18 +336,17 @@ class SessionManager:
   # ---------------------------------------------------------------------------
 
   def get_session_usage(self, session_id: str) -> dict | None:
-    """Extract context-window token usage from the last result event.
+    """Return cached usage from usage.json, falling back to full NDJSON parse."""
+    cache_path = self._usage_cache_path(session_id)
+    if cache_path.exists():
+      try:
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+      except (json.JSONDecodeError, OSError) as e:
+        log.debug("usage_cache_read_failed", session_id=session_id, error=str(e))
+    return self._parse_usage_from_events(session_id)
 
-    Scans chat_events.jsonl backwards for the most recent 'result' event and
-    accumulates total_cost_usd across ALL result events.
-
-    Returns a dict with:
-      context_tokens  – input + cache_creation + cache_read from last result
-      context_limit   – from modelUsage contextWindow (default 200000)
-      total_cost_usd  – sum across every result event
-      model           – primary model name
-    Returns None if no result events exist.
-    """
+  def _parse_usage_from_events(self, session_id: str) -> dict | None:
+    """Full NDJSON parse fallback for get_session_usage."""
     events = parse_ndjson_file(self._chat_events_path(session_id))
     if not events:
       return None
@@ -334,8 +360,6 @@ class SessionManager:
         continue
       last_result = ev
       total_cost += ev.get("total_cost_usd", 0.0)
-      # Track last result with actual token data (Claude Code sometimes emits
-      # result events with all-zero usage).
       u = ev.get("usage", {})
       if u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0) > 0:
         last_usage_result = ev
@@ -343,21 +367,19 @@ class SessionManager:
     if last_result is None:
       return None
 
-    # Prefer the last result that has real token data; fall back to last_result.
     usage_source = last_usage_result or last_result
     usage = usage_source.get("usage", {})
     context_tokens = (
         usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
         usage.get("cache_read_input_tokens", 0))
 
-    # Extract context limit and model from modelUsage
     model_usage = usage_source.get("modelUsage", {})
     context_limit = 200_000
     model = ""
     for model_name, info in model_usage.items():
       model = model_name
       context_limit = info.get("contextWindow", 200_000)
-      break  # use the first (primary) model
+      break
 
     return {
         "context_tokens": context_tokens,
@@ -365,6 +387,52 @@ class SessionManager:
         "total_cost_usd": round(total_cost, 4),
         "model": model,
     }
+
+  async def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
+    """Incrementally update usage.json cache from a new result event."""
+    cache_path = self._usage_cache_path(session_id)
+    prev: dict = {}
+    if cache_path.exists():
+      try:
+        prev = json.loads(cache_path.read_text(encoding="utf-8"))
+      except (json.JSONDecodeError, OSError):
+        pass
+
+    prev_cost = prev.get("total_cost_usd", 0.0)
+    new_cost = round(prev_cost + result_event.get("total_cost_usd", 0.0), 4)
+
+    # Check if this result has real token data.
+    u = result_event.get("usage", {})
+    real_tokens = (
+        u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0))
+
+    if real_tokens > 0:
+      context_tokens = real_tokens
+      model_usage = result_event.get("modelUsage", {})
+      context_limit = 200_000
+      model = ""
+      for model_name, info in model_usage.items():
+        model = model_name
+        context_limit = info.get("contextWindow", 200_000)
+        break
+    else:
+      # Keep previous token data; only update cost.
+      context_tokens = prev.get("context_tokens", 0)
+      context_limit = prev.get("context_limit", 200_000)
+      model = prev.get("model", "")
+
+    data = {
+        "context_tokens": context_tokens,
+        "context_limit": context_limit,
+        "total_cost_usd": new_cost,
+        "model": model,
+    }
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    async with aiofiles.open(cache_path, "w", encoding="utf-8") as f:
+      await f.write(json.dumps(data))
+
+  def _usage_cache_path(self, session_id: str) -> Path:
+    return self._session_dir(session_id) / "data" / "usage.json"
 
   # ---------------------------------------------------------------------------
   # Private helpers

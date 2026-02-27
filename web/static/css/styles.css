@@ -69,6 +69,11 @@ body.resizing { cursor: col-resize; user-select: none; }
     .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
     .hamburger-btn { display: inline-flex !important; }
     #backlog-panel:not(.hidden) { width: 100% !important; }
+    /* Bug 2: Tabs on their own row on mobile */
+    main > header { flex-wrap: wrap; }
+    #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
+    #tab-buttons button { white-space: nowrap; }
+    #usage-indicator { display: none !important; }
 }
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -105,3 +110,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 .slash-item:hover, .slash-item.active { background: #334155; }
 .slash-item .slash-name { font-weight: 600; color: #93c5fd; font-family: ui-monospace, 'Fira Code', monospace; }
 .slash-item .slash-desc { color: #94a3b8; font-size: 0.75rem; align-self: center; }
+/* Bug 1: On touch devices, invisible sidebar action buttons swallow taps */
+@media (hover: none) {
+  #session-list .group-hover\:opacity-100 { pointer-events: none; }
+}
+/* Bug 3: Prevent overscroll bounce */
+body { overscroll-behavior: none; }
+#messages { overscroll-behavior: contain; }

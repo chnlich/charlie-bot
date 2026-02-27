@@ -5,6 +5,269 @@
 // unread dot after the spinner hides.
 const sessionUnread = {};
 
+// ---------------------------------------------------------------------------
+// SPA-style session switching
+// ---------------------------------------------------------------------------
+let switchGeneration = 0;
+
+async function switchSession(sessionId) {
+  // Welcome screen — no SPA state to swap, fall back to full load
+  if (!SESSION_ID) { location.href = '/?session=' + sessionId; return; }
+  // Already on this session
+  if (sessionId === SESSION_ID) return;
+
+  const gen = ++switchGeneration;
+
+  // Save draft for current session
+  if (DRAFT_KEY) {
+    const v = document.getElementById('msg-input').value;
+    if (v) localStorage.setItem(DRAFT_KEY, v);
+    else localStorage.removeItem(DRAFT_KEY);
+  }
+
+  // Stop thinking indicator
+  if (masterThinking) stopThinking();
+
+  // Close WebSocket (suppress auto-reconnect)
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+
+  // Reset streaming state
+  streamBuf = '';
+  catchupDone = false;
+  pendingUserMsg = false;
+  hideStreaming();
+
+  // Fetch session view data
+  let data;
+  try {
+    const res = await fetch('/api/sessions/' + sessionId + '/view');
+    if (!res.ok) throw new Error(res.status);
+    data = await res.json();
+  } catch (err) {
+    console.error('switchSession fetch failed:', err);
+    location.href = '/?session=' + sessionId;
+    return;
+  }
+
+  // Discard stale response from rapid clicks
+  if (gen !== switchGeneration) return;
+
+  // Update globals
+  SESSION_ID = sessionId;
+  DRAFT_KEY = 'charliebot-draft-' + sessionId;
+  THINKING_SINCE = data.session.thinking_since || null;
+  eventCursor = data.event_count;
+  usageTotalCost = data.usage ? (data.usage.total_cost_usd || 0) : 0;
+
+  // Update URL
+  history.pushState({session: sessionId}, '', '/?session=' + sessionId);
+
+  // Render content
+  renderSessionView(data);
+
+  // Reconnect WebSocket
+  reconnectDelay = 1000;
+  connectWS();
+
+  // Restore draft for new session
+  const draft = localStorage.getItem(DRAFT_KEY);
+  const inp = document.getElementById('msg-input');
+  if (inp) { inp.value = draft || ''; autoResize(inp); }
+
+  // Resume thinking if session was mid-thought
+  if (THINKING_SINCE) {
+    thinkingStart = new Date(THINKING_SINCE).getTime();
+    startThinking();
+  }
+
+  updateSidebarHighlight(sessionId);
+
+  // Reset lazy-load state
+  _backlogLoaded = false;
+  loadedThreads.clear();
+}
+
+function renderSessionView(data) {
+  const session = data.session;
+  const messages = data.messages;
+
+  // Update header
+  const headerName = document.getElementById('header-session-name');
+  if (headerName) {
+    headerName.textContent = session.name;
+    headerName.setAttribute('onclick', "startRename(event, '" + session.id + "', '" + escapeHtml(session.name).replace(/'/g, "\\'") + "')");
+  }
+
+  // Update events viewer link
+  const evLink = document.querySelector('a[href*="/events"]');
+  if (evLink) evLink.href = '/sessions/' + session.id + '/events';
+
+  // Update usage
+  renderUsageFromData(data.usage);
+
+  // Update backend selector
+  const sel = document.getElementById('backend-select');
+  if (sel) { sel.value = data.active_backend; sel.dataset.current = data.active_backend; }
+
+  // Build message HTML
+  const container = document.getElementById('messages');
+  if (!container) return;
+  const streamEl = document.getElementById('streaming-msg');
+  const streamHtml = streamEl ? streamEl.outerHTML : '';
+
+  const parts = messages.map(msg => {
+    if (msg.role === 'user') {
+      const voiceSpan = msg.is_voice ? '<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>' : '';
+      return '<div class="flex justify-end"><div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">'
+        + voiceSpan + '<div class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</div></div></div>';
+    }
+    if (msg.role === 'assistant') {
+      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" data-md>'
+        + escapeHtml(msg.content) + '</div></div>';
+    }
+    if (msg.role === 'system') {
+      return '<div class="flex justify-center"><div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate">'
+        + escapeHtml(msg.content) + '</div></div>';
+    }
+    if (msg.role === 'worker_summary') {
+      const escaped = escapeHtml(msg.full_content || '').replace(/"/g, '&quot;');
+      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer"'
+        + ' data-md data-full="' + escaped + '"'
+        + ' onclick="showTextModal(\'Worker Result\', this.dataset.full)">'
+        + escapeHtml(msg.content) + '</div></div>';
+    }
+    if (msg.role === 'plan') {
+      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm prose-msg">'
+        + '<div class="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2">'
+        + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>'
+        + 'Plan</div>'
+        + '<div data-md>' + escapeHtml(msg.content) + '</div></div></div>';
+    }
+    if (msg.role === 'separator') {
+      const timeStr = msg.thinking_seconds != null ? ' &middot; ' + msg.thinking_seconds + 's' : '';
+      return '<div class="flex items-center gap-3 py-2 px-4 separator-line group/sep">'
+        + '<div class="flex-1 border-t border-slate-600/40"></div>'
+        + '<span class="text-xs text-slate-500 whitespace-nowrap">response complete' + timeStr + '</span>'
+        + '<button onclick="rewindSession(\'' + session.id + '\', ' + msg.event_index + ')"'
+        + ' class="opacity-0 group-hover/sep:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity" title="Rewind to here">'
+        + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"/></svg>'
+        + '</button>'
+        + '<div class="flex-1 border-t border-slate-600/40"></div></div>';
+    }
+    return '';
+  });
+
+  container.innerHTML = parts.join('') + streamHtml;
+
+  // Parse markdown
+  container.querySelectorAll('[data-md]').forEach(el => { el.innerHTML = marked.parse(el.textContent); });
+
+  // Scroll to bottom
+  container.scrollTop = container.scrollHeight;
+
+  // Render workers tab
+  renderWorkersTab(data.threads, session.id);
+
+  // Update workers badge
+  const btn = document.getElementById('btn-workers');
+  if (btn) {
+    const badge = btn.querySelector('span');
+    if (data.threads.length > 0) {
+      if (badge) { badge.textContent = data.threads.length; }
+      else {
+        const s = document.createElement('span');
+        s.className = 'ml-1 text-xs bg-slate-600 px-1.5 py-0.5 rounded-full';
+        s.textContent = data.threads.length;
+        btn.appendChild(s);
+      }
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+
+  switchTab('chat');
+}
+
+function renderUsageFromData(usage) {
+  const indicator = document.getElementById('usage-indicator');
+  if (!usage) { if (indicator) indicator.classList.add('hidden'); return; }
+  if (indicator) indicator.classList.remove('hidden');
+
+  const contextTokens = usage.context_tokens || 0;
+  const contextLimit = usage.context_limit || 200000;
+  const pct = contextLimit > 0 ? (contextTokens / contextLimit * 100) : 0;
+
+  const bar = document.getElementById('usage-bar');
+  if (bar) {
+    bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
+    bar.className = 'h-full rounded-full transition-all duration-300 '
+      + (pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500');
+  }
+  const text = document.getElementById('usage-text');
+  if (text) text.textContent = formatTokens(contextTokens) + ' / ' + formatTokens(contextLimit);
+  const cost = document.getElementById('usage-cost');
+  if (cost) cost.textContent = '$' + (usage.total_cost_usd || 0).toFixed(2);
+}
+
+function renderWorkersTab(threads, sessionId) {
+  const container = document.getElementById('tab-workers');
+  if (!container) return;
+
+  if (!threads || !threads.length) {
+    container.innerHTML = '<div id="no-workers-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">No worker threads</div>';
+    return;
+  }
+
+  const cards = threads.map(t => {
+    const statusColors = {running: 'bg-blue-500', completed: 'bg-green-500', failed: 'bg-red-500', cancelled: 'bg-slate-500', idle: 'bg-slate-500'};
+    const dotColor = statusColors[t.status] || 'bg-slate-500';
+    const pulse = t.status === 'running' ? ' animate-pulse' : '';
+    const created = new Date(t.created_at);
+    const mm = String(created.getMonth() + 1).padStart(2, '0');
+    const dd = String(created.getDate()).padStart(2, '0');
+    const hh = String(created.getHours()).padStart(2, '0');
+    const mi = String(created.getMinutes()).padStart(2, '0');
+    const timeStr = mm + '/' + dd + ' ' + hh + ':' + mi;
+    let duration = '';
+    if (t.completed_at) {
+      const secs = Math.floor((new Date(t.completed_at) - created) / 1000);
+      duration = ' &middot; ' + Math.floor(secs / 60) + 'm' + (secs % 60) + 's';
+    }
+    const cancelBtn = t.status === 'running'
+      ? '<button id="cancel-btn-' + t.id + '" onclick="event.stopPropagation(); cancelThread(\'' + t.id + '\', \'' + sessionId + '\')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
+      : '';
+    return '<div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">'
+      + '<div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750" onclick="toggleThreadDetail(\'' + t.id + '\', \'' + sessionId + '\')">'
+      + '<span id="thread-dot-' + t.id + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dotColor + pulse + '"></span>'
+      + '<div class="flex-1 min-w-0">'
+      + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeHtml(t.description || '').replace(/"/g, '&quot;') + '">' + escapeHtml(t.description || '') + '</p>'
+      + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + timeStr + duration + '</p>'
+      + '</div>'
+      + cancelBtn
+      + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
+      + '</div>'
+      + '<div id="thread-detail-' + t.id + '" class="hidden border-t border-slate-700">'
+      + '<div id="thread-events-' + t.id + '" class="p-4 max-h-96 overflow-y-auto"><p class="text-xs text-slate-500">Loading events...</p></div>'
+      + '</div></div>';
+  });
+
+  container.innerHTML = cards.join('');
+}
+
+function updateSidebarHighlight(newSessionId) {
+  document.querySelectorAll('[id^="session-"]').forEach(el => {
+    if (!el.id.startsWith('session-')) return;
+    el.classList.remove('bg-blue-600/20', 'text-blue-300');
+    el.classList.add('hover:bg-slate-700/50', 'text-slate-300');
+  });
+  const active = document.getElementById('session-' + newSessionId);
+  if (active) {
+    active.classList.add('bg-blue-600/20', 'text-blue-300');
+    active.classList.remove('hover:bg-slate-700/50', 'text-slate-300');
+  }
+}
+
 function setSessionSpinner(sid, visible) {
   const spinner = document.getElementById('spinner-' + sid);
   if (spinner) spinner.classList.toggle('hidden', !visible);
@@ -336,7 +599,7 @@ function renderScheduledSessionItem(s) {
   return `<a href="/?session=${s.id}&filter=scheduled"
      class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
      ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
-     onclick="markSessionRead('${s.id}')"
+     onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}">
     <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
@@ -498,7 +761,7 @@ function renderSessionList(sessions, filter) {
     return `<a href="/?session=${s.id}&filter=${filter}"
        class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
        ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
-       onclick="markSessionRead('${s.id}')"
+       onclick="event.preventDefault(); switchSession('${s.id}')"
        id="session-${s.id}">
       <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
       <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>

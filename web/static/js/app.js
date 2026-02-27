@@ -72,6 +72,17 @@ document.addEventListener('DOMContentLoaded', () => {
     startThinking();
   }
 
+  // SPA back/forward navigation
+  window.addEventListener('popstate', () => {
+    const params = new URLSearchParams(location.search);
+    const sid = params.get('session');
+    if (sid && sid !== SESSION_ID) {
+      switchSession(sid);
+    } else if (!sid) {
+      location.reload();
+    }
+  });
+
 });
 
 document.addEventListener('click', function(e) {

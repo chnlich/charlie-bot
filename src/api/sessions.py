@@ -8,6 +8,8 @@ from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from src.api.deps import get_session_manager, get_thread_manager, require_session
+from src.api.message_utils import events_to_messages
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
@@ -18,7 +20,6 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.api.deps import get_session_manager, get_thread_manager, require_session
 
 router = APIRouter()
 
@@ -106,6 +107,37 @@ async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get
   if not q.strip():
     return await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
   return await session_mgr.search_sessions(q.strip())
+
+
+@router.get('/{session_id}/view')
+async def get_session_view(
+    session_id: str,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Return all data needed to render a session chat panel (SPA switch)."""
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  threads_task = thread_mgr.list_threads(session_id)
+  raw_events, threads = await asyncio.gather(events_task, threads_task)
+  messages = events_to_messages(raw_events)
+  usage = session_mgr.usage_from_events(raw_events)
+  try:
+    await session_mgr.mark_read(session_id)
+  except Exception:
+    pass
+  active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
+  return {
+      "session": meta.model_dump(mode="json"),
+      "messages": messages,
+      "threads": [t.model_dump(mode="json") for t in threads],
+      "event_count": len(raw_events),
+      "usage": usage,
+      "active_backend": active_backend,
+  }
 
 
 @router.post('/{session_id}/rewind', response_model=SessionMetadata)

@@ -110,9 +110,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 .slash-item:hover, .slash-item.active { background: #334155; }
 .slash-item .slash-name { font-weight: 600; color: #93c5fd; font-family: ui-monospace, 'Fira Code', monospace; }
 .slash-item .slash-desc { color: #94a3b8; font-size: 0.75rem; align-self: center; }
-/* Bug 1: On touch devices, invisible sidebar action buttons swallow taps */
+/* Bug 1: On touch devices, invisible sidebar action buttons swallow taps.
+   Exclude buttons forced visible via !opacity-100 (starred / active session). */
 @media (hover: none) {
-  #session-list .group-hover\:opacity-100 { pointer-events: none; }
+  #session-list .group-hover\:opacity-100:not(.\!opacity-100) { pointer-events: none; }
 }
 /* Bug 3: Prevent overscroll bounce */
 body { overscroll-behavior: none; }

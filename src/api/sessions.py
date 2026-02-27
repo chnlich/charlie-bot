@@ -87,16 +87,16 @@ async def list_scheduled_sessions(
 @router.get('/usage')
 async def all_sessions_usage(session_mgr: SessionManager = Depends(get_session_manager)):
   """Return {session_id: usage_dict} for all active sessions (lazy-loaded by frontend)."""
-  sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
-  result: dict[str, dict] = {}
-  for s in sessions:
+  session_ids = await asyncio.to_thread(session_mgr.list_active_session_ids)
+
+  async def _fetch(sid: str) -> tuple[str, dict | None]:
     try:
-      u = await asyncio.to_thread(session_mgr.get_session_usage, s.id)
-      if u:
-        result[s.id] = u
+      return sid, await asyncio.to_thread(session_mgr.get_session_usage, sid)
     except Exception:
-      pass
-  return result
+      return sid, None
+
+  pairs = await asyncio.gather(*[_fetch(sid) for sid in session_ids])
+  return {sid: u for sid, u in pairs if u}
 
 
 @router.get('/search', response_model=list[SessionMetadata])

@@ -26,9 +26,9 @@
     window.pdfjsLib = pdfjsLib;
   </script>
   <script>
-    const SESSION_ID = {{ (active_session.id|tojson) if active_session else 'null' }};
-    const DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
-    const THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
+    let SESSION_ID = {{ (active_session.id|tojson) if active_session else 'null' }};
+    let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
+    let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
     let usageTotalCost = {{ session_usage.total_cost_usd if session_usage else 0 }};
     const BACKEND_OPTIONS = {

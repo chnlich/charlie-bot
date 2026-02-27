@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.deps import get_session_manager, get_thread_manager
+from src.api.message_utils import events_to_messages
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
@@ -18,82 +19,6 @@ log = structlog.get_logger()
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
-
-
-def _events_to_messages(events: list[dict]) -> list[dict]:
-  """Convert raw chat_events.jsonl entries into displayable messages."""
-  messages = []
-  assistant_buf = ""
-  last_event_idx = 0
-
-  for idx, ev in enumerate(events):
-    t = ev.get("type")
-    if t == "user":
-      # Skip CC-internal user events (tool results) — they have a "message" field
-      # but no top-level "content". Only real user messages have "content".
-      if "message" in ev and "content" not in ev:
-        continue
-      # Flush any pending assistant buffer
-      if assistant_buf:
-        messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
-        assistant_buf = ""
-      messages.append(
-          {
-              "role": "user",
-              "content": ev.get("content", ""),
-              "is_voice": ev.get("is_voice", False),
-              "event_index": idx,
-          })
-    elif t == "assistant":
-      last_event_idx = idx
-      msg = ev.get("message") or {}
-      blocks = msg.get("content") or []
-      for b in blocks:
-        if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'ExitPlanMode':
-          plan_text = (b.get('input') or {}).get('plan', '')
-          if plan_text:
-            if assistant_buf:
-              messages.append({'role': 'assistant', 'content': assistant_buf, 'event_index': last_event_idx})
-              assistant_buf = ''
-            messages.append({'role': 'plan', 'content': plan_text, 'event_index': idx})
-      text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
-      if text and assistant_buf:
-        messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
-        assistant_buf = ""
-      assistant_buf += text
-    elif t == "master_done":
-      if assistant_buf:
-        messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
-        assistant_buf = ""
-      if not ev.get("still_thinking"):
-        messages.append({"role": "separator", "thinking_seconds": ev.get("thinking_seconds"), "event_index": idx})
-    elif t == "assistant_error":
-      if assistant_buf:
-        messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
-        assistant_buf = ""
-      messages.append({"role": "system", "content": f"Error: {ev.get('content', '')}", "event_index": idx})
-    elif t == "task_delegated":
-      if assistant_buf:
-        messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
-        assistant_buf = ""
-      desc = ev.get("description", "")
-      messages.append({"role": "system", "content": f"Task delegated: {desc}", "event_index": idx})
-    elif t == "worker_summary":
-      if assistant_buf:
-        messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
-        assistant_buf = ""
-      messages.append({
-          "role": "worker_summary",
-          "content": ev.get("content", ""),
-          "full_content": ev.get("full_content", ""),
-          "event_index": idx,
-      })
-
-  # Flush trailing assistant content (if stream was interrupted)
-  if assistant_buf:
-    messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
-
-  return messages
 
 
 @router.get("/sessions/{session_id}/events", response_class=HTMLResponse)
@@ -153,7 +78,7 @@ async def index(
       threads_task = thread_mgr.list_threads(session)
       try:
         raw_events, threads = await asyncio.gather(events_task, threads_task)
-        messages = _events_to_messages(raw_events)
+        messages = events_to_messages(raw_events)
         session_usage = session_mgr.usage_from_events(raw_events)
       except Exception:
         log.exception("load_session_data_failed", session_id=session)

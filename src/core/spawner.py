@@ -127,8 +127,9 @@ async def spawn_worker(
       branch_name = f"charliebot/task-{ts}-{thread.id[:8]}"
       wt_path = str(Path(cfg.worktree_dir) / branch_name.replace("/", "-"))
 
-      # Store branch_name on thread metadata
+      # Store branch_name and repo_path on thread metadata
       thread.branch_name = branch_name
+      thread.repo_path = str(resolved_repo)
       await thread_mgr._save_metadata(thread)
 
       # Build enriched prompt with worktree workflow instructions
@@ -223,11 +224,7 @@ async def _spawn_review_worker(
     thread_mgr: ThreadManager,
 ) -> None:
   """Spawn a review worker for a successfully completed worker's branch."""
-  repos = cfg.discover_repos()
-  if not repos:
-    log.error("spawn_review_no_repo", session=session_id, detail="no repos found in workspace_dirs")
-    return
-  repo_path = Path(repos[0]["path"])
+  repo_path = Path(original_thread.repo_path)
 
   base_branch = await _git_current_branch(repo_path)
   branch_name = original_thread.branch_name

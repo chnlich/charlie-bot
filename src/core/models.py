@@ -43,6 +43,7 @@ class ThreadMetadata(BaseModel):
   exit_code: Optional[int] = None
   cli_command: Optional[str] = None
   branch_name: Optional[str] = None
+  repo_path: Optional[str] = None
   review_of: Optional[str] = None
 
 

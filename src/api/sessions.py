@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import structlog
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -21,6 +22,7 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
+log = structlog.get_logger()
 router = APIRouter()
 
 
@@ -128,7 +130,7 @@ async def get_session_view(
   try:
     await session_mgr.mark_read(session_id)
   except Exception:
-    pass
+    log.warning("mark_read_failed", session_id=session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
   return {
       "session": meta.model_dump(mode="json"),

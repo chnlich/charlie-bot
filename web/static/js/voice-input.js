@@ -74,14 +74,37 @@ async function transcribeAudio(blob) {
   form.append('audio', blob, 'recording' + (blob._ext || '.webm'));
   form.append('session_id', SESSION_ID);
   pendingUserMsg = true;
+
+  // Show transcribing placeholder bubble
+  const container = document.getElementById('messages');
+  const placeholder = document.createElement('div');
+  placeholder.id = 'voice-transcribing';
+  placeholder.className = 'flex justify-end';
+  placeholder.innerHTML = `<div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
+    <span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>
+    <div class="flex items-center gap-2 text-blue-200">
+      <svg class="w-4 h-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      </svg>
+      Transcribing…
+    </div>
+  </div>`;
+  const streamEl = document.getElementById('streaming-msg');
+  container.insertBefore(placeholder, streamEl);
+  container.scrollTop = container.scrollHeight;
+
   try {
     const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form });
     const data = await res.json();
+    document.getElementById('voice-transcribing')?.remove();
     if (data.transcription) {
       appendMessage('user', data.transcription, true);
       startThinking();
     }
   } catch (err) {
     console.error('Transcription failed:', err);
+    document.getElementById('voice-transcribing')?.remove();
+    appendMessage('system', 'Voice transcription failed');
   }
 }

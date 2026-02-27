@@ -21,22 +21,32 @@ from src.core.config import CharlieBotConfig
 log = structlog.get_logger()
 
 
-def _build_worker_prompt(description: str, repo_path: Path, base_branch: str, worktree_dir: str, thread_id: str) -> str:
+def _build_worker_prompt(description: str, repo_path: Path, base_branch: str, branch_name: str, wt_path: str) -> str:
   """Build the full worker prompt including worktree workflow instructions."""
-  ts = int(time.time())
-  branch_name = f"charliebot/task-{ts}-{thread_id[:8]}"
-  wt_path = str(Path(worktree_dir) / branch_name.replace("/", "-"))
-
   return (
       f"## Worktree Workflow\n"
       f"You MUST isolate your work in a git worktree. Follow these steps exactly:\n"
       f"1. Create worktree: `git worktree add -b {branch_name} {wt_path} {base_branch}`\n"
       f"2. `cd {wt_path}` — do ALL your work inside this worktree.\n"
-      f"3. Commit your changes with descriptive messages.\n"
-      f"4. Rebase onto base branch: `git rebase {base_branch}`\n"
-      f"5. Merge back: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"6. Clean up: `git worktree remove {wt_path}`\n\n"
+      f"3. Commit your changes with descriptive messages.\n\n"
+      f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
       f"## Task\n{description}")
+
+
+def _build_review_prompt(description: str, branch_name: str, wt_path: str, repo_path: Path, base_branch: str) -> str:
+  """Build the prompt for a review worker."""
+  return (
+      f"## Code Review\n"
+      f"You are reviewing another worker's code changes.\n\n"
+      f"Original task: {description}\n\n"
+      f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
+      f"1. `cd {wt_path}`\n"
+      f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
+      f"3. Check for: correctness, bugs, style violations (Google Style, 2-space indent, 120-col), missing edge cases.\n"
+      f"4. If you find issues, fix them and commit with descriptive messages.\n"
+      f"5. Rebase onto base: `git rebase {base_branch}` — resolve any conflicts.\n"
+      f"6. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
+      f"7. Clean up: `git worktree remove {wt_path}`")
 
 
 async def _git_current_branch(repo_path: Path) -> str:
@@ -87,6 +97,7 @@ async def spawn_worker(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     repo_path: Optional[str] = None,
+    prompt_override: Optional[str] = None,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   try:
@@ -105,11 +116,23 @@ async def spawn_worker(
 
     resolved_repo = Path(repo_path)
 
-    # Get current branch as the base for the worktree
-    base_branch = await _git_current_branch(resolved_repo)
+    if prompt_override:
+      worker_prompt = prompt_override
+    else:
+      # Get current branch as the base for the worktree
+      base_branch = await _git_current_branch(resolved_repo)
 
-    # Build enriched prompt with worktree workflow instructions
-    worker_prompt = _build_worker_prompt(description, resolved_repo, base_branch, cfg.worktree_dir, thread.id)
+      # Compute branch name and worktree path
+      ts = int(time.time())
+      branch_name = f"charliebot/task-{ts}-{thread.id[:8]}"
+      wt_path = str(Path(cfg.worktree_dir) / branch_name.replace("/", "-"))
+
+      # Store branch_name on thread metadata
+      thread.branch_name = branch_name
+      await thread_mgr._save_metadata(thread)
+
+      # Build enriched prompt with worktree workflow instructions
+      worker_prompt = _build_worker_prompt(description, resolved_repo, base_branch, branch_name, wt_path)
 
     # Ensure worktree parent dir exists
     Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
@@ -192,6 +215,46 @@ async def _trigger_master(
     log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
 
 
+async def _spawn_review_worker(
+    session_id: str,
+    original_thread,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+) -> None:
+  """Spawn a review worker for a successfully completed worker's branch."""
+  repos = cfg.discover_repos()
+  if not repos:
+    log.error("spawn_review_no_repo", session=session_id, detail="no repos found in workspace_dirs")
+    return
+  repo_path = Path(repos[0]["path"])
+
+  base_branch = await _git_current_branch(repo_path)
+  branch_name = original_thread.branch_name
+  wt_path = str(Path(cfg.worktree_dir) / branch_name.replace("/", "-"))
+
+  review_prompt = _build_review_prompt(original_thread.description, branch_name, wt_path, repo_path, base_branch)
+
+  session_meta = await session_mgr.get_session(session_id)
+  review_thread = await thread_mgr.create_thread(
+      session_meta,
+      f"Review: {original_thread.description}",
+      review_of=original_thread.id,
+  )
+
+  asyncio.create_task(
+      spawn_worker(
+          session_id,
+          review_thread.description,
+          review_thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          repo_path=str(repo_path),
+          prompt_override=review_prompt,
+      ))
+
+
 async def _notify_completion(
     session_id: str,
     description: str,
@@ -226,6 +289,22 @@ async def _notify_completion(
     await broadcast_and_persist(session_id, worker_event, session_mgr)
     log.info("worker_summary_sent", session=session_id, thread=thread.id)
 
+    # Re-read thread metadata to get review_of field
+    thread_meta = await thread_mgr.get_thread(session_id, thread.id)
+
+    if exit_code == 0 and not thread_meta.review_of:
+      # Successful worker, not a review -> spawn reviewer, don't trigger master yet
+      await _spawn_review_worker(session_id, thread_meta, cfg, session_mgr, thread_mgr)
+      return
+
+    if thread_meta.review_of:
+      # This IS the review -> combine summaries, trigger master
+      original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
+      combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
+      await _trigger_master(session_id, combined, cfg, session_mgr)
+      return
+
+    # Failed/cancelled worker -> trigger master immediately
     await _trigger_master(session_id, full_summary, cfg, session_mgr)
 
   except Exception as e:

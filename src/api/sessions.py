@@ -123,6 +123,7 @@ async def get_session_view(
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
+  meta.has_running_tasks = bool(meta.thinking_since) or await session_mgr._has_running_tasks(session_id)
   events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
   threads_task = thread_mgr.list_threads(session_id)
   raw_events, threads = await asyncio.gather(events_task, threads_task)

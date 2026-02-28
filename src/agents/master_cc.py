@@ -120,6 +120,13 @@ async def run_message(
     session_meta.thinking_since = datetime.now(timezone.utc)
   if save_metadata:
     await save_metadata(session_meta)
+  if _active_tasks[session_meta.id] == 1:
+    await streaming_manager.broadcast(
+        'sidebar', {
+            'type': 'running_changed',
+            'session_id': session_meta.id,
+            'has_running_tasks': True,
+        })
 
   extra_flags: list[str] = []
   if session_meta.cc_session_id:

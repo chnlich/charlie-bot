@@ -69,6 +69,11 @@ async function switchSession(sessionId) {
   // Render content
   renderSessionView(data);
 
+  // Mark switched-to session as read (WS was closed so broadcast is lost)
+  sessionUnread[sessionId] = false;
+  const unreadDot = document.getElementById('unread-' + sessionId);
+  if (unreadDot) unreadDot.classList.add('hidden');
+
   // Reconnect WebSocket
   reconnectDelay = 1000;
   connectWS();
@@ -85,6 +90,7 @@ async function switchSession(sessionId) {
     startThinking();
   }
 
+  updateSpinner();
   updateSidebarHighlight(sessionId);
 
   // Reset lazy-load state
@@ -673,6 +679,8 @@ function renderGroupedScheduledList(sessions) {
     </div>`;
   }
   nav.innerHTML = html;
+  // Resync sessionUnread dict from fresh DOM data
+  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();
 }
 
@@ -786,6 +794,8 @@ function renderSessionList(sessions, filter) {
       ${actions}
     </a>`;
   }).join('');
+  // Resync sessionUnread dict from fresh DOM data
+  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();
 }
 

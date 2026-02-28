@@ -14,9 +14,11 @@ function connectWS() {
   catchupDone = false;
   hideStreaming();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const targetSession = SESSION_ID;
   ws = new WebSocket(`${proto}//${location.host}/ws/sessions/${SESSION_ID}`);
 
   ws.onopen = () => {
+    if (targetSession !== SESSION_ID) { ws.onclose = null; ws.close(); ws = null; return; }
     console.log('WS connected');
     reconnectDelay = 1000;
     // Send cursor so the server only replays events beyond this index.

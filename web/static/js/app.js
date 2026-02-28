@@ -59,6 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Reconnect immediately on tab becoming visible (mobile Chrome background kills WS)
   document.addEventListener('visibilitychange', () => {
+    if (switching) return;
     if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)) {
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       reconnectDelay = 1000;
@@ -74,6 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // SPA back/forward navigation
   window.addEventListener('popstate', () => {
+    if (switching) return;
     const params = new URLSearchParams(location.search);
     const sid = params.get('session');
     if (sid && sid !== SESSION_ID) {

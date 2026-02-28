@@ -9,6 +9,7 @@ const sessionUnread = {};
 // SPA-style session switching
 // ---------------------------------------------------------------------------
 let switchGeneration = 0;
+let switching = false;
 
 async function switchSession(sessionId) {
   // Welcome screen — no SPA state to swap, fall back to full load
@@ -16,6 +17,7 @@ async function switchSession(sessionId) {
   // Already on this session
   if (sessionId === SESSION_ID) return;
 
+  switching = true;
   const gen = ++switchGeneration;
 
   // Save draft for current session
@@ -46,12 +48,13 @@ async function switchSession(sessionId) {
     data = await res.json();
   } catch (err) {
     console.error('switchSession fetch failed:', err);
+    switching = false;
     location.href = '/?session=' + sessionId;
     return;
   }
 
   // Discard stale response from rapid clicks
-  if (gen !== switchGeneration) return;
+  if (gen !== switchGeneration) { switching = false; return; }
 
   // Update globals
   SESSION_ID = sessionId;
@@ -69,6 +72,7 @@ async function switchSession(sessionId) {
   // Reconnect WebSocket
   reconnectDelay = 1000;
   connectWS();
+  switching = false;
 
   // Restore draft for new session
   const draft = localStorage.getItem(DRAFT_KEY);

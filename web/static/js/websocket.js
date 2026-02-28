@@ -65,6 +65,7 @@ function handleWSEvent(ev) {
   // Sidebar unread indicator — handle before catchup guard
   if (t === 'unread_changed') {
     sessionUnread[ev.session_id] = ev.has_unread;
+    if (ev.session_id === SESSION_ID) return;
     const spinner = document.getElementById('spinner-' + ev.session_id);
     const spinnerVisible = spinner && !spinner.classList.contains('hidden');
     const dot = document.getElementById('unread-' + ev.session_id);

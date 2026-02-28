@@ -20,9 +20,11 @@ def _repo_path(repo: str | None) -> Path:
     return Path(repo).expanduser()
   from src.core.config import get_config
   cfg = get_config()
-  if not cfg.backlog_repo:
-    raise ValueError('backlog_repo not configured in config.yaml')
-  return Path(cfg.backlog_repo)
+  if cfg.backlog_repos:
+    return Path(cfg.backlog_repos[0].path)
+  if cfg.backlog_repo:
+    return Path(cfg.backlog_repo)
+  raise ValueError('backlog_repos not configured in config.yaml')
 
 
 def _load_all_items(repo_path: Path) -> list[dict]:
@@ -71,6 +73,14 @@ def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) ->
   if any(str(i.get('id')) == item_id for i in items):
     return path, items
   return None, None
+
+
+@router.get('/repos')
+async def get_repos():
+  """Return configured backlog repos [{label, path}]."""
+  from src.core.config import get_config
+  cfg = get_config()
+  return JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.backlog_repos])
 
 
 @router.get('')

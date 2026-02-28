@@ -54,7 +54,7 @@ async function switchSession(sessionId) {
   }
 
   // Discard stale response from rapid clicks
-  if (gen !== switchGeneration) { switching = false; return; }
+  if (gen !== switchGeneration) return;  // newer switch owns the flag
 
   // Update globals
   SESSION_ID = sessionId;

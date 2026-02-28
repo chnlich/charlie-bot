@@ -28,6 +28,7 @@ const backlogPanel = (() => {
     in_progress: 'bg-blue-900 text-blue-300',
     done:        'bg-green-800 text-green-200',
     rejected:    'bg-red-900 text-red-300',
+    failed:      'bg-orange-900 text-orange-300',
   };
 
   function _badge(map, key, fallback) {
@@ -75,6 +76,10 @@ const backlogPanel = (() => {
       actions = `
         <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}')"
                 class="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Reopen</button>`;
+    } else if (item.status === 'failed') {
+      actions = `
+        <button onclick="backlogPanel.retryItem('${item.id}','${item._source || ''}')"
+                class="px-2 py-1 text-xs rounded bg-orange-800 hover:bg-orange-700 text-orange-200 transition-colors">Retry</button>`;
     }
 
     let backtestHtml = '';
@@ -114,6 +119,7 @@ const backlogPanel = (() => {
         <p id="${descId}" class="text-xs text-gray-400 line-clamp-2 cursor-pointer select-none"
            onclick="this.classList.toggle('line-clamp-2')">${_esc(item.description || '')}</p>
         ${item.rejected_reason ? `<p class="text-xs text-red-400 mt-1">Rejected${item.rejected_at ? ' ' + _fmtDate(item.rejected_at) : ''}: ${_esc(item.rejected_reason)}</p>` : ''}
+        ${item.failed_reason ? `<p class="text-xs text-orange-400 mt-1">Failed${item.failed_at ? ' ' + _fmtDate(item.failed_at) : ''}${item.failed_count > 1 ? ' (' + item.failed_count + 'x)' : ''}: ${_esc(item.failed_reason)}</p>` : ''}
         <p class="text-xs text-gray-600 mt-1">${_fmtDate(item.created)}</p>
         ${backtestHtml}
         ${actions ? `<div class="flex gap-2 mt-2">${actions}</div>` : ''}
@@ -191,9 +197,10 @@ const backlogPanel = (() => {
     const moduleFilter = (document.getElementById('backlog-module-filter') || {}).value || 'all';
 
     let visible = _items;
-    if (statusFilter === 'pending')  visible = visible.filter(i => i.status === 'pending' || i.status === 'in_progress');
+    if (statusFilter === 'pending')  visible = visible.filter(i => i.status === 'pending' || i.status === 'in_progress' || i.status === 'failed');
     else if (statusFilter === 'done') visible = visible.filter(i => i.status === 'done');
     else if (statusFilter === 'rejected') visible = visible.filter(i => i.status === 'rejected');
+    else if (statusFilter === 'failed') visible = visible.filter(i => i.status === 'failed');
     // 'all' → no status filter
 
     if (moduleFilter !== 'all') {
@@ -235,11 +242,15 @@ const backlogPanel = (() => {
     await updateStatus(id, 'rejected', source, {rejected_reason: reason || null});
   }
 
+  async function retryItem(id, source) {
+    await updateStatus(id, 'approved', source);
+  }
+
   function init() {
     // Resize handle init happens in app.js via initBacklogResize()
   }
 
-  return {init, refresh, render, updateStatus, rejectWithReason, switchRepo};
+  return {init, refresh, render, updateStatus, rejectWithReason, retryItem, switchRepo};
 })();
 
 // ---------------------------------------------------------------------------

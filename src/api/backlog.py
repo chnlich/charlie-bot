@@ -128,6 +128,8 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
             item['rejected_reason'] = patch.rejected_reason
           else:
             item.pop('rejected_reason', None)
+          item.pop('revision_feedback', None)
+          item.pop('revision_requested_at', None)
         elif patch.status == 'failed':
           item['failed_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
           if patch.failed_reason:

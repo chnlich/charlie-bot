@@ -97,9 +97,18 @@ function handleWSEvent(ev) {
   } else if (t === 'assistant') {
     const blocks = (ev.message || {}).content || [];
     for (const b of blocks) {
-      if (b.type === 'tool_use' && b.name === 'ExitPlanMode' && b.input && b.input.plan) {
-        if (streamBuf) { if (catchupDone) hideStreaming(); appendMessage('assistant', streamBuf); streamBuf = ''; }
-        appendMessage('plan', b.input.plan);
+      if (b.type === 'tool_use' && b.name === 'ExitPlanMode') {
+        const planText = (b.input && b.input.plan) || streamBuf;
+        if (planText) {
+          if (b.input && b.input.plan && streamBuf) {
+            if (catchupDone) hideStreaming();
+            appendMessage('assistant', streamBuf);
+          } else if (catchupDone) {
+            hideStreaming();
+          }
+          streamBuf = '';
+          appendMessage('plan', planText);
+        }
       }
     }
     let text = '';

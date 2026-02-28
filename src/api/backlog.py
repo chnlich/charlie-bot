@@ -136,6 +136,7 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
           item['failed_count'] = item.get('failed_count', 0) + 1
         elif patch.status == 'approved':
           item.pop('failed_at', None)
+          item.pop('failed_reason', None)
         elif patch.status == 'pending':
           item.pop('rejected_reason', None)
           item.pop('rejected_at', None)

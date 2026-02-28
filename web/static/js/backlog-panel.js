@@ -27,8 +27,9 @@ const backlogPanel = (() => {
     approved:    'bg-green-900 text-green-300',
     in_progress: 'bg-blue-900 text-blue-300',
     done:        'bg-green-800 text-green-200',
-    rejected:    'bg-red-900 text-red-300',
-    failed:      'bg-orange-900 text-orange-300',
+    rejected:           'bg-red-900 text-red-300',
+    failed:             'bg-orange-900 text-orange-300',
+    revision_requested: 'bg-yellow-900 text-yellow-300',
   };
 
   function _badge(map, key, fallback) {
@@ -63,6 +64,14 @@ const backlogPanel = (() => {
 
     let actions = '';
     if (item.status === 'pending') {
+      actions = `
+        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}')"
+                class="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-200 transition-colors">Approve</button>
+        <button onclick="backlogPanel.requestRevision('${item.id}','${item._source || ''}')"
+                class="px-2 py-1 text-xs rounded bg-yellow-800 hover:bg-yellow-700 text-yellow-200 transition-colors">Revise</button>
+        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}')"
+                class="px-2 py-1 text-xs rounded bg-red-800 hover:bg-red-700 text-red-200 transition-colors">Reject</button>`;
+    } else if (item.status === 'revision_requested') {
       actions = `
         <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}')"
                 class="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-200 transition-colors">Approve</button>
@@ -120,6 +129,7 @@ const backlogPanel = (() => {
            onclick="this.classList.toggle('line-clamp-2')">${_esc(item.description || '')}</p>
         ${item.rejected_reason ? `<p class="text-xs text-red-400 mt-1">Rejected${item.rejected_at ? ' ' + _fmtDate(item.rejected_at) : ''}: ${_esc(item.rejected_reason)}</p>` : ''}
         ${item.failed_reason ? `<p class="text-xs text-orange-400 mt-1">Failed${item.failed_at ? ' ' + _fmtDate(item.failed_at) : ''}${item.failed_count > 1 ? ' (' + item.failed_count + 'x)' : ''}: ${_esc(item.failed_reason)}</p>` : ''}
+        ${item.revision_feedback ? `<p class="text-xs text-yellow-400 mt-1">Revision requested${item.revision_requested_at ? ' ' + _fmtDate(item.revision_requested_at) : ''}: ${_esc(item.revision_feedback)}</p>` : ''}
         <p class="text-xs text-gray-600 mt-1">${_fmtDate(item.created)}</p>
         ${backtestHtml}
         ${actions ? `<div class="flex gap-2 mt-2">${actions}</div>` : ''}
@@ -197,7 +207,7 @@ const backlogPanel = (() => {
     const moduleFilter = (document.getElementById('backlog-module-filter') || {}).value || 'all';
 
     let visible = _items;
-    if (statusFilter === 'pending')  visible = visible.filter(i => i.status === 'pending' || i.status === 'in_progress' || i.status === 'failed');
+    if (statusFilter === 'pending')  visible = visible.filter(i => i.status === 'pending' || i.status === 'in_progress' || i.status === 'failed' || i.status === 'revision_requested');
     else if (statusFilter === 'done') visible = visible.filter(i => i.status === 'done');
     else if (statusFilter === 'rejected') visible = visible.filter(i => i.status === 'rejected');
     else if (statusFilter === 'failed') visible = visible.filter(i => i.status === 'failed');
@@ -242,6 +252,12 @@ const backlogPanel = (() => {
     await updateStatus(id, 'rejected', source, {rejected_reason: reason || null});
   }
 
+  async function requestRevision(id, source) {
+    const text = prompt('Revision feedback (required):');
+    if (!text) return;  // cancelled or empty
+    await updateStatus(id, 'revision_requested', source, {revision_feedback: text});
+  }
+
   async function retryItem(id, source) {
     await updateStatus(id, 'approved', source);
   }
@@ -250,7 +266,7 @@ const backlogPanel = (() => {
     // Resize handle init happens in app.js via initBacklogResize()
   }
 
-  return {init, refresh, render, updateStatus, rejectWithReason, retryItem, switchRepo};
+  return {init, refresh, render, updateStatus, rejectWithReason, requestRevision, retryItem, switchRepo};
 })();
 
 // ---------------------------------------------------------------------------

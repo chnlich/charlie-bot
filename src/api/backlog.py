@@ -106,6 +106,7 @@ class BacklogPatch(BaseModel):
   priority: str | None = None
   rejected_reason: str | None = None
   failed_reason: str | None = None
+  revision_feedback: str | None = None
 
 
 @router.patch('/{item_id}')
@@ -134,12 +135,22 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
           else:
             item.pop('failed_reason', None)
           item['failed_count'] = item.get('failed_count', 0) + 1
+        elif patch.status == 'revision_requested':
+          item['revision_requested_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+          if patch.revision_feedback:
+            item['revision_feedback'] = patch.revision_feedback
+          else:
+            item.pop('revision_feedback', None)
         elif patch.status == 'approved':
           item.pop('failed_at', None)
           item.pop('failed_reason', None)
+          item.pop('revision_feedback', None)
+          item.pop('revision_requested_at', None)
         elif patch.status == 'pending':
           item.pop('rejected_reason', None)
           item.pop('rejected_at', None)
+          item.pop('revision_feedback', None)
+          item.pop('revision_requested_at', None)
       if patch.priority is not None:
         item['priority'] = patch.priority
       updated = item

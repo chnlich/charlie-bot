@@ -80,6 +80,7 @@ async def list_scheduled_sessions(
       s.schedule_enabled = task.enabled
       s.schedule_timezone = task.timezone
       s.schedule_project = task.project
+      s.schedule_allow_failure = task.allow_failure
       tz = ZoneInfo(task.timezone)
       now = datetime.now(tz)
       s.schedule_next_run = croniter(task.cron, now).get_next(datetime).isoformat()

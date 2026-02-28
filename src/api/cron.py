@@ -34,6 +34,7 @@ class TaskUpdate(BaseModel):
   timezone: Optional[str] = None
   enabled: Optional[bool] = None
   project: Optional[str] = None
+  allow_failure: Optional[bool] = None
 
 
 class TaskCreate(BaseModel):
@@ -44,6 +45,7 @@ class TaskCreate(BaseModel):
   timezone: str = 'America/New_York'
   enabled: bool = True
   project: Optional[str] = None
+  allow_failure: bool = False
 
 
 @router.get('/tasks')
@@ -71,6 +73,8 @@ async def update_cron_task(name: str, req: TaskUpdate):
         task['enabled'] = req.enabled
       if req.project is not None:
         task['project'] = req.project or None
+      if req.allow_failure is not None:
+        task['allow_failure'] = req.allow_failure
       data['scheduled_tasks'] = tasks
       await asyncio.to_thread(_write_cron_yaml, data)
       log.debug('cron_task_updated', name=name)

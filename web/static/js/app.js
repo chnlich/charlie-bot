@@ -54,6 +54,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Lazy-load sidebar usage badges (non-blocking)
   fetchSidebarUsage();
 
+  // Re-evaluate mobile layout on platform mode change
+  platform.onChange((mode) => {
+    const backlogPanel = document.getElementById('backlog-panel');
+    const chatEl = document.getElementById('tab-chat');
+    if (!backlogPanel || backlogPanel.classList.contains('hidden')) return;
+    // Backlog visible: fullscreen on mobile, side-panel on desktop
+    if (mode === 'desktop') {
+      chatEl.classList.remove('hidden');
+    } else {
+      chatEl.classList.add('hidden');
+    }
+  });
+
   // Connect WebSocket
   connectWS();
 

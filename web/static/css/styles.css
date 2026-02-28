@@ -74,6 +74,7 @@ body.resizing { cursor: col-resize; user-select: none; }
     #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
     #tab-buttons button { white-space: nowrap; }
     #usage-indicator { display: none !important; }
+    .input-buttons button { min-width: 44px; min-height: 44px; }
 }
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -113,8 +114,15 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Bug 1: On touch devices, invisible sidebar action buttons swallow taps.
    Exclude buttons forced visible via !opacity-100 (starred / active session). */
 @media (hover: none) {
-  #session-list .group-hover\:opacity-100:not(.\!opacity-100) { pointer-events: none; }
+  #session-list .group-hover\:opacity-100:not(.\!opacity-100) { opacity: 0.4; pointer-events: auto; }
 }
 /* Bug 3: Prevent overscroll bounce */
 body { overscroll-behavior: none; }
 #messages { overscroll-behavior: contain; }
+/* Z Fold cover screen (~280px) */
+@media (max-width: 320px) {
+  .tab-btn { font-size: 0.7rem; padding: 0.375rem 0.5rem; }
+  .input-buttons button { min-width: 44px; min-height: 44px; }
+  #session-list a { min-height: 44px; }
+  .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
+}

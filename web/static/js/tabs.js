@@ -31,7 +31,7 @@ function switchTab(tab) {
   }
 
   // Mobile: backlog takes full screen, hide chat area
-  const isMobile = window.innerWidth <= 768;
+  const isMobile = platform.isMobile;
   if (isMobile) {
     const chatEl = document.getElementById('tab-chat');
     if (tab === 'chat-backlog') {

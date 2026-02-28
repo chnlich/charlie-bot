@@ -5,6 +5,8 @@ const backlogPanel = (() => {
   let _items = [];
   let _history = [];
   let _loaded = false;
+  let _repos = [];
+  let _currentRepo = null;  // null = default (first configured repo)
 
   const PRIORITY_BADGE = {
     high:   'bg-red-900 text-red-300',
@@ -136,13 +138,34 @@ const backlogPanel = (() => {
     if (sources.includes(prev)) sel.value = prev;
   }
 
+  function _repoQs() {
+    return _currentRepo ? '?repo=' + encodeURIComponent(_currentRepo) : '';
+  }
+
+  function _populateRepoSelector() {
+    const sel = document.getElementById('backlog-repo-selector');
+    if (!sel || !_repos.length) return;
+    sel.innerHTML = _repos.map(r =>
+      `<option value="${_esc(r.path)}">${_esc(r.label)}</option>`
+    ).join('');
+    if (_currentRepo) sel.value = _currentRepo;
+    else sel.value = _repos[0].path;
+  }
+
   async function refresh() {
     const list = document.getElementById('backlog-list');
     if (list) list.innerHTML = '<p class="text-xs text-gray-500">Loading...</p>';
     try {
+      // Fetch repos list on first load
+      if (!_repos.length) {
+        const rResp = await fetch('/api/backlog/repos');
+        _repos = rResp.ok ? await rResp.json() : [];
+        _populateRepoSelector();
+      }
+      const qs = _repoQs();
       const [bResp, hResp] = await Promise.all([
-        fetch('/api/backlog'),
-        fetch('/api/backlog/history'),
+        fetch('/api/backlog' + qs),
+        fetch('/api/backlog/history' + qs),
       ]);
       _items   = bResp.ok ? await bResp.json() : [];
       _history = hResp.ok ? await hResp.json() : [];
@@ -154,6 +177,11 @@ const backlogPanel = (() => {
     }
     _populateModuleFilter();
     render();
+  }
+
+  function switchRepo(path) {
+    _currentRepo = path;
+    refresh();
   }
 
   function render() {
@@ -180,7 +208,10 @@ const backlogPanel = (() => {
   }
 
   async function updateStatus(id, newStatus, source, extra) {
-    const qs = source ? `?source=${encodeURIComponent(source)}` : '';
+    const params = new URLSearchParams();
+    if (source) params.set('source', source);
+    if (_currentRepo) params.set('repo', _currentRepo);
+    const qs = params.toString() ? '?' + params.toString() : '';
     try {
       const resp = await fetch(`/api/backlog/${id}${qs}`, {
         method: 'PATCH',
@@ -208,7 +239,7 @@ const backlogPanel = (() => {
     // Resize handle init happens in app.js via initBacklogResize()
   }
 
-  return {init, refresh, render, updateStatus, rejectWithReason};
+  return {init, refresh, render, updateStatus, rejectWithReason, switchRepo};
 })();
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,12 @@ class ScheduledTaskConfig(BaseModel):
     return self
 
 
+class BacklogRepoConfig(BaseModel):
+  """A single backlog repo entry: label + path."""
+  label: str
+  path: str
+
+
 class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
 
@@ -58,8 +64,9 @@ class CharlieBotConfig(BaseModel):
   worktree_dir: str = "~/worktrees"
 
   # Backlog panel
-  backlog_repo: Optional[str] = None
-  backlog_label: str = 'Project Backlog'
+  backlog_repos: list[BacklogRepoConfig] = []
+  backlog_repo: Optional[str] = None  # deprecated, migrated to backlog_repos
+  backlog_label: str = 'Project Backlog'  # deprecated, used during migration
 
   # SSL
   ssl_certfile: Optional[str] = None
@@ -96,8 +103,17 @@ class CharlieBotConfig(BaseModel):
       values["ssl_certfile"] = os.path.expanduser(values["ssl_certfile"])
     if values.get("ssl_keyfile"):
       values["ssl_keyfile"] = os.path.expanduser(values["ssl_keyfile"])
-    if values.get("backlog_repo"):
+    # Migrate old backlog_repo (singular) → backlog_repos list
+    if values.get("backlog_repo") and not values.get("backlog_repos"):
+      label = values.pop("backlog_label", "Backlog")
+      repo = os.path.expanduser(values.pop("backlog_repo"))
+      values["backlog_repos"] = [{"label": label, "path": repo}]
+    elif values.get("backlog_repo"):
       values["backlog_repo"] = os.path.expanduser(values["backlog_repo"])
+    # Expand ~ in backlog_repos entries
+    for entry in values.get("backlog_repos", []):
+      if isinstance(entry, dict) and entry.get("path"):
+        entry["path"] = os.path.expanduser(entry["path"])
     return values
 
   @field_validator("workspace_dirs", mode="before")

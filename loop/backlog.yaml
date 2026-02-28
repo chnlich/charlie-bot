@@ -1,103 +1,109 @@
-- id: "001"
-  title: "Extract shared session-view loader"
-  description: >
-    api/pages.py:index (L76-95) and api/sessions.py:get_session_view (L115-142) duplicate
-    the same load-events → load-threads → events_to_messages → usage_from_events → mark_read
-    pipeline. Extract a shared helper (e.g. build_session_view_data()) in api/message_utils.py
-    or a new api/helpers.py that both endpoints call. Reduces ~30 duplicate lines to ~2 call sites.
+- id: '001'
+  title: Extract shared session-view loader
+  description: 'api/pages.py:index (L76-95) and api/sessions.py:get_session_view (L115-142)
+    duplicate the same load-events → load-threads → events_to_messages → usage_from_events
+    → mark_read pipeline. Extract a shared helper (e.g. build_session_view_data())
+    in api/message_utils.py or a new api/helpers.py that both endpoints call. Reduces
+    ~30 duplicate lines to ~2 call sites.
+
+    '
   category: duplication
   status: pending
-  created: "2026-02-27T12:00:00Z"
+  created: '2026-02-27T12:00:00Z'
   priority: medium
-
-- id: "002"
-  title: "Collapse 6 session-toggle methods into generic helper"
-  description: >
-    core/sessions.py has archive/unarchive/star/unstar/mark_waiting/unmark_waiting (L227-292)
-    all following identical get→mutate→save→log pattern. Introduce _update_field(session_id,
+- id: '002'
+  title: Collapse 6 session-toggle methods into generic helper
+  description: 'core/sessions.py has archive/unarchive/star/unstar/mark_waiting/unmark_waiting
+    (L227-292) all following identical get→mutate→save→log pattern. Introduce _update_field(session_id,
     field, value, log_event) and reduce each to a one-liner. Saves ~50 lines, lowers
     maintenance surface.
+
+    '
   category: duplication
   status: pending
-  created: "2026-02-27T12:00:00Z"
+  created: '2026-02-27T12:00:00Z'
   priority: low
+- id: '003'
+  title: Split run_message into smaller functions
+  description: 'agents/master_cc.py:run_message is 180 lines — by far the longest
+    function. Extract logical phases: _build_prompt() for voice prefix, _handle_event()
+    for the event loop body (compact_boundary detection), _finalize_session() for
+    the finally block (thinking state, error broadcast, tex check). Each becomes a
+    testable unit.
 
-- id: "003"
-  title: "Split run_message into smaller functions"
-  description: >
-    agents/master_cc.py:run_message is 180 lines — by far the longest function. Extract
-    logical phases: _build_prompt() for voice prefix, _handle_event() for the event loop body
-    (compact_boundary detection), _finalize_session() for the finally block (thinking state,
-    error broadcast, tex check). Each becomes a testable unit.
+    '
   category: architecture
-  status: pending
-  created: "2026-02-27T12:00:00Z"
+  status: approved
+  created: '2026-02-27T12:00:00Z'
   priority: high
+- id: '004'
+  title: Remove unused ClaudeCodeBackend import in master_cc.py
+  description: 'agents/master_cc.py:11 imports ClaudeCodeBackend but never uses it
+    (backend construction goes through build_backend from registry). Delete the import
+    line.
 
-- id: "004"
-  title: "Remove unused ClaudeCodeBackend import in master_cc.py"
-  description: >
-    agents/master_cc.py:11 imports ClaudeCodeBackend but never uses it (backend construction
-    goes through build_backend from registry). Delete the import line.
+    '
   category: imports
   status: pending
-  created: "2026-02-27T12:00:00Z"
+  created: '2026-02-27T12:00:00Z'
   priority: low
+- id: '005'
+  title: Fix yapf formatting violations in spawner.py and message_utils.py
+  description: 'yapf --diff found formatting issues in core/spawner.py (3 hunks: long
+    dict literal on L80, multi-arg log.error on L228, long _build_worker_event call
+    on L315) and api/message_utils.py (1 hunk: dict append indentation on L66). Run
+    yapf -i on both files.
 
-- id: "005"
-  title: "Fix yapf formatting violations in spawner.py and message_utils.py"
-  description: >
-    yapf --diff found formatting issues in core/spawner.py (3 hunks: long dict literal on L80,
-    multi-arg log.error on L228, long _build_worker_event call on L315) and
-    api/message_utils.py (1 hunk: dict append indentation on L66). Run yapf -i on both files.
+    '
   category: formatting
   status: pending
-  created: "2026-02-27T12:00:00Z"
+  created: '2026-02-27T12:00:00Z'
   priority: low
+- id: '006'
+  title: Cache scheduler session lookup per tick
+  description: 'core/scheduler.py _tick() calls _get_or_create_session and _get_last_run
+    per enabled task, each doing a full list_sessions() directory scan. With N tasks,
+    that''s 2N scans per 60s tick. Cache the session list once at the start of _tick()
+    and pass it to _maybe_run/_get_last_run. Reduces I/O from O(N) to O(1) per tick.
 
-- id: "006"
-  title: "Cache scheduler session lookup per tick"
-  description: >
-    core/scheduler.py _tick() calls _get_or_create_session and _get_last_run per enabled task,
-    each doing a full list_sessions() directory scan. With N tasks, that's 2N scans per 60s tick.
-    Cache the session list once at the start of _tick() and pass it to _maybe_run/_get_last_run.
-    Reduces I/O from O(N) to O(1) per tick.
+    '
   category: performance
   status: pending
-  created: "2026-02-28T12:00:00Z"
+  created: '2026-02-28T12:00:00Z'
   priority: medium
+- id: '007'
+  title: Log silently swallowed exception in _fetch
+  description: 'api/sessions.py:99 (_fetch in all_sessions_usage) catches except Exception
+    and returns (sid, None) without logging. Per project rules, caught exceptions
+    must always be logged. Add log.debug or log.warning to the catch block.
 
-- id: "007"
-  title: "Log silently swallowed exception in _fetch"
-  description: >
-    api/sessions.py:99 (_fetch in all_sessions_usage) catches except Exception and returns
-    (sid, None) without logging. Per project rules, caught exceptions must always be logged.
-    Add log.debug or log.warning to the catch block.
+    '
   category: error-handling
   status: pending
-  created: "2026-02-28T12:00:00Z"
+  created: '2026-02-28T12:00:00Z'
   priority: high
+- id: 008
+  title: Make _update_usage_cache async
+  description: 'core/sessions.py:422 _update_usage_cache() does synchronous read_text/write_text
+    file I/O but is called from async save_chat_event() on every persisted event.
+    On slow disks this blocks the event loop. Either wrap the file ops in asyncio.to_thread()
+    or keep the cache dict in-memory and flush periodically.
 
-- id: "008"
-  title: "Make _update_usage_cache async"
-  description: >
-    core/sessions.py:422 _update_usage_cache() does synchronous read_text/write_text file I/O
-    but is called from async save_chat_event() on every persisted event. On slow disks this blocks
-    the event loop. Either wrap the file ops in asyncio.to_thread() or keep the cache dict
-    in-memory and flush periodically.
+    '
   category: performance
   status: pending
-  created: "2026-02-28T12:00:00Z"
+  created: '2026-02-28T12:00:00Z'
   priority: medium
+- id: 009
+  title: Remove redundant field_validators in config.py
+  description: 'core/config.py has both a model_validator (migrate_and_expand, L98-101)
+    and separate field_validators (expand_workspace_dirs L120, expand_worktree_dir
+    L125) that both call os.path.expanduser on workspace_dirs and worktree_dir. The
+    model_validator runs first and already handles expansion. Delete the two field_validators
+    (6 lines) to avoid double-expansion.
 
-- id: "009"
-  title: "Remove redundant field_validators in config.py"
-  description: >
-    core/config.py has both a model_validator (migrate_and_expand, L98-101) and separate
-    field_validators (expand_workspace_dirs L120, expand_worktree_dir L125) that both call
-    os.path.expanduser on workspace_dirs and worktree_dir. The model_validator runs first and
-    already handles expansion. Delete the two field_validators (6 lines) to avoid double-expansion.
+    '
   category: maintainability
   status: pending
-  created: "2026-02-28T12:00:00Z"
+  created: '2026-02-28T12:00:00Z'
   priority: low

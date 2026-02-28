@@ -68,11 +68,11 @@
   priority: medium
 
 - id: "007"
-  title: "Log silently swallowed exceptions in API layer"
+  title: "Log silently swallowed exception in _fetch"
   description: >
-    api/sessions.py:99 (_fetch in all_sessions_usage) and api/sessions.py:132 (mark_read in
-    get_session_view) catch except Exception without logging. Per project rules, caught exceptions
-    must always be logged. Add log.debug or log.warning to both catch blocks.
+    api/sessions.py:99 (_fetch in all_sessions_usage) catches except Exception and returns
+    (sid, None) without logging. Per project rules, caught exceptions must always be logged.
+    Add log.debug or log.warning to the catch block.
   category: error-handling
   status: pending
   created: "2026-02-28T12:00:00Z"

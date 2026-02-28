@@ -40,7 +40,7 @@ function toggleMobileSidebar() {
 // Close sidebar on navigation (mobile)
 document.querySelectorAll('#sidebar a[href]').forEach(function(a) {
   a.addEventListener('click', function() {
-    if (window.innerWidth <= 768) {
+    if (platform.isMobile) {
       const sidebar = document.getElementById('sidebar');
       const overlay = document.getElementById('sidebar-overlay');
       sidebar.classList.remove('open');

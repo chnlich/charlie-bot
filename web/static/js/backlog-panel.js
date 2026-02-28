@@ -27,8 +27,8 @@ const backlogPanel = (() => {
     approved:    'bg-green-900 text-green-300',
     in_progress: 'bg-blue-900 text-blue-300',
     done:        'bg-green-800 text-green-200',
-    rejected:           'bg-red-900 text-red-300',
-    failed:             'bg-orange-900 text-orange-300',
+    rejected:    'bg-red-900 text-red-300',
+    failed:      'bg-orange-900 text-orange-300',
     revision_requested: 'bg-yellow-900 text-yellow-300',
   };
 

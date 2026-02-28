@@ -133,6 +133,7 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     session.last_scheduled_run = now.isoformat()
+    session.last_run_status = "running"
     session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
@@ -144,6 +145,7 @@ class Scheduler:
           'status': 'ok',
           'message': str(result) if result is not None else 'done',
       }
+      session.last_run_status = "success"
     except Exception as e:
       log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
       event = {
@@ -152,6 +154,9 @@ class Scheduler:
           'status': 'error',
           'message': str(e),
       }
+      session.last_run_status = "failed"
+    session.updated_at = datetime.now(timezone.utc)
+    await session_mgr.save_metadata(session)
     await broadcast_and_persist(session.id, event, session_mgr)
     return {'session_id': session.id, 'thread_id': None}
 
@@ -163,10 +168,11 @@ class Scheduler:
 
     session = await self._get_or_create_session(task_cfg.name, session_mgr)
 
-    # Update last_scheduled_run immediately before spawning
+    # Update last_scheduled_run and mark as running before spawning
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     session.last_scheduled_run = now.isoformat()
+    session.last_run_status = "running"
     session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
 

@@ -78,12 +78,14 @@ class SessionMetadata(BaseModel):
   backend: str = "claude-opus-4.6"  # must match an id in cfg.backend_options
   scheduled_task: Optional[str] = None  # task name; None = regular session
   last_scheduled_run: Optional[str] = None  # ISO datetime of last scheduler execution
+  last_run_status: Optional[str] = None  # "running" / "success" / "failed"
   # Transient fields, populated by API layer for scheduled sessions only
   schedule_cron: Optional[str] = None
   schedule_enabled: Optional[bool] = None
   schedule_next_run: Optional[str] = None
   schedule_timezone: Optional[str] = None
   schedule_project: Optional[str] = None
+  schedule_allow_failure: Optional[bool] = None
   # Rewind fields
   parent_session_id: Optional[str] = None  # original session this was rewound from
   rewind_summary: Optional[str] = None  # context summary from parent session

@@ -269,6 +269,13 @@ async def _notify_completion(
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
+    # Update last_run_status for scheduled sessions
+    session_meta = await session_mgr.get_session(session_id)
+    if session_meta and session_meta.scheduled_task:
+      session_meta.last_run_status = "success" if exit_code == 0 else "failed"
+      session_meta.updated_at = datetime.now(timezone.utc)
+      await session_mgr.save_metadata(session_meta)
+
     events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
 
     status = "completed" if exit_code == 0 else "failed"

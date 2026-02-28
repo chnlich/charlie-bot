@@ -37,6 +37,9 @@ def events_to_messages(events: list[dict]) -> list[dict]:
               messages.append({'role': 'assistant', 'content': assistant_buf, 'event_index': last_event_idx})
               assistant_buf = ''
             messages.append({'role': 'plan', 'content': plan_text, 'event_index': idx})
+          elif assistant_buf:
+            messages.append({'role': 'plan', 'content': assistant_buf, 'event_index': idx})
+            assistant_buf = ''
       text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
       if text and assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
@@ -69,6 +72,28 @@ def events_to_messages(events: list[dict]) -> list[dict]:
           "full_content": ev.get("full_content", ""),
           "event_index": idx,
       })
+    elif t == 'handler_result':
+      if assistant_buf:
+        messages.append({'role': 'assistant', 'content': assistant_buf, 'event_index': last_event_idx})
+        assistant_buf = ''
+      icon = '\u2713' if ev.get('status') == 'ok' else '\u2717'
+      messages.append({
+          'role': 'system',
+          'content': f"{icon} {ev.get('task', '')}: {ev.get('message', '')}",
+          'event_index': idx,
+      })
+    elif t == 'context_compacted':
+      if assistant_buf:
+        messages.append({'role': 'assistant', 'content': assistant_buf, 'event_index': last_event_idx})
+        assistant_buf = ''
+      trigger = ev.get('trigger', 'auto')
+      pre_tokens = ev.get('pre_tokens')
+      msg = 'Context compacted'
+      if trigger:
+        msg += f' ({trigger})'
+      if pre_tokens:
+        msg += f' \u2014 was {round(pre_tokens / 1000)}k tokens'
+      messages.append({'role': 'system', 'content': msg, 'event_index': idx})
 
   # Flush trailing assistant content (if stream was interrupted)
   if assistant_buf:

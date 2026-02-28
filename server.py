@@ -10,10 +10,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from src.api import backlog, chat, cron, internal, latex, pages, sessions, slash, threads, voice
+from src.api.deps import get_session_manager
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
 from src.core.scheduler import Scheduler
-from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
@@ -73,8 +73,6 @@ async def session_websocket(websocket: WebSocket, session_id: str):
   channel = f"session:{session_id}"
   log.info("session_ws_connected", session_id=session_id)
 
-  # Wait for the client to send a cursor (index of events already rendered
-  # server-side) so we only replay events the browser hasn't seen yet.
   cursor = 0
   try:
     raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
@@ -86,43 +84,41 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     return
   except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
     log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
-    # Fall back to sending all events (cursor stays 0)
 
-  # Send catch-up events from chat_events.jsonl, skipping those the client
-  # already has from the server-side render.
-  cfg = get_config()
-  session_mgr = SessionManager(cfg)
-  try:
-    events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-    for event in events[cursor:]:
-      try:
-        await websocket.send_json(event)
-      except Exception as e:
-        log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
-        return
-    await websocket.send_json({"type": "catchup_complete"})
-    log.debug(
-      "session_ws_catchup_sent",
-      session_id=session_id,
-      cursor=cursor,
-      total=len(events),
-      sent=max(0, len(events) - cursor),
-    )
-  except Exception as e:
-    log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
-
+  # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.
   await streaming_manager.subscribe(channel, websocket)
   await streaming_manager.subscribe("sidebar", websocket)
   try:
-    while True:
-      try:
-        await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-      except asyncio.TimeoutError:
-        await websocket.send_json({"type": "ping"})
-  except WebSocketDisconnect:
-    pass
-  except Exception as e:
-    log.info("session_ws_closed", session_id=session_id, reason=str(e))
+    session_mgr = get_session_manager()
+    try:
+      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+      for event in events[cursor:]:
+        try:
+          await websocket.send_json(event)
+        except Exception as e:
+          log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
+          return
+      await websocket.send_json({"type": "catchup_complete"})
+      log.debug(
+        "session_ws_catchup_sent",
+        session_id=session_id,
+        cursor=cursor,
+        total=len(events),
+        sent=max(0, len(events) - cursor),
+      )
+    except Exception as e:
+      log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
+
+    try:
+      while True:
+        try:
+          await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+        except asyncio.TimeoutError:
+          await websocket.send_json({"type": "ping"})
+    except WebSocketDisconnect:
+      pass
+    except Exception as e:
+      log.info("session_ws_closed", session_id=session_id, reason=str(e))
   finally:
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe("sidebar", websocket)

@@ -264,11 +264,18 @@ function updateSidebarHighlight(newSessionId) {
     if (!el.id.startsWith('session-')) return;
     el.classList.remove('bg-blue-600/20', 'text-blue-300');
     el.classList.add('hover:bg-slate-700/50', 'text-slate-300');
+    el.querySelectorAll('.group-hover\\:opacity-100').forEach(btn => {
+      if (btn.classList.contains('star-btn') && btn.classList.contains('text-yellow-400')) return;
+      btn.classList.remove('!opacity-100');
+    });
   });
   const active = document.getElementById('session-' + newSessionId);
   if (active) {
     active.classList.add('bg-blue-600/20', 'text-blue-300');
     active.classList.remove('hover:bg-slate-700/50', 'text-slate-300');
+    active.querySelectorAll('.group-hover\\:opacity-100').forEach(btn => {
+      btn.classList.add('!opacity-100');
+    });
   }
 }
 

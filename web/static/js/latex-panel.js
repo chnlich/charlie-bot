@@ -41,6 +41,8 @@ function switchLatexView(view) {
 async function loadLatexPdf() {
   const container = document.getElementById('latex-pdf-canvas-container');
   if (!container) return;
+  // Skip re-fetch if PDF is already rendered (preserves scroll position)
+  if (container.querySelector('canvas')) return;
   container.innerHTML = '<p class="text-slate-500 text-sm">Loading PDF...</p>';
   try {
     const resp = await fetch('/api/latex/pdf?t=' + Date.now());

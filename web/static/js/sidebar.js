@@ -371,7 +371,7 @@ function updateWorkerStatus(threadId, status) {
   if (cancelBtn) cancelBtn.style.display = status === 'running' ? '' : 'none';
 }
 
-function addWorkerCard(threadId, description) {
+function addWorkerCard(threadId, description, createdAt) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
   // Remove placeholder if present
@@ -381,7 +381,7 @@ function addWorkerCard(threadId, description) {
   const card = document.createElement('div');
   card.className = 'bg-slate-800 rounded-xl border border-slate-700 overflow-hidden';
   const nowStr = (() => {
-    const d = new Date();
+    const d = createdAt ? new Date(createdAt) : new Date();
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     const hh = String(d.getHours()).padStart(2, '0');

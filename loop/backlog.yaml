@@ -146,7 +146,7 @@
     OSError with pass. Both silently swallow exceptions, violating the project rule.
     Add log.debug to each catch block.
   category: error-handling
-  status: pending
+  status: approved
   created: '2026-03-01T12:00:00Z'
   priority: medium
 - id: '014'

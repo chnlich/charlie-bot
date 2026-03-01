@@ -4,6 +4,7 @@ import asyncio
 import time
 import traceback
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
 
@@ -174,8 +175,9 @@ async def spawn_worker(
     await thread_mgr._save_metadata(thread)
     log.info("worker_running", thread_id=thread.id, session=session_id)
 
+    now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
     started_event = _build_worker_event(
-        thread.id, f'Worker `{thread.id[:8]}` started: {_short_desc(description)}', 'running')
+        thread.id, f'Worker `{thread.id[:8]}` started ({now}): {_short_desc(description)}', 'running')
     await broadcast_and_persist(session_id, started_event, session_mgr)
 
     try:
@@ -298,7 +300,8 @@ async def _notify_completion(
     events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
 
     status = "completed" if exit_code == 0 else "failed"
-    chat_summary = f'Worker `{thread.id[:8]}` finished: {_short_desc(description)}'
+    now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
+    chat_summary = f'Worker `{thread.id[:8]}` finished ({now}): {_short_desc(description)}'
     full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
 
     suffix = ""

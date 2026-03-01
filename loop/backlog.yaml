@@ -44,9 +44,11 @@
 
     '
   category: imports
-  status: pending
+  status: revision_requested
   created: '2026-02-27T12:00:00Z'
   priority: low
+  revision_requested_at: '2026-03-01T14:14:33'
+  revision_feedback: can you double check to make sure it is really unused?
 - id: '005'
   title: Fix yapf formatting violations in spawner.py and message_utils.py
   description: 'yapf --diff found formatting issues in core/spawner.py (3 hunks: long
@@ -109,50 +111,50 @@
   priority: low
 - id: '010'
   title: Unify slash command dispatch between chat.py and slash.py
-  description: 'api/chat.py L72-117 and api/slash.py L60-139 both implement slash
-    command lookup and dispatch (load commands → dict → lookup → handle prompt/shell
-    scope). Extract a shared dispatch_slash_command() helper in core/slash_commands.py
-    that both endpoints call. Removes ~40 duplicate lines and ensures bug fixes apply
-    in both paths.'
+  description: api/chat.py L72-117 and api/slash.py L60-139 both implement slash command
+    lookup and dispatch (load commands → dict → lookup → handle prompt/shell scope).
+    Extract a shared dispatch_slash_command() helper in core/slash_commands.py that
+    both endpoints call. Removes ~40 duplicate lines and ensures bug fixes apply in
+    both paths.
   category: duplication
   status: pending
   created: '2026-03-01T12:00:00Z'
   priority: high
 - id: '011'
   title: Clean up worker.py imports and move WORKER_COMMAND to spawner.py
-  description: 'agents/worker.py:13 imports get_config but never uses it (cfg is
-    passed via constructor) — delete. agents/worker.py:11 imports BASE_COMMAND as
-    WORKER_COMMAND which spawner.py re-imports; spawner.py should import BASE_COMMAND
-    directly from agents/backends/claude_code instead of going through worker.py.
-    Then remove the WORKER_COMMAND alias from worker.py.'
+  description: agents/worker.py:13 imports get_config but never uses it (cfg is passed
+    via constructor) — delete. agents/worker.py:11 imports BASE_COMMAND as WORKER_COMMAND
+    which spawner.py re-imports; spawner.py should import BASE_COMMAND directly from
+    agents/backends/claude_code instead of going through worker.py. Then remove the
+    WORKER_COMMAND alias from worker.py.
   category: imports
   status: pending
   created: '2026-03-01T12:00:00Z'
   priority: low
 - id: '012'
   title: Remove dead subscriber_count method from StreamingManager
-  description: 'core/streaming.py:57-58 defines subscriber_count() on StreamingManager
-    but it is never called anywhere in the codebase. Delete the 2-line method.'
+  description: core/streaming.py:57-58 defines subscriber_count() on StreamingManager
+    but it is never called anywhere in the codebase. Delete the 2-line method.
   category: dead-code
   status: pending
   created: '2026-03-01T12:00:00Z'
   priority: low
 - id: '013'
   title: Log swallowed exceptions in _update_usage_cache
-  description: 'core/sessions.py:429-430 catches (json.JSONDecodeError, OSError) with
+  description: core/sessions.py:429-430 catches (json.JSONDecodeError, OSError) with
     pass when reading the usage cache file. Also L364-365 in get_session_usage catches
     OSError with pass. Both silently swallow exceptions, violating the project rule.
-    Add log.debug to each catch block.'
+    Add log.debug to each catch block.
   category: error-handling
   status: pending
   created: '2026-03-01T12:00:00Z'
   priority: medium
 - id: '014'
   title: Stop calling private _save_metadata from spawner.py
-  description: 'core/spawner.py calls thread_mgr._save_metadata(thread) directly
-    on L133, L154, L174 — accessing a private method across module boundaries. ThreadManager
+  description: core/spawner.py calls thread_mgr._save_metadata(thread) directly on
+    L133, L154, L174 — accessing a private method across module boundaries. ThreadManager
     should expose a public save_metadata() method (like SessionManager.save_metadata
-    at sessions.py:294) and spawner.py should use it.'
+    at sessions.py:294) and spawner.py should use it.
   category: maintainability
   status: pending
   created: '2026-03-01T12:00:00Z'

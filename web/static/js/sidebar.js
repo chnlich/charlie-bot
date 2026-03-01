@@ -206,7 +206,10 @@ function renderSessionView(data) {
     }
   }
 
-  switchTab('chat');
+  // Restore whichever tab was active before the session switch
+  const activeBtn = document.querySelector('#btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
+  const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
+  switchTab(activeTab);
 }
 
 function renderUsageFromData(usage) {

@@ -26,10 +26,6 @@ router = APIRouter()
 _DEFAULT_NAME_RE = re.compile(r"^Session \d+$")
 
 
-class SwitchBackendRequest(BaseModel):
-  backend: str
-
-
 @router.post("/{session_id}/upload")
 async def upload_file(
     session_id: str,
@@ -138,31 +134,6 @@ async def cancel_master_agent(
   if not found:
     raise HTTPException(status_code=404, detail="No active master agent")
   return {"ok": True}
-
-
-@router.patch("/{session_id}/backend")
-async def switch_backend(
-    session_id: str,
-    req: SwitchBackendRequest,
-    meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
-):
-  """Switch the active backend for a session."""
-  option = next((o for o in cfg.backend_options if o.id == req.backend), None)
-  if option is None:
-    raise HTTPException(status_code=400, detail=f"Unknown backend id: {req.backend!r}")
-
-  if option.type == "cc-kimi" and not cfg.moonshot_api_key:
-    raise HTTPException(status_code=400, detail="moonshot_api_key not set in config")
-
-  # Resuming across backends is invalid — clear the CC session ID.
-  meta.cc_session_id = None
-  meta.backend = req.backend
-  await session_mgr.save_metadata(meta)
-
-  log.info("backend_switched", session=session_id, backend=req.backend)
-  return {"ok": True, "backend": req.backend}
 
 
 async def run_and_finalize(

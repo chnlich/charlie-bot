@@ -117,16 +117,18 @@ function renderSessionView(data) {
     headerName.setAttribute('onclick', "startRename(event, '" + session.id + "', '" + escapeHtml(session.name).replace(/'/g, "\\'") + "')");
   }
 
+  // Update backend badge
+  const backendBadge = document.getElementById('backend-badge');
+  if (backendBadge) {
+    backendBadge.textContent = BACKEND_OPTIONS[data.active_backend] || data.active_backend;
+  }
+
   // Update events viewer link
   const evLink = document.querySelector('a[href*="/events"]');
   if (evLink) evLink.href = '/sessions/' + session.id + '/events';
 
   // Update usage
   renderUsageFromData(data.usage);
-
-  // Update backend selector
-  const sel = document.getElementById('backend-select');
-  if (sel) { sel.value = data.active_backend; sel.dataset.current = data.active_backend; }
 
   // Build message HTML
   const container = document.getElementById('messages');
@@ -426,8 +428,6 @@ function startThinking() {
   document.getElementById('send-btn').disabled = true;
   document.getElementById('send-btn').classList.add('opacity-50');
   setSessionSpinner(SESSION_ID, true);
-  const sel = document.getElementById('backend-select');
-  if (sel) sel.disabled = true;
 }
 
 function stopThinking() {
@@ -437,8 +437,6 @@ function stopThinking() {
   thinkingStart = null;
   document.getElementById('send-btn').disabled = false;
   document.getElementById('send-btn').classList.remove('opacity-50');
-  const sel = document.getElementById('backend-select');
-  if (sel) sel.disabled = false;
   if (!switching) updateSpinner();
 }
 
@@ -461,10 +459,12 @@ async function cancelMaster() {
 // ---------------------------------------------------------------------------
 async function createSession() {
   try {
+    const backendSel = document.getElementById('new-session-backend');
+    const backend = backendSel ? backendSel.value : undefined;
     const res = await fetch('/api/sessions/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ backend }),
     });
     const data = await res.json();
     location.href = '/?session=' + data.id;

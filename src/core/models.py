@@ -121,6 +121,7 @@ class WorkerEvent(BaseModel):
 class CreateSessionRequest(BaseModel):
   name: Optional[str] = None
   scheduled_task: Optional[str] = None
+  backend: Optional[str] = None
 
 
 class SendMessageRequest(BaseModel):

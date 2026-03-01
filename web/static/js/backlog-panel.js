@@ -61,33 +61,34 @@ const backlogPanel = (() => {
     const categoryCls = _badge(CATEGORY_BADGE, item.category);
     const statusCls   = _badge(STATUS_BADGE, item.status);
     const modLabel    = _moduleLabel(item._source);
+    const repo = _currentRepo || '';
 
     let actions = '';
     if (item.status === 'pending') {
       actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}')"
+        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-200 transition-colors">Approve</button>
-        <button onclick="backlogPanel.requestRevision('${item.id}','${item._source || ''}')"
+        <button onclick="backlogPanel.requestRevision('${item.id}','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-yellow-800 hover:bg-yellow-700 text-yellow-200 transition-colors">Revise</button>
-        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}')"
+        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-red-800 hover:bg-red-700 text-red-200 transition-colors">Reject</button>`;
     } else if (item.status === 'revision_requested') {
       actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}')"
+        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-green-800 hover:bg-green-700 text-green-200 transition-colors">Approve</button>
-        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}')"
+        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-red-800 hover:bg-red-700 text-red-200 transition-colors">Reject</button>`;
     } else if (item.status === 'approved') {
       actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}')"
+        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Revoke</button>`;
     } else if (item.status === 'rejected') {
       actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}')"
+        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">Reopen</button>`;
     } else if (item.status === 'failed') {
       actions = `
-        <button onclick="backlogPanel.retryItem('${item.id}','${item._source || ''}')"
+        <button onclick="backlogPanel.retryItem('${item.id}','${item._source || ''}','${repo}')"
                 class="px-2 py-1 text-xs rounded bg-orange-800 hover:bg-orange-700 text-orange-200 transition-colors">Retry</button>`;
     }
 
@@ -224,10 +225,10 @@ const backlogPanel = (() => {
     list.innerHTML = visible.map(_renderCard).join('');
   }
 
-  async function updateStatus(id, newStatus, source, extra) {
+  async function updateStatus(id, newStatus, source, repo, extra) {
     const params = new URLSearchParams();
     if (source) params.set('source', source);
-    if (_currentRepo) params.set('repo', _currentRepo);
+    if (repo) params.set('repo', repo);
     const qs = params.toString() ? '?' + params.toString() : '';
     try {
       const resp = await fetch(`/api/backlog/${id}${qs}`, {
@@ -246,20 +247,20 @@ const backlogPanel = (() => {
     await refresh();
   }
 
-  async function rejectWithReason(id, source) {
+  async function rejectWithReason(id, source, repo) {
     const reason = prompt('Rejection reason (optional):');
     if (reason === null) return;  // user cancelled
-    await updateStatus(id, 'rejected', source, {rejected_reason: reason || null});
+    await updateStatus(id, 'rejected', source, repo, {rejected_reason: reason || null});
   }
 
-  async function requestRevision(id, source) {
+  async function requestRevision(id, source, repo) {
     const text = prompt('Revision feedback (required):');
     if (!text) return;  // cancelled or empty
-    await updateStatus(id, 'revision_requested', source, {revision_feedback: text});
+    await updateStatus(id, 'revision_requested', source, repo, {revision_feedback: text});
   }
 
-  async function retryItem(id, source) {
-    await updateStatus(id, 'approved', source);
+  async function retryItem(id, source, repo) {
+    await updateStatus(id, 'approved', source, repo);
   }
 
   function init() {

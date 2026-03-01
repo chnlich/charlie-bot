@@ -59,7 +59,6 @@ class ClaudeCodeBackend(AgentBackend):
       self._cmd += extra_flags
     self._buffer_limit = buffer_limit or _DEFAULT_BUFFER_LIMIT
     self._on_spawn = on_spawn
-    self._model = model
     self._proc: Optional[asyncio.subprocess.Process] = None
     self.exit_code: int = -1
     self.stderr_text: str = ""
@@ -84,17 +83,13 @@ class ClaudeCodeBackend(AgentBackend):
       Parsed NDJSON event dicts from stdout.
     """
     cmd = self._cmd + [prompt]
-    # Propagate model to subagents via env var
-    worker_env = dict(env)
-    if self._model:
-      worker_env["CLAUDE_CODE_SUBAGENT_MODEL"] = self._model
     self._proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=worker_env,
+        env=env,
         limit=self._buffer_limit,
     )
     if self._on_spawn is not None:

@@ -70,6 +70,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Connect WebSocket
   connectWS();
 
+  // Poll sidebar status every 3s to correct WS drift
+  statusPollInterval = setInterval(pollSessionStatus, 3000);
+
   // Reconnect immediately on tab becoming visible (mobile Chrome background kills WS)
   document.addEventListener('visibilitychange', () => {
     if (switching) return;

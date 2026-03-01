@@ -89,6 +89,26 @@ async def list_scheduled_sessions(
   return sessions
 
 
+@router.get('/status')
+async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_manager)):
+  """Return {session_id: {has_unread, has_running_tasks}} for all active sessions."""
+  session_ids = await asyncio.to_thread(session_mgr.list_active_session_ids)
+
+  async def _fetch(sid: str) -> tuple[str, dict | None]:
+    try:
+      meta = await session_mgr.get_session(sid)
+      if not meta:
+        return sid, None
+      has_running = bool(meta.thinking_since) or await session_mgr._has_running_tasks(sid)
+      return sid, {"has_unread": bool(meta.has_unread), "has_running_tasks": has_running}
+    except Exception:
+      log.debug("status_fetch_failed", session_id=sid)
+      return sid, None
+
+  pairs = await asyncio.gather(*[_fetch(sid) for sid in session_ids])
+  return {sid: s for sid, s in pairs if s}
+
+
 @router.get('/usage')
 async def all_sessions_usage(session_mgr: SessionManager = Depends(get_session_manager)):
   """Return {session_id: usage_dict} for all active sessions (lazy-loaded by frontend)."""

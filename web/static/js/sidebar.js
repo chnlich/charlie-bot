@@ -299,6 +299,27 @@ function updateSpinner() {
   setSessionSpinner(SESSION_ID, masterThinking || anyRunning);
 }
 
+// Poll-based sidebar status (corrects WS drift)
+let statusPollInterval = null;
+
+function pollSessionStatus() {
+  fetch('/api/sessions/status')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data) return;
+      for (const [sid, st] of Object.entries(data)) {
+        sessionUnread[sid] = st.has_unread;
+        if (sid === SESSION_ID) {
+          // Don't touch unread dot for current session, but update spinner
+          setSessionSpinner(sid, st.has_running_tasks);
+        } else {
+          setSessionSpinner(sid, st.has_running_tasks);
+        }
+      }
+    })
+    .catch(() => {});  // Silently ignore poll failures
+}
+
 function updateWorkersTabBadge() {
   var btn = document.getElementById('btn-workers');
   if (!btn) return;

@@ -102,7 +102,7 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
       has_running = bool(meta.thinking_since) or await session_mgr._has_running_tasks(sid)
       return sid, {"has_unread": bool(meta.has_unread), "has_running_tasks": has_running}
     except Exception:
-      log.debug("status_fetch_failed", session_id=sid)
+      log.debug("status_fetch_failed", session_id=sid, exc_info=True)
       return sid, None
 
   pairs = await asyncio.gather(*[_fetch(sid) for sid in session_ids])

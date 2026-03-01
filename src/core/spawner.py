@@ -378,6 +378,12 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
           texts.append(f"[tool_use: {block.get('name', '?')}]")
     return " ".join(texts)[:300] if texts else ""
 
+  if ev_type == "rate_limit_event":
+    rli = ev.get("rate_limit_info", {})
+    status = rli.get("status", "unknown")
+    rate_type = rli.get("rateLimitType", "unknown")
+    return f"Rate limit {status} ({rate_type})"
+
   if ev_type in ("thinking", "error", "complete", "tool_result", "tool_use", "file_write"):
     content = ev.get("content", ev.get("message", ""))
     if isinstance(content, list):

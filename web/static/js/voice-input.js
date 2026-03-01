@@ -75,6 +75,7 @@ function resetVoiceState() {
 }
 
 async function transcribeAudio(blob) {
+  const targetSession = SESSION_ID;
   const form = new FormData();
   form.append('audio', blob, 'recording' + (blob._ext || '.webm'));
   form.append('session_id', SESSION_ID);
@@ -103,6 +104,7 @@ async function transcribeAudio(blob) {
     const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form });
     const data = await res.json();
     document.getElementById('voice-transcribing')?.remove();
+    if (SESSION_ID !== targetSession) return;
     if (data.transcription) {
       appendMessage('user', data.transcription, true);
       startThinking();
@@ -110,6 +112,7 @@ async function transcribeAudio(blob) {
   } catch (err) {
     console.error('Transcription failed:', err);
     document.getElementById('voice-transcribing')?.remove();
+    if (SESSION_ID !== targetSession) return;
     appendMessage('system', 'Voice transcription failed');
   }
 }

@@ -316,7 +316,11 @@ function pollSessionStatus() {
       if (!data) return;
       for (const [sid, st] of Object.entries(data)) {
         if (sid !== SESSION_ID) sessionUnread[sid] = st.has_unread;
-        setSessionSpinner(sid, st.has_running_tasks);
+        if (sid === SESSION_ID) {
+          setSessionSpinner(sid, masterThinking || st.has_running_tasks);
+        } else {
+          setSessionSpinner(sid, st.has_running_tasks);
+        }
       }
     })
     .catch(() => {});  // Silently ignore poll failures

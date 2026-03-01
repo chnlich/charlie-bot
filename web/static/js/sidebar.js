@@ -30,6 +30,13 @@ async function switchSession(sessionId) {
   // Stop thinking indicator
   if (masterThinking) stopThinking();
 
+  // Clean up transient UI state from previous session
+  resetVoiceState();
+  uploadedFiles = [];
+  renderFileChips();
+  hideSlashPopup();
+  document.getElementById('text-modal-overlay')?.setAttribute('style', 'display:none');
+
   // Close WebSocket (suppress auto-reconnect)
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }

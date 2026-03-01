@@ -69,6 +69,11 @@ function stopRecording() {
   document.getElementById('voice-btn').classList.add('bg-slate-800', 'border-slate-600');
 }
 
+function resetVoiceState() {
+  if (isRecording) stopRecording();
+  document.getElementById('voice-transcribing')?.remove();
+}
+
 async function transcribeAudio(blob) {
   const form = new FormData();
   form.append('audio', blob, 'recording' + (blob._ext || '.webm'));

@@ -128,7 +128,7 @@
     agents/backends/claude_code instead of going through worker.py. Then remove the
     WORKER_COMMAND alias from worker.py.
   category: imports
-  status: pending
+  status: approved
   created: '2026-03-01T12:00:00Z'
   priority: low
 - id: '012'

@@ -136,7 +136,7 @@
   description: core/streaming.py:57-58 defines subscriber_count() on StreamingManager
     but it is never called anywhere in the codebase. Delete the 2-line method.
   category: dead-code
-  status: pending
+  status: approved
   created: '2026-03-01T12:00:00Z'
   priority: low
 - id: '013'

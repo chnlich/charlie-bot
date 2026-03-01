@@ -156,6 +156,6 @@
     should expose a public save_metadata() method (like SessionManager.save_metadata
     at sessions.py:294) and spawner.py should use it.
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-03-01T12:00:00Z'
   priority: medium

@@ -40,6 +40,7 @@ class Worker:
       task_description: str,
       extra_env: Optional[dict[str, str]] = None,
       on_spawned: Optional[callable] = None,
+      model: Optional[str] = None,
   ):
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -47,6 +48,7 @@ class Worker:
     self._task_description = task_description
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
+    self._model = model
     self._backend: Optional[ClaudeCodeBackend] = None
 
   async def run(self) -> int:
@@ -61,6 +63,7 @@ class Worker:
         await self._on_spawned(self._thread)
 
     self._backend = ClaudeCodeBackend(
+        model=self._model,
         buffer_limit=get_config().subprocess_buffer_limit,
         on_spawn=_on_spawn,
     )

@@ -119,12 +119,12 @@
   created: '2026-03-01T12:00:00Z'
   priority: high
 - id: '011'
-  title: Remove unused imports in worker.py and fix WORKER_COMMAND re-export
+  title: Clean up worker.py imports and move WORKER_COMMAND to spawner.py
   description: 'agents/worker.py:13 imports get_config but never uses it (cfg is
-    passed via constructor). agents/worker.py:11 imports BASE_COMMAND as WORKER_COMMAND
-    solely for re-export to spawner.py. Instead, spawner.py should import BASE_COMMAND
-    directly from agents/backends/claude_code. Delete the 2 unused imports from worker.py
-    and update spawner.py L13.'
+    passed via constructor) — delete. agents/worker.py:11 imports BASE_COMMAND as
+    WORKER_COMMAND which spawner.py re-imports; spawner.py should import BASE_COMMAND
+    directly from agents/backends/claude_code instead of going through worker.py.
+    Then remove the WORKER_COMMAND alias from worker.py.'
   category: imports
   status: pending
   created: '2026-03-01T12:00:00Z'
@@ -139,10 +139,10 @@
   priority: low
 - id: '013'
   title: Log swallowed exceptions in _update_usage_cache
-  description: 'core/sessions.py:429-430 has bare except (json.JSONDecodeError, OSError):
-    pass when reading the usage cache file. Also L364-365 in get_session_usage has
-    except OSError: pass. Both violate the project rule against silently swallowing
-    exceptions. Add log.debug to each catch block.'
+  description: 'core/sessions.py:429-430 catches (json.JSONDecodeError, OSError) with
+    pass when reading the usage cache file. Also L364-365 in get_session_usage catches
+    OSError with pass. Both silently swallow exceptions, violating the project rule.
+    Add log.debug to each catch block.'
   category: error-handling
   status: pending
   created: '2026-03-01T12:00:00Z'

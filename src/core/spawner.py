@@ -150,7 +150,9 @@ async def spawn_worker(
           backend_option = cfg.backend_options[0]
           log.warning("spawn_worker_backend_fallback", session=session_id, requested=backend_id, using=backend_option.id)
         if backend_option:
-          worker_model = backend_option.model
+          # Only pass model for cc-claude backends; cc-kimi uses env vars
+          if backend_option.type == "cc-claude":
+            worker_model = backend_option.model
           thread.backend = backend_option.id
           await thread_mgr._save_metadata(thread)
     except Exception:

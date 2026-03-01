@@ -49,6 +49,7 @@ async def delegate_task(
       "type": "task_delegated",
       "thread_id": thread.id,
       "description": req.description,
+      "created_at": thread.created_at.isoformat(),
   }
   await broadcast_and_persist(req.session_id, task_event, session_mgr)
 

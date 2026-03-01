@@ -152,7 +152,7 @@ function handleWSEvent(ev) {
     }
     appendMessage('system', `Task delegated: ${ev.description || ''}`);
     setSessionSpinner(SESSION_ID, true);
-    if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '');
+    if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '', ev.created_at);
   } else if (t === 'worker_summary') {
     // Flush pending assistant text before worker summary (matches backend)
     if (streamBuf) {

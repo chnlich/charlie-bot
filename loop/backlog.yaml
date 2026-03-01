@@ -107,3 +107,53 @@
   status: approved
   created: '2026-02-28T12:00:00Z'
   priority: low
+- id: '010'
+  title: Unify slash command dispatch between chat.py and slash.py
+  description: 'api/chat.py L72-117 and api/slash.py L60-139 both implement slash
+    command lookup and dispatch (load commands → dict → lookup → handle prompt/shell
+    scope). Extract a shared dispatch_slash_command() helper in core/slash_commands.py
+    that both endpoints call. Removes ~40 duplicate lines and ensures bug fixes apply
+    in both paths.'
+  category: duplication
+  status: pending
+  created: '2026-03-01T12:00:00Z'
+  priority: high
+- id: '011'
+  title: Remove unused imports in worker.py and fix WORKER_COMMAND re-export
+  description: 'agents/worker.py:13 imports get_config but never uses it (cfg is
+    passed via constructor). agents/worker.py:11 imports BASE_COMMAND as WORKER_COMMAND
+    solely for re-export to spawner.py. Instead, spawner.py should import BASE_COMMAND
+    directly from agents/backends/claude_code. Delete the 2 unused imports from worker.py
+    and update spawner.py L13.'
+  category: imports
+  status: pending
+  created: '2026-03-01T12:00:00Z'
+  priority: low
+- id: '012'
+  title: Remove dead subscriber_count method from StreamingManager
+  description: 'core/streaming.py:57-58 defines subscriber_count() on StreamingManager
+    but it is never called anywhere in the codebase. Delete the 2-line method.'
+  category: dead-code
+  status: pending
+  created: '2026-03-01T12:00:00Z'
+  priority: low
+- id: '013'
+  title: Log swallowed exceptions in _update_usage_cache
+  description: 'core/sessions.py:429-430 has bare except (json.JSONDecodeError, OSError):
+    pass when reading the usage cache file. Also L364-365 in get_session_usage has
+    except OSError: pass. Both violate the project rule against silently swallowing
+    exceptions. Add log.debug to each catch block.'
+  category: error-handling
+  status: pending
+  created: '2026-03-01T12:00:00Z'
+  priority: medium
+- id: '014'
+  title: Stop calling private _save_metadata from spawner.py
+  description: 'core/spawner.py calls thread_mgr._save_metadata(thread) directly
+    on L133, L154, L174 — accessing a private method across module boundaries. ThreadManager
+    should expose a public save_metadata() method (like SessionManager.save_metadata
+    at sessions.py:294) and spawner.py should use it.'
+  category: maintainability
+  status: pending
+  created: '2026-03-01T12:00:00Z'
+  priority: medium

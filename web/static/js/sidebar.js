@@ -99,6 +99,7 @@ async function switchSession(sessionId) {
 
   updateSpinner();
   updateSidebarHighlight(sessionId);
+  pollSessionStatus();
 
   // Reset lazy-load state
   _backlogLoaded = false;
@@ -438,7 +439,7 @@ function stopThinking() {
   document.getElementById('send-btn').classList.remove('opacity-50');
   const sel = document.getElementById('backend-select');
   if (sel) sel.disabled = false;
-  updateSpinner();
+  if (!switching) updateSpinner();
 }
 
 function updateThinkingTime() {

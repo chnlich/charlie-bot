@@ -138,6 +138,20 @@ async def spawn_worker(
     # Ensure worktree parent dir exists
     Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
 
+    # Look up the session's backend to get the model for subagents
+    worker_model = None
+    try:
+      session_meta = await session_mgr.get_session(session_id)
+      if session_meta:
+        backend_id = session_meta.backend
+        backend_option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+        if backend_option:
+          worker_model = backend_option.model
+          thread.backend = backend_id
+          await thread_mgr._save_metadata(thread)
+    except Exception:
+      log.warning("spawn_worker_backend_lookup_failed", session=session_id, exc_info=True)
+
     # Build and run Worker
     events_log = await thread_mgr.get_events_log_path(session_id, thread_id)
     worker = Worker(
@@ -146,6 +160,7 @@ async def spawn_worker(
         events_log,
         worker_prompt,
         on_spawned=thread_mgr._save_metadata,
+        model=worker_model,
     )
 
     # Mark RUNNING

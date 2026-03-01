@@ -118,6 +118,17 @@ class Worker:
     event_message = str(event_data.get("message", "")).lower()
     event_content = str(event_data.get("content", "")).lower()
 
+    # Detect rate-limit rejections from Claude Code (type='rate_limit_event')
+    if event_type == "rate_limit_event":
+      rli = event_data.get("rate_limit_info", {})
+      if rli.get("status") == "rejected":
+        rate_type = rli.get("rateLimitType", "unknown")
+        resets_at = rli.get("resetsAt", "unknown")
+        log.warning("worker_rate_limited", thread=self._thread.id, rate_type=rate_type, resets_at=resets_at)
+        await log_file.write(json.dumps(event_data) + "\n")
+        await log_file.flush()
+        raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
+
     if event_type == "error" and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
       await log_file.write(json.dumps(event_data) + "\n")
       await log_file.flush()

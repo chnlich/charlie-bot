@@ -102,8 +102,24 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
 
-    last_run_at = await self._get_last_run(task_cfg.name, session_mgr)
-    if last_run_at is None:
+    session = await self._get_or_create_session(task_cfg.name, session_mgr)
+
+    # Detect cron expression change — reset last_scheduled_run to now and skip tick
+    if session.last_scheduled_cron is not None and session.last_scheduled_cron != task_cfg.cron:
+      log.info("scheduler_cron_changed", task=task_cfg.name, old=session.last_scheduled_cron, new=task_cfg.cron)
+      session.last_scheduled_run = now.isoformat()
+      session.last_scheduled_cron = task_cfg.cron
+      session.updated_at = datetime.now(timezone.utc)
+      await session_mgr.save_metadata(session)
+      return
+
+    if session.last_scheduled_run:
+      try:
+        last_run_at = datetime.fromisoformat(session.last_scheduled_run)
+      except ValueError as e:
+        log.warning("scheduler_bad_last_run", task=task_cfg.name, value=session.last_scheduled_run, error=str(e))
+        last_run_at = now - timedelta(seconds=_TICK_INTERVAL)
+    else:
       # Never run: use a reference 60s before now so it fires immediately if due
       last_run_at = now - timedelta(seconds=_TICK_INTERVAL)
 
@@ -133,6 +149,7 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     session.last_scheduled_run = now.isoformat()
+    session.last_scheduled_cron = task_cfg.cron
     session.last_run_status = "running"
     session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
@@ -172,6 +189,7 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     session.last_scheduled_run = now.isoformat()
+    session.last_scheduled_cron = task_cfg.cron
     session.last_run_status = "running"
     session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
@@ -218,17 +236,6 @@ class Scheduler:
         CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name))
     log.info("scheduled_session_created", task=task_name, session=meta.id)
     return meta
-
-  async def _get_last_run(self, task_name: str, session_mgr: SessionManager) -> Optional[datetime]:
-    """Return last_scheduled_run from the dedicated session, or None."""
-    sessions = await session_mgr.list_sessions()
-    for s in sessions:
-      if s.scheduled_task == task_name and s.last_scheduled_run:
-        try:
-          return datetime.fromisoformat(s.last_scheduled_run)
-        except ValueError as e:
-          log.warning("scheduler_bad_last_run", task=task_name, value=s.last_scheduled_run, error=str(e))
-    return None
 
   # ---------------------------------------------------------------------------
   # Config reload

@@ -65,13 +65,22 @@ class Worker:
       if self._on_spawned:
         await self._on_spawned(self._thread)
 
-    # Build the correct backend (Claude or Kimi) based on backend_option
+    # Read CLAUDE.md for codex backend (which injects it into the prompt)
+    instructions_content: Optional[str] = None
+    if self._backend_option and self._backend_option.type == "codex":
+      thread_dir = self._events_log.parent.parent  # events.jsonl is in data/, thread dir is parent
+      claude_md = thread_dir / "CLAUDE.md"
+      if claude_md.exists():
+        instructions_content = claude_md.read_text(encoding="utf-8")
+
+    # Build the correct backend based on backend_option
     if self._backend_option:
       self._backend = build_backend(
           self._backend_option,
           self._cfg,
           buffer_limit=self._cfg.subprocess_buffer_limit,
           on_spawn=_on_spawn,
+          instructions_content=instructions_content,
       )
     else:
       # Fallback to default ClaudeCodeBackend

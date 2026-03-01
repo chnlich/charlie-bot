@@ -128,8 +128,18 @@ async def run_message(
             'has_running_tasks': True,
         })
 
+  from src.agents.backends.registry import build_backend
+  option = backend_option or cfg.backend_options[0]
+
+  # Read CLAUDE.md content for codex backend (which injects it into the prompt)
+  instructions_content: Optional[str] = None
+  if option.type == "codex":
+    session_claude_md = cfg.session_claude_md(session_meta.id)
+    if session_claude_md.exists():
+      instructions_content = session_claude_md.read_text(encoding="utf-8")
+
   extra_flags: list[str] = []
-  if session_meta.cc_session_id:
+  if session_meta.cc_session_id and option.type != "codex":
     extra_flags = ["--resume", session_meta.cc_session_id]
   if extra_claude_flags:
     extra_flags.extend(extra_claude_flags)
@@ -147,14 +157,13 @@ async def run_message(
   async def _on_spawn(pid: int) -> None:
     log.info("master_cc_spawned", session=session_meta.id, pid=pid)
 
-  from src.agents.backends.registry import build_backend
-  option = backend_option or cfg.backend_options[0]
   backend = build_backend(
       option,
       cfg,
       extra_flags=extra_flags or None,
       buffer_limit=cfg.subprocess_buffer_limit,
       on_spawn=_on_spawn,
+      instructions_content=instructions_content,
   )
 
   try:

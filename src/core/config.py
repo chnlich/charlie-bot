@@ -52,6 +52,9 @@ class CharlieBotConfig(BaseModel):
   moonshot_api_key: Optional[str] = None
   kimi_model: str = "kimi-k2.5"
 
+  # OpenAI — used by Codex backend
+  openai_api_key: Optional[str] = None
+
   # Server
   server_port: int = 8000
 
@@ -83,6 +86,7 @@ class CharlieBotConfig(BaseModel):
   backend_options: list[BackendOption] = [
       BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6"),
       BackendOption(id="kimi-k2.5", label="CC \u00b7 Kimi K2.5", type="cc-kimi", model="kimi-k2.5"),
+      BackendOption(id="codex-o3", label="Codex \u00b7 o3", type="codex", model="o3"),
   ]
 
   @model_validator(mode="before")

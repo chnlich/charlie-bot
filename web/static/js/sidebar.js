@@ -461,12 +461,15 @@ async function createSession() {
   try {
     const backendSel = document.getElementById('new-session-backend');
     const backend = backendSel ? backendSel.value : undefined;
+    // Debug logging
+    console.log('Creating session with backend:', backend, 'select element:', backendSel);
     const res = await fetch('/api/sessions/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ backend }),
     });
     const data = await res.json();
+    console.log('Session created:', data.id, 'backend:', data.backend);
     location.href = '/?session=' + data.id;
   } catch (err) {
     console.error('Create session failed:', err);

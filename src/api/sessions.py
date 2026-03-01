@@ -37,7 +37,19 @@ async def create_session(
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  backend = req.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
+  # Debug logging to troubleshoot backend selection issue
+  log.debug("create_session_request", backend_from_req=req.backend, backend_type=type(req.backend).__name__ if req.backend else None)
+
+  # Validate backend: if not provided or empty, use default
+  valid_backend_ids = {opt.id for opt in cfg.backend_options}
+  if req.backend and req.backend in valid_backend_ids:
+    backend = req.backend
+  else:
+    backend = cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
+    if req.backend and req.backend not in valid_backend_ids:
+      log.warning("invalid_backend_requested", requested=req.backend, valid=list(valid_backend_ids), fallback=backend)
+
+  log.info("creating_session", backend=backend, name=req.name)
   return await session_mgr.create_session(req, backend=backend)
 
 

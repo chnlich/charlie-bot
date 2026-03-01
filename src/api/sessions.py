@@ -35,8 +35,10 @@ async def list_sessions(session_mgr: SessionManager = Depends(get_session_manage
 async def create_session(
     req: CreateSessionRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
-  return await session_mgr.create_session(req)
+  backend = req.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
+  return await session_mgr.create_session(req, backend=backend)
 
 
 @router.get("/projects")

@@ -35,10 +35,10 @@ class SessionManager:
   # Session CRUD
   # ---------------------------------------------------------------------------
 
-  async def create_session(self, req: CreateSessionRequest) -> SessionMetadata:
+  async def create_session(self, req: CreateSessionRequest, backend: str | None = None) -> SessionMetadata:
     """Create a new session."""
     name = req.name or await self._next_session_name()
-    meta = SessionMetadata(name=name, scheduled_task=req.scheduled_task)
+    meta = SessionMetadata(name=name, scheduled_task=req.scheduled_task, backend=backend or "claude-opus-4.6")
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure

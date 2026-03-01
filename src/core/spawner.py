@@ -139,15 +139,19 @@ async def spawn_worker(
     Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
 
     # Look up the session's backend to get the model for subagents
+    # Fallback to first option if session's backend not found (config may have changed)
     worker_model = None
     try:
       session_meta = await session_mgr.get_session(session_id)
       if session_meta:
         backend_id = session_meta.backend
         backend_option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+        if not backend_option and cfg.backend_options:
+          backend_option = cfg.backend_options[0]
+          log.warning("spawn_worker_backend_fallback", session=session_id, requested=backend_id, using=backend_option.id)
         if backend_option:
           worker_model = backend_option.model
-          thread.backend = backend_id
+          thread.backend = backend_option.id
           await thread_mgr._save_metadata(thread)
     except Exception:
       log.warning("spawn_worker_backend_lookup_failed", session=session_id, exc_info=True)

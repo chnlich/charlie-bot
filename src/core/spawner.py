@@ -140,8 +140,7 @@ async def spawn_worker(
 
     # Look up the session's backend to get the model for subagents
     # Fallback to first option if session's backend not found (config may have changed)
-    worker_model = None
-    worker_extra_env: dict[str, str] = {}
+    backend_option = None
     try:
       session_meta = await session_mgr.get_session(session_id)
       if session_meta:
@@ -151,13 +150,6 @@ async def spawn_worker(
           backend_option = cfg.backend_options[0]
           log.warning("spawn_worker_backend_fallback", session=session_id, requested=backend_id, using=backend_option.id)
         if backend_option:
-          if backend_option.type == "cc-claude":
-            worker_model = backend_option.model
-          elif backend_option.type == "cc-kimi":
-            # For Kimi backend, set env vars so subagent connects to Moonshot API
-            worker_extra_env["ANTHROPIC_BASE_URL"] = "https://api.moonshot.cn/anthropic"
-            worker_extra_env["ANTHROPIC_AUTH_TOKEN"] = cfg.moonshot_api_key or ""
-            worker_extra_env["ANTHROPIC_MODEL"] = backend_option.model or cfg.kimi_model
           thread.backend = backend_option.id
           await thread_mgr._save_metadata(thread)
     except Exception:
@@ -170,9 +162,9 @@ async def spawn_worker(
         resolved_repo,
         events_log,
         worker_prompt,
+        cfg,
+        backend_option=backend_option,
         on_spawned=thread_mgr._save_metadata,
-        model=worker_model,
-        extra_env=worker_extra_env or None,
     )
 
     # Mark RUNNING

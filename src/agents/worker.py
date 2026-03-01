@@ -9,8 +9,9 @@ import aiofiles
 import structlog
 
 from src.agents.backends.claude_code import BASE_COMMAND as WORKER_COMMAND, ClaudeCodeBackend
-from src.core.config import get_config
-from src.core.models import ThreadMetadata
+from src.agents.backends.registry import build_backend
+from src.core.config import get_config, CharlieBotConfig
+from src.core.models import BackendOption, ThreadMetadata
 from src.core.ndjson import append_ndjson
 from src.core.streaming import streaming_manager
 
@@ -38,17 +39,19 @@ class Worker:
       working_dir: Path,
       events_log_path: Path,
       task_description: str,
+      cfg: CharlieBotConfig,
+      backend_option: Optional[BackendOption] = None,
       extra_env: Optional[dict[str, str]] = None,
       on_spawned: Optional[callable] = None,
-      model: Optional[str] = None,
   ):
     self._thread = thread_metadata
     self._worktree = working_dir
     self._events_log = events_log_path
     self._task_description = task_description
+    self._cfg = cfg
+    self._backend_option = backend_option
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
-    self._model = model
     self._backend: Optional[ClaudeCodeBackend] = None
 
   async def run(self) -> int:
@@ -62,11 +65,20 @@ class Worker:
       if self._on_spawned:
         await self._on_spawned(self._thread)
 
-    self._backend = ClaudeCodeBackend(
-        model=self._model,
-        buffer_limit=get_config().subprocess_buffer_limit,
-        on_spawn=_on_spawn,
-    )
+    # Build the correct backend (Claude or Kimi) based on backend_option
+    if self._backend_option:
+      self._backend = build_backend(
+          self._backend_option,
+          self._cfg,
+          buffer_limit=self._cfg.subprocess_buffer_limit,
+          on_spawn=_on_spawn,
+      )
+    else:
+      # Fallback to default ClaudeCodeBackend
+      self._backend = ClaudeCodeBackend(
+          buffer_limit=self._cfg.subprocess_buffer_limit,
+          on_spawn=_on_spawn,
+      )
 
     log.info("worker_starting", thread=self._thread.id, cwd=str(self._worktree))
 

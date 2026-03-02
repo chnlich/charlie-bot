@@ -12,7 +12,7 @@ import structlog
 
 from src.agents.master_cc import run_message
 from src.agents.worker import WORKER_COMMAND, QuotaExhaustedException, Worker
-from src.core.models import BackendOption, ThreadMetadata, ThreadStatus
+from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
@@ -274,21 +274,79 @@ async def _trigger_master(
       log.debug("trigger_master_skipped", session=session_id, reason="no cc_session_id")
       return
 
-    new_cc_session_id = await run_message(
-        cfg,
-        session_meta,
-        summary,
-        session_mgr.save_chat_event,
-        session_mgr.save_metadata,
-        mark_unread=session_mgr.mark_unread,
-        skip_user_event=True,
-    )
+    try:
+      new_cc_session_id = await run_message(
+          cfg,
+          session_meta,
+          summary,
+          session_mgr.save_chat_event,
+          session_mgr.save_metadata,
+          mark_unread=session_mgr.mark_unread,
+          skip_user_event=True,
+      )
+    except Exception as e:
+      if not _is_resume_not_found_error(e):
+        raise
+
+      stale_cc_session_id = session_meta.cc_session_id
+      log.warning(
+          "trigger_master_invalid_resume_detected",
+          session=session_id,
+          cc_session_id=stale_cc_session_id,
+          error=str(e),
+      )
+
+      retry_session_meta = session_meta.model_copy(deep=True)
+      retry_session_meta.cc_session_id = None
+      log.info(
+          "trigger_master_retry_without_resume",
+          session=session_id,
+          stale_cc_session_id=stale_cc_session_id,
+      )
+      new_cc_session_id = await run_message(
+          cfg,
+          retry_session_meta,
+          summary,
+          session_mgr.save_chat_event,
+          session_mgr.save_metadata,
+          mark_unread=session_mgr.mark_unread,
+          skip_user_event=True,
+      )
+      log.info(
+          "trigger_master_resume_recovery_succeeded",
+          session=session_id,
+          stale_cc_session_id=stale_cc_session_id,
+          recovered_cc_session_id=new_cc_session_id,
+      )
 
     if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:
-      session_meta.cc_session_id = new_cc_session_id
-      await session_mgr.save_metadata(session_meta)
+      await _persist_cc_session_id(session_id, new_cc_session_id, session_meta, session_mgr)
   except Exception as e:
     log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
+
+
+async def _persist_cc_session_id(
+    session_id: str,
+    new_cc_session_id: str,
+    fallback_meta: SessionMetadata,
+    session_mgr: SessionManager,
+) -> None:
+  """Persist a refreshed cc_session_id without clobbering unrelated metadata fields."""
+  fresh = await session_mgr.get_session(session_id)
+  meta = fresh or fallback_meta
+  meta.cc_session_id = new_cc_session_id
+  await session_mgr.save_metadata(meta)
+
+
+def _is_resume_not_found_error(error: Exception) -> bool:
+  """Return True only for stale resume errors where session/conversation is missing."""
+  message = str(error).lower()
+  if "resume" not in message:
+    return False
+
+  has_conversation_not_found = "conversation" in message and "not found" in message
+  has_session_not_found = "session" in message and "not found" in message
+  return has_conversation_not_found or has_session_not_found
 
 
 async def _spawn_review_worker(

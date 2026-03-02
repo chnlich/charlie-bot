@@ -7,6 +7,23 @@ let reconnectDelay = 1000;
 let reconnectTimer = null;
 let catchupDone = false;
 let pendingUserMsg = false;
+let wsGeneration = 0;
+
+function isStaleSocket(socket, targetSession, generation) {
+  return socket !== ws || generation !== wsGeneration || targetSession !== SESSION_ID;
+}
+
+function disconnectWS() {
+  wsGeneration++;
+  const socket = ws;
+  ws = null;
+  if (!socket) return;
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onclose = null;
+  socket.onerror = null;
+  try { socket.close(); } catch {}
+}
 
 function connectWS() {
   if (!SESSION_ID) return;
@@ -15,32 +32,44 @@ function connectWS() {
   hideStreaming();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const targetSession = SESSION_ID;
-  ws = new WebSocket(`${proto}//${location.host}/ws/sessions/${SESSION_ID}`);
+  const generation = ++wsGeneration;
+  const socket = new WebSocket(`${proto}//${location.host}/ws/sessions/${SESSION_ID}`);
+  ws = socket;
 
-  ws.onopen = () => {
-    if (targetSession !== SESSION_ID) { ws.onclose = null; ws.close(); ws = null; return; }
+  socket.onopen = () => {
+    if (isStaleSocket(socket, targetSession, generation)) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      try { socket.close(); } catch {}
+      return;
+    }
     console.log('WS connected');
     reconnectDelay = 1000;
     // Send cursor so the server only replays events beyond this index.
-    ws.send(JSON.stringify({type: 'cursor', index: eventCursor}));
+    socket.send(JSON.stringify({type: 'cursor', index: eventCursor}));
   };
 
-  ws.onmessage = (e) => {
+  socket.onmessage = (e) => {
+    if (isStaleSocket(socket, targetSession, generation)) return;
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
-    handleWSEvent(data);
+    handleWSEvent(data, targetSession, generation);
   };
 
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (isStaleSocket(socket, targetSession, generation)) return;
     console.log('WS closed, reconnecting in', reconnectDelay, 'ms');
     reconnectTimer = setTimeout(connectWS, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
   };
 
-  ws.onerror = () => { ws.close(); };
+  socket.onerror = () => { if (!isStaleSocket(socket, targetSession, generation)) socket.close(); };
 }
 
-function handleWSEvent(ev) {
+function handleWSEvent(ev, socketSessionId, socketGeneration) {
+  if (socketSessionId !== SESSION_ID || socketGeneration !== wsGeneration) return;
   const t = ev.type;
 
   if (t === 'catchup_complete') {

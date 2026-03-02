@@ -147,6 +147,8 @@ async def spawn_worker(
       if session_meta:
         backend_id = session_meta.backend
         backend_option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+        if not backend_option and backend_id.startswith("codex"):
+          backend_option = next((opt for opt in cfg.backend_options if opt.type == "codex"), None)
         if not backend_option and cfg.backend_options:
           backend_option = cfg.backend_options[0]
           log.warning("spawn_worker_backend_fallback", session=session_id, requested=backend_id, using=backend_option.id)

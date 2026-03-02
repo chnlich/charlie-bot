@@ -52,6 +52,17 @@ async def create_session(
   if req.backend is not None and req.backend in valid_backend_ids:
     backend = req.backend
     log.info("using_requested_backend", backend=backend)
+  elif req.backend is not None and req.backend.startswith("codex"):
+    codex_option = next((opt for opt in cfg.backend_options if opt.type == "codex"), None)
+    if codex_option:
+      backend = codex_option.id
+      log.info("using_requested_backend_family_match", requested=req.backend, backend=backend)
+    else:
+      backend = cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
+      log.info("using_default_backend",
+               reason="codex_family_requested_but_no_codex_backend",
+               requested=req.backend,
+               default=backend)
   else:
     backend = cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
     log.info("using_default_backend",

@@ -2,7 +2,6 @@
 // Init
 // ---------------------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {
-  normalizeBackendLabels();
   initSidebarResize();
   initLatexResize();
   initBacklogResize();

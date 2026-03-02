@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -46,7 +46,6 @@ class ThreadMetadata(BaseModel):
   repo_path: Optional[str] = None
   review_of: Optional[str] = None
   backend: Optional[str] = None
-  model: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -59,23 +58,6 @@ class BackendOption(BaseModel):
   label: str
   type: str  # 'cc-claude' | 'cc-kimi'
   model: Optional[str] = None
-
-
-class BackendModelConfig(BaseModel):
-  """Explicit backend+model selection without fallback fields."""
-
-  model_config = ConfigDict(extra="forbid")
-
-  backend: str
-  model: str
-
-  @field_validator("backend", "model")
-  @classmethod
-  def ensure_not_blank(cls, value: str) -> str:
-    cleaned = value.strip()
-    if not cleaned:
-      raise ValueError("must not be blank")
-    return cleaned
 
 
 # ---------------------------------------------------------------------------

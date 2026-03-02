@@ -10,7 +10,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 log = structlog.get_logger()
 
-from src.core.models import BackendModelConfig, BackendOption
+from src.core.models import BackendOption
 
 
 class ScheduledTaskConfig(BaseModel):
@@ -25,7 +25,6 @@ class ScheduledTaskConfig(BaseModel):
   enabled: bool = True
   project: Optional[str] = None
   allow_failure: bool = False
-  subagent: Optional[BackendModelConfig] = None
 
   @model_validator(mode='after')
   def check_prompt_or_handler(self) -> 'ScheduledTaskConfig':
@@ -52,6 +51,9 @@ class CharlieBotConfig(BaseModel):
   # Kimi (Moonshot) — optional, not wired in by default
   moonshot_api_key: Optional[str] = None
   kimi_model: str = "kimi-k2.5"
+
+  # OpenAI — used by Codex backend
+  openai_api_key: Optional[str] = None
 
   # Server
   server_port: int = 8000
@@ -84,7 +86,7 @@ class CharlieBotConfig(BaseModel):
   backend_options: list[BackendOption] = [
       BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6"),
       BackendOption(id="kimi-k2.5", label="CC \u00b7 Kimi K2.5", type="cc-kimi", model="kimi-k2.5"),
-      BackendOption(id="codex-gpt-5-3", label="Codex \u00b7 gpt-5.3-codex", type="codex", model="gpt-5.3-codex"),
+      BackendOption(id="codex-o3", label="Codex \u00b7 o3", type="codex", model="o3"),
   ]
 
   @model_validator(mode="before")

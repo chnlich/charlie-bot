@@ -149,8 +149,6 @@ async def run_and_finalize(
   """Run master CC, persist cc_session_id, and auto-name the session."""
   backend_id = meta.backend
   backend_option = next((o for o in cfg.backend_options if o.id == backend_id), None)
-  if backend_option is None and backend_id.startswith("codex"):
-    backend_option = next((o for o in cfg.backend_options if o.type == "codex"), None)
   try:
     cc_session_id = await run_message(
         cfg,
@@ -179,15 +177,6 @@ async def run_and_finalize(
       asyncio.create_task(_auto_name(cfg, meta, content, session_mgr))
   except Exception as e:
     log.exception("master_cc_run_failed", session=meta.id)
-    # run_message() should handle and emit failures, but keep this as a
-    # last-resort guard so the UI never gets stuck in "Thinking...".
-    error_event = {"type": "assistant_error", "content": f"Agent error: {e}"}
-    done_event = {"type": "master_done", "exit_code": 1, "still_thinking": False}
-    channel = f"session:{meta.id}"
-    await session_mgr.save_chat_event(meta.id, error_event)
-    await streaming_manager.broadcast(channel, error_event)
-    await session_mgr.save_chat_event(meta.id, done_event)
-    await streaming_manager.broadcast(channel, done_event)
 
 
 async def _auto_name(

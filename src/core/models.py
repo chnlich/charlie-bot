@@ -46,6 +46,7 @@ class ThreadMetadata(BaseModel):
   repo_path: Optional[str] = None
   review_of: Optional[str] = None
   backend: Optional[str] = None
+  model: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

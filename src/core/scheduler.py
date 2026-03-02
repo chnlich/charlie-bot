@@ -281,6 +281,9 @@ class Scheduler:
   ) -> tuple[str, str, str]:
     """Resolve backend+model for one scheduler run (job override > session default)."""
     if task_cfg.subagent:
+      option = next((opt for opt in cfg.backend_options if opt.id == task_cfg.subagent.backend), None)
+      if option is None:
+        raise ValueError(f"Scheduled task '{task_cfg.name}' backend '{task_cfg.subagent.backend}' is not in backend_options")
       return task_cfg.subagent.backend, task_cfg.subagent.model, "task_override"
 
     backend_id = session.backend

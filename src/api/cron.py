@@ -10,7 +10,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.core.config import get_scheduled_tasks
-from src.core.models import BackendModelConfig
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -36,7 +35,6 @@ class TaskUpdate(BaseModel):
   enabled: Optional[bool] = None
   project: Optional[str] = None
   allow_failure: Optional[bool] = None
-  subagent: Optional[BackendModelConfig] = None
 
 
 class TaskCreate(BaseModel):
@@ -48,7 +46,6 @@ class TaskCreate(BaseModel):
   enabled: bool = True
   project: Optional[str] = None
   allow_failure: bool = False
-  subagent: Optional[BackendModelConfig] = None
 
 
 @router.get('/tasks')
@@ -78,8 +75,6 @@ async def update_cron_task(name: str, req: TaskUpdate):
         task['project'] = req.project or None
       if req.allow_failure is not None:
         task['allow_failure'] = req.allow_failure
-      if req.subagent is not None:
-        task['subagent'] = req.subagent.model_dump()
       data['scheduled_tasks'] = tasks
       await asyncio.to_thread(_write_cron_yaml, data)
       log.debug('cron_task_updated', name=name)

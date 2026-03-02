@@ -159,3 +159,47 @@
   status: approved
   created: '2026-03-01T12:00:00Z'
   priority: medium
+- id: '015'
+  title: Pull terminate() and _DEFAULT_BUFFER_LIMIT into AgentBackend base class
+  description: Eliminate identical code duplicated across both backends. ClaudeCodeBackend
+    (claude_code.py:116-129) and CodexBackend (codex.py:259-272) have identical terminate()
+    implementations (13 lines each). Both also define _DEFAULT_BUFFER_LIMIT = 1GB.
+    Move terminate() as a concrete method on AgentBackend in base.py, add a _proc
+    attribute to the base, and define DEFAULT_BUFFER_LIMIT there. Removes ~25 lines
+    of duplication and ensures consistency for future backends.
+  category: duplication
+  status: pending
+  created: '2026-03-02T12:00:00Z'
+  priority: medium
+- id: '016'
+  title: Extract assistant-buffer flush helper in events_to_messages
+  description: Reduce repetition and prevent bugs in the message parser. api/message_utils.py:events_to_messages
+    (99 lines) repeats the same 3-line "flush assistant_buf" block 8 times (before
+    each event type branch). Extract a local _flush() closure that appends the buffer
+    and resets it. Cuts ~20 lines and makes adding new event types less error-prone.
+  category: maintainability
+  status: pending
+  created: '2026-03-02T12:00:00Z'
+  priority: medium
+- id: '017'
+  title: Extract compact_boundary handling into shared helper
+  description: Deduplicate identical event handling between master and worker. master_cc.py:190-201
+    and worker.py:153-165 both detect compact_boundary system events, create a context_compacted
+    event, log it, and broadcast/persist it. Extract a handle_compact_boundary(event,
+    channel_or_id, broadcast_fn, persist_fn, log_context) helper in core/streaming.py
+    or a new core/events.py. Both call sites become one-liners.
+  category: duplication
+  status: pending
+  created: '2026-03-02T12:00:00Z'
+  priority: medium
+- id: '018'
+  title: Remove stale debug logging and unused import in api/sessions.py and api/chat.py
+  description: Clean up leftover debugging artifacts. api/sessions.py:42-48 has a
+    verbose log.info("create_session_request_dump") that dumps full request data —
+    this was temporary debugging for a backend selection issue and should be removed
+    or downgraded to log.debug. api/chat.py:11 imports BaseModel from pydantic but
+    never uses it — delete the import.
+  category: maintainability
+  status: pending
+  created: '2026-03-02T12:00:00Z'
+  priority: low

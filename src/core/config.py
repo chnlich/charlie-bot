@@ -10,7 +10,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 log = structlog.get_logger()
 
-from src.core.models import BackendOption
+from src.core.models import BackendModelConfig, BackendOption
 
 
 class ScheduledTaskConfig(BaseModel):
@@ -25,6 +25,7 @@ class ScheduledTaskConfig(BaseModel):
   enabled: bool = True
   project: Optional[str] = None
   allow_failure: bool = False
+  subagent: Optional[BackendModelConfig] = None
 
   @model_validator(mode='after')
   def check_prompt_or_handler(self) -> 'ScheduledTaskConfig':

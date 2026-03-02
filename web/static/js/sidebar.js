@@ -38,7 +38,7 @@ async function switchSession(sessionId) {
   document.getElementById('text-modal-overlay')?.setAttribute('style', 'display:none');
 
   // Close WebSocket (suppress auto-reconnect)
-  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  disconnectWS();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
   // Reset streaming state

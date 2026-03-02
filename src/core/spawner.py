@@ -12,7 +12,7 @@ import structlog
 
 from src.agents.master_cc import run_message
 from src.agents.worker import WORKER_COMMAND, QuotaExhaustedException, Worker
-from src.core.models import ThreadStatus
+from src.core.models import BackendOption, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
@@ -79,9 +79,68 @@ def _short_desc(description: str, limit: int = 120) -> str:
   return first_line
 
 
-def _build_worker_event(thread_id: str, content: str, status: str, full_content: str = '') -> dict:
+def _build_worker_event(
+    thread_id: str,
+    content: str,
+    status: str,
+    full_content: str = '',
+    backend: Optional[str] = None,
+    model: Optional[str] = None,
+) -> dict:
   """Build a worker_summary event dict."""
-  return {"type": "worker_summary", "thread_id": thread_id, "content": content, "status": status, "full_content": full_content}
+  event = {
+      "type": "worker_summary",
+      "thread_id": thread_id,
+      "content": content,
+      "status": status,
+      "full_content": full_content,
+  }
+  if backend:
+    event["resolved_backend"] = backend
+  if model:
+    event["resolved_model"] = model
+  return event
+
+
+def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str) -> BackendOption:
+  """Resolve a runtime backend option from explicit backend/model values."""
+  if not backend_id:
+    raise ValueError("resolved backend is required")
+  if not model:
+    raise ValueError("resolved model is required")
+  option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+  if option is None:
+    raise ValueError(f"resolved backend '{backend_id}' is not configured")
+  return BackendOption(id=option.id, label=option.label, type=option.type, model=model)
+
+
+async def resolve_session_subagent_backend_model(
+    session_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+) -> tuple[str, str]:
+  """Resolve backend+model from the session default, with strict validation."""
+  session_meta = await session_mgr.get_session(session_id)
+  if session_meta is None:
+    raise ValueError(f"session '{session_id}' not found")
+  backend_id = session_meta.backend
+  if not backend_id:
+    raise ValueError(f"session '{session_id}' has no backend configured")
+  option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+  if option is None:
+    raise ValueError(f"session backend '{backend_id}' is not in backend_options")
+  if not option.model:
+    raise ValueError(f"session backend '{backend_id}' has no default model")
+  return option.id, option.model
+
+
+def _require_thread_backend_model(thread: ThreadMetadata) -> tuple[str, str]:
+  """Return backend+model from thread metadata or raise."""
+  if not thread.backend:
+    raise ValueError(f"thread '{thread.id}' missing backend metadata")
+  if not thread.model:
+    raise ValueError(f"thread '{thread.id}' missing model metadata")
+  return thread.backend, thread.model
 
 
 async def broadcast_and_persist(session_id: str, event: dict, session_mgr: SessionManager) -> None:
@@ -99,6 +158,8 @@ async def spawn_worker(
     thread_mgr: ThreadManager,
     repo_path: Optional[str] = None,
     prompt_override: Optional[str] = None,
+    resolved_backend: str = "",
+    resolved_model: str = "",
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   try:
@@ -139,24 +200,10 @@ async def spawn_worker(
     # Ensure worktree parent dir exists
     Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
 
-    # Look up the session's backend to get the model for subagents
-    # Fallback to first option if session's backend not found (config may have changed)
-    backend_option = None
-    try:
-      session_meta = await session_mgr.get_session(session_id)
-      if session_meta:
-        backend_id = session_meta.backend
-        backend_option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
-        if not backend_option and backend_id.startswith("codex"):
-          backend_option = next((opt for opt in cfg.backend_options if opt.type == "codex"), None)
-        if not backend_option and cfg.backend_options:
-          backend_option = cfg.backend_options[0]
-          log.warning("spawn_worker_backend_fallback", session=session_id, requested=backend_id, using=backend_option.id)
-        if backend_option:
-          thread.backend = backend_option.id
-          await thread_mgr._save_metadata(thread)
-    except Exception:
-      log.warning("spawn_worker_backend_lookup_failed", session=session_id, exc_info=True)
+    backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
+    thread.backend = backend_option.id
+    thread.model = backend_option.model
+    await thread_mgr._save_metadata(thread)
 
     # Build and run Worker
     events_log = await thread_mgr.get_events_log_path(session_id, thread_id)
@@ -179,7 +226,12 @@ async def spawn_worker(
 
     now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
     started_event = _build_worker_event(
-        thread.id, f'Worker `{thread.id[:8]}` started ({now}): {_short_desc(description)}', 'running')
+        thread.id,
+        f'Worker `{thread.id[:8]}` started ({now}): {_short_desc(description)}',
+        'running',
+        backend=thread.backend,
+        model=thread.model,
+    )
     await broadcast_and_persist(session_id, started_event, session_mgr)
 
     try:
@@ -258,6 +310,7 @@ async def _spawn_review_worker(
   wt_path = str(Path(cfg.worktree_dir) / branch_name.replace("/", "-"))
 
   review_prompt = _build_review_prompt(original_thread.description, branch_name, wt_path, repo_path, base_branch)
+  resolved_backend, resolved_model = _require_thread_backend_model(original_thread)
 
   session_meta = await session_mgr.get_session(session_id)
   review_thread = await thread_mgr.create_thread(
@@ -276,6 +329,8 @@ async def _spawn_review_worker(
           thread_mgr,
           repo_path=str(repo_path),
           prompt_override=review_prompt,
+          resolved_backend=resolved_backend,
+          resolved_model=resolved_model,
       ))
 
 
@@ -316,7 +371,14 @@ async def _notify_completion(
     chat_summary += suffix
     full_summary += suffix
 
-    worker_event = _build_worker_event(thread.id, chat_summary, status, full_content=full_summary)
+    worker_event = _build_worker_event(
+        thread.id,
+        chat_summary,
+        status,
+        full_content=full_summary,
+        backend=thread.backend,
+        model=thread.model,
+    )
     await session_mgr.mark_unread(session_id)
     await broadcast_and_persist(session_id, worker_event, session_mgr)
     log.info("worker_summary_sent", session=session_id, thread=thread.id)
@@ -343,7 +405,14 @@ async def _notify_completion(
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
       fallback = f'Worker `{thread.id[:8]}` finished: {_short_desc(description)}\n\n*(summary unavailable: {e})*'
-      fallback_event = _build_worker_event(thread.id, fallback, "completed" if exit_code == 0 else "failed", full_content=fallback)
+      fallback_event = _build_worker_event(
+          thread.id,
+          fallback,
+          "completed" if exit_code == 0 else "failed",
+          full_content=fallback,
+          backend=thread.backend,
+          model=thread.model,
+      )
       await session_mgr.mark_unread(session_id)
       await broadcast_and_persist(session_id, fallback_event, session_mgr)
     except Exception as inner:

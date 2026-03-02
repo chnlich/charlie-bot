@@ -3,6 +3,27 @@
 // eventCursor, usageTotalCost, BACKEND_OPTIONS are injected inline by index.html)
 // ---------------------------------------------------------------------------
 let _draftTimer = null;
+const CODEX_BACKEND_ID = 'codex-gpt-5-3';
+const CODEX_BACKEND_LABEL = 'Codex · gpt-5.3-codex';
+
+function normalizeBackendLabels() {
+  if (typeof BACKEND_OPTIONS === 'object' && BACKEND_OPTIONS) {
+    BACKEND_OPTIONS[CODEX_BACKEND_ID] = CODEX_BACKEND_LABEL;
+  }
+
+  const select = document.getElementById('new-session-backend');
+  if (select) {
+    Array.from(select.options).forEach((opt) => {
+      if (opt.value === CODEX_BACKEND_ID) opt.textContent = CODEX_BACKEND_LABEL;
+    });
+  }
+
+  const badge = document.getElementById('backend-badge');
+  if (badge && (badge.textContent || '').toLowerCase().includes('codex')) {
+    badge.textContent = CODEX_BACKEND_LABEL;
+  }
+}
+
 function saveDraft() {
   if (!DRAFT_KEY) return;
   clearTimeout(_draftTimer);

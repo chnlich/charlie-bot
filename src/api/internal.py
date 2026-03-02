@@ -9,7 +9,7 @@ from src.api.deps import get_session_manager, get_thread_manager
 from src.core.config import get_config
 from src.core.models import DelegateRequest
 from src.core.sessions import SessionManager
-from src.core.spawner import broadcast_and_persist, spawn_worker
+from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -28,11 +28,17 @@ async def delegate_task(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
+  cfg = get_config()
+
   # Create thread immediately so it's visible in the UI
   thread = await thread_mgr.create_thread(meta, req.description)
 
+  resolved_backend, resolved_model = await resolve_session_subagent_backend_model(req.session_id, cfg, session_mgr)
+  thread.backend = resolved_backend
+  thread.model = resolved_model
+  await thread_mgr._save_metadata(thread)
+
   # Fire-and-forget: spawn worker in background
-  cfg = get_config()
   asyncio.create_task(
       spawn_worker(
           req.session_id,
@@ -42,6 +48,8 @@ async def delegate_task(
           session_mgr,
           thread_mgr,
           repo_path=req.repo_path,
+          resolved_backend=resolved_backend,
+          resolved_model=resolved_model,
       ))
 
   # Save and broadcast task_delegated event so cursor stays in sync on reconnect
@@ -50,6 +58,8 @@ async def delegate_task(
       "thread_id": thread.id,
       "description": req.description,
       "created_at": thread.created_at.isoformat(),
+      "resolved_backend": resolved_backend,
+      "resolved_model": resolved_model,
   }
   await broadcast_and_persist(req.session_id, task_event, session_mgr)
 

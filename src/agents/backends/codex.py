@@ -14,6 +14,7 @@ from src.agents.backends.base import AgentBackend
 log = structlog.get_logger()
 
 _DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
+_MODEL_REASONING_EFFORT_CONFIG = 'model_reasoning_effort="xhigh"'
 
 
 def _resolve_codex_binary() -> str:
@@ -76,6 +77,7 @@ class CodexBackend(AgentBackend):
           self._codex_bin, "exec", "resume", "--json", "--skip-git-repo-check",
           "--dangerously-bypass-approvals-and-sandbox",
           "--model", self._model,
+          "--config", _MODEL_REASONING_EFFORT_CONFIG,
           self._resume_session_id,
       ]
     else:
@@ -83,6 +85,7 @@ class CodexBackend(AgentBackend):
           self._codex_bin, "exec", "--json", "--skip-git-repo-check",
           "--dangerously-bypass-approvals-and-sandbox",
           "--model", self._model,
+          "--config", _MODEL_REASONING_EFFORT_CONFIG,
       ]
     cmd.extend(self._extra_flags)
     cmd.append(effective_prompt)

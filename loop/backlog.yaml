@@ -168,7 +168,7 @@
     attribute to the base, and define DEFAULT_BUFFER_LIMIT there. Removes ~25 lines
     of duplication and ensures consistency for future backends.
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-02T12:00:00Z'
   priority: medium
 - id: '016'
@@ -194,7 +194,7 @@
   status: pending
   created: '2026-03-02T12:00:00Z'
   priority: medium
-- id: '018'
+- id: 018
   title: Remove stale debug logging and unused import in api/sessions.py and api/chat.py
   description: Clean up leftover debugging artifacts. api/sessions.py:42-48 has a
     verbose log.info("create_session_request_dump") that dumps full request data —

@@ -44,6 +44,7 @@ class ThreadMetadata(BaseModel):
   cli_command: Optional[str] = None
   branch_name: Optional[str] = None
   repo_path: Optional[str] = None
+  worktree_path: Optional[str] = None
   review_of: Optional[str] = None
   backend: Optional[str] = None
   model: Optional[str] = None

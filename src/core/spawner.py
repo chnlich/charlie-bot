@@ -26,10 +26,13 @@ def _build_worker_prompt(description: str, repo_path: Path, base_branch: str, br
   """Build the full worker prompt including worktree workflow instructions."""
   return (
       f"## Worktree Workflow\n"
-      f"You MUST isolate your work in a git worktree. Follow these steps exactly:\n"
-      f"1. Create worktree: `git worktree add -b {branch_name} {wt_path} {base_branch}`\n"
-      f"2. `cd {wt_path}` — do ALL your work inside this worktree.\n"
-      f"3. Commit your changes with descriptive messages.\n\n"
+      f"A dedicated git worktree is already created for you.\n"
+      f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
+      f"- Worktree: `{wt_path}`\n"
+      f"- Repo: `{repo_path}`\n\n"
+      f"Follow these steps exactly:\n"
+      f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
+      f"2. Commit your changes with descriptive messages.\n\n"
       f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
       f"## Task\n{description}")
 
@@ -69,6 +72,37 @@ async def _git_current_branch(repo_path: Path) -> str:
       return 'main'
     raise RuntimeError(f'git rev-parse failed: {err_msg}')
   return stdout.decode().strip()
+
+
+async def _git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> None:
+  """Create a git worktree and fail loudly if git reports an error."""
+  proc = await asyncio.create_subprocess_exec(
+      "git",
+      "worktree",
+      "add",
+      "-b",
+      branch_name,
+      str(wt_path),
+      base_branch,
+      cwd=str(repo_path),
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  stdout, stderr = await proc.communicate()
+  if proc.returncode != 0:
+    out = stdout.decode().strip()
+    err = stderr.decode().strip()
+    log.error(
+        "spawn_worker_worktree_create_failed",
+        repo=str(repo_path),
+        branch=branch_name,
+        worktree=str(wt_path),
+        base_branch=base_branch,
+        stdout=out,
+        stderr=err,
+        returncode=proc.returncode,
+    )
+    raise RuntimeError(f"git worktree add failed for {branch_name}: {err or out or 'unknown error'}")
 
 
 def _short_desc(description: str, limit: int = 120) -> str:
@@ -176,10 +210,20 @@ async def spawn_worker(
       repo_path = repos[0]["path"]
       log.info("spawn_worker_repo_defaulted", session=session_id, repo=repo_path)
 
-    resolved_repo = Path(repo_path)
+    resolved_repo = Path(repo_path).resolve()
+    worktree_path: Optional[Path] = None
 
     if prompt_override:
       worker_prompt = prompt_override
+      if not thread.worktree_path:
+        log.error(
+            "spawn_worker_missing_worktree_path",
+            session=session_id,
+            thread_id=thread_id,
+            detail="prompt_override requires persisted worktree_path",
+        )
+        raise RuntimeError("thread metadata missing worktree_path")
+      worktree_path = Path(thread.worktree_path).resolve()
     else:
       # Get current branch as the base for the worktree
       base_branch = await _git_current_branch(resolved_repo)
@@ -187,18 +231,33 @@ async def spawn_worker(
       # Compute branch name and worktree path
       ts = int(time.time())
       branch_name = f"charliebot/task-{ts}-{thread.id[:8]}"
-      wt_path = str(Path(cfg.worktree_dir) / branch_name.replace("/", "-"))
+      wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
 
-      # Store branch_name and repo_path on thread metadata
+      # Ensure worktree parent dir exists and create worktree before launch.
+      Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
+      await _git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
+
+      # Store branch_name, repo_path, and explicit worktree path on thread metadata.
       thread.branch_name = branch_name
       thread.repo_path = str(resolved_repo)
+      thread.worktree_path = str(wt_path)
       await thread_mgr._save_metadata(thread)
 
       # Build enriched prompt with worktree workflow instructions
-      worker_prompt = _build_worker_prompt(description, resolved_repo, base_branch, branch_name, wt_path)
+      worker_prompt = _build_worker_prompt(description, resolved_repo, base_branch, branch_name, str(wt_path))
+      worktree_path = wt_path.resolve()
 
-    # Ensure worktree parent dir exists
-    Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
+    if worktree_path is None:
+      raise RuntimeError("worktree path was not resolved")
+    if worktree_path == resolved_repo:
+      log.error(
+          "spawn_worker_repo_root_cwd_detected",
+          session=session_id,
+          thread_id=thread.id,
+          repo=str(resolved_repo),
+          worktree=str(worktree_path),
+      )
+      raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
     backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
     thread.backend = backend_option.id
@@ -209,7 +268,7 @@ async def spawn_worker(
     events_log = await thread_mgr.get_events_log_path(session_id, thread_id)
     worker = Worker(
         thread,
-        resolved_repo,
+        worktree_path,
         events_log,
         worker_prompt,
         cfg,
@@ -362,10 +421,18 @@ async def _spawn_review_worker(
               detail="original thread missing repo_path")
     return
   repo_path = Path(original_thread.repo_path)
+  if not original_thread.branch_name:
+    log.error("spawn_review_no_branch_name", session=session_id, thread=original_thread.id,
+              detail="original thread missing branch_name")
+    return
+  if not original_thread.worktree_path:
+    log.error("spawn_review_no_worktree_path", session=session_id, thread=original_thread.id,
+              detail="original thread missing worktree_path")
+    return
 
   base_branch = await _git_current_branch(repo_path)
   branch_name = original_thread.branch_name
-  wt_path = str(Path(cfg.worktree_dir) / branch_name.replace("/", "-"))
+  wt_path = original_thread.worktree_path
 
   review_prompt = _build_review_prompt(original_thread.description, branch_name, wt_path, repo_path, base_branch)
   resolved_backend, resolved_model = _require_thread_backend_model(original_thread)
@@ -376,6 +443,10 @@ async def _spawn_review_worker(
       f"Review: {original_thread.description}",
       review_of=original_thread.id,
   )
+  review_thread.branch_name = branch_name
+  review_thread.repo_path = str(repo_path)
+  review_thread.worktree_path = wt_path
+  await thread_mgr._save_metadata(review_thread)
 
   asyncio.create_task(
       spawn_worker(

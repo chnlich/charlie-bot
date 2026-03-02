@@ -56,6 +56,12 @@ def events_to_messages(events: list[dict]) -> list[dict]:
         messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
         assistant_buf = ""
       messages.append({"role": "system", "content": f"Error: {ev.get('content', '')}", "event_index": idx})
+    elif t == "error":
+      if assistant_buf:
+        messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
+        assistant_buf = ""
+      error_content = ev.get("content") or ev.get("message") or "Unknown error"
+      messages.append({"role": "system", "content": f"Error: {error_content}", "event_index": idx})
     elif t == "task_delegated":
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})

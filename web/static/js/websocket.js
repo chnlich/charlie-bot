@@ -143,6 +143,14 @@ function handleWSEvent(ev) {
     }
     stopThinking();
     appendMessage('system', 'Error: ' + (ev.content || ''));
+  } else if (t === 'error') {
+    if (catchupDone) hideStreaming();
+    if (streamBuf) {
+      appendMessage('assistant', streamBuf);
+      streamBuf = '';
+    }
+    const msg = ev.content || ev.message || 'Unknown error';
+    appendMessage('system', 'Error: ' + msg);
   } else if (t === 'task_delegated') {
     // Flush pending assistant text before system message (matches backend)
     if (streamBuf) {

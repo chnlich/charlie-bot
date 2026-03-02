@@ -178,7 +178,7 @@
     each event type branch). Extract a local _flush() closure that appends the buffer
     and resets it. Cuts ~25 lines and makes adding new event types less error-prone.
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-03-02T12:00:00Z'
   priority: medium
 - id: '017'

@@ -174,20 +174,22 @@
 - id: '016'
   title: Extract assistant-buffer flush helper in events_to_messages
   description: Reduce repetition and prevent bugs in the message parser. api/message_utils.py:events_to_messages
-    (99 lines) repeats the same 3-line "flush assistant_buf" block 8 times (before
+    (99 lines) repeats the same 3-line "flush assistant_buf" block ~10 times (before
     each event type branch). Extract a local _flush() closure that appends the buffer
-    and resets it. Cuts ~20 lines and makes adding new event types less error-prone.
+    and resets it. Cuts ~25 lines and makes adding new event types less error-prone.
   category: maintainability
   status: pending
   created: '2026-03-02T12:00:00Z'
   priority: medium
 - id: '017'
   title: Extract compact_boundary handling into shared helper
-  description: Deduplicate identical event handling between master and worker. master_cc.py:190-201
-    and worker.py:153-165 both detect compact_boundary system events, create a context_compacted
-    event, log it, and broadcast/persist it. Extract a handle_compact_boundary(event,
-    channel_or_id, broadcast_fn, persist_fn, log_context) helper in core/streaming.py
-    or a new core/events.py. Both call sites become one-liners.
+  description: Deduplicate near-identical event handling between master and worker.
+    master_cc.py:190-201 and worker.py:153-165 both detect compact_boundary system
+    events, create a context_compacted event, log it, and broadcast it. They differ
+    only in persistence (master calls save_chat_event, worker does explicit log_file.write+flush)
+    and log context keys. Extract a handle_compact_boundary(event, channel_or_id,
+    broadcast_fn, persist_fn, log_context) helper in core/streaming.py or a new core/events.py.
+    Both call sites become one-liners.
   category: duplication
   status: pending
   created: '2026-03-02T12:00:00Z'

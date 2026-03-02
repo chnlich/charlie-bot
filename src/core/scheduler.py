@@ -184,6 +184,15 @@ class Scheduler:
     thread_mgr = ThreadManager(cfg)
 
     session = await self._get_or_create_session(task_cfg.name, session_mgr)
+    resolved_backend, resolved_model, resolution_source = self._resolve_subagent_backend_model(task_cfg, session, cfg)
+    log.info(
+        "scheduler_subagent_resolved",
+        task=task_cfg.name,
+        session=session.id,
+        backend=resolved_backend,
+        model=resolved_model,
+        source=resolution_source,
+    )
 
     # Update last_scheduled_run and mark as running before spawning
     tz = ZoneInfo(task_cfg.timezone)
@@ -195,6 +204,9 @@ class Scheduler:
     await session_mgr.save_metadata(session)
 
     thread = await thread_mgr.create_thread(session, task_cfg.prompt)
+    thread.backend = resolved_backend
+    thread.model = resolved_model
+    await thread_mgr._save_metadata(thread)
 
     asyncio.create_task(
         spawn_worker(
@@ -205,6 +217,8 @@ class Scheduler:
             session_mgr=session_mgr,
             thread_mgr=thread_mgr,
             repo_path=task_cfg.repo,
+            resolved_backend=resolved_backend,
+            resolved_model=resolved_model,
         ),
         name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
     )
@@ -215,9 +229,19 @@ class Scheduler:
         "description": task_cfg.prompt,
         "session_id": session.id,
         "thread_id": thread.id,
+        "resolved_backend": resolved_backend,
+        "resolved_model": resolved_model,
+        "backend_resolution_source": resolution_source,
     }
     await broadcast_and_persist(session.id, event, session_mgr)
-    log.info("scheduled_task_fired", task=task_cfg.name, session=session.id, thread=thread.id)
+    log.info(
+        "scheduled_task_fired",
+        task=task_cfg.name,
+        session=session.id,
+        thread=thread.id,
+        backend=resolved_backend,
+        model=resolved_model,
+    )
 
     return {"session_id": session.id, "thread_id": thread.id}
 
@@ -248,3 +272,26 @@ class Scheduler:
     except Exception as e:
       log.warning("scheduler_config_reload_failed", error=str(e))
       return self._cfg
+
+  def _resolve_subagent_backend_model(
+      self,
+      task_cfg: ScheduledTaskConfig,
+      session: SessionMetadata,
+      cfg: CharlieBotConfig,
+  ) -> tuple[str, str, str]:
+    """Resolve backend+model for one scheduler run (job override > session default)."""
+    if task_cfg.subagent:
+      option = next((opt for opt in cfg.backend_options if opt.id == task_cfg.subagent.backend), None)
+      if option is None:
+        raise ValueError(f"Scheduled task '{task_cfg.name}' backend '{task_cfg.subagent.backend}' is not in backend_options")
+      return task_cfg.subagent.backend, task_cfg.subagent.model, "task_override"
+
+    backend_id = session.backend
+    if not backend_id:
+      raise ValueError(f"Scheduled session '{session.id}' has no backend configured")
+    option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+    if option is None:
+      raise ValueError(f"Scheduled session '{session.id}' backend '{backend_id}' is not in backend_options")
+    if not option.model:
+      raise ValueError(f"Scheduled session backend '{backend_id}' has no default model")
+    return option.id, option.model, "session_default"

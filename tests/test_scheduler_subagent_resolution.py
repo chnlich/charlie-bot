@@ -56,6 +56,23 @@ def test_scheduler_resolution_prefers_job_override() -> None:
   assert source == "task_override"
 
 
+def test_scheduler_resolution_raises_for_unknown_override_backend() -> None:
+  cfg = _build_cfg([
+      BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+  ])
+  scheduler = Scheduler(cfg)
+  session = SessionMetadata(name="Scheduled: daily", backend="claude-opus-4.6")
+  task = ScheduledTaskConfig(
+      name="daily",
+      cron="0 * * * *",
+      prompt="run checks",
+      subagent={"backend": "missing-backend", "model": "o3"},
+  )
+
+  with pytest.raises(ValueError, match="is not in backend_options"):
+    scheduler._resolve_subagent_backend_model(task, session, cfg)
+
+
 def test_scheduler_resolution_falls_back_to_session_default() -> None:
   cfg = _build_cfg([
       BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),

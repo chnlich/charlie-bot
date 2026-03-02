@@ -67,10 +67,7 @@ def events_to_messages(events: list[dict]) -> list[dict]:
         messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})
         assistant_buf = ""
       desc = ev.get("description", "")
-      backend = ev.get("resolved_backend")
-      model = ev.get("resolved_model")
-      backend_text = f" [{backend}/{model}]" if backend and model else ""
-      messages.append({"role": "system", "content": f"Task delegated{backend_text}: {desc}", "event_index": idx})
+      messages.append({"role": "system", "content": f"Task delegated: {desc}", "event_index": idx})
     elif t == "worker_summary":
       if assistant_buf:
         messages.append({"role": "assistant", "content": assistant_buf, "event_index": last_event_idx})

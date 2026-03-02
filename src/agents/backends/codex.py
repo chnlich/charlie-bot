@@ -32,17 +32,17 @@ class CodexBackend(AgentBackend):
 
   def __init__(
       self,
-      api_key: str,
-      model: str = "o3",
+      model: str = "gpt-5.3-codex",
       instructions_content: Optional[str] = None,
+      resume_session_id: Optional[str] = None,
       extra_flags: Optional[list[str]] = None,
       buffer_limit: Optional[int] = None,
       on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
   ):
     self._codex_bin = _resolve_codex_binary()
-    self._api_key = api_key
     self._model = model
     self._instructions_content = instructions_content
+    self._resume_session_id = resume_session_id
     self._extra_flags = extra_flags or []
     self._buffer_limit = buffer_limit or _DEFAULT_BUFFER_LIMIT
     self._on_spawn = on_spawn
@@ -58,10 +58,7 @@ class CodexBackend(AgentBackend):
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
     """Spawn codex exec and yield CC-compatible event dicts."""
-    codex_env = {
-        **env,
-        "OPENAI_API_KEY": self._api_key,
-    }
+    codex_env = {**env}
     # Ensure ~/.local/bin is on PATH if codex lives there
     local_bin = str(Path.home() / ".local" / "bin")
     current_path = codex_env.get("PATH", "")
@@ -74,10 +71,19 @@ class CodexBackend(AgentBackend):
       effective_prompt = (
           f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
 
-    cmd = [
-        self._codex_bin, "exec", "--json", "--skip-git-repo-check", "--full-auto",
-        "--model", self._model,
-    ]
+    if self._resume_session_id:
+      cmd = [
+          self._codex_bin, "exec", "resume", "--json", "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--model", self._model,
+          self._resume_session_id,
+      ]
+    else:
+      cmd = [
+          self._codex_bin, "exec", "--json", "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--model", self._model,
+      ]
     cmd.extend(self._extra_flags)
     cmd.append(effective_prompt)
 
@@ -169,27 +175,33 @@ class CodexBackend(AgentBackend):
 
     # --- agent_message ---
     if item_type == "agent_message":
-      content = item.get("content", [])
-      for part in content:
-        part_type = part.get("type", "")
-        if part_type == "text":
-          full_text = part.get("text", "")
-          prev = self._last_agent_text.get(item_id, "")
-          delta = full_text[len(prev):]
-          if delta:
-            results.append({
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": delta}]},
-            })
-          self._last_agent_text[item_id] = full_text
+      # Newer codex schema emits item.text directly; older schema used content[].
+      full_text = item.get("text", "")
+      if not full_text:
+        content = item.get("content", [])
+        full_text = "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text")
+      if full_text:
+        prev = self._last_agent_text.get(item_id, "")
+        delta = full_text[len(prev):]
+        if delta:
+          results.append({
+              "type": "assistant",
+              "message": {"content": [{"type": "text", "text": delta}]},
+          })
+        self._last_agent_text[item_id] = full_text
 
     # --- reasoning ---
     if item_type == "reasoning":
-      text = ""
-      summary = item.get("summary", [])
-      for part in summary:
-        if part.get("type") == "summary_text":
-          text += part.get("text", "")
+      # Newer codex schema emits reasoning text directly; older schema used summary[].
+      text = item.get("text", "")
+      if not text:
+        summary = item.get("summary", [])
+        for part in summary:
+          if part.get("type") == "summary_text":
+            text += part.get("text", "")
       if text:
         results.append({"type": "thinking", "content": text})
 

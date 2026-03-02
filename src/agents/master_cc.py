@@ -59,6 +59,28 @@ Continue from this context. The user wants to take a different direction from th
     session_claude_md.unlink()
 
   session_claude_md.write_text("\n\n".join(parts), encoding="utf-8")
+
+  # Keep AGENTS.md as a stable alias to CLAUDE.md for tools that read AGENTS.md.
+  agents_md = session_claude_md.parent / "AGENTS.md"
+  if agents_md.exists() or agents_md.is_symlink():
+    if agents_md.is_symlink():
+      try:
+        if agents_md.resolve() == session_claude_md.resolve():
+          log.debug("session_agents_md_symlink_ok", path=str(agents_md))
+          log.debug("session_claude_md_written", path=str(session_claude_md))
+          return
+      except OSError:
+        pass
+      agents_md.unlink()
+    elif agents_md.is_file():
+      agents_md.unlink()
+    else:
+      log.warning("session_agents_md_not_file", path=str(agents_md))
+      log.debug("session_claude_md_written", path=str(session_claude_md))
+      return
+
+  agents_md.symlink_to("CLAUDE.md")
+  log.debug("session_agents_md_symlinked", path=str(agents_md), target="CLAUDE.md")
   log.debug("session_claude_md_written", path=str(session_claude_md))
 
 
@@ -157,16 +179,18 @@ async def run_message(
   async def _on_spawn(pid: int) -> None:
     log.info("master_cc_spawned", session=session_meta.id, pid=pid)
 
-  backend = build_backend(
-      option,
-      cfg,
-      extra_flags=extra_flags or None,
-      buffer_limit=cfg.subprocess_buffer_limit,
-      on_spawn=_on_spawn,
-      instructions_content=instructions_content,
-  )
+  backend: Optional[AgentBackend] = None
 
   try:
+    backend = build_backend(
+        option,
+        cfg,
+        extra_flags=extra_flags or None,
+        buffer_limit=cfg.subprocess_buffer_limit,
+        on_spawn=_on_spawn,
+        instructions_content=instructions_content,
+        resume_session_id=session_meta.cc_session_id if option.type == "codex" else None,
+    )
     _active_procs[session_meta.id] = backend
 
     prompt = user_content

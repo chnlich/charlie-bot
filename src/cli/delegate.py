@@ -22,6 +22,7 @@ def main() -> None:
   parser.add_argument("--session", required=True, help="Session ID")
   parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
   parser.add_argument("--description", required=True, help="Task description")
+  parser.add_argument("--context", default=None, help="Business context for reviewers")
   args = parser.parse_args()
 
   cfg = get_config()
@@ -33,6 +34,8 @@ def main() -> None:
   }
   if args.repo is not None:
     payload["repo_path"] = args.repo
+  if args.context is not None:
+    payload["context"] = args.context
 
   try:
     resp = requests.post(f"https://localhost:{port}/api/internal/delegate", json=payload, timeout=30, verify=False)

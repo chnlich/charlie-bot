@@ -46,6 +46,7 @@ class ThreadMetadata(BaseModel):
   repo_path: Optional[str] = None
   worktree_path: Optional[str] = None
   review_of: Optional[str] = None
+  context: Optional[str] = None
   backend: Optional[str] = None
   model: Optional[str] = None
   tried_backends: list[str] = Field(default_factory=list)
@@ -149,3 +150,4 @@ class DelegateRequest(BaseModel):
   session_id: str
   description: str
   repo_path: Optional[str] = None
+  context: Optional[str] = None

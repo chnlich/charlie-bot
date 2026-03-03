@@ -51,19 +51,35 @@ def _build_worker_prompt(
       f"- Repo: `{repo_path}`\n\n"
       f"Follow these steps exactly:\n"
       f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
-      f"2. Commit your changes with descriptive messages.\n\n"
+      f"2. Commit your changes with descriptive messages.\n"
+      f"   Use structured commit messages: first line is a short summary, then a blank line, "
+      f"then a \"Why:\" line explaining the business reason for the change.\n\n"
       f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
       f"## Task\n{description}")
 
   return f"{subagent_content}\n{session_info}\n{worktree_section}"
 
 
-def _build_review_prompt(description: str, branch_name: str, wt_path: str, repo_path: Path, base_branch: str) -> str:
+def _build_review_prompt(
+    description: str,
+    branch_name: str,
+    wt_path: str,
+    repo_path: Path,
+    base_branch: str,
+    context: Optional[str] = None,
+) -> str:
   """Build the prompt for a review worker."""
+  context_section = ""
+  if context:
+    context_section = (
+        f"\n## Business Context\n{context}\n\n"
+        f"Use this context to judge whether the changes are correct for the intended purpose, "
+        f"not just whether the code compiles.\n")
   return (
       f"## Code Review\n"
       f"You are reviewing another worker's code changes.\n\n"
-      f"Original task: {description}\n\n"
+      f"Original task: {description}\n"
+      f"{context_section}\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
@@ -225,6 +241,7 @@ async def spawn_worker(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     repo_path: Optional[str] = None,
+    context: Optional[str] = None,
     prompt_override: Optional[str] = None,
     resolved_backend: str = "",
     resolved_model: str = "",
@@ -271,10 +288,12 @@ async def spawn_worker(
       Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
       await _git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
 
-      # Store branch_name, repo_path, and explicit worktree path on thread metadata.
+      # Store branch_name, repo_path, worktree path, and optional context on thread metadata.
       thread.branch_name = branch_name
       thread.repo_path = str(resolved_repo)
       thread.worktree_path = str(wt_path)
+      if context:
+        thread.context = context
       await thread_mgr._save_metadata(thread)
 
       # Build enriched prompt with worktree workflow instructions
@@ -488,7 +507,9 @@ async def _spawn_review_worker(
   branch_name = original_thread.branch_name
   wt_path = original_thread.worktree_path
 
-  review_prompt = _build_review_prompt(original_thread.description, branch_name, wt_path, repo_path, base_branch)
+  review_prompt = _build_review_prompt(
+      original_thread.description, branch_name, wt_path, repo_path, base_branch,
+      context=original_thread.context)
   worker_backend, worker_model = _require_thread_backend_model(original_thread)
   resolved_backend, resolved_model = worker_backend, worker_model
 

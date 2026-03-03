@@ -37,18 +37,17 @@
   created: '2026-02-27T12:00:00Z'
   priority: high
 - id: '004'
-  title: Remove unused ClaudeCodeBackend import in master_cc.py
-  description: 'agents/master_cc.py:11 imports ClaudeCodeBackend but never uses it
-    (backend construction goes through build_backend from registry). Delete the import
-    line.
+  title: 'Already resolved: ClaudeCodeBackend import no longer exists in master_cc.py'
+  description: 'Double-checked as requested: master_cc.py does NOT import ClaudeCodeBackend
+    at all. The file imports AgentBackend from base (L10) and uses build_backend from
+    registry (L152). The original issue was already resolved. This item can be closed
+    with no code changes needed.
 
     '
   category: imports
-  status: revision_requested
+  status: pending
   created: '2026-02-27T12:00:00Z'
   priority: low
-  revision_requested_at: '2026-03-01T14:14:33'
-  revision_feedback: can you double check to make sure it is really unused?
 - id: '005'
   title: Fix yapf formatting violations in spawner.py and message_utils.py
   description: 'yapf --diff found formatting issues in core/spawner.py (3 hunks: long

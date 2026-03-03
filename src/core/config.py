@@ -86,6 +86,12 @@ class CharlieBotConfig(BaseModel):
       BackendOption(id="codex-gpt-5-3", label="Codex \u00b7 gpt-5.3-codex", type="codex", model="gpt-5.3-codex"),
   ]
 
+  # Ordered preference list for reviewer backend selection.
+  # Each entry is a BackendOption.id. The first entry that differs from
+  # the worker's backend and resolves successfully is used for the reviewer.
+  # Empty list (default) preserves current behavior: reviewer uses same backend as worker.
+  model_preference: list[str] = []
+
   @model_validator(mode="before")
   @classmethod
   def migrate_and_expand(cls, values: dict) -> dict:

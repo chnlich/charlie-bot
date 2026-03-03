@@ -265,7 +265,7 @@ function renderWorkersTab(threads, sessionId) {
       + '<span id="thread-dot-' + t.id + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dotColor + pulse + '"></span>'
       + '<div class="flex-1 min-w-0">'
       + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeHtml(t.description || '').replace(/"/g, '&quot;') + '">' + escapeHtml(t.description || '') + '</p>'
-      + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + timeStr + duration + '</p>'
+      + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + timeStr + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[t.backend] || t.backend) : '') + '</p>'
       + '</div>'
       + cancelBtn
       + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
@@ -371,7 +371,7 @@ function updateWorkerStatus(threadId, status) {
   if (cancelBtn) cancelBtn.style.display = status === 'running' ? '' : 'none';
 }
 
-function addWorkerCard(threadId, description, createdAt) {
+function addWorkerCard(threadId, description, createdAt, backend) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
   // Remove placeholder if present
@@ -394,7 +394,7 @@ function addWorkerCard(threadId, description, createdAt) {
       <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 bg-blue-500 animate-pulse"></span>
       <div class="flex-1 min-w-0">
         <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="${escapeHtml(description)}">${escapeHtml(description)}</p>
-        <p id="thread-status-${threadId}" class="text-xs text-slate-500">running · ${nowStr}</p>
+        <p id="thread-status-${threadId}" class="text-xs text-slate-500">running &middot; ${nowStr}${backend ? ' &middot; ' + (BACKEND_OPTIONS[backend] || backend) : ''}</p>
       </div>
       <button id="cancel-btn-${threadId}" onclick="event.stopPropagation(); cancelThread('${threadId}', '${SESSION_ID}')"
               class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel">

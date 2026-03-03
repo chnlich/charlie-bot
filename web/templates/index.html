@@ -279,6 +279,8 @@
 
       <!-- ===== WORKERS TAB ===== -->
       <div id="tab-workers" class="flex-1 overflow-y-auto p-4 space-y-3 hidden">
+        {% set backend_label_map = {} %}
+        {% for opt in backend_options %}{% if backend_label_map.update({opt.id: opt.label}) %}{% endif %}{% endfor %}
         {% if threads %}
         {% for t in threads %}
         <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
@@ -294,7 +296,7 @@
             <span id="thread-dot-{{ t.id }}" class="w-2 h-2 rounded-full flex-shrink-0 {{ status_colors.get(t.status.value, 'bg-slate-500') }} {% if t.status.value == 'running' %}animate-pulse{% endif %}"></span>
             <div class="flex-1 min-w-0">
               <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="{{ t.description }}">{{ t.description }}</p>
-              <p id="thread-status-{{ t.id }}" class="text-xs text-slate-500">{{ t.status.value }} · {{ t.created_at.strftime("%m/%d %H:%M") }}{% if t.completed_at %} · {{ ((t.completed_at - t.created_at).total_seconds()|int // 60) }}m{{ ((t.completed_at - t.created_at).total_seconds()|int % 60) }}s{% endif %}</p>
+              <p id="thread-status-{{ t.id }}" class="text-xs text-slate-500">{{ t.status.value }} · {{ t.created_at.strftime("%m/%d %H:%M") }}{% if t.completed_at %} · {{ ((t.completed_at - t.created_at).total_seconds()|int // 60) }}m{{ ((t.completed_at - t.created_at).total_seconds()|int % 60) }}s{% endif %}{% if t.backend %} · {{ backend_label_map.get(t.backend, t.backend) }}{% endif %}</p>
             </div>
             {% if t.status.value == 'running' %}
             <button onclick="event.stopPropagation(); cancelThread('{{ t.id }}', '{{ active_session.id }}')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel">

@@ -11,6 +11,7 @@ from croniter import croniter
 
 from src.core.backup import BACKUP_DIR, apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
+from src.core.improvement_loop import determine_action
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
@@ -133,9 +134,11 @@ class Scheduler:
   # ---------------------------------------------------------------------------
 
   async def _execute_task(self, task_cfg: ScheduledTaskConfig) -> dict:
-    """Route to handler or prompt execution based on task config."""
+    """Route to handler, loop, or prompt execution based on task config."""
     if task_cfg.handler:
       return await self._execute_handler_task(task_cfg)
+    if task_cfg.loop:
+      return await self._execute_loop_task(task_cfg)
     return await self._execute_prompt_task(task_cfg)
 
   async def _execute_handler_task(self, task_cfg: ScheduledTaskConfig) -> dict:
@@ -224,6 +227,70 @@ class Scheduler:
     }
     await broadcast_and_persist(session.id, event, session_mgr)
     log.info("scheduled_task_fired", task=task_cfg.name, session=session.id, thread=thread.id)
+
+    return {"session_id": session.id, "thread_id": thread.id}
+
+  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig) -> dict:
+    """Run an improvement-loop task: determine action, then spawn worker if needed."""
+    cfg = self._reload_config()
+    session_mgr = SessionManager(cfg)
+
+    session = await self._get_or_create_session(task_cfg.name, session_mgr)
+
+    tz = ZoneInfo(task_cfg.timezone)
+    now = datetime.now(tz)
+    session.last_scheduled_run = now.isoformat()
+    session.last_scheduled_cron = task_cfg.cron
+    session.updated_at = datetime.now(timezone.utc)
+
+    repo_path = Path(task_cfg.repo) if task_cfg.repo else None
+    if repo_path is None:
+      raise ValueError(f"loop task '{task_cfg.name}' requires 'repo'")
+
+    backlog_path = repo_path / task_cfg.loop.backlog
+    action_type, prompt = await determine_action(backlog_path, task_cfg.loop, repo_path)
+
+    if action_type in ('noop', 'stale_reset'):
+      session.last_run_status = "success"
+      await session_mgr.save_metadata(session)
+      log.info("loop_task_noop", task=task_cfg.name, action=action_type)
+      return {"session_id": session.id, "thread_id": None}
+
+    # Spawn a worker with the generated prompt
+    session.last_run_status = "running"
+    await session_mgr.save_metadata(session)
+
+    thread_mgr = ThreadManager(cfg)
+    thread = await thread_mgr.create_thread(session, prompt)
+
+    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session.id, cfg, session_mgr)
+
+    asyncio.create_task(
+        spawn_worker(
+            session_id=session.id,
+            description=prompt,
+            thread_id=thread.id,
+            cfg=cfg,
+            session_mgr=session_mgr,
+            thread_mgr=thread_mgr,
+            repo_path=task_cfg.repo,
+            resolved_backend=resolved_backend,
+            resolved_model=resolved_model,
+        ),
+        name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
+    )
+
+    event = {
+        "type": "task_delegated",
+        "task": task_cfg.name,
+        "description": f"[{action_type}] {prompt[:200]}",
+        "session_id": session.id,
+        "thread_id": thread.id,
+        "backend": resolved_backend or "",
+        "model": resolved_model or "",
+    }
+    await broadcast_and_persist(session.id, event, session_mgr)
+    log.info("loop_task_fired", task=task_cfg.name, action=action_type, session=session.id, thread=thread.id)
 
     return {"session_id": session.id, "thread_id": thread.id}
 

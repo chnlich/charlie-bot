@@ -13,6 +13,23 @@ log = structlog.get_logger()
 from src.core.models import BackendOption
 
 
+class ImprovementLoopConfig(BaseModel):
+  """Declarative config for an improvement-loop cron task."""
+
+  backlog: str  # relative path within repo, e.g. 'loop/backlog.yaml'
+  role: str  # agent role description
+  scope_files: list[str]  # files/dirs agent may modify
+  id_prefix: str = ''  # e.g. 'D' for D-001, empty for plain 001
+  language: str = 'en'  # 'en' or 'zh-CN'
+  max_pending: int = 10
+  stale_timeout_hours: float = 1.0
+  state_files: list[str] = []  # extra files to read before acting
+  verify: list[str] = []  # shell commands to run after implementing
+  scan_prompt: str = ''  # module-specific instructions for health scan step
+  idea_prompt: str = ''  # what to think about when generating new ideas
+  extra_rules: list[str] = []  # module-specific rules appended to prompt
+
+
 class ScheduledTaskConfig(BaseModel):
   """Configuration for a single scheduled (cron-like) task."""
 
@@ -20,6 +37,7 @@ class ScheduledTaskConfig(BaseModel):
   cron: str
   prompt: Optional[str] = None
   handler: Optional[str] = None
+  loop: Optional[ImprovementLoopConfig] = None
   repo: Optional[str] = None
   timezone: str = "America/New_York"
   enabled: bool = True
@@ -27,11 +45,10 @@ class ScheduledTaskConfig(BaseModel):
   allow_failure: bool = False
 
   @model_validator(mode='after')
-  def check_prompt_or_handler(self) -> 'ScheduledTaskConfig':
-    has_prompt = bool(self.prompt)
-    has_handler = bool(self.handler)
-    if has_prompt == has_handler:
-      raise ValueError("task must have exactly one of 'prompt' or 'handler'")
+  def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
+    sources = sum([bool(self.prompt), bool(self.handler), bool(self.loop)])
+    if sources != 1:
+      raise ValueError("task must have exactly one of 'prompt', 'handler', or 'loop'")
     return self
 
 

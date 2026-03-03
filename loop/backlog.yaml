@@ -281,7 +281,7 @@
     -> BackendOption | None method to CharlieBotConfig in core/config.py and replace
     all inline lookups. Complements backlog item 019 (default_backend_id).
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-03T14:00:00Z'
   priority: medium
 - id: '026'

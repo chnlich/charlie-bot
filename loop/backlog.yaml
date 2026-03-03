@@ -273,12 +273,11 @@
   priority: medium
 - id: '025'
   title: Add get_backend_option(id) method to CharlieBotConfig
-  description: Centralize backend option lookup that is scattered across 5+ call
-    sites. The pattern next((opt for opt in cfg.backend_options if opt.id == X), None)
-    appears in chat.py:151, sessions.py:52, spawner.py:165/179/197, and scheduler.py:199.
-    Add a get_backend_option(self, backend_id) -> BackendOption | None method to
-    CharlieBotConfig in core/config.py and replace all inline lookups. Complements
-    backlog item 019 (default_backend_id).
+  description: Centralize backend option lookup scattered across 4 call sites. The
+    pattern next((opt for opt in cfg.backend_options if opt.id == X), None) appears
+    in chat.py:151, spawner.py:165/179/197. Add a get_backend_option(self, backend_id)
+    -> BackendOption | None method to CharlieBotConfig in core/config.py and replace
+    all inline lookups. Complements backlog item 019 (default_backend_id).
   category: duplication
   status: pending
   created: '2026-03-03T14:00:00Z'
@@ -307,13 +306,13 @@
   created: '2026-03-03T14:00:00Z'
   priority: medium
 - id: '028'
-  title: Split _translate_item_event in codex.py with dispatch dict
+  title: Split _translate_item_event in codex.py into handler methods
   description: Reduce complexity of 101-line event translation function. agents/backends/codex.py:_translate_item_event
-    (L127-227) uses an 8-branch if/elif chain to handle different Codex event types
+    (L127-227) uses 8 independent if-blocks to handle different Codex event types
     (agent_message, reasoning, command_execution, file_change, mcp_tool_call, web_search,
-    todo_list, error). Replace with a _ITEM_HANDLERS dispatch dict mapping item type
-    strings to handler methods. Each handler becomes a focused 10-15 line method,
-    making it easy to add new event types without growing the main function.
+    todo_list, error). Note these are independent ifs (not elif) so multiple handlers
+    can fire per event. Extract each block into a _handle_<type>() method. The main
+    function becomes a loop calling each handler, preserving multi-fire semantics.
   category: architecture
   status: pending
   created: '2026-03-03T14:00:00Z'

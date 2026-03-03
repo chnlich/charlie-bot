@@ -9,7 +9,7 @@ from src.api.deps import get_session_manager, get_thread_manager
 from src.core.config import get_config
 from src.core.models import DelegateRequest
 from src.core.sessions import SessionManager
-from src.core.spawner import broadcast_and_persist, spawn_worker
+from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -31,8 +31,11 @@ async def delegate_task(
   # Create thread immediately so it's visible in the UI
   thread = await thread_mgr.create_thread(meta, req.description)
 
-  # Fire-and-forget: spawn worker in background
+  # Resolve backend/model from session config before spawning
   cfg = get_config()
+  resolved_backend, resolved_model = await resolve_session_subagent_backend_model(req.session_id, cfg, session_mgr)
+
+  # Fire-and-forget: spawn worker in background
   asyncio.create_task(
       spawn_worker(
           req.session_id,
@@ -42,6 +45,8 @@ async def delegate_task(
           session_mgr,
           thread_mgr,
           repo_path=req.repo_path,
+          resolved_backend=resolved_backend,
+          resolved_model=resolved_model,
       ))
 
   # Save and broadcast task_delegated event so cursor stays in sync on reconnect

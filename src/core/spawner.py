@@ -318,6 +318,12 @@ async def spawn_worker(
 
   except Exception as e:
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
+    try:
+      t = await thread_mgr.get_thread(session_id, thread_id)
+      if t and t.status == ThreadStatus.IDLE:
+        await thread_mgr.update_status(session_id, thread_id, ThreadStatus.FAILED, exit_code=-1)
+    except Exception:
+      pass
 
 
 async def _trigger_master(

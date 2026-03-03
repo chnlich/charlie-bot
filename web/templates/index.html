@@ -189,21 +189,22 @@
             <div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
               {% if msg.is_voice %}<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>{% endif %}
               <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+              {% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}
             </div>
           </div>
           {% elif msg.role == 'assistant' %}
           <div class="flex justify-start">
-            <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" data-md>{{ msg.content }}</div>
+            <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" data-md>{{ msg.content }}{% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}</div>
           </div>
           {% elif msg.role == 'system' %}
           <div class="flex justify-center">
-            <div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate">{{ msg.content }}</div>
+            <div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"{% if msg.timestamp %} title="{{ msg.timestamp }}"{% endif %}>{{ msg.content }}</div>
           </div>
           {% elif msg.role == 'worker_summary' %}
           <div class="flex justify-start">
             <div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer"
                  data-md data-full="{{ msg.full_content | e }}"
-                 onclick="showTextModal('Worker Result', this.dataset.full)">{{ msg.content }}</div>
+                 onclick="showTextModal('Worker Result', this.dataset.full)">{{ msg.content }}{% if msg.timestamp %}<div class="bubble-time text-[10px] text-emerald-400/50 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}</div>
           </div>
           {% elif msg.role == 'plan' %}
           <div class="flex justify-start">
@@ -213,6 +214,7 @@
                 Plan
               </div>
               <div data-md>{{ msg.content }}</div>
+              {% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}
             </div>
           </div>
           {% elif msg.role == 'separator' %}

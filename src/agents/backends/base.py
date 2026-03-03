@@ -22,6 +22,11 @@ class AgentBackend(ABC):
 
   Template-method pattern: subclasses override ``_build_command()`` (required),
   and optionally ``_prepare_env()`` and ``translate_event()``.
+
+  Event schema contract:
+    All events yielded by run() must be JSON-serializable dicts with at
+    minimum a "type" key. A "timestamp" (UTC ISO-8601) is recommended but
+    optional — the persistence layer injects one if missing.
   """
 
   def __init__(
@@ -65,7 +70,19 @@ class AgentBackend(ABC):
     return env
 
   def translate_event(self, event: dict) -> list[dict]:
-    """Hook to translate a raw NDJSON event into CC-compatible event(s). Identity default."""
+    """Translate a raw backend NDJSON event into CC-compatible event dict(s).
+
+    Each returned event dict MUST contain a "type" field. Standard types:
+      - "assistant": message content (requires "message.content" list)
+      - "system": system-level info
+      - "result": final usage/cost summary
+      - "error": error details
+
+    Events MAY include a "timestamp" field (UTC ISO-8601 string). If omitted,
+    the persistence layer (save_chat_event) injects one automatically.
+
+    Identity default: returns [event] unchanged.
+    """
     return [event]
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:

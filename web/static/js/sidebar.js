@@ -123,6 +123,10 @@ function renderSessionView(data) {
   if (backendBadge) {
     backendBadge.textContent = BACKEND_OPTIONS[data.active_backend] || data.active_backend;
   }
+  const inputModelBadge = document.getElementById('input-model-badge');
+  if (inputModelBadge) {
+    inputModelBadge.textContent = BACKEND_OPTIONS[data.active_backend] || data.active_backend;
+  }
 
   // Update events viewer link
   const evLink = document.querySelector('a[href*="/events"]');

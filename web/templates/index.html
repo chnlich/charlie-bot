@@ -260,6 +260,7 @@
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
+          <div id="input-model-badge" class="text-xs text-slate-400 mb-1 pl-1">{{ active_backend_label or active_backend }}</div>
           <div class="flex gap-2 items-end input-row">
             <div class="flex-1 relative">
               <div id="slash-popup" class="slash-popup"></div>

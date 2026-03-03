@@ -189,7 +189,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     const msg = ev.content || ev.message || 'Unknown error';
     appendMessage('system', 'Error: ' + msg, false, ev.timestamp);
   } else if (t === 'task_delegated') {
-    // Flush pending assistant text before system message (matches backend)
+    // Flush pending assistant text before task_delegated bubble (matches backend)
     if (streamBuf) {
       if (catchupDone) hideStreaming();
       appendMessage('assistant', streamBuf, false, streamTs);

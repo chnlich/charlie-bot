@@ -189,7 +189,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     }
     appendMessage('system', `Task delegated: ${ev.description || ''}`);
     setSessionSpinner(SESSION_ID, true);
-    if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '', ev.created_at);
+    if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '', ev.created_at, ev.backend || '');
   } else if (t === 'worker_summary') {
     // Flush pending assistant text before worker summary (matches backend)
     if (streamBuf) {

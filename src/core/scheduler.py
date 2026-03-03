@@ -219,6 +219,8 @@ class Scheduler:
         "description": task_cfg.prompt,
         "session_id": session.id,
         "thread_id": thread.id,
+        "backend": resolved_backend or "",
+        "model": resolved_model or "",
     }
     await broadcast_and_persist(session.id, event, session_mgr)
     log.info("scheduled_task_fired", task=task_cfg.name, session=session.id, thread=thread.id)

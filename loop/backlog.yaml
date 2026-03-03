@@ -213,9 +213,11 @@
     a `@property default_backend_id` to CharlieBotConfig in core/config.py that returns
     this value. Replace all 4 call sites with `cfg.default_backend_id`.
   category: duplication
-  status: pending
+  status: revision_requested
   created: '2026-03-03T12:00:00Z'
   priority: medium
+  revision_requested_at: '2026-03-03T12:37:00'
+  revision_feedback: now we have the config for the preferred model list
 - id: '020'
   title: Deduplicate cc_session_id persistence into SessionManager
   description: Prevent divergent persistence logic for cc_session_id. api/chat.py:170-174

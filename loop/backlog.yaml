@@ -260,3 +260,61 @@
   status: pending
   created: '2026-03-03T12:00:00Z'
   priority: low
+- id: '024'
+  title: Wrap iterdir() in asyncio.to_thread() in sessions.py
+  description: Fix sync I/O blocking the event loop on page loads. sessions.py:list_sessions
+    (L78) and search_sessions (L105) call Path.iterdir() synchronously inside async
+    functions. Wrap both in asyncio.to_thread() or convert to anyio.Path.iterdir().
+    These run on every page load and session search, so blocking here directly impacts
+    UI responsiveness.
+  category: performance
+  status: pending
+  created: '2026-03-03T14:00:00Z'
+  priority: medium
+- id: '025'
+  title: Add get_backend_option(id) method to CharlieBotConfig
+  description: Centralize backend option lookup that is scattered across 5+ call
+    sites. The pattern next((opt for opt in cfg.backend_options if opt.id == X), None)
+    appears in chat.py:151, sessions.py:52, spawner.py:165/179/197, and scheduler.py:199.
+    Add a get_backend_option(self, backend_id) -> BackendOption | None method to
+    CharlieBotConfig in core/config.py and replace all inline lookups. Complements
+    backlog item 019 (default_backend_id).
+  category: duplication
+  status: pending
+  created: '2026-03-03T14:00:00Z'
+  priority: medium
+- id: '026'
+  title: Remove dead AgentBackend.pid property
+  description: Clean up dead code on the backend base class. agents/backends/base.py:51
+    defines a pid property that is never accessed anywhere in the codebase. All PID
+    access goes through self._proc.pid directly or via the on_spawn callback parameter.
+    Delete the 3-line property definition.
+  category: dead-code
+  status: pending
+  created: '2026-03-03T14:00:00Z'
+  priority: low
+- id: '027'
+  title: Split _notify_completion in spawner.py into phases
+  description: Improve readability of spawner.py's third-longest function. core/spawner.py:_notify_completion
+    (L530-612, 83 lines) handles three distinct responsibilities in one function —
+    broadcasting completion events, spawning review worker, and triggering master
+    agent. Extract _broadcast_completion() for event building and websocket broadcast,
+    and _maybe_spawn_reviewer() for the review worker decision and spawn. The _trigger_master
+    call already exists as a separate function. Similar approach to backlog items
+    003 and 021.
+  category: architecture
+  status: pending
+  created: '2026-03-03T14:00:00Z'
+  priority: medium
+- id: '028'
+  title: Split _translate_item_event in codex.py with dispatch dict
+  description: Reduce complexity of 101-line event translation function. agents/backends/codex.py:_translate_item_event
+    (L127-227) uses an 8-branch if/elif chain to handle different Codex event types
+    (agent_message, reasoning, command_execution, file_change, mcp_tool_call, web_search,
+    todo_list, error). Replace with a _ITEM_HANDLERS dispatch dict mapping item type
+    strings to handler methods. Each handler becomes a focused 10-15 line method,
+    making it easy to add new event types without growing the main function.
+  category: architecture
+  status: pending
+  created: '2026-03-03T14:00:00Z'
+  priority: low

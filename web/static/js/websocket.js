@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 let ws = null;
 let streamBuf = '';
+let streamTs = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
 let catchupDone = false;
@@ -117,11 +118,12 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     // Flush pending assistant text before showing user message (matches backend)
     if (streamBuf) {
       if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf);
+      appendMessage('assistant', streamBuf, false, streamTs);
       streamBuf = '';
+      streamTs = null;
     }
     // Only show if sent from another tab (this tab already added it optimistically)
-    if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice);
+    if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice, ev.timestamp);
     pendingUserMsg = false;
   } else if (t === 'assistant') {
     const blocks = (ev.message || {}).content || [];
@@ -131,12 +133,13 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
         if (planText) {
           if (b.input && b.input.plan && streamBuf) {
             if (catchupDone) hideStreaming();
-            appendMessage('assistant', streamBuf);
+            appendMessage('assistant', streamBuf, false, streamTs);
           } else if (catchupDone) {
             hideStreaming();
           }
           streamBuf = '';
-          appendMessage('plan', planText);
+          streamTs = null;
+          appendMessage('plan', planText, false, ev.timestamp);
         }
       }
     }
@@ -146,16 +149,19 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     }
     if (text && streamBuf) {
       if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf);
+      appendMessage('assistant', streamBuf, false, streamTs);
       streamBuf = '';
+      streamTs = null;
     }
+    if (!streamBuf) streamTs = ev.timestamp;
     streamBuf += text;
     if (catchupDone && streamBuf) showStreaming(streamBuf);
   } else if (t === 'master_done') {
     if (streamBuf) {
       if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf);
+      appendMessage('assistant', streamBuf, false, streamTs);
       streamBuf = '';
+      streamTs = null;
     }
     if (!ev.still_thinking) {
       const elapsed = ev.thinking_seconds != null
@@ -167,40 +173,45 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   } else if (t === 'assistant_error') {
     if (catchupDone) hideStreaming();
     if (streamBuf) {
-      appendMessage('assistant', streamBuf);
+      appendMessage('assistant', streamBuf, false, streamTs);
       streamBuf = '';
+      streamTs = null;
     }
     stopThinking();
-    appendMessage('system', 'Error: ' + (ev.content || ''));
+    appendMessage('system', 'Error: ' + (ev.content || ''), false, ev.timestamp);
   } else if (t === 'error') {
     if (catchupDone) hideStreaming();
     if (streamBuf) {
-      appendMessage('assistant', streamBuf);
+      appendMessage('assistant', streamBuf, false, streamTs);
       streamBuf = '';
+      streamTs = null;
     }
     const msg = ev.content || ev.message || 'Unknown error';
-    appendMessage('system', 'Error: ' + msg);
+    appendMessage('system', 'Error: ' + msg, false, ev.timestamp);
   } else if (t === 'task_delegated') {
     // Flush pending assistant text before system message (matches backend)
     if (streamBuf) {
       if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf);
+      appendMessage('assistant', streamBuf, false, streamTs);
       streamBuf = '';
+      streamTs = null;
     }
-    appendMessage('system', `Task delegated: ${ev.description || ''}`);
+    appendMessage('system', `Task delegated: ${ev.description || ''}`, false, ev.timestamp);
     setSessionSpinner(SESSION_ID, true);
-    if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '', ev.created_at, ev.backend || '');
+    if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '', ev.timestamp || ev.created_at, ev.backend || '');
   } else if (t === 'worker_summary') {
     // Flush pending assistant text before worker summary (matches backend)
     if (streamBuf) {
       if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf);
+      appendMessage('assistant', streamBuf, false, streamTs);
       streamBuf = '';
+      streamTs = null;
     }
     const wDiv = document.createElement('div');
     wDiv.className = 'flex justify-start';
     const fullContent = (ev.full_content || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    wDiv.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer" data-full="${fullContent}" onclick="showTextModal('Worker Result', this.dataset.full)">${marked.parse(ev.content || '')}</div>`;
+    const tsHtml = ev.timestamp ? '<div class="text-[10px] text-emerald-400/50 mt-1">' + formatBubbleTime(ev.timestamp) + '</div>' : '';
+    wDiv.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer" data-full="${fullContent}" onclick="showTextModal('Worker Result', this.dataset.full)">${marked.parse(ev.content || '')}${tsHtml}</div>`;
     const streamEl = document.getElementById('streaming-msg');
     document.getElementById('messages').insertBefore(wDiv, streamEl);
     document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
@@ -208,7 +219,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     updateSpinner();
   } else if (t === 'handler_result') {
     const icon = ev.status === 'ok' ? '✓' : '✗';
-    appendMessage('system', `${icon} ${ev.task}: ${ev.message || ''}`);
+    appendMessage('system', `${icon} ${ev.task}: ${ev.message || ''}`, false, ev.timestamp);
   } else if (t === 'result') {
     updateUsageDisplay(ev);
   } else if (t === 'tex_edit_proposed') {
@@ -219,6 +230,6 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     let msg = 'Context compacted';
     if (trigger) msg += ' (' + trigger + ')';
     if (preTokens) msg += ' — was ' + Math.round(preTokens / 1000) + 'k tokens';
-    appendMessage('system', msg);
+    appendMessage('system', msg, false, ev.timestamp);
   }
 }

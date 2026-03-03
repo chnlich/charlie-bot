@@ -14,6 +14,14 @@ function bumpCurrentSessionToTop() {
   }
 }
 
+function formatBubbleTime(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString(undefined, {
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short'
+  });
+}
+
 async function sendMessage() {
   const input = document.getElementById('msg-input');
   const content = input.value.trim();
@@ -27,7 +35,7 @@ async function sendMessage() {
   // Optimistic UI: append user message and bump session to top
   pendingUserMsg = true;
   const displayContent = content || '[Files attached]';
-  appendMessage('user', displayContent);
+  appendMessage('user', displayContent, false, new Date().toISOString());
   bumpCurrentSessionToTop();
   input.value = '';
   input.style.height = 'auto';
@@ -49,18 +57,19 @@ async function sendMessage() {
   }
 }
 
-function appendMessage(role, content, isVoice) {
+function appendMessage(role, content, isVoice, timestamp) {
   const container = document.getElementById('messages');
   const div = document.createElement('div');
+  const timeHtml = timestamp ? '<div class="text-[10px] text-slate-400/60 mt-1">' + formatBubbleTime(timestamp) + '</div>' : '';
 
   if (role === 'user') {
     div.className = 'flex justify-end';
     div.innerHTML = `<div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
       ${isVoice ? '<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>' : ''}
-      <div class="whitespace-pre-wrap">${escapeHtml(content)}</div></div>`;
+      <div class="whitespace-pre-wrap">${escapeHtml(content)}</div>${timeHtml}</div>`;
   } else if (role === 'assistant') {
     div.className = 'flex justify-start';
-    div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg">${marked.parse(content)}</div>`;
+    div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg">${marked.parse(content)}${timeHtml}</div>`;
   } else if (role === 'plan') {
     div.className = 'flex justify-start';
     div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm prose-msg">
@@ -68,10 +77,12 @@ function appendMessage(role, content, isVoice) {
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
         Plan
       </div>
-      ${marked.parse(content)}</div>`;
+      ${marked.parse(content)}${timeHtml}</div>`;
   } else {
+    // System pill — show timestamp as hover tooltip
+    const titleAttr = timestamp ? ' title="' + formatBubbleTime(timestamp) + '"' : '';
     div.className = 'flex justify-center';
-    div.innerHTML = `<div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate">${escapeHtml(content)}</div>`;
+    div.innerHTML = `<div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"${titleAttr}>${escapeHtml(content)}</div>`;
   }
 
   // Insert before streaming-msg

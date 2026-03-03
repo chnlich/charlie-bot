@@ -43,6 +43,7 @@ async function switchSession(sessionId) {
 
   // Reset streaming state
   streamBuf = '';
+  streamTs = null;
   catchupDone = false;
   pendingUserMsg = false;
   hideStreaming();
@@ -137,32 +138,35 @@ function renderSessionView(data) {
   const streamHtml = streamEl ? streamEl.outerHTML : '';
 
   const parts = messages.map(msg => {
+    const tsDiv = msg.timestamp ? '<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="' + msg.timestamp + '"></div>' : '';
     if (msg.role === 'user') {
       const voiceSpan = msg.is_voice ? '<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>' : '';
       return '<div class="flex justify-end"><div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">'
-        + voiceSpan + '<div class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</div></div></div>';
+        + voiceSpan + '<div class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
     }
     if (msg.role === 'assistant') {
       return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" data-md>'
-        + escapeHtml(msg.content) + '</div></div>';
+        + escapeHtml(msg.content) + tsDiv + '</div></div>';
     }
     if (msg.role === 'system') {
-      return '<div class="flex justify-center"><div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate">'
+      const titleAttr = msg.timestamp ? ' title="' + msg.timestamp + '"' : '';
+      return '<div class="flex justify-center"><div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"' + titleAttr + '>'
         + escapeHtml(msg.content) + '</div></div>';
     }
     if (msg.role === 'worker_summary') {
       const escaped = escapeHtml(msg.full_content || '').replace(/"/g, '&quot;');
+      const wsTsDiv = msg.timestamp ? '<div class="bubble-time text-[10px] text-emerald-400/50 mt-1" data-ts="' + msg.timestamp + '"></div>' : '';
       return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer"'
         + ' data-md data-full="' + escaped + '"'
         + ' onclick="showTextModal(\'Worker Result\', this.dataset.full)">'
-        + escapeHtml(msg.content) + '</div></div>';
+        + escapeHtml(msg.content) + wsTsDiv + '</div></div>';
     }
     if (msg.role === 'plan') {
       return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm prose-msg">'
         + '<div class="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2">'
         + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>'
         + 'Plan</div>'
-        + '<div data-md>' + escapeHtml(msg.content) + '</div></div></div>';
+        + '<div data-md>' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
     }
     if (msg.role === 'separator') {
       const timeStr = msg.thinking_seconds != null ? ' &middot; ' + msg.thinking_seconds + 's' : '';
@@ -182,6 +186,13 @@ function renderSessionView(data) {
 
   // Parse markdown
   container.querySelectorAll('[data-md]').forEach(el => { el.innerHTML = marked.parse(el.textContent); });
+  // Render bubble timestamps
+  container.querySelectorAll('.bubble-time[data-ts]').forEach(el => { el.textContent = formatBubbleTime(el.dataset.ts); });
+  // Format system pill title attributes
+  container.querySelectorAll('.rounded-full[title]').forEach(el => {
+    const t = el.getAttribute('title');
+    if (t && t.includes('T')) el.title = formatBubbleTime(t);
+  });
 
   // Scroll to bottom
   container.scrollTop = container.scrollHeight;

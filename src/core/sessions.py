@@ -324,6 +324,8 @@ class SessionManager:
 
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     """Append a single NDJSON event line to chat_events.jsonl."""
+    if 'timestamp' not in event:
+      event['timestamp'] = datetime.now(timezone.utc).isoformat()
     await append_ndjson(self._chat_events_path(session_id), event)
     # Keep in-memory cache in sync
     if session_id in self._events_cache:

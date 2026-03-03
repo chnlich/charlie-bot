@@ -54,7 +54,7 @@ async def delegate_task(
       "type": "task_delegated",
       "thread_id": thread.id,
       "description": req.description,
-      "created_at": thread.created_at.isoformat(),
+      "timestamp": thread.created_at.isoformat(),
       "backend": resolved_backend or "",
       "model": resolved_model or "",
   }

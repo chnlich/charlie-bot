@@ -25,6 +25,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-md]').forEach(el => {
     el.innerHTML = marked.parse(el.textContent);
   });
+  // Render bubble timestamps (server sends raw ISO, JS formats to local TZ)
+  document.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
+    el.textContent = formatBubbleTime(el.dataset.ts);
+  });
+  // Format system pill title attributes from ISO to local time
+  document.querySelectorAll('#messages .rounded-full[title]').forEach(el => {
+    const t = el.getAttribute('title');
+    if (t && t.includes('T')) el.title = formatBubbleTime(t);
+  });
 
   // Scroll to bottom of messages
   const msgs = document.getElementById('messages');

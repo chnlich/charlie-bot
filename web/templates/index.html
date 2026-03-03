@@ -194,7 +194,10 @@
           </div>
           {% elif msg.role == 'assistant' %}
           <div class="flex justify-start">
-            <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" data-md>{{ msg.content }}{% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}</div>
+            <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">
+              <div class="prose-msg" data-md>{{ msg.content }}</div>
+              {% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}
+            </div>
           </div>
           {% elif msg.role == 'system' %}
           <div class="flex justify-center">
@@ -213,9 +216,12 @@
           </div>
           {% elif msg.role == 'worker_summary' %}
           <div class="flex justify-start">
-            <div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer"
-                 data-md data-full="{{ msg.full_content | e }}"
-                 onclick="showTextModal('Worker Result', this.dataset.full)">{{ msg.content }}{% if msg.timestamp %}<div class="bubble-time text-[10px] text-emerald-400/50 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}</div>
+            <div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 cursor-pointer"
+                 data-full="{{ msg.full_content | e }}"
+                 onclick="showTextModal('Worker Result', this.dataset.full)">
+              <div class="prose-msg" data-md>{{ msg.content }}</div>
+              {% if msg.timestamp %}<div class="bubble-time text-[10px] text-emerald-400/50 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}
+            </div>
           </div>
           {% elif msg.role == 'plan' %}
           <div class="flex justify-start">
@@ -224,7 +230,7 @@
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
                 Plan
               </div>
-              <div data-md>{{ msg.content }}</div>
+              <div class="prose-msg" data-md>{{ msg.content }}</div>
               {% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}
             </div>
           </div>

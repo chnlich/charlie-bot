@@ -270,7 +270,7 @@
     These run on every page load and session search, so blocking here directly impacts
     UI responsiveness.
   category: performance
-  status: pending
+  status: approved
   created: '2026-03-03T14:00:00Z'
   priority: medium
 - id: '025'

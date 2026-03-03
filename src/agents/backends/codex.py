@@ -34,7 +34,6 @@ class CodexBackend(AgentBackend):
   def __init__(
       self,
       model: str = "gpt-5.3-codex",
-      instructions_content: Optional[str] = None,
       resume_session_id: Optional[str] = None,
       extra_flags: Optional[list[str]] = None,
       buffer_limit: Optional[int] = None,
@@ -42,7 +41,6 @@ class CodexBackend(AgentBackend):
   ):
     self._codex_bin = _resolve_codex_binary()
     self._model = model
-    self._instructions_content = instructions_content
     self._resume_session_id = resume_session_id
     self._extra_flags = extra_flags or []
     self._buffer_limit = buffer_limit or _DEFAULT_BUFFER_LIMIT
@@ -65,12 +63,6 @@ class CodexBackend(AgentBackend):
     current_path = codex_env.get("PATH", "")
     if local_bin not in current_path.split(":"):
       codex_env["PATH"] = f"{local_bin}:{current_path}"
-
-    # Prepend instructions to prompt if provided
-    effective_prompt = prompt
-    if self._instructions_content:
-      effective_prompt = (
-          f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
 
     if self._resume_session_id:
       cmd = [

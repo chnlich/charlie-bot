@@ -22,9 +22,28 @@ from src.core.config import CharlieBotConfig
 log = structlog.get_logger()
 
 
-def _build_worker_prompt(description: str, repo_path: Path, base_branch: str, branch_name: str, wt_path: str) -> str:
-  """Build the full worker prompt including worktree workflow instructions."""
-  return (
+def _build_worker_prompt(
+    description: str,
+    repo_path: Path,
+    base_branch: str,
+    branch_name: str,
+    wt_path: str,
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+) -> str:
+  """Build the full worker prompt including subagent instructions, session info, and worktree workflow."""
+  # Prepend SUBAGENT_PROMPT.md content
+  subagent_content = ""
+  prompt_file = cfg.subagent_prompt_file
+  if prompt_file.exists():
+    subagent_content = prompt_file.read_text(encoding="utf-8")
+  else:
+    log.warning("subagent_prompt_file_missing", path=str(prompt_file))
+
+  session_info = (f"## Session Info\n"
+                  f"- Session: {session_meta.name}\n")
+
+  worktree_section = (
       f"## Worktree Workflow\n"
       f"A dedicated git worktree is already created for you.\n"
       f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
@@ -35,6 +54,8 @@ def _build_worker_prompt(description: str, repo_path: Path, base_branch: str, br
       f"2. Commit your changes with descriptive messages.\n\n"
       f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
       f"## Task\n{description}")
+
+  return f"{subagent_content}\n{session_info}\n{worktree_section}"
 
 
 def _build_review_prompt(description: str, branch_name: str, wt_path: str, repo_path: Path, base_branch: str) -> str:
@@ -244,7 +265,9 @@ async def spawn_worker(
       await thread_mgr._save_metadata(thread)
 
       # Build enriched prompt with worktree workflow instructions
-      worker_prompt = _build_worker_prompt(description, resolved_repo, base_branch, branch_name, str(wt_path))
+      session_meta = await session_mgr.get_session(session_id)
+      worker_prompt = _build_worker_prompt(
+          description, resolved_repo, base_branch, branch_name, str(wt_path), cfg, session_meta)
       worktree_path = wt_path.resolve()
 
     if worktree_path is None:

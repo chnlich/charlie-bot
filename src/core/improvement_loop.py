@@ -88,8 +88,7 @@ def _check_revision(items: list[dict], backlog_path: Path) -> Optional[str]:
   return None
 
 
-async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementLoopConfig,
-                        repo_path: Path) -> bool:
+async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementLoopConfig, repo_path: Path) -> bool:
   """Step 1: reset stale in_progress items. Returns True if any were reset."""
   now = datetime.now(timezone.utc)
   modified = False
@@ -186,8 +185,9 @@ def _build_scan_prompt(cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
   ]
   if cfg.scan_prompt:
     parts.append(cfg.scan_prompt)
-  parts.append(f'If issues found, create ONE backlog item in {backlog_path} (status: pending). '
-               f'If clean, do nothing.')
+  parts.append(
+      f'If issues found, create ONE backlog item in {backlog_path} (status: pending). '
+      f'If clean, do nothing.')
   parts.append(_language_rule(cfg.language))
   parts.append('Commit and push.')
   extra = _extra_rules_text(cfg.extra_rules)

@@ -34,12 +34,18 @@ def _write_backlog(path: Path, items: list[dict]) -> None:
 # test_revision_requested_picked_first
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_revision_requested_picked_first(tmp_path: Path) -> None:
   """Revision feedback takes priority over approved items."""
   backlog = tmp_path / 'backlog.yaml'
   items = [
-      {'id': '001', 'status': 'approved', 'title': 'Fix bug', 'priority': 'high'},
+      {
+          'id': '001',
+          'status': 'approved',
+          'title': 'Fix bug',
+          'priority': 'high'
+      },
       {
           'id': '002',
           'status': 'revision_requested',
@@ -61,13 +67,19 @@ async def test_revision_requested_picked_first(tmp_path: Path) -> None:
 # test_stale_in_progress_reset
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_stale_in_progress_reset(tmp_path: Path) -> None:
   """Stale in_progress items get reset to failed, YAML updated."""
   backlog = tmp_path / 'backlog.yaml'
   old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
   items = [
-      {'id': '001', 'status': 'in_progress', 'title': 'Slow task', 'created': old_time},
+      {
+          'id': '001',
+          'status': 'in_progress',
+          'title': 'Slow task',
+          'created': old_time
+      },
   ]
   _write_backlog(backlog, items)
   cfg = _make_cfg()
@@ -89,14 +101,33 @@ async def test_stale_in_progress_reset(tmp_path: Path) -> None:
 # test_implement_highest_priority
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_implement_highest_priority(tmp_path: Path) -> None:
   """Multiple approved items — picks highest priority."""
   backlog = tmp_path / 'backlog.yaml'
   items = [
-      {'id': '001', 'status': 'approved', 'title': 'Low prio', 'priority': 'low', 'description': 'desc1'},
-      {'id': '002', 'status': 'approved', 'title': 'High prio', 'priority': 'high', 'description': 'desc2'},
-      {'id': '003', 'status': 'approved', 'title': 'Med prio', 'priority': 'medium', 'description': 'desc3'},
+      {
+          'id': '001',
+          'status': 'approved',
+          'title': 'Low prio',
+          'priority': 'low',
+          'description': 'desc1'
+      },
+      {
+          'id': '002',
+          'status': 'approved',
+          'title': 'High prio',
+          'priority': 'high',
+          'description': 'desc2'
+      },
+      {
+          'id': '003',
+          'status': 'approved',
+          'title': 'Med prio',
+          'priority': 'medium',
+          'description': 'desc3'
+      },
   ]
   _write_backlog(backlog, items)
   cfg = _make_cfg()
@@ -112,13 +143,22 @@ async def test_implement_highest_priority(tmp_path: Path) -> None:
 # test_generate_when_no_active
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_generate_when_no_active(tmp_path: Path) -> None:
   """No approved/in_progress items and under cap → generate."""
   backlog = tmp_path / 'backlog.yaml'
   items = [
-      {'id': '001', 'status': 'done', 'title': 'Done task'},
-      {'id': '002', 'status': 'pending', 'title': 'Pending task'},
+      {
+          'id': '001',
+          'status': 'done',
+          'title': 'Done task'
+      },
+      {
+          'id': '002',
+          'status': 'pending',
+          'title': 'Pending task'
+      },
   ]
   _write_backlog(backlog, items)
   cfg = _make_cfg(max_pending=10)
@@ -132,6 +172,7 @@ async def test_generate_when_no_active(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # test_noop_when_at_cap
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_noop_when_at_cap(tmp_path: Path) -> None:
@@ -152,6 +193,7 @@ async def test_noop_when_at_cap(tmp_path: Path) -> None:
 # test_scan_fallback
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_scan_fallback(tmp_path: Path) -> None:
   """Empty backlog → scan fallback."""
@@ -169,14 +211,33 @@ async def test_scan_fallback(tmp_path: Path) -> None:
 # test_priority_ordering
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_priority_ordering(tmp_path: Path) -> None:
   """Priority: high > medium > low."""
   backlog = tmp_path / 'backlog.yaml'
   items = [
-      {'id': '001', 'status': 'approved', 'title': 'Med', 'priority': 'medium', 'description': 'x'},
-      {'id': '002', 'status': 'approved', 'title': 'Low', 'priority': 'low', 'description': 'y'},
-      {'id': '003', 'status': 'approved', 'title': 'High', 'priority': 'high', 'description': 'z'},
+      {
+          'id': '001',
+          'status': 'approved',
+          'title': 'Med',
+          'priority': 'medium',
+          'description': 'x'
+      },
+      {
+          'id': '002',
+          'status': 'approved',
+          'title': 'Low',
+          'priority': 'low',
+          'description': 'y'
+      },
+      {
+          'id': '003',
+          'status': 'approved',
+          'title': 'High',
+          'priority': 'high',
+          'description': 'z'
+      },
   ]
   _write_backlog(backlog, items)
   cfg = _make_cfg()
@@ -191,6 +252,7 @@ async def test_priority_ordering(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # test_next_id_with_prefix
 # ---------------------------------------------------------------------------
+
 
 def test_next_id_with_prefix() -> None:
   items = [{'id': 'D-001'}, {'id': 'D-005'}, {'id': '007'}]
@@ -211,6 +273,7 @@ def test_next_id_empty_backlog() -> None:
 # test_missing_backlog_file
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_missing_backlog_generates(tmp_path: Path) -> None:
   """Missing backlog file → generate (empty backlog, under cap)."""
@@ -225,6 +288,7 @@ async def test_missing_backlog_generates(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # test_language_rule_in_prompt
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_language_rule_zh_cn(tmp_path: Path) -> None:

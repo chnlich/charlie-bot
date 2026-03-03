@@ -17,7 +17,8 @@ function bumpCurrentSessionToTop() {
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
-  return d.toLocaleTimeString(undefined, {
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short'
   });
 }

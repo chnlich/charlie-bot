@@ -205,3 +205,57 @@
   status: approved
   created: '2026-03-02T12:00:00Z'
   priority: low
+- id: '019'
+  title: Add default_backend_id property to CharlieBotConfig
+  description: Eliminate 4 copies of the fallback expression across the codebase.
+    The expression `cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"`
+    is duplicated in api/sessions.py (L61, L67, L178) and api/pages.py (L95). Add
+    a `@property default_backend_id` to CharlieBotConfig in core/config.py that returns
+    this value. Replace all 4 call sites with `cfg.default_backend_id`.
+  category: duplication
+  status: pending
+  created: '2026-03-03T12:00:00Z'
+  priority: medium
+- id: '020'
+  title: Deduplicate cc_session_id persistence into SessionManager
+  description: Prevent divergent persistence logic for cc_session_id. api/chat.py:170-174
+    inlines the same "read-fresh → set cc_session_id → save" logic that spawner.py:429
+    already has as `_persist_cc_session_id`. Move the helper to SessionManager as
+    a public method `persist_cc_session_id(session_id, cc_session_id)` and have both
+    chat.py and spawner.py call it.
+  category: duplication
+  status: pending
+  created: '2026-03-03T12:00:00Z'
+  priority: medium
+- id: '021'
+  title: Split spawn_worker into smaller phase functions
+  description: Improve readability of the second-longest function in the codebase.
+    core/spawner.py:spawn_worker is 143 lines handling prompt building, process creation,
+    event streaming, and finalization in one function. Extract _build_worker_prompt(),
+    _start_worker_process(), _stream_worker_events(), and _finalize_worker() as separate
+    functions. Similar approach to backlog 003 for run_message.
+  category: architecture
+  status: pending
+  created: '2026-03-03T12:00:00Z'
+  priority: high
+- id: '022'
+  title: Fix yapf violations in codex.py, pages.py, and sessions.py
+  description: Bring remaining files into yapf compliance. Backlog 005 covers spawner.py
+    and message_utils.py only. yapf --diff also flags agents/backends/codex.py (~10
+    hunks, mostly list/dict formatting), api/pages.py (1 hunk, generator expression
+    wrapping), and api/sessions.py (1 hunk, log.info indentation). Run `yapf -i`
+    on all three files.
+  category: formatting
+  status: pending
+  created: '2026-03-03T12:00:00Z'
+  priority: low
+- id: '023'
+  title: Remove dead get_thread_dir and unused Optional import in codex.py
+  description: Clean up two dead symbols found in the health check. core/threads.py:91
+    defines get_thread_dir() which wraps _thread_dir but has zero callers anywhere
+    in the codebase — delete it. agents/backends/codex.py:6 imports Optional from
+    typing but never uses it — delete the import.
+  category: dead-code
+  status: pending
+  created: '2026-03-03T12:00:00Z'
+  priority: low

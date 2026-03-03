@@ -83,7 +83,8 @@ def _build_review_prompt(
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
-      f"3. Check for: correctness, bugs, style violations (Google Style, 2-space indent, 120-col), missing edge cases.\n"
+      f"3. Check for: correctness, bugs, style violations (Google Style, 2-space indent, 120-col), "
+      f"missing edge cases.\n"
       f"4. If you find issues, fix them and commit with descriptive messages.\n"
       f"5. Rebase onto base: `git rebase {base_branch}` — resolve any conflicts.\n"
       f"6. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
@@ -292,8 +293,7 @@ async def spawn_worker(
       thread.branch_name = branch_name
       thread.repo_path = str(resolved_repo)
       thread.worktree_path = str(wt_path)
-      if context:
-        thread.context = context
+      thread.context = context
       await thread_mgr._save_metadata(thread)
 
       # Build enriched prompt with worktree workflow instructions

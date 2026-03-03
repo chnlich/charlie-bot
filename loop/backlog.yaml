@@ -257,7 +257,7 @@
     in the codebase — delete it. agents/backends/codex.py:6 imports Optional from
     typing but never uses it — delete the import.
   category: dead-code
-  status: pending
+  status: approved
   created: '2026-03-03T12:00:00Z'
   priority: low
 - id: '024'

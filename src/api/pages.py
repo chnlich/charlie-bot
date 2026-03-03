@@ -106,7 +106,6 @@ async def index(
           "threads": threads,
           "event_count": len(raw_events),
           "session_usage": session_usage,
-          "all_usage": {},
           "backend_options": cfg.backend_options,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,

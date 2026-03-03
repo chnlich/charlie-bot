@@ -19,10 +19,6 @@ function updateUsageDisplay(ev) {
     // Still update cost display
     const cost = document.getElementById('usage-cost');
     if (cost) cost.textContent = '$' + usageTotalCost.toFixed(2);
-    const sidebarUsage = document.getElementById('sidebar-usage-' + SESSION_ID);
-    if (sidebarUsage) {
-      sidebarUsage.textContent = sidebarUsage.textContent.replace(/\$[\d.]+/, '$' + usageTotalCost.toFixed(2));
-    }
     return;
   }
 
@@ -50,12 +46,6 @@ function updateUsageDisplay(ev) {
     cost.textContent = '$' + usageTotalCost.toFixed(2);
   }
 
-  // Update sidebar for current session
-  const sidebarUsage = document.getElementById('sidebar-usage-' + SESSION_ID);
-  if (sidebarUsage) {
-    sidebarUsage.textContent = formatTokens(contextTokens) + ' tokens \u00b7 $' + usageTotalCost.toFixed(2);
-    sidebarUsage.classList.remove('hidden');
-  }
 }
 
 function showStreaming(content) {

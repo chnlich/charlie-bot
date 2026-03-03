@@ -52,9 +52,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Lazy-load sidebar usage badges (non-blocking)
-  fetchSidebarUsage();
-
   // Re-evaluate mobile layout on platform mode change
   platform.onChange((mode) => {
     const backlogPanel = document.getElementById('backlog-panel');

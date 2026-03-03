@@ -79,6 +79,14 @@ function appendMessage(role, content, isVoice, timestamp) {
         Plan
       </div>
       ${marked.parse(content)}${timeHtml}</div>`;
+  } else if (role === 'task_delegated') {
+    div.className = 'flex justify-start';
+    div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300">
+      <div class="flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+        Delegated
+      </div>
+      <div class="whitespace-pre-wrap">${escapeHtml(content)}</div>${timeHtml}</div>`;
   } else {
     // System pill — show timestamp as hover tooltip
     const titleAttr = timestamp ? ' title="' + formatBubbleTime(timestamp) + '"' : '';

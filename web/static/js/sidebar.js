@@ -153,6 +153,13 @@ function renderSessionView(data) {
       return '<div class="flex justify-center"><div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"' + titleAttr + '>'
         + escapeHtml(msg.content) + '</div></div>';
     }
+    if (msg.role === 'task_delegated') {
+      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300">'
+        + '<div class="flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2">'
+        + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>'
+        + 'Delegated</div>'
+        + '<div class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
+    }
     if (msg.role === 'worker_summary') {
       const escaped = escapeHtml(msg.full_content || '').replace(/"/g, '&quot;');
       const wsTsDiv = msg.timestamp ? '<div class="bubble-time text-[10px] text-emerald-400/50 mt-1" data-ts="' + msg.timestamp + '"></div>' : '';

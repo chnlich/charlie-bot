@@ -80,7 +80,7 @@ class CodexBackend(AgentBackend):
           "--config", _MODEL_REASONING_EFFORT_CONFIG,
       ]
     cmd.extend(self._extra_flags)
-    cmd.append(effective_prompt)
+    cmd.append(prompt)
 
     self._last_agent_text.clear()
 

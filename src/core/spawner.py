@@ -157,6 +157,19 @@ def _build_worker_event(
   return event
 
 
+def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> BackendOption:
+  """Resolve a model_preference entry to its BackendOption with default model.
+
+  Raises ValueError if the option_id is not in backend_options or has no model.
+  """
+  option = next((opt for opt in cfg.backend_options if opt.id == option_id), None)
+  if option is None:
+    raise ValueError(f"model_preference entry '{option_id}' not in backend_options")
+  if not option.model:
+    raise ValueError(f"model_preference entry '{option_id}' has no default model")
+  return option
+
+
 def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str) -> BackendOption:
   """Resolve a runtime backend option from explicit backend/model values."""
   if not backend_id:
@@ -465,6 +478,28 @@ async def _spawn_review_worker(
 
   review_prompt = _build_review_prompt(original_thread.description, branch_name, wt_path, repo_path, base_branch)
   resolved_backend, resolved_model = _require_thread_backend_model(original_thread)
+
+  # Cross-backend reviewer selection via model_preference
+  for pref_id in cfg.model_preference:
+    if pref_id == resolved_backend:
+      log.debug("reviewer_skip_same_backend", preference=pref_id)
+      continue
+    try:
+      pref_option = _resolve_preference_option(cfg, pref_id)
+      log.info(
+          "reviewer_backend_selected",
+          preference=pref_id,
+          worker_backend=resolved_backend,
+          reviewer_model=pref_option.model,
+      )
+      resolved_backend = pref_option.id
+      resolved_model = pref_option.model
+      break
+    except Exception as e:
+      log.warning("reviewer_preference_failed", preference=pref_id, error=str(e))
+  else:
+    if cfg.model_preference:
+      log.info("reviewer_fallback_to_worker_backend", worker_backend=resolved_backend)
 
   session_meta = await session_mgr.get_session(session_id)
   review_thread = await thread_mgr.create_thread(

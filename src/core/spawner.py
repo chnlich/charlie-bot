@@ -456,41 +456,58 @@ async def _spawn_review_worker(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-) -> None:
-  """Spawn a review worker for a successfully completed worker's branch."""
+    tried_backends: Optional[list[str]] = None,
+) -> bool:
+  """Spawn a review worker for a completed worker's branch.
+
+  Returns True if a reviewer was spawned, False if all backends are exhausted.
+  """
+  if tried_backends is None:
+    tried_backends = []
+
+  # Max retries guard: at most len(model_preference) retries after the initial spawn.
+  if len(tried_backends) > len(cfg.model_preference):
+    log.warning("reviewer_max_retries_exceeded", tried=tried_backends, max=len(cfg.model_preference))
+    return False
+
   if not original_thread.repo_path:
     log.error("spawn_review_no_repo_path", session=session_id, thread=original_thread.id,
               detail="original thread missing repo_path")
-    return
+    return False
   repo_path = Path(original_thread.repo_path)
   if not original_thread.branch_name:
     log.error("spawn_review_no_branch_name", session=session_id, thread=original_thread.id,
               detail="original thread missing branch_name")
-    return
+    return False
   if not original_thread.worktree_path:
     log.error("spawn_review_no_worktree_path", session=session_id, thread=original_thread.id,
               detail="original thread missing worktree_path")
-    return
+    return False
 
   base_branch = await _git_current_branch(repo_path)
   branch_name = original_thread.branch_name
   wt_path = original_thread.worktree_path
 
   review_prompt = _build_review_prompt(original_thread.description, branch_name, wt_path, repo_path, base_branch)
-  resolved_backend, resolved_model = _require_thread_backend_model(original_thread)
+  worker_backend, worker_model = _require_thread_backend_model(original_thread)
+  resolved_backend, resolved_model = worker_backend, worker_model
 
-  # Cross-backend reviewer selection via model_preference
+  # Cross-backend reviewer selection via model_preference, skipping already-tried backends.
   for pref_id in cfg.model_preference:
-    if pref_id == resolved_backend:
+    if pref_id == worker_backend:
       log.debug("reviewer_skip_same_backend", preference=pref_id)
+      continue
+    if pref_id in tried_backends:
+      log.debug("reviewer_skip_tried_backend", preference=pref_id)
       continue
     try:
       pref_option = _resolve_preference_option(cfg, pref_id)
       log.info(
           "reviewer_backend_selected",
           preference=pref_id,
-          worker_backend=resolved_backend,
+          worker_backend=worker_backend,
           reviewer_model=pref_option.model,
+          retry_attempt=len(tried_backends),
       )
       resolved_backend = pref_option.id
       resolved_model = pref_option.model
@@ -499,7 +516,13 @@ async def _spawn_review_worker(
       log.warning("reviewer_preference_failed", preference=pref_id, error=str(e))
   else:
     if cfg.model_preference:
-      log.info("reviewer_fallback_to_worker_backend", worker_backend=resolved_backend)
+      if worker_backend not in tried_backends:
+        log.info("reviewer_fallback_to_worker_backend", worker_backend=worker_backend, tried=tried_backends)
+      else:
+        log.warning("reviewer_all_backends_exhausted", tried=tried_backends)
+        return False
+
+  tried_backends = tried_backends + [resolved_backend]
 
   session_meta = await session_mgr.get_session(session_id)
   review_thread = await thread_mgr.create_thread(
@@ -510,6 +533,7 @@ async def _spawn_review_worker(
   review_thread.branch_name = branch_name
   review_thread.repo_path = str(repo_path)
   review_thread.worktree_path = wt_path
+  review_thread.tried_backends = tried_backends
   await thread_mgr._save_metadata(review_thread)
 
   asyncio.create_task(
@@ -525,6 +549,7 @@ async def _spawn_review_worker(
           resolved_backend=resolved_backend,
           resolved_model=resolved_model,
       ))
+  return True
 
 
 async def _notify_completion(
@@ -585,7 +610,37 @@ async def _notify_completion(
       return
 
     if thread_meta.review_of:
-      # This IS the review -> combine summaries, trigger master
+      # This IS a reviewer thread.
+      if exit_code != 0:
+        # Reviewer failed — attempt retry with next untried backend.
+        original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
+        if original_thread:
+          retried = await _spawn_review_worker(
+              session_id, original_thread, cfg, session_mgr, thread_mgr,
+              tried_backends=list(thread_meta.tried_backends),
+          )
+          if retried:
+            log.info(
+                "reviewer_retry_spawned",
+                session=session_id,
+                failed_review=thread_meta.id,
+                tried=thread_meta.tried_backends,
+            )
+            return
+          log.info(
+              "reviewer_retries_exhausted",
+              session=session_id,
+              failed_review=thread_meta.id,
+              tried=thread_meta.tried_backends,
+          )
+        else:
+          log.warning(
+              "reviewer_retry_original_not_found",
+              session=session_id,
+              review_of=thread_meta.review_of,
+          )
+
+      # Review done (success or retries exhausted) -> combine summaries, trigger master.
       original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
       combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
       await _trigger_master(session_id, combined, cfg, session_mgr)

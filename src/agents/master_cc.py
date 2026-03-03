@@ -154,13 +154,13 @@ async def run_message(
 
   # Read CLAUDE.md content for codex backend (which injects it into the prompt)
   instructions_content: Optional[str] = None
-  if option.type == "codex":
+  if option.type in ("codex", "gemini"):
     session_claude_md = cfg.session_claude_md(session_meta.id)
     if session_claude_md.exists():
       instructions_content = session_claude_md.read_text(encoding="utf-8")
 
   extra_flags: list[str] = []
-  if session_meta.cc_session_id and option.type != "codex":
+  if session_meta.cc_session_id and option.type not in ("codex", "gemini"):
     extra_flags = ["--resume", session_meta.cc_session_id]
   if extra_claude_flags:
     extra_flags.extend(extra_claude_flags)
@@ -188,7 +188,7 @@ async def run_message(
         buffer_limit=cfg.subprocess_buffer_limit,
         on_spawn=_on_spawn,
         instructions_content=instructions_content,
-        resume_session_id=session_meta.cc_session_id if option.type == "codex" else None,
+        resume_session_id=session_meta.cc_session_id if option.type in ("codex", "gemini") else None,
     )
     _active_procs[session_meta.id] = backend
 

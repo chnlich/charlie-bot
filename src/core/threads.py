@@ -26,7 +26,7 @@ class ThreadManager:
       branch_name: Optional[str] = None,
       review_of: Optional[str] = None,
   ) -> ThreadMetadata:
-    """Create a new thread with a CLAUDE.md for the worker."""
+    """Create a new thread directory and metadata."""
     thread = ThreadMetadata(
         session_id=session_meta.id,
         description=description,
@@ -36,8 +36,6 @@ class ThreadManager:
 
     thread_dir = self._thread_dir(session_meta.id, thread.id)
     (thread_dir / "data").mkdir(parents=True, exist_ok=True)
-
-    await self._write_claude_md(thread_dir, session_meta)
 
     await self._save_metadata(thread)
     log.info("thread_created", thread_id=thread.id)
@@ -96,27 +94,6 @@ class ThreadManager:
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
-
-  async def _write_claude_md(
-      self,
-      thread_dir: Path,
-      session_meta: SessionMetadata,
-  ) -> None:
-    """Write default instructions + session info (task is passed via -p)."""
-    default_content = ""
-    prompt_file = self._cfg.subagent_prompt_file
-    if prompt_file.exists():
-      default_content = prompt_file.read_text(encoding="utf-8")
-    else:
-      log.warning("subagent_prompt_file_missing", path=str(prompt_file))
-
-    content = (f"{default_content}\n"
-               f"## Session Info\n"
-               f"- Session: {session_meta.name}\n")
-
-    claude_md_path = thread_dir / "CLAUDE.md"
-    async with aiofiles.open(claude_md_path, "w", encoding="utf-8") as f:
-      await f.write(content)
 
   async def _save_metadata(self, meta: ThreadMetadata) -> None:
     path = self._metadata_path(meta.session_id, meta.id)

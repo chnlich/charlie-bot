@@ -29,7 +29,7 @@ async def delegate_task(
     raise HTTPException(status_code=404, detail="Session not found")
 
   # Create thread immediately so it's visible in the UI
-  thread = await thread_mgr.create_thread(meta, req.description)
+  thread = await thread_mgr.create_thread(meta, req.description, context=req.context)
 
   # Resolve backend/model from session config before spawning
   cfg = get_config()
@@ -45,6 +45,7 @@ async def delegate_task(
           session_mgr,
           thread_mgr,
           repo_path=req.repo_path,
+          context=req.context,
           resolved_backend=resolved_backend,
           resolved_model=resolved_model,
       ))

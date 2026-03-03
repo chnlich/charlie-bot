@@ -48,6 +48,7 @@ class ThreadMetadata(BaseModel):
   review_of: Optional[str] = None
   backend: Optional[str] = None
   model: Optional[str] = None
+  tried_backends: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

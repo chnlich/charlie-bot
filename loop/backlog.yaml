@@ -205,7 +205,7 @@
   status: approved
   created: '2026-03-02T12:00:00Z'
   priority: low
-- id: '019'
+- id: 019
   title: Add default_backend_id property to CharlieBotConfig
   description: Eliminate 4 copies of the fallback expression across the codebase.
     The expression `cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"`
@@ -224,7 +224,7 @@
     a public method `persist_cc_session_id(session_id, cc_session_id)` and have both
     chat.py and spawner.py call it.
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-03T12:00:00Z'
   priority: medium
 - id: '021'
@@ -244,8 +244,8 @@
   description: Bring remaining files into yapf compliance. Backlog 005 covers spawner.py
     and message_utils.py only. yapf --diff also flags agents/backends/codex.py (~10
     hunks, mostly list/dict formatting), api/pages.py (1 hunk, generator expression
-    wrapping), and api/sessions.py (1 hunk, log.info indentation). Run `yapf -i`
-    on all three files.
+    wrapping), and api/sessions.py (1 hunk, log.info indentation). Run `yapf -i` on
+    all three files.
   category: formatting
   status: pending
   created: '2026-03-03T12:00:00Z'
@@ -305,7 +305,7 @@
   status: pending
   created: '2026-03-03T14:00:00Z'
   priority: medium
-- id: '028'
+- id: 028
   title: Split _translate_item_event in codex.py into handler methods
   description: Reduce complexity of 101-line event translation function. agents/backends/codex.py:_translate_item_event
     (L127-227) uses 8 independent if-blocks to handle different Codex event types

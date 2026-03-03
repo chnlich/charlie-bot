@@ -73,5 +73,5 @@ function switchTab(tab) {
 // ---------------------------------------------------------------------------
 function autoResize(el) {
   el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  el.style.height = Math.min(Math.max(el.scrollHeight, 38), 200) + 'px';
 }

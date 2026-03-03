@@ -267,7 +267,10 @@
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
           <div class="flex gap-2 items-end input-row">
-            <span id="input-model-badge" class="text-xs text-slate-400 whitespace-nowrap self-center">{{ active_backend_label or active_backend }}</span>
+            <span
+              id="input-model-badge"
+              class="text-xs text-slate-400 whitespace-nowrap self-center"
+            >{{ active_backend_label or active_backend }}</span>
             <div class="flex-1 relative">
               <div id="slash-popup" class="slash-popup"></div>
               <textarea id="msg-input"

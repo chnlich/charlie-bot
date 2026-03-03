@@ -8,7 +8,6 @@ from typing import Optional
 import structlog
 
 from src.agents.backends.base import AgentBackend
-from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.core.config import CharlieBotConfig
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
 from src.core.models import BackendOption, SessionMetadata

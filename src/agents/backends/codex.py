@@ -1,11 +1,9 @@
 """CodexBackend — AgentBackend wrapping the `codex exec --json` CLI."""
 
-import asyncio
 import json
 import shutil
-from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Optional
 
 import structlog
 
@@ -13,7 +11,8 @@ from src.agents.backends.base import AgentBackend
 
 log = structlog.get_logger()
 
-_DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
+# model_reasoning_effort="xhigh" is the only working value.
+# Other values are silently ignored by the Codex CLI. Do not make configurable.
 _MODEL_REASONING_EFFORT_CONFIG = 'model_reasoning_effort="xhigh"'
 
 
@@ -31,38 +30,24 @@ def _resolve_codex_binary() -> str:
 class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
-  def __init__(
-      self,
-      model: str = "gpt-5.3-codex",
-      resume_session_id: Optional[str] = None,
-      extra_flags: Optional[list[str]] = None,
-      buffer_limit: Optional[int] = None,
-      on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
-  ):
+  def __init__(self, **kwargs):
+    model = kwargs.pop("model", "gpt-5.3-codex")
+    instructions_content = kwargs.pop("instructions_content", None)
+    resume_session_id = kwargs.pop("resume_session_id", None)
+    extra_flags = kwargs.pop("extra_flags", None)
+    super().__init__(
+        model=model, instructions_content=instructions_content,
+        resume_session_id=resume_session_id, extra_flags=extra_flags, **kwargs)
     self._codex_bin = _resolve_codex_binary()
-    self._model = model
-    self._resume_session_id = resume_session_id
-    self._extra_flags = extra_flags or []
-    self._buffer_limit = buffer_limit or _DEFAULT_BUFFER_LIMIT
-    self._on_spawn = on_spawn
-    self._proc: Optional[asyncio.subprocess.Process] = None
-    self.exit_code: int = -1
-    self.stderr_text: str = ""
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
 
-  @property
-  def pid(self) -> Optional[int]:
-    return self._proc.pid if self._proc else None
-
-  async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
-    """Spawn codex exec and yield CC-compatible event dicts."""
-    codex_env = {**env}
-    # Ensure ~/.local/bin is on PATH if codex lives there
-    local_bin = str(Path.home() / ".local" / "bin")
-    current_path = codex_env.get("PATH", "")
-    if local_bin not in current_path.split(":"):
-      codex_env["PATH"] = f"{local_bin}:{current_path}"
+  def _build_command(self, prompt: str) -> list[str]:
+    # Prepend instructions to prompt if provided
+    effective_prompt = prompt
+    if self._instructions_content:
+      effective_prompt = (
+          f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
 
     if self._resume_session_id:
       cmd = [
@@ -80,42 +65,20 @@ class CodexBackend(AgentBackend):
           "--config", _MODEL_REASONING_EFFORT_CONFIG,
       ]
     cmd.extend(self._extra_flags)
-    cmd.append(prompt)
+    cmd.append(effective_prompt)
 
     self._last_agent_text.clear()
+    return cmd
 
-    self._proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=cwd,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=codex_env,
-        limit=self._buffer_limit,
-    )
-    if self._on_spawn is not None:
-      await self._on_spawn(self._proc.pid)
+  def _prepare_env(self, env: dict) -> dict:
+    codex_env = {**env}
+    local_bin = str(Path.home() / ".local" / "bin")
+    current_path = codex_env.get("PATH", "")
+    if local_bin not in current_path.split(":"):
+      codex_env["PATH"] = f"{local_bin}:{current_path}"
+    return codex_env
 
-    assert self._proc.stdout is not None
-    async for raw_line in self._proc.stdout:
-      line = raw_line.decode("utf-8", errors="replace").strip()
-      if not line:
-        continue
-      try:
-        codex_event = json.loads(line)
-      except json.JSONDecodeError as e:
-        log.debug("codex_line_not_json", error=str(e))
-        continue
-      for cc_event in self._translate_event(codex_event):
-        yield cc_event
-
-    assert self._proc.stderr is not None
-    stderr_bytes = await self._proc.stderr.read()
-    await self._proc.wait()
-    self.exit_code = self._proc.returncode or 0
-    self.stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
-
-  def _translate_event(self, ev: dict) -> list[dict]:
+  def translate_event(self, ev: dict) -> list[dict]:
     """Translate a single Codex NDJSON event into CC-compatible event(s)."""
     ev_type = ev.get("type", "")
 
@@ -262,18 +225,3 @@ class CodexBackend(AgentBackend):
       results.append({"type": "error", "message": msg, "content": msg})
 
     return results
-
-  async def terminate(self) -> None:
-    """Send SIGTERM; escalate to SIGKILL if process does not exit within 5 s."""
-    if self._proc is None or self._proc.returncode is not None:
-      return
-    try:
-      self._proc.terminate()
-    except ProcessLookupError:
-      log.debug("codex_terminate_pid_gone", pid=self._proc.pid)
-      return
-    try:
-      await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
-      log.warning("codex_terminate_timeout", pid=self._proc.pid)
-      self._proc.kill()

@@ -26,17 +26,11 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
     ValueError: If the backend type is unknown or required config is missing.
   """
   if option.type == "cc-claude":
-    kwargs.pop("resume_session_id", None)
     return ClaudeCodeBackend(model=option.model, **kwargs)
   elif option.type == "cc-kimi":
-    kwargs.pop("resume_session_id", None)
     if not cfg.moonshot_api_key:
       raise ValueError("moonshot_api_key not set in config")
     return KimiBackend(api_key=cfg.moonshot_api_key, model=option.model or cfg.kimi_model, **kwargs)
   elif option.type == "codex":
-    return CodexBackend(
-        model=option.model,
-        resume_session_id=kwargs.pop("resume_session_id", None),
-        **kwargs,
-    )
+    return CodexBackend(model=option.model, **kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

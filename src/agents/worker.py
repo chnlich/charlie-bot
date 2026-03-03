@@ -8,6 +8,7 @@ from typing import Optional
 import aiofiles
 import structlog
 
+from src.agents.backends.base import AgentBackend
 from src.agents.backends.claude_code import BASE_COMMAND as WORKER_COMMAND, ClaudeCodeBackend
 from src.agents.backends.registry import build_backend
 from src.core.config import get_config, CharlieBotConfig
@@ -52,7 +53,7 @@ class Worker:
     self._backend_option = backend_option
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
-    self._backend: Optional[ClaudeCodeBackend] = None
+    self._backend: Optional[AgentBackend] = None
 
   async def run(self) -> int:
     """Spawn the Worker and stream its output. Returns exit code."""

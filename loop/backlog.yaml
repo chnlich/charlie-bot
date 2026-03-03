@@ -291,7 +291,7 @@
     access goes through self._proc.pid directly or via the on_spawn callback parameter.
     Delete the 3-line property definition.
   category: dead-code
-  status: pending
+  status: approved
   created: '2026-03-03T14:00:00Z'
   priority: low
 - id: '027'

@@ -237,11 +237,13 @@ class Scheduler:
 
     session = await self._get_or_create_session(task_cfg.name, session_mgr)
 
+    # Update last_scheduled_run before determine_action to prevent double-scheduling
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     session.last_scheduled_run = now.isoformat()
     session.last_scheduled_cron = task_cfg.cron
     session.updated_at = datetime.now(timezone.utc)
+    await session_mgr.save_metadata(session)
 
     repo_path = Path(task_cfg.repo) if task_cfg.repo else None
     if repo_path is None:

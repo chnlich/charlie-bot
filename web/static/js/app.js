@@ -74,10 +74,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Reconnect immediately on tab becoming visible (mobile Chrome background kills WS)
   document.addEventListener('visibilitychange', () => {
     if (switching) return;
-    if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)) {
-      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-      reconnectDelay = 1000;
-      connectWS();
+    if (document.visibilityState === 'visible') {
+      const inp = document.getElementById('msg-input');
+      if (inp) autoResize(inp);
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        reconnectDelay = 1000;
+        connectWS();
+      }
     }
   });
 

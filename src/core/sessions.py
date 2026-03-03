@@ -328,9 +328,6 @@ class SessionManager:
     # Keep in-memory cache in sync
     if session_id in self._events_cache:
       self._events_cache[session_id].append(event)
-    # Update usage.json cache whenever a result event is persisted.
-    if event.get("type") == "result":
-      self._update_usage_cache(session_id, event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up. Uses in-memory cache after first read."""
@@ -346,24 +343,6 @@ class SessionManager:
   # ---------------------------------------------------------------------------
   # Usage / token tracking
   # ---------------------------------------------------------------------------
-
-  def get_session_usage(self, session_id: str) -> dict | None:
-    """Return cached usage from usage.json, falling back to full NDJSON parse."""
-    cache_path = self._usage_cache_path(session_id)
-    if cache_path.exists():
-      try:
-        return json.loads(cache_path.read_text(encoding="utf-8"))
-      except (json.JSONDecodeError, OSError) as e:
-        log.debug("usage_cache_read_failed", session_id=session_id, error=str(e))
-    result = self.usage_from_events(self.load_chat_events_sync(session_id))
-    if result is not None:
-      # Backfill usage.json so future calls skip the full NDJSON parse.
-      cache_path.parent.mkdir(parents=True, exist_ok=True)
-      try:
-        cache_path.write_text(json.dumps(result), encoding="utf-8")
-      except OSError:
-        pass
-    return result
 
   @staticmethod
   def usage_from_events(events: list[dict]) -> dict | None:
@@ -418,51 +397,6 @@ class SessionManager:
         "total_cost_usd": round(total_cost, 4),
         "model": model,
     }
-
-  def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
-    """Incrementally update usage.json cache from a new result event."""
-    cache_path = self._usage_cache_path(session_id)
-    prev: dict = {}
-    if cache_path.exists():
-      try:
-        prev = json.loads(cache_path.read_text(encoding="utf-8"))
-      except (json.JSONDecodeError, OSError):
-        pass
-
-    prev_cost = prev.get("total_cost_usd", 0.0)
-    new_cost = round(prev_cost + result_event.get("total_cost_usd", 0.0), 4)
-
-    # Check if this result has real token data.
-    u = result_event.get("usage", {})
-    real_tokens = (
-        u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0))
-
-    if real_tokens > 0:
-      context_tokens = real_tokens
-      model_usage = result_event.get("modelUsage", {})
-      context_limit = 200_000
-      model = ""
-      for model_name, info in model_usage.items():
-        model = model_name
-        context_limit = info.get("contextWindow", 200_000)
-        break
-    else:
-      # Keep previous token data; only update cost.
-      context_tokens = prev.get("context_tokens", 0)
-      context_limit = prev.get("context_limit", 200_000)
-      model = prev.get("model", "")
-
-    data = {
-        "context_tokens": context_tokens,
-        "context_limit": context_limit,
-        "total_cost_usd": new_cost,
-        "model": model,
-    }
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(data), encoding="utf-8")
-
-  def _usage_cache_path(self, session_id: str) -> Path:
-    return self._session_dir(session_id) / "data" / "usage.json"
 
   # ---------------------------------------------------------------------------
   # Private helpers

@@ -146,21 +146,6 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
   return {sid: s for sid, s in pairs if s}
 
 
-@router.get('/usage')
-async def all_sessions_usage(session_mgr: SessionManager = Depends(get_session_manager)):
-  """Return {session_id: usage_dict} for all active sessions (lazy-loaded by frontend)."""
-  session_ids = await asyncio.to_thread(session_mgr.list_active_session_ids)
-
-  async def _fetch(sid: str) -> tuple[str, dict | None]:
-    try:
-      return sid, await asyncio.to_thread(session_mgr.get_session_usage, sid)
-    except Exception:
-      return sid, None
-
-  pairs = await asyncio.gather(*[_fetch(sid) for sid in session_ids])
-  return {sid: u for sid, u in pairs if u}
-
-
 @router.get('/search', response_model=list[SessionMetadata])
 async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
   """Full-text search across session names and chat content."""

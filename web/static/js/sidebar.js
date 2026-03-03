@@ -659,7 +659,6 @@ function renderScheduledSessionItem(s) {
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
       ${s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : ''}
       ${s.last_run_status ? `<span class="block text-xs ${s.last_run_status === 'success' ? 'text-green-400' : s.last_run_status === 'running' ? 'text-yellow-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400')}">Last: ${escapeHtml(s.last_run_status)}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>` : ''}
-      <span class="block text-xs text-slate-600 session-usage hidden" id="sidebar-usage-${s.id}"></span>
     </span>
     ${actions}
   </a>`;
@@ -823,7 +822,6 @@ function renderSessionList(sessions, filter) {
       <span class="flex-1 min-w-0">
         <span class="truncate block session-name">${escapeHtml(s.name)}</span>
         ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : `<span class="block text-xs text-slate-500 session-time" data-time="${timeIso}">${timeStr}</span>`}
-        <span class="block text-xs text-slate-600 session-usage hidden" id="sidebar-usage-${s.id}"></span>
       </span>
       ${actions}
     </a>`;
@@ -1028,26 +1026,6 @@ async function deleteCronTask() {
   }
   closeCronModal();
   switchSidebarFilter('scheduled');
-}
-
-// ---------------------------------------------------------------------------
-// Lazy-load sidebar usage badges
-// ---------------------------------------------------------------------------
-function fetchSidebarUsage() {
-  fetch('/api/sessions/usage')
-    .then(res => res.json())
-    .then(data => {
-      for (const [sid, u] of Object.entries(data)) {
-        const el = document.getElementById('sidebar-usage-' + sid);
-        if (el) {
-          const tokens = Math.round((u.context_tokens || 0) / 1000) + 'k';
-          const cost = '$' + (u.total_cost_usd || 0).toFixed(2);
-          el.textContent = tokens + ' tokens \u00b7 ' + cost;
-          el.classList.remove('hidden');
-        }
-      }
-    })
-    .catch(err => console.debug('Sidebar usage fetch failed:', err));
 }
 
 // ---------------------------------------------------------------------------

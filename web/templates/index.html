@@ -100,11 +100,6 @@
           <span class="flex-1 min-w-0">
             <span class="truncate block session-name">{{ s.name }}</span>
             <span class="block text-xs text-slate-500 session-time" data-time="{{ s.updated_at.isoformat() }}">{{ s.updated_at.strftime('%b %d, %H:%M') }}</span>
-            {% if all_usage is defined and all_usage.get(s.id) %}
-            <span class="block text-xs text-slate-600 session-usage" id="sidebar-usage-{{ s.id }}">{{ '%dk' % (all_usage[s.id].context_tokens // 1000) }} tokens &middot; ${{ '%.2f' % all_usage[s.id].total_cost_usd }}</span>
-            {% else %}
-            <span class="block text-xs text-slate-600 session-usage hidden" id="sidebar-usage-{{ s.id }}"></span>
-            {% endif %}
           </span>
           <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('{{ s.id }}', {{ 'true' if s.starred else 'false' }})"
                   class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn {% if s.starred %}text-yellow-400 !opacity-100{% else %}hover:text-yellow-400{% endif %}{% if active_session and active_session.id == s.id %} !opacity-100{% endif %}" title="Star" id="star-{{ s.id }}">

@@ -230,10 +230,11 @@
 - id: '021'
   title: Split spawn_worker into smaller phase functions
   description: Improve readability of the second-longest function in the codebase.
-    core/spawner.py:spawn_worker is 143 lines handling prompt building, process creation,
-    event streaming, and finalization in one function. Extract _build_worker_prompt(),
-    _start_worker_process(), _stream_worker_events(), and _finalize_worker() as separate
-    functions. Similar approach to backlog 003 for run_message.
+    core/spawner.py:spawn_worker (L220-365, ~145 lines) handles worktree creation,
+    process spawning, event streaming, and finalization in one function. Note that
+    _build_worker_prompt() is already extracted (L25). Extract the remaining phases
+    into _create_worktree_and_process(), _stream_worker_events(), and _finalize_worker().
+    Similar approach to backlog 003 for run_message.
   category: architecture
   status: pending
   created: '2026-03-03T12:00:00Z'

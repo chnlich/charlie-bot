@@ -206,9 +206,9 @@ async def run_message(
         if sid:
           cc_session_id = sid
 
-      # Broadcast to WebSocket subscribers and persist
-      await streaming_manager.broadcast(channel, event)
+      # Persist first (injects timestamp), then broadcast with timestamp included
       await save_chat_event(session_meta.id, event)
+      await streaming_manager.broadcast(channel, event)
 
       if event.get("type") == "system" and event.get("subtype") == "compact_boundary":
         meta = event.get("compact_metadata", {})
@@ -220,8 +220,8 @@ async def run_message(
             "trigger": trigger,
             "pre_tokens": pre_tokens,
         }
-        await streaming_manager.broadcast(channel, compact_event)
         await save_chat_event(session_meta.id, compact_event)
+        await streaming_manager.broadcast(channel, compact_event)
 
     exit_code = backend.exit_code
     if backend.stderr_text:
@@ -255,8 +255,8 @@ async def run_message(
 
     if error_msg:
       err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
-      await streaming_manager.broadcast(channel, err_event)
       await save_chat_event(session_meta.id, err_event)
+      await streaming_manager.broadcast(channel, err_event)
 
     # Mark session unread so other viewers see the new output
     if mark_unread:
@@ -265,15 +265,15 @@ async def run_message(
     done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
     if thinking_seconds is not None:
       done_event["thinking_seconds"] = thinking_seconds
-    await streaming_manager.broadcast(channel, done_event)
     await save_chat_event(session_meta.id, done_event)
+    await streaming_manager.broadcast(channel, done_event)
 
     if should_check_tex:
       proposal = await asyncio.to_thread(check_tex_changed)
       if proposal:
         tex_event = {'type': 'tex_edit_proposed'}
-        await streaming_manager.broadcast(channel, tex_event)
         await save_chat_event(session_meta.id, tex_event)
+        await streaming_manager.broadcast(channel, tex_event)
         log.info('tex_edit_proposed', session=session_meta.id)
       else:
         clear_snapshot()

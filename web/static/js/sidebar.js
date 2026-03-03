@@ -149,8 +149,8 @@ function renderSessionView(data) {
         + voiceSpan + '<div class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
     }
     if (msg.role === 'assistant') {
-      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" data-md>'
-        + escapeHtml(msg.content) + tsDiv + '</div></div>';
+      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">'
+        + '<div class="prose-msg" data-md>' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
     }
     if (msg.role === 'system') {
       const titleAttr = msg.timestamp ? ' title="' + msg.timestamp + '"' : '';
@@ -167,17 +167,17 @@ function renderSessionView(data) {
     if (msg.role === 'worker_summary') {
       const escaped = escapeHtml(msg.full_content || '').replace(/"/g, '&quot;');
       const wsTsDiv = msg.timestamp ? '<div class="bubble-time text-[10px] text-emerald-400/50 mt-1" data-ts="' + msg.timestamp + '"></div>' : '';
-      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer"'
-        + ' data-md data-full="' + escaped + '"'
+      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 cursor-pointer"'
+        + ' data-full="' + escaped + '"'
         + ' onclick="showTextModal(\'Worker Result\', this.dataset.full)">'
-        + escapeHtml(msg.content) + wsTsDiv + '</div></div>';
+        + '<div class="prose-msg" data-md>' + escapeHtml(msg.content) + '</div>' + wsTsDiv + '</div></div>';
     }
     if (msg.role === 'plan') {
-      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm prose-msg">'
+      return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm">'
         + '<div class="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2">'
         + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>'
         + 'Plan</div>'
-        + '<div data-md>' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
+        + '<div class="prose-msg" data-md>' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
     }
     if (msg.role === 'separator') {
       const timeStr = msg.thinking_seconds != null ? ' &middot; ' + msg.thinking_seconds + 's' : '';

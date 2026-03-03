@@ -196,7 +196,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
       streamBuf = '';
       streamTs = null;
     }
-    appendMessage('system', `Task delegated: ${ev.description || ''}`, false, ev.timestamp);
+    appendMessage('task_delegated', `Task delegated: ${ev.description || ''}`, false, ev.timestamp);
     setSessionSpinner(SESSION_ID, true);
     if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '', ev.timestamp || ev.created_at, ev.backend || '');
   } else if (t === 'worker_summary') {

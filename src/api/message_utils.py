@@ -115,7 +115,7 @@ def events_to_messages(events: list[dict]) -> list[dict]:
         last_assistant_ts = None
       desc = ev.get("description", "")
       messages.append({
-          "role": "system", "content": f"Task delegated: {desc}",
+          "role": "task_delegated", "content": f"Task delegated: {desc}",
           "event_index": idx, "timestamp": ev.get("timestamp") or ev.get("created_at"),
       })
     elif t == "worker_summary":

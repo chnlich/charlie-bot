@@ -13,7 +13,7 @@ from src.core.backup import BACKUP_DIR, apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
-from src.core.spawner import broadcast_and_persist, spawn_worker
+from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -196,6 +196,8 @@ class Scheduler:
 
     thread = await thread_mgr.create_thread(session, task_cfg.prompt)
 
+    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session.id, cfg, session_mgr)
+
     asyncio.create_task(
         spawn_worker(
             session_id=session.id,
@@ -205,6 +207,8 @@ class Scheduler:
             session_mgr=session_mgr,
             thread_mgr=thread_mgr,
             repo_path=task_cfg.repo,
+            resolved_backend=resolved_backend,
+            resolved_model=resolved_model,
         ),
         name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
     )

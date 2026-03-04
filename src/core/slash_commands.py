@@ -1,6 +1,7 @@
 """Slash command loading and execution."""
 
 import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -90,3 +91,50 @@ async def execute_shell_command(
       'stderr': stderr_bytes.decode('utf-8', errors='replace'),
       'exit_code': proc.returncode,
   }
+
+
+@dataclass
+class SlashDispatchResult:
+  """Result of dispatching a slash command."""
+  kind: str  # 'not_found', 'shell_result', 'prompt', 'error'
+  command: Optional[SlashCommand] = None
+  shell_result: Optional[dict] = None  # {stdout, stderr, exit_code}
+  substituted_prompt: Optional[str] = None
+  claude_code_flags: Optional[list[str]] = None
+  error: Optional[str] = None
+
+
+async def dispatch_slash_command(
+    name: str,
+    args: str,
+    session_dir: str = '',
+) -> SlashDispatchResult:
+  """Look up a YAML slash command by name and execute/prepare it.
+
+  For shell commands: runs the command and returns the result.
+  For prompt commands: substitutes args and returns the prompt text.
+  Returns kind='not_found' if the command doesn't exist in the registry.
+  """
+  commands = {c.name: c for c in await asyncio.to_thread(load_slash_commands)}
+  cmd = commands.get(name)
+  if cmd is None:
+    return SlashDispatchResult(kind='not_found')
+
+  if cmd.scope == 'shell':
+    if not cmd.command:
+      log.warning('slash_shell_missing_command_template', name=name)
+      return SlashDispatchResult(kind='error', command=cmd, error=f'Command /{name} has no command template configured')
+    result = await execute_shell_command(
+        cmd_template=cmd.command, args=args, session_dir=session_dir, timeout=cmd.timeout, cwd=cmd.cwd)
+    return SlashDispatchResult(kind='shell_result', command=cmd, shell_result=result)
+
+  if cmd.scope == 'prompt':
+    if not cmd.prompt:
+      log.warning('slash_prompt_missing_template', name=name)
+      return SlashDispatchResult(kind='error', command=cmd, error=f'Command /{name} has no prompt template configured')
+    substituted = cmd.prompt.replace('{args}', args)
+    return SlashDispatchResult(
+        kind='prompt', command=cmd, substituted_prompt=substituted, claude_code_flags=cmd.claude_code_flags or None)
+
+  log.warning('slash_unknown_scope', name=name, scope=cmd.scope)
+  return SlashDispatchResult(kind='error', command=cmd, error=f'Unknown scope for command /{name}: {cmd.scope}')

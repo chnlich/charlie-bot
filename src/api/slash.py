@@ -12,7 +12,7 @@ from src.api.deps import get_session_manager, require_session
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
-from src.core.slash_commands import execute_shell_command, load_slash_commands
+from src.core.slash_commands import dispatch_slash_command, load_slash_commands
 
 log = structlog.get_logger()
 
@@ -98,25 +98,17 @@ async def execute_command(
         },
     )
 
-  # Look up in YAML registry
-  commands = {c.name: c for c in await asyncio.to_thread(load_slash_commands)}
-  cmd = commands.get(name)
-  if cmd is None:
+  # Look up and dispatch via shared helper
+  dispatch = await dispatch_slash_command(name, req.args, session_dir=str(cfg.sessions_dir / session_id))
+
+  if dispatch.kind == 'not_found':
     return {'error': f'Unknown command: /{name}'}
 
-  if cmd.scope == 'shell':
-    if not cmd.command:
-      log.warning('slash_shell_missing_command_template', name=name)
-      return {'error': f'Command /{name} has no command template configured'}
+  if dispatch.kind == 'error':
+    return {'error': dispatch.error}
 
-    session_dir = str(cfg.sessions_dir / session_id)
-    result = await execute_shell_command(
-        cmd_template=cmd.command,
-        args=req.args,
-        session_dir=session_dir,
-        timeout=cmd.timeout,
-        cwd=cmd.cwd,
-    )
+  if dispatch.kind == 'shell_result':
+    result = dispatch.shell_result
     return {
         'type': 'shell_result',
         'command': name,
@@ -125,15 +117,10 @@ async def execute_command(
         'exit_code': result['exit_code'],
     }
 
-  if cmd.scope == 'prompt':
-    if not cmd.prompt:
-      log.warning('slash_prompt_missing_template', name=name)
-      return {'error': f'Command /{name} has no prompt template configured'}
-
-    substituted = cmd.prompt.replace('{args}', req.args)
+  if dispatch.kind == 'prompt':
     asyncio.create_task(
-        run_and_finalize(cfg, meta, substituted, session_mgr, extra_claude_flags=cmd.claude_code_flags or None))
+        run_and_finalize(
+            cfg, meta, dispatch.substituted_prompt, session_mgr, extra_claude_flags=dispatch.claude_code_flags))
     return JSONResponse(status_code=202, content={'type': 'prompt_dispatched', 'command': name})
 
-  log.warning('slash_unknown_scope', name=name, scope=cmd.scope)
-  return {'error': f'Unknown scope for command /{name}: {cmd.scope}'}
+  return {'error': f'Unexpected dispatch result for /{name}'}

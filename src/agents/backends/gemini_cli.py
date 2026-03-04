@@ -30,15 +30,18 @@ class GeminiCliBackend(AgentBackend):
     resume_session_id = kwargs.pop("resume_session_id", None)
     extra_flags = kwargs.pop("extra_flags", None)
     super().__init__(
-        model=model, instructions_content=instructions_content,
-        resume_session_id=resume_session_id, extra_flags=extra_flags, **kwargs)
+        model=model,
+        instructions_content=instructions_content,
+        resume_session_id=resume_session_id,
+        extra_flags=extra_flags,
+        **kwargs)
     self._gemini_bin = _resolve_gemini_binary()
+    self._text_buffer = ""
 
   def _build_command(self, prompt: str) -> list[str]:
     effective_prompt = prompt
     if self._instructions_content:
-      effective_prompt = (
-          f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
+      effective_prompt = (f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
 
     cmd = [self._gemini_bin, "-m", self._model, "-p", effective_prompt, "-o", "stream-json", "-y"]
     if self._resume_session_id:
@@ -57,6 +60,21 @@ class GeminiCliBackend(AgentBackend):
     """Translate a single Gemini stream-json NDJSON event into CC-compatible event(s)."""
     ev_type = ev.get("type", "")
 
+    def flush_buffer():
+      if self._text_buffer:
+        msg = [{
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": self._text_buffer
+                }]
+            },
+        }]
+        self._text_buffer = ""
+        return msg
+      return []
+
     # --- init ---
     if ev_type == "init":
       return [{"session_id": ev.get("session_id", "")}]
@@ -67,52 +85,62 @@ class GeminiCliBackend(AgentBackend):
       if role == "user":
         return []
       if role == "assistant":
-        return [{
-            "type": "assistant",
-            "message": {"content": [{"type": "text", "text": ev.get("content", "")}]},
-        }]
+        self._text_buffer += ev.get("content", "")
+        if not ev.get("delta", False):
+          return flush_buffer()
+        return []
 
     # --- tool_use ---
     if ev_type == "tool_use":
-      return [{
+      events = flush_buffer()
+      events.append({
           "type": "tool_use",
           "name": ev.get("tool_name", ""),
           "input": ev.get("parameters", {}),
-      }]
+      })
+      return events
 
     # --- tool_result ---
     if ev_type == "tool_result":
+      events = flush_buffer()
       status = ev.get("status", "")
       if status == "success":
-        return [{
+        events.append({
             "type": "tool_result",
             "tool_name": ev.get("tool_id", ""),
             "content": ev.get("output", ""),
-        }]
-      if status == "error":
+        })
+      elif status == "error":
         error = ev.get("error", {})
         msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        return [{"type": "tool_result", "tool_name": ev.get("tool_id", ""), "content": msg}]
+        events.append({"type": "tool_result", "tool_name": ev.get("tool_id", ""), "content": msg})
+      return events
 
     # --- error ---
     if ev_type == "error":
+      events = flush_buffer()
       msg = ev.get("message", "")
-      return [{"type": "error", "message": msg, "content": msg}]
+      events.append({"type": "error", "message": msg, "content": msg})
+      return events
 
     # --- result ---
     if ev_type == "result":
+      events = flush_buffer()
       stats = ev.get("stats", {})
-      return [{
-          "type": "result",
-          "result": "",
-          "usage": {
-              "input_tokens": stats.get("input_tokens", 0),
-              "output_tokens": stats.get("output_tokens", 0),
-              "cache_read_input_tokens": stats.get("cached", 0),
-              "cache_creation_input_tokens": 0,
-          },
-          "total_cost_usd": 0,
-      }]
+      events.append(
+          {
+              "type": "result",
+              "result": "",
+              "usage":
+                  {
+                      "input_tokens": stats.get("input_tokens", 0),
+                      "output_tokens": stats.get("output_tokens", 0),
+                      "cache_read_input_tokens": stats.get("cached", 0),
+                      "cache_creation_input_tokens": 0,
+                  },
+              "total_cost_usd": 0,
+          })
+      return events
 
     log.debug("gemini_event_unhandled", type=ev_type)
-    return []
+    return flush_buffer()

@@ -36,7 +36,7 @@ def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:
   ]
 
 
-def test_prepare_env_strips_api_keys(monkeypatch) -> None:
+def test_prepare_env_preserves_api_keys(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
   original_env = {
       "PATH": "/usr/bin",
@@ -46,11 +46,9 @@ def test_prepare_env_strips_api_keys(monkeypatch) -> None:
 
   prepared = backend._prepare_env(original_env)
 
-  assert "GEMINI_API_KEY" not in prepared
-  assert "GOOGLE_API_KEY" not in prepared
+  assert prepared["GEMINI_API_KEY"] == "gemini-key"
+  assert prepared["GOOGLE_API_KEY"] == "google-key"
   assert prepared["PATH"] == "/usr/bin"
-  assert original_env["GEMINI_API_KEY"] == "gemini-key"
-  assert original_env["GOOGLE_API_KEY"] == "google-key"
 
 
 def test_translate_event_mappings(monkeypatch) -> None:

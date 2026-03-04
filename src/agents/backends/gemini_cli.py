@@ -46,13 +46,6 @@ class GeminiCliBackend(AgentBackend):
     cmd.extend(self._extra_flags)
     return cmd
 
-  def _prepare_env(self, env: dict) -> dict:
-    """Strip API key env vars — Gemini CLI uses OAuth auth, not API keys."""
-    gemini_env = {**env}
-    gemini_env.pop("GEMINI_API_KEY", None)
-    gemini_env.pop("GOOGLE_API_KEY", None)
-    return gemini_env
-
   def translate_event(self, ev: dict) -> list[dict]:
     """Translate a single Gemini stream-json NDJSON event into CC-compatible event(s)."""
     ev_type = ev.get("type", "")

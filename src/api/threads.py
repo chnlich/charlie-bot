@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,14 +49,16 @@ async def get_thread_events(
     event_type = data.get('type', '')
     if event_type == 'assistant' and isinstance(data.get('message'), dict):
       for block in data['message'].get('content', []):
+        ts = data.get('timestamp', datetime.now(timezone.utc).isoformat())
         if block.get('type') == 'text':
-          events.append(WorkerEvent(type='assistant', content=block['text']))
+          events.append(WorkerEvent(type='assistant', content=block['text'], timestamp=ts))
         elif block.get('type') == 'tool_use':
           tool_id_to_name[block['id']] = block['name']
           events.append(WorkerEvent(
               type='tool_use',
               tool_name=block['name'],
               input=block.get('input', {}),
+              timestamp=ts,
           ))
     elif event_type == 'user' and isinstance(data.get('message'), dict):
       for block in data['message'].get('content', []):
@@ -68,7 +71,8 @@ async def get_thread_events(
             result_text = '\n'.join(text_parts)
           else:
             result_text = str(raw_content)
-          events.append(WorkerEvent(type='tool_result', tool_name=name, content=result_text))
+          ts = data.get('timestamp', datetime.now(timezone.utc).isoformat())
+          events.append(WorkerEvent(type='tool_result', tool_name=name, content=result_text, timestamp=ts))
     else:
       try:
         events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))

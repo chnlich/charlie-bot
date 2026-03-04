@@ -242,6 +242,169 @@ async def broadcast_and_persist(session_id: str, event: dict, session_mgr: Sessi
   await session_mgr.save_chat_event(session_id, event)
 
 
+async def _create_worktree_and_worker(
+    session_id: str,
+    thread: ThreadMetadata,
+    description: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    resolved_repo: Path,
+    context: Optional[str],
+    prompt_override: Optional[str],
+    resolved_backend: str,
+    resolved_model: str,
+) -> Worker:
+  """Create worktree, build prompt, resolve backend, and construct Worker."""
+  worktree_path: Optional[Path] = None
+
+  if prompt_override:
+    worker_prompt = prompt_override
+    if not thread.worktree_path:
+      log.error(
+          "spawn_worker_missing_worktree_path",
+          session=session_id,
+          thread_id=thread.id,
+          detail="prompt_override requires persisted worktree_path",
+      )
+      raise RuntimeError("thread metadata missing worktree_path")
+    worktree_path = Path(thread.worktree_path).resolve()
+  else:
+    # Get current branch as the base for the worktree
+    base_branch = await _git_current_branch(resolved_repo)
+
+    # Compute branch name and worktree path
+    ts = int(time.time())
+    branch_name = f"charliebot/task-{ts}-{thread.id[:8]}"
+    wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
+
+    # Ensure worktree parent dir exists and create worktree before launch.
+    Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
+    await _git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
+
+    # Store branch_name, repo_path, worktree path, and optional context on thread metadata.
+    thread.branch_name = branch_name
+    thread.repo_path = str(resolved_repo)
+    thread.worktree_path = str(wt_path)
+    thread.context = context
+    await thread_mgr._save_metadata(thread)
+
+    # Build enriched prompt with worktree workflow instructions
+    session_meta = await session_mgr.get_session(session_id)
+    worker_prompt = _build_worker_prompt(
+        description, resolved_repo, base_branch, branch_name, str(wt_path), session_meta)
+    worktree_path = wt_path.resolve()
+
+  if worktree_path is None:
+    raise RuntimeError("worktree path was not resolved")
+  if worktree_path == resolved_repo:
+    log.error(
+        "spawn_worker_repo_root_cwd_detected",
+        session=session_id,
+        thread_id=thread.id,
+        repo=str(resolved_repo),
+        worktree=str(worktree_path),
+    )
+    raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
+
+  backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
+  thread.backend = backend_option.id
+  thread.model = backend_option.model
+  await thread_mgr._save_metadata(thread)
+
+  # Read subagent instructions (SUBAGENT_PROMPT.md) for all backends
+  subagent_instructions = _read_subagent_instructions(cfg)
+
+  # Build Worker
+  events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
+  return Worker(
+      thread,
+      worktree_path,
+      events_log,
+      worker_prompt,
+      cfg,
+      backend_option=backend_option,
+      on_spawned=thread_mgr._save_metadata,
+      instructions_content=subagent_instructions,
+  )
+
+
+async def _stream_worker_events(
+    worker: Worker,
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+) -> tuple[int, bool, str]:
+  """Mark worker running, broadcast start event, run worker.
+
+  Returns (exit_code, quota_exhausted, error_message).
+  """
+  thread.cli_command = " ".join(WORKER_COMMAND + [description])
+  thread.status = ThreadStatus.RUNNING
+  thread.started_at = datetime.now(timezone.utc)
+  await thread_mgr._save_metadata(thread)
+  log.info("worker_running", thread_id=thread.id, session=session_id)
+
+  now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
+  started_event = _build_worker_event(
+      thread.id,
+      f'Worker `{thread.id[:8]}` started ({now}): {_short_desc(description)}',
+      'running',
+      backend=thread.backend,
+      model=thread.model,
+  )
+  await broadcast_and_persist(session_id, started_event, session_mgr)
+
+  try:
+    exit_code = await worker.run()
+    return exit_code, False, ""
+  except QuotaExhaustedException:
+    await worker.terminate()
+    log.warning("worker_quota_exhausted", thread_id=thread.id)
+    return -1, True, ""
+  except Exception as e:
+    await worker.terminate()
+    log.error("worker_failed", thread_id=thread.id, error=str(e), traceback=traceback.format_exc())
+    return -1, False, str(e)
+
+
+async def _finalize_worker(
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    exit_code: int,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    quota_exhausted: bool = False,
+    error: str = "",
+) -> None:
+  """Update thread status and notify completion."""
+  if quota_exhausted:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED)
+  elif error:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1)
+  elif exit_code == 0:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0)
+    log.info("worker_completed", thread_id=thread.id)
+  else:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
+    log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
+
+  await _notify_completion(
+      session_id,
+      description,
+      thread,
+      exit_code,
+      thread_mgr,
+      session_mgr,
+      cfg,
+      quota_exhausted=quota_exhausted,
+      error=error)
+
+
 async def spawn_worker(
     session_id: str,
     description: str,
@@ -271,117 +434,24 @@ async def spawn_worker(
       log.info("spawn_worker_repo_defaulted", session=session_id, repo=repo_path)
 
     resolved_repo = Path(repo_path).resolve()
-    worktree_path: Optional[Path] = None
 
-    if prompt_override:
-      worker_prompt = prompt_override
-      if not thread.worktree_path:
-        log.error(
-            "spawn_worker_missing_worktree_path",
-            session=session_id,
-            thread_id=thread_id,
-            detail="prompt_override requires persisted worktree_path",
-        )
-        raise RuntimeError("thread metadata missing worktree_path")
-      worktree_path = Path(thread.worktree_path).resolve()
-    else:
-      # Get current branch as the base for the worktree
-      base_branch = await _git_current_branch(resolved_repo)
+    worker = await _create_worktree_and_worker(
+        session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
+        resolved_backend, resolved_model)
 
-      # Compute branch name and worktree path
-      ts = int(time.time())
-      branch_name = f"charliebot/task-{ts}-{thread.id[:8]}"
-      wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
+    exit_code, quota_exhausted, error = await _stream_worker_events(
+        worker, session_id, description, thread, thread_mgr, session_mgr)
 
-      # Ensure worktree parent dir exists and create worktree before launch.
-      Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
-      await _git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
-
-      # Store branch_name, repo_path, worktree path, and optional context on thread metadata.
-      thread.branch_name = branch_name
-      thread.repo_path = str(resolved_repo)
-      thread.worktree_path = str(wt_path)
-      thread.context = context
-      await thread_mgr._save_metadata(thread)
-
-      # Build enriched prompt with worktree workflow instructions
-      session_meta = await session_mgr.get_session(session_id)
-      worker_prompt = _build_worker_prompt(
-          description, resolved_repo, base_branch, branch_name, str(wt_path), session_meta)
-      worktree_path = wt_path.resolve()
-
-    if worktree_path is None:
-      raise RuntimeError("worktree path was not resolved")
-    if worktree_path == resolved_repo:
-      log.error(
-          "spawn_worker_repo_root_cwd_detected",
-          session=session_id,
-          thread_id=thread.id,
-          repo=str(resolved_repo),
-          worktree=str(worktree_path),
-      )
-      raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
-
-    backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
-    thread.backend = backend_option.id
-    thread.model = backend_option.model
-    await thread_mgr._save_metadata(thread)
-
-    # Read subagent instructions (SUBAGENT_PROMPT.md) for all backends
-    subagent_instructions = _read_subagent_instructions(cfg)
-
-    # Build and run Worker
-    events_log = await thread_mgr.get_events_log_path(session_id, thread_id)
-    worker = Worker(
+    await _finalize_worker(
+        session_id,
+        description,
         thread,
-        worktree_path,
-        events_log,
-        worker_prompt,
+        exit_code,
+        thread_mgr,
+        session_mgr,
         cfg,
-        backend_option=backend_option,
-        on_spawned=thread_mgr._save_metadata,
-        instructions_content=subagent_instructions,
-    )
-
-    # Mark RUNNING
-    thread.cli_command = " ".join(WORKER_COMMAND + [description])
-    thread.status = ThreadStatus.RUNNING
-    thread.started_at = datetime.now(timezone.utc)
-    await thread_mgr._save_metadata(thread)
-    log.info("worker_running", thread_id=thread.id, session=session_id)
-
-    now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
-    started_event = _build_worker_event(
-        thread.id,
-        f'Worker `{thread.id[:8]}` started ({now}): {_short_desc(description)}',
-        'running',
-        backend=thread.backend,
-        model=thread.model,
-    )
-    await broadcast_and_persist(session_id, started_event, session_mgr)
-
-    try:
-      exit_code = await worker.run()
-      if exit_code == 0:
-        await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0)
-        log.info("worker_completed", thread_id=thread.id)
-      else:
-        await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
-        log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
-
-      await _notify_completion(session_id, description, thread, exit_code, thread_mgr, session_mgr, cfg)
-
-    except QuotaExhaustedException:
-      await worker.terminate()
-      await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED)
-      log.warning("worker_quota_exhausted", thread_id=thread.id)
-      await _notify_completion(session_id, description, thread, -1, thread_mgr, session_mgr, cfg, quota_exhausted=True)
-
-    except Exception as e:
-      await worker.terminate()
-      await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1)
-      log.error("worker_failed", thread_id=thread.id, error=str(e), traceback=traceback.format_exc())
-      await _notify_completion(session_id, description, thread, -1, thread_mgr, session_mgr, cfg, error=str(e))
+        quota_exhausted=quota_exhausted,
+        error=error)
 
   except Exception as e:
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
@@ -502,17 +572,26 @@ async def _spawn_review_worker(
     return False
 
   if not original_thread.repo_path:
-    log.error("spawn_review_no_repo_path", session=session_id, thread=original_thread.id,
-              detail="original thread missing repo_path")
+    log.error(
+        "spawn_review_no_repo_path",
+        session=session_id,
+        thread=original_thread.id,
+        detail="original thread missing repo_path")
     return False
   repo_path = Path(original_thread.repo_path)
   if not original_thread.branch_name:
-    log.error("spawn_review_no_branch_name", session=session_id, thread=original_thread.id,
-              detail="original thread missing branch_name")
+    log.error(
+        "spawn_review_no_branch_name",
+        session=session_id,
+        thread=original_thread.id,
+        detail="original thread missing branch_name")
     return False
   if not original_thread.worktree_path:
-    log.error("spawn_review_no_worktree_path", session=session_id, thread=original_thread.id,
-              detail="original thread missing worktree_path")
+    log.error(
+        "spawn_review_no_worktree_path",
+        session=session_id,
+        thread=original_thread.id,
+        detail="original thread missing worktree_path")
     return False
 
   base_branch = await _git_current_branch(repo_path)
@@ -520,9 +599,15 @@ async def _spawn_review_worker(
   wt_path = original_thread.worktree_path
 
   review_prompt = _build_review_prompt(
-      original_thread.description, branch_name, wt_path, repo_path, base_branch,
-      session_id=session_id, original_thread_id=original_thread.id,
-      sessions_dir=cfg.sessions_dir, context=original_thread.context)
+      original_thread.description,
+      branch_name,
+      wt_path,
+      repo_path,
+      base_branch,
+      session_id=session_id,
+      original_thread_id=original_thread.id,
+      sessions_dir=cfg.sessions_dir,
+      context=original_thread.context)
   worker_backend, worker_model = _require_thread_backend_model(original_thread)
   resolved_backend, resolved_model = worker_backend, worker_model
 
@@ -650,7 +735,11 @@ async def _notify_completion(
         original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
         if original_thread:
           retried = await _spawn_review_worker(
-              session_id, original_thread, cfg, session_mgr, thread_mgr,
+              session_id,
+              original_thread,
+              cfg,
+              session_mgr,
+              thread_mgr,
               tried_backends=list(thread_meta.tried_backends),
           )
           if retried:

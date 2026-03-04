@@ -205,18 +205,18 @@
   created: '2026-03-02T12:00:00Z'
   priority: low
 - id: 019
-  title: Add default_backend_id property to CharlieBotConfig
+  title: Add default_backend_id property using model_preference config
   description: Eliminate 4 copies of the fallback expression across the codebase.
     The expression `cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"`
     is duplicated in api/sessions.py (L61, L67, L178) and api/pages.py (L95). Add
-    a `@property default_backend_id` to CharlieBotConfig in core/config.py that returns
-    this value. Replace all 4 call sites with `cfg.default_backend_id`.
+    a `@property default_backend_id` to CharlieBotConfig in core/config.py that
+    consults the existing `model_preference` list first — return the first entry
+    that matches a valid backend_option, falling back to backend_options[0].id or
+    the hardcoded default. Replace all 4 call sites with `cfg.default_backend_id`.
   category: duplication
-  status: revision_requested
+  status: pending
   created: '2026-03-03T12:00:00Z'
   priority: medium
-  revision_requested_at: '2026-03-03T12:37:00'
-  revision_feedback: now we have the config for the preferred model list
 - id: '020'
   title: Deduplicate cc_session_id persistence into SessionManager
   description: Prevent divergent persistence logic for cc_session_id. api/chat.py:170-174

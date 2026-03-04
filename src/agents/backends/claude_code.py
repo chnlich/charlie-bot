@@ -24,19 +24,15 @@ class ClaudeCodeBackend(AgentBackend):
   def __init__(self, **kwargs):
     model = kwargs.pop("model", None)
     instructions_content = kwargs.pop("instructions_content", None)
-    system_prompt_path = kwargs.pop("system_prompt_path", None)
     extra_flags = kwargs.pop("extra_flags", None)
     super().__init__(
         model=model,
         instructions_content=instructions_content,
-        system_prompt_path=system_prompt_path,
         extra_flags=extra_flags,
         **kwargs)
     self._cmd: list[str] = list(BASE_COMMAND)
     if model:
       self._cmd += ["--model", model]
-    if system_prompt_path:
-      self._cmd += ["--system-prompt", system_prompt_path]
     if extra_flags:
       self._cmd += extra_flags
 

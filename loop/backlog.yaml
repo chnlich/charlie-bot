@@ -116,7 +116,7 @@
     both endpoints call. Removes ~40 duplicate lines and ensures bug fixes apply in
     both paths.
   category: duplication
-  status: approved
+  status: done
   created: '2026-03-01T12:00:00Z'
   priority: high
 - id: '011'

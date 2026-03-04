@@ -93,12 +93,20 @@ async def get_backlog(repo: str | None = None):
 
 @router.get('/history')
 async def get_history(repo: str | None = None):
-  """Return history entries from {repo}/loop/history.yaml."""
-  path = _repo_path(repo) / 'loop' / 'history.yaml'
-  if not path.exists():
+  """Return history entries from {repo}/loop/history-*.yaml files, sorted by timestamp descending."""
+  loop_dir = _repo_path(repo) / 'loop'
+  files = sorted(loop_dir.glob('history-*.yaml'))
+  if not files:
     return JSONResponse(content=[], status_code=200)
-  items = await asyncio.to_thread(lambda: yaml.safe_load(path.read_text(encoding='utf-8')) or [])
-  return JSONResponse(content=items)
+
+  def _load() -> list[dict]:
+    items: list[dict] = []
+    for f in files:
+      items.extend(yaml.safe_load(f.read_text(encoding='utf-8')) or [])
+    items.sort(key=lambda e: e.get('timestamp', ''), reverse=True)
+    return items
+
+  return JSONResponse(content=await asyncio.to_thread(_load))
 
 
 class BacklogPatch(BaseModel):

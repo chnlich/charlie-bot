@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -96,7 +97,7 @@ class Worker:
     exit_code = self._backend.exit_code
 
     if self._backend.stderr_text:
-      stderr_event = {"type": "error", "content": self._backend.stderr_text}
+      stderr_event = {"type": "error", "content": self._backend.stderr_text, "timestamp": datetime.now(timezone.utc).isoformat()}
       await append_ndjson(self._events_log, stderr_event)
       await streaming_manager.broadcast(self._thread.id, stderr_event)
       log.warning("worker_stderr", thread=self._thread.id, stderr=self._backend.stderr_text[:500])
@@ -106,6 +107,7 @@ class Worker:
         "type": "complete" if exit_code == 0 else "error",
         "status": "success" if exit_code == 0 else "failed",
         "exit_code": exit_code,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     await streaming_manager.broadcast(self._thread.id, final_event)
     log.info("worker_finished", thread=self._thread.id, exit_code=exit_code)
@@ -138,6 +140,10 @@ class Worker:
       await log_file.write(json.dumps(event_data) + "\n")
       await log_file.flush()
       raise QuotaExhaustedException(event_data.get("message", "Quota exhausted"))
+
+    # Inject timestamp if missing so replayed events carry the original time
+    if 'timestamp' not in event_data:
+      event_data['timestamp'] = datetime.now(timezone.utc).isoformat()
 
     # Write to disk
     await log_file.write(json.dumps(event_data) + "\n")

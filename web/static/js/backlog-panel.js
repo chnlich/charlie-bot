@@ -121,8 +121,8 @@ const backlogPanel = (() => {
       <div class="bg-gray-800 rounded-lg p-3 border border-gray-700 hover:border-gray-600 transition-colors">
         <div class="flex flex-wrap gap-1 mb-1.5">
           <span class="px-1.5 py-0.5 rounded text-xs font-medium ${priorityCls}">${item.priority || 'low'}</span>
-          <span class="px-1.5 py-0.5 rounded text-xs font-medium ${categoryCls}">${item.category || ''}</span>
-          <span class="px-1.5 py-0.5 rounded text-xs font-medium ${statusCls}">${item.status || ''}</span>
+          ${item.category ? `<span class="px-1.5 py-0.5 rounded text-xs font-medium ${categoryCls}">${item.category}</span>` : ''}
+          ${item.status ? `<span class="px-1.5 py-0.5 rounded text-xs font-medium ${statusCls}">${item.status}</span>` : ''}
           ${modBadge}
         </div>
         <p class="text-sm font-semibold text-gray-100 mb-1"><span class="text-gray-500 font-mono">#${_esc(item.id)}</span> ${_esc(item.title || '')}</p>

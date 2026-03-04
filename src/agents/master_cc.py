@@ -49,6 +49,110 @@ Continue from this context. The user wants to take a different direction from th
   return "\n\n".join(parts)
 
 
+def _build_prompt(user_content: str, is_voice: bool) -> str:
+  """Prepend voice-transcription disclaimer when the message comes from voice input."""
+  if is_voice:
+    return (
+        "[The following message is from voice transcription and might not be accurate. "
+        "Please ask the user first for any words that are unclear or might be wrong.]\n"
+        f"{user_content}")
+  return user_content
+
+
+async def _handle_event(
+    event: dict,
+    session_id: str,
+    channel: str,
+    cc_session_id: Optional[str],
+    save_chat_event,
+) -> Optional[str]:
+  """Process a single backend event: persist, broadcast, and handle compact_boundary.
+
+  Returns the cc_session_id (possibly updated from the event).
+  """
+  if not cc_session_id:
+    sid = event.get("session_id")
+    if sid:
+      cc_session_id = sid
+
+  # Persist first (injects timestamp), then broadcast with timestamp included
+  await save_chat_event(session_id, event)
+  await streaming_manager.broadcast(channel, event)
+
+  if event.get("type") == "system" and event.get("subtype") == "compact_boundary":
+    meta = event.get("compact_metadata", {})
+    trigger = meta.get("trigger", "unknown")
+    pre_tokens = meta.get("pre_tokens")
+    log.info("cc_context_compacted", session=session_id, trigger=trigger, pre_tokens=pre_tokens)
+    compact_event = {
+        "type": "context_compacted",
+        "trigger": trigger,
+        "pre_tokens": pre_tokens,
+    }
+    await save_chat_event(session_id, compact_event)
+    await streaming_manager.broadcast(channel, compact_event)
+
+  return cc_session_id
+
+
+async def _finalize_session(
+    session_meta: SessionMetadata,
+    channel: str,
+    exit_code: int,
+    error_msg: Optional[str],
+    should_check_tex: bool,
+    save_chat_event,
+    save_metadata=None,
+    mark_unread=None,
+) -> None:
+  """Clean up after run_message: update thinking state, broadcast errors/done, check tex."""
+  _active_procs.pop(session_meta.id, None)
+  # Decrement active-task counter; only clear thinking when ALL tasks finish
+  _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
+  still_thinking = _active_tasks.get(session_meta.id, 0) > 0
+
+  thinking_seconds = None
+  if not still_thinking:
+    if session_meta.thinking_since:
+      thinking_seconds = int((datetime.now(timezone.utc) - session_meta.thinking_since).total_seconds())
+    session_meta.thinking_since = None
+    if save_metadata:
+      await save_metadata(session_meta)
+    await streaming_manager.broadcast(
+        "sidebar", {
+            "type": "running_changed",
+            "session_id": session_meta.id,
+            "has_running_tasks": False,
+        })
+
+  if error_msg:
+    err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
+    await save_chat_event(session_meta.id, err_event)
+    await streaming_manager.broadcast(channel, err_event)
+
+  # Mark session unread so other viewers see the new output
+  if mark_unread:
+    await mark_unread(session_meta.id)
+
+  done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
+  if thinking_seconds is not None:
+    done_event["thinking_seconds"] = thinking_seconds
+  await save_chat_event(session_meta.id, done_event)
+  await streaming_manager.broadcast(channel, done_event)
+
+  if should_check_tex:
+    proposal = await asyncio.to_thread(check_tex_changed)
+    if proposal:
+      tex_event = {'type': 'tex_edit_proposed'}
+      await save_chat_event(session_meta.id, tex_event)
+      await streaming_manager.broadcast(channel, tex_event)
+      log.info('tex_edit_proposed', session=session_meta.id)
+    else:
+      clear_snapshot()
+
+  log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code, still_thinking=still_thinking)
+
+
 async def run_message(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -151,36 +255,10 @@ async def run_message(
     )
     _active_procs[session_meta.id] = backend
 
-    prompt = user_content
-    if is_voice:
-      prompt = (
-          "[The following message is from voice transcription and might not be accurate. "
-          "Please ask the user first for any words that are unclear or might be wrong.]\n"
-          f"{user_content}")
+    prompt = _build_prompt(user_content, is_voice)
 
     async for event in backend.run(prompt, cwd, env):
-      # Capture the CC session ID from the first event that has one
-      if not cc_session_id:
-        sid = event.get("session_id")
-        if sid:
-          cc_session_id = sid
-
-      # Persist first (injects timestamp), then broadcast with timestamp included
-      await save_chat_event(session_meta.id, event)
-      await streaming_manager.broadcast(channel, event)
-
-      if event.get("type") == "system" and event.get("subtype") == "compact_boundary":
-        meta = event.get("compact_metadata", {})
-        trigger = meta.get("trigger", "unknown")
-        pre_tokens = meta.get("pre_tokens")
-        log.info("cc_context_compacted", session=session_meta.id, trigger=trigger, pre_tokens=pre_tokens)
-        compact_event = {
-            "type": "context_compacted",
-            "trigger": trigger,
-            "pre_tokens": pre_tokens,
-        }
-        await save_chat_event(session_meta.id, compact_event)
-        await streaming_manager.broadcast(channel, compact_event)
+      cc_session_id = await _handle_event(event, session_meta.id, channel, cc_session_id, save_chat_event)
 
     exit_code = backend.exit_code
     if backend.stderr_text:
@@ -193,51 +271,16 @@ async def run_message(
     error_msg = str(e)
 
   finally:
-    _active_procs.pop(session_meta.id, None)
-    # Decrement active-task counter; only clear thinking when ALL tasks finish
-    _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
-    still_thinking = _active_tasks.get(session_meta.id, 0) > 0
-
-    thinking_seconds = None
-    if not still_thinking:
-      if session_meta.thinking_since:
-        thinking_seconds = int((datetime.now(timezone.utc) - session_meta.thinking_since).total_seconds())
-      session_meta.thinking_since = None
-      if save_metadata:
-        await save_metadata(session_meta)
-      await streaming_manager.broadcast(
-          "sidebar", {
-              "type": "running_changed",
-              "session_id": session_meta.id,
-              "has_running_tasks": False,
-          })
-
-    if error_msg:
-      err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
-      await save_chat_event(session_meta.id, err_event)
-      await streaming_manager.broadcast(channel, err_event)
-
-    # Mark session unread so other viewers see the new output
-    if mark_unread:
-      await mark_unread(session_meta.id)
-
-    done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
-    if thinking_seconds is not None:
-      done_event["thinking_seconds"] = thinking_seconds
-    await save_chat_event(session_meta.id, done_event)
-    await streaming_manager.broadcast(channel, done_event)
-
-    if should_check_tex:
-      proposal = await asyncio.to_thread(check_tex_changed)
-      if proposal:
-        tex_event = {'type': 'tex_edit_proposed'}
-        await save_chat_event(session_meta.id, tex_event)
-        await streaming_manager.broadcast(channel, tex_event)
-        log.info('tex_edit_proposed', session=session_meta.id)
-      else:
-        clear_snapshot()
-
-    log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code, still_thinking=still_thinking)
+    await _finalize_session(
+        session_meta,
+        channel,
+        exit_code,
+        error_msg,
+        should_check_tex,
+        save_chat_event,
+        save_metadata=save_metadata,
+        mark_unread=mark_unread,
+    )
 
   return cc_session_id
 

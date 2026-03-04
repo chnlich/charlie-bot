@@ -242,7 +242,7 @@ async def broadcast_and_persist(session_id: str, event: dict, session_mgr: Sessi
   await session_mgr.save_chat_event(session_id, event)
 
 
-async def _create_worktree_and_worker(
+async def _create_worktree_and_process(
     session_id: str,
     thread: ThreadMetadata,
     description: str,
@@ -435,7 +435,7 @@ async def spawn_worker(
 
     resolved_repo = Path(repo_path).resolve()
 
-    worker = await _create_worktree_and_worker(
+    worker = await _create_worktree_and_process(
         session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
         resolved_backend, resolved_model)
 

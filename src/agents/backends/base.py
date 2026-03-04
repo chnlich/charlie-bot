@@ -67,6 +67,9 @@ class AgentBackend(ABC):
     """
     ...
 
+  def _prepare_cwd(self, cwd: str) -> None:
+    """Hook to prepare the working directory before subprocess spawn. No-op default."""
+
   def _prepare_env(self, env: dict) -> dict:
     """Hook to modify the environment before subprocess spawn. Identity default."""
     return env
@@ -96,6 +99,7 @@ class AgentBackend(ABC):
     After the generator is fully consumed, ``exit_code`` and ``stderr_text``
     are populated.
     """
+    self._prepare_cwd(cwd)
     cmd = self._build_command(prompt)
     final_env = self._prepare_env(env)
 

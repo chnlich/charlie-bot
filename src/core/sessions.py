@@ -9,7 +9,6 @@ from typing import Optional
 import aiofiles
 import structlog
 
-from src.agents.master_cc import ensure_master_claude_md
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
@@ -46,9 +45,6 @@ class SessionManager:
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     await self._save_metadata(meta)
-
-    # Write CLAUDE.md immediately so it's ready before the first message
-    await asyncio.to_thread(ensure_master_claude_md, meta, self._cfg)
 
     log.info("session_created", session_id=meta.id, name=meta.name)
     return meta
@@ -178,8 +174,6 @@ class SessionManager:
     await asyncio.to_thread(events_path.write_text, '\n'.join(kept_lines) + '\n', encoding='utf-8')
 
     await self._save_metadata(meta)
-
-    await asyncio.to_thread(ensure_master_claude_md, meta, self._cfg)
 
     log.info('session_rewound', new_session=meta.id, parent=parent_id, event_index=event_index)
     return meta

@@ -22,24 +22,24 @@ from src.core.config import CharlieBotConfig
 log = structlog.get_logger()
 
 
+def _read_subagent_instructions(cfg: CharlieBotConfig) -> Optional[str]:
+  """Read SUBAGENT_PROMPT.md content for use as instructions_content."""
+  prompt_file = cfg.subagent_prompt_file
+  if prompt_file.exists():
+    return prompt_file.read_text(encoding="utf-8")
+  log.warning("subagent_prompt_file_missing", path=str(prompt_file))
+  return None
+
+
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
     base_branch: str,
     branch_name: str,
     wt_path: str,
-    cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
 ) -> str:
-  """Build the full worker prompt including subagent instructions, session info, and worktree workflow."""
-  # Prepend SUBAGENT_PROMPT.md content
-  subagent_content = ""
-  prompt_file = cfg.subagent_prompt_file
-  if prompt_file.exists():
-    subagent_content = prompt_file.read_text(encoding="utf-8")
-  else:
-    log.warning("subagent_prompt_file_missing", path=str(prompt_file))
-
+  """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   session_info = (f"## Session Info\n"
                   f"- Session: {session_meta.name}\n")
 
@@ -57,7 +57,7 @@ def _build_worker_prompt(
       f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
       f"## Task\n{description}")
 
-  return f"{subagent_content}\n{session_info}\n{worktree_section}"
+  return f"{session_info}\n{worktree_section}"
 
 
 def _build_review_prompt(
@@ -307,7 +307,7 @@ async def spawn_worker(
       # Build enriched prompt with worktree workflow instructions
       session_meta = await session_mgr.get_session(session_id)
       worker_prompt = _build_worker_prompt(
-          description, resolved_repo, base_branch, branch_name, str(wt_path), cfg, session_meta)
+          description, resolved_repo, base_branch, branch_name, str(wt_path), session_meta)
       worktree_path = wt_path.resolve()
 
     if worktree_path is None:
@@ -327,6 +327,9 @@ async def spawn_worker(
     thread.model = backend_option.model
     await thread_mgr._save_metadata(thread)
 
+    # Read subagent instructions (SUBAGENT_PROMPT.md) for all backends
+    subagent_instructions = _read_subagent_instructions(cfg)
+
     # Build and run Worker
     events_log = await thread_mgr.get_events_log_path(session_id, thread_id)
     worker = Worker(
@@ -337,6 +340,7 @@ async def spawn_worker(
         cfg,
         backend_option=backend_option,
         on_spawned=thread_mgr._save_metadata,
+        instructions_content=subagent_instructions,
     )
 
     # Mark RUNNING

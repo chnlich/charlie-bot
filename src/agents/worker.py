@@ -44,6 +44,7 @@ class Worker:
       backend_option: Optional[BackendOption] = None,
       extra_env: Optional[dict[str, str]] = None,
       on_spawned: Optional[callable] = None,
+      instructions_content: Optional[str] = None,
   ):
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -53,6 +54,7 @@ class Worker:
     self._backend_option = backend_option
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
+    self._instructions_content = instructions_content
     self._backend: Optional[AgentBackend] = None
 
   async def run(self) -> int:
@@ -73,12 +75,14 @@ class Worker:
           self._cfg,
           buffer_limit=self._cfg.subprocess_buffer_limit,
           on_spawn=_on_spawn,
+          instructions_content=self._instructions_content,
       )
     else:
       # Fallback to default ClaudeCodeBackend
       self._backend = ClaudeCodeBackend(
           buffer_limit=self._cfg.subprocess_buffer_limit,
           on_spawn=_on_spawn,
+          instructions_content=self._instructions_content,
       )
 
     log.info("worker_starting", thread=self._thread.id, cwd=str(self._worktree))

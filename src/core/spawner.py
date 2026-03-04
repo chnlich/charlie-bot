@@ -66,29 +66,37 @@ def _build_review_prompt(
     wt_path: str,
     repo_path: Path,
     base_branch: str,
+    session_id: str,
+    original_thread_id: str,
+    sessions_dir: Path,
     context: Optional[str] = None,
 ) -> str:
   """Build the prompt for a review worker."""
-  context_section = ""
-  if context:
-    context_section = (
-        f"\n## Business Context\n{context}\n\n"
-        f"Use this context to judge whether the changes are correct for the intended purpose, "
-        f"not just whether the code compiles.\n")
+  context_hint = context or '(none provided)'
+  chat_log = f"{sessions_dir}/{session_id}/data/chat_events.jsonl"
+  worker_log = f"{sessions_dir}/{session_id}/threads/{original_thread_id}/data/events.jsonl"
   return (
       f"## Code Review\n"
       f"You are reviewing another worker's code changes.\n\n"
-      f"Original task: {description}\n"
-      f"{context_section}\n"
+      f"## Context Research\n"
+      f"Before reviewing the code, understand the intent behind the changes:\n"
+      f"1. Read the session conversation: `{chat_log}`\n"
+      f"   - Focus on user messages to understand what was requested and why.\n"
+      f"2. Read the original worker's log: `{worker_log}`\n"
+      f"   - Understand what the worker did and any decisions it made.\n"
+      f"3. Delegator's context hint: {context_hint}\n\n"
+      f"## Review Checklist\n"
+      f"Original task: {description}\n\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
-      f"3. Check for: correctness, bugs, style violations (Google Style, 2-space indent, 120-col), "
-      f"missing edge cases.\n"
-      f"4. If you find issues, fix them and commit with descriptive messages.\n"
-      f"5. Rebase onto base: `git rebase {base_branch}` — resolve any conflicts.\n"
-      f"6. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"7. Clean up: `git worktree remove {wt_path}`")
+      f"3. Verify the changes address the user's actual intent (from context research above).\n"
+      f"4. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
+      f"5. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
+      f"6. If you find issues, fix them and commit with descriptive messages.\n"
+      f"7. Rebase onto base: `git rebase {base_branch}` — resolve any conflicts.\n"
+      f"8. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
+      f"9. Clean up: `git worktree remove {wt_path}`")
 
 
 async def _git_current_branch(repo_path: Path) -> str:
@@ -509,7 +517,8 @@ async def _spawn_review_worker(
 
   review_prompt = _build_review_prompt(
       original_thread.description, branch_name, wt_path, repo_path, base_branch,
-      context=original_thread.context)
+      session_id=session_id, original_thread_id=original_thread.id,
+      sessions_dir=cfg.sessions_dir, context=original_thread.context)
   worker_backend, worker_model = _require_thread_backend_model(original_thread)
   resolved_backend, resolved_model = worker_backend, worker_model
 

@@ -99,6 +99,16 @@ async def send_message(
                 skip_user_event=True))
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
+      elif dispatch.kind == 'error':
+        error_text = dispatch.error or f'Failed to dispatch /{name}'
+        asst_event = {"type": "assistant", "message": {"content": [{"type": "text", "text": error_text}]}}
+        await session_mgr.save_chat_event(session_id, asst_event)
+        await streaming_manager.broadcast(channel, asst_event)
+        done_event = {"type": "master_done", "exit_code": 1, "still_thinking": False}
+        await session_mgr.save_chat_event(session_id, done_event)
+        await streaming_manager.broadcast(channel, done_event)
+        return JSONResponse(status_code=202, content={"status": "accepted"})
+
       elif dispatch.kind == 'shell_result':
         result = dispatch.shell_result
         out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
@@ -112,7 +122,7 @@ async def send_message(
         await streaming_manager.broadcast(channel, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
-    # Unknown /xxx or error — fall through to normal run_and_finalize (e.g. /compact)
+    # Unknown /xxx — fall through to normal run_and_finalize (e.g. /compact)
 
   # Fire-and-forget: spawn master CC in a background task
   asyncio.create_task(run_and_finalize(cfg, meta, content, session_mgr))

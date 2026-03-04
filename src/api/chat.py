@@ -16,7 +16,7 @@ from src.core.autonamer import maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SendMessageRequest, SessionMetadata
 from src.core.sessions import SessionManager
-from src.core.slash_commands import execute_shell_command, load_slash_commands
+from src.core.slash_commands import dispatch_slash_command
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
@@ -75,10 +75,9 @@ async def send_message(
     name = content[1:space_idx] if space_idx != -1 else content[1:]
     args = content[space_idx + 1:].strip() if space_idx != -1 else ''
 
-    commands = {c.name: c for c in await asyncio.to_thread(load_slash_commands)}
-    cmd = commands.get(name)
+    dispatch = await dispatch_slash_command(name, args, session_dir=str(cfg.sessions_dir / session_id))
 
-    if cmd is not None:
+    if dispatch.kind != 'not_found':
       channel = f"session:{session_id}"
       user_event = {
           "type": "user",
@@ -89,22 +88,19 @@ async def send_message(
       await session_mgr.save_chat_event(session_id, user_event)
       await streaming_manager.broadcast(channel, user_event)
 
-      if cmd.scope == 'prompt':
-        substituted = cmd.prompt.replace('{args}', args) if cmd.prompt else args
+      if dispatch.kind == 'prompt':
         asyncio.create_task(
             run_and_finalize(
                 cfg,
                 meta,
-                substituted,
+                dispatch.substituted_prompt,
                 session_mgr,
-                extra_claude_flags=cmd.claude_code_flags or None,
+                extra_claude_flags=dispatch.claude_code_flags,
                 skip_user_event=True))
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
-      elif cmd.scope == 'shell' and cmd.command:
-        session_dir = str(cfg.sessions_dir / session_id)
-        result = await execute_shell_command(
-            cmd_template=cmd.command, args=args, session_dir=session_dir, timeout=cmd.timeout, cwd=cmd.cwd)
+      elif dispatch.kind == 'shell_result':
+        result = dispatch.shell_result
         out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
             result['stdout'] or result['stderr'] or '(no output)')
         md_out = '```\n' + out + '\n```'
@@ -116,7 +112,7 @@ async def send_message(
         await streaming_manager.broadcast(channel, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
-    # Unknown /xxx — fall through to normal run_and_finalize (e.g. /compact)
+    # Unknown /xxx or error — fall through to normal run_and_finalize (e.g. /compact)
 
   # Fire-and-forget: spawn master CC in a background task
   asyncio.create_task(run_and_finalize(cfg, meta, content, session_mgr))

@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import signal
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Awaitable, Callable, Optional
@@ -105,6 +107,7 @@ class AgentBackend(ABC):
         stderr=asyncio.subprocess.PIPE,
         env=final_env,
         limit=self._buffer_limit,
+        start_new_session=True,
     )
     if self._on_spawn is not None:
       await self._on_spawn(self._proc.pid)
@@ -129,16 +132,19 @@ class AgentBackend(ABC):
     self.stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 
   async def terminate(self) -> None:
-    """Send SIGTERM; escalate to SIGKILL if process does not exit within 5 s."""
+    """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""
     if self._proc is None or self._proc.returncode is not None:
       return
     try:
-      self._proc.terminate()
-    except ProcessLookupError:
+      os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
       log.debug("backend_terminate_pid_gone", pid=self._proc.pid)
       return
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=5.0)
     except asyncio.TimeoutError:
       log.warning("backend_terminate_timeout", pid=self._proc.pid)
-      self._proc.kill()
+      try:
+        os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+      except (ProcessLookupError, PermissionError):
+        pass

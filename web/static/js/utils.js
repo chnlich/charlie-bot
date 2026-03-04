@@ -30,6 +30,6 @@ function formatLastRun(isoString) {
   if (!isoString) return '';
   const d = new Date(isoString);
   const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const timeStr = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+  const timeStr = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
   return dateStr + ', ' + timeStr;
 }

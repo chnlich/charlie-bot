@@ -166,10 +166,6 @@ class CharlieBotConfig(BaseModel):
     """The master agent prompt: ~/.charliebot/MASTER_AGENT_PROMPT.md."""
     return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
 
-  def session_claude_md(self, session_id: str) -> Path:
-    """Per-session CLAUDE.md: concatenation of MASTER_AGENT_PROMPT.md + MEMORY.md."""
-    return self.sessions_dir / session_id / "CLAUDE.md"
-
   @property
   def subagent_prompt_file(self) -> Path:
     """The subagent (worker) prompt template: ~/.charliebot/SUBAGENT_PROMPT.md."""

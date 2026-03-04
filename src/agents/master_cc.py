@@ -23,23 +23,19 @@ _active_tasks: dict[str, int] = {}
 _active_procs: dict[str, AgentBackend] = {}
 
 
-def ensure_master_claude_md(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
-  """Write session CLAUDE.md by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md.
-
-  Intentionally synchronous — called from both sync and async contexts.
-  Callers in async contexts should wrap with asyncio.to_thread().
-  """
+def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
+  """Build master agent instructions by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md in memory."""
   prompt_file = cfg.claude_md_file
+  if not prompt_file.exists():
+    log.warning("master_prompt_file_missing", path=str(prompt_file))
+    return None
 
-  # Concatenate prompt + memory → session CLAUDE.md (rewritten each time)
   prompt_text = prompt_file.read_text(encoding="utf-8")
-  # Substitute the session UUID placeholder so the agent can call delegate correctly
   prompt_text = prompt_text.replace("YOUR_SESSION_UUID", session_meta.id)
   parts = [prompt_text]
   if cfg.memory_file.exists():
     parts.append(cfg.memory_file.read_text(encoding="utf-8"))
 
-  # Inject rewind context if this session was rewound from another
   if session_meta.rewind_summary:
     parts.append(
         f"""# Session Rewind Context
@@ -50,37 +46,7 @@ This session was rewound from a previous conversation. Here is the conversation 
 
 Continue from this context. The user wants to take a different direction from this point.""")
 
-  session_claude_md = cfg.session_claude_md(session_meta.id)
-  session_claude_md.parent.mkdir(parents=True, exist_ok=True)
-
-  # Remove stale symlink (from pre-refactor sessions) so we write a real file
-  if session_claude_md.is_symlink():
-    session_claude_md.unlink()
-
-  session_claude_md.write_text("\n\n".join(parts), encoding="utf-8")
-
-  # Keep AGENTS.md as a stable alias to CLAUDE.md for tools that read AGENTS.md.
-  agents_md = session_claude_md.parent / "AGENTS.md"
-  if agents_md.exists() or agents_md.is_symlink():
-    if agents_md.is_symlink():
-      try:
-        if agents_md.resolve() == session_claude_md.resolve():
-          log.debug("session_agents_md_symlink_ok", path=str(agents_md))
-          log.debug("session_claude_md_written", path=str(session_claude_md))
-          return
-      except OSError:
-        pass
-      agents_md.unlink()
-    elif agents_md.is_file():
-      agents_md.unlink()
-    else:
-      log.warning("session_agents_md_not_file", path=str(agents_md))
-      log.debug("session_claude_md_written", path=str(session_claude_md))
-      return
-
-  agents_md.symlink_to("CLAUDE.md")
-  log.debug("session_agents_md_symlinked", path=str(agents_md), target="CLAUDE.md")
-  log.debug("session_claude_md_written", path=str(session_claude_md))
+  return "\n\n".join(parts)
 
 
 async def run_message(
@@ -115,8 +81,8 @@ async def run_message(
   session_dir.mkdir(parents=True, exist_ok=True)
   cwd = str(session_dir)
 
-  # Write session CLAUDE.md (prompt + memory) so Claude Code picks it up
-  await asyncio.to_thread(ensure_master_claude_md, session_meta, cfg)
+  # Build instructions content in memory (all backends receive it uniformly)
+  instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg)
 
   tex_path = get_tex_path()
   should_check_tex = tex_path.exists()
@@ -151,13 +117,6 @@ async def run_message(
 
   from src.agents.backends.registry import build_backend
   option = backend_option or cfg.backend_options[0]
-
-  # Read CLAUDE.md content for codex backend (which injects it into the prompt)
-  instructions_content: Optional[str] = None
-  if option.type in ("codex", "gemini"):
-    session_claude_md = cfg.session_claude_md(session_meta.id)
-    if session_claude_md.exists():
-      instructions_content = session_claude_md.read_text(encoding="utf-8")
 
   extra_flags: list[str] = []
   if session_meta.cc_session_id and option.type not in ("codex", "gemini"):

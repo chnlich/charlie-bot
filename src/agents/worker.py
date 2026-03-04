@@ -97,7 +97,11 @@ class Worker:
     exit_code = self._backend.exit_code
 
     if self._backend.stderr_text:
-      stderr_event = {"type": "error", "content": self._backend.stderr_text, "timestamp": datetime.now(timezone.utc).isoformat()}
+      stderr_event = {
+          "type": "error",
+          "content": self._backend.stderr_text,
+          "timestamp": datetime.now(timezone.utc).isoformat(),
+      }
       await append_ndjson(self._events_log, stderr_event)
       await streaming_manager.broadcast(self._thread.id, stderr_event)
       log.warning("worker_stderr", thread=self._thread.id, stderr=self._backend.stderr_text[:500])
@@ -125,6 +129,10 @@ class Worker:
     event_message = str(event_data.get("message", "")).lower()
     event_content = str(event_data.get("content", "")).lower()
 
+    # Ensure all persisted events carry a stable event-time.
+    if not event_data.get("timestamp"):
+      event_data["timestamp"] = datetime.now(timezone.utc).isoformat()
+
     # Detect rate-limit rejections from Claude Code (type='rate_limit_event')
     if event_type == "rate_limit_event":
       rli = event_data.get("rate_limit_info", {})
@@ -140,10 +148,6 @@ class Worker:
       await log_file.write(json.dumps(event_data) + "\n")
       await log_file.flush()
       raise QuotaExhaustedException(event_data.get("message", "Quota exhausted"))
-
-    # Inject timestamp if missing so replayed events carry the original time
-    if 'timestamp' not in event_data:
-      event_data['timestamp'] = datetime.now(timezone.utc).isoformat()
 
     # Write to disk
     await log_file.write(json.dumps(event_data) + "\n")

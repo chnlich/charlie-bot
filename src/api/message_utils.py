@@ -2,8 +2,14 @@
 
 import asyncio
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import structlog
+
+if TYPE_CHECKING:
+  from src.core.models import ThreadMetadata
+  from src.core.sessions import SessionManager
+  from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 
@@ -13,11 +19,15 @@ class SessionViewData:
   """Data produced by the load-events → messages → usage → mark-read pipeline."""
   raw_events: list[dict]
   messages: list[dict]
-  threads: list
+  threads: list['ThreadMetadata']
   usage: dict | None
 
 
-async def build_session_view_data(session_id: str, session_mgr, thread_mgr) -> SessionViewData:
+async def build_session_view_data(
+    session_id: str,
+    session_mgr: 'SessionManager',
+    thread_mgr: 'ThreadManager',
+) -> SessionViewData:
   """Load events + threads in parallel, derive messages and usage, and mark read."""
   events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
   threads_task = thread_mgr.list_threads(session_id)

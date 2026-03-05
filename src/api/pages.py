@@ -1,6 +1,5 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
-import asyncio
 from pathlib import Path
 
 import structlog
@@ -9,7 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.deps import get_session_manager, get_thread_manager
-from src.api.message_utils import events_to_messages
+from src.api.message_utils import build_session_view_data
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
@@ -73,21 +72,14 @@ async def index(
       log.exception("get_session_failed", session_id=session)
 
     if active_session:
-      # Load events + threads in parallel; derive usage from already-loaded events
-      events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session)
-      threads_task = thread_mgr.list_threads(session)
       try:
-        raw_events, threads = await asyncio.gather(events_task, threads_task)
-        messages = events_to_messages(raw_events)
-        session_usage = session_mgr.usage_from_events(raw_events)
+        view = await build_session_view_data(session, session_mgr, thread_mgr)
+        raw_events = view.raw_events
+        messages = view.messages
+        threads = view.threads
+        session_usage = view.usage
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
-
-      # Mark session as read (fire-and-forget, don't block response)
-      try:
-        await session_mgr.mark_read(session)
-      except Exception:
-        log.exception("mark_read_failed", session_id=session)
   elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 

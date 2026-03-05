@@ -1,5 +1,35 @@
 """Shared helpers for converting raw chat events into displayable messages."""
 
+import asyncio
+from dataclasses import dataclass
+
+import structlog
+
+log = structlog.get_logger()
+
+
+@dataclass
+class SessionViewData:
+  """Data produced by the load-events → messages → usage → mark-read pipeline."""
+  raw_events: list[dict]
+  messages: list[dict]
+  threads: list
+  usage: dict | None
+
+
+async def build_session_view_data(session_id: str, session_mgr, thread_mgr) -> SessionViewData:
+  """Load events + threads in parallel, derive messages and usage, and mark read."""
+  events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  threads_task = thread_mgr.list_threads(session_id)
+  raw_events, threads = await asyncio.gather(events_task, threads_task)
+  messages = events_to_messages(raw_events)
+  usage = session_mgr.usage_from_events(raw_events)
+  try:
+    await session_mgr.mark_read(session_id)
+  except Exception:
+    log.warning("mark_read_failed", session_id=session_id)
+  return SessionViewData(raw_events=raw_events, messages=messages, threads=threads, usage=usage)
+
 
 def events_to_messages(events: list[dict]) -> list[dict]:
   """Convert raw chat_events.jsonl entries into displayable messages."""

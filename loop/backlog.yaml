@@ -92,9 +92,12 @@
 
     '
   category: performance
-  status: approved
+  status: done
   created: '2026-02-28T12:00:00Z'
   priority: medium
+  done_reason: 'Already resolved: _update_usage_cache() no longer exists. save_chat_event()
+    now uses async append_ndjson (aiofiles) for persistence and an in-memory _events_cache
+    dict for reads — no sync file I/O blocks the event loop.'
 - id: 009
   title: Remove redundant field_validators in config.py
   description: 'core/config.py has both a model_validator (migrate_and_expand, L98-101)

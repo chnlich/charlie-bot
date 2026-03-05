@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from src.api.deps import get_session_manager, get_thread_manager, require_session
-from src.api.message_utils import events_to_messages
+from src.api.message_utils import build_session_view_data
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
@@ -166,22 +166,14 @@ async def get_session_view(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
   meta.has_running_tasks = bool(meta.thinking_since) or await session_mgr._has_running_tasks(session_id)
-  events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  threads_task = thread_mgr.list_threads(session_id)
-  raw_events, threads = await asyncio.gather(events_task, threads_task)
-  messages = events_to_messages(raw_events)
-  usage = session_mgr.usage_from_events(raw_events)
-  try:
-    await session_mgr.mark_read(session_id)
-  except Exception:
-    log.warning("mark_read_failed", session_id=session_id)
+  view = await build_session_view_data(session_id, session_mgr, thread_mgr)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
   return {
       "session": meta.model_dump(mode="json"),
-      "messages": messages,
-      "threads": [t.model_dump(mode="json") for t in threads],
-      "event_count": len(raw_events),
-      "usage": usage,
+      "messages": view.messages,
+      "threads": [t.model_dump(mode="json") for t in view.threads],
+      "event_count": len(view.raw_events),
+      "usage": view.usage,
       "active_backend": active_backend,
   }
 

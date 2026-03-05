@@ -39,9 +39,6 @@ function switchTab(tab) {
     } else if (showChat) {
       chatEl.classList.remove('hidden');
     }
-    if (latexHandle) {
-      latexHandle.style.display = 'none';
-    }
   }
 
   if (tab === 'chat-tex') {

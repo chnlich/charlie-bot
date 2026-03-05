@@ -30,14 +30,17 @@ function switchTab(tab) {
     backlogHandle.style.display = (tab === 'chat-backlog') ? '' : 'none';
   }
 
-  // Mobile: backlog takes full screen, hide chat area
+  // Mobile: backlog and latex take full screen, hide chat area
   const isMobile = platform.isMobile;
   if (isMobile) {
     const chatEl = document.getElementById('tab-chat');
-    if (tab === 'chat-backlog') {
+    if (tab === 'chat-backlog' || tab === 'chat-tex') {
       chatEl.classList.add('hidden');
     } else if (showChat) {
       chatEl.classList.remove('hidden');
+    }
+    if (latexHandle) {
+      latexHandle.style.display = 'none';
     }
   }
 

@@ -69,6 +69,7 @@ body.resizing { cursor: col-resize; user-select: none; }
     .sidebar-overlay.active { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
     .hamburger-btn { display: inline-flex !important; }
     #backlog-panel:not(.hidden) { width: 100% !important; }
+    #latex-panel:not(.hidden) { width: 100% !important; }
     /* Bug 2: Tabs on their own row on mobile */
     main > header { flex-wrap: wrap; }
     #tab-buttons { width: 100%; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }

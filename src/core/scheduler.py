@@ -88,23 +88,35 @@ class Scheduler:
 
     session_mgr = SessionManager(cfg)
 
+    # Cache all sessions once to avoid O(N) list_sessions() calls per tick.
+    all_sessions = await session_mgr.list_sessions()
+    session_cache: dict[str, SessionMetadata] = {}
+    for s in all_sessions:
+      if s.scheduled_task:
+        session_cache[s.scheduled_task] = s
+
     for task_cfg in tasks:
       if task_cfg.enabled:
-        await self._get_or_create_session(task_cfg.name, session_mgr)
+        await self._get_or_create_session(task_cfg.name, session_mgr, session_cache)
 
     for task_cfg in tasks:
       if not task_cfg.enabled:
         continue
       try:
-        await self._maybe_run(task_cfg, session_mgr)
+        await self._maybe_run(task_cfg, session_mgr, session_cache)
       except Exception as e:
         log.error("scheduler_task_error", task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
 
-  async def _maybe_run(self, task_cfg: ScheduledTaskConfig, session_mgr: SessionManager) -> None:
+  async def _maybe_run(
+      self,
+      task_cfg: ScheduledTaskConfig,
+      session_mgr: SessionManager,
+      session_cache: dict[str, SessionMetadata],
+  ) -> None:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
 
-    session = await self._get_or_create_session(task_cfg.name, session_mgr)
+    session = await self._get_or_create_session(task_cfg.name, session_mgr, session_cache)
 
     # Detect cron expression change — reset last_scheduled_run to now and skip tick
     if session.last_scheduled_cron is not None and session.last_scheduled_cron != task_cfg.cron:
@@ -301,16 +313,32 @@ class Scheduler:
   # Session helpers
   # ---------------------------------------------------------------------------
 
-  async def _get_or_create_session(self, task_name: str, session_mgr: SessionManager) -> SessionMetadata:
-    """Return the existing dedicated session for task_name, or create one."""
-    sessions = await session_mgr.list_sessions()
-    for s in sessions:
-      if s.scheduled_task == task_name:
-        return s
+  async def _get_or_create_session(
+      self,
+      task_name: str,
+      session_mgr: SessionManager,
+      session_cache: Optional[dict[str, SessionMetadata]] = None,
+  ) -> SessionMetadata:
+    """Return the existing dedicated session for task_name, or create one.
+
+    When session_cache is provided, uses it instead of scanning the sessions
+    directory. Newly created sessions are added to the cache.
+    """
+    if session_cache is not None:
+      cached = session_cache.get(task_name)
+      if cached is not None:
+        return cached
+    else:
+      sessions = await session_mgr.list_sessions()
+      for s in sessions:
+        if s.scheduled_task == task_name:
+          return s
 
     meta = await session_mgr.create_session(
         CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name))
     log.info("scheduled_session_created", task=task_name, session=meta.id)
+    if session_cache is not None:
+      session_cache[task_name] = meta
     return meta
 
   # ---------------------------------------------------------------------------

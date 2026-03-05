@@ -92,7 +92,7 @@ class Scheduler:
     all_sessions = await session_mgr.list_sessions()
     session_cache: dict[str, SessionMetadata] = {}
     for s in all_sessions:
-      if s.scheduled_task:
+      if s.scheduled_task and s.scheduled_task not in session_cache:
         session_cache[s.scheduled_task] = s
 
     for task_cfg in tasks:

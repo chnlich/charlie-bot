@@ -11,7 +11,7 @@ from src.agents.backends.base import AgentBackend
 from src.core.config import CharlieBotConfig
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
 from src.core.models import BackendOption, SessionMetadata
-from src.core.streaming import streaming_manager
+from src.core.streaming import handle_compact_boundary, streaming_manager
 
 log = structlog.get_logger()
 
@@ -79,18 +79,13 @@ async def _handle_event(
   await save_chat_event(session_id, event)
   await streaming_manager.broadcast(channel, event)
 
-  if event.get("type") == "system" and event.get("subtype") == "compact_boundary":
-    meta = event.get("compact_metadata", {})
-    trigger = meta.get("trigger", "unknown")
-    pre_tokens = meta.get("pre_tokens")
-    log.info("cc_context_compacted", session=session_id, trigger=trigger, pre_tokens=pre_tokens)
-    compact_event = {
-        "type": "context_compacted",
-        "trigger": trigger,
-        "pre_tokens": pre_tokens,
-    }
-    await save_chat_event(session_id, compact_event)
-    await streaming_manager.broadcast(channel, compact_event)
+  await handle_compact_boundary(
+      event,
+      channel,
+      broadcast_fn=streaming_manager.broadcast,
+      persist_fn=lambda evt: save_chat_event(session_id, evt),
+      log_context={"session": session_id},
+  )
 
   return cc_session_id
 

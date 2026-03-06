@@ -148,7 +148,8 @@ class SessionManager:
     for line_text in kept_lines:
       try:
         ev = json.loads(line_text)
-      except (json.JSONDecodeError, ValueError):
+      except (json.JSONDecodeError, ValueError) as e:
+        log.debug('rewind_parse_skip', line=line_text[:120], error=str(e))
         continue
       t = ev.get('type')
       if t == 'user' and 'content' in ev:
@@ -413,7 +414,8 @@ class SessionManager:
           meta = json.loads(meta_path.read_text(encoding="utf-8"))
           if meta.get("status") == "running":
             return True
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+          log.debug('thread_meta_read_failed', thread_dir=thread_dir.name, error=str(e))
           continue
       return False
 

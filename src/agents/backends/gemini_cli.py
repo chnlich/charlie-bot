@@ -43,7 +43,7 @@ class GeminiCliBackend(AgentBackend):
     if self._instructions_content:
       effective_prompt = (f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
 
-    cmd = [self._gemini_bin, "-m", self._model, "-p", effective_prompt, "-o", "stream-json", "-y"]
+    cmd = [self._gemini_bin, "-m", self._model, "-p", effective_prompt, "-o", "stream-json", "-y", "--sandbox=false"]
     if self._resume_session_id:
       cmd.extend(["--resume", self._resume_session_id])
     cmd.extend(self._extra_flags)

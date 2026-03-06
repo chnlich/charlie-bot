@@ -38,11 +38,11 @@ function switchLatexView(view) {
   }
 }
 
-async function loadLatexPdf() {
+async function loadLatexPdf(force = false) {
   const container = document.getElementById('latex-pdf-canvas-container');
   if (!container) return;
   // Skip re-fetch if PDF is already rendered (preserves scroll position)
-  if (container.querySelector('canvas')) return;
+  if (!force && container.querySelector('canvas')) return;
   container.innerHTML = '<p class="text-slate-500 text-sm">Loading PDF...</p>';
   try {
     const resp = await fetch('/api/latex/pdf?t=' + Date.now());
@@ -234,7 +234,7 @@ function initLatexResize() {
       panel.style.width = pct + '%';
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      if (latexView === 'pdf') loadLatexPdf();
+      if (latexView === 'pdf') loadLatexPdf(true);
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);

@@ -48,7 +48,7 @@ def events_to_messages(events: list[dict]) -> list[dict]:
   last_event_idx = 0
   last_assistant_ts = None
 
-  def _flush():
+  def _flush() -> None:
     nonlocal assistant_buf, last_assistant_ts
     if assistant_buf:
       messages.append(

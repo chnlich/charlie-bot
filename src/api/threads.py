@@ -22,6 +22,26 @@ log = structlog.get_logger()
 router = APIRouter()
 
 
+@router.get("/{session_id}/list")
+async def list_threads(
+    session_id: str,
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+) -> list[dict]:
+  """Return thread summaries for a session, sorted by created_at descending."""
+  threads = await thread_mgr.list_threads(session_id)
+  return [
+      {
+          "id": t.id,
+          "description": t.description,
+          "status": t.status.value,
+          "created_at": t.created_at.isoformat(),
+          "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+          "backend": t.backend,
+      }
+      for t in threads
+  ]
+
+
 @router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadata)
 async def get_thread(
     session_id: str,

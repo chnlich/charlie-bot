@@ -102,6 +102,11 @@ async function switchSession(sessionId) {
   updateSidebarHighlight(sessionId);
   pollSessionStatus();
 
+  // Restart workers poll for the new session
+  if (workersPollInterval) clearInterval(workersPollInterval);
+  pollWorkers();
+  workersPollInterval = setInterval(pollWorkers, 3000);
+
   // Reset lazy-load state
   _backlogLoaded = false;
   loadedThreads.clear();
@@ -348,6 +353,28 @@ function pollSessionStatus() {
           setSessionSpinner(sid, masterThinking || st.has_running_tasks);
         } else {
           setSessionSpinner(sid, st.has_running_tasks);
+        }
+      }
+    })
+    .catch(() => {});  // Silently ignore poll failures
+}
+
+// Poll-based workers tab updates (replaces WS-driven addWorkerCard/updateWorkerStatus)
+let workersPollInterval = null;
+
+function pollWorkers() {
+  if (!SESSION_ID) return;
+  fetch('/api/threads/' + SESSION_ID + '/list')
+    .then(r => r.ok ? r.json() : null)
+    .then(threads => {
+      if (!threads) return;
+      for (const t of threads) {
+        const existing = document.getElementById('thread-dot-' + t.id);
+        if (!existing) {
+          addWorkerCard(t.id, t.description, t.created_at, t.backend || '');
+          if (t.status !== 'running') updateWorkerStatus(t.id, t.status);
+        } else {
+          updateWorkerStatus(t.id, t.status);
         }
       }
     })

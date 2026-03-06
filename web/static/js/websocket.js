@@ -198,7 +198,6 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     }
     appendMessage('task_delegated', `Task delegated: ${ev.description || ''}`, false, ev.timestamp);
     setSessionSpinner(SESSION_ID, true);
-    if (catchupDone) addWorkerCard(ev.thread_id, ev.description || '', ev.timestamp || ev.created_at, ev.backend || '');
   } else if (t === 'worker_summary') {
     // Flush pending assistant text before worker summary (matches backend)
     if (streamBuf) {
@@ -215,7 +214,6 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     const streamEl = document.getElementById('streaming-msg');
     document.getElementById('messages').insertBefore(wDiv, streamEl);
     document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
-    updateWorkerStatus(ev.thread_id, ev.status || 'completed');
     updateSpinner();
   } else if (t === 'handler_result') {
     const icon = ev.status === 'ok' ? '✓' : '✗';

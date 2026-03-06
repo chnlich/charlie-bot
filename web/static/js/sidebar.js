@@ -961,6 +961,7 @@ function initSidebarResize() {
       localStorage.setItem('sidebar-width', sidebar.offsetWidth);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      if (latexPanelOpen && latexView === 'pdf') loadLatexPdf(true);
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);

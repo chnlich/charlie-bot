@@ -61,7 +61,6 @@ def _build_worker_prompt(
 
 
 def _build_review_prompt(
-    description: str,
     branch_name: str,
     wt_path: str,
     repo_path: Path,
@@ -86,7 +85,6 @@ def _build_review_prompt(
       f"   - Understand what the worker did and any decisions it made.\n"
       f"3. Delegator's context hint: {context_hint}\n\n"
       f"## Review Checklist\n"
-      f"Original task: {description}\n\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
@@ -599,7 +597,6 @@ async def _spawn_review_worker(
   wt_path = original_thread.worktree_path
 
   review_prompt = _build_review_prompt(
-      original_thread.description,
       branch_name,
       wt_path,
       repo_path,
@@ -646,7 +643,7 @@ async def _spawn_review_worker(
   session_meta = await session_mgr.get_session(session_id)
   review_thread = await thread_mgr.create_thread(
       session_meta,
-      f"Review: {original_thread.description}",
+      f"Review: {original_thread.context or _short_desc(original_thread.description)}",
       review_of=original_thread.id,
   )
   review_thread.branch_name = branch_name

@@ -527,22 +527,9 @@ async def _trigger_master(
       )
 
     if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:
-      await _persist_cc_session_id(session_id, new_cc_session_id, session_meta, session_mgr)
+      await session_mgr.persist_cc_session_id(session_id, new_cc_session_id)
   except Exception as e:
     log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
-
-
-async def _persist_cc_session_id(
-    session_id: str,
-    new_cc_session_id: str,
-    fallback_meta: SessionMetadata,
-    session_mgr: SessionManager,
-) -> None:
-  """Persist a refreshed cc_session_id without clobbering unrelated metadata fields."""
-  fresh = await session_mgr.get_session(session_id)
-  meta = fresh or fallback_meta
-  meta.cc_session_id = new_cc_session_id
-  await session_mgr.save_metadata(meta)
 
 
 def _is_resume_not_found_error(error: Exception) -> bool:

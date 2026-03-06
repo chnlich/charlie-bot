@@ -174,10 +174,7 @@ async def run_and_finalize(
     # Re-read fresh metadata from disk to avoid overwriting has_unread
     # (or other fields) that mark_unread() set during run_message().
     if cc_session_id and cc_session_id != meta.cc_session_id:
-      fresh = await session_mgr.get_session(meta.id)
-      if fresh:
-        fresh.cc_session_id = cc_session_id
-        await session_mgr.save_metadata(fresh)
+      await session_mgr.persist_cc_session_id(meta.id, cc_session_id)
       meta.cc_session_id = cc_session_id
 
     # Auto-name session after first turn if still using default name

@@ -290,6 +290,13 @@ class SessionManager:
     """Public wrapper for _save_metadata."""
     await self._save_metadata(meta)
 
+  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> None:
+    """Persist a cc_session_id without clobbering unrelated metadata fields."""
+    fresh = await self.get_session(session_id)
+    if fresh:
+      fresh.cc_session_id = cc_session_id
+      await self._save_metadata(fresh)
+
   def list_active_session_ids(self) -> list[str]:
     """Return IDs of active sessions by reading only metadata.json status.
 

@@ -71,9 +71,8 @@ class SessionManager:
     sessions: list[SessionMetadata] = []
     if not self._cfg.sessions_dir.exists():
       return sessions
-    for d in self._cfg.sessions_dir.iterdir():
-      if not d.is_dir():
-        continue
+    dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
+    for d in dirs:
       meta = await self.get_session(d.name)
       if not meta:
         continue
@@ -98,9 +97,8 @@ class SessionManager:
     results: list[SessionMetadata] = []
     if not self._cfg.sessions_dir.exists():
       return results
-    for d in self._cfg.sessions_dir.iterdir():
-      if not d.is_dir():
-        continue
+    dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
+    for d in dirs:
       meta = await self.get_session(d.name)
       if not meta or meta.status not in (SessionStatus.ACTIVE, SessionStatus.WAITING):
         continue

@@ -2,7 +2,7 @@
 
 import asyncio
 from collections import defaultdict
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import structlog
 from fastapi import WebSocket
@@ -60,3 +60,26 @@ class StreamingManager:
 
 # Module-level singleton used across the application
 streaming_manager = StreamingManager()
+
+
+async def handle_compact_boundary(
+    event: dict[str, Any],
+    channel: str,
+    broadcast_fn: Callable[[str, dict[str, Any]], Awaitable[None]],
+    persist_fn: Callable[[dict[str, Any]], Awaitable[None]],
+    log_context: dict[str, Any],
+) -> None:
+  """Detect compact_boundary system events, log, persist, and broadcast a context_compacted event."""
+  if event.get("type") != "system" or event.get("subtype") != "compact_boundary":
+    return
+  meta = event.get("compact_metadata", {})
+  trigger = meta.get("trigger", "unknown")
+  pre_tokens = meta.get("pre_tokens")
+  log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)
+  compact_event: dict[str, Any] = {
+      "type": "context_compacted",
+      "trigger": trigger,
+      "pre_tokens": pre_tokens,
+  }
+  await persist_fn(compact_event)
+  await broadcast_fn(channel, compact_event)

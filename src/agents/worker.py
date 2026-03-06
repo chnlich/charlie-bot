@@ -15,7 +15,7 @@ from src.agents.backends.registry import build_backend
 from src.core.config import get_config, CharlieBotConfig
 from src.core.models import BackendOption, ThreadMetadata
 from src.core.ndjson import append_ndjson
-from src.core.streaming import streaming_manager
+from src.core.streaming import handle_compact_boundary, streaming_manager
 
 log = structlog.get_logger()
 
@@ -156,16 +156,14 @@ class Worker:
     # Broadcast to WebSocket subscribers
     await streaming_manager.broadcast(self._thread.id, event_data)
 
-    if event_data.get("type") == "system" and event_data.get("subtype") == "compact_boundary":
-      meta = event_data.get("compact_metadata", {})
-      trigger = meta.get("trigger", "unknown")
-      pre_tokens = meta.get("pre_tokens")
-      log.info("cc_context_compacted", thread=self._thread.id, trigger=trigger, pre_tokens=pre_tokens)
-      compact_event = {
-          "type": "context_compacted",
-          "trigger": trigger,
-          "pre_tokens": pre_tokens,
-      }
-      await log_file.write(json.dumps(compact_event) + "\n")
+    async def _persist(evt: dict) -> None:
+      await log_file.write(json.dumps(evt) + "\n")
       await log_file.flush()
-      await streaming_manager.broadcast(self._thread.id, compact_event)
+
+    await handle_compact_boundary(
+        event_data,
+        self._thread.id,
+        broadcast_fn=streaming_manager.broadcast,
+        persist_fn=_persist,
+        log_context={"thread": self._thread.id},
+    )

@@ -173,9 +173,13 @@
     attribute to the base, and define DEFAULT_BUFFER_LIMIT there. Removes ~25 lines
     of duplication and ensures consistency for future backends.
   category: duplication
-  status: approved
+  status: done
   created: '2026-03-02T12:00:00Z'
   priority: medium
+  done_reason: 'Already resolved: terminate() is already a concrete method on AgentBackend
+    in base.py (L138-154), DEFAULT_BUFFER_LIMIT is defined at base.py:15, and _proc
+    is initialized in __init__ (L53). Neither ClaudeCodeBackend nor CodexBackend have
+    duplicate implementations.'
 - id: '016'
   title: Extract assistant-buffer flush helper in events_to_messages
   description: Reduce repetition and prevent bugs in the message parser. api/message_utils.py:events_to_messages

@@ -287,7 +287,7 @@ async def _create_worktree_and_process(
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
     thread.context = context
-    await thread_mgr._save_metadata(thread)
+    await thread_mgr.save_metadata(thread)
 
     # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
@@ -310,7 +310,7 @@ async def _create_worktree_and_process(
   backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
   thread.backend = backend_option.id
   thread.model = backend_option.model
-  await thread_mgr._save_metadata(thread)
+  await thread_mgr.save_metadata(thread)
 
   # Read subagent instructions (SUBAGENT_PROMPT.md) for all backends
   subagent_instructions = _read_subagent_instructions(cfg)
@@ -324,7 +324,7 @@ async def _create_worktree_and_process(
       worker_prompt,
       cfg,
       backend_option=backend_option,
-      on_spawned=thread_mgr._save_metadata,
+      on_spawned=thread_mgr.save_metadata,
       instructions_content=subagent_instructions,
   )
 
@@ -344,7 +344,7 @@ async def _stream_worker_events(
   thread.cli_command = " ".join(WORKER_COMMAND + [description])
   thread.status = ThreadStatus.RUNNING
   thread.started_at = datetime.now(timezone.utc)
-  await thread_mgr._save_metadata(thread)
+  await thread_mgr.save_metadata(thread)
   log.info("worker_running", thread_id=thread.id, session=session_id)
 
   now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
@@ -653,7 +653,7 @@ async def _spawn_review_worker(
   review_thread.repo_path = str(repo_path)
   review_thread.worktree_path = wt_path
   review_thread.tried_backends = tried_backends
-  await thread_mgr._save_metadata(review_thread)
+  await thread_mgr.save_metadata(review_thread)
 
   asyncio.create_task(
       spawn_worker(

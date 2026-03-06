@@ -417,6 +417,10 @@ async def spawn_worker(
     resolved_model: str = "",
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
+  thread = None
+  exit_code = -1
+  quota_exhausted = False
+  error_msg = ""
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
     if not thread:
@@ -427,38 +431,39 @@ async def spawn_worker(
       repos = cfg.discover_repos()
       if not repos:
         log.error("spawn_worker_no_repo", session=session_id, detail="no repos found in workspace_dirs")
-        return
-      repo_path = repos[0]["path"]
-      log.info("spawn_worker_repo_defaulted", session=session_id, repo=repo_path)
+        error_msg = "no repos found in workspace_dirs"
+      else:
+        repo_path = repos[0]["path"]
+        log.info("spawn_worker_repo_defaulted", session=session_id, repo=repo_path)
 
-    resolved_repo = Path(repo_path).resolve()
+    if not error_msg:
+      resolved_repo = Path(repo_path).resolve()
 
-    worker = await _create_worktree_and_process(
-        session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
-        resolved_backend, resolved_model)
+      worker = await _create_worktree_and_process(
+          session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
+          resolved_backend, resolved_model)
 
-    exit_code, quota_exhausted, error = await _stream_worker_events(
-        worker, session_id, description, thread, thread_mgr, session_mgr)
-
-    await _finalize_worker(
-        session_id,
-        description,
-        thread,
-        exit_code,
-        thread_mgr,
-        session_mgr,
-        cfg,
-        quota_exhausted=quota_exhausted,
-        error=error)
+      exit_code, quota_exhausted, error_msg = await _stream_worker_events(
+          worker, session_id, description, thread, thread_mgr, session_mgr)
 
   except Exception as e:
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
-    try:
-      t = await thread_mgr.get_thread(session_id, thread_id)
-      if t and t.status == ThreadStatus.IDLE:
-        await thread_mgr.update_status(session_id, thread_id, ThreadStatus.FAILED, exit_code=-1)
-    except Exception:
-      pass
+    error_msg = str(e)
+  finally:
+    if thread is not None:
+      try:
+        await _finalize_worker(
+            session_id,
+            description,
+            thread,
+            exit_code,
+            thread_mgr,
+            session_mgr,
+            cfg,
+            quota_exhausted=quota_exhausted,
+            error=error_msg)
+      except Exception:
+        log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
 
 
 async def _trigger_master(

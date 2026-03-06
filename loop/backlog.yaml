@@ -148,9 +148,12 @@
     OSError with pass. Both silently swallow exceptions, violating the project rule.
     Add log.debug to each catch block.
   category: error-handling
-  status: approved
+  status: done
   created: '2026-03-01T12:00:00Z'
   priority: medium
+  done_reason: 'Added log.debug to two swallowed exception blocks in sessions.py:
+    rewind_parse_skip (L151) and thread_meta_read_failed (L416). The original _update_usage_cache
+    and get_session_usage methods no longer exist after prior refactoring.'
 - id: '014'
   title: Stop calling private _save_metadata from spawner.py
   description: core/spawner.py calls thread_mgr._save_metadata(thread) directly on

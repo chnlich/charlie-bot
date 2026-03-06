@@ -363,11 +363,12 @@ function pollSessionStatus() {
 let workersPollInterval = null;
 
 function pollWorkers() {
-  if (!SESSION_ID) return;
-  fetch('/api/threads/' + SESSION_ID + '/list')
+  const pollSessionId = SESSION_ID;
+  if (!pollSessionId) return;
+  fetch('/api/threads/' + pollSessionId + '/list')
     .then(r => r.ok ? r.json() : null)
     .then(threads => {
-      if (!threads) return;
+      if (!threads || pollSessionId !== SESSION_ID) return;
       for (const t of threads) {
         const existing = document.getElementById('thread-dot-' + t.id);
         if (!existing) {

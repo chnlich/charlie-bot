@@ -483,6 +483,7 @@ async def _trigger_master(
           session_mgr.save_metadata,
           mark_unread=session_mgr.mark_unread,
           skip_user_event=True,
+          auto_trigger=True,
       )
     except Exception as e:
       if not _is_resume_not_found_error(e):
@@ -511,6 +512,7 @@ async def _trigger_master(
           session_mgr.save_metadata,
           mark_unread=session_mgr.mark_unread,
           skip_user_event=True,
+          auto_trigger=True,
       )
       log.info(
           "trigger_master_resume_recovery_succeeded",

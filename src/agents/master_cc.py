@@ -104,15 +104,17 @@ async def _finalize_session(
     save_chat_event,
     save_metadata=None,
     mark_unread=None,
+    auto_trigger: bool = False,
 ) -> None:
   """Clean up after run_message: update thinking state, broadcast errors/done, check tex."""
-  _active_procs.pop(session_meta.id, None)
-  # Decrement active-task counter; only clear thinking when ALL tasks finish
-  _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
+  if not auto_trigger:
+    _active_procs.pop(session_meta.id, None)
+    # Decrement active-task counter; only clear thinking when ALL tasks finish
+    _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
   still_thinking = _active_tasks.get(session_meta.id, 0) > 0
 
   thinking_seconds = None
-  if not still_thinking:
+  if not auto_trigger and not still_thinking:
     if session_meta.thinking_since:
       thinking_seconds = int((datetime.now(timezone.utc) - session_meta.thinking_since).total_seconds())
     session_meta.thinking_since = None
@@ -162,6 +164,7 @@ async def run_message(
     mark_unread=None,
     skip_user_event: bool = False,
     is_voice: bool = False,
+    auto_trigger: bool = False,
     backend_option: Optional[BackendOption] = None,
     extra_claude_flags: Optional[list[str]] = None,
 ) -> Optional[str]:
@@ -205,19 +208,22 @@ async def run_message(
     await streaming_manager.broadcast(channel, user_event)
     session_meta.updated_at = datetime.now(timezone.utc)
 
-  # Track concurrent tasks; only set thinking_since on the first one
-  _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1
-  if _active_tasks[session_meta.id] == 1:
-    session_meta.thinking_since = datetime.now(timezone.utc)
-  if save_metadata:
-    await save_metadata(session_meta)
-  if _active_tasks[session_meta.id] == 1:
-    await streaming_manager.broadcast(
-        'sidebar', {
-            'type': 'running_changed',
-            'session_id': session_meta.id,
-            'has_running_tasks': True,
-        })
+  # Track concurrent tasks; only set thinking_since on the first one.
+  # Auto-triggered runs (worker completions) skip task counting and thinking state
+  # to avoid disabling the mobile send button on page reload.
+  if not auto_trigger:
+    _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1
+    if _active_tasks[session_meta.id] == 1:
+      session_meta.thinking_since = datetime.now(timezone.utc)
+    if save_metadata:
+      await save_metadata(session_meta)
+    if _active_tasks[session_meta.id] == 1:
+      await streaming_manager.broadcast(
+          'sidebar', {
+              'type': 'running_changed',
+              'session_id': session_meta.id,
+              'has_running_tasks': True,
+          })
 
   from src.agents.backends.registry import build_backend
   option = backend_option or cfg.backend_options[0]
@@ -253,7 +259,8 @@ async def run_message(
         instructions_content=instructions_content,
         resume_session_id=session_meta.cc_session_id if option.type in ("codex", "gemini") else None,
     )
-    _active_procs[session_meta.id] = backend
+    if not auto_trigger:
+      _active_procs[session_meta.id] = backend
 
     prompt = _build_prompt(user_content, is_voice)
 
@@ -280,6 +287,7 @@ async def run_message(
         save_chat_event,
         save_metadata=save_metadata,
         mark_unread=mark_unread,
+        auto_trigger=auto_trigger,
     )
 
   return cc_session_id

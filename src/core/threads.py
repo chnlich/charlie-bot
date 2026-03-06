@@ -93,6 +93,10 @@ class ThreadManager:
   def get_thread_dir(self, session_id: str, thread_id: str) -> Path:
     return self._thread_dir(session_id, thread_id)
 
+  async def save_metadata(self, meta: ThreadMetadata) -> None:
+    """Persist thread metadata to disk."""
+    await self._save_metadata(meta)
+
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------

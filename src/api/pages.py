@@ -85,9 +85,8 @@ async def index(
 
   active_backend = active_session.backend if active_session else (
       cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
-  active_backend_label = next(
-      (opt.label for opt in cfg.backend_options if opt.id == active_backend),
-      active_backend)
+  active_backend_opt = cfg.get_backend_option(active_backend)
+  active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
 
   return templates.TemplateResponse(
       "index.html", {

@@ -662,6 +662,119 @@ async def _spawn_review_worker(
   return True
 
 
+async def _broadcast_completion(
+    session_id: str,
+    description: str,
+    thread,
+    exit_code: int,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    quota_exhausted: bool = False,
+    error: str = "",
+) -> tuple[str, str]:
+  """Build and broadcast the worker_summary event. Returns (events_summary, full_summary)."""
+  # Update last_run_status for scheduled sessions
+  session_meta = await session_mgr.get_session(session_id)
+  if session_meta and session_meta.scheduled_task:
+    session_meta.last_run_status = "success" if exit_code == 0 else "failed"
+    session_meta.updated_at = datetime.now(timezone.utc)
+    await session_mgr.save_metadata(session_meta)
+
+  events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
+
+  status = "completed" if exit_code == 0 else "failed"
+  now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
+  chat_summary = f'Worker `{thread.id[:8]}` finished ({now}): {_short_desc(description)}'
+  full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
+
+  suffix = ""
+  if quota_exhausted:
+    suffix = "\n\n*Worker stopped: API quota exhausted.*"
+  elif error:
+    suffix = f"\n\n*Worker error: {error}*"
+  elif exit_code != 0:
+    suffix = f"\n\n*Worker exited with code {exit_code}.*"
+  chat_summary += suffix
+  full_summary += suffix
+
+  worker_event = _build_worker_event(
+      thread.id,
+      chat_summary,
+      status,
+      full_content=full_summary,
+      backend=thread.backend,
+      model=thread.model,
+  )
+  await session_mgr.mark_unread(session_id)
+  await broadcast_and_persist(session_id, worker_event, session_mgr)
+  log.info("worker_summary_sent", session=session_id, thread=thread.id)
+  return events_summary, full_summary
+
+
+async def _maybe_spawn_reviewer(
+    session_id: str,
+    thread,
+    exit_code: int,
+    events_summary: str,
+    full_summary: str,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+) -> None:
+  """Handle review spawning logic and trigger master when appropriate."""
+  # Re-read thread metadata to get review_of field
+  thread_meta = await thread_mgr.get_thread(session_id, thread.id)
+
+  if exit_code == 0 and not thread_meta.review_of:
+    # Successful worker, not a review -> spawn reviewer, don't trigger master yet
+    await _spawn_review_worker(session_id, thread_meta, cfg, session_mgr, thread_mgr)
+    return
+
+  if thread_meta.review_of:
+    # This IS a reviewer thread.
+    if exit_code != 0:
+      # Reviewer failed — attempt retry with next untried backend.
+      original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
+      if original_thread:
+        retried = await _spawn_review_worker(
+            session_id,
+            original_thread,
+            cfg,
+            session_mgr,
+            thread_mgr,
+            tried_backends=list(thread_meta.tried_backends),
+        )
+        if retried:
+          log.info(
+              "reviewer_retry_spawned",
+              session=session_id,
+              failed_review=thread_meta.id,
+              tried=thread_meta.tried_backends,
+          )
+          return
+        log.info(
+            "reviewer_retries_exhausted",
+            session=session_id,
+            failed_review=thread_meta.id,
+            tried=thread_meta.tried_backends,
+        )
+      else:
+        log.warning(
+            "reviewer_retry_original_not_found",
+            session=session_id,
+            review_of=thread_meta.review_of,
+        )
+
+    # Review done (success or retries exhausted) -> combine summaries, trigger master.
+    original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
+    combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
+    await _trigger_master(session_id, combined, cfg, session_mgr)
+    return
+
+  # Failed/cancelled worker -> trigger master immediately
+  await _trigger_master(session_id, full_summary, cfg, session_mgr)
+
+
 async def _notify_completion(
     session_id: str,
     description: str,
@@ -675,94 +788,10 @@ async def _notify_completion(
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
-    # Update last_run_status for scheduled sessions
-    session_meta = await session_mgr.get_session(session_id)
-    if session_meta and session_meta.scheduled_task:
-      session_meta.last_run_status = "success" if exit_code == 0 else "failed"
-      session_meta.updated_at = datetime.now(timezone.utc)
-      await session_mgr.save_metadata(session_meta)
-
-    events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
-
-    status = "completed" if exit_code == 0 else "failed"
-    now = datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d %H:%M')
-    chat_summary = f'Worker `{thread.id[:8]}` finished ({now}): {_short_desc(description)}'
-    full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
-
-    suffix = ""
-    if quota_exhausted:
-      suffix = "\n\n*Worker stopped: API quota exhausted.*"
-    elif error:
-      suffix = f"\n\n*Worker error: {error}*"
-    elif exit_code != 0:
-      suffix = f"\n\n*Worker exited with code {exit_code}.*"
-    chat_summary += suffix
-    full_summary += suffix
-
-    worker_event = _build_worker_event(
-        thread.id,
-        chat_summary,
-        status,
-        full_content=full_summary,
-        backend=thread.backend,
-        model=thread.model,
-    )
-    await session_mgr.mark_unread(session_id)
-    await broadcast_and_persist(session_id, worker_event, session_mgr)
-    log.info("worker_summary_sent", session=session_id, thread=thread.id)
-
-    # Re-read thread metadata to get review_of field
-    thread_meta = await thread_mgr.get_thread(session_id, thread.id)
-
-    if exit_code == 0 and not thread_meta.review_of:
-      # Successful worker, not a review -> spawn reviewer, don't trigger master yet
-      await _spawn_review_worker(session_id, thread_meta, cfg, session_mgr, thread_mgr)
-      return
-
-    if thread_meta.review_of:
-      # This IS a reviewer thread.
-      if exit_code != 0:
-        # Reviewer failed — attempt retry with next untried backend.
-        original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
-        if original_thread:
-          retried = await _spawn_review_worker(
-              session_id,
-              original_thread,
-              cfg,
-              session_mgr,
-              thread_mgr,
-              tried_backends=list(thread_meta.tried_backends),
-          )
-          if retried:
-            log.info(
-                "reviewer_retry_spawned",
-                session=session_id,
-                failed_review=thread_meta.id,
-                tried=thread_meta.tried_backends,
-            )
-            return
-          log.info(
-              "reviewer_retries_exhausted",
-              session=session_id,
-              failed_review=thread_meta.id,
-              tried=thread_meta.tried_backends,
-          )
-        else:
-          log.warning(
-              "reviewer_retry_original_not_found",
-              session=session_id,
-              review_of=thread_meta.review_of,
-          )
-
-      # Review done (success or retries exhausted) -> combine summaries, trigger master.
-      original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
-      combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
-      await _trigger_master(session_id, combined, cfg, session_mgr)
-      return
-
-    # Failed/cancelled worker -> trigger master immediately
-    await _trigger_master(session_id, full_summary, cfg, session_mgr)
-
+    events_summary, full_summary = await _broadcast_completion(
+        session_id, description, thread, exit_code, thread_mgr, session_mgr, quota_exhausted, error)
+    await _maybe_spawn_reviewer(
+        session_id, thread, exit_code, events_summary, full_summary, thread_mgr, session_mgr, cfg)
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:

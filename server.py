@@ -219,7 +219,7 @@ if __name__ == "__main__":
     ssl_kwargs['ssl_keyfile'] = cfg.ssl_keyfile
   uvicorn.run(
     "server:app",
-    host="127.0.0.1",
+    host="0.0.0.0",
     port=cfg.server_port,
     reload=False,
     log_level="info",

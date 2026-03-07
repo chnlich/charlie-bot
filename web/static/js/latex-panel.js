@@ -133,7 +133,7 @@ async function compileLatex() {
     if (data.ok) {
       status.textContent = 'Done';
       status.className = 'text-xs text-green-400';
-      if (latexView === 'pdf') loadLatexPdf();
+      if (latexView === 'pdf') loadLatexPdf(true);
     } else {
       status.textContent = 'Failed (see console)';
       status.className = 'text-xs text-red-400';

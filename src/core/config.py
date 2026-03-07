@@ -183,6 +183,10 @@ class CharlieBotConfig(BaseModel):
   def config_d_dir(self) -> Path:
     return self.charliebot_home / "config.d"
 
+  def get_backend_option(self, backend_id: str) -> Optional[BackendOption]:
+    """Look up a backend option by id."""
+    return next((opt for opt in self.backend_options if opt.id == backend_id), None)
+
   def discover_repos(self) -> list[dict[str, str]]:
     """Scan workspace_dirs for directories containing a .git folder."""
     repos: list[dict[str, str]] = []

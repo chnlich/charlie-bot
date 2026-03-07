@@ -185,7 +185,7 @@ def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> Backend
 
   Raises ValueError if the option_id is not in backend_options or has no model.
   """
-  option = next((opt for opt in cfg.backend_options if opt.id == option_id), None)
+  option = cfg.get_backend_option(option_id)
   if option is None:
     raise ValueError(f"model_preference entry '{option_id}' not in backend_options")
   if not option.model:
@@ -199,7 +199,7 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str) -
     raise ValueError("resolved backend is required")
   if not model:
     raise ValueError("resolved model is required")
-  option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+  option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"resolved backend '{backend_id}' is not configured")
   return BackendOption(id=option.id, label=option.label, type=option.type, model=model)
@@ -217,7 +217,7 @@ async def resolve_session_subagent_backend_model(
   backend_id = session_meta.backend
   if not backend_id:
     raise ValueError(f"session '{session_id}' has no backend configured")
-  option = next((opt for opt in cfg.backend_options if opt.id == backend_id), None)
+  option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"session backend '{backend_id}' is not in backend_options")
   if not option.model:

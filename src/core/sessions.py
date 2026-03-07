@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import aiofiles
 import structlog
@@ -219,70 +219,29 @@ class SessionManager:
 
   async def archive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Mark a session as archived (does not delete files)."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    meta.status = SessionStatus.ARCHIVED
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
+    meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._events_cache.pop(session_id, None)
-    log.info("session_archived", session_id=session_id)
     return meta
 
   async def unarchive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Restore an archived session back to active."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    meta.status = SessionStatus.ACTIVE
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
-    log.info("session_unarchived", session_id=session_id)
-    return meta
+    return await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
 
   async def mark_waiting(self, session_id: str) -> Optional[SessionMetadata]:
     """Mark a session as waiting for confirmation."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    meta.status = SessionStatus.WAITING
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
-    log.info("session_mark_waiting", session_id=session_id)
-    return meta
+    return await self._update_field(session_id, "status", SessionStatus.WAITING, "session_mark_waiting")
 
   async def unmark_waiting(self, session_id: str) -> Optional[SessionMetadata]:
     """Restore a waiting session back to active."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    meta.status = SessionStatus.ACTIVE
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
-    log.info("session_unmark_waiting", session_id=session_id)
-    return meta
+    return await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unmark_waiting")
 
   async def star_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Star a session."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    meta.starred = True
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
-    log.info("session_starred", session_id=session_id)
-    return meta
+    return await self._update_field(session_id, "starred", True, "session_starred")
 
   async def unstar_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Unstar a session."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    meta.starred = False
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
-    log.info("session_unstarred", session_id=session_id)
-    return meta
+    return await self._update_field(session_id, "starred", False, "session_unstarred")
 
   async def save_metadata(self, meta: SessionMetadata) -> None:
     """Public wrapper for _save_metadata."""
@@ -403,6 +362,17 @@ class SessionManager:
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  async def _update_field(self, session_id: str, field: str, value: Any, log_event: str) -> Optional[SessionMetadata]:
+    """Get a session, set one field, save, and log. Returns None if session not found."""
+    meta = await self.get_session(session_id)
+    if not meta:
+      return None
+    setattr(meta, field, value)
+    meta.updated_at = datetime.now(timezone.utc)
+    await self._save_metadata(meta)
+    log.info(log_event, session_id=session_id)
+    return meta
 
   async def _has_running_tasks(self, session_id: str) -> bool:
     """Check if a session has any threads with status 'running'."""

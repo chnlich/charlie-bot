@@ -4,6 +4,7 @@
 let latexPanelOpen = false;
 let latexView = 'pdf'; // 'pdf' or 'tex'
 let latexEditorDirty = false;
+let pdfNeedsReload = false;
 
 function toggleLatexPanel() {
   if (latexPanelOpen) {
@@ -39,6 +40,10 @@ function switchLatexView(view) {
 }
 
 async function loadLatexPdf(force = false) {
+  if (pdfNeedsReload) {
+    force = true;
+    pdfNeedsReload = false;
+  }
   const container = document.getElementById('latex-pdf-canvas-container');
   if (!container) return;
   // Skip re-fetch if PDF is already rendered (preserves scroll position)
@@ -133,7 +138,11 @@ async function compileLatex() {
     if (data.ok) {
       status.textContent = 'Done';
       status.className = 'text-xs text-green-400';
-      if (latexView === 'pdf') loadLatexPdf(true);
+      if (latexView === 'pdf' && latexPanelOpen) {
+        loadLatexPdf(true);
+      } else {
+        pdfNeedsReload = true;
+      }
     } else {
       status.textContent = 'Failed (see console)';
       status.className = 'text-xs text-red-400';
@@ -234,7 +243,11 @@ function initLatexResize() {
       panel.style.width = pct + '%';
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      if (latexView === 'pdf') loadLatexPdf(true);
+      if (latexView === 'pdf') {
+        loadLatexPdf(true);
+      } else {
+        pdfNeedsReload = true;
+      }
     }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);

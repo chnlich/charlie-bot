@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Awaitable, Callable, Optional
@@ -117,6 +118,11 @@ class AgentBackend(ABC):
       await self._on_spawn(self._proc.pid)
 
     assert self._proc.stdout is not None
+    _saw_result = False
+    _result_time: float = 0.0
+    _POST_RESULT_TIMEOUT = 30.0
+    _CLEANUP_TIMEOUT = 5.0
+
     async for raw_line in self._proc.stdout:
       line = raw_line.decode("utf-8", errors="replace").strip()
       if not line:
@@ -128,10 +134,57 @@ class AgentBackend(ABC):
         continue
       for translated in self.translate_event(event):
         yield translated
+        if not _saw_result and translated.get("type") == "result":
+          _saw_result = True
+          _result_time = time.monotonic()
 
+      # After a result event, apply a timeout to subsequent reads so we don't
+      # block forever when orphan child processes keep stdout open.
+      if _saw_result:
+        remaining = _POST_RESULT_TIMEOUT - (time.monotonic() - _result_time)
+        if remaining <= 0:
+          log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
+          break
+        # Wrap the next iteration's readline with a timeout by draining with a deadline.
+        try:
+          raw_tail = await asyncio.wait_for(self._proc.stdout.readline(), timeout=remaining)
+        except asyncio.TimeoutError:
+          log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
+          break
+        if not raw_tail:
+          break  # EOF
+        tail_line = raw_tail.decode("utf-8", errors="replace").strip()
+        if tail_line:
+          try:
+            tail_event = json.loads(tail_line)
+          except json.JSONDecodeError:
+            pass
+          else:
+            for translated in self.translate_event(tail_event):
+              yield translated
+
+    # Drain stderr and wait for process exit with a timeout.
     assert self._proc.stderr is not None
-    stderr_bytes = await self._proc.stderr.read()
-    await self._proc.wait()
+    try:
+      stderr_bytes = await asyncio.wait_for(self._proc.stderr.read(), timeout=_CLEANUP_TIMEOUT)
+    except asyncio.TimeoutError:
+      stderr_bytes = b""
+    try:
+      await asyncio.wait_for(self._proc.wait(), timeout=_CLEANUP_TIMEOUT)
+    except asyncio.TimeoutError:
+      log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
+      try:
+        os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+      except (ProcessLookupError, PermissionError):
+        pass
+      try:
+        await asyncio.wait_for(self._proc.wait(), timeout=_CLEANUP_TIMEOUT)
+      except asyncio.TimeoutError:
+        log.warning("backend_sigkill_after_result", pid=self._proc.pid)
+        try:
+          os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+          pass
     self.exit_code = self._proc.returncode or 0
     self.stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 

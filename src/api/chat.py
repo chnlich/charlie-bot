@@ -154,7 +154,7 @@ async def run_and_finalize(
 ) -> None:
   """Run master CC, persist cc_session_id, and auto-name the session."""
   backend_id = meta.backend
-  backend_option = next((o for o in cfg.backend_options if o.id == backend_id), None)
+  backend_option = cfg.get_backend_option(backend_id)
   if backend_option is None and backend_id.startswith("codex"):
     backend_option = next((o for o in cfg.backend_options if o.type == "codex"), None)
   try:

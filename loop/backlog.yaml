@@ -281,9 +281,12 @@
     These run on every page load and session search, so blocking here directly impacts
     UI responsiveness.
   category: performance
-  status: approved
+  status: done
   created: '2026-03-03T14:00:00Z'
   priority: medium
+  done_reason: 'Already resolved: both list_sessions (L74) and search_sessions (L100)
+    already wrap Path.iterdir() in asyncio.to_thread(lambda: [d for d in ...iterdir()
+    if d.is_dir()]). No code changes needed.'
 - id: '025'
   title: Add get_backend_option(id) method to CharlieBotConfig
   description: Centralize backend option lookup scattered across 4 call sites. The

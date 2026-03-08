@@ -57,9 +57,13 @@
 
     '
   category: formatting
-  status: approved
+  status: done
   created: '2026-02-27T12:00:00Z'
   priority: low
+  done_reason: 'Already resolved: both files pass yapf --diff with no violations.
+    The original formatting issues were fixed by prior refactoring (items 016 and 021
+    which restructured both files). Verified with yapf -i (no changes) and yapf --diff
+    (clean).'
 - id: '006'
   title: Cache scheduler session lookup per tick
   description: 'core/scheduler.py _tick() calls _get_or_create_session and _get_last_run

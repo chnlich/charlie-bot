@@ -14,6 +14,7 @@ from src.api.message_utils import build_session_view_data
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
+    RateSessionRequest,
     RenameSessionRequest,
     SessionMetadata,
     SessionStatus,
@@ -231,6 +232,21 @@ async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(
   meta = await session_mgr.unstar_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
+  return meta
+
+
+@router.post("/{session_id}/rate", response_model=SessionMetadata)
+async def rate_session(
+    session_id: str,
+    req: RateSessionRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  meta.rating = req.rating
+  await session_mgr.save_metadata(meta)
+  log.info("session_rated", session_id=session_id, rating=req.rating)
   return meta
 
 

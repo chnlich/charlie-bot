@@ -1,7 +1,7 @@
 """Session management API routes."""
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -244,7 +244,10 @@ async def rate_session(
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
+  if meta.status != SessionStatus.ARCHIVED:
+    raise HTTPException(status_code=409, detail="Session is not archived")
   meta.rating = req.rating
+  meta.updated_at = datetime.now(timezone.utc)
   await session_mgr.save_metadata(meta)
   log.info("session_rated", session_id=session_id, rating=req.rating)
   return meta

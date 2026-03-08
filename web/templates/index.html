@@ -180,7 +180,7 @@
       <!-- Tab content wrapper (chat + workers + latex panel side by side) -->
       <div class="flex-1 flex min-h-0">
       <!-- ===== CHAT TAB ===== -->
-      <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0">
+      <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
         <!-- Messages -->
         <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           {% for msg in messages %}
@@ -251,6 +251,16 @@
             <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" id="streaming-content"></div>
           </div>
         </div>
+
+        <!-- Scroll-to-bottom floating button -->
+        <button id="scroll-to-bottom"
+                onclick="scrollToBottom()"
+                class="hidden absolute right-6 bottom-24 z-10 p-2 rounded-full bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 hover:text-white shadow-lg transition-all"
+                title="Scroll to bottom">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+          </svg>
+        </button>
 
         <!-- Thinking indicator -->
         <div id="thinking" class="hidden px-4 py-2 flex items-center gap-2 text-sm text-slate-400">

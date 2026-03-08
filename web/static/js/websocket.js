@@ -206,14 +206,20 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
       streamBuf = '';
       streamTs = null;
     }
+    const container = document.getElementById('messages');
+    const wasAtBottom = shouldAutoScroll(container);
     const wDiv = document.createElement('div');
     wDiv.className = 'flex justify-start';
     const fullContent = (ev.full_content || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     const tsHtml = ev.timestamp ? '<div class="text-[10px] text-emerald-400/50 mt-1">' + formatBubbleTime(ev.timestamp) + '</div>' : '';
     wDiv.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 prose-msg cursor-pointer" data-full="${fullContent}" onclick="showTextModal('Worker Result', this.dataset.full)">${marked.parse(ev.content || '')}${tsHtml}</div>`;
     const streamEl = document.getElementById('streaming-msg');
-    document.getElementById('messages').insertBefore(wDiv, streamEl);
-    document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+    container.insertBefore(wDiv, streamEl);
+    if (wasAtBottom) {
+      container.scrollTop = container.scrollHeight;
+    } else {
+      showScrollToBottom();
+    }
     updateSpinner();
   } else if (t === 'handler_result') {
     const icon = ev.status === 'ok' ? '✓' : '✗';

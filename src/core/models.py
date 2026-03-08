@@ -3,9 +3,15 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
+
+SessionRating = Literal['thumbs_up', 'neutral', 'thumbs_down']
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -95,6 +101,8 @@ class SessionMetadata(BaseModel):
   # Rewind fields
   parent_session_id: Optional[str] = None  # original session this was rewound from
   rewind_summary: Optional[str] = None  # context summary from parent session
+  # Rating
+  rating: Optional[SessionRating] = None
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +151,10 @@ class VoiceTranscriptionResponse(BaseModel):
 
 class RenameSessionRequest(BaseModel):
   name: str
+
+
+class RateSessionRequest(BaseModel):
+  rating: SessionRating
 
 
 class DelegateRequest(BaseModel):

@@ -559,6 +559,33 @@ async function unarchiveSession(id) {
   }
 }
 
+async function rateSession(id, rating) {
+  try {
+    const res = await fetch(`/api/sessions/${id}/rate`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({rating}),
+    });
+    if (!res.ok) throw new Error(`Rate failed: ${res.status}`);
+    // Update button highlights
+    const container = document.getElementById('rating-' + id);
+    if (container) {
+      container.querySelectorAll('button').forEach(btn => {
+        const btnRating = btn.dataset.rating;
+        if (btnRating === rating) {
+          btn.classList.add('!opacity-100');
+          btn.classList.remove('opacity-0', 'group-hover:opacity-100');
+        } else {
+          btn.classList.remove('!opacity-100');
+          btn.classList.add('opacity-0', 'group-hover:opacity-100');
+        }
+      });
+    }
+  } catch (err) {
+    console.error('Rate session failed:', err);
+  }
+}
+
 async function waitSession(id) {
   try {
     await fetch(`/api/sessions/${id}/wait`, { method: 'POST' });
@@ -813,7 +840,18 @@ function renderSessionList(sessions, filter) {
     // Action buttons differ by filter
     let actions = '';
     if (filter === 'archived') {
+      const rUp = s.rating === 'thumbs_up' ? '!opacity-100 text-green-400' : 'opacity-0 group-hover:opacity-100 hover:text-green-400';
+      const rNeu = s.rating === 'neutral' ? '!opacity-100 text-slate-300' : 'opacity-0 group-hover:opacity-100 hover:text-slate-300';
+      const rDn = s.rating === 'thumbs_down' ? '!opacity-100 text-red-400' : 'opacity-0 group-hover:opacity-100 hover:text-red-400';
       actions = `
+        <span id="rating-${s.id}" class="inline-flex items-center gap-0">
+          <button onclick="event.preventDefault(); event.stopPropagation(); rateSession('${s.id}', 'thumbs_up')"
+                  data-rating="thumbs_up" class="p-0.5 text-xs transition-opacity flex-shrink-0 ${rUp}" title="Thumbs up">👍</button>
+          <button onclick="event.preventDefault(); event.stopPropagation(); rateSession('${s.id}', 'neutral')"
+                  data-rating="neutral" class="p-0.5 text-xs transition-opacity flex-shrink-0 ${rNeu}" title="Neutral">—</button>
+          <button onclick="event.preventDefault(); event.stopPropagation(); rateSession('${s.id}', 'thumbs_down')"
+                  data-rating="thumbs_down" class="p-0.5 text-xs transition-opacity flex-shrink-0 ${rDn}" title="Thumbs down">👎</button>
+        </span>
         <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
                 class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
           <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>

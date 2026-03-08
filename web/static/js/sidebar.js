@@ -570,14 +570,30 @@ async function rateSession(id, rating) {
     // Update button highlights
     const container = document.getElementById('rating-' + id);
     if (container) {
+      const activeColorClass = {
+        thumbs_up: 'text-green-400',
+        neutral: 'text-slate-300',
+        thumbs_down: 'text-red-400',
+      };
+      const hoverColorClass = {
+        thumbs_up: 'hover:text-green-400',
+        neutral: 'hover:text-slate-300',
+        thumbs_down: 'hover:text-red-400',
+      };
       container.querySelectorAll('button').forEach(btn => {
         const btnRating = btn.dataset.rating;
+        const activeColor = activeColorClass[btnRating] || '';
+        const hoverColor = hoverColorClass[btnRating] || '';
         if (btnRating === rating) {
           btn.classList.add('!opacity-100');
+          if (activeColor) btn.classList.add(activeColor);
           btn.classList.remove('opacity-0', 'group-hover:opacity-100');
+          if (hoverColor) btn.classList.remove(hoverColor);
         } else {
           btn.classList.remove('!opacity-100');
+          if (activeColor) btn.classList.remove(activeColor);
           btn.classList.add('opacity-0', 'group-hover:opacity-100');
+          if (hoverColor) btn.classList.add(hoverColor);
         }
       });
     }

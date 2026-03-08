@@ -10,9 +10,9 @@ import aiofiles
 import structlog
 
 from src.agents.backends.base import AgentBackend
-from src.agents.backends.claude_code import BASE_COMMAND as WORKER_COMMAND, ClaudeCodeBackend
+from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.registry import build_backend
-from src.core.config import get_config, CharlieBotConfig
+from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, ThreadMetadata
 from src.core.ndjson import append_ndjson
 from src.core.streaming import handle_compact_boundary, streaming_manager

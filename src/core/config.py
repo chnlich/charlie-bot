@@ -6,7 +6,7 @@ from typing import Optional
 
 import yaml
 import structlog
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, model_validator
 
 log = structlog.get_logger()
 
@@ -141,16 +141,6 @@ class CharlieBotConfig(BaseModel):
       if isinstance(entry, dict) and entry.get("path"):
         entry["path"] = os.path.expanduser(entry["path"])
     return values
-
-  @field_validator("workspace_dirs", mode="before")
-  @classmethod
-  def expand_workspace_dirs(cls, v: list[str]) -> list[str]:
-    return [os.path.expanduser(p) for p in (v or [])]
-
-  @field_validator("worktree_dir", mode="before")
-  @classmethod
-  def expand_worktree_dir(cls, v: str) -> str:
-    return os.path.expanduser(v)
 
   @property
   def subprocess_buffer_limit(self) -> int:

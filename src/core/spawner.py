@@ -11,7 +11,8 @@ from typing import Optional
 import structlog
 
 from src.agents.master_cc import run_message
-from src.agents.worker import WORKER_COMMAND, QuotaExhaustedException, Worker
+from src.agents.backends.claude_code import BASE_COMMAND
+from src.agents.worker import QuotaExhaustedException, Worker
 from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
@@ -339,7 +340,7 @@ async def _stream_worker_events(
 
   Returns (exit_code, quota_exhausted, error_message).
   """
-  thread.cli_command = " ".join(WORKER_COMMAND + [description])
+  thread.cli_command = " ".join(BASE_COMMAND + [description])
   thread.status = ThreadStatus.RUNNING
   thread.started_at = datetime.now(timezone.utc)
   await thread_mgr.save_metadata(thread)

@@ -83,6 +83,7 @@ async function transcribeAudio(blob) {
 
   // Show transcribing placeholder bubble
   const container = document.getElementById('messages');
+  const wasAtBottom = shouldAutoScroll(container);
   const placeholder = document.createElement('div');
   placeholder.id = 'voice-transcribing';
   placeholder.className = 'flex justify-end';
@@ -98,7 +99,7 @@ async function transcribeAudio(blob) {
   </div>`;
   const streamEl = document.getElementById('streaming-msg');
   container.insertBefore(placeholder, streamEl);
-  container.scrollTop = container.scrollHeight;
+  if (wasAtBottom) container.scrollTop = container.scrollHeight;
 
   try {
     const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form });

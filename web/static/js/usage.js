@@ -51,10 +51,15 @@ function updateUsageDisplay(ev) {
 function showStreaming(content) {
   const el = document.getElementById('streaming-msg');
   const inner = document.getElementById('streaming-content');
+  const container = document.getElementById('messages');
+  const wasAtBottom = shouldAutoScroll(container);
   el.classList.remove('hidden');
   inner.innerHTML = marked.parse(content);
-  const container = document.getElementById('messages');
-  container.scrollTop = container.scrollHeight;
+  if (wasAtBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    showScrollToBottom();
+  }
 }
 
 function hideStreaming() {

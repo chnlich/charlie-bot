@@ -1,4 +1,11 @@
 // ---------------------------------------------------------------------------
+// Auto-scroll helper — returns true only when user is near the bottom
+// ---------------------------------------------------------------------------
+function shouldAutoScroll(container, threshold = 150) {
+  return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+}
+
+// ---------------------------------------------------------------------------
 // Send message
 // ---------------------------------------------------------------------------
 function bumpCurrentSessionToTop() {
@@ -60,6 +67,7 @@ async function sendMessage() {
 
 function appendMessage(role, content, isVoice, timestamp) {
   const container = document.getElementById('messages');
+  const wasAtBottom = shouldAutoScroll(container);
   const div = document.createElement('div');
   const timeHtml = timestamp ? '<div class="text-[10px] text-slate-400/60 mt-1">' + formatBubbleTime(timestamp) + '</div>' : '';
 
@@ -98,11 +106,16 @@ function appendMessage(role, content, isVoice, timestamp) {
   // Insert before streaming-msg
   const streamEl = document.getElementById('streaming-msg');
   container.insertBefore(div, streamEl);
-  container.scrollTop = container.scrollHeight;
+  if (role === 'user' || wasAtBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    showScrollToBottom();
+  }
 }
 
 function appendSeparator(seconds) {
   const container = document.getElementById('messages');
+  const wasAtBottom = shouldAutoScroll(container);
   const div = document.createElement('div');
   div.className = 'flex items-center gap-3 py-2 px-4 separator-line';
   const timeStr = seconds != null ? ' · ' + seconds + 's' : '';
@@ -111,7 +124,11 @@ function appendSeparator(seconds) {
     + '<div class="flex-1 border-t border-slate-600/40"></div>';
   const streamEl = document.getElementById('streaming-msg');
   container.insertBefore(div, streamEl);
-  container.scrollTop = container.scrollHeight;
+  if (wasAtBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    showScrollToBottom();
+  }
 }
 
 function escapeHtml(str) {
@@ -119,3 +136,32 @@ function escapeHtml(str) {
   d.textContent = str;
   return d.innerHTML;
 }
+
+// ---------------------------------------------------------------------------
+// Scroll-to-bottom floating button
+// ---------------------------------------------------------------------------
+function showScrollToBottom() {
+  const btn = document.getElementById('scroll-to-bottom');
+  if (btn) btn.classList.remove('hidden');
+}
+
+function hideScrollToBottom() {
+  const btn = document.getElementById('scroll-to-bottom');
+  if (btn) btn.classList.add('hidden');
+}
+
+function scrollToBottom() {
+  const container = document.getElementById('messages');
+  if (container) container.scrollTop = container.scrollHeight;
+  hideScrollToBottom();
+}
+
+// Hide the button when user scrolls back to bottom
+document.addEventListener('DOMContentLoaded', () => {
+  const container = document.getElementById('messages');
+  if (container) {
+    container.addEventListener('scroll', () => {
+      if (shouldAutoScroll(container)) hideScrollToBottom();
+    });
+  }
+});

@@ -54,9 +54,6 @@ class StreamingManager:
       except Exception as e:
         log.debug("ws_close_on_shutdown_failed", error=str(e))
 
-  def subscriber_count(self, thread_id: str) -> int:
-    return len(self._connections.get(thread_id, set()))
-
 
 # Module-level singleton used across the application
 streaming_manager = StreamingManager()

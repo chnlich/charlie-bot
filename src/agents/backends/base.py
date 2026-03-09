@@ -55,11 +55,6 @@ class AgentBackend(ABC):
     self.exit_code: int = -1
     self.stderr_text: str = ""
 
-  @property
-  def pid(self) -> Optional[int]:
-    """Return the PID of the running subprocess, or None if not yet started."""
-    return self._proc.pid if self._proc else None
-
   @abstractmethod
   def _build_command(self, prompt: str) -> list[str]:
     """Build the full CLI command list for the subprocess.

@@ -138,112 +138,148 @@ class CodexBackend(AgentBackend):
     log.debug("codex_event_unhandled", type=ev_type)
     return []
 
+  # Handler registry: each handler is called for every item event,
+  # preserving multi-fire semantics (independent ifs, not elif).
+  _ITEM_HANDLERS = [
+      "_handle_agent_message",
+      "_handle_reasoning",
+      "_handle_command_execution",
+      "_handle_file_change",
+      "_handle_mcp_tool_call",
+      "_handle_web_search",
+      "_handle_todo_list",
+      "_handle_error",
+  ]
+
   def _translate_item_event(self, ev: dict) -> list[dict]:
     """Translate item.started/updated/completed events."""
     results: list[dict] = []
-    item = ev.get("item", {})
-    item_type = item.get("type", "")
-    item_id = item.get("id", "")
-
-    # --- agent_message ---
-    if item_type == "agent_message":
-      # Newer codex schema emits item.text directly; older schema used content[].
-      full_text = item.get("text", "")
-      if not full_text:
-        content = item.get("content", [])
-        full_text = "".join(
-            part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
-      if full_text:
-        prev = self._last_agent_text.get(item_id, "")
-        delta = full_text[len(prev):]
-        if delta:
-          results.append({
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": delta
-                  }]
-              },
-          })
-        self._last_agent_text[item_id] = full_text
-
-    # --- reasoning ---
-    if item_type == "reasoning":
-      # Newer codex schema emits reasoning text directly; older schema used summary[].
-      text = item.get("text", "")
-      if not text:
-        summary = item.get("summary", [])
-        for part in summary:
-          if part.get("type") == "summary_text":
-            text += part.get("text", "")
-      if text:
-        results.append({"type": "thinking", "content": text})
-
-    # --- command_execution ---
-    if item_type == "command_execution":
-      if ev.get("type") == "item.started":
-        command = item.get("command", "")
-        results.append({"type": "tool_use", "name": "Bash", "input": {"command": command}})
-      elif ev.get("type") == "item.completed":
-        output = item.get("output", "")
-        results.append({"type": "tool_result", "tool_name": "Bash", "content": output})
-
-    # --- file_change ---
-    if item_type == "file_change":
-      filename = item.get("filename", "")
-      if filename:
-        results.append({"type": "file_write", "path": filename})
-
-    # --- mcp_tool_call ---
-    if item_type == "mcp_tool_call":
-      server = item.get("server_label", "")
-      tool = item.get("name", "")
-      tool_name = f"mcp:{server}/{tool}" if server else f"mcp:{tool}"
-      if ev.get("type") == "item.started":
-        arguments = item.get("arguments", {})
-        if isinstance(arguments, str):
-          try:
-            arguments = json.loads(arguments)
-          except json.JSONDecodeError:
-            arguments = {"raw": arguments}
-        results.append({"type": "tool_use", "name": tool_name, "input": arguments})
-      elif ev.get("type") == "item.completed":
-        output = item.get("result", item.get("error", ""))
-        results.append({"type": "tool_result", "tool_name": tool_name, "content": str(output)})
-
-    # --- web_search ---
-    if item_type == "web_search":
-      if ev.get("type") == "item.started":
-        query = item.get("query", "")
-        results.append({"type": "tool_use", "name": "WebSearch", "input": {"query": query}})
-      elif ev.get("type") == "item.completed":
-        output = item.get("output", "")
-        results.append({"type": "tool_result", "tool_name": "WebSearch", "content": str(output)})
-
-    # --- todo_list ---
-    if item_type == "todo_list":
-      items = item.get("items", [])
-      lines = []
-      for todo in items:
-        status = todo.get("status", "pending")
-        label = todo.get("label", todo.get("content", ""))
-        marker = {"completed": "[x]", "in_progress": "[~]"}.get(status, "[ ]")
-        lines.append(f"- {marker} {label}")
-      if lines:
-        results.append({
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": "\n".join(lines)
-                }]
-            },
-        })
-
-    # --- error ---
-    if item_type == "error":
-      msg = item.get("message", str(item))
-      results.append({"type": "error", "message": msg, "content": msg})
-
+    for handler_name in self._ITEM_HANDLERS:
+      results.extend(getattr(self, handler_name)(ev))
     return results
+
+  def _handle_agent_message(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "agent_message":
+      return []
+    item_id = item.get("id", "")
+    # Newer codex schema emits item.text directly; older schema used content[].
+    full_text = item.get("text", "")
+    if not full_text:
+      content = item.get("content", [])
+      full_text = "".join(
+          part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+    if not full_text:
+      return []
+    prev = self._last_agent_text.get(item_id, "")
+    delta = full_text[len(prev):]
+    self._last_agent_text[item_id] = full_text
+    if not delta:
+      return []
+    return [{
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "text",
+                "text": delta
+            }]
+        },
+    }]
+
+  def _handle_reasoning(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "reasoning":
+      return []
+    # Newer codex schema emits reasoning text directly; older schema used summary[].
+    text = item.get("text", "")
+    if not text:
+      summary = item.get("summary", [])
+      for part in summary:
+        if part.get("type") == "summary_text":
+          text += part.get("text", "")
+    if not text:
+      return []
+    return [{"type": "thinking", "content": text}]
+
+  def _handle_command_execution(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "command_execution":
+      return []
+    if ev.get("type") == "item.started":
+      command = item.get("command", "")
+      return [{"type": "tool_use", "name": "Bash", "input": {"command": command}}]
+    if ev.get("type") == "item.completed":
+      output = item.get("output", "")
+      return [{"type": "tool_result", "tool_name": "Bash", "content": output}]
+    return []
+
+  def _handle_file_change(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "file_change":
+      return []
+    filename = item.get("filename", "")
+    if not filename:
+      return []
+    return [{"type": "file_write", "path": filename}]
+
+  def _handle_mcp_tool_call(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "mcp_tool_call":
+      return []
+    server = item.get("server_label", "")
+    tool = item.get("name", "")
+    tool_name = f"mcp:{server}/{tool}" if server else f"mcp:{tool}"
+    if ev.get("type") == "item.started":
+      arguments = item.get("arguments", {})
+      if isinstance(arguments, str):
+        try:
+          arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+          arguments = {"raw": arguments}
+      return [{"type": "tool_use", "name": tool_name, "input": arguments}]
+    if ev.get("type") == "item.completed":
+      output = item.get("result", item.get("error", ""))
+      return [{"type": "tool_result", "tool_name": tool_name, "content": str(output)}]
+    return []
+
+  def _handle_web_search(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "web_search":
+      return []
+    if ev.get("type") == "item.started":
+      query = item.get("query", "")
+      return [{"type": "tool_use", "name": "WebSearch", "input": {"query": query}}]
+    if ev.get("type") == "item.completed":
+      output = item.get("output", "")
+      return [{"type": "tool_result", "tool_name": "WebSearch", "content": str(output)}]
+    return []
+
+  def _handle_todo_list(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "todo_list":
+      return []
+    items = item.get("items", [])
+    lines = []
+    for todo in items:
+      status = todo.get("status", "pending")
+      label = todo.get("label", todo.get("content", ""))
+      marker = {"completed": "[x]", "in_progress": "[~]"}.get(status, "[ ]")
+      lines.append(f"- {marker} {label}")
+    if not lines:
+      return []
+    return [{
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "text",
+                "text": "\n".join(lines)
+            }]
+        },
+    }]
+
+  def _handle_error(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "error":
+      return []
+    msg = item.get("message", str(item))
+    return [{"type": "error", "message": msg, "content": msg}]

@@ -38,14 +38,6 @@ async def create_session(
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  # Debug logging to troubleshoot backend selection issue
-  # CRITICAL: Dump entire request to see what FastAPI parsed
-  log.info("create_session_request_dump",
-           req_dict=req.model_dump() if hasattr(req, 'model_dump') else str(req),
-           backend_raw=req.backend,
-           backend_type=type(req.backend).__name__ if req.backend is not None else "None",
-           backend_is_none=req.backend is None)
-
   # Validate backend: if not provided or empty, use default
   valid_backend_ids = {opt.id for opt in cfg.backend_options}
   log.info("valid_backend_ids", ids=list(valid_backend_ids))

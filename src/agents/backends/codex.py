@@ -36,8 +36,11 @@ class CodexBackend(AgentBackend):
     resume_session_id = kwargs.pop("resume_session_id", None)
     extra_flags = kwargs.pop("extra_flags", None)
     super().__init__(
-        model=model, instructions_content=instructions_content,
-        resume_session_id=resume_session_id, extra_flags=extra_flags, **kwargs)
+        model=model,
+        instructions_content=instructions_content,
+        resume_session_id=resume_session_id,
+        extra_flags=extra_flags,
+        **kwargs)
     self._codex_bin = _resolve_codex_binary()
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
@@ -46,23 +49,33 @@ class CodexBackend(AgentBackend):
     # Prepend instructions to prompt if provided
     effective_prompt = prompt
     if self._instructions_content:
-      effective_prompt = (
-          f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
+      effective_prompt = (f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
 
     if self._resume_session_id:
       cmd = [
-          self._codex_bin, "exec", "resume", "--json", "--skip-git-repo-check",
+          self._codex_bin,
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
           "--dangerously-bypass-approvals-and-sandbox",
-          "--model", self._model,
-          "--config", _MODEL_REASONING_EFFORT_CONFIG,
+          "--model",
+          self._model,
+          "--config",
+          _MODEL_REASONING_EFFORT_CONFIG,
           self._resume_session_id,
       ]
     else:
       cmd = [
-          self._codex_bin, "exec", "--json", "--skip-git-repo-check",
+          self._codex_bin,
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
           "--dangerously-bypass-approvals-and-sandbox",
-          "--model", self._model,
-          "--config", _MODEL_REASONING_EFFORT_CONFIG,
+          "--model",
+          self._model,
+          "--config",
+          _MODEL_REASONING_EFFORT_CONFIG,
       ]
     cmd.extend(self._extra_flags)
     cmd.append(effective_prompt)
@@ -93,17 +106,20 @@ class CodexBackend(AgentBackend):
     # --- turn.completed ---
     if ev_type == "turn.completed":
       usage = ev.get("usage", {})
-      return [{
-          "type": "result",
-          "result": "",
-          "usage": {
-              "input_tokens": usage.get("input_tokens", 0),
-              "cache_read_input_tokens": usage.get("cached_input_tokens", 0),
-              "cache_creation_input_tokens": 0,
-              "output_tokens": usage.get("output_tokens", 0),
-          },
-          "total_cost_usd": 0,
-      }]
+      return [
+          {
+              "type": "result",
+              "result": "",
+              "usage":
+                  {
+                      "input_tokens": usage.get("input_tokens", 0),
+                      "cache_read_input_tokens": usage.get("cached_input_tokens", 0),
+                      "cache_creation_input_tokens": 0,
+                      "output_tokens": usage.get("output_tokens", 0),
+                  },
+              "total_cost_usd": 0,
+          }
+      ]
 
     # --- turn.failed ---
     if ev_type == "turn.failed":
@@ -138,16 +154,19 @@ class CodexBackend(AgentBackend):
       if not full_text:
         content = item.get("content", [])
         full_text = "".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text")
+            part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
       if full_text:
         prev = self._last_agent_text.get(item_id, "")
         delta = full_text[len(prev):]
         if delta:
           results.append({
               "type": "assistant",
-              "message": {"content": [{"type": "text", "text": delta}]},
+              "message": {
+                  "content": [{
+                      "type": "text",
+                      "text": delta
+                  }]
+              },
           })
         self._last_agent_text[item_id] = full_text
 
@@ -216,7 +235,12 @@ class CodexBackend(AgentBackend):
       if lines:
         results.append({
             "type": "assistant",
-            "message": {"content": [{"type": "text", "text": "\n".join(lines)}]},
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": "\n".join(lines)
+                }]
+            },
         })
 
     # --- error ---

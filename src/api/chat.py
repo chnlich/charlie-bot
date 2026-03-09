@@ -8,8 +8,6 @@ import aiofiles
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager, require_session
 from src.core.autonamer import maybe_auto_name

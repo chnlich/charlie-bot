@@ -215,7 +215,7 @@
     or downgraded to log.debug. api/chat.py:11 imports BaseModel from pydantic but
     never uses it — delete the import.
   category: maintainability
-  status: approved
+  status: done
   created: '2026-03-02T12:00:00Z'
   priority: low
 - id: 019

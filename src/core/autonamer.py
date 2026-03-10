@@ -1,5 +1,6 @@
-"""Auto-name sessions after the first chat turn using Gemini."""
+"""Auto-name sessions after the first chat turn using Gemini or Claude CLI."""
 
+import asyncio
 import re
 
 import structlog
@@ -22,6 +23,24 @@ _NAMING_PROMPT = (
     "Assistant: {assistant_response}")
 
 
+async def _generate_name_via_claude_cli(prompt: str) -> str:
+  """Generate text using the claude CLI in print mode."""
+  proc = await asyncio.create_subprocess_exec(
+      "claude", "-p",
+      "--output-format", "text",
+      "--no-session-persistence",
+      "--model", "sonnet",
+      prompt,
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+  if proc.returncode != 0:
+    raise RuntimeError(
+        f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
+  return stdout.decode().strip()
+
+
 async def maybe_auto_name(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -29,12 +48,8 @@ async def maybe_auto_name(
     assistant_response: str,
     session_mgr: SessionManager,
 ) -> None:
-  """If the session still has a default name, generate a descriptive one via Gemini."""
+  """If the session still has a default name, generate a descriptive one."""
   if not _DEFAULT_NAME_RE.match(session_meta.name):
-    return
-
-  if not cfg.gemini_api_key:
-    log.debug("autonamer_skipped_no_api_key")
     return
 
   try:
@@ -43,8 +58,11 @@ async def maybe_auto_name(
         assistant_response=assistant_response[:1000],
     )
 
-    provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
-    raw = await provider.generate_text(prompt)
+    if cfg.gemini_api_key:
+      provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
+      raw = await provider.generate_text(prompt)
+    else:
+      raw = await _generate_name_via_claude_cli(prompt)
 
     # Sanitize: strip quotes, limit length
     name = raw.strip().strip('"\'').strip()

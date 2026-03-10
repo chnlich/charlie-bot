@@ -112,12 +112,18 @@ class OpenCodeBackend(AgentBackend):
               }]
           },
       })
-      # Emit tool_result event
-      results.append({
-          "type": "tool_result",
-          "tool_use_id": call_id,
-          "content": output,
-      })
+      # Emit tool_result event only when output is present
+      if output:
+        results.append({
+            "type": "tool_result",
+            "tool_use_id": call_id,
+            "content": output,
+        })
+      return results
+
+    if ev_type == "error":
+      msg = ev.get("part", {}).get("error", str(ev))
+      results.append({"type": "error", "message": msg, "content": msg})
       return results
 
     if ev_type == "step_finish":

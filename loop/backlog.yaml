@@ -337,3 +337,18 @@
   status: done
   created: '2026-03-03T14:00:00Z'
   priority: low
+- id: '029'
+  title: Refactor events_to_messages repetitive branches into dispatch table
+  description: Reduce the longest function in the codebase (events_to_messages, 146
+    lines) by replacing 7 near-identical if-elif branches with a data-driven dispatch
+    table. 7 of 9 event types (master_done, assistant_error, error, task_delegated,
+    worker_summary, handler_result, context_compacted) follow the same pattern — _flush()
+    then messages.append({role, content, event_index, timestamp}) with only role and
+    content-extraction differing. Define a SIMPLE_HANDLERS dict mapping event type
+    to (role, content_fn) and replace the 7 branches with a ~10-line loop. Keep only
+    the special user and assistant branches inline. Cuts ~60 lines of repetitive code
+    and makes adding new event types a one-line dict entry.
+  category: maintainability
+  status: pending
+  created: '2026-03-09T12:00:00Z'
+  priority: medium

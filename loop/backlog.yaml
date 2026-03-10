@@ -352,3 +352,18 @@
   status: pending
   created: '2026-03-09T12:00:00Z'
   priority: medium
+- id: '030'
+  title: Fix unchecked returncodes in api/backlog.py _git_commit_push
+  description: Prevent silent git failures in backlog status updates. api/backlog.py:_git_commit_push
+    (L184-219) spawns three sequential git subprocesses (add, commit, push) using
+    asyncio.create_subprocess_exec with DEVNULL but never checks returncode after
+    each .wait(). If git add fails, git commit still runs; if commit fails, push
+    still runs — all silently. This is inconsistent with improvement_loop.py:_git_commit_push
+    (L123-131) which correctly uses subprocess.run(check=True, capture_output=True).
+    Refactor to use asyncio.to_thread wrapping sequential subprocess.run(check=True,
+    capture_output=True) calls, matching the established pattern. Short-circuits
+    on first failure and logs captured stderr for diagnostics.
+  category: error-handling
+  status: pending
+  created: '2026-03-09T12:00:00Z'
+  priority: high

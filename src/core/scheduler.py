@@ -59,7 +59,7 @@ class Scheduler:
 
   async def run_task_now(self, task_name: str) -> dict:
     """Manually trigger a task by name. Returns session_id and thread_id."""
-    cfg = self._reload_config()
+    self._reload_config()
     task_map = {t.name: t for t in get_scheduled_tasks()}
     task_cfg = task_map.get(task_name)
     if task_cfg is None:

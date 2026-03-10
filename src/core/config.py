@@ -103,7 +103,6 @@ class CharlieBotConfig(BaseModel):
       BackendOption(id="kimi-k2.5", label="CC \u00b7 Kimi K2.5", type="cc-kimi", model="kimi-k2.5"),
       BackendOption(id="codex-gpt-5-3", label="Codex \u00b7 gpt-5.3-codex", type="codex", model="gpt-5.3-codex"),
       BackendOption(id="gemini-3-pro", label="Gemini \u00b7 3 Pro", type="gemini", model="gemini-3-pro-preview"),
-      BackendOption(id="opencode-glm5", label="OC \u00b7 GLM-5", type="opencode", model="glm5/zai-org/GLM-5-FP8"),
   ]
 
   # Ordered preference list for reviewer backend selection.

@@ -41,7 +41,7 @@ def check_tex_changed() -> dict | None:
   If different: revert file to snapshot, store {old, new} in _pending_proposal,
   and return the proposal dict. If unchanged: return None.
   """
-  global _pending_proposal
+  global _pending_proposal, _tex_snapshot
   if _tex_snapshot is None:
     return None
   current = get_tex_path().read_text(encoding='utf-8')

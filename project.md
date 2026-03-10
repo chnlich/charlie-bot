@@ -4,15 +4,15 @@
 **CharlieBot** is a Python-based system designed to coordinate and manage multiple **Claude Code** instances (Workers) to complete complex tasks. The primary interface is a responsive Web UI for desktop and mobile access.
 
 ### 1.1 Objectives
-- **Agent Orchestration**: Enable an API-based **Master Agent** (Gemini 3.1 Pro, Kimi k2.5) to manage and coordinate **Claude Code** Worker instances.
-- **Task Delegation**: Master delegates coding tasks to Workers; actual code analysis and implementation planning is performed by the Workers themselves.
+- **Agent Orchestration**: A **Master Agent** (running as a Claude Code session) manages and coordinates Worker instances via a CLI delegation workflow.
+- **Task Delegation**: Master delegates coding tasks to Workers that run in isolated git worktrees; a separate Review Agent automatically verifies and merges the work.
 - **Python-Native**: Built entirely in Python for extensibility and ease of integration with AI toolsets.
 
 ---
 
 ## 2. Technical Stack
 - **Language**: Python 3.10+
-- **Master Agent**: API-based LLM (Gemini 3.1 Pro primary, Kimi k2.5 fallback)
+- **Master Agent**: Claude Code session (pluggable backends: Claude, Kimi, Codex, Gemini, OpenCode)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
 - **Backend**: FastAPI (or Flask), WebSockets/SSE for real-time streaming, asyncio for concurrency
 - **Frontend**: React SPA built to static files, served by FastAPI
@@ -79,73 +79,82 @@ charlie-bot/
 ### 4.1 Agent Roles
 | Role | Type | Responsibilities |
 |------|------|------------------|
-| **Master Agent** | API LLM (Gemini 3.1 Pro / Kimi k2.5) | User interaction, task classification (P0/P1/P2), high-level planning decisions, reviewing Worker results. Does NOT perform code analysis or queue operations. |
-| **Queue Manager** | Python (Deterministic) | Hard-coded queue logic: push/pop/reorder tasks, monitor Worker slots, spawn Workers. Stateless, no LLM involvement. |
-| **Worker Agent** | Claude Code CLI | Code analysis, implementation planning, file editing, git operations, testing. Runs in non-interactive mode (`claude -p --dangerously-skip-permissions`). |
+| **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend (Claude, Kimi, Codex, Gemini). |
+| **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
+| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto base branch, merges (ff-only), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `model_preference` config). |
 
-**Model Abstraction**: The LLM client is wrapped in an abstract `LLMProvider` class, enabling easy addition of other models without modifying core logic.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`), with implementations for Claude Code, Kimi, Codex, Gemini, and OpenCode. Backend selection is configured via `backend_options` and `model_preference` in `config.yaml`.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
-  - One Git Worktree (associated with a specific repo/branch)
-  - A priority task queue (`task_queue.json`)
-  - Multiple Threads (concurrent Workers)
-  
-- **Thread**: Represents a single Worker task. Each Thread has:
+  - A `cc_session_id` for resuming the Master Agent's Claude Code conversation
+  - Multiple Threads (concurrent Workers and Reviewers)
+
+- **Thread**: Represents a single Worker or Reviewer task. Each Thread has:
   - Its own isolated Git branch (e.g., `charliebot/task-{timestamp}-{id}`)
-  - A dedicated worktree under `<repo_path>/worktree/<branch_name>/`
-  - A `CLAUDE.md` file written into the worktree with task instructions
+  - A dedicated worktree directory
+  - Metadata fields: `branch_name`, `repo_path`, `worktree_path`, `backend`, `model`, `context`
+  - Reviewer-specific fields: `review_of` (links to original worker thread), `tried_backends` (for retry tracking)
 
 ### 4.3 Git Isolation Strategy
-- **Session Worktree**: Base working directory for the project
-- **Thread Branch Isolation**: Each Worker operates on its own branch to prevent conflicts
-- **Conflict Resolution**: When auto-merge fails, a dedicated **Conflict Resolution Worker** reads commit messages from both branches, analyzes the changes, and performs an intelligent merge
+- **Thread Branch Isolation**: Each Worker operates on its own branch in an isolated git worktree to prevent conflicts
+- **Reviewer Merge**: The review agent rebases the worker's branch onto the base branch and merges with `--ff-only`
+- **Worktree Cleanup**: The reviewer removes the worktree after successful merge
 
 ---
 
 ## 5. Core Workflows
 
-### 5.1 Ralph Loop (Continuous Task Consumption)
-CharlieBot operates in a continuous loop where Workers automatically pull and execute tasks:
+### 5.1 Delegation Workflow
+The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 
-1. **Task Queue** (`task_queue.json`): Three priority levels
-   - **P0 (Immediate)**: Active conversation — execute immediately
-   - **P1 (Standard)**: Features/bugs — consume when slots available
-   - **P2 (Background)**: Refactoring/docs — batch during idle time
+1. **Task Delegation** (Master → Worker):
+   - User submits request via Web UI chat
+   - Master Agent (Claude Code session) decides to delegate a coding task
+   - Master calls `python -m src.cli.delegate --session SESSION --repo /path --description "task"` (`src/cli/delegate.py`)
+   - The CLI POSTs to `/api/internal/delegate`, which creates a thread and spawns a Worker via `spawn_worker()` (`src/core/spawner.py`)
 
-2. **Task Ingestion** (Master Agent - LLM):
-   - User submits request via chat
-   - Master Agent classifies priority (P0/P1/P2) and generates task description
-   - Python Queue Manager receives the classified task and pushes to queue
+2. **Worker Execution** (Phase 1 — Implement):
+   - Spawner creates an isolated git worktree on a new branch (`charliebot/task-{ts}-{id}`)
+   - Worker receives a prompt with session info, worktree instructions, and the task description
+   - Worker is explicitly told: "Do NOT rebase, merge, or remove the worktree. A reviewer will handle that."
+   - Worker implements the task, commits changes, and exits
+   - Events are streamed via WebSocket and persisted to `events.jsonl`
 
-3. **Execution Flow** (Queue Manager - Python):
-   - Queue Manager (deterministic Python code) monitors available Worker slots
-   - When slot free, Queue Manager pops highest priority task from queue
-   - Queue Manager spawns Worker and passes task context
-   - Worker executes and **automatically exits**
-   - Queue Manager immediately triggers next iteration
+3. **Review** (Phase 2 — Automatic on Worker Success):
+   - On successful worker completion, `_spawn_review_worker()` automatically spawns a Review Agent
+   - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from `model_preference` config
+   - Reviewer reads session conversation + worker log for context, then:
+     - Reviews `git diff base_branch...branch_name`
+     - Fixes any issues found, commits fixes
+     - Rebases the branch onto the base branch
+     - Merges back to main with `--ff-only`
+     - Cleans up the worktree
+   - If the reviewer **fails**, it retries with the next untried backend from `model_preference`. Max retries = `len(model_preference)`
 
-4. **Completion Handling** (Master Agent - LLM):
-   - When Worker finishes, Master Agent reviews results
-   - Master summarizes to user and decides if follow-up tasks needed
-   - If new tasks identified, Master classifies and submits to Queue Manager
+4. **Master Trigger on Completion**:
+   - After review completes (success or all retries exhausted), the master agent is triggered via `_trigger_master()` with a combined summary of worker + reviewer results
+   - If the worker itself failed (no review spawned), the master is triggered immediately with the worker's summary
+   - The master can then inform the user and decide on follow-up actions
 
-5. **Survivability**: On restart, Queue Manager reloads queue state and resumes from where it left off
+5. **Thread Metadata Tracking**:
+   - `review_of`: Links a reviewer thread to its original worker thread
+   - `tried_backends`: Tracks which backends have been attempted for reviewer retries
+   - `branch_name`, `worktree_path`, `repo_path`: Git isolation state
+   - `backend`, `model`: Which LLM backend/model was used
 
 ### 5.2 Plan Mode (Two-Phase Execution)
 For complex tasks, CharlieBot uses a planning phase:
 
-**Phase 1: Planning** (Master Agent decides, Queue Manager executes)
+**Phase 1: Planning**
 - Master Agent determines task requires planning phase
-- Queue Manager creates "Plan Thread" with `--plan-mode` flag
+- A "Plan Thread" is created with `--plan-mode` flag
 - Worker analyzes and outputs detailed execution plan (no file modifications)
 - Plan displayed in Web UI as editable checklist
 
-**Phase 2: Execution** (User approves, Queue Manager schedules)
+**Phase 2: Execution**
 - User reviews, edits, or approves the plan
-- Upon approval, Master Agent classifies plan steps as P0/P1
-- Queue Manager pushes approved steps into task queue
-- Execution Workers run approved steps (popped by Queue Manager)
+- Approved steps are delegated as individual worker tasks
 - Multiple plans can execute in parallel across different Threads
 
 ---
@@ -205,8 +214,9 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 ## 9. Error Handling & Resilience
 
 ### 9.1 Model Fallback
-- Primary: **Gemini 3.1 Pro**
-- Fallback: **Kimi k2.5** (automatic switch on API failure, transparent to user)
+- Multiple backends configured via `backend_options` in `config.yaml` (Claude Opus 4.6, Kimi K2.5, Codex GPT-5.3, Gemini 3 Pro)
+- `model_preference` controls reviewer backend selection order, enabling cross-backend code review
+- Failed reviewers automatically retry with the next untried backend
 
 ### 9.2 Quota Exhaustion Handling
 - Worker enters **PENDING_QUOTA** state on quota error
@@ -251,11 +261,12 @@ Each Thread's `CLAUDE.md` contains:
 
 **Backend**
 - FastAPI server (`server.py`)
-- All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/voice`, `/api/memory`
-- `MasterAgent` with Gemini (primary) + Kimi (fallback) LLM providers, streaming, conversation summarization
-- `QueueManager` — priority queue (P0 > P1 > P2) with atomic JSON persistence via `os.replace`
-- `SessionDispatcher` — per-session background queue loop that pops tasks, creates threads, and spawns Claude Code workers (`claude -p --dangerously-skip-permissions --output-format stream-json --verbose`)
-- Worker completion handling: dispatcher reads worker's NDJSON event log, asks Master Agent to review and summarize, appends summary to session conversation history, broadcasts via session WebSocket
+- All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/voice`, `/api/memory`, `/api/internal/delegate`
+- Master Agent as Claude Code session (`src/agents/master_cc.py`) with `--resume` support for persistent conversations. Supports multiple backends (Claude, Kimi, Codex, Gemini, OpenCode) via pluggable `AgentBackend` interface
+- Delegation CLI (`src/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
+- Worker spawner (`src/core/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
+- Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `model_preference`). Failed reviewers retry with the next untried backend
+- Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `_trigger_master()` for user notification and follow-up decisions
 - `SessionManager`, `ThreadManager`, `MemoryManager`, `GitManager`
 - `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
 - Memory updates: Master Agent can include `memory_update` field in any response to persist user preferences/facts to `MEMORY.md`
@@ -274,8 +285,9 @@ Each Thread's `CLAUDE.md` contains:
 
 **Configuration**
 - `~/.charliebot/config.yaml` is the single source of truth for API keys and settings — no environment variables
-- Active models: `gemini-3.1-pro-preview` (primary), `kimi-k2.5` (fallback)
+- `backend_options`: configurable list of LLM backends (Claude Opus 4.6, Kimi K2.5, Codex GPT-5.3, Gemini 3 Pro)
+- `model_preference`: ordered list of backend IDs for cross-backend reviewer selection
 
 ### 11.2 Pending / Not Yet Implemented
 
-- Claude plan usage tracking and Kimi K2.5 fallback for workers when near quota limits
+- Claude plan usage tracking and automatic fallback for workers when near quota limits

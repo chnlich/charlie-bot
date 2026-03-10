@@ -61,9 +61,9 @@
   created: '2026-02-27T12:00:00Z'
   priority: low
   done_reason: 'Already resolved: both files pass yapf --diff with no violations.
-    The original formatting issues were fixed by prior refactoring (items 016 and 021
-    which restructured both files). Verified with yapf -i (no changes) and yapf --diff
-    (clean).'
+    The original formatting issues were fixed by prior refactoring (items 016 and
+    021 which restructured both files). Verified with yapf -i (no changes) and yapf
+    --diff (clean).'
 - id: '006'
   title: Cache scheduler session lookup per tick
   description: 'core/scheduler.py _tick() calls _get_or_create_session and _get_last_run
@@ -337,7 +337,7 @@
   status: done
   created: '2026-03-03T14:00:00Z'
   priority: low
-- id: '029'
+- id: 029
   title: Refactor events_to_messages repetitive branches into dispatch table
   description: Reduce the longest function in the codebase (events_to_messages, 146
     lines) by replacing 7 near-identical if-elif branches with a data-driven dispatch
@@ -357,26 +357,26 @@
   description: Prevent silent git failures in backlog status updates. api/backlog.py:_git_commit_push
     (L184-219) spawns three sequential git subprocesses (add, commit, push) using
     asyncio.create_subprocess_exec with DEVNULL but never checks returncode after
-    each .wait(). If git add fails, git commit still runs; if commit fails, push
-    still runs — all silently. This is inconsistent with improvement_loop.py:_git_commit_push
+    each .wait(). If git add fails, git commit still runs; if commit fails, push still
+    runs — all silently. This is inconsistent with improvement_loop.py:_git_commit_push
     (L123-131) which correctly uses subprocess.run(check=True, capture_output=True).
     Refactor to use asyncio.to_thread wrapping sequential subprocess.run(check=True,
-    capture_output=True) calls, matching the established pattern. Short-circuits
-    on first failure and logs captured stderr for diagnostics.
+    capture_output=True) calls, matching the established pattern. Short-circuits on
+    first failure and logs captured stderr for diagnostics.
   category: error-handling
-  status: pending
+  status: approved
   created: '2026-03-09T12:00:00Z'
   priority: high
 - id: '031'
   title: Unify default-session-name detection used by chat and autonamer
-  description: >-
-    Avoid divergent regex semantics across api/chat.py and core/autonamer.py.
+  description: 'Avoid divergent regex semantics across api/chat.py and core/autonamer.py.
     chat.py currently gates auto-naming with ^Session \d+$, while autonamer.py uses
     ^(Session \d+$|\d+: ) which also matches already-renamed titles like "7: My Topic".
-    That means removing the chat.py guard would trigger repeated renames on later turns.
-    Extract a shared helper (for example is_default_session_name(name)) and define explicit
-    behavior: match only true defaults ("Session N"), plus legacy empty placeholders
-    ("N: " with no title) if still required. Use the helper in both call sites.
+    That means removing the chat.py guard would trigger repeated renames on later
+    turns. Extract a shared helper (for example is_default_session_name(name)) and
+    define explicit behavior: match only true defaults ("Session N"), plus legacy
+    empty placeholders ("N: " with no title) if still required. Use the helper in
+    both call sites.'
   category: maintainability
   status: pending
   created: '2026-03-10T12:00:00Z'

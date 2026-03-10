@@ -1,5 +1,7 @@
 """OpenCodeBackend — AgentBackend wrapping the `opencode run --format json` CLI."""
 
+import json
+import os
 import shutil
 from pathlib import Path
 
@@ -37,6 +39,35 @@ class OpenCodeBackend(AgentBackend):
         **kwargs)
     self._opencode_bin = _resolve_opencode_binary()
     self._session_id_emitted = False
+
+  def _prepare_cwd(self, cwd: str) -> None:
+    """Write permissive .opencode/config.json so tool calls aren't auto-denied in non-interactive mode."""
+    config_dir = os.path.join(cwd, ".opencode")
+    config_path = os.path.join(config_dir, "config.json")
+    if os.path.exists(config_path):
+      return
+    os.makedirs(config_dir, exist_ok=True)
+    allow_all = {"*": "allow"}
+    config = {
+        "agent": {
+            "build": {
+                "permission": {
+                    "external_directory": allow_all,
+                    "read": allow_all,
+                    "edit": allow_all,
+                    "bash": allow_all,
+                    "glob": allow_all,
+                    "grep": allow_all,
+                    "list": allow_all,
+                    "write": allow_all,
+                    "skill": allow_all,
+                }
+            }
+        }
+    }
+    with open(config_path, "w") as f:
+      json.dump(config, f, indent=2)
+    log.debug("opencode_config_written", path=config_path)
 
   def _build_command(self, prompt: str) -> list[str]:
     effective_prompt = prompt

@@ -172,6 +172,7 @@ const backlogPanel = (() => {
   async function refresh() {
     const list = document.getElementById('backlog-list');
     if (list) list.innerHTML = '<p class="text-xs text-gray-500">Loading...</p>';
+    let error = null;
     try {
       // Fetch repos list on first load
       if (!_repos.length) {
@@ -184,13 +185,24 @@ const backlogPanel = (() => {
         fetch('/api/backlog' + qs),
         fetch('/api/backlog/history' + qs),
       ]);
-      _items   = bResp.ok ? await bResp.json() : [];
-      _history = hResp.ok ? await hResp.json() : [];
-      _loaded = true;
+      if (!bResp.ok) {
+        _items = [];
+        _history = [];
+        error = `Failed to load backlog (status ${bResp.status})`;
+      } else {
+        _items   = await bResp.json();
+        _history = hResp.ok ? await hResp.json() : [];
+        _loaded = true;
+      }
     } catch (e) {
       console.error('backlog refresh failed:', e);
       _items = [];
       _history = [];
+      error = `Failed to load backlog: ${e.message || e}`;
+    }
+    if (error) {
+      if (list) list.innerHTML = `<p class="text-xs text-red-400">${_esc(error)}</p>`;
+      return;
     }
     _populateModuleFilter();
     render();

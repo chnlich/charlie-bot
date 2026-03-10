@@ -185,7 +185,7 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
 async def _git_commit_push(repo_path: Path, git_rel: str, item_id: str, status: str):
   """Fire-and-forget: git add + commit + push the modified backlog file."""
 
-  def _run():
+  def _run() -> None:
     subprocess.run(['git', 'add', git_rel], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(
         ['git', 'commit', '-m', f'backlog: update {item_id} status to {status}'],

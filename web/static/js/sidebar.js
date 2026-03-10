@@ -1057,7 +1057,7 @@ async function openCronEditor(taskName) {
   document.getElementById('cron-prompt').value = task.prompt || '';
   document.getElementById('cron-repo').value = task.repo || '';
   document.getElementById('cron-project').value = task.project || '';
-  document.getElementById('cron-timezone').value = task.timezone || 'America/New_York';
+  document.getElementById('cron-timezone').value = task.timezone || 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = task.enabled !== false;
   document.getElementById('cron-delete-btn').classList.remove('hidden');
   document.getElementById('cron-modal').classList.remove('hidden');
@@ -1073,7 +1073,7 @@ function openCronAdder() {
   document.getElementById('cron-prompt').value = '';
   document.getElementById('cron-repo').value = '';
   document.getElementById('cron-project').value = '';
-  document.getElementById('cron-timezone').value = 'America/New_York';
+  document.getElementById('cron-timezone').value = 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = true;
   document.getElementById('cron-delete-btn').classList.add('hidden');
   document.getElementById('cron-modal').classList.remove('hidden');

@@ -42,7 +42,7 @@ class TaskCreate(BaseModel):
   cron: str
   prompt: str
   repo: Optional[str] = None
-  timezone: str = 'America/New_York'
+  timezone: str = 'America/Los_Angeles'
   enabled: bool = True
   project: Optional[str] = None
   allow_failure: bool = False

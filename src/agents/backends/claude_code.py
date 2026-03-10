@@ -25,7 +25,11 @@ class ClaudeCodeBackend(AgentBackend):
     model = kwargs.pop("model", None)
     instructions_content = kwargs.pop("instructions_content", None)
     extra_flags = kwargs.pop("extra_flags", None)
-    super().__init__(model=model, instructions_content=instructions_content, extra_flags=extra_flags, **kwargs)
+    super().__init__(
+        model=model,
+        instructions_content=instructions_content,
+        extra_flags=extra_flags,
+        **kwargs)
     self._cmd: list[str] = list(BASE_COMMAND)
     if model:
       self._cmd += ["--model", model]

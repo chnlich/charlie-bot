@@ -224,7 +224,7 @@ async def run_message(
   option = backend_option or cfg.backend_options[0]
 
   extra_flags: list[str] = []
-  if session_meta.cc_session_id and option.type not in ("codex", "gemini"):
+  if session_meta.cc_session_id and option.type not in ("codex", "gemini", "opencode"):
     extra_flags = ["--resume", session_meta.cc_session_id]
   if extra_claude_flags:
     extra_flags.extend(extra_claude_flags)
@@ -252,7 +252,7 @@ async def run_message(
         buffer_limit=cfg.subprocess_buffer_limit,
         on_spawn=_on_spawn,
         instructions_content=instructions_content,
-        resume_session_id=session_meta.cc_session_id if option.type in ("codex", "gemini") else None,
+        resume_session_id=session_meta.cc_session_id if option.type in ("codex", "gemini", "opencode") else None,
     )
     if not auto_trigger:
       _active_procs[session_meta.id] = backend

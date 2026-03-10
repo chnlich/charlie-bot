@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 import structlog
 
@@ -39,6 +39,63 @@ async def build_session_view_data(
   except Exception:
     log.warning("mark_read_failed", session_id=session_id)
   return SessionViewData(raw_events=raw_events, messages=messages, threads=threads, usage=usage)
+
+
+def _handler_result_msg(ev: dict) -> dict:
+  icon = '\u2713' if ev.get('status') == 'ok' else '\u2717'
+  return {
+      'role': 'system',
+      'content': f"{icon} {ev.get('task', '')}: {ev.get('message', '')}",
+  }
+
+
+def _context_compacted_msg(ev: dict) -> dict:
+  trigger = ev.get('trigger', 'auto')
+  pre_tokens = ev.get('pre_tokens')
+  msg = 'Context compacted'
+  if trigger:
+    msg += f' ({trigger})'
+  if pre_tokens:
+    msg += f' \u2014 was {round(pre_tokens / 1000)}k tokens'
+  return {'role': 'system', 'content': msg}
+
+
+# Dispatch table for event types that follow the flush-then-append pattern.
+# Each handler returns a message dict (role + content + any extras) or None to
+# skip the event.  The loop adds event_index and a default timestamp.
+_SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
+    'master_done':
+        lambda ev: None if ev.get('still_thinking') else {
+            'role': 'separator',
+            'thinking_seconds': ev.get('thinking_seconds'),
+        },
+    'assistant_error':
+        lambda ev: {
+            'role': 'system',
+            'content': f"Error: {ev.get('content', '')}",
+        },
+    'error':
+        lambda ev: {
+            'role': 'system',
+            'content': f"Error: {ev.get('content') or ev.get('message') or 'Unknown error'}",
+        },
+    'task_delegated':
+        lambda ev: {
+            'role': 'task_delegated',
+            'content': f"Task delegated: {ev.get('description', '')}",
+            'timestamp': ev.get('timestamp') or ev.get('created_at'),
+        },
+    'worker_summary':
+        lambda ev: {
+            'role': 'worker_summary',
+            'content': ev.get('content', ''),
+            'full_content': ev.get('full_content', ''),
+        },
+    'handler_result':
+        _handler_result_msg,
+    'context_compacted':
+        _context_compacted_msg,
+}
 
 
 def events_to_messages(events: list[dict]) -> list[dict]:
@@ -110,80 +167,15 @@ def events_to_messages(events: list[dict]) -> list[dict]:
         _flush()
         last_assistant_ts = ev.get("timestamp")
       assistant_buf += text
-    elif t == "master_done":
-      _flush()
-      if not ev.get("still_thinking"):
-        messages.append(
-            {
-                "role": "separator",
-                "thinking_seconds": ev.get("thinking_seconds"),
-                "event_index": idx,
-                "timestamp": ev.get("timestamp"),
-            })
-    elif t == "assistant_error":
-      _flush()
-      messages.append(
-          {
-              "role": "system",
-              "content": f"Error: {ev.get('content', '')}",
-              "event_index": idx,
-              "timestamp": ev.get("timestamp"),
-          })
-    elif t == "error":
-      _flush()
-      error_content = ev.get("content") or ev.get("message") or "Unknown error"
-      messages.append(
-          {
-              "role": "system",
-              "content": f"Error: {error_content}",
-              "event_index": idx,
-              "timestamp": ev.get("timestamp"),
-          })
-    elif t == "task_delegated":
-      _flush()
-      desc = ev.get("description", "")
-      messages.append(
-          {
-              "role": "task_delegated",
-              "content": f"Task delegated: {desc}",
-              "event_index": idx,
-              "timestamp": ev.get("timestamp") or ev.get("created_at"),
-          })
-    elif t == "worker_summary":
-      _flush()
-      messages.append(
-          {
-              "role": "worker_summary",
-              "content": ev.get("content", ""),
-              "full_content": ev.get("full_content", ""),
-              "event_index": idx,
-              "timestamp": ev.get("timestamp"),
-          })
-    elif t == 'handler_result':
-      _flush()
-      icon = '\u2713' if ev.get('status') == 'ok' else '\u2717'
-      messages.append(
-          {
-              'role': 'system',
-              'content': f"{icon} {ev.get('task', '')}: {ev.get('message', '')}",
-              'event_index': idx,
-              'timestamp': ev.get('timestamp'),
-          })
-    elif t == 'context_compacted':
-      _flush()
-      trigger = ev.get('trigger', 'auto')
-      pre_tokens = ev.get('pre_tokens')
-      msg = 'Context compacted'
-      if trigger:
-        msg += f' ({trigger})'
-      if pre_tokens:
-        msg += f' \u2014 was {round(pre_tokens / 1000)}k tokens'
-      messages.append({
-          'role': 'system',
-          'content': msg,
-          'event_index': idx,
-          'timestamp': ev.get('timestamp'),
-      })
+    else:
+      handler = _SIMPLE_HANDLERS.get(t)
+      if handler is not None:
+        _flush()
+        result = handler(ev)
+        if result is not None:
+          result.setdefault('timestamp', ev.get('timestamp'))
+          result['event_index'] = idx
+          messages.append(result)
 
   _flush()
   return messages

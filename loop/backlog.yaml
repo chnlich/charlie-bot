@@ -349,7 +349,7 @@
     the special user and assistant branches inline. Cuts ~60 lines of repetitive code
     and makes adding new event types a one-line dict entry.
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-03-09T12:00:00Z'
   priority: medium
 - id: '030'

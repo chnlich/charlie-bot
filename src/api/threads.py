@@ -37,8 +37,7 @@ async def list_threads(
           "created_at": t.created_at.isoformat(),
           "completed_at": t.completed_at.isoformat() if t.completed_at else None,
           "backend": t.backend,
-      }
-      for t in threads
+      } for t in threads
   ]
 
 
@@ -74,12 +73,13 @@ async def get_thread_events(
           events.append(WorkerEvent(type='assistant', content=block['text'], timestamp=event_timestamp))
         elif block.get('type') == 'tool_use':
           tool_id_to_name[block['id']] = block['name']
-          events.append(WorkerEvent(
-              type='tool_use',
-              tool_name=block['name'],
-              input=block.get('input', {}),
-              timestamp=event_timestamp,
-          ))
+          events.append(
+              WorkerEvent(
+                  type='tool_use',
+                  tool_name=block['name'],
+                  input=block.get('input', {}),
+                  timestamp=event_timestamp,
+              ))
     elif event_type == 'user' and isinstance(data.get('message'), dict):
       for block in data['message'].get('content', []):
         if block.get('type') == 'tool_result':

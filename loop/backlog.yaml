@@ -367,3 +367,18 @@
   status: pending
   created: '2026-03-09T12:00:00Z'
   priority: high
+- id: '031'
+  title: Consolidate duplicate _DEFAULT_NAME_RE and redundant guard in chat.py
+  description: Eliminate inconsistent session-name matching and a redundant check.
+    api/chat.py:24 defines _DEFAULT_NAME_RE = r"^Session \d+$" (narrow) while core/autonamer.py:15
+    defines the same name as r"^(Session \d+$|\d+: )" (broader, also matches legacy
+    numbered prefixes). chat.py:179 uses its copy to guard the auto_name call, but
+    autonamer.py:33 already performs the same guard with the broader pattern — so the
+    check in chat.py is both redundant and inconsistent (sessions with "N: " names
+    are silently skipped). Fix by deleting _DEFAULT_NAME_RE and the guard from chat.py
+    and letting autonamer.maybe_auto_name handle the check exclusively. One import
+    removal and 3 lines deleted.
+  category: duplication
+  status: pending
+  created: '2026-03-10T12:00:00Z'
+  priority: low

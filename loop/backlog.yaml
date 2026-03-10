@@ -369,7 +369,8 @@
   priority: high
 - id: '031'
   title: Unify default-session-name detection used by chat and autonamer
-  description: Avoid divergent regex semantics across api/chat.py and core/autonamer.py.
+  description: >-
+    Avoid divergent regex semantics across api/chat.py and core/autonamer.py.
     chat.py currently gates auto-naming with ^Session \d+$, while autonamer.py uses
     ^(Session \d+$|\d+: ) which also matches already-renamed titles like "7: My Topic".
     That means removing the chat.py guard would trigger repeated renames on later turns.

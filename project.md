@@ -32,7 +32,6 @@ All instance-specific data (configs, logs, sessions) is stored here.
 └── sessions/            # Session directories
     └── {session_uuid}/
         ├── metadata.json      # Session info (name, repo, branch)
-        ├── task_queue.json    # Session's priority task queue
         ├── repo.git/          # Session-scoped bare git repository
         ├── data/              # Session-level JSON data
         └── threads/           # Thread directories
@@ -48,8 +47,7 @@ All instance-specific data (configs, logs, sessions) is stored here.
 ├── .git/
 ├── worktree/                           # Overall worktree directory
 │   ├── main/                           # Session's base branch worktree
-│   ├── charliebot/task-{ts}-{id}/      # Thread worktree (isolated branch)
-│   └── charliebot/conflict-{ts}-{id}/  # Conflict resolver worktree
+│   └── charliebot/task-{ts}-{id}/      # Thread worktree (isolated branch)
 └── src/
 ```
 
@@ -218,19 +216,10 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 - `model_preference` controls reviewer backend selection order, enabling cross-backend code review
 - Failed reviewers automatically retry with the next untried backend
 
-### 9.2 Quota Exhaustion Handling
-- Worker enters **PENDING_QUOTA** state on quota error
-- Queue Manager (Python) periodically polls for quota recovery
-- Task auto-resumes when quota available; Master Agent notified to inform user
-- All context persisted to disk during wait
-
-### 9.3 Merge Conflict Resolution
-When auto-merge fails:
-1. Spawn **Conflict Resolution Worker**
-2. Worker reads commit messages from both branches
-3. Analyzes conflicted files and context
-4. Decides: keep one side, merge both, or manual resolve
-5. Creates resolution commit with explanation
+### 9.2 Rebase Conflict Handling
+- The Review Agent rebases the worker branch onto the base branch before merging
+- If the rebase fails (conflicts), the reviewer attempts to resolve them as part of its review
+- If unresolvable, the review fails and retries with the next backend
 
 ---
 

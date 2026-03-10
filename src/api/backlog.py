@@ -1,6 +1,7 @@
 """Backlog API routes — read/write project backlog.yaml and history.yaml."""
 
 import asyncio
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -183,36 +184,20 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
 
 async def _git_commit_push(repo_path: Path, git_rel: str, item_id: str, status: str):
   """Fire-and-forget: git add + commit + push the modified backlog file."""
+
+  def _run():
+    subprocess.run(['git', 'add', git_rel], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(
+        ['git', 'commit', '-m', f'backlog: update {item_id} status to {status}'],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True)
+
   try:
-    add = await asyncio.create_subprocess_exec(
-        'git',
-        '-C',
-        str(repo_path),
-        'add',
-        git_rel,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    await add.wait()
-    commit = await asyncio.create_subprocess_exec(
-        'git',
-        '-C',
-        str(repo_path),
-        'commit',
-        '-m',
-        f'backlog: update {item_id} status to {status}',
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    await commit.wait()
-    push = await asyncio.create_subprocess_exec(
-        'git',
-        '-C',
-        str(repo_path),
-        'push',
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    await push.wait()
+    await asyncio.to_thread(_run)
+  except subprocess.CalledProcessError as e:
+    log.warning('backlog_git_push_failed', item_id=item_id, cmd=e.cmd, stderr=e.stderr.decode(errors='replace'))
   except Exception as e:
     log.warning('backlog_git_push_failed', item_id=item_id, error=str(e))

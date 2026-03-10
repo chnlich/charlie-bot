@@ -383,25 +383,23 @@
   priority: medium
 - id: '032'
   title: Log malformed JSON fallback in codex.py _handle_tool_call
-  description: >-
-    agents/backends/codex.py:237 catches json.JSONDecodeError when parsing tool
-    call arguments and silently falls back to {"raw": arguments} with no logging.
+  description: 'agents/backends/codex.py:237 catches json.JSONDecodeError when parsing
+    tool call arguments and silently falls back to {"raw": arguments} with no logging.
     This masks malformed Codex responses. Add a log.warning with the raw arguments
-    string so malformed responses are diagnosable. Do not change the fallback
-    behavior itself — only add the log call.
+    string so malformed responses are diagnosable. Do not change the fallback behavior
+    itself — only add the log call.'
   category: error-handling
-  status: pending
+  status: approved
   created: '2026-03-10T12:00:00Z'
   priority: medium
 - id: '033'
   title: Surface page-load errors to user in api/pages.py index route
-  description: >-
-    api/pages.py:57-61 catches Exception on list_sessions and silently sets
-    sessions=[]. The page renders as if there are zero sessions, with no indication
-    that an error occurred. Same pattern for threads (L65). Per project rules
-    (fail loudly), propagate the exception or pass an error flag to the template
-    so the frontend can display a warning banner. The log.exception call is
-    already there but the user never sees the error.
+  description: api/pages.py:57-61 catches Exception on list_sessions and silently
+    sets sessions=[]. The page renders as if there are zero sessions, with no indication
+    that an error occurred. Same pattern for threads (L65). Per project rules (fail
+    loudly), propagate the exception or pass an error flag to the template so the
+    frontend can display a warning banner. The log.exception call is already there
+    but the user never sees the error.
   category: error-handling
   status: pending
   created: '2026-03-10T12:00:00Z'

@@ -7,6 +7,7 @@ from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.codex import CodexBackend
 from src.agents.backends.gemini_cli import GeminiCliBackend
 from src.agents.backends.kimi import KimiBackend
+from src.agents.backends.opencode import OpenCodeBackend
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
 
@@ -36,4 +37,6 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
     return CodexBackend(model=option.model, **kwargs)
   elif option.type == "gemini":
     return GeminiCliBackend(model=option.model or cfg.gemini_model, **kwargs)
+  elif option.type == "opencode":
+    return OpenCodeBackend(model=option.model, **kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

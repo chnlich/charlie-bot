@@ -20,11 +20,7 @@ _PREAMBLE_RE = re.compile(
     r"^(here(?:'s| is|are)\s.*?[:]\s*|sure[,!.\s]+|title:\s*|okay[,.\s]+)",
     re.IGNORECASE,
 )
-_SENTENCE_WORDS_RE = re.compile(
-    r"\b(the|is|are|was|were|this|that|have|has|can|will|would|should|could|"
-    r"because|however|actually|basically|definitely|specifically)\b",
-    re.IGNORECASE,
-)
+_MAX_TITLE_WORDS = 8
 
 _NAMING_PROMPT = (
     "Generate a short, descriptive title (3-6 words) for this conversation. "
@@ -97,7 +93,7 @@ async def maybe_auto_name(
       return
 
     # 4. Discard if still too long or looks like a sentence
-    if len(name) > 60 or _SENTENCE_WORDS_RE.search(name):
+    if len(name) > 60 or len(name.split()) > _MAX_TITLE_WORDS:
       return
 
     # Prefix with session number extracted from 'Session N'

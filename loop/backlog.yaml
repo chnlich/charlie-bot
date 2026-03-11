@@ -401,6 +401,6 @@
     frontend can display a warning banner. The log.exception call is already there
     but the user never sees the error.
   category: error-handling
-  status: approved
+  status: done
   created: '2026-03-10T12:00:00Z'
   priority: medium

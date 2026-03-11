@@ -416,3 +416,17 @@
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: medium
+- id: '035'
+  title: Wrap blocking parse_ndjson_file call in _read_events_summary with asyncio.to_thread
+  description: Prevent event-loop blocking when summarizing worker events for completion
+    notifications. core/spawner.py:817 calls parse_ndjson_file(events_path) synchronously
+    inside async _read_events_summary(), which reads and parses potentially large NDJSON
+    event logs directly on the event loop. This function is called twice during worker
+    completion (L684 for notify, L770 for review). The analogous call in api/threads.py:64
+    already correctly uses await asyncio.to_thread(parse_ndjson_file, events_path).
+    Wrap the spawner.py call with await asyncio.to_thread() to match the established
+    pattern. One-line fix.
+  category: performance
+  status: pending
+  created: '2026-03-11T12:00:00Z'
+  priority: medium

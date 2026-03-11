@@ -413,6 +413,6 @@
     wrapped with asyncio.to_thread(). Wrap the spawner.py call with await asyncio.to_thread()
     to match the established pattern. One-line fix.
   category: performance
-  status: done
+  status: pending
   created: '2026-03-11T12:00:00Z'
   priority: medium

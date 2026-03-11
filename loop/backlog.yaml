@@ -445,3 +445,19 @@
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: medium
+- id: '037'
+  title: Extract shared spawn-and-broadcast tail in scheduler.py
+  description: Eliminate duplicated worker-spawning logic between two scheduled
+    task types. _execute_prompt_task (L213-243) and _execute_loop_task (L278-310)
+    repeat the same 25-line tail — resolve backend/model, asyncio.create_task(spawn_worker(...)),
+    build task_delegated event dict, broadcast_and_persist, log, and return. The only
+    differences are the description string and the log event name. Extract a helper
+    like _spawn_scheduled_worker(session, task_cfg, description, event_description,
+    cfg, session_mgr, thread_mgr) that encapsulates thread creation, backend resolution,
+    spawn_worker fire-and-forget, task_delegated broadcast, and the return dict. Each
+    caller becomes a 1-2 line call. Complements backlog item 036 (preamble extraction) —
+    together they reduce each execute method to its unique logic only.
+  category: duplication
+  status: pending
+  created: '2026-03-11T12:00:00Z'
+  priority: medium

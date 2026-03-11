@@ -312,7 +312,7 @@ async def _create_worktree_and_process(
   await thread_mgr.save_metadata(thread)
 
   # Read subagent instructions (SUBAGENT_PROMPT.md) for all backends
-  subagent_instructions = _read_subagent_instructions(cfg)
+  subagent_instructions = await asyncio.to_thread(_read_subagent_instructions, cfg)
 
   # Build Worker
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)

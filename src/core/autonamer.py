@@ -15,6 +15,16 @@ log = structlog.get_logger()
 
 _DEFAULT_NAME_RE = re.compile(r"^(Session \d+$|\d+: )")
 _SESSION_NUMBER_RE = re.compile(r"^Session (\d+)$")
+_MARKDOWN_CHARS_RE = re.compile(r"[*`#_~\[\]]")
+_PREAMBLE_RE = re.compile(
+    r"^(here(?:'s| is|are)\s.*?[:]\s*|sure[,!.\s]+|title:\s*|okay[,.\s]+)",
+    re.IGNORECASE,
+)
+_SENTENCE_WORDS_RE = re.compile(
+    r"\b(the|is|are|was|were|this|that|have|has|can|will|would|should|could|"
+    r"because|however|actually|basically|definitely|specifically)\b",
+    re.IGNORECASE,
+)
 
 _NAMING_PROMPT = (
     "Generate a short, descriptive title (3-6 words) for this conversation. "
@@ -64,12 +74,31 @@ async def maybe_auto_name(
     else:
       raw = await _generate_name_via_claude_cli(prompt)
 
-    # Sanitize: strip quotes, limit length
-    name = raw.strip().strip('"\'').strip()
+    # Sanitize: extract a concise title from potentially verbose LLM output
+    # 1. Take only the first non-empty line
+    name = ""
+    for line in raw.splitlines():
+      line = line.strip()
+      if line:
+        name = line
+        break
     if not name:
       return
-    if len(name) > 60:
-      name = name[:57] + "..."
+
+    # 2. Strip quotes and markdown formatting
+    name = name.strip('"\'').strip()
+    name = _MARKDOWN_CHARS_RE.sub("", name)
+    name = name.strip()
+
+    # 3. Strip common LLM preamble patterns
+    name = _PREAMBLE_RE.sub("", name).strip()
+
+    if not name:
+      return
+
+    # 4. Discard if still too long or looks like a sentence
+    if len(name) > 60 or _SENTENCE_WORDS_RE.search(name):
+      return
 
     # Prefix with session number extracted from 'Session N'
     m = _SESSION_NUMBER_RE.match(session_meta.name)

@@ -40,18 +40,20 @@ _NAMING_PROMPT = (
 async def _generate_name_via_claude_cli(prompt: str) -> str:
   """Generate text using the claude CLI in print mode."""
   proc = await asyncio.create_subprocess_exec(
-      "claude", "-p",
-      "--output-format", "text",
+      "claude",
+      "-p",
+      "--output-format",
+      "text",
       "--no-session-persistence",
-      "--model", "sonnet",
+      "--model",
+      "sonnet",
       prompt,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
   )
   stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
   if proc.returncode != 0:
-    raise RuntimeError(
-        f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
+    raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
   return stdout.decode().strip()
 
 

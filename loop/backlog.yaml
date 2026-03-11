@@ -404,3 +404,15 @@
   status: done
   created: '2026-03-10T12:00:00Z'
   priority: medium
+- id: '034'
+  title: Wrap blocking _read_subagent_instructions in asyncio.to_thread in spawner.py
+  description: Prevent event-loop blocking during worker spawning. core/spawner.py:315
+    calls _read_subagent_instructions(cfg) synchronously inside async _create_worktree_and_process(),
+    performing Path.exists() and Path.read_text() directly on the event loop. The
+    analogous call in master_cc.py:187 (_build_instructions_content) is already correctly
+    wrapped with asyncio.to_thread(). Wrap the spawner.py call with await asyncio.to_thread()
+    to match the established pattern. One-line fix.
+  category: performance
+  status: done
+  created: '2026-03-11T12:00:00Z'
+  priority: medium

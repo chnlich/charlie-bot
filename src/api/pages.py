@@ -54,11 +54,13 @@ async def index(
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Render the full page. All data loaded here."""
+  load_errors: list[str] = []
   try:
     sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False)
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []
+    load_errors.append("Failed to load sessions. Check server logs for details.")
 
   active_session = None
   messages: list[dict] = []
@@ -80,6 +82,7 @@ async def index(
         session_usage = view.usage
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
+        load_errors.append("Failed to load session data. Check server logs for details.")
   elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
@@ -100,4 +103,5 @@ async def index(
           "backend_options": cfg.backend_options,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,
+          "load_errors": load_errors,
       })

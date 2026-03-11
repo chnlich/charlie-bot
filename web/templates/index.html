@@ -122,6 +122,9 @@
         {% if not sessions %}
         <p class="text-slate-500 text-sm px-3 py-2">No sessions yet</p>
         {% endif %}
+        {% for err in load_errors %}
+        <div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs">{{ err }}</div>
+        {% endfor %}
       </nav>
     </aside>
       <div id="sidebar-overlay" class="sidebar-overlay" onclick="toggleMobileSidebar()"></div>

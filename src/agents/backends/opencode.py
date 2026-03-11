@@ -49,24 +49,21 @@ class OpenCodeBackend(AgentBackend):
     os.makedirs(config_dir, exist_ok=True)
     allow_all = {"*": "allow"}
     config = {
-        "agent":
-            {
-                "build":
-                    {
-                        "permission":
-                            {
-                                "external_directory": allow_all,
-                                "read": allow_all,
-                                "edit": allow_all,
-                                "bash": allow_all,
-                                "glob": allow_all,
-                                "grep": allow_all,
-                                "list": allow_all,
-                                "write": allow_all,
-                                "skill": allow_all,
-                            }
-                    }
+        "agent": {
+            "build": {
+                "permission": {
+                    "external_directory": allow_all,
+                    "read": allow_all,
+                    "edit": allow_all,
+                    "bash": allow_all,
+                    "glob": allow_all,
+                    "grep": allow_all,
+                    "list": allow_all,
+                    "write": allow_all,
+                    "skill": allow_all,
+                }
             }
+        }
     }
     with open(config_path, "w") as f:
       json.dump(config, f, indent=2)
@@ -135,18 +132,17 @@ class OpenCodeBackend(AgentBackend):
       output = state.get("output", "")
 
       # Emit tool_use event
-      results.append(
-          {
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "tool_use",
-                      "name": tool_name,
-                      "id": call_id,
-                      "input": input_data,
-                  }]
-              },
-          })
+      results.append({
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "tool_use",
+                  "name": tool_name,
+                  "id": call_id,
+                  "input": input_data,
+              }]
+          },
+      })
       # Emit tool_result event only when output is present
       if output:
         results.append({
@@ -168,19 +164,17 @@ class OpenCodeBackend(AgentBackend):
         cost = part.get("cost", 0)
         tokens = part.get("tokens", {})
         cache = tokens.get("cache", {})
-        results.append(
-            {
-                "type": "result",
-                "result": "",
-                "usage":
-                    {
-                        "input_tokens": tokens.get("input", 0),
-                        "output_tokens": tokens.get("output", 0),
-                        "cache_read_input_tokens": cache.get("read", 0),
-                        "cache_creation_input_tokens": cache.get("write", 0),
-                    },
-                "total_cost_usd": cost,
-            })
+        results.append({
+            "type": "result",
+            "result": "",
+            "usage": {
+                "input_tokens": tokens.get("input", 0),
+                "output_tokens": tokens.get("output", 0),
+                "cache_read_input_tokens": cache.get("read", 0),
+                "cache_creation_input_tokens": cache.get("write", 0),
+            },
+            "total_cost_usd": cost,
+        })
       return results
 
     log.debug("opencode_event_unhandled", type=ev_type)

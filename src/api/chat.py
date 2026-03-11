@@ -1,7 +1,6 @@
 """Chat API routes — triggers master CC process, returns 202 Accepted."""
 
 import asyncio
-import re
 from datetime import datetime, timezone
 
 import aiofiles
@@ -10,7 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager, require_session
-from src.core.autonamer import maybe_auto_name
+from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SendMessageRequest, SessionMetadata
 from src.core.sessions import SessionManager
@@ -20,8 +19,6 @@ from src.core.streaming import streaming_manager
 log = structlog.get_logger()
 
 router = APIRouter()
-
-_DEFAULT_NAME_RE = re.compile(r"^Session \d+$")
 
 
 @router.post("/{session_id}/upload")
@@ -176,7 +173,7 @@ async def run_and_finalize(
       meta.cc_session_id = cc_session_id
 
     # Auto-name session after first turn if still using default name
-    if _DEFAULT_NAME_RE.match(meta.name):
+    if is_default_session_name(meta.name):
       asyncio.create_task(_auto_name(cfg, meta, content, session_mgr))
   except Exception as e:
     log.exception("master_cc_run_failed", session=meta.id)

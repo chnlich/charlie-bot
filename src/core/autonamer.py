@@ -13,7 +13,9 @@ from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
 
-_DEFAULT_NAME_RE = re.compile(r"^(Session \d+$|\d+: )")
+# Matches true defaults ("Session 7") and legacy empty placeholders ("7: ").
+# Does NOT match already-renamed titles like "7: My Topic".
+_DEFAULT_NAME_RE = re.compile(r"^(Session \d+|\d+: )$")
 _SESSION_NUMBER_RE = re.compile(r"^Session (\d+)$")
 _MARKDOWN_CHARS_RE = re.compile(r"[*`#_~\[\]]")
 _PREAMBLE_RE = re.compile(
@@ -21,6 +23,12 @@ _PREAMBLE_RE = re.compile(
     re.IGNORECASE,
 )
 _MAX_TITLE_WORDS = 8
+
+
+def is_default_session_name(name: str) -> bool:
+  """Return True if *name* is a system-generated default (not yet user/auto-named)."""
+  return bool(_DEFAULT_NAME_RE.match(name))
+
 
 _NAMING_PROMPT = (
     "Generate a short, descriptive title (3-6 words) for this conversation. "
@@ -55,7 +63,7 @@ async def maybe_auto_name(
     session_mgr: SessionManager,
 ) -> None:
   """If the session still has a default name, generate a descriptive one."""
-  if not _DEFAULT_NAME_RE.match(session_meta.name):
+  if not is_default_session_name(session_meta.name):
     return
 
   try:

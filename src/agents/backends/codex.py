@@ -235,6 +235,7 @@ class CodexBackend(AgentBackend):
         try:
           arguments = json.loads(arguments)
         except json.JSONDecodeError:
+          log.warning("codex_malformed_tool_args", raw_arguments=arguments)
           arguments = {"raw": arguments}
       return [{"type": "tool_use", "name": tool_name, "input": arguments}]
     if ev.get("type") == "item.completed":

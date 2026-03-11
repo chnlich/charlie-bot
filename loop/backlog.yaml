@@ -389,7 +389,7 @@
     string so malformed responses are diagnosable. Do not change the fallback behavior
     itself — only add the log call.'
   category: error-handling
-  status: approved
+  status: done
   created: '2026-03-10T12:00:00Z'
   priority: medium
 - id: '033'

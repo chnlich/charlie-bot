@@ -430,3 +430,18 @@
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: medium
+- id: '036'
+  title: Extract shared task-execution preamble in scheduler.py
+  description: Prevent divergent session-bookkeeping logic across scheduled task types.
+    _execute_handler_task (L157), _execute_prompt_task (L196), and _execute_loop_task
+    (L246) all repeat the same 8-line preamble — reload config, create SessionManager,
+    _get_or_create_session, ZoneInfo, datetime.now, then set last_scheduled_run,
+    last_scheduled_cron, updated_at, and save_metadata. Extract a helper like
+    _prepare_task_execution(task_cfg) that returns (cfg, SessionManager, SessionMetadata)
+    with all bookkeeping fields already persisted. Each execute method calls it as
+    its first line, reducing ~24 duplicated lines to 3 call sites. Adding a new task
+    type would require only calling the helper instead of copying the preamble.
+  category: maintainability
+  status: pending
+  created: '2026-03-11T12:00:00Z'
+  priority: medium

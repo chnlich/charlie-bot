@@ -442,7 +442,7 @@
     duplicated lines to 3 call sites. Adding a new task type would require only calling
     the helper instead of copying the preamble.
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: '037'

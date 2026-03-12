@@ -458,7 +458,7 @@
     caller becomes a 1-2 line call. Complements backlog item 036 (preamble extraction)
     — together they reduce each execute method to its unique logic only.
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: 038

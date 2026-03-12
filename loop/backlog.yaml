@@ -427,7 +427,7 @@
     Wrap the spawner.py call with await asyncio.to_thread() to match the established
     pattern. One-line fix.
   category: performance
-  status: approved
+  status: done
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: '036'

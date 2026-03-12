@@ -146,6 +146,25 @@ class Scheduler:
   # Task execution
   # ---------------------------------------------------------------------------
 
+  async def _prepare_task_execution(
+      self,
+      task_cfg: ScheduledTaskConfig,
+      initial_status: Optional[str] = None,
+  ) -> tuple[CharlieBotConfig, SessionManager, SessionMetadata]:
+    """Shared preamble: reload config, get/create session, persist bookkeeping fields."""
+    cfg = self._reload_config()
+    session_mgr = SessionManager(cfg)
+    session = await self._get_or_create_session(task_cfg.name, session_mgr)
+    tz = ZoneInfo(task_cfg.timezone)
+    now = datetime.now(tz)
+    session.last_scheduled_run = now.isoformat()
+    session.last_scheduled_cron = task_cfg.cron
+    if initial_status:
+      session.last_run_status = initial_status
+    session.updated_at = datetime.now(timezone.utc)
+    await session_mgr.save_metadata(session)
+    return cfg, session_mgr, session
+
   async def _execute_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Route to handler, loop, or prompt execution based on task config."""
     if task_cfg.handler:
@@ -159,16 +178,7 @@ class Scheduler:
     handler = TASK_HANDLERS.get(task_cfg.handler)
     if handler is None:
       raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
-    cfg = self._reload_config()
-    session_mgr = SessionManager(cfg)
-    session = await self._get_or_create_session(task_cfg.name, session_mgr)
-    tz = ZoneInfo(task_cfg.timezone)
-    now = datetime.now(tz)
-    session.last_scheduled_run = now.isoformat()
-    session.last_scheduled_cron = task_cfg.cron
-    session.last_run_status = "running"
-    session.updated_at = datetime.now(timezone.utc)
-    await session_mgr.save_metadata(session)
+    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
     try:
       result = await handler()
@@ -195,20 +205,8 @@ class Scheduler:
 
   async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
-    cfg = self._reload_config()
-    session_mgr = SessionManager(cfg)
+    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
     thread_mgr = ThreadManager(cfg)
-
-    session = await self._get_or_create_session(task_cfg.name, session_mgr)
-
-    # Update last_scheduled_run and mark as running before spawning
-    tz = ZoneInfo(task_cfg.timezone)
-    now = datetime.now(tz)
-    session.last_scheduled_run = now.isoformat()
-    session.last_scheduled_cron = task_cfg.cron
-    session.last_run_status = "running"
-    session.updated_at = datetime.now(timezone.utc)
-    await session_mgr.save_metadata(session)
 
     thread = await thread_mgr.create_thread(session, task_cfg.prompt)
 
@@ -245,18 +243,7 @@ class Scheduler:
 
   async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Run an improvement-loop task: determine action, then spawn worker if needed."""
-    cfg = self._reload_config()
-    session_mgr = SessionManager(cfg)
-
-    session = await self._get_or_create_session(task_cfg.name, session_mgr)
-
-    # Update last_scheduled_run before determine_action to prevent double-scheduling
-    tz = ZoneInfo(task_cfg.timezone)
-    now = datetime.now(tz)
-    session.last_scheduled_run = now.isoformat()
-    session.last_scheduled_cron = task_cfg.cron
-    session.updated_at = datetime.now(timezone.utc)
-    await session_mgr.save_metadata(session)
+    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
 
     repo_path = Path(task_cfg.repo) if task_cfg.repo else None
     if repo_path is None:

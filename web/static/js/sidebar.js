@@ -541,9 +541,19 @@ async function archiveSession(id) {
   showRatingModal(id);
 }
 
-function showRatingModal(sessionId) {
-  // Remove any existing modal
+let ratingModalKeyHandler = null;
+
+function closeRatingModal() {
   document.getElementById('rating-modal-overlay')?.remove();
+  if (ratingModalKeyHandler) {
+    document.removeEventListener('keydown', ratingModalKeyHandler);
+    ratingModalKeyHandler = null;
+  }
+}
+
+function showRatingModal(sessionId) {
+  // Remove any existing modal and listeners first.
+  closeRatingModal();
 
   const overlay = document.createElement('div');
   overlay.id = 'rating-modal-overlay';
@@ -573,19 +583,19 @@ function showRatingModal(sessionId) {
   });
   // Close on overlay background click
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) closeRatingModal();
   });
   // Close on Escape
-  const onKey = (e) => {
-    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  ratingModalKeyHandler = (e) => {
+    if (e.key === 'Escape') closeRatingModal();
   };
-  document.addEventListener('keydown', onKey);
+  document.addEventListener('keydown', ratingModalKeyHandler);
 
   document.body.appendChild(overlay);
 }
 
 async function doArchiveWithRating(sessionId, rating) {
-  document.getElementById('rating-modal-overlay')?.remove();
+  closeRatingModal();
   try {
     await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
     if (rating !== 'skip') {

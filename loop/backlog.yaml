@@ -461,3 +461,19 @@
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: medium
+- id: '038'
+  title: Extract shared _resolve_binary and _effective_prompt into backend base module
+  description: Eliminate tripled utility code across CLI backend subclasses.
+    gemini_cli.py:13, opencode.py:15, and codex.py:17 each define a near-identical
+    _resolve_*_binary() function (shutil.which then fallback path then FileNotFoundError).
+    Similarly, all three repeat the same 3-line instructions-prepend block in
+    _build_command(). Add a module-level _resolve_binary(name, fallback_dir)
+    utility in agents/backends/base.py and a _effective_prompt(self, prompt)
+    method on AgentBackend. Each CLI backend calls _resolve_binary() in __init__
+    and self._effective_prompt(prompt) in _build_command(). ClaudeCodeBackend
+    is unaffected (uses _prepare_cwd for instructions). Removes ~25 lines of
+    triplication and ensures consistent error messages and prompt formatting
+    across current and future CLI backends.
+  status: pending
+  created: '2026-03-11T12:00:00Z'
+  priority: low

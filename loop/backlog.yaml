@@ -413,16 +413,16 @@
     wrapped with asyncio.to_thread(). Wrap the spawner.py call with await asyncio.to_thread()
     to match the established pattern. One-line fix.
   category: performance
-  status: pending
+  status: approved
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: '035'
   title: Wrap blocking parse_ndjson_file call in _read_events_summary with asyncio.to_thread
   description: Prevent event-loop blocking when summarizing worker events for completion
     notifications. core/spawner.py:817 calls parse_ndjson_file(events_path) synchronously
-    inside async _read_events_summary(), which reads and parses potentially large NDJSON
-    event logs directly on the event loop. This function is called twice during worker
-    completion (L684 for notify, L770 for review). The analogous call in api/threads.py:64
+    inside async _read_events_summary(), which reads and parses potentially large
+    NDJSON event logs directly on the event loop. This function is called twice during
+    worker completion (L684 for notify, L770 for review). The analogous call in api/threads.py:64
     already correctly uses await asyncio.to_thread(parse_ndjson_file, events_path).
     Wrap the spawner.py call with await asyncio.to_thread() to match the established
     pattern. One-line fix.
@@ -435,44 +435,43 @@
   description: Prevent divergent session-bookkeeping logic across scheduled task types.
     _execute_handler_task (L157), _execute_prompt_task (L196), and _execute_loop_task
     (L246) all repeat the same 8-line preamble — reload config, create SessionManager,
-    _get_or_create_session, ZoneInfo, datetime.now, then set last_scheduled_run,
-    last_scheduled_cron, updated_at, and save_metadata. Extract a helper like
-    _prepare_task_execution(task_cfg) that returns (cfg, SessionManager, SessionMetadata)
-    with all bookkeeping fields already persisted. Each execute method calls it as
-    its first line, reducing ~24 duplicated lines to 3 call sites. Adding a new task
-    type would require only calling the helper instead of copying the preamble.
+    _get_or_create_session, ZoneInfo, datetime.now, then set last_scheduled_run, last_scheduled_cron,
+    updated_at, and save_metadata. Extract a helper like _prepare_task_execution(task_cfg)
+    that returns (cfg, SessionManager, SessionMetadata) with all bookkeeping fields
+    already persisted. Each execute method calls it as its first line, reducing ~24
+    duplicated lines to 3 call sites. Adding a new task type would require only calling
+    the helper instead of copying the preamble.
   category: maintainability
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: '037'
   title: Extract shared spawn-and-broadcast tail in scheduler.py
-  description: Eliminate duplicated worker-spawning logic between two scheduled
-    task types. _execute_prompt_task (L213-243) and _execute_loop_task (L278-310)
-    repeat the same 25-line tail — resolve backend/model, asyncio.create_task(spawn_worker(...)),
+  description: Eliminate duplicated worker-spawning logic between two scheduled task
+    types. _execute_prompt_task (L213-243) and _execute_loop_task (L278-310) repeat
+    the same 25-line tail — resolve backend/model, asyncio.create_task(spawn_worker(...)),
     build task_delegated event dict, broadcast_and_persist, log, and return. The only
     differences are the description string and the log event name. Extract a helper
     like _spawn_scheduled_worker(session, task_cfg, description, event_description,
     cfg, session_mgr, thread_mgr) that encapsulates thread creation, backend resolution,
     spawn_worker fire-and-forget, task_delegated broadcast, and the return dict. Each
-    caller becomes a 1-2 line call. Complements backlog item 036 (preamble extraction) —
-    together they reduce each execute method to its unique logic only.
+    caller becomes a 1-2 line call. Complements backlog item 036 (preamble extraction)
+    — together they reduce each execute method to its unique logic only.
   category: duplication
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: medium
-- id: '038'
+- id: 038
   title: Extract shared _resolve_binary and _effective_prompt into backend base module
-  description: Eliminate tripled utility code across CLI backend subclasses.
-    gemini_cli.py:13, opencode.py:15, and codex.py:17 each define a near-identical
-    _resolve_*_binary() function (shutil.which then fallback path then FileNotFoundError).
-    Similarly, all three repeat the same 3-line instructions-prepend block in
-    _build_command(). Add a module-level _resolve_binary(name, fallback_dir)
-    utility in agents/backends/base.py and a _effective_prompt(self, prompt)
-    method on AgentBackend. Each CLI backend calls _resolve_binary() in __init__
-    and self._effective_prompt(prompt) in _build_command(). ClaudeCodeBackend
-    is unaffected (uses _prepare_cwd for instructions). Removes ~25 lines of
-    triplication and ensures consistent error messages and prompt formatting
+  description: Eliminate tripled utility code across CLI backend subclasses. gemini_cli.py:13,
+    opencode.py:15, and codex.py:17 each define a near-identical _resolve_*_binary()
+    function (shutil.which then fallback path then FileNotFoundError). Similarly,
+    all three repeat the same 3-line instructions-prepend block in _build_command().
+    Add a module-level _resolve_binary(name, fallback_dir) utility in agents/backends/base.py
+    and a _effective_prompt(self, prompt) method on AgentBackend. Each CLI backend
+    calls _resolve_binary() in __init__ and self._effective_prompt(prompt) in _build_command().
+    ClaudeCodeBackend is unaffected (uses _prepare_cwd for instructions). Removes
+    ~25 lines of triplication and ensures consistent error messages and prompt formatting
     across current and future CLI backends.
   category: duplication
   status: pending

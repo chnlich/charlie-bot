@@ -206,40 +206,8 @@ class Scheduler:
   async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
-    thread_mgr = ThreadManager(cfg)
-
-    thread = await thread_mgr.create_thread(session, task_cfg.prompt)
-
-    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session.id, cfg, session_mgr)
-
-    asyncio.create_task(
-        spawn_worker(
-            session_id=session.id,
-            description=task_cfg.prompt,
-            thread_id=thread.id,
-            cfg=cfg,
-            session_mgr=session_mgr,
-            thread_mgr=thread_mgr,
-            repo_path=task_cfg.repo,
-            resolved_backend=resolved_backend,
-            resolved_model=resolved_model,
-        ),
-        name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
-    )
-
-    event = {
-        "type": "task_delegated",
-        "task": task_cfg.name,
-        "description": task_cfg.prompt,
-        "session_id": session.id,
-        "thread_id": thread.id,
-        "backend": resolved_backend or "",
-        "model": resolved_model or "",
-    }
-    await broadcast_and_persist(session.id, event, session_mgr)
-    log.info("scheduled_task_fired", task=task_cfg.name, session=session.id, thread=thread.id)
-
-    return {"session_id": session.id, "thread_id": thread.id}
+    return await self._spawn_scheduled_worker(
+        session, task_cfg, task_cfg.prompt, task_cfg.prompt, "scheduled_task_fired", cfg, session_mgr)
 
   async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Run an improvement-loop task: determine action, then spawn worker if needed."""
@@ -258,19 +226,39 @@ class Scheduler:
       log.info("loop_task_noop", task=task_cfg.name, action=action_type)
       return {"session_id": session.id, "thread_id": None}
 
-    # Spawn a worker with the generated prompt
     session.last_run_status = "running"
     await session_mgr.save_metadata(session)
+    return await self._spawn_scheduled_worker(
+        session,
+        task_cfg,
+        prompt,
+        f"[{action_type}] {prompt[:200]}",
+        "loop_task_fired",
+        cfg,
+        session_mgr,
+        action=action_type)
 
+  async def _spawn_scheduled_worker(
+      self,
+      session: SessionMetadata,
+      task_cfg: ScheduledTaskConfig,
+      description: str,
+      event_description: str,
+      log_event: str,
+      cfg: CharlieBotConfig,
+      session_mgr: SessionManager,
+      **log_extra: str,
+  ) -> dict:
+    """Create thread, spawn worker, broadcast task_delegated, and return result dict."""
     thread_mgr = ThreadManager(cfg)
-    thread = await thread_mgr.create_thread(session, prompt)
+    thread = await thread_mgr.create_thread(session, description)
 
     resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session.id, cfg, session_mgr)
 
     asyncio.create_task(
         spawn_worker(
             session_id=session.id,
-            description=prompt,
+            description=description,
             thread_id=thread.id,
             cfg=cfg,
             session_mgr=session_mgr,
@@ -285,14 +273,14 @@ class Scheduler:
     event = {
         "type": "task_delegated",
         "task": task_cfg.name,
-        "description": f"[{action_type}] {prompt[:200]}",
+        "description": event_description,
         "session_id": session.id,
         "thread_id": thread.id,
         "backend": resolved_backend or "",
         "model": resolved_model or "",
     }
     await broadcast_and_persist(session.id, event, session_mgr)
-    log.info("loop_task_fired", task=task_cfg.name, action=action_type, session=session.id, thread=thread.id)
+    log.info(log_event, task=task_cfg.name, session=session.id, thread=thread.id, **log_extra)
 
     return {"session_id": session.id, "thread_id": thread.id}
 

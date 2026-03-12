@@ -36,9 +36,24 @@
       {{ opt.id|tojson }}: {{ opt.label|tojson }},
       {% endfor %}
     };
+    const AUTH_ENABLED = {{ auth_enabled|tojson }};
   </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 h-dvh overflow-hidden">
+  <!-- Auth overlay (shown when access key is required but not yet provided) -->
+  <div id="auth-overlay" class="fixed inset-0 z-[9999] bg-slate-900 flex items-center justify-center" style="display:none">
+    <div class="w-full max-w-sm px-6">
+      <h1 class="text-xl font-bold text-blue-400 text-center mb-6">CharlieBot</h1>
+      <p class="text-sm text-slate-400 text-center mb-4">Enter access key to continue</p>
+      <input id="auth-key-input" type="password" placeholder="Access key"
+             class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 mb-3"
+             onkeydown="if(event.key==='Enter')submitAccessKey()">
+      <button onclick="submitAccessKey()"
+              class="w-full px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors">Unlock</button>
+      <p id="auth-error" class="text-xs text-red-400 text-center mt-3 hidden">Invalid access key</p>
+    </div>
+  </div>
+
   <div class="flex h-dvh">
 
     <!-- ==================== SIDEBAR ==================== -->

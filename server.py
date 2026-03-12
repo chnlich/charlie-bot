@@ -1,6 +1,7 @@
 """CharlieBot server entry point."""
 
 import asyncio
+import hmac
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,8 +9,6 @@ from pathlib import Path
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-
-import hmac
 
 from src.api import backlog, chat, cron, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
@@ -20,6 +19,22 @@ from src.core.scheduler import Scheduler
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
+
+
+async def _check_ws_auth(websocket: WebSocket) -> bool:
+  """Validate access-key auth for WebSocket connections.
+
+  Returns True if the connection is authorized, False otherwise
+  (and closes the socket with code 4401).
+  """
+  access_key = get_config().charliebot_access_key
+  if not access_key:
+    return True
+  token = websocket.query_params.get("token", "")
+  if hmac.compare_digest(token, access_key):
+    return True
+  await websocket.close(code=4401)
+  return False
 
 
 @asynccontextmanager
@@ -74,13 +89,8 @@ app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str):
   """Push session-level events (master CC output, worker summaries) to the browser."""
-  cfg = get_config()
-  access_key = cfg.charliebot_access_key
-  if access_key:
-    token = websocket.query_params.get("token", "")
-    if not hmac.compare_digest(token, access_key):
-      await websocket.close(code=4401)
-      return
+  if not await _check_ws_auth(websocket):
+    return
   await websocket.accept()
   channel = f"session:{session_id}"
   log.info("session_ws_connected", session_id=session_id)
@@ -148,13 +158,8 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   Stream live Worker events to the browser.
   On connect, sends all historical events first (catch-up), then live events.
   """
-  cfg_ws = get_config()
-  access_key = cfg_ws.charliebot_access_key
-  if access_key:
-    token = websocket.query_params.get("token", "")
-    if not hmac.compare_digest(token, access_key):
-      await websocket.close(code=4401)
-      return
+  if not await _check_ws_auth(websocket):
+    return
   await websocket.accept()
   log.info("ws_connected", thread_id=thread_id)
 

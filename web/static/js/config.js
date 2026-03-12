@@ -28,8 +28,7 @@ function submitAccessKey() {
   const key = (input && input.value || '').trim();
   if (!key) return;
   localStorage.setItem('charliebot_access_key', key);
-  // Verify the key by calling the auth/status endpoint (which is public)
-  // then reload so all connections use the new key.
+  // Reload so all connections use the new key. If invalid, 401 will re-show the overlay.
   hideAuthOverlay();
   location.reload();
 }

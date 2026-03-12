@@ -538,12 +538,67 @@ function markSessionRead(id) {
 }
 
 async function archiveSession(id) {
+  showRatingModal(id);
+}
+
+function showRatingModal(sessionId) {
+  // Remove any existing modal
+  document.getElementById('rating-modal-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'rating-modal-overlay';
+  overlay.className = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
+  overlay.innerHTML = `
+    <div class="bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72 text-center"
+         onclick="event.stopPropagation()">
+      <p class="text-sm text-slate-300 mb-4">Rate this session before archiving?</p>
+      <div class="flex justify-center gap-3 mb-4">
+        <button data-rating="thumbs_up"
+                class="w-10 h-10 rounded-lg bg-slate-700 hover:bg-green-600/30 hover:text-green-400
+                       text-lg transition-colors flex items-center justify-center" title="Thumbs up">👍</button>
+        <button data-rating="neutral"
+                class="w-10 h-10 rounded-lg bg-slate-700 hover:bg-slate-600 hover:text-slate-200
+                       text-lg transition-colors flex items-center justify-center" title="Neutral">—</button>
+        <button data-rating="thumbs_down"
+                class="w-10 h-10 rounded-lg bg-slate-700 hover:bg-red-600/30 hover:text-red-400
+                       text-lg transition-colors flex items-center justify-center" title="Thumbs down">👎</button>
+      </div>
+      <button data-rating="skip"
+              class="text-xs text-slate-500 hover:text-slate-300 transition-colors">Skip &amp; archive</button>
+    </div>`;
+
+  // Handle rating button clicks
+  overlay.querySelectorAll('[data-rating]').forEach(btn => {
+    btn.addEventListener('click', () => doArchiveWithRating(sessionId, btn.dataset.rating));
+  });
+  // Close on overlay background click
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  // Close on Escape
+  const onKey = (e) => {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  };
+  document.addEventListener('keydown', onKey);
+
+  document.body.appendChild(overlay);
+}
+
+async function doArchiveWithRating(sessionId, rating) {
+  document.getElementById('rating-modal-overlay')?.remove();
   try {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-    if (SESSION_ID === id) {
+    await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    if (rating !== 'skip') {
+      await fetch(`/api/sessions/${sessionId}/rate`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({rating}),
+      });
+    }
+    if (SESSION_ID === sessionId) {
       location.href = '/?session=';
     } else {
-      document.getElementById('session-' + id)?.remove();
+      document.getElementById('session-' + sessionId)?.remove();
     }
   } catch (err) {
     console.error('Archive failed:', err);
@@ -856,18 +911,12 @@ function renderSessionList(sessions, filter) {
     // Action buttons differ by filter
     let actions = '';
     if (filter === 'archived') {
-      const rUp = s.rating === 'thumbs_up' ? '!opacity-100 text-green-400' : 'opacity-0 group-hover:opacity-100 hover:text-green-400';
-      const rNeu = s.rating === 'neutral' ? '!opacity-100 text-slate-300' : 'opacity-0 group-hover:opacity-100 hover:text-slate-300';
-      const rDn = s.rating === 'thumbs_down' ? '!opacity-100 text-red-400' : 'opacity-0 group-hover:opacity-100 hover:text-red-400';
+      const ratingBadge = s.rating === 'thumbs_up' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs up">👍</span>'
+        : s.rating === 'neutral' ? '<span class="text-xs flex-shrink-0" title="Rated: neutral">—</span>'
+        : s.rating === 'thumbs_down' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs down">👎</span>'
+        : '';
       actions = `
-        <span id="rating-${s.id}" class="inline-flex items-center gap-0">
-          <button onclick="event.preventDefault(); event.stopPropagation(); rateSession('${s.id}', 'thumbs_up')"
-                  data-rating="thumbs_up" class="p-0.5 text-xs transition-opacity flex-shrink-0 ${rUp}" title="Thumbs up">👍</button>
-          <button onclick="event.preventDefault(); event.stopPropagation(); rateSession('${s.id}', 'neutral')"
-                  data-rating="neutral" class="p-0.5 text-xs transition-opacity flex-shrink-0 ${rNeu}" title="Neutral">—</button>
-          <button onclick="event.preventDefault(); event.stopPropagation(); rateSession('${s.id}', 'thumbs_down')"
-                  data-rating="thumbs_down" class="p-0.5 text-xs transition-opacity flex-shrink-0 ${rDn}" title="Thumbs down">👎</button>
-        </span>
+        ${ratingBadge}
         <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
                 class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
           <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>

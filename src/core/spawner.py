@@ -815,7 +815,7 @@ async def _notify_completion(
 async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:
   """Read the last N lines from a thread's events.jsonl for summarization."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  events = parse_ndjson_file(events_path)
+  events = await asyncio.to_thread(parse_ndjson_file, events_path)
   if not events:
     return "(no events recorded)"
   tail = events[-max_lines:]

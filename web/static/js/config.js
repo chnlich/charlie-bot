@@ -1,4 +1,46 @@
 // ---------------------------------------------------------------------------
+// Auth: global fetch wrapper to attach Bearer token and handle 401s
+// ---------------------------------------------------------------------------
+const _origFetch = window.fetch;
+window.fetch = function(url, opts = {}) {
+  const key = localStorage.getItem('charliebot_access_key');
+  if (key) {
+    opts.headers = { ...(opts.headers || {}), 'Authorization': 'Bearer ' + key };
+  }
+  return _origFetch.call(window, url, opts).then(res => {
+    if (res.status === 401) { showAuthOverlay(); }
+    return res;
+  });
+};
+
+function showAuthOverlay() {
+  const el = document.getElementById('auth-overlay');
+  if (el) el.style.display = 'flex';
+}
+
+function hideAuthOverlay() {
+  const el = document.getElementById('auth-overlay');
+  if (el) el.style.display = 'none';
+}
+
+function submitAccessKey() {
+  const input = document.getElementById('auth-key-input');
+  const key = (input && input.value || '').trim();
+  if (!key) return;
+  localStorage.setItem('charliebot_access_key', key);
+  // Verify the key by calling the auth/status endpoint (which is public)
+  // then reload so all connections use the new key.
+  hideAuthOverlay();
+  location.reload();
+}
+
+function initAuth() {
+  if (typeof AUTH_ENABLED !== 'undefined' && AUTH_ENABLED && !localStorage.getItem('charliebot_access_key')) {
+    showAuthOverlay();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Config (non-Jinja2 parts; SESSION_ID, DRAFT_KEY, THINKING_SINCE,
 // eventCursor, usageTotalCost, BACKEND_OPTIONS are injected inline by index.html)
 // ---------------------------------------------------------------------------

@@ -69,6 +69,9 @@ class CharlieBotConfig(BaseModel):
   moonshot_api_key: Optional[str] = None
   kimi_model: str = "kimi-k2.5"
 
+  # Authentication — shared secret; empty string disables auth
+  charliebot_access_key: str = ""
+
   # Server
   server_host: str = "127.0.0.1"
   server_port: int = 8000

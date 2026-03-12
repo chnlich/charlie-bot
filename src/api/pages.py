@@ -4,7 +4,7 @@ from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.deps import get_session_manager, get_thread_manager
@@ -18,6 +18,12 @@ log = structlog.get_logger()
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
+
+
+@router.get("/api/auth/status")
+async def auth_status(cfg: CharlieBotConfig = Depends(get_config)):
+  """Return whether access-key authentication is enabled."""
+  return JSONResponse({"auth_enabled": bool(cfg.charliebot_access_key)})
 
 
 @router.get("/sessions/{session_id}/events", response_class=HTMLResponse)
@@ -104,4 +110,5 @@ async def index(
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,
           "load_errors": load_errors,
+          "auth_enabled": bool(cfg.charliebot_access_key),
       })

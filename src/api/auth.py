@@ -42,9 +42,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     if not token or not hmac.compare_digest(token, key):
       return Response(
-        content=json.dumps({"detail": "Unauthorized"}),
-        status_code=401,
-        media_type="application/json",
+          content=json.dumps({"detail": "Unauthorized"}),
+          status_code=401,
+          media_type="application/json",
       )
 
     return await call_next(request)

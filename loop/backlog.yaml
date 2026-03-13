@@ -506,3 +506,20 @@
   status: pending
   created: '2026-03-13T12:00:00Z'
   priority: medium
+- id: '041'
+  title: Split _spawn_review_worker into validation, backend selection, and spawn phases
+  description: Improve readability of the longest function in the codebase (118 lines).
+    core/spawner.py _spawn_review_worker (L548-665) handles three distinct responsibilities
+    in one function — validating thread prerequisites (repo_path, branch_name, worktree_path),
+    selecting a reviewer backend via model_preference with retry/fallback logic, and
+    creating the review thread with metadata and firing off spawn_worker. Extract
+    _validate_review_prerequisites(original_thread, session_id) returning (repo_path,
+    branch_name, wt_path) or raising, and _select_reviewer_backend(cfg, worker_backend,
+    tried_backends) returning (resolved_backend, resolved_model, updated_tried_backends).
+    The main function becomes a short orchestrator calling both helpers then spawning.
+    Follows the established pattern of items 003, 021, and 027 which successfully split
+    other long functions in spawner.py and master_cc.py.
+  category: architecture
+  status: pending
+  created: '2026-03-13T12:00:00Z'
+  priority: medium

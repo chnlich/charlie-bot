@@ -477,3 +477,18 @@
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: low
+- id: '039'
+  title: Use os.killpg in cancel_thread and catch PermissionError
+  description: Prevent orphan child processes on worker cancellation. api/threads.py:122-125
+    cancel_thread sends SIGTERM via os.kill(pid, SIGTERM), which only signals the
+    group leader process. Since worker subprocesses are started with start_new_session=True
+    (base.py:110), each has its own process group whose children are missed by os.kill.
+    Additionally, only ProcessLookupError is caught, not PermissionError, inconsistent
+    with the established pattern in base.py:terminate() (L184) which catches both.
+    Fix by using os.killpg(os.getpgid(pid), SIGTERM) to signal the entire process
+    group, matching base.py's pattern, and catch (ProcessLookupError, PermissionError).
+    Wrap os.getpgid in the same try-except since the process may already be gone.
+  category: error-handling
+  status: pending
+  created: '2026-03-12T12:00:00Z'
+  priority: medium

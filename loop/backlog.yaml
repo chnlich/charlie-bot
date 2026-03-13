@@ -523,3 +523,21 @@
   status: pending
   created: '2026-03-13T12:00:00Z'
   priority: medium
+- id: '042'
+  title: Add event factory helpers to AgentBackend base module
+  description: Centralize CC-compatible event dict construction that is currently
+    duplicated across all three CLI backends' translate_event methods. codex.py,
+    gemini_cli.py, and opencode.py each independently build identical dict structures
+    for assistant-text events ({type, message.content[{type, text}]}), error events
+    ({type, message, content}), result events ({type, result, usage{...}, total_cost_usd}),
+    and tool_use/tool_result events — 15+ near-identical dict literals total. Schema
+    changes (e.g. adding a field to result events) require updating all three files.
+    Add module-level factory functions in agents/backends/base.py — make_text_event(text),
+    make_error_event(msg), make_result_event(input_tokens, output_tokens, cache_read,
+    cache_creation, cost), make_tool_use_event(name, input_data), make_tool_result_event(tool_name,
+    content). Each is 2-5 lines; call sites become one-liners. Complements item 038
+    (command-building helpers) by addressing the event-translation side.
+  category: duplication
+  status: pending
+  created: '2026-03-13T12:00:00Z'
+  priority: low

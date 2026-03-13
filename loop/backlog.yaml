@@ -502,6 +502,7 @@
     wrapping sync I/O) can similarly be batched. Apply the same gather pattern in both
     methods. Expected change is ~10 lines per method, replacing the for-loop with a
     gather call and post-filtering.
+  category: performance
   status: pending
   created: '2026-03-13T12:00:00Z'
   priority: medium

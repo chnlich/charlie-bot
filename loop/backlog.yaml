@@ -541,7 +541,7 @@
   status: pending
   created: '2026-03-13T12:00:00Z'
   priority: low
-- id: '044'
+- id: '043'
   title: Wrap blocking _prepare_cwd hook in asyncio.to_thread in AgentBackend.run()
   description: Prevent event-loop blocking during worker subprocess setup by wrapping
     the sync _prepare_cwd() hook call at the template-method level. agents/backends/base.py:98

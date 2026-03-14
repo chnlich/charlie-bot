@@ -559,3 +559,18 @@
   status: pending
   created: '2026-03-13T12:00:00Z'
   priority: medium
+- id: '044'
+  title: Wrap blocking discover_repos call in asyncio.to_thread in spawner.py
+  description: Prevent event-loop blocking during worker spawn when no explicit repo_path
+    is provided. core/spawner.py:433 calls cfg.discover_repos() synchronously inside
+    async spawn_worker(). discover_repos() (config.py:184-194) performs Path.iterdir(),
+    child.is_dir(), and (child / ".git").exists() for every directory in workspace_dirs
+    — all blocking filesystem I/O directly on the event loop. The identical call in
+    api/sessions.py:79 is already correctly wrapped with await asyncio.to_thread(cfg.discover_repos).
+    Change spawner.py:433 from repos = cfg.discover_repos() to repos = await asyncio.to_thread(cfg.discover_repos).
+    One-line fix. asyncio is already imported in spawner.py. Follows the established
+    pattern of items 034, 035, and 043 which wrapped similar sync I/O calls.
+  category: performance
+  status: pending
+  created: '2026-03-14T12:00:00Z'
+  priority: medium

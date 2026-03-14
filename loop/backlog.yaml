@@ -590,3 +590,19 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
+- id: '046'
+  title: Wrap sync iterdir and parallelise get_thread calls in ThreadManager.list_threads
+  description: Prevent event-loop blocking and reduce worker-panel load latency.
+    core/threads.py list_threads (L54-66) calls threads_dir.exists(), iterdir(),
+    and is_dir() synchronously on the event loop, then calls get_thread() sequentially
+    in a for loop — the exact same anti-pattern already fixed for SessionManager
+    in items 024 (asyncio.to_thread for iterdir) and 040 (asyncio.gather for metadata
+    reads). On sessions with many workers this blocks the event loop for each syscall
+    and serialises N file reads that could run concurrently. Wrap the directory scan
+    in asyncio.to_thread (matching sessions.py L74) and replace the sequential
+    get_thread loop with asyncio.gather (matching the approach from item 040).
+    Expected change is ~5 lines plus adding the asyncio import to threads.py.
+  category: performance
+  status: pending
+  created: '2026-03-14T12:00:00Z'
+  priority: medium

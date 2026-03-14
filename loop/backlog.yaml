@@ -624,3 +624,25 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
+- id: '048'
+  title: Unify save-then-broadcast into SessionManager.persist_and_broadcast
+  description: Eliminate ~12 duplicate save_chat_event+broadcast pairs and fix an
+    ordering bug. The two-step pattern await save_chat_event(sid, event) then await
+    streaming_manager.broadcast(channel, event) is repeated 7 times in api/chat.py
+    and 5 times in agents/master_cc.py. spawner.py already has a standalone broadcast_and_persist()
+    helper but it broadcasts BEFORE persisting, so WebSocket clients receive events
+    without the timestamp that save_chat_event injects — the opposite of master_cc.py
+    which deliberately persists first to inject the timestamp then broadcasts with
+    the timestamp included. Add a persist_and_broadcast(session_id, event) method
+    to SessionManager that calls save_chat_event (injects timestamp) then streaming_manager.broadcast
+    in the correct order. Replace all 12 inline pairs in chat.py and master_cc.py
+    with single calls. Delete the standalone broadcast_and_persist from spawner.py
+    and replace its call sites with session_mgr.persist_and_broadcast. For master_cc.py,
+    change the save_chat_event callback to a persist_and_broadcast callback so the
+    manual broadcast calls can be removed. Fixes the timestamp-ordering bug, removes
+    ~12 duplicate line pairs, and ensures a single source of truth for the persist-then-broadcast
+    contract.
+  category: duplication
+  status: pending
+  created: '2026-03-14T12:00:00Z'
+  priority: medium

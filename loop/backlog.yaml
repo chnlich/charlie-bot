@@ -541,3 +541,21 @@
   status: pending
   created: '2026-03-13T12:00:00Z'
   priority: low
+- id: '044'
+  title: Wrap blocking _prepare_cwd hook in asyncio.to_thread in AgentBackend.run()
+  description: Prevent event-loop blocking during worker subprocess setup by wrapping
+    the sync _prepare_cwd() hook call at the template-method level. agents/backends/base.py:98
+    calls self._prepare_cwd(cwd) synchronously inside the async run() generator.
+    Both concrete overrides perform blocking file I/O — ClaudeCodeBackend._prepare_cwd
+    (claude_code.py:35-41) writes CLAUDE.md via Path.write_text(), and OpenCodeBackend._prepare_cwd
+    (opencode.py:43-73) calls os.makedirs(), os.path.exists(), and open()+json.dump()
+    to create a config directory and file. These block the event loop on every worker
+    spawn. Change base.py:98 from self._prepare_cwd(cwd) to await asyncio.to_thread(self._prepare_cwd,
+    cwd). One-line fix in the template method that automatically protects all current
+    and future backend implementations. Follows the pattern established by items 034
+    and 035 which wrapped similar sync I/O calls in spawner.py. asyncio is already
+    imported in base.py.
+  category: performance
+  status: pending
+  created: '2026-03-13T12:00:00Z'
+  priority: medium

@@ -574,3 +574,19 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
+- id: '045'
+  title: Extract shared content-block text parser for CC assistant events
+  description: Eliminate duplicated assistant-event content-block iteration across
+    5 consumer files. api/chat.py:202, core/sessions.py:157, api/message_utils.py:165,
+    api/threads.py:71-100, and core/spawner.py:838-846 each independently navigate
+    event['message']['content'][] to extract text from blocks using nearly identical
+    isinstance/dict-get boilerplate. A CC event schema change (e.g. adding a new block
+    type) requires updating all 5 locations. Add extract_text_from_message(msg) helper
+    in api/message_utils.py (or core/ndjson.py) that joins text from content blocks.
+    Replace 5 inline iterations with one-liner calls. Reduces nesting depth in
+    get_thread_events (6 to ~4) and _extract_event_content (5 to ~3). Complements
+    item 042 which addresses the construction side in backends.
+  category: duplication
+  status: pending
+  created: '2026-03-14T12:00:00Z'
+  priority: medium

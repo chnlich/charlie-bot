@@ -606,3 +606,21 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
+- id: '047'
+  title: Extract shared git_add_commit_push helper and add subprocess timeouts
+  description: Consolidate duplicated git-commit-and-push logic and add missing subprocess
+    timeouts. api/backlog.py:185-203 and core/improvement_loop.py:123-131 each define
+    their own _git_commit_push() with near-identical subprocess.run(['git', 'add']),
+    subprocess.run(['git', 'commit']), subprocess.run(['git', 'push']) sequences wrapped
+    in asyncio.to_thread. The improvement_loop.py version lacks error handling entirely
+    (CalledProcessError propagates uncaught), and neither version sets a subprocess
+    timeout — a hung git push (e.g. unresponsive remote) blocks the thread pool worker
+    indefinitely. Extract a shared async helper like git_add_commit_push(repo_path,
+    files, message, timeout=60) in a new core/git.py module that wraps each subprocess.run
+    call with timeout= and catches CalledProcessError consistently. Both callers become
+    one-liner calls. Removes ~25 duplicated lines across 2 files and fixes a latent
+    reliability issue.
+  category: duplication
+  status: pending
+  created: '2026-03-14T12:00:00Z'
+  priority: medium

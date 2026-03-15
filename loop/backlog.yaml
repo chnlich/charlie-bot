@@ -662,3 +662,20 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: high
+- id: '050'
+  title: Add exception-logging callback to fire-and-forget asyncio.create_task calls
+  description: Prevent silent failures in background tasks by ensuring exceptions are
+    always logged. 10 call sites across 6 files (api/chat.py, api/voice.py, api/backlog.py,
+    api/slash.py, api/internal.py, core/spawner.py) use asyncio.create_task() without
+    attaching a done callback — if the coroutine raises, the exception is silently
+    discarded (Python only emits a brief "Task exception was never retrieved" warning
+    at GC time, easily lost in log noise). Add a module-level create_logged_task(coro,
+    *, name=None) helper in core/tasks.py that wraps asyncio.create_task() and attaches
+    a done callback logging any exception via structlog. Replace all 10 bare create_task
+    call sites with create_logged_task. ~15 lines for the helper, 1-line change per
+    call site. No behavioral change — tasks still fire-and-forget, but failures now
+    produce actionable log entries with full tracebacks instead of being silently swallowed.
+  category: error-handling
+  status: pending
+  created: '2026-03-15T12:00:00Z'
+  priority: high

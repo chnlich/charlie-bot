@@ -1,5 +1,6 @@
 """Core backup/restore logic for ~/.charliebot data."""
 
+import sys
 import tarfile
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,22 @@ _BACKUP_SUFFIX = '.tar.gz'
 _DAILY_THRESHOLD = 7
 _WEEKLY_THRESHOLD = 30
 _MONTHLY_THRESHOLD = 90
+
+
+def _safe_extractall(tar: tarfile.TarFile, target: Path) -> None:
+  """Extract tar members safely, preventing path-traversal attacks (CVE-2007-4559)."""
+  if sys.version_info >= (3, 12):
+    tar.extractall(path=target, filter='data')
+    return
+  resolved_target = target.resolve()
+  safe_members = []
+  for member in tar.getmembers():
+    member_path = (resolved_target / member.name).resolve()
+    if not str(member_path).startswith(str(resolved_target) + '/') and member_path != resolved_target:
+      log.warning('backup_extract_skip_traversal', member=member.name)
+      continue
+    safe_members.append(member)
+  tar.extractall(path=target, members=safe_members)
 
 
 def _should_exclude(arcname: str) -> bool:
@@ -137,7 +154,7 @@ def restore_backup(archive_path: Path, target: Path = None) -> None:
       return
   target.mkdir(parents=True, exist_ok=True)
   with tarfile.open(archive_path, 'r:gz') as tar:
-    tar.extractall(path=target)
+    _safe_extractall(tar, target)
   log.info('backup_restored', archive=str(archive_path), target=str(target))
 
 

@@ -679,3 +679,18 @@
   status: pending
   created: '2026-03-15T12:00:00Z'
   priority: high
+- id: '051'
+  title: Kill orphan subprocesses on asyncio.wait_for timeout in autonamer and latex
+  description: Prevent orphan subprocesses that leak CPU and memory when asyncio.wait_for
+    times out. core/autonamer.py:54 and core/latex.py:135 both use asyncio.wait_for(proc.communicate(),
+    timeout=...) but neither kills the subprocess when TimeoutError fires — the cancelled
+    communicate() leaves the child process running indefinitely. The claude CLI (autonamer,
+    30s timeout) is a heavyweight process; pdflatex (latex, 60s timeout) can also linger.
+    Repeated timeouts accumulate orphans until the host runs out of resources. core/slash_commands.py:81-86
+    already handles this correctly by calling proc.kill() inside the TimeoutError handler.
+    Apply the same pattern to both files — catch asyncio.TimeoutError explicitly, call
+    proc.kill(), then proceed with the existing error-handling logic. ~5 lines per file,
+    matching the established slash_commands.py pattern.
+  status: pending
+  created: '2026-03-15T12:00:00Z'
+  priority: high

@@ -32,7 +32,7 @@ def _safe_extractall(tar: tarfile.TarFile, target: Path) -> None:
   safe_members = []
   for member in tar.getmembers():
     member_path = (resolved_target / member.name).resolve()
-    if not str(member_path).startswith(str(resolved_target) + '/') and member_path != resolved_target:
+    if not member_path.is_relative_to(resolved_target):
       log.warning('backup_extract_skip_traversal', member=member.name)
       continue
     safe_members.append(member)

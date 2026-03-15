@@ -660,7 +660,7 @@
     3.12+, pass filter='data' as the idiomatic fix. ~10 lines added, no behavioral
     change for legitimate archives.
   category: security
-  status: pending
+  status: approved
   created: '2026-03-14T12:00:00Z'
   priority: high
 - id: '050'

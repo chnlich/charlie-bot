@@ -557,7 +557,7 @@
     and 035 which wrapped similar sync I/O calls in spawner.py. asyncio is already
     imported in base.py.
   category: performance
-  status: pending
+  status: approved
   created: '2026-03-13T12:00:00Z'
   priority: medium
 - id: '044'

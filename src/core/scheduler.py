@@ -16,6 +16,7 @@ from src.core.improvement_loop import determine_action
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
+from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -255,7 +256,7 @@ class Scheduler:
 
     resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session.id, cfg, session_mgr)
 
-    asyncio.create_task(
+    create_logged_task(
         spawn_worker(
             session_id=session.id,
             description=description,

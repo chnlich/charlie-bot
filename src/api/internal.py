@@ -1,7 +1,5 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
-import asyncio
-
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -10,6 +8,7 @@ from src.core.config import get_config
 from src.core.models import DelegateRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
+from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -36,7 +35,7 @@ async def delegate_task(
   resolved_backend, resolved_model = await resolve_session_subagent_backend_model(req.session_id, cfg, session_mgr)
 
   # Fire-and-forget: spawn worker in background
-  asyncio.create_task(
+  create_logged_task(
       spawn_worker(
           req.session_id,
           req.description,

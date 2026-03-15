@@ -489,7 +489,7 @@
     group, matching base.py's pattern, and catch (ProcessLookupError, PermissionError).
     Wrap os.getpgid in the same try-except since the process may already be gone.
   category: error-handling
-  status: pending
+  status: approved
   created: '2026-03-12T12:00:00Z'
   priority: medium
 - id: '040'

@@ -17,6 +17,7 @@ from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, Thre
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
+from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 from src.core.config import CharlieBotConfig
 
@@ -648,7 +649,7 @@ async def _spawn_review_worker(
   review_thread.tried_backends = tried_backends
   await thread_mgr.save_metadata(review_thread)
 
-  asyncio.create_task(
+  create_logged_task(
       spawn_worker(
           session_id,
           review_thread.description,

@@ -13,6 +13,7 @@ from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.slash_commands import dispatch_slash_command, load_slash_commands
+from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
 
@@ -118,7 +119,7 @@ async def execute_command(
     }
 
   if dispatch.kind == 'prompt':
-    asyncio.create_task(
+    create_logged_task(
         run_and_finalize(
             cfg, meta, dispatch.substituted_prompt, session_mgr, extra_claude_flags=dispatch.claude_code_flags))
     return JSONResponse(status_code=202, content={'type': 'prompt_dispatched', 'command': name})

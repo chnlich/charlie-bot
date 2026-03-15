@@ -15,6 +15,7 @@ from src.core.models import SendMessageRequest, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.slash_commands import dispatch_slash_command
 from src.core.streaming import streaming_manager
+from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
 
@@ -84,7 +85,7 @@ async def send_message(
       await streaming_manager.broadcast(channel, user_event)
 
       if dispatch.kind == 'prompt':
-        asyncio.create_task(
+        create_logged_task(
             run_and_finalize(
                 cfg,
                 meta,
@@ -120,7 +121,7 @@ async def send_message(
     # Unknown /xxx — fall through to normal run_and_finalize (e.g. /compact)
 
   # Fire-and-forget: spawn master CC in a background task
-  asyncio.create_task(run_and_finalize(cfg, meta, content, session_mgr))
+  create_logged_task(run_and_finalize(cfg, meta, content, session_mgr))
 
   return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -174,7 +175,7 @@ async def run_and_finalize(
 
     # Auto-name session after first turn if still using default name
     if is_default_session_name(meta.name):
-      asyncio.create_task(_auto_name(cfg, meta, content, session_mgr))
+      create_logged_task(_auto_name(cfg, meta, content, session_mgr))
   except Exception as e:
     log.exception("master_cc_run_failed", session=meta.id)
     # run_message() should handle and emit failures, but keep this as a

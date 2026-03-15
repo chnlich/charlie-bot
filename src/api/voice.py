@@ -1,7 +1,5 @@
 """Voice transcription API route."""
 
-import asyncio
-
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -11,6 +9,7 @@ from src.api.deps import get_session_manager
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import VoiceTranscriptionResponse
 from src.core.sessions import SessionManager
+from src.core.tasks import create_logged_task
 
 router = APIRouter()
 
@@ -63,6 +62,6 @@ async def transcribe_audio(
 
   meta = await session_mgr.get_session(session_id)
   if meta:
-    asyncio.create_task(run_and_finalize(cfg, meta, transcription, session_mgr, is_voice=True))
+    create_logged_task(run_and_finalize(cfg, meta, transcription, session_mgr, is_voice=True))
 
   return VoiceTranscriptionResponse(transcription=transcription)

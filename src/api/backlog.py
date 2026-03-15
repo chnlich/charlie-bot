@@ -11,6 +11,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from src.core.tasks import create_logged_task
+
 log = structlog.get_logger()
 
 router = APIRouter()
@@ -176,7 +178,7 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
 
   git_rel = str(yaml_path.relative_to(repo_path))
   status_label = patch.status or 'updated'
-  asyncio.create_task(_git_commit_push(repo_path, git_rel, item_id, status_label))
+  create_logged_task(_git_commit_push(repo_path, git_rel, item_id, status_label))
 
   resp = {k: v for k, v in updated.items() if k != '_source'}
   return JSONResponse(content=resp)

@@ -588,7 +588,7 @@
     (6 to ~4) and _extract_event_content (5 to ~3). Complements item 042 which addresses
     the construction side in backends.
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: '046'

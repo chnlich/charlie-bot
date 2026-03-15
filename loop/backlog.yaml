@@ -646,3 +646,19 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
+- id: '049'
+  title: Add path-traversal protection to tar.extractall in backup restore
+  description: Prevent archive path-traversal attacks and fix forward-compatibility
+    with Python 3.12+. core/backup.py:140 calls tar.extractall(path=target) without
+    validating archive member paths or using the filter parameter introduced in Python
+    3.12. A crafted .tar.gz could write files outside the target directory via absolute
+    paths or ".." components (CVE-2007-4559). Python 3.12 emits a DeprecationWarning
+    for filterless extractall; Python 3.14 will make it an error. Add a _safe_extractall
+    helper that iterates tar.getmembers(), rejects any member whose resolved path
+    escapes the target directory, then extracts only validated members. On Python 3.12+,
+    pass filter='data' as the idiomatic fix. ~10 lines added, no behavioral change
+    for legitimate archives.
+  category: security
+  status: pending
+  created: '2026-03-14T12:00:00Z'
+  priority: high

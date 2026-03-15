@@ -694,3 +694,24 @@
   status: pending
   created: '2026-03-15T12:00:00Z'
   priority: high
+- id: '052'
+  title: Adopt require_session dependency and add require_thread analog to eliminate inline 404 checks
+  description: Eliminate 10 repeated inline "get-then-404" checks by using FastAPI dependency
+    injection consistently. deps.py already defines require_session (L29-37) and 6
+    endpoints use it, but 8 other session endpoints in sessions.py (L160, L186, L199,
+    L218, L226, L238, L278, L286), pages.py (L42), and internal.py (L27) still inline
+    the same 3-line get_session + if-not-meta + raise-404 pattern. Similarly, threads.py
+    has 2 inline "Thread not found" checks (L50, L117) with no dependency analog. For
+    the 4 endpoints that call get_session directly (get_session_view, update_backend,
+    pages index, internal delegate), replace with Depends(require_session) and use the
+    returned meta. For the 6 mutation endpoints (rewind, archive, star, unstar, rename,
+    mark_read), add Depends(require_session) as a pre-validation dependency — the double
+    read is negligible for a single-user app — and remove the inline None check. Add
+    a require_thread(session_id, thread_id) dependency in deps.py following the same
+    pattern, and adopt it in threads.py get_thread_events and cancel_thread. Net removal
+    of ~30 lines of boilerplate across 4 files, consistent use of the dependency-injection
+    pattern already established in the codebase.
+  category: duplication
+  status: pending
+  created: '2026-03-15T12:00:00Z'
+  priority: medium

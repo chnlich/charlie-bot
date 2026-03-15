@@ -477,7 +477,7 @@
   status: pending
   created: '2026-03-11T12:00:00Z'
   priority: low
-- id: '039'
+- id: 039
   title: Use os.killpg in cancel_thread and catch PermissionError
   description: Prevent orphan child processes on worker cancellation. api/threads.py:122-125
     cancel_thread sends SIGTERM via os.kill(pid, SIGTERM), which only signals the
@@ -499,15 +499,16 @@
     call get_session() in a sequential for loop — N sessions means N serial file reads
     on every page load and sidebar refresh. Gather all get_session() calls with asyncio.gather()
     to issue them concurrently. The _has_running_tasks() check per session (also async,
-    wrapping sync I/O) can similarly be batched. Apply the same gather pattern in both
-    methods. Expected change is ~10 lines per method, replacing the for-loop with a
-    gather call and post-filtering.
+    wrapping sync I/O) can similarly be batched. Apply the same gather pattern in
+    both methods. Expected change is ~10 lines per method, replacing the for-loop
+    with a gather call and post-filtering.
   category: performance
   status: pending
   created: '2026-03-13T12:00:00Z'
   priority: medium
 - id: '041'
-  title: Split _spawn_review_worker into validation, backend selection, and spawn phases
+  title: Split _spawn_review_worker into validation, backend selection, and spawn
+    phases
   description: Improve readability of the longest function in the codebase (118 lines).
     core/spawner.py _spawn_review_worker (L548-665) handles three distinct responsibilities
     in one function — validating thread prerequisites (repo_path, branch_name, worktree_path),
@@ -517,8 +518,8 @@
     branch_name, wt_path) or raising, and _select_reviewer_backend(cfg, worker_backend,
     tried_backends) returning (resolved_backend, resolved_model, updated_tried_backends).
     The main function becomes a short orchestrator calling both helpers then spawning.
-    Follows the established pattern of items 003, 021, and 027 which successfully split
-    other long functions in spawner.py and master_cc.py.
+    Follows the established pattern of items 003, 021, and 027 which successfully
+    split other long functions in spawner.py and master_cc.py.
   category: architecture
   status: pending
   created: '2026-03-13T12:00:00Z'
@@ -526,17 +527,17 @@
 - id: '042'
   title: Add event factory helpers to AgentBackend base module
   description: Centralize CC-compatible event dict construction that is currently
-    duplicated across all three CLI backends' translate_event methods. codex.py,
-    gemini_cli.py, and opencode.py each independently build identical dict structures
-    for assistant-text events ({type, message.content[{type, text}]}), error events
-    ({type, message, content}), result events ({type, result, usage{...}, total_cost_usd}),
-    and tool_use/tool_result events — 15+ near-identical dict literals total. Schema
-    changes (e.g. adding a field to result events) require updating all three files.
-    Add module-level factory functions in agents/backends/base.py — make_text_event(text),
-    make_error_event(msg), make_result_event(input_tokens, output_tokens, cache_read,
-    cache_creation, cost), make_tool_use_event(name, input_data), make_tool_result_event(tool_name,
-    content). Each is 2-5 lines; call sites become one-liners. Complements item 038
-    (command-building helpers) by addressing the event-translation side.
+    duplicated across all three CLI backends' translate_event methods. codex.py, gemini_cli.py,
+    and opencode.py each independently build identical dict structures for assistant-text
+    events ({type, message.content[{type, text}]}), error events ({type, message,
+    content}), result events ({type, result, usage{...}, total_cost_usd}), and tool_use/tool_result
+    events — 15+ near-identical dict literals total. Schema changes (e.g. adding a
+    field to result events) require updating all three files. Add module-level factory
+    functions in agents/backends/base.py — make_text_event(text), make_error_event(msg),
+    make_result_event(input_tokens, output_tokens, cache_read, cache_creation, cost),
+    make_tool_use_event(name, input_data), make_tool_result_event(tool_name, content).
+    Each is 2-5 lines; call sites become one-liners. Complements item 038 (command-building
+    helpers) by addressing the event-translation side.
   category: duplication
   status: pending
   created: '2026-03-13T12:00:00Z'
@@ -545,8 +546,8 @@
   title: Wrap blocking _prepare_cwd hook in asyncio.to_thread in AgentBackend.run()
   description: Prevent event-loop blocking during worker subprocess setup by wrapping
     the sync _prepare_cwd() hook call at the template-method level. agents/backends/base.py:98
-    calls self._prepare_cwd(cwd) synchronously inside the async run() generator.
-    Both concrete overrides perform blocking file I/O — ClaudeCodeBackend._prepare_cwd
+    calls self._prepare_cwd(cwd) synchronously inside the async run() generator. Both
+    concrete overrides perform blocking file I/O — ClaudeCodeBackend._prepare_cwd
     (claude_code.py:35-41) writes CLAUDE.md via Path.write_text(), and OpenCodeBackend._prepare_cwd
     (opencode.py:43-73) calls os.makedirs(), os.path.exists(), and open()+json.dump()
     to create a config directory and file. These block the event loop on every worker
@@ -583,25 +584,25 @@
     isinstance/dict-get boilerplate. A CC event schema change (e.g. adding a new block
     type) requires updating all 5 locations. Add extract_text_from_message(msg) helper
     in api/message_utils.py (or core/ndjson.py) that joins text from content blocks.
-    Replace 5 inline iterations with one-liner calls. Reduces nesting depth in
-    get_thread_events (6 to ~4) and _extract_event_content (5 to ~3). Complements
-    item 042 which addresses the construction side in backends.
+    Replace 5 inline iterations with one-liner calls. Reduces nesting depth in get_thread_events
+    (6 to ~4) and _extract_event_content (5 to ~3). Complements item 042 which addresses
+    the construction side in backends.
   category: duplication
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: '046'
   title: Wrap sync iterdir and parallelise get_thread calls in ThreadManager.list_threads
-  description: Prevent event-loop blocking and reduce worker-panel load latency.
-    core/threads.py list_threads (L54-66) calls threads_dir.exists(), iterdir(),
-    and is_dir() synchronously on the event loop, then calls get_thread() sequentially
-    in a for loop — the exact same anti-pattern already fixed for SessionManager
-    in items 024 (asyncio.to_thread for iterdir) and 040 (asyncio.gather for metadata
-    reads). On sessions with many workers this blocks the event loop for each syscall
-    and serialises N file reads that could run concurrently. Wrap the directory scan
-    in asyncio.to_thread (matching sessions.py L74) and replace the sequential
-    get_thread loop with asyncio.gather (matching the approach from item 040).
-    Expected change is ~5 lines plus adding the asyncio import to threads.py.
+  description: Prevent event-loop blocking and reduce worker-panel load latency. core/threads.py
+    list_threads (L54-66) calls threads_dir.exists(), iterdir(), and is_dir() synchronously
+    on the event loop, then calls get_thread() sequentially in a for loop — the exact
+    same anti-pattern already fixed for SessionManager in items 024 (asyncio.to_thread
+    for iterdir) and 040 (asyncio.gather for metadata reads). On sessions with many
+    workers this blocks the event loop for each syscall and serialises N file reads
+    that could run concurrently. Wrap the directory scan in asyncio.to_thread (matching
+    sessions.py L74) and replace the sequential get_thread loop with asyncio.gather
+    (matching the approach from item 040). Expected change is ~5 lines plus adding
+    the asyncio import to threads.py.
   category: performance
   status: pending
   created: '2026-03-14T12:00:00Z'
@@ -624,7 +625,7 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
-- id: '048'
+- id: 048
   title: Unify save-then-broadcast into SessionManager.persist_and_broadcast
   description: Eliminate ~12 duplicate save_chat_event+broadcast pairs and fix an
     ordering bug. The two-step pattern await save_chat_event(sid, event) then await
@@ -646,7 +647,7 @@
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: medium
-- id: '049'
+- id: 049
   title: Add path-traversal protection to tar.extractall in backup restore
   description: Prevent archive path-traversal attacks and fix forward-compatibility
     with Python 3.12+. core/backup.py:140 calls tar.extractall(path=target) without
@@ -655,17 +656,17 @@
     paths or ".." components (CVE-2007-4559). Python 3.12 emits a DeprecationWarning
     for filterless extractall; Python 3.14 will make it an error. Add a _safe_extractall
     helper that iterates tar.getmembers(), rejects any member whose resolved path
-    escapes the target directory, then extracts only validated members. On Python 3.12+,
-    pass filter='data' as the idiomatic fix. ~10 lines added, no behavioral change
-    for legitimate archives.
+    escapes the target directory, then extracts only validated members. On Python
+    3.12+, pass filter='data' as the idiomatic fix. ~10 lines added, no behavioral
+    change for legitimate archives.
   category: security
   status: pending
   created: '2026-03-14T12:00:00Z'
   priority: high
 - id: '050'
   title: Add exception-logging callback to fire-and-forget asyncio.create_task calls
-  description: Prevent silent failures in background tasks by ensuring exceptions are
-    always logged. 10 call sites across 6 files (api/chat.py, api/voice.py, api/backlog.py,
+  description: Prevent silent failures in background tasks by ensuring exceptions
+    are always logged. 10 call sites across 6 files (api/chat.py, api/voice.py, api/backlog.py,
     api/slash.py, api/internal.py, core/spawner.py) use asyncio.create_task() without
     attaching a done callback — if the coroutine raises, the exception is silently
     discarded (Python only emits a brief "Task exception was never retrieved" warning
@@ -674,7 +675,8 @@
     a done callback logging any exception via structlog. Replace all 10 bare create_task
     call sites with create_logged_task. ~15 lines for the helper, 1-line change per
     call site. No behavioral change — tasks still fire-and-forget, but failures now
-    produce actionable log entries with full tracebacks instead of being silently swallowed.
+    produce actionable log entries with full tracebacks instead of being silently
+    swallowed.
   category: error-handling
   status: pending
   created: '2026-03-15T12:00:00Z'
@@ -685,32 +687,34 @@
     times out. core/autonamer.py:54 and core/latex.py:135 both use asyncio.wait_for(proc.communicate(),
     timeout=...) but neither kills the subprocess when TimeoutError fires — the cancelled
     communicate() leaves the child process running indefinitely. The claude CLI (autonamer,
-    30s timeout) is a heavyweight process; pdflatex (latex, 60s timeout) can also linger.
-    Repeated timeouts accumulate orphans until the host runs out of resources. core/slash_commands.py:81-86
-    already handles this correctly by calling proc.kill() inside the TimeoutError handler.
-    Apply the same pattern to both files — catch asyncio.TimeoutError explicitly, call
-    proc.kill(), then proceed with the existing error-handling logic. ~5 lines per file,
-    matching the established slash_commands.py pattern.
-  status: pending
+    30s timeout) is a heavyweight process; pdflatex (latex, 60s timeout) can also
+    linger. Repeated timeouts accumulate orphans until the host runs out of resources.
+    core/slash_commands.py:81-86 already handles this correctly by calling proc.kill()
+    inside the TimeoutError handler. Apply the same pattern to both files — catch
+    asyncio.TimeoutError explicitly, call proc.kill(), then proceed with the existing
+    error-handling logic. ~5 lines per file, matching the established slash_commands.py
+    pattern.
+  status: approved
   created: '2026-03-15T12:00:00Z'
   priority: high
 - id: '052'
-  title: Adopt require_session dependency and add require_thread analog to eliminate inline 404 checks
-  description: Eliminate 10 repeated inline "get-then-404" checks by using FastAPI dependency
-    injection consistently. deps.py already defines require_session (L29-37) and 6
-    endpoints use it, but 8 other session endpoints in sessions.py (L160, L186, L199,
-    L218, L226, L238, L278, L286), pages.py (L42), and internal.py (L27) still inline
-    the same 3-line get_session + if-not-meta + raise-404 pattern. Similarly, threads.py
-    has 2 inline "Thread not found" checks (L50, L117) with no dependency analog. For
-    the 4 endpoints that call get_session directly (get_session_view, update_backend,
-    pages index, internal delegate), replace with Depends(require_session) and use the
-    returned meta. For the 6 mutation endpoints (rewind, archive, star, unstar, rename,
-    mark_read), add Depends(require_session) as a pre-validation dependency — the double
-    read is negligible for a single-user app — and remove the inline None check. Add
-    a require_thread(session_id, thread_id) dependency in deps.py following the same
-    pattern, and adopt it in threads.py get_thread_events and cancel_thread. Net removal
-    of ~30 lines of boilerplate across 4 files, consistent use of the dependency-injection
-    pattern already established in the codebase.
+  title: Adopt require_session dependency and add require_thread analog to eliminate
+    inline 404 checks
+  description: Eliminate 10 repeated inline "get-then-404" checks by using FastAPI
+    dependency injection consistently. deps.py already defines require_session (L29-37)
+    and 6 endpoints use it, but 8 other session endpoints in sessions.py (L160, L186,
+    L199, L218, L226, L238, L278, L286), pages.py (L42), and internal.py (L27) still
+    inline the same 3-line get_session + if-not-meta + raise-404 pattern. Similarly,
+    threads.py has 2 inline "Thread not found" checks (L50, L117) with no dependency
+    analog. For the 4 endpoints that call get_session directly (get_session_view,
+    update_backend, pages index, internal delegate), replace with Depends(require_session)
+    and use the returned meta. For the 6 mutation endpoints (rewind, archive, star,
+    unstar, rename, mark_read), add Depends(require_session) as a pre-validation dependency
+    — the double read is negligible for a single-user app — and remove the inline
+    None check. Add a require_thread(session_id, thread_id) dependency in deps.py
+    following the same pattern, and adopt it in threads.py get_thread_events and cancel_thread.
+    Net removal of ~30 lines of boilerplate across 4 files, consistent use of the
+    dependency-injection pattern already established in the codebase.
   category: duplication
   status: pending
   created: '2026-03-15T12:00:00Z'

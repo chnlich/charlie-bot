@@ -117,6 +117,7 @@ class AgentBackend(ABC):
     _result_time: float = 0.0
     _POST_RESULT_TIMEOUT = 30.0
     _CLEANUP_TIMEOUT = 5.0
+    _pending_tool_calls: set[str] = set()
 
     while True:
       if _saw_result:
@@ -145,10 +146,42 @@ class AgentBackend(ABC):
         continue
 
       for translated in self.translate_event(event):
+        evt_type = translated.get("type")
+
+        # Track pending tool calls — wrapped format (OpenCode/GLM-5):
+        # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
+        if evt_type == "assistant":
+          for item in translated.get("message", {}).get("content", []):
+            if isinstance(item, dict) and item.get("type") == "tool_use":
+              tool_id = item.get("id", "")
+              if tool_id:
+                _pending_tool_calls.add(tool_id)
+
+        # Track pending tool calls — flat format (Codex/Gemini):
+        # {type: 'tool_use', id: '...', name: '...'}
+        if evt_type == "tool_use":
+          tool_id = translated.get("id", "")
+          if tool_id:
+            _pending_tool_calls.add(tool_id)
+
+        # Clear pending tool calls on tool_result events.
+        if evt_type == "tool_result":
+          tool_use_id = translated.get("tool_use_id", "")
+          if tool_use_id:
+            _pending_tool_calls.discard(tool_use_id)
+
         yield translated
-        if not _saw_result and translated.get("type") == "result":
-          _saw_result = True
-          _result_time = time.monotonic()
+
+        if not _saw_result and evt_type == "result":
+          if _pending_tool_calls:
+            log.debug(
+              "backend_result_suppressed_pending_tools",
+              pending=len(_pending_tool_calls),
+              tool_ids=list(_pending_tool_calls),
+            )
+          else:
+            _saw_result = True
+            _result_time = time.monotonic()
 
     # Drain stderr and wait for process exit with a timeout.
     assert self._proc.stderr is not None

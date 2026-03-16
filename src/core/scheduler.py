@@ -208,7 +208,8 @@ class Scheduler:
     """Find-or-create session, create thread, fire-and-forget worker."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
     return await self._spawn_scheduled_worker(
-        session, task_cfg, task_cfg.prompt, task_cfg.prompt, "scheduled_task_fired", cfg, session_mgr)
+        session, task_cfg, task_cfg.prompt, task_cfg.prompt, "scheduled_task_fired", cfg, session_mgr,
+        require_review=False)
 
   async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Run an improvement-loop task: determine action, then spawn worker if needed."""
@@ -237,6 +238,7 @@ class Scheduler:
         "loop_task_fired",
         cfg,
         session_mgr,
+        require_review=(action_type == 'implement'),
         action=action_type)
 
   async def _spawn_scheduled_worker(
@@ -248,11 +250,12 @@ class Scheduler:
       log_event: str,
       cfg: CharlieBotConfig,
       session_mgr: SessionManager,
+      require_review: bool = True,
       **log_extra: str,
   ) -> dict:
     """Create thread, spawn worker, broadcast task_delegated, and return result dict."""
     thread_mgr = ThreadManager(cfg)
-    thread = await thread_mgr.create_thread(session, description)
+    thread = await thread_mgr.create_thread(session, description, require_review=require_review)
 
     resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session.id, cfg, session_mgr)
 

@@ -758,7 +758,11 @@ async def _maybe_spawn_reviewer(
   thread_meta = await thread_mgr.get_thread(session_id, thread.id)
 
   if exit_code == 0 and not thread_meta.review_of:
-    # Successful worker, not a review -> spawn reviewer, don't trigger master yet
+    if not thread_meta.require_review:
+      # No review needed — trigger master directly
+      await _trigger_master(session_id, full_summary, cfg, session_mgr)
+      return
+    # Successful worker needing review -> spawn reviewer
     await _spawn_review_worker(session_id, thread_meta, cfg, session_mgr, thread_mgr)
     return
 

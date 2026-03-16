@@ -26,6 +26,7 @@ class ThreadManager:
       branch_name: Optional[str] = None,
       review_of: Optional[str] = None,
       context: Optional[str] = None,
+      require_review: bool = True,
   ) -> ThreadMetadata:
     """Create a new thread directory and metadata."""
     thread = ThreadMetadata(
@@ -34,6 +35,7 @@ class ThreadManager:
         branch_name=branch_name,
         review_of=review_of,
         context=context,
+        require_review=require_review,
     )
 
     thread_dir = self._thread_dir(session_meta.id, thread.id)

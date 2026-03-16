@@ -546,66 +546,50 @@ def _is_resume_not_found_error(error: Exception) -> bool:
   return has_conversation_not_found or has_session_not_found
 
 
-async def _spawn_review_worker(
+def _validate_review_prerequisites(
+    original_thread: ThreadMetadata,
     session_id: str,
-    original_thread,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread_mgr: ThreadManager,
-    tried_backends: Optional[list[str]] = None,
-) -> bool:
-  """Spawn a review worker for a completed worker's branch.
+) -> Optional[tuple[Path, str, str]]:
+  """Validate that original_thread has repo_path, branch_name, and worktree_path.
 
-  Returns True if a reviewer was spawned, False if all backends are exhausted.
+  Returns (repo_path, branch_name, worktree_path) or None if validation fails.
   """
-  if tried_backends is None:
-    tried_backends = []
-
-  # Max retries guard: at most len(model_preference) retries after the initial spawn.
-  if len(tried_backends) > len(cfg.model_preference):
-    log.warning("reviewer_max_retries_exceeded", tried=tried_backends, max=len(cfg.model_preference))
-    return False
-
   if not original_thread.repo_path:
     log.error(
         "spawn_review_no_repo_path",
         session=session_id,
         thread=original_thread.id,
         detail="original thread missing repo_path")
-    return False
-  repo_path = Path(original_thread.repo_path)
+    return None
   if not original_thread.branch_name:
     log.error(
         "spawn_review_no_branch_name",
         session=session_id,
         thread=original_thread.id,
         detail="original thread missing branch_name")
-    return False
+    return None
   if not original_thread.worktree_path:
     log.error(
         "spawn_review_no_worktree_path",
         session=session_id,
         thread=original_thread.id,
         detail="original thread missing worktree_path")
-    return False
+    return None
+  return Path(original_thread.repo_path), original_thread.branch_name, original_thread.worktree_path
 
-  base_branch = await _git_current_branch(repo_path)
-  branch_name = original_thread.branch_name
-  wt_path = original_thread.worktree_path
 
-  review_prompt = _build_review_prompt(
-      branch_name,
-      wt_path,
-      repo_path,
-      base_branch,
-      session_id=session_id,
-      original_thread_id=original_thread.id,
-      sessions_dir=cfg.sessions_dir,
-      context=original_thread.context)
-  worker_backend, worker_model = _require_thread_backend_model(original_thread)
+def _select_reviewer_backend(
+    cfg: CharlieBotConfig,
+    worker_backend: str,
+    worker_model: str,
+    tried_backends: list[str],
+) -> Optional[tuple[str, str, list[str]]]:
+  """Select a reviewer backend via model_preference, skipping already-tried backends.
+
+  Returns (resolved_backend, resolved_model, updated_tried_backends) or None if exhausted.
+  """
   resolved_backend, resolved_model = worker_backend, worker_model
 
-  # Cross-backend reviewer selection via model_preference, skipping already-tried backends.
   for pref_id in cfg.model_preference:
     if pref_id == worker_backend:
       log.debug("reviewer_skip_same_backend", preference=pref_id)
@@ -633,9 +617,53 @@ async def _spawn_review_worker(
         log.info("reviewer_fallback_to_worker_backend", worker_backend=worker_backend, tried=tried_backends)
       else:
         log.warning("reviewer_all_backends_exhausted", tried=tried_backends)
-        return False
+        return None
 
-  tried_backends = tried_backends + [resolved_backend]
+  return resolved_backend, resolved_model, tried_backends + [resolved_backend]
+
+
+async def _spawn_review_worker(
+    session_id: str,
+    original_thread,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    tried_backends: Optional[list[str]] = None,
+) -> bool:
+  """Spawn a review worker for a completed worker's branch.
+
+  Returns True if a reviewer was spawned, False if all backends are exhausted.
+  """
+  if tried_backends is None:
+    tried_backends = []
+
+  # Max retries guard: at most len(model_preference) retries after the initial spawn.
+  if len(tried_backends) > len(cfg.model_preference):
+    log.warning("reviewer_max_retries_exceeded", tried=tried_backends, max=len(cfg.model_preference))
+    return False
+
+  prerequisites = _validate_review_prerequisites(original_thread, session_id)
+  if prerequisites is None:
+    return False
+  repo_path, branch_name, wt_path = prerequisites
+
+  base_branch = await _git_current_branch(repo_path)
+  worker_backend, worker_model = _require_thread_backend_model(original_thread)
+
+  backend_result = _select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)
+  if backend_result is None:
+    return False
+  resolved_backend, resolved_model, tried_backends = backend_result
+
+  review_prompt = _build_review_prompt(
+      branch_name,
+      wt_path,
+      repo_path,
+      base_branch,
+      session_id=session_id,
+      original_thread_id=original_thread.id,
+      sessions_dir=cfg.sessions_dir,
+      context=original_thread.context)
 
   session_meta = await session_mgr.get_session(session_id)
   review_thread = await thread_mgr.create_thread(

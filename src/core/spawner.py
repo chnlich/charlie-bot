@@ -458,7 +458,7 @@ async def spawn_worker(
       return
 
     if repo_path is None:
-      repos = cfg.discover_repos()
+      repos = await asyncio.to_thread(cfg.discover_repos)
       if not repos:
         log.error("spawn_worker_no_repo", session=session_id, detail="no repos found in workspace_dirs")
         error_msg = "no repos found in workspace_dirs"

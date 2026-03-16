@@ -97,8 +97,8 @@ def _build_review_prompt(
       f"6. If you find issues, fix them and commit with descriptive messages.\n"
       f"\n> **Note:** Steps 8-10 use `cd {repo_path}` because the Bash tool does not persist CWD across calls. "
       f"If your shell CWD becomes invalid (e.g. after worktree removal), prefix commands with `cd {repo_path} &&`.\n\n"
-      f"7. Stash untracked/modified files, rebase, then pop: "
-      f"`git stash --include-untracked && git rebase {base_branch} && git stash pop`\n"
+      f"7. Stash untracked/modified files then rebase: "
+      f"`git stash --include-untracked && git rebase {base_branch}`\n"
       f"8. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
       f"9. Clean up: `cd {repo_path} && git worktree remove {wt_path}`\n"
       f"10. Push to remote: `cd {repo_path} && git push`")

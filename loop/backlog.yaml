@@ -572,7 +572,7 @@
     One-line fix. asyncio is already imported in spawner.py. Follows the established
     pattern of items 034, 035, and 043 which wrapped similar sync I/O calls.
   category: performance
-  status: pending
+  status: approved
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: '045'

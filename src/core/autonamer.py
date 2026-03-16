@@ -1,7 +1,9 @@
 """Auto-name sessions after the first chat turn using Gemini or Claude CLI."""
 
 import asyncio
+import os
 import re
+import signal
 
 import structlog
 
@@ -50,12 +52,15 @@ async def _generate_name_via_claude_cli(prompt: str) -> str:
       prompt,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
+      start_new_session=True,
   )
   try:
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
   except asyncio.TimeoutError:
     try:
-      proc.kill()
+      os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+      pass
     except Exception as kill_err:
       log.debug('autonamer_kill_failed', error=str(kill_err))
     raise

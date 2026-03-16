@@ -1,6 +1,8 @@
 """LaTeX project configuration and compilation."""
 
 import asyncio
+import os
+import signal
 from pathlib import Path
 
 import structlog
@@ -131,6 +133,7 @@ async def compile_latex() -> dict:
         cwd=str(project_dir),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
     output = stdout.decode('utf-8', errors='replace')
@@ -142,7 +145,9 @@ async def compile_latex() -> dict:
     return {'ok': ok, 'log': output}
   except asyncio.TimeoutError:
     try:
-      proc.kill()
+      os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+      pass
     except Exception as kill_err:
       log.debug('latex_compile_kill_failed', error=str(kill_err))
     log.warning('latex_compile_timeout')

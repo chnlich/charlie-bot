@@ -521,7 +521,7 @@
     Follows the established pattern of items 003, 021, and 027 which successfully
     split other long functions in spawner.py and master_cc.py.
   category: architecture
-  status: approved
+  status: done
   created: '2026-03-13T12:00:00Z'
   priority: medium
 - id: '042'

@@ -51,7 +51,14 @@ async def _generate_name_via_claude_cli(prompt: str) -> str:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
   )
-  stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+  try:
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+  except asyncio.TimeoutError:
+    try:
+      proc.kill()
+    except Exception as kill_err:
+      log.debug('autonamer_kill_failed', error=str(kill_err))
+    raise
   if proc.returncode != 0:
     raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
   return stdout.decode().strip()

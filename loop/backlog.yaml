@@ -539,7 +539,7 @@
     Each is 2-5 lines; call sites become one-liners. Complements item 038 (command-building
     helpers) by addressing the event-translation side.
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-13T12:00:00Z'
   priority: low
 - id: '043'

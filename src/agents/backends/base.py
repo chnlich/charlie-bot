@@ -95,7 +95,7 @@ class AgentBackend(ABC):
     After the generator is fully consumed, ``exit_code`` and ``stderr_text``
     are populated.
     """
-    self._prepare_cwd(cwd)
+    await asyncio.to_thread(self._prepare_cwd, cwd)
     cmd = self._build_command(prompt)
     final_env = self._prepare_env(env)
 

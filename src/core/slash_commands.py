@@ -1,6 +1,8 @@
 """Slash command loading and execution."""
 
 import asyncio
+import os
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -71,6 +73,7 @@ async def execute_shell_command(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd or None,
+        start_new_session=True,
     )
   except Exception as e:
     log.warning('slash_shell_spawn_failed', cmd=cmd, error=str(e))
@@ -81,7 +84,9 @@ async def execute_shell_command(
   except asyncio.TimeoutError:
     log.warning('slash_shell_timeout', cmd=cmd, timeout=timeout)
     try:
-      proc.kill()
+      os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+      pass
     except Exception as kill_err:
       log.debug('slash_shell_kill_failed', error=str(kill_err))
     return {'stdout': '', 'stderr': 'Command timed out', 'exit_code': -1}

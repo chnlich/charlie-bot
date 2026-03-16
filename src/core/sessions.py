@@ -68,12 +68,12 @@ class SessionManager:
       scheduled: Optional[bool] = None,
   ) -> list[SessionMetadata]:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
-    sessions: list[SessionMetadata] = []
     if not self._cfg.sessions_dir.exists():
-      return sessions
+      return []
     dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
-    for d in dirs:
-      meta = await self.get_session(d.name)
+    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs))
+    sessions: list[SessionMetadata] = []
+    for meta in all_meta:
       if not meta:
         continue
       if status is not None and meta.status != status:
@@ -82,8 +82,10 @@ class SessionManager:
         continue
       if scheduled is not None and bool(meta.scheduled_task) != scheduled:
         continue
-      meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
       sessions.append(meta)
+    running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in sessions))
+    for meta, running in zip(sessions, running_flags):
+      meta.has_running_tasks = bool(meta.thinking_since) or running
     # Normalise to offset-aware (UTC) so naive vs aware datetimes don't explode
     for s in sessions:
       if s.updated_at.tzinfo is None:
@@ -94,17 +96,16 @@ class SessionManager:
   async def search_sessions(self, query: str) -> list[SessionMetadata]:
     """Search active sessions by name and chat event content (case-insensitive)."""
     query_lower = query.lower()
-    results: list[SessionMetadata] = []
     if not self._cfg.sessions_dir.exists():
-      return results
+      return []
     dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
-    for d in dirs:
-      meta = await self.get_session(d.name)
+    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs))
+    results: list[SessionMetadata] = []
+    for meta in all_meta:
       if not meta or meta.status not in (SessionStatus.ACTIVE, SessionStatus.WAITING):
         continue
       # Check session name first
       if query_lower in (meta.name or '').lower():
-        meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
         results.append(meta)
         continue
       # Check chat events (offload sync I/O to thread pool)
@@ -113,10 +114,12 @@ class SessionManager:
         try:
           text = await asyncio.to_thread(events_path.read_text, encoding='utf-8')
           if query_lower in text.lower():
-            meta.has_running_tasks = bool(meta.thinking_since) or await self._has_running_tasks(meta.id)
             results.append(meta)
         except OSError as e:
           log.debug('search_read_failed', session_id=meta.id, error=str(e))
+    running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in results))
+    for meta, running in zip(results, running_flags):
+      meta.has_running_tasks = bool(meta.thinking_since) or running
     for s in results:
       if s.updated_at.tzinfo is None:
         s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)

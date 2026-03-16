@@ -96,35 +96,22 @@ async function executeSlashCommand(name, args) {
   }
 }
 
-function handleInputKey(e) {
+function handleSlashPopupKey(e) {
   const popup = document.getElementById('slash-popup');
   const popupVisible = popup && popup.classList.contains('visible');
-  if (popupVisible) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); navigateSlashPopup(1); return; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); navigateSlashPopup(-1); return; }
-    if (e.key === 'Tab' || e.key === 'Enter') {
-      e.preventDefault();
-      const active = popup.querySelector('.slash-item.active');
-      if (active) {
-        const nameEl = active.querySelector('.slash-name');
-        const name = nameEl ? nameEl.textContent.slice(1) : '';
-        selectSlashCommand(name);
-      }
-      return;
-    }
-    if (e.key === 'Escape') { e.preventDefault(); hideSlashPopup(); return; }
-  }
-  if (e.key === 'Enter' && !e.shiftKey && platform.enterSendsMessage) {
+  if (!popupVisible) return false;
+  if (e.key === 'ArrowDown') { e.preventDefault(); navigateSlashPopup(1); return true; }
+  if (e.key === 'ArrowUp') { e.preventDefault(); navigateSlashPopup(-1); return true; }
+  if (e.key === 'Tab' || e.key === 'Enter') {
     e.preventDefault();
-    const input = document.getElementById('msg-input');
-    const val = input ? input.value.trim() : '';
-    if (val.startsWith('/')) {
-      const spaceIdx = val.indexOf(' ');
-      const name = spaceIdx === -1 ? val.slice(1) : val.slice(1, spaceIdx);
-      const args = spaceIdx === -1 ? '' : val.slice(spaceIdx + 1).trim();
-      executeSlashCommand(name, args);
-    } else {
-      sendMessage();
+    const active = popup.querySelector('.slash-item.active');
+    if (active) {
+      const nameEl = active.querySelector('.slash-name');
+      const name = nameEl ? nameEl.textContent.slice(1) : '';
+      selectSlashCommand(name);
     }
+    return true;
   }
+  if (e.key === 'Escape') { e.preventDefault(); hideSlashPopup(); return true; }
+  return false;
 }

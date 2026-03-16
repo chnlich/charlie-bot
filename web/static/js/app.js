@@ -116,6 +116,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
 });
 
+// ---------------------------------------------------------------------------
+// Global input key handler (delegates to slash popup, then Enter-to-send)
+// ---------------------------------------------------------------------------
+function handleInputKey(e) {
+  if (handleSlashPopupKey(e)) return;
+  if (e.key === 'Enter' && !e.shiftKey && platform.enterSendsMessage) {
+    e.preventDefault();
+    const input = document.getElementById('msg-input');
+    const val = input ? input.value.trim() : '';
+    if (val.startsWith('/')) {
+      const spaceIdx = val.indexOf(' ');
+      const name = spaceIdx === -1 ? val.slice(1) : val.slice(1, spaceIdx);
+      const args = spaceIdx === -1 ? '' : val.slice(spaceIdx + 1).trim();
+      executeSlashCommand(name, args);
+    } else {
+      sendMessage();
+    }
+  }
+}
+
 document.addEventListener('click', function(e) {
   const menu = document.getElementById('overflow-menu');
   const toggle = document.querySelector('.overflow-toggle');

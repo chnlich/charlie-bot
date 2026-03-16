@@ -120,8 +120,8 @@ async def cancel_thread(
 
   if thread.pid:
     try:
-      os.kill(thread.pid, signal.SIGTERM)
-    except ProcessLookupError:
+      os.killpg(os.getpgid(thread.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
       log.debug("cancel_pid_gone", pid=thread.pid, thread=thread_id)
 
   await thread_mgr.update_status(session_id, thread_id, ThreadStatus.CANCELLED)

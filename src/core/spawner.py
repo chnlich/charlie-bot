@@ -97,7 +97,7 @@ def _build_review_prompt(
       f"6. If you find issues, fix them and commit with descriptive messages.\n"
       f"7. Rebase onto base: `git rebase {base_branch}` — resolve any conflicts.\n"
       f"8. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"9. Clean up: `git worktree remove {wt_path}`\n"
+      f"9. Clean up: `cd {repo_path} && git worktree remove {wt_path}`\n"
       f"10. Push to remote: `git push`")
 
 

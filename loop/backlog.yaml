@@ -474,7 +474,7 @@
     ~25 lines of triplication and ensures consistent error messages and prompt formatting
     across current and future CLI backends.
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-11T12:00:00Z'
   priority: low
 - id: 039

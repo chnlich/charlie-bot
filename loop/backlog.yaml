@@ -694,7 +694,7 @@
     asyncio.TimeoutError explicitly, call proc.kill(), then proceed with the existing
     error-handling logic. ~5 lines per file, matching the established slash_commands.py
     pattern.
-  status: approved
+  status: done
   created: '2026-03-15T12:00:00Z'
   priority: high
 - id: '052'

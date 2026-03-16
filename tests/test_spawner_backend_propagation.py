@@ -52,6 +52,9 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   captures: dict[str, Any] = {}
 
   class FakeSessionManager:
+    async def get_session(self, session_id: str) -> Any:
+      return SessionMetadata(id=session_id, name="Test Session")
+
     async def save_chat_event(self, session_id: str, event: dict[str, Any]) -> None:
       captures["chat_event"] = event
 
@@ -59,7 +62,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
 
-    async def _save_metadata(self, meta: ThreadMetadata) -> None:
+    async def save_metadata(self, meta: ThreadMetadata) -> None:
       captures["saved_thread"] = meta
 
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
@@ -99,6 +102,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
         backend_option: Optional[BackendOption] = None,
         extra_env: Optional[dict[str, str]] = None,
         on_spawned: Optional[callable] = None,
+        instructions_content: Optional[str] = None,
     ) -> None:
       captures["worker_dir"] = working_dir
       captures["worker_backend"] = backend_option
@@ -179,7 +183,7 @@ async def test_spawn_review_worker_propagates_backend_model(
           review_of=review_of,
       )
 
-    async def _save_metadata(self, meta: ThreadMetadata) -> None:
+    async def save_metadata(self, meta: ThreadMetadata) -> None:
       saved_review_thread["meta"] = meta
 
   async def fake_git_current_branch(repo_path: Path) -> str:
@@ -199,17 +203,18 @@ async def test_spawn_review_worker_propagates_backend_model(
   ) -> None:
     return None
 
-  def fake_create_task(coro: Any, name: Optional[str] = None) -> Any:
+  def fake_create_logged_task(coro: Any, *, name: Optional[str] = None) -> Any:
     if coro.cr_frame is not None:
       captured.update(coro.cr_frame.f_locals)
     coro.close()
     class DummyTask:
-      pass
+      def add_done_callback(self, cb: Any) -> None:
+        pass
     return DummyTask()
 
   monkeypatch.setattr(spawner, "_git_current_branch", fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(spawner.asyncio, "create_task", fake_create_task)
+  monkeypatch.setattr(spawner, "create_logged_task", fake_create_logged_task)
 
   original = ThreadMetadata(
       id="origin-thread-id",

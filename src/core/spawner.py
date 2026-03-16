@@ -19,7 +19,8 @@ from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_scheduled_tasks
+from src.core.notifications import send_telegram
 
 log = structlog.get_logger()
 
@@ -821,6 +822,18 @@ async def _notify_completion(
   try:
     events_summary, full_summary = await _broadcast_completion(
         session_id, description, thread, exit_code, thread_mgr, session_mgr, quota_exhausted, error)
+
+    # Send Telegram notification if the session's scheduled task has notify='telegram'.
+    try:
+      session_meta = await session_mgr.get_session(session_id)
+      if session_meta and session_meta.scheduled_task:
+        for task in get_scheduled_tasks():
+          if task.name == session_meta.scheduled_task and task.notify == 'telegram':
+            await send_telegram(events_summary, cfg)
+            break
+    except Exception as tg_err:
+      log.warning("telegram_notify_failed", session=session_id, error=str(tg_err))
+
     await _maybe_spawn_reviewer(
         session_id, thread, exit_code, events_summary, full_summary, thread_mgr, session_mgr, cfg)
   except Exception as e:

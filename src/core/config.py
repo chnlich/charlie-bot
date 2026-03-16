@@ -43,12 +43,15 @@ class ScheduledTaskConfig(BaseModel):
   enabled: bool = True
   project: Optional[str] = None
   allow_failure: bool = False
+  notify: Optional[str] = None  # 'telegram' or None
 
   @model_validator(mode='after')
   def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
     sources = sum([bool(self.prompt), bool(self.handler), bool(self.loop)])
     if sources != 1:
       raise ValueError("task must have exactly one of 'prompt', 'handler', or 'loop'")
+    if self.notify and self.notify != 'telegram':
+      raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
     return self
 
 
@@ -113,6 +116,10 @@ class CharlieBotConfig(BaseModel):
   # the worker's backend and resolves successfully is used for the reviewer.
   # Empty list (default) preserves current behavior: reviewer uses same backend as worker.
   model_preference: list[str] = []
+
+  # Telegram notifications
+  telegram_bot_token: Optional[str] = None
+  telegram_chat_id: Optional[str] = None
 
   @model_validator(mode="before")
   @classmethod

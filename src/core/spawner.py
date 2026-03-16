@@ -95,10 +95,13 @@ def _build_review_prompt(
       f"4. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
       f"5. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
       f"6. If you find issues, fix them and commit with descriptive messages.\n"
-      f"7. Rebase onto base: `git rebase {base_branch}` — resolve any conflicts.\n"
+      f"\n> **Note:** Steps 8-10 use `cd {repo_path}` because the Bash tool does not persist CWD across calls. "
+      f"If your shell CWD becomes invalid (e.g. after worktree removal), prefix commands with `cd {repo_path} &&`.\n\n"
+      f"7. Stash untracked/modified files, rebase, then pop: "
+      f"`git stash --include-untracked && git rebase {base_branch} && git stash pop`\n"
       f"8. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
       f"9. Clean up: `cd {repo_path} && git worktree remove {wt_path}`\n"
-      f"10. Push to remote: `git push`")
+      f"10. Push to remote: `cd {repo_path} && git push`")
 
 
 async def _git_current_branch(repo_path: Path) -> str:

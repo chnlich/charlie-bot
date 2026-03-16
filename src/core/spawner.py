@@ -95,13 +95,10 @@ def _build_review_prompt(
       f"4. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
       f"5. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
       f"6. If you find issues, fix them and commit with descriptive messages.\n"
-      f"\n> **Note:** Steps 8-10 use `cd {repo_path}` because the Bash tool does not persist CWD across calls. "
-      f"If your shell CWD becomes invalid (e.g. after worktree removal), prefix commands with `cd {repo_path} &&`.\n\n"
       f"7. Stash untracked/modified files then rebase: "
       f"`git stash --include-untracked && git rebase {base_branch}`\n"
       f"8. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"9. Clean up: `cd {repo_path} && git worktree remove {wt_path}`\n"
-      f"10. Push to remote: `cd {repo_path} && git push`")
+      f"9. Push to remote: `cd {repo_path} && git push`")
 
 
 async def _git_current_branch(repo_path: Path) -> str:
@@ -397,6 +394,32 @@ async def _finalize_worker(
   else:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
+
+  # Clean up the thread's worktree now that the worker/reviewer process has exited.
+  if getattr(thread, 'worktree_path', None) and getattr(thread, 'repo_path', None):
+    wt = Path(thread.worktree_path)
+    if wt.exists():
+      try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "worktree", "remove", "--force", str(wt),
+            cwd=thread.repo_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+          log.warning("worktree_remove_failed", thread_id=thread.id, stderr=stderr.decode().strip())
+        else:
+          log.info("worktree_removed", thread_id=thread.id, path=str(wt))
+        # Prune stale worktree refs
+        await asyncio.create_subprocess_exec(
+            "git", "worktree", "prune",
+            cwd=thread.repo_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+      except Exception as wt_err:
+        log.warning("worktree_cleanup_error", thread_id=thread.id, error=str(wt_err))
 
   await _notify_completion(
       session_id,

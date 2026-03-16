@@ -141,6 +141,10 @@ async def compile_latex() -> dict:
       log.info('latex_compile_done')
     return {'ok': ok, 'log': output}
   except asyncio.TimeoutError:
+    try:
+      proc.kill()
+    except Exception as kill_err:
+      log.debug('latex_compile_kill_failed', error=str(kill_err))
     log.warning('latex_compile_timeout')
     return {'ok': False, 'log': 'Compilation timed out after 60s'}
   except Exception as e:

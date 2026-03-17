@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager, require_session
+from src.api.message_utils import extract_text_from_message
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SendMessageRequest, SessionMetadata
@@ -200,9 +201,7 @@ async def _auto_name(
   assistant_text = ""
   for ev in events:
     if ev.get("type") == "assistant":
-      for block in (ev.get("message") or {}).get("content") or []:
-        if isinstance(block, dict) and block.get("type") == "text":
-          assistant_text += block.get("text", "")
+      assistant_text += extract_text_from_message(ev.get("message"))
 
   if not assistant_text:
     return

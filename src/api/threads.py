@@ -9,6 +9,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_thread_manager
+from src.api.message_utils import extract_text_from_message
 from src.core.models import (
     ThreadMetadata,
     ThreadStatus,
@@ -68,10 +69,11 @@ async def get_thread_events(
     event_timestamp = data.get("timestamp") or datetime.now(timezone.utc)
     event_type = data.get('type', '')
     if event_type == 'assistant' and isinstance(data.get('message'), dict):
+      text = extract_text_from_message(data['message'])
+      if text:
+        events.append(WorkerEvent(type='assistant', content=text, timestamp=event_timestamp))
       for block in data['message'].get('content', []):
-        if block.get('type') == 'text':
-          events.append(WorkerEvent(type='assistant', content=block['text'], timestamp=event_timestamp))
-        elif block.get('type') == 'tool_use':
+        if isinstance(block, dict) and block.get('type') == 'tool_use':
           tool_id_to_name[block['id']] = block['name']
           events.append(
               WorkerEvent(

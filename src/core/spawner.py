@@ -11,6 +11,7 @@ from typing import Optional
 import structlog
 
 from src.agents.master_cc import run_message
+from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
@@ -906,16 +907,15 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     return str(ev.get("result", ""))[:500]
 
   if ev_type == "assistant":
-    msg = ev.get("message", {})
-    blocks = msg.get("content", []) if isinstance(msg, dict) else []
-    texts = []
-    for block in blocks if isinstance(blocks, list) else []:
-      if isinstance(block, dict):
-        if block.get("type") == "text":
-          texts.append(block.get("text", ""))
-        elif block.get("type") == "tool_use":
-          texts.append(f"[tool_use: {block.get('name', '?')}]")
-    return " ".join(texts)[:300] if texts else ""
+    msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+    text = extract_text_from_message(msg)
+    blocks = msg.get("content") or []
+    tool_parts = [
+        f"[tool_use: {b.get('name', '?')}]" for b in (blocks if isinstance(blocks, list) else [])
+        if isinstance(b, dict) and b.get("type") == "tool_use"
+    ]
+    parts = ([text] if text else []) + tool_parts
+    return " ".join(parts)[:300] if parts else ""
 
   if ev_type == "rate_limit_event":
     rli = ev.get("rate_limit_info", {})
@@ -926,8 +926,8 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
   if ev_type in ("thinking", "error", "complete", "tool_result", "tool_use", "file_write"):
     content = ev.get("content", ev.get("message", ""))
     if isinstance(content, list):
-      texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
-      return " ".join(texts)[:200] if texts else ""
+      text = extract_text_from_message({"content": content})
+      return text[:200] if text else ""
     return str(content)[:200]
 
   return ""

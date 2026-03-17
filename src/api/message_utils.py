@@ -14,6 +14,14 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+def extract_text_from_message(msg: dict | None) -> str:
+  """Join text from content blocks of a CC assistant message."""
+  blocks = (msg or {}).get("content") or []
+  if not isinstance(blocks, list):
+    return ""
+  return "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+
+
 @dataclass
 class SessionViewData:
   """Data produced by the load-events → messages → usage → mark-read pipeline."""
@@ -162,7 +170,7 @@ def events_to_messages(events: list[dict]) -> list[dict]:
                 })
             assistant_buf = ''
             last_assistant_ts = None
-      text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+      text = extract_text_from_message(msg)
       if text and assistant_buf:
         _flush()
         last_assistant_ts = ev.get("timestamp")

@@ -15,6 +15,7 @@ from src.core.models import (
     SessionMetadata,
     SessionStatus,
 )
+from src.api.message_utils import extract_text_from_message
 from src.core.ndjson import append_ndjson, parse_ndjson_file
 from src.core.streaming import streaming_manager
 
@@ -156,9 +157,7 @@ class SessionManager:
       if t == 'user' and 'content' in ev:
         summary_parts.append(f'User: {ev["content"]}')
       elif t == 'assistant':
-        msg = ev.get('message') or {}
-        blocks = msg.get('content') or []
-        text = ''.join(b.get('text', '') for b in blocks if isinstance(b, dict) and b.get('type') == 'text')
+        text = extract_text_from_message(ev.get('message'))
         if text:
           summary_parts.append(f'Assistant: {text}')
     summary = '\n\n'.join(summary_parts)

@@ -1,24 +1,12 @@
 """GeminiCliBackend — AgentBackend wrapping the `gemini` CLI in stream-json mode."""
 
-import shutil
 from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends.base import AgentBackend, resolve_binary
 
 log = structlog.get_logger()
-
-
-def _resolve_gemini_binary() -> str:
-  """Resolve the gemini binary path, falling back to ~/.local/bin/gemini."""
-  path = shutil.which("gemini")
-  if path:
-    return path
-  fallback = Path.home() / ".local" / "bin" / "gemini"
-  if fallback.exists():
-    return str(fallback)
-  raise FileNotFoundError("gemini binary not found on PATH or at ~/.local/bin/gemini")
 
 
 class GeminiCliBackend(AgentBackend):
@@ -35,15 +23,14 @@ class GeminiCliBackend(AgentBackend):
         resume_session_id=resume_session_id,
         extra_flags=extra_flags,
         **kwargs)
-    self._gemini_bin = _resolve_gemini_binary()
+    self._gemini_bin = resolve_binary("gemini", str(Path.home() / ".local" / "bin"))
     self._text_buffer = ""
 
   def _build_command(self, prompt: str) -> list[str]:
-    effective_prompt = prompt
-    if self._instructions_content:
-      effective_prompt = (f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
-
-    cmd = [self._gemini_bin, "-m", self._model, "-p", effective_prompt, "-o", "stream-json", "-y", "--sandbox=false"]
+    cmd = [
+        self._gemini_bin, "-m", self._model, "-p",
+        self._effective_prompt(prompt), "-o", "stream-json", "-y", "--sandbox=false"
+    ]
     if self._resume_session_id:
       cmd.extend(["--resume", self._resume_session_id])
     cmd.extend(self._extra_flags)

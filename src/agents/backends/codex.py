@@ -1,28 +1,17 @@
 """CodexBackend — AgentBackend wrapping the `codex exec --json` CLI."""
 
 import json
-import shutil
 from pathlib import Path
+
 import structlog
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends.base import AgentBackend, resolve_binary
 
 log = structlog.get_logger()
 
 # model_reasoning_effort="xhigh" is the only working value.
 # Other values are silently ignored by the Codex CLI. Do not make configurable.
 _MODEL_REASONING_EFFORT_CONFIG = 'model_reasoning_effort="xhigh"'
-
-
-def _resolve_codex_binary() -> str:
-  """Resolve the codex binary path, falling back to ~/.local/bin/codex."""
-  path = shutil.which("codex")
-  if path:
-    return path
-  fallback = Path.home() / ".local" / "bin" / "codex"
-  if fallback.exists():
-    return str(fallback)
-  raise FileNotFoundError("codex binary not found on PATH or at ~/.local/bin/codex")
 
 
 class CodexBackend(AgentBackend):
@@ -39,15 +28,12 @@ class CodexBackend(AgentBackend):
         resume_session_id=resume_session_id,
         extra_flags=extra_flags,
         **kwargs)
-    self._codex_bin = _resolve_codex_binary()
+    self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
 
   def _build_command(self, prompt: str) -> list[str]:
-    # Prepend instructions to prompt if provided
-    effective_prompt = prompt
-    if self._instructions_content:
-      effective_prompt = (f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
+    effective_prompt = self._effective_prompt(prompt)
 
     if self._resume_session_id:
       cmd = [

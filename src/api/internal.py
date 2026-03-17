@@ -7,7 +7,7 @@ from src.api.deps import get_session_manager, get_thread_manager
 from src.core.config import get_config
 from src.core.models import DelegateRequest
 from src.core.sessions import SessionManager
-from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
+from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
@@ -58,7 +58,7 @@ async def delegate_task(
       "backend": resolved_backend or "",
       "model": resolved_model or "",
   }
-  await broadcast_and_persist(req.session_id, task_event, session_mgr)
+  await session_mgr.persist_and_broadcast(req.session_id, task_event)
 
   log.info("task_delegated_internal", session=req.session_id, thread_id=thread.id)
 

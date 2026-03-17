@@ -15,7 +15,7 @@ from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled
 from src.core.improvement_loop import determine_action
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
-from src.core.spawner import broadcast_and_persist, resolve_session_subagent_backend_model, spawn_worker
+from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
@@ -201,14 +201,20 @@ class Scheduler:
       session.last_run_status = "failed"
     session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
-    await broadcast_and_persist(session.id, event, session_mgr)
+    await session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 
   async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
     return await self._spawn_scheduled_worker(
-        session, task_cfg, task_cfg.prompt, task_cfg.prompt, "scheduled_task_fired", cfg, session_mgr,
+        session,
+        task_cfg,
+        task_cfg.prompt,
+        task_cfg.prompt,
+        "scheduled_task_fired",
+        cfg,
+        session_mgr,
         require_review=False)
 
   async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig) -> dict:
@@ -283,7 +289,7 @@ class Scheduler:
         "backend": resolved_backend or "",
         "model": resolved_model or "",
     }
-    await broadcast_and_persist(session.id, event, session_mgr)
+    await session_mgr.persist_and_broadcast(session.id, event)
     log.info(log_event, task=task_cfg.name, session=session.id, thread=thread.id, **log_extra)
 
     return {"session_id": session.id, "thread_id": thread.id}

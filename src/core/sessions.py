@@ -292,6 +292,11 @@ class SessionManager:
     if session_id in self._events_cache:
       self._events_cache[session_id].append(event)
 
+  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
+    """Persist event (injecting timestamp) then broadcast to the session WebSocket channel."""
+    await self.save_chat_event(session_id, event)
+    await streaming_manager.broadcast(f"session:{session_id}", event)
+
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up. Uses in-memory cache after first read."""
     if session_id in self._events_cache:

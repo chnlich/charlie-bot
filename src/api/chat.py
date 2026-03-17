@@ -15,7 +15,6 @@ from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SendMessageRequest, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.slash_commands import dispatch_slash_command
-from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
@@ -75,15 +74,13 @@ async def send_message(
     dispatch = await dispatch_slash_command(name, args, session_dir=str(cfg.sessions_dir / session_id))
 
     if dispatch.kind != 'not_found':
-      channel = f"session:{session_id}"
       user_event = {
           "type": "user",
           "content": content,
           "timestamp": datetime.now(timezone.utc).isoformat(),
           "is_voice": False,
       }
-      await session_mgr.save_chat_event(session_id, user_event)
-      await streaming_manager.broadcast(channel, user_event)
+      await session_mgr.persist_and_broadcast(session_id, user_event)
 
       if dispatch.kind == 'prompt':
         create_logged_task(
@@ -99,11 +96,9 @@ async def send_message(
       elif dispatch.kind == 'error':
         error_text = dispatch.error or f'Failed to dispatch /{name}'
         asst_event = {"type": "assistant", "message": {"content": [{"type": "text", "text": error_text}]}}
-        await session_mgr.save_chat_event(session_id, asst_event)
-        await streaming_manager.broadcast(channel, asst_event)
+        await session_mgr.persist_and_broadcast(session_id, asst_event)
         done_event = {"type": "master_done", "exit_code": 1, "still_thinking": False}
-        await session_mgr.save_chat_event(session_id, done_event)
-        await streaming_manager.broadcast(channel, done_event)
+        await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
       elif dispatch.kind == 'shell_result':
@@ -112,11 +107,9 @@ async def send_message(
             result['stdout'] or result['stderr'] or '(no output)')
         md_out = '```\n' + out + '\n```'
         asst_event = {"type": "assistant", "message": {"content": [{"type": "text", "text": md_out}]}}
-        await session_mgr.save_chat_event(session_id, asst_event)
-        await streaming_manager.broadcast(channel, asst_event)
+        await session_mgr.persist_and_broadcast(session_id, asst_event)
         done_event = {"type": "master_done", "exit_code": 0, "still_thinking": False}
-        await session_mgr.save_chat_event(session_id, done_event)
-        await streaming_manager.broadcast(channel, done_event)
+        await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
     # Unknown /xxx — fall through to normal run_and_finalize (e.g. /compact)
@@ -159,7 +152,7 @@ async def run_and_finalize(
         cfg,
         meta,
         content,
-        session_mgr.save_chat_event,
+        session_mgr.persist_and_broadcast,
         session_mgr.save_metadata,
         mark_unread=session_mgr.mark_unread,
         skip_user_event=skip_user_event,
@@ -183,11 +176,8 @@ async def run_and_finalize(
     # last-resort guard so the UI never gets stuck in "Thinking...".
     error_event = {"type": "assistant_error", "content": f"Agent error: {e}"}
     done_event = {"type": "master_done", "exit_code": 1, "still_thinking": False}
-    channel = f"session:{meta.id}"
-    await session_mgr.save_chat_event(meta.id, error_event)
-    await streaming_manager.broadcast(channel, error_event)
-    await session_mgr.save_chat_event(meta.id, done_event)
-    await streaming_manager.broadcast(channel, done_event)
+    await session_mgr.persist_and_broadcast(meta.id, error_event)
+    await session_mgr.persist_and_broadcast(meta.id, done_event)
 
 
 async def _auto_name(

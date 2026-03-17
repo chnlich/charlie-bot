@@ -33,6 +33,48 @@ def resolve_binary(name: str, fallback_dir: str) -> str:
   raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
 
 
+def make_text_event(text: str) -> dict:
+  """Build a CC-compatible assistant-text event."""
+  return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def make_error_event(msg: str) -> dict:
+  """Build a CC-compatible error event."""
+  return {"type": "error", "message": msg, "content": msg}
+
+
+def make_result_event(
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read: int = 0,
+    cache_creation: int = 0,
+    cost: float = 0,
+) -> dict:
+  """Build a CC-compatible result/usage event."""
+  return {
+      "type": "result",
+      "result": "",
+      "usage":
+          {
+              "input_tokens": input_tokens,
+              "output_tokens": output_tokens,
+              "cache_read_input_tokens": cache_read,
+              "cache_creation_input_tokens": cache_creation,
+          },
+      "total_cost_usd": cost,
+  }
+
+
+def make_tool_use_event(name: str, input_data: dict) -> dict:
+  """Build a CC-compatible tool_use event (flat format)."""
+  return {"type": "tool_use", "name": name, "input": input_data}
+
+
+def make_tool_result_event(tool_name: str, content: str) -> dict:
+  """Build a CC-compatible tool_result event keyed by tool_name."""
+  return {"type": "tool_result", "tool_name": tool_name, "content": content}
+
+
 class AgentBackend(ABC):
   """Abstract interface for running a Claude agent subprocess.
 

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import AgentBackend, resolve_binary
+from src.agents.backends.base import (
+    AgentBackend, make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
+    resolve_binary)
 
 log = structlog.get_logger()
 
@@ -49,15 +51,7 @@ class GeminiCliBackend(AgentBackend):
 
     def flush_buffer():
       if self._text_buffer:
-        msg = [{
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": self._text_buffer
-                }]
-            },
-        }]
+        msg = [make_text_event(self._text_buffer)]
         self._text_buffer = ""
         return msg
       return []
@@ -80,11 +74,7 @@ class GeminiCliBackend(AgentBackend):
     # --- tool_use ---
     if ev_type == "tool_use":
       events = flush_buffer()
-      events.append({
-          "type": "tool_use",
-          "name": ev.get("tool_name", ""),
-          "input": ev.get("parameters", {}),
-      })
+      events.append(make_tool_use_event(ev.get("tool_name", ""), ev.get("parameters", {})))
       return events
 
     # --- tool_result ---
@@ -92,22 +82,18 @@ class GeminiCliBackend(AgentBackend):
       events = flush_buffer()
       status = ev.get("status", "")
       if status == "success":
-        events.append({
-            "type": "tool_result",
-            "tool_name": ev.get("tool_id", ""),
-            "content": ev.get("output", ""),
-        })
+        events.append(make_tool_result_event(ev.get("tool_id", ""), ev.get("output", "")))
       elif status == "error":
         error = ev.get("error", {})
         msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        events.append({"type": "tool_result", "tool_name": ev.get("tool_id", ""), "content": msg})
+        events.append(make_tool_result_event(ev.get("tool_id", ""), msg))
       return events
 
     # --- error ---
     if ev_type == "error":
       events = flush_buffer()
       msg = ev.get("message", "")
-      events.append({"type": "error", "message": msg, "content": msg})
+      events.append(make_error_event(msg))
       return events
 
     # --- result ---
@@ -115,18 +101,11 @@ class GeminiCliBackend(AgentBackend):
       events = flush_buffer()
       stats = ev.get("stats", {})
       events.append(
-          {
-              "type": "result",
-              "result": "",
-              "usage":
-                  {
-                      "input_tokens": stats.get("input_tokens", 0),
-                      "output_tokens": stats.get("output_tokens", 0),
-                      "cache_read_input_tokens": stats.get("cached", 0),
-                      "cache_creation_input_tokens": 0,
-                  },
-              "total_cost_usd": 0,
-          })
+          make_result_event(
+              input_tokens=stats.get("input_tokens", 0),
+              output_tokens=stats.get("output_tokens", 0),
+              cache_read=stats.get("cached", 0),
+          ))
       return events
 
     log.debug("gemini_event_unhandled", type=ev_type)

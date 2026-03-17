@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import AgentBackend, resolve_binary
+from src.agents.backends.base import AgentBackend, make_error_event, make_result_event, make_text_event, resolve_binary
 
 log = structlog.get_logger()
 
@@ -99,15 +99,7 @@ class OpenCodeBackend(AgentBackend):
       part = ev.get("part", {})
       text = part.get("text", "")
       if text:
-        results.append({
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": text
-                }]
-            },
-        })
+        results.append(make_text_event(text))
       return results
 
     if ev_type == "tool_use":
@@ -142,7 +134,7 @@ class OpenCodeBackend(AgentBackend):
 
     if ev_type == "error":
       msg = ev.get("part", {}).get("error", str(ev))
-      results.append({"type": "error", "message": msg, "content": msg})
+      results.append(make_error_event(msg))
       return results
 
     if ev_type == "step_finish":
@@ -153,18 +145,13 @@ class OpenCodeBackend(AgentBackend):
         tokens = part.get("tokens", {})
         cache = tokens.get("cache", {})
         results.append(
-            {
-                "type": "result",
-                "result": "",
-                "usage":
-                    {
-                        "input_tokens": tokens.get("input", 0),
-                        "output_tokens": tokens.get("output", 0),
-                        "cache_read_input_tokens": cache.get("read", 0),
-                        "cache_creation_input_tokens": cache.get("write", 0),
-                    },
-                "total_cost_usd": cost,
-            })
+            make_result_event(
+                input_tokens=tokens.get("input", 0),
+                output_tokens=tokens.get("output", 0),
+                cache_read=cache.get("read", 0),
+                cache_creation=cache.get("write", 0),
+                cost=cost,
+            ))
       return results
 
     log.debug("opencode_event_unhandled", type=ev_type)

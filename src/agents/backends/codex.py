@@ -5,7 +5,9 @@ from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import AgentBackend, resolve_binary
+from src.agents.backends.base import (
+    AgentBackend, make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
+    resolve_binary)
 
 log = structlog.get_logger()
 
@@ -91,31 +93,24 @@ class CodexBackend(AgentBackend):
     if ev_type == "turn.completed":
       usage = ev.get("usage", {})
       return [
-          {
-              "type": "result",
-              "result": "",
-              "usage":
-                  {
-                      "input_tokens": usage.get("input_tokens", 0),
-                      "cache_read_input_tokens": usage.get("cached_input_tokens", 0),
-                      "cache_creation_input_tokens": 0,
-                      "output_tokens": usage.get("output_tokens", 0),
-                  },
-              "total_cost_usd": 0,
-          }
+          make_result_event(
+              input_tokens=usage.get("input_tokens", 0),
+              output_tokens=usage.get("output_tokens", 0),
+              cache_read=usage.get("cached_input_tokens", 0),
+          )
       ]
 
     # --- turn.failed ---
     if ev_type == "turn.failed":
       error = ev.get("error", {})
       msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-      return [{"type": "error", "message": msg, "content": msg}]
+      return [make_error_event(msg)]
 
     # --- top-level error ---
     if ev_type == "error":
       error = ev.get("error", {})
       msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-      return [{"type": "error", "message": msg, "content": msg}]
+      return [make_error_event(msg)]
 
     # --- item.started / item.updated / item.completed ---
     if ev_type in ("item.started", "item.updated", "item.completed"):
@@ -162,15 +157,7 @@ class CodexBackend(AgentBackend):
     self._last_agent_text[item_id] = full_text
     if not delta:
       return []
-    return [{
-        "type": "assistant",
-        "message": {
-            "content": [{
-                "type": "text",
-                "text": delta
-            }]
-        },
-    }]
+    return [make_text_event(delta)]
 
   def _handle_reasoning(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})
@@ -193,10 +180,10 @@ class CodexBackend(AgentBackend):
       return []
     if ev.get("type") == "item.started":
       command = item.get("command", "")
-      return [{"type": "tool_use", "name": "Bash", "input": {"command": command}}]
+      return [make_tool_use_event("Bash", {"command": command})]
     if ev.get("type") == "item.completed":
       output = item.get("output", "")
-      return [{"type": "tool_result", "tool_name": "Bash", "content": output}]
+      return [make_tool_result_event("Bash", output)]
     return []
 
   def _handle_file_change(self, ev: dict) -> list[dict]:
@@ -223,10 +210,10 @@ class CodexBackend(AgentBackend):
         except json.JSONDecodeError:
           log.warning("codex_malformed_tool_args", raw_arguments=arguments)
           arguments = {"raw": arguments}
-      return [{"type": "tool_use", "name": tool_name, "input": arguments}]
+      return [make_tool_use_event(tool_name, arguments)]
     if ev.get("type") == "item.completed":
       output = item.get("result", item.get("error", ""))
-      return [{"type": "tool_result", "tool_name": tool_name, "content": str(output)}]
+      return [make_tool_result_event(tool_name, str(output))]
     return []
 
   def _handle_web_search(self, ev: dict) -> list[dict]:
@@ -235,10 +222,10 @@ class CodexBackend(AgentBackend):
       return []
     if ev.get("type") == "item.started":
       query = item.get("query", "")
-      return [{"type": "tool_use", "name": "WebSearch", "input": {"query": query}}]
+      return [make_tool_use_event("WebSearch", {"query": query})]
     if ev.get("type") == "item.completed":
       output = item.get("output", "")
-      return [{"type": "tool_result", "tool_name": "WebSearch", "content": str(output)}]
+      return [make_tool_result_event("WebSearch", str(output))]
     return []
 
   def _handle_todo_list(self, ev: dict) -> list[dict]:
@@ -254,19 +241,11 @@ class CodexBackend(AgentBackend):
       lines.append(f"- {marker} {label}")
     if not lines:
       return []
-    return [{
-        "type": "assistant",
-        "message": {
-            "content": [{
-                "type": "text",
-                "text": "\n".join(lines)
-            }]
-        },
-    }]
+    return [make_text_event("\n".join(lines))]
 
   def _handle_error(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})
     if item.get("type") != "error":
       return []
     msg = item.get("message", str(item))
-    return [{"type": "error", "message": msg, "content": msg}]
+    return [make_error_event(msg)]

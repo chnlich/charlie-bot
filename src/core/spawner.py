@@ -17,7 +17,6 @@ from src.agents.worker import QuotaExhaustedException, Worker
 from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
-from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
@@ -239,12 +238,6 @@ def _require_thread_backend_model(thread: ThreadMetadata) -> tuple[str, str]:
   return thread.backend, thread.model
 
 
-async def broadcast_and_persist(session_id: str, event: dict, session_mgr: SessionManager) -> None:
-  """Broadcast an event to the session WebSocket channel and persist it to NDJSON."""
-  await streaming_manager.broadcast(f"session:{session_id}", event)
-  await session_mgr.save_chat_event(session_id, event)
-
-
 async def _create_worktree_and_process(
     session_id: str,
     thread: ThreadMetadata,
@@ -358,7 +351,7 @@ async def _stream_worker_events(
       backend=thread.backend,
       model=thread.model,
   )
-  await broadcast_and_persist(session_id, started_event, session_mgr)
+  await session_mgr.persist_and_broadcast(session_id, started_event)
 
   try:
     exit_code = await worker.run()
@@ -402,7 +395,11 @@ async def _finalize_worker(
     if wt.exists():
       try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "remove", "--force", str(wt),
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            str(wt),
             cwd=thread.repo_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -414,7 +411,9 @@ async def _finalize_worker(
           log.info("worktree_removed", thread_id=thread.id, path=str(wt))
         # Prune stale worktree refs
         await asyncio.create_subprocess_exec(
-            "git", "worktree", "prune",
+            "git",
+            "worktree",
+            "prune",
             cwd=thread.repo_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -515,7 +514,7 @@ async def _trigger_master(
           cfg,
           session_meta,
           summary,
-          session_mgr.save_chat_event,
+          session_mgr.persist_and_broadcast,
           session_mgr.save_metadata,
           mark_unread=session_mgr.mark_unread,
           skip_user_event=True,
@@ -544,7 +543,7 @@ async def _trigger_master(
           cfg,
           retry_session_meta,
           summary,
-          session_mgr.save_chat_event,
+          session_mgr.persist_and_broadcast,
           session_mgr.save_metadata,
           mark_unread=session_mgr.mark_unread,
           skip_user_event=True,
@@ -765,7 +764,7 @@ async def _broadcast_completion(
       model=thread.model,
   )
   await session_mgr.mark_unread(session_id)
-  await broadcast_and_persist(session_id, worker_event, session_mgr)
+  await session_mgr.persist_and_broadcast(session_id, worker_event)
   log.info("worker_summary_sent", session=session_id, thread=thread.id)
   return events_summary, full_summary
 
@@ -880,7 +879,7 @@ async def _notify_completion(
           model=thread.model,
       )
       await session_mgr.mark_unread(session_id)
-      await broadcast_and_persist(session_id, fallback_event, session_mgr)
+      await session_mgr.persist_and_broadcast(session_id, fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
 

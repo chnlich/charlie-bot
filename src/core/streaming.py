@@ -61,9 +61,7 @@ streaming_manager = StreamingManager()
 
 async def handle_compact_boundary(
     event: dict[str, Any],
-    channel: str,
-    broadcast_fn: Callable[[str, dict[str, Any]], Awaitable[None]],
-    persist_fn: Callable[[dict[str, Any]], Awaitable[None]],
+    persist_and_broadcast: Callable[[dict[str, Any]], Awaitable[None]],
     log_context: dict[str, Any],
 ) -> None:
   """Detect compact_boundary system events, log, persist, and broadcast a context_compacted event."""
@@ -78,5 +76,4 @@ async def handle_compact_boundary(
       "trigger": trigger,
       "pre_tokens": pre_tokens,
   }
-  await persist_fn(compact_event)
-  await broadcast_fn(channel, compact_event)
+  await persist_and_broadcast(compact_event)

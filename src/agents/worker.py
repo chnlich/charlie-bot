@@ -156,14 +156,13 @@ class Worker:
     # Broadcast to WebSocket subscribers
     await streaming_manager.broadcast(self._thread.id, event_data)
 
-    async def _persist(evt: dict) -> None:
+    async def _persist_and_broadcast(evt: dict) -> None:
       await log_file.write(json.dumps(evt) + "\n")
       await log_file.flush()
+      await streaming_manager.broadcast(self._thread.id, evt)
 
     await handle_compact_boundary(
         event_data,
-        self._thread.id,
-        broadcast_fn=streaming_manager.broadcast,
-        persist_fn=_persist,
+        persist_and_broadcast=_persist_and_broadcast,
         log_context={"thread": self._thread.id},
     )

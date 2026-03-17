@@ -62,9 +62,8 @@ def _build_prompt(user_content: str, is_voice: bool) -> str:
 async def _handle_event(
     event: dict,
     session_id: str,
-    channel: str,
     cc_session_id: Optional[str],
-    save_chat_event,
+    persist_and_broadcast,
 ) -> Optional[str]:
   """Process a single backend event: persist, broadcast, and handle compact_boundary.
 
@@ -76,14 +75,11 @@ async def _handle_event(
       cc_session_id = sid
 
   # Persist first (injects timestamp), then broadcast with timestamp included
-  await save_chat_event(session_id, event)
-  await streaming_manager.broadcast(channel, event)
+  await persist_and_broadcast(session_id, event)
 
   await handle_compact_boundary(
       event,
-      channel,
-      broadcast_fn=streaming_manager.broadcast,
-      persist_fn=lambda evt: save_chat_event(session_id, evt),
+      persist_and_broadcast=lambda evt: persist_and_broadcast(session_id, evt),
       log_context={"session": session_id},
   )
 
@@ -92,11 +88,10 @@ async def _handle_event(
 
 async def _finalize_session(
     session_meta: SessionMetadata,
-    channel: str,
     exit_code: int,
     error_msg: Optional[str],
     should_check_tex: bool,
-    save_chat_event,
+    persist_and_broadcast,
     save_metadata=None,
     mark_unread=None,
     auto_trigger: bool = False,
@@ -124,8 +119,7 @@ async def _finalize_session(
 
   if error_msg:
     err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
-    await save_chat_event(session_meta.id, err_event)
-    await streaming_manager.broadcast(channel, err_event)
+    await persist_and_broadcast(session_meta.id, err_event)
 
   # Mark session unread so other viewers see the new output
   if mark_unread:
@@ -134,15 +128,13 @@ async def _finalize_session(
   done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
   if thinking_seconds is not None:
     done_event["thinking_seconds"] = thinking_seconds
-  await save_chat_event(session_meta.id, done_event)
-  await streaming_manager.broadcast(channel, done_event)
+  await persist_and_broadcast(session_meta.id, done_event)
 
   if should_check_tex:
     proposal = await asyncio.to_thread(check_tex_changed)
     if proposal:
       tex_event = {'type': 'tex_edit_proposed'}
-      await save_chat_event(session_meta.id, tex_event)
-      await streaming_manager.broadcast(channel, tex_event)
+      await persist_and_broadcast(session_meta.id, tex_event)
       log.info('tex_edit_proposed', session=session_meta.id)
     else:
       clear_snapshot()
@@ -154,7 +146,7 @@ async def run_message(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
     user_content: str,
-    save_chat_event,
+    persist_and_broadcast,
     save_metadata=None,
     mark_unread=None,
     skip_user_event: bool = False,
@@ -169,7 +161,8 @@ async def run_message(
     cfg: App configuration.
     session_meta: The session to run in.
     user_content: The user's message text.
-    save_chat_event: Coroutine to persist each event to chat_events.jsonl.
+    persist_and_broadcast: Coroutine to persist each event (injecting timestamp)
+      then broadcast to the session WebSocket channel.
     save_metadata: Coroutine to persist session metadata updates.
     mark_unread: Coroutine to mark the session unread for other viewers.
     skip_user_event: If True, skip persisting/broadcasting the user event
@@ -178,7 +171,6 @@ async def run_message(
   Returns:
     The CC session ID (for --resume on subsequent messages), or None.
   """
-  channel = f"session:{session_meta.id}"
   session_dir = cfg.sessions_dir / session_meta.id
   session_dir.mkdir(parents=True, exist_ok=True)
   cwd = str(session_dir)
@@ -199,8 +191,7 @@ async def run_message(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "is_voice": is_voice
     }
-    await save_chat_event(session_meta.id, user_event)
-    await streaming_manager.broadcast(channel, user_event)
+    await persist_and_broadcast(session_meta.id, user_event)
     session_meta.updated_at = datetime.now(timezone.utc)
 
   # Track concurrent tasks; only set thinking_since on the first one.
@@ -260,7 +251,7 @@ async def run_message(
     prompt = _build_prompt(user_content, is_voice)
 
     async for event in backend.run(prompt, cwd, env):
-      cc_session_id = await _handle_event(event, session_meta.id, channel, cc_session_id, save_chat_event)
+      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, persist_and_broadcast)
 
     exit_code = backend.exit_code
     if backend.stderr_text:
@@ -275,11 +266,10 @@ async def run_message(
   finally:
     await _finalize_session(
         session_meta,
-        channel,
         exit_code,
         error_msg,
         should_check_tex,
-        save_chat_event,
+        persist_and_broadcast,
         save_metadata=save_metadata,
         mark_unread=mark_unread,
         auto_trigger=auto_trigger,

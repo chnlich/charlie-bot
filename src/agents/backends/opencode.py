@@ -2,25 +2,13 @@
 
 import json
 import os
-import shutil
 from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends.base import AgentBackend, resolve_binary
 
 log = structlog.get_logger()
-
-
-def _resolve_opencode_binary() -> str:
-  """Resolve the opencode binary path, falling back to ~/.opencode/bin/opencode."""
-  path = shutil.which("opencode")
-  if path:
-    return path
-  fallback = Path.home() / ".opencode" / "bin" / "opencode"
-  if fallback.exists():
-    return str(fallback)
-  raise FileNotFoundError("opencode binary not found on PATH or at ~/.opencode/bin/opencode")
 
 
 class OpenCodeBackend(AgentBackend):
@@ -37,7 +25,7 @@ class OpenCodeBackend(AgentBackend):
         resume_session_id=resume_session_id,
         extra_flags=extra_flags,
         **kwargs)
-    self._opencode_bin = _resolve_opencode_binary()
+    self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
     self._session_id_emitted = False
 
   def _prepare_cwd(self, cwd: str) -> None:
@@ -73,17 +61,13 @@ class OpenCodeBackend(AgentBackend):
     log.debug("opencode_config_written", path=config_path)
 
   def _build_command(self, prompt: str) -> list[str]:
-    effective_prompt = prompt
-    if self._instructions_content:
-      effective_prompt = (f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}")
-
     cmd = [self._opencode_bin, "run", "--format", "json"]
     if self._model:
       cmd.extend(["--model", self._model])
     if self._resume_session_id:
       cmd.extend(["--session", self._resume_session_id])
     cmd.extend(self._extra_flags)
-    cmd.append(effective_prompt)
+    cmd.append(self._effective_prompt(prompt))
 
     self._session_id_emitted = False
     return cmd

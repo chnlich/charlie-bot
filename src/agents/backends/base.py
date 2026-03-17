@@ -3,10 +3,12 @@
 import asyncio
 import json
 import os
+import shutil
 import signal
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 import structlog
@@ -14,6 +16,21 @@ import structlog
 log = structlog.get_logger()
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
+
+
+def resolve_binary(name: str, fallback_dir: str) -> str:
+  """Resolve a CLI binary by name, falling back to a directory path.
+
+  Checks PATH via shutil.which first, then tries fallback_dir/name.
+  Raises FileNotFoundError with a consistent message if neither exists.
+  """
+  path = shutil.which(name)
+  if path:
+    return path
+  fallback = Path(fallback_dir) / name
+  if fallback.exists():
+    return str(fallback)
+  raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
 
 
 class AgentBackend(ABC):
@@ -54,6 +71,12 @@ class AgentBackend(ABC):
     self._proc: Optional[asyncio.subprocess.Process] = None
     self.exit_code: int = -1
     self.stderr_text: str = ""
+
+  def _effective_prompt(self, prompt: str) -> str:
+    """Return prompt with instructions prepended, if any are configured."""
+    if self._instructions_content:
+      return f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}"
+    return prompt
 
   @abstractmethod
   def _build_command(self, prompt: str) -> list[str]:
@@ -175,9 +198,9 @@ class AgentBackend(ABC):
         if not _saw_result and evt_type == "result":
           if _pending_tool_calls:
             log.debug(
-              "backend_result_suppressed_pending_tools",
-              pending=len(_pending_tool_calls),
-              tool_ids=list(_pending_tool_calls),
+                "backend_result_suppressed_pending_tools",
+                pending=len(_pending_tool_calls),
+                tool_ids=list(_pending_tool_calls),
             )
           else:
             _saw_result = True

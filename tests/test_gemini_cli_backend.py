@@ -3,8 +3,8 @@ from src.agents.backends.gemini_cli import GeminiCliBackend
 
 def _build_backend(monkeypatch, **kwargs) -> GeminiCliBackend:
   monkeypatch.setattr(
-      "src.agents.backends.gemini_cli._resolve_gemini_binary",
-      lambda: "/usr/bin/gemini",
+      "src.agents.backends.gemini_cli.resolve_binary",
+      lambda name, fallback: "/usr/bin/gemini",
   )
   return GeminiCliBackend(**kwargs)
 
@@ -29,6 +29,7 @@ def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:
       "-o",
       "stream-json",
       "-y",
+      "--sandbox=false",
       "--resume",
       "session-123",
       "--approval-mode",

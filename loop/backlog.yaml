@@ -604,7 +604,7 @@
     (matching the approach from item 040). Expected change is ~5 lines plus adding
     the asyncio import to threads.py.
   category: performance
-  status: approved
+  status: done
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: '047'

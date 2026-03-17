@@ -1,5 +1,6 @@
 """Thread management for CharlieBot Worker tasks."""
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -54,16 +55,11 @@ class ThreadManager:
     return ThreadMetadata.model_validate_json(raw)
 
   async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
-    threads: list[ThreadMetadata] = []
     threads_dir = self._cfg.sessions_dir / session_id / "threads"
-    if not threads_dir.exists():
-      return threads
-    for d in threads_dir.iterdir():
-      if not d.is_dir():
-        continue
-      meta = await self.get_thread(session_id, d.name)
-      if meta:
-        threads.append(meta)
+    dirs = await asyncio.to_thread(
+        lambda: [d for d in threads_dir.iterdir() if d.is_dir()] if threads_dir.exists() else [])
+    all_meta = await asyncio.gather(*(self.get_thread(session_id, d.name) for d in dirs))
+    threads = [m for m in all_meta if m]
     threads.sort(key=lambda t: t.created_at, reverse=True)
     return threads
 

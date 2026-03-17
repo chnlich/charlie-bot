@@ -1,7 +1,6 @@
 """Backlog API routes — read/write project backlog.yaml and history.yaml."""
 
 import asyncio
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from src.core.git import git_add_commit_push
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
@@ -178,28 +178,7 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
 
   git_rel = str(yaml_path.relative_to(repo_path))
   status_label = patch.status or 'updated'
-  create_logged_task(_git_commit_push(repo_path, git_rel, item_id, status_label))
+  create_logged_task(git_add_commit_push(repo_path, [git_rel], f'backlog: update {item_id} status to {status_label}'))
 
   resp = {k: v for k, v in updated.items() if k != '_source'}
   return JSONResponse(content=resp)
-
-
-async def _git_commit_push(repo_path: Path, git_rel: str, item_id: str, status: str):
-  """Fire-and-forget: git add + commit + push the modified backlog file."""
-
-  def _run() -> None:
-    subprocess.run(['git', 'add', git_rel], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(
-        ['git', 'commit', '-m', f'backlog: update {item_id} status to {status}'],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True)
-
-  try:
-    await asyncio.to_thread(_run)
-  except subprocess.CalledProcessError as e:
-    log.warning('backlog_git_push_failed', item_id=item_id, cmd=e.cmd, stderr=e.stderr.decode(errors='replace'))
-  except Exception as e:
-    log.warning('backlog_git_push_failed', item_id=item_id, error=str(e))

@@ -58,6 +58,8 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     async def save_chat_event(self, session_id: str, event: dict[str, Any]) -> None:
       captures["chat_event"] = event
 
+    async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
+      captures["broadcast_event"] = event
   class FakeThreadManager:
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
@@ -113,9 +115,6 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     async def terminate(self) -> None:
       return None
 
-  async def fake_broadcast_and_persist(session_id: str, event: dict[str, Any], session_mgr: Any) -> None:
-    captures["broadcast_event"] = event
-
   async def fake_notify_completion(
       session_id: str,
       description: str,
@@ -133,7 +132,6 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   monkeypatch.setattr(spawner, "_git_current_branch", fake_git_current_branch)
   monkeypatch.setattr(spawner, "_git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner, "Worker", FakeWorker)
-  monkeypatch.setattr(spawner, "broadcast_and_persist", fake_broadcast_and_persist)
   monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
 
   await spawner.spawn_worker(

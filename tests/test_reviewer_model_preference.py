@@ -368,6 +368,9 @@ class NotifyFakeSessionManager:
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     pass
 
+  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
+    pass
+
 
 class NotifyFakeThreadManager:
 
@@ -408,7 +411,6 @@ async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.Monkey
 
   monkeypatch.setattr(spawner, "_spawn_review_worker", fake_spawn_review)
   monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
-  monkeypatch.setattr(spawner, "broadcast_and_persist", _noop)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await spawner._notify_completion(
@@ -447,7 +449,6 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
 
   monkeypatch.setattr(spawner, "_spawn_review_worker", fake_spawn_review)
   monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
-  monkeypatch.setattr(spawner, "broadcast_and_persist", _noop)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await spawner._notify_completion(
@@ -486,7 +487,6 @@ async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.Monk
 
   monkeypatch.setattr(spawner, "_spawn_review_worker", fake_spawn_review)
   monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
-  monkeypatch.setattr(spawner, "broadcast_and_persist", _noop)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await spawner._notify_completion(
@@ -535,7 +535,6 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
 
   monkeypatch.setattr(spawner, "_spawn_review_worker", fake_spawn_review)
   monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
-  monkeypatch.setattr(spawner, "broadcast_and_persist", _noop)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await spawner._notify_completion(
@@ -583,7 +582,6 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
 
   monkeypatch.setattr(spawner, "_spawn_review_worker", fake_spawn_review)
   monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
-  monkeypatch.setattr(spawner, "broadcast_and_persist", _noop)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await spawner._notify_completion(

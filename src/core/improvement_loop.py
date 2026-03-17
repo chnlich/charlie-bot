@@ -1,8 +1,6 @@
 """Improvement-loop lifecycle — determines the next action from a backlog YAML."""
 
-import asyncio
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -11,6 +9,7 @@ import yaml
 import structlog
 
 from src.core.config import ImprovementLoopConfig
+from src.core.git import git_add_commit_push
 
 log = structlog.get_logger()
 
@@ -120,17 +119,8 @@ async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementL
 
   _save_backlog(backlog_path, items)
 
-  def _git_commit_push():
-    subprocess.run(['git', 'add', str(backlog_path)], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(
-        ['git', 'commit', '-m', f'loop: reset stale in_progress items in {backlog_path.name}'],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True)
-
-  await asyncio.to_thread(_git_commit_push)
+  await git_add_commit_push(
+      repo_path, [str(backlog_path)], f'loop: reset stale in_progress items in {backlog_path.name}')
   return True
 
 

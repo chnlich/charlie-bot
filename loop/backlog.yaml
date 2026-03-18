@@ -755,3 +755,20 @@
   status: pending
   created: '2026-03-18T12:00:00Z'
   priority: low
+- id: '055'
+  title: Sanitize uploaded filename to prevent path traversal in chat upload endpoint
+  description: 'PURPOSE — Prevent a crafted filename from writing files outside the
+    uploads directory, closing a path-traversal vulnerability (CWE-22) in the file
+    upload endpoint. HOW — api/chat.py:36 uses the raw user-provided filename directly:
+    dest = uploads_dir / (file.filename or "upload"). A filename containing "../"
+    components (e.g. "../../other_session/data/metadata.json") resolves outside the
+    intended uploads directory, allowing arbitrary file overwrites within process permissions.
+    Fix by extracting only the base name: safe_name = Path(file.filename or "upload").name;
+    dest = uploads_dir / safe_name. Path.name strips all directory components including
+    ".." traversals. One-line fix, same class of vulnerability as the already-completed
+    item 049 (tar extraction path traversal in backup.py). pathlib is already imported
+    in the file via indirect usage.'
+  category: security
+  status: pending
+  created: '2026-03-18T12:00:00Z'
+  priority: high

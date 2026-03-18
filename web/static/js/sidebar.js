@@ -575,12 +575,24 @@ function showRatingModal(sessionId) {
       </div>
       <button data-rating="skip"
               class="text-xs text-slate-500 hover:text-slate-300 transition-colors">Skip &amp; archive</button>
+      <div class="mt-3 pt-3 border-t border-slate-700">
+        <button id="delete-permanently-btn"
+                class="text-xs text-red-400 hover:text-red-300 transition-colors inline-flex items-center gap-1">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+          </svg>
+          Delete permanently
+        </button>
+      </div>
     </div>`;
 
   // Handle rating button clicks
   overlay.querySelectorAll('[data-rating]').forEach(btn => {
     btn.addEventListener('click', () => doArchiveWithRating(sessionId, btn.dataset.rating));
   });
+  // Handle delete permanently
+  overlay.querySelector('#delete-permanently-btn').addEventListener('click', () => doDeletePermanently(sessionId));
   // Close on overlay background click
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) closeRatingModal();
@@ -592,6 +604,23 @@ function showRatingModal(sessionId) {
   document.addEventListener('keydown', ratingModalKeyHandler);
 
   document.body.appendChild(overlay);
+}
+
+async function doDeletePermanently(sessionId) {
+  if (!confirm('Are you sure? This will permanently delete this session and all its data. This cannot be undone.')) {
+    return;
+  }
+  closeRatingModal();
+  try {
+    await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
+    if (SESSION_ID === sessionId) {
+      location.href = '/?session=';
+    } else {
+      document.getElementById('session-' + sessionId)?.remove();
+    }
+  } catch (err) {
+    console.error('Permanent delete failed:', err);
+  }
 }
 
 async function doArchiveWithRating(sessionId, rating) {

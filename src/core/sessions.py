@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -224,6 +225,16 @@ class SessionManager:
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._events_cache.pop(session_id, None)
     return meta
+
+  async def delete_session_permanently(self, session_id: str) -> bool:
+    """Permanently delete a session and all its data from disk."""
+    session_dir = self._session_dir(session_id)
+    if not session_dir.exists():
+      return False
+    await asyncio.to_thread(shutil.rmtree, session_dir)
+    self._events_cache.pop(session_id, None)
+    log.info("session_deleted_permanently", session_id=session_id)
+    return True
 
   async def unarchive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Restore an archived session back to active."""

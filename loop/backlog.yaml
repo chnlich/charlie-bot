@@ -774,3 +774,20 @@
   priority: high
   rejected_at: '2026-03-18T14:57:29'
   rejected_reason: user is only myself so it should be generally OK
+- id: '056'
+  title: Await and add timeout to fire-and-forget git worktree prune in spawner.py
+  description: 'PURPOSE — Prevent a hung git worktree prune from blocking the event
+    loop indefinitely during worker finalization. The prune subprocess is the only
+    remaining unguarded subprocess call after item 053 added timeouts to all other
+    bare communicate() calls. HOW — spawner.py:426-433 fires git worktree prune via
+    asyncio.create_subprocess_exec but never awaits communicate() and has no timeout.
+    The subprocess result is silently discarded, stdout/stderr pipes fill up and can
+    cause the child to block on write, and if git hangs (lock contention, corrupted
+    refs) the zombie process leaks a PID. Apply the same wait_for + kill pattern used
+    3 lines above for worktree remove (L415-420): wrap proc.communicate() with asyncio.wait_for(timeout=30.0),
+    catch TimeoutError to proc.kill() and log a warning. ~5 lines changed, no behavioral
+    change for normal operation. Directly follows from the gap left by item 053.'
+  category: error-handling
+  status: pending
+  created: '2026-03-18T12:00:00Z'
+  priority: high

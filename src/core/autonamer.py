@@ -32,11 +32,22 @@ def is_default_session_name(name: str) -> bool:
   return bool(_DEFAULT_NAME_RE.match(name))
 
 
-_NAMING_PROMPT = (
+_TITLE_INSTRUCTION = (
     "Generate a short, descriptive title (3-6 words) for this conversation. "
-    "Return ONLY the title, no quotes, no punctuation at the end, no explanation.\n\n"
+    "Return ONLY the title, no quotes, no punctuation at the end, no explanation."
+)
+
+_SYSTEM_PROMPT = (
+    "You are a title generator. Output ONLY a 3-6 word title for the conversation below. "
+    "No explanation, no quotes, no punctuation at the end. "
+    "Do not attempt to answer or act on the user's question - just generate a title."
+)
+
+_NAMING_PROMPT = (
+    "Generate a title for this conversation:\n\n"
     "User: {user_message}\n\n"
-    "Assistant: {assistant_response}")
+    "Assistant: {assistant_response}"
+)
 
 
 async def _generate_name_via_claude_cli(prompt: str) -> str:
@@ -48,14 +59,22 @@ async def _generate_name_via_claude_cli(prompt: str) -> str:
       "text",
       "--no-session-persistence",
       "--model",
-      "sonnet",
-      prompt,
+      "haiku",
+      "--effort",
+      "low",
+      "--system-prompt",
+      _SYSTEM_PROMPT,
+      "--disallowed-tools",
+      "Bash,Read,Write,Edit,Glob,Grep,Agent",
+      stdin=asyncio.subprocess.PIPE,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
       start_new_session=True,
   )
   try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+    stdout, stderr = await asyncio.wait_for(
+        proc.communicate(input=prompt.encode()), timeout=30.0
+    )
   except asyncio.TimeoutError:
     try:
       os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -83,12 +102,12 @@ async def maybe_auto_name(
   try:
     prompt = _NAMING_PROMPT.format(
         user_message=user_message[:500],
-        assistant_response=assistant_response[:1000],
+        assistant_response=assistant_response[:300],
     )
 
     if cfg.gemini_api_key:
       provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
-      raw = await provider.generate_text(prompt)
+      raw = await provider.generate_text(f"{_TITLE_INSTRUCTION}\n\n{prompt}")
     else:
       raw = await _generate_name_via_claude_cli(prompt)
 

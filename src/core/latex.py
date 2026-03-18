@@ -98,7 +98,12 @@ async def get_git_info() -> dict | None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
-    root_out, _ = await root_proc.communicate()
+    try:
+      root_out, _ = await asyncio.wait_for(root_proc.communicate(), timeout=30.0)
+    except asyncio.TimeoutError:
+      root_proc.kill()
+      log.warning('get_git_info_timeout', cmd='rev-parse --show-toplevel')
+      return None
     if root_proc.returncode != 0:
       return None
     repo_path = root_out.decode().strip()
@@ -113,7 +118,12 @@ async def get_git_info() -> dict | None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
-    branch_out, _ = await branch_proc.communicate()
+    try:
+      branch_out, _ = await asyncio.wait_for(branch_proc.communicate(), timeout=30.0)
+    except asyncio.TimeoutError:
+      branch_proc.kill()
+      log.warning('get_git_info_timeout', cmd='rev-parse --abbrev-ref HEAD')
+      return None
     branch = branch_out.decode().strip() if branch_proc.returncode == 0 else 'unknown'
 
     return {'repo_name': Path(repo_path).name, 'repo_path': repo_path, 'branch': branch}

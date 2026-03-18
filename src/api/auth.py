@@ -11,7 +11,7 @@ from src.core.config import get_config
 
 # Paths that are always public (no auth required).
 _PUBLIC_PATHS = frozenset({"/", "/api/auth/status"})
-_PUBLIC_PREFIXES = ("/static/",)
+_PUBLIC_PREFIXES = ("/static/", "/files/")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

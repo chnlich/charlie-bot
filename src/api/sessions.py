@@ -8,6 +8,7 @@ import structlog
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from starlette.responses import Response
 
 from src.api.deps import get_session_manager, get_thread_manager, require_session
 from src.api.message_utils import build_session_view_data
@@ -200,6 +201,14 @@ async def archive_session(session_id: str, session_mgr: SessionManager = Depends
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
   return meta
+
+
+@router.delete("/{session_id}/permanent", status_code=204)
+async def delete_session_permanently(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+  result = await session_mgr.delete_session_permanently(session_id)
+  if not result:
+    raise HTTPException(status_code=404, detail="Session not found")
+  return Response(status_code=204)
 
 
 @router.post("/{session_id}/unarchive", response_model=SessionMetadata)

@@ -112,7 +112,11 @@ async def _git_current_branch(repo_path: Path) -> str:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
   )
-  stdout, stderr = await proc.communicate()
+  try:
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+  except asyncio.TimeoutError:
+    proc.kill()
+    raise RuntimeError(f'git rev-parse timed out after 30s in {repo_path}')
   if proc.returncode != 0:
     err_msg = stderr.decode().strip()
     if 'unknown revision' in err_msg:
@@ -136,7 +140,11 @@ async def _git_create_worktree(repo_path: Path, base_branch: str, branch_name: s
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
   )
-  stdout, stderr = await proc.communicate()
+  try:
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+  except asyncio.TimeoutError:
+    proc.kill()
+    raise RuntimeError(f'git worktree add timed out after 60s for {branch_name}')
   if proc.returncode != 0:
     out = stdout.decode().strip()
     err = stderr.decode().strip()
@@ -404,7 +412,12 @@ async def _finalize_worker(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await proc.communicate()
+        try:
+          _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+        except asyncio.TimeoutError:
+          proc.kill()
+          log.warning("worktree_remove_timeout", thread_id=thread.id, path=str(wt))
+          return
         if proc.returncode != 0:
           log.warning("worktree_remove_failed", thread_id=thread.id, stderr=stderr.decode().strip())
         else:

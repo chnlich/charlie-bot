@@ -719,3 +719,21 @@
   status: pending
   created: '2026-03-15T12:00:00Z'
   priority: medium
+- id: '053'
+  title: Add timeouts to bare asyncio subprocess communicate() calls in spawner.py
+    and latex.py
+  description: Prevent indefinite event-loop blocking from hung git subprocesses.
+    5 asyncio.create_subprocess_exec call sites use proc.communicate() without any
+    timeout — spawner.py _git_current_branch (L115), _git_create_worktree (L139),
+    worktree remove in _finalize_worker (L407), and latex.py get_git_info (L101, L116).
+    A hung git process (network issue, lock contention, corrupted repo) blocks the
+    event loop forever, freezing the entire app. The fix is established in the codebase
+    — autonamer.py:58 and slash_commands.py:83 already wrap communicate() with asyncio.wait_for(proc.communicate(),
+    timeout=30.0) and kill the process on TimeoutError. Apply the same pattern to all
+    5 call sites with a 30s timeout for fast operations (rev-parse, worktree remove/prune)
+    and 60s for worktree creation. ~3 lines per call site (wrap in wait_for, add except
+    TimeoutError with proc.kill()).
+  category: error-handling
+  status: pending
+  created: '2026-03-17T12:00:00Z'
+  priority: high

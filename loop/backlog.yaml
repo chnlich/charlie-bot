@@ -769,6 +769,8 @@
     as the already-completed item 049 (tar extraction path traversal in backup.py).
     pathlib is already imported in the file via indirect usage.'
   category: security
-  status: pending
+  status: rejected
   created: '2026-03-18T12:00:00Z'
   priority: high
+  rejected_at: '2026-03-18T14:57:29'
+  rejected_reason: user is only myself so it should be generally OK

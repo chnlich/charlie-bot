@@ -737,3 +737,21 @@
   status: pending
   created: '2026-03-17T12:00:00Z'
   priority: high
+- id: '054'
+  title: Simplify backend __init__ by removing redundant kwargs-popping boilerplate
+  description: 'PURPOSE — Remove ~24 lines of unnecessary kwargs-popping code duplicated
+    across all four AgentBackend subclasses, making constructor signatures explicit
+    and reducing boilerplate for future backends. HOW — ClaudeCodeBackend, CodexBackend,
+    GeminiCliBackend, and OpenCodeBackend each manually pop model, instructions_content,
+    resume_session_id, and extra_flags from **kwargs only to pass them unchanged to
+    super().__init__(), which already declares them as keyword-only parameters with
+    defaults. Replace each __init__ with an explicit keyword-only signature that only
+    overrides the model default, e.g. def __init__(self, *, model="gpt-5.3-codex",
+    **kwargs): super().__init__(model=model, **kwargs). KimiBackend already uses this
+    cleaner pattern (kimi.py:16). Each constructor drops from ~10 lines to ~2 lines.
+    The registry (build_backend) passes all args as keyword args, so no call-site
+    changes needed.'
+  category: duplication
+  status: pending
+  created: '2026-03-18T12:00:00Z'
+  priority: low

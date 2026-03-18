@@ -398,7 +398,13 @@ async def _finalize_worker(
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
   # Clean up the thread's worktree now that the worker/reviewer process has exited.
-  if getattr(thread, 'worktree_path', None) and getattr(thread, 'repo_path', None):
+  # Skip cleanup if a reviewer will be spawned — it needs the worktree.
+  skip_cleanup = (
+      exit_code == 0
+      and getattr(thread, 'require_review', False)
+      and not getattr(thread, 'review_of', None)
+  )
+  if not skip_cleanup and getattr(thread, 'worktree_path', None) and getattr(thread, 'repo_path', None):
     wt = Path(thread.worktree_path)
     if wt.exists():
       try:

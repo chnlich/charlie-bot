@@ -1,8 +1,10 @@
 """File server router — serves files and directory listings from the filesystem."""
 
+import html
 import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import structlog
 from fastapi import APIRouter, HTTPException
@@ -44,15 +46,15 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
     parent = "/".join(url_prefix.rstrip("/").split("/")[:-1]) or "/files"
     rows += (
       '<tr>'
-      f'<td>📁</td><td><a href="{parent}">..</a></td>'
+      f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
       '<td></td><td></td>'
       '</tr>\n'
     )
 
   for e in entries:
     icon = "📁" if e["is_dir"] else "📄"
-    name = e["name"] + ("/" if e["is_dir"] else "")
-    href = f"{url_prefix.rstrip('/')}/{e['name']}"
+    name = html.escape(e["name"] + ("/" if e["is_dir"] else ""))
+    href = html.escape(f"{url_prefix.rstrip('/')}/{quote(e['name'], safe='')}")
     size = "" if e["is_dir"] else _human_size(e["size"])
     mtime = e["mtime"].strftime("%Y-%m-%d %H:%M")
     rows += (
@@ -62,8 +64,8 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
       f'</tr>\n'
     )
 
-  display_path = "/" + dir_path.as_posix().lstrip("/")
-  html = f"""<!DOCTYPE html>
+  display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
+  page = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Index of {display_path}</title>
 <style>
@@ -82,21 +84,21 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
 </table>
 </body>
 </html>"""
-  return html
+  return page
 
 
 @router.get("/{path:path}")
 async def serve_file(path: str):
   """Serve a file or directory listing from the filesystem."""
-  fs_path = Path("/") / path
+  fs_path = (Path("/") / path).resolve()
 
   if not fs_path.exists():
     raise HTTPException(status_code=404, detail="Not found")
 
   if fs_path.is_dir():
     url_prefix = f"/files/{path}" if path else "/files"
-    html = _dir_listing_html(fs_path, url_prefix)
-    return HTMLResponse(html)
+    listing = _dir_listing_html(fs_path, url_prefix)
+    return HTMLResponse(listing)
 
   # Serve the file with auto-detected MIME type
   media_type, _ = mimetypes.guess_type(str(fs_path))

@@ -729,12 +729,12 @@
     A hung git process (network issue, lock contention, corrupted repo) blocks the
     event loop forever, freezing the entire app. The fix is established in the codebase
     — autonamer.py:58 and slash_commands.py:83 already wrap communicate() with asyncio.wait_for(proc.communicate(),
-    timeout=30.0) and kill the process on TimeoutError. Apply the same pattern to all
-    5 call sites with a 30s timeout for fast operations (rev-parse, worktree remove/prune)
+    timeout=30.0) and kill the process on TimeoutError. Apply the same pattern to
+    all 5 call sites with a 30s timeout for fast operations (rev-parse, worktree remove/prune)
     and 60s for worktree creation. ~3 lines per call site (wrap in wait_for, add except
     TimeoutError with proc.kill()).
   category: error-handling
-  status: pending
+  status: approved
   created: '2026-03-17T12:00:00Z'
   priority: high
 - id: '054'
@@ -762,12 +762,12 @@
     upload endpoint. HOW — api/chat.py:36 uses the raw user-provided filename directly:
     dest = uploads_dir / (file.filename or "upload"). A filename containing "../"
     components (e.g. "../../other_session/data/metadata.json") resolves outside the
-    intended uploads directory, allowing arbitrary file overwrites within process permissions.
-    Fix by extracting only the base name: safe_name = Path(file.filename or "upload").name;
-    dest = uploads_dir / safe_name. Path.name strips all directory components including
-    ".." traversals. One-line fix, same class of vulnerability as the already-completed
-    item 049 (tar extraction path traversal in backup.py). pathlib is already imported
-    in the file via indirect usage.'
+    intended uploads directory, allowing arbitrary file overwrites within process
+    permissions. Fix by extracting only the base name: safe_name = Path(file.filename
+    or "upload").name; dest = uploads_dir / safe_name. Path.name strips all directory
+    components including ".." traversals. One-line fix, same class of vulnerability
+    as the already-completed item 049 (tar extraction path traversal in backup.py).
+    pathlib is already imported in the file via indirect usage.'
   category: security
   status: pending
   created: '2026-03-18T12:00:00Z'

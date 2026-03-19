@@ -31,12 +31,13 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
         stat = child.stat()
       except OSError:
         continue
-      entries.append({
-        "name": child.name,
-        "is_dir": child.is_dir(),
-        "size": stat.st_size,
-        "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-      })
+      entries.append(
+          {
+              "name": child.name,
+              "is_dir": child.is_dir(),
+              "size": stat.st_size,
+              "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+          })
   except PermissionError:
     raise HTTPException(status_code=403, detail="Permission denied")
 
@@ -44,12 +45,10 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
   # Parent directory link (unless at root)
   if url_prefix.rstrip("/") != "/files":
     parent = "/".join(url_prefix.rstrip("/").split("/")[:-1]) or "/files"
-    rows += (
-      '<tr>'
-      f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
-      '<td></td><td></td>'
-      '</tr>\n'
-    )
+    rows += ('<tr>'
+             f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
+             '<td></td><td></td>'
+             '</tr>\n')
 
   for e in entries:
     icon = "📁" if e["is_dir"] else "📄"
@@ -58,11 +57,10 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
     size = "" if e["is_dir"] else _human_size(e["size"])
     mtime = e["mtime"].strftime("%Y-%m-%d %H:%M")
     rows += (
-      f'<tr>'
-      f'<td>{icon}</td><td><a href="{href}">{name}</a></td>'
-      f'<td style="text-align:right">{size}</td><td>{mtime}</td>'
-      f'</tr>\n'
-    )
+        f'<tr>'
+        f'<td>{icon}</td><td><a href="{href}">{name}</a></td>'
+        f'<td style="text-align:right">{size}</td><td>{mtime}</td>'
+        f'</tr>\n')
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
   page = f"""<!DOCTYPE html>

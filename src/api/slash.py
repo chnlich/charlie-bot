@@ -8,12 +8,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.api.chat import run_and_finalize
-from src.api.deps import get_session_manager, require_session
+from src.api.deps import get_session_manager, get_thread_manager, require_session
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.slash_commands import dispatch_slash_command, load_slash_commands
 from src.core.tasks import create_logged_task
+from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 
@@ -36,6 +37,19 @@ _RUN_ENTRY = {
     'args': '<task-name>',
 }
 
+_IMPROVE_ENTRY = {
+    'name': 'improve',
+    'scope': 'builtin',
+    'description': 'Run iterative improvement loop',
+    'args': '[max_iterations] <goal>',
+}
+
+_STOP_IMPROVE_ENTRY = {
+    'name': 'stop-improve',
+    'scope': 'builtin',
+    'description': 'Stop an active improve loop after current iteration',
+}
+
 
 async def _build_command_list() -> list[dict]:
   """Return the full command list: YAML commands + built-ins."""
@@ -43,6 +57,8 @@ async def _build_command_list() -> list[dict]:
   result = [{'name': c.name, 'scope': c.scope, 'description': c.description, 'args': c.args} for c in cmds]
   result.append(_HELP_ENTRY)
   result.append(_RUN_ENTRY)
+  result.append(_IMPROVE_ENTRY)
+  result.append(_STOP_IMPROVE_ENTRY)
   return result
 
 
@@ -64,6 +80,7 @@ async def execute_command(
     req: SlashExecuteRequest,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Execute a slash command for a session."""
@@ -72,6 +89,39 @@ async def execute_command(
   # Built-in /help
   if name == 'help':
     return {'type': 'help', 'commands': await _build_command_list()}
+
+  # Built-in /improve
+  if name == 'improve':
+    args_text = req.args.strip()
+    if not args_text:
+      return {'error': 'Usage: /improve [max_iterations] <goal>'}
+    parts = args_text.split(None, 1)
+    max_iterations = 5
+    goal = args_text
+    if parts[0].isdigit():
+      max_iterations = int(parts[0])
+      goal = parts[1] if len(parts) > 1 else ''
+    if not goal:
+      return {'error': 'Usage: /improve [max_iterations] <goal>'}
+    from src.core.improve_command import start_improve_loop
+    create_logged_task(
+        start_improve_loop(session_id, goal, max_iterations, cfg, session_mgr, thread_mgr))
+    return JSONResponse(
+        status_code=202,
+        content={
+            'type': 'improve_started',
+            'goal': goal,
+            'max_iterations': max_iterations,
+        },
+    )
+
+  # Built-in /stop-improve
+  if name == 'stop-improve':
+    from src.core.improve_command import stop_improve_loop
+    stopped = await stop_improve_loop(session_id, cfg)
+    if stopped:
+      return {'type': 'improve_stopped', 'message': 'Improve loop will stop after current iteration'}
+    return {'error': 'No active improve loop in this session'}
 
   # Built-in /run <task-name>
   if name == 'run':

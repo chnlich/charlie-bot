@@ -104,7 +104,8 @@ async def execute_command(
     if not goal:
       return {'error': 'Usage: /improve [max_iterations] <goal>'}
     from src.core.improve_command import start_improve_loop
-    create_logged_task(start_improve_loop(session_id, goal, max_iterations, cfg, session_mgr, thread_mgr))
+    create_logged_task(
+        start_improve_loop(session_id, goal, max_iterations, cfg, session_mgr, thread_mgr))
     return JSONResponse(
         status_code=202,
         content={

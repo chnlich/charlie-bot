@@ -791,3 +791,22 @@
   status: pending
   created: '2026-03-18T12:00:00Z'
   priority: high
+- id: '057'
+  title: Wrap blocking sync I/O in asyncio.to_thread in api/files.py serve_file
+  description: 'PURPOSE — Prevent event-loop blocking during filesystem browsing on
+    the public /files/ route, which can stall all concurrent requests when listing
+    large directories. HOW — api/files.py:serve_file (L89-106) is an async def endpoint
+    that calls Path.resolve(), .exists(), and .is_dir() synchronously on the event
+    loop (L91-96). The helper _dir_listing_html (L25-85) then calls dir_path.iterdir(),
+    child.stat(), and child.is_dir() — all blocking syscalls — directly on the event
+    loop. This is the exact anti-pattern already fixed in 6 prior items: 024 (sessions
+    iterdir), 034 (subagent instructions read), 035 (parse_ndjson_file), 043 (_prepare_cwd),
+    044 (discover_repos), 046 (threads iterdir). Fix by wrapping the _dir_listing_html()
+    call and the path existence/type checks in asyncio.to_thread(). The function is
+    pure sync code with no async dependencies, making it a clean to_thread candidate.
+    ~5 lines changed, asyncio is already imported in api/files.py via FastAPI transitive
+    deps but may need an explicit import.'
+  category: performance
+  status: pending
+  created: '2026-03-18T12:00:00Z'
+  priority: medium

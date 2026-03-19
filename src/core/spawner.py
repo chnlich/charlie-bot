@@ -1,6 +1,8 @@
 """Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
 import asyncio
+import shutil
+import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
@@ -333,6 +335,50 @@ async def _create_worktree_and_process(
   )
 
 
+async def _create_repoless_process(
+    session_id: str,
+    thread: ThreadMetadata,
+    description: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    context: Optional[str],
+    prompt_override: Optional[str],
+    resolved_backend: str,
+    resolved_model: str,
+) -> Worker:
+  """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
+  worker_prompt = prompt_override or description
+  tmp_dir = Path(tempfile.mkdtemp(prefix='charliebot-repoless-'))
+
+  # Repo-less tasks cannot produce branch/worktree review artifacts.
+  thread.branch_name = None
+  thread.repo_path = None
+  thread.worktree_path = str(tmp_dir)
+  thread.require_review = False
+  thread.context = context
+  await thread_mgr.save_metadata(thread)
+
+  backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
+  thread.backend = backend_option.id
+  thread.model = backend_option.model
+  await thread_mgr.save_metadata(thread)
+
+  subagent_instructions = await asyncio.to_thread(_read_subagent_instructions, cfg)
+
+  events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
+  return Worker(
+      thread,
+      tmp_dir,
+      events_log,
+      worker_prompt,
+      cfg,
+      backend_option=backend_option,
+      on_spawned=thread_mgr.save_metadata,
+      instructions_content=subagent_instructions,
+  )
+
+
 async def _stream_worker_events(
     worker: Worker,
     session_id: str,
@@ -437,6 +483,16 @@ async def _finalize_worker(
       except Exception as wt_err:
         log.warning("worktree_cleanup_error", thread_id=thread.id, error=str(wt_err))
 
+  # Clean up temp dir for repoless workers (no repo_path, temp dir as worktree_path).
+  if not skip_cleanup and getattr(thread, 'worktree_path', None) and not getattr(thread, 'repo_path', None):
+    tmp = Path(thread.worktree_path)
+    if tmp.exists() and tmp.name.startswith('charliebot-repoless-'):
+      try:
+        await asyncio.to_thread(shutil.rmtree, str(tmp))
+        log.info("repoless_tmpdir_removed", thread_id=thread.id, path=str(tmp))
+      except Exception as tmp_err:
+        log.warning("repoless_tmpdir_cleanup_error", thread_id=thread.id, error=str(tmp_err))
+
   await _notify_completion(
       session_id,
       description,
@@ -473,45 +529,19 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    if repo_path is not None:
+    if repo_path is None:
+      # Repo-less worker: run prompt directly without worktree
+      worker = await _create_repoless_process(
+          session_id, thread, description, cfg, session_mgr, thread_mgr, context, prompt_override, resolved_backend,
+          resolved_model)
+    else:
       resolved_repo = Path(repo_path).resolve()
-
       worker = await _create_worktree_and_process(
           session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
           resolved_backend, resolved_model)
-    else:
-      # Repo-less worker (e.g. prompt-only scheduled tasks): no worktree needed.
-      log.info("spawn_worker_no_repo", session=session_id, thread_id=thread.id, detail="running without worktree")
 
-      backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
-      # Repo-less tasks cannot produce a review/merge artifact.
-      thread.branch_name = None
-      thread.repo_path = None
-      thread.worktree_path = None
-      thread.require_review = False
-      thread.context = context
-      thread.backend = backend_option.id
-      thread.model = backend_option.model
-      await thread_mgr.save_metadata(thread)
-
-      subagent_instructions = await asyncio.to_thread(_read_subagent_instructions, cfg)
-      events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
-
-      worker_prompt = prompt_override or description
-      worker = Worker(
-          thread,
-          Path.home(),
-          events_log,
-          worker_prompt,
-          cfg,
-          backend_option=backend_option,
-          on_spawned=thread_mgr.save_metadata,
-          instructions_content=subagent_instructions,
-      )
-
-    if not error_msg:
-      exit_code, quota_exhausted, error_msg = await _stream_worker_events(
-          worker, session_id, description, thread, thread_mgr, session_mgr)
+    exit_code, quota_exhausted, error_msg = await _stream_worker_events(
+        worker, session_id, description, thread, thread_mgr, session_mgr)
 
   except Exception as e:
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
@@ -619,11 +649,11 @@ def _validate_review_prerequisites(
   Returns (repo_path, branch_name, worktree_path) or None if validation fails.
   """
   if not original_thread.repo_path:
-    log.error(
+    log.warning(
         "spawn_review_no_repo_path",
         session=session_id,
         thread=original_thread.id,
-        detail="original thread missing repo_path")
+        detail="original thread missing repo_path (repoless worker — review not applicable)")
     return None
   if not original_thread.branch_name:
     log.error(

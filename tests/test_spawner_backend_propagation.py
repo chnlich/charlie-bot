@@ -4,7 +4,7 @@ from typing import Any, Optional
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, ThreadMetadata
+from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core import spawner
 
 
@@ -151,6 +151,68 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   assert captures["worker_dir"] == captures["git_create_worktree"]["wt_path"].resolve()
   assert captures["worker_dir"] != repo_path
   assert thread.worktree_path == str(captures["git_create_worktree"]["wt_path"])
+
+
+@pytest.mark.asyncio
+async def test_finalize_worker_cleans_repoless_tmpdir_when_review_is_not_spawnable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = _build_cfg()
+  repoless_dir = tmp_path / "charliebot-repoless-test"
+  repoless_dir.mkdir()
+  (repoless_dir / "artifact.txt").write_text("tmp", encoding="utf-8")
+
+  thread = ThreadMetadata(
+      id="thread-1",
+      session_id="session-id",
+      description="Prompt-only task",
+      worktree_path=str(repoless_dir),
+      require_review=True,
+  )
+  captures: dict[str, Any] = {}
+
+  class FakeThreadManager:
+    async def update_status(
+        self,
+        session_id: str,
+        thread_id: str,
+        status: Any,
+        pid: Optional[int] = None,
+        exit_code: Optional[int] = None,
+    ) -> None:
+      captures["status"] = status
+      captures["exit_code"] = exit_code
+
+  async def fake_notify_completion(
+      session_id: str,
+      description: str,
+      thread_meta: ThreadMetadata,
+      exit_code: int,
+      thread_mgr: Any,
+      session_mgr: Any,
+      notify_cfg: CharlieBotConfig,
+      quota_exhausted: bool = False,
+      error: str = "",
+  ) -> None:
+    captures["notified"] = True
+
+  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+
+  await spawner._finalize_worker(
+      session_id="session-id",
+      description="Prompt-only task",
+      thread=thread,
+      exit_code=0,
+      thread_mgr=FakeThreadManager(),
+      session_mgr=object(),
+      cfg=cfg,
+  )
+
+  assert captures["status"] == ThreadStatus.COMPLETED
+  assert captures["exit_code"] == 0
+  assert captures["notified"] is True
+  assert not repoless_dir.exists()
 
 
 @pytest.mark.asyncio

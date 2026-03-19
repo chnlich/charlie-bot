@@ -13,7 +13,6 @@ from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 
-
 # ---------------------------------------------------------------------------
 # State models
 # ---------------------------------------------------------------------------
@@ -121,11 +120,12 @@ async def start_improve_loop(
   )
   save_improve_state(session_id, state, cfg)
 
-  await session_mgr.persist_and_broadcast(session_id, {
-      "type": "improve_started",
-      "goal": goal,
-      "max_iterations": max_iterations,
-  })
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": "improve_started",
+          "goal": goal,
+          "max_iterations": max_iterations,
+      })
 
   await _spawn_improve_worker(session_id, state, cfg, session_mgr, thread_mgr)
 
@@ -153,24 +153,25 @@ async def continue_improve_loop(
 
   if state.status == "stopped":
     save_improve_state(session_id, state, cfg)
-    await session_mgr.persist_and_broadcast(session_id, {
-        "type": "improve_stopped",
-        "iterations_completed": state.current_iteration,
-    })
+    await session_mgr.persist_and_broadcast(
+        session_id, {
+            "type": "improve_stopped",
+            "iterations_completed": state.current_iteration,
+        })
     return
 
   if state.current_iteration >= state.max_iterations:
     state.status = "completed"
     save_improve_state(session_id, state, cfg)
-    await session_mgr.persist_and_broadcast(session_id, {
-        "type": "improve_completed",
-        "iterations_completed": state.current_iteration,
-        "goal": state.goal,
-    })
+    await session_mgr.persist_and_broadcast(
+        session_id, {
+            "type": "improve_completed",
+            "iterations_completed": state.current_iteration,
+            "goal": state.goal,
+        })
     # Trigger master with final summary
     from src.core.spawner import _trigger_master
-    summaries = "\n".join(
-        f"**Iteration {it.iteration}:** {it.summary}" for it in state.iterations if it.summary)
+    summaries = "\n".join(f"**Iteration {it.iteration}:** {it.summary}" for it in state.iterations if it.summary)
     final = f"**Improve loop completed** ({state.current_iteration} iterations)\n\nGoal: {state.goal}\n\n{summaries}"
     await _trigger_master(session_id, final, cfg, session_mgr)
     return
@@ -231,12 +232,13 @@ async def _spawn_improve_worker(
   state.iterations.append(iteration)
   save_improve_state(session_id, state, cfg)
 
-  await session_mgr.persist_and_broadcast(session_id, {
-      "type": "improve_iteration",
-      "iteration": state.current_iteration,
-      "max_iterations": state.max_iterations,
-      "thread_id": thread.id,
-  })
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": "improve_iteration",
+          "iteration": state.current_iteration,
+          "max_iterations": state.max_iterations,
+          "thread_id": thread.id,
+      })
 
   create_logged_task(
       spawn_worker(

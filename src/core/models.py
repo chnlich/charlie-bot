@@ -56,6 +56,7 @@ class ThreadMetadata(BaseModel):
   backend: Optional[str] = None
   model: Optional[str] = None
   require_review: bool = True
+  improve_loop: bool = False  # True if this thread is part of an /improve loop
   tried_backends: list[str] = Field(default_factory=list)
 
 

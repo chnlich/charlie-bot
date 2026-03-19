@@ -25,7 +25,7 @@ def _default_config_yaml() -> dict:
 
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
-DEFAULT_MEMORY_HOST = '# HOST MEMORY\n\nHost-specific settings, hardware, local tools, and repo paths.\n'
+DEFAULT_MEMORY_HOST = "# HOST MEMORY\n\nHost-specific settings, hardware, local tools, and repo paths.\n"
 
 DEFAULT_SLASH_COMMANDS = """\
 commands:

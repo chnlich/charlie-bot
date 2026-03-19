@@ -24,7 +24,7 @@ _active_procs: dict[str, AgentBackend] = {}
 
 
 def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
-  """Build master agent instructions by concatenating MASTER_AGENT_PROMPT.md + MEMORY.md in memory."""
+  """Build master agent instructions by concatenating prompt + memory files."""
   prompt_file = cfg.claude_md_file
   if not prompt_file.exists():
     log.warning("master_prompt_file_missing", path=str(prompt_file))

@@ -230,6 +230,9 @@ const backlogPanel = (() => {
       visible = visible.filter(i => i._source === moduleFilter);
     }
 
+    const priorityWeight = {high: 0, medium: 1, low: 2};
+    visible.sort((a, b) => (priorityWeight[a.priority] ?? 3) - (priorityWeight[b.priority] ?? 3));
+
     if (!visible.length) {
       list.innerHTML = '<p class="text-xs text-gray-500">No items.</p>';
       return;

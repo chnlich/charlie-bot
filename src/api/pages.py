@@ -1,5 +1,6 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
+import socket
 from pathlib import Path
 
 import structlog
@@ -48,6 +49,7 @@ async def events_viewer(
           "session": session,
           "session_id": session_id,
           "events_url": f"/api/sessions/{session_id}/events.jsonl",
+          "hostname": socket.gethostname(),
       })
 
 
@@ -111,4 +113,5 @@ async def index(
           "active_backend_label": active_backend_label,
           "load_errors": load_errors,
           "auth_enabled": bool(cfg.charliebot_access_key),
+          "hostname": socket.gethostname(),
       })

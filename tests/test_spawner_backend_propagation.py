@@ -353,7 +353,7 @@ async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_spawn_worker_repoless_disables_review_and_uses_home_cwd(tmp_path: Path) -> None:
+async def test_spawn_worker_repoless_disables_review_and_uses_temp_cwd(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
@@ -457,9 +457,12 @@ async def test_spawn_worker_repoless_disables_review_and_uses_home_cwd(tmp_path:
   )
   monkeypatch.undo()
 
-  assert captures["worker_dir"] == Path.home()
+  worker_dir = captures["worker_dir"]
+  assert worker_dir != Path.home()
+  assert worker_dir.name.startswith("charliebot-repoless-")
+  assert not worker_dir.exists()
   assert captures["notify_exit_code"] == 0
   assert captures["notify_require_review"] is False
   assert captures["notify_repo_path"] is None
-  assert captures["notify_worktree_path"] is None
+  assert captures["notify_worktree_path"] == str(worker_dir)
   assert captures["notify_branch_name"] is None

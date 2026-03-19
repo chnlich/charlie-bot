@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title or "Trace" }} — Perfetto — CharlieBot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+    #topbar { background: #172033; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 12px; padding: 8px 16px; flex-shrink: 0; }
+    #topbar .trace-name { font-size: 14px; font-weight: 500; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #topbar a { color: #7dd3fc; font-size: 13px; text-decoration: none; white-space: nowrap; }
+    #topbar a:hover { text-decoration: underline; }
+    #topbar .spacer { flex: 1; }
+    #status { display: flex; align-items: center; justify-content: center; flex: 1; font-size: 15px; color: #94a3b8; }
+    #status.error { color: #fca5a5; }
+    #perfetto-iframe { flex: 1; border: none; width: 100%; display: none; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <span class="trace-name">{{ title or trace_path }}</span>
+    <span class="spacer"></span>
+    <a href="#" id="open-new-tab">Open in new tab</a>
+  </div>
+
+  <div id="status">Loading trace...</div>
+  <iframe id="perfetto-iframe" allow="cross-origin-isolated"></iframe>
+
+  <script>
+    const PERFETTO_UI = 'https://ui.perfetto.dev';
+    const traceUrl = '{{ trace_url }}';
+    const traceTitle = '{{ title or trace_path }}';
+
+    const statusEl = document.getElementById('status');
+    const iframeEl = document.getElementById('perfetto-iframe');
+    const openNewTabLink = document.getElementById('open-new-tab');
+
+    let traceBuffer = null;
+
+    function showError(msg) {
+      statusEl.textContent = msg;
+      statusEl.classList.add('error');
+    }
+
+    async function fetchTrace() {
+      try {
+        const resp = await fetch(traceUrl);
+        if (!resp.ok) {
+          if (resp.status === 404) {
+            showError('Error: trace file not found.');
+          } else {
+            showError('Error: failed to fetch trace (HTTP ' + resp.status + ').');
+          }
+          return null;
+        }
+        return await resp.arrayBuffer();
+      } catch (e) {
+        showError('Error: failed to fetch trace — ' + e.message);
+        return null;
+      }
+    }
+
+    function sendToPerfetto(target, buffer, origin) {
+      let pingInterval = null;
+
+      const onMessage = (evt) => {
+        if (evt.data !== 'PONG') return;
+        window.removeEventListener('message', onMessage);
+        if (pingInterval) clearInterval(pingInterval);
+
+        target.postMessage({
+          perfetto: {
+            buffer: buffer,
+            title: traceTitle,
+          }
+        }, origin);
+      };
+
+      window.addEventListener('message', onMessage);
+
+      pingInterval = setInterval(() => {
+        target.postMessage('PING', origin);
+      }, 50);
+    }
+
+    function loadInIframe(buffer) {
+      statusEl.style.display = 'none';
+      iframeEl.style.display = 'block';
+      iframeEl.src = PERFETTO_UI;
+
+      iframeEl.addEventListener('load', () => {
+        sendToPerfetto(iframeEl.contentWindow, buffer, PERFETTO_UI);
+      });
+    }
+
+    openNewTabLink.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const buf = traceBuffer || await fetchTrace();
+      if (!buf) return;
+      const win = window.open(PERFETTO_UI);
+      if (!win) {
+        showError('Error: popup blocked. Please allow popups for this site.');
+        return;
+      }
+      sendToPerfetto(win, buf, PERFETTO_UI);
+    });
+
+    (async () => {
+      traceBuffer = await fetchTrace();
+      if (!traceBuffer) return;
+      loadInIframe(traceBuffer);
+    })();
+  </script>
+</body>
+</html>

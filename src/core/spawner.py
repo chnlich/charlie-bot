@@ -103,10 +103,10 @@ def _build_review_prompt(
       f"6. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
       f"7. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
       f"8. If you find issues, fix them and commit with descriptive messages.\n"
-      f"9. Stash untracked/modified files then rebase: "
-      f"`git stash --include-untracked && git rebase {base_branch}`\n"
-      f"10. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"11. Push to remote: `cd {repo_path} && git push`")
+      f"9. Stash untracked/modified files: `git stash --include-untracked`\n"
+      f"10. Rebase onto base branch: `git rebase {base_branch}`\n"
+      f"11. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
+      f"12. Push to remote: `cd {repo_path} && git pull --ff-only && git push`")
 
 
 async def _git_current_branch(repo_path: Path) -> str:

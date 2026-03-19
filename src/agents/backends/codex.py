@@ -105,7 +105,7 @@ class CodexBackend(AgentBackend):
       error = ev.get("error", {})
       msg = error.get("message") if isinstance(error, dict) else str(error)
       if not msg:
-        msg = "Unknown error from Codex backend"
+        msg = f"Codex turn.failed with no message. Full event: {json.dumps(ev, default=str)}"
       return [make_error_event(msg)]
 
     # --- top-level error ---
@@ -113,7 +113,7 @@ class CodexBackend(AgentBackend):
       error = ev.get("error", {})
       msg = error.get("message") if isinstance(error, dict) else str(error)
       if not msg:
-        msg = "Unknown error from Codex backend"
+        msg = f"Codex error event with no message. Full event: {json.dumps(ev, default=str)}"
       return [make_error_event(msg)]
 
     # --- item.started / item.updated / item.completed ---
@@ -251,5 +251,5 @@ class CodexBackend(AgentBackend):
     item = ev.get("item", {})
     if item.get("type") != "error":
       return []
-    msg = item.get("message") or "Unknown error from Codex backend"
+    msg = item.get("message") or f"Codex item error with no message. Full event: {json.dumps(ev, default=str)}"
     return [make_error_event(msg)]

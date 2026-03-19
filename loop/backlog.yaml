@@ -827,3 +827,23 @@
   status: pending
   created: '2026-03-19T12:00:00Z'
   priority: medium
+- id: '059'
+  title: Extract shared YAML load/save helpers to eliminate repeated boilerplate
+  description: 'PURPOSE — Eliminate 8 duplicated yaml.safe_load(path.read_text())
+    call sites and 4 duplicated yaml.dump/safe_dump call sites across 4 files, fixing
+    inconsistent encoding and serialization options. Currently api/backlog.py (5 sites),
+    core/improvement_loop.py (1), api/cron.py (1), and core/config.py (1) each inline
+    the same load pattern with varying defaults ([] vs {} vs {scheduled_tasks: []})
+    and inconsistent encoding (some pass encoding="utf-8", some do not). The save
+    side similarly varies between yaml.dump and yaml.safe_dump, with inconsistent
+    default_flow_style and sort_keys options. HOW — Add load_yaml(path, default=None)
+    and save_yaml(path, data, sort_keys=False) helpers in a new core/yaml_utils.py
+    module. load_yaml handles encoding="utf-8", safe_load, and default fallback.
+    save_yaml uses safe_dump with allow_unicode=True and consistent formatting. Replace
+    all 12 inline call sites with one-liner calls. ~15 lines for the module, 1-line
+    change per call site. Ensures consistent encoding and serialization behavior across
+    all YAML consumers.'
+  category: duplication
+  status: pending
+  created: '2026-03-19T12:00:00Z'
+  priority: low

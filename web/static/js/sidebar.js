@@ -606,21 +606,38 @@ function showRatingModal(sessionId) {
   document.body.appendChild(overlay);
 }
 
-async function doDeletePermanently(sessionId) {
-  if (!confirm('Are you sure? This will permanently delete this session and all its data. This cannot be undone.')) {
-    return;
-  }
-  closeRatingModal();
-  try {
-    await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
-    if (SESSION_ID === sessionId) {
-      location.href = '/?session=';
-    } else {
-      document.getElementById('session-' + sessionId)?.remove();
+function doDeletePermanently(sessionId) {
+  const overlay = document.getElementById("rating-modal-overlay");
+  if (!overlay) return;
+  const box = overlay.querySelector(".bg-slate-800");
+  if (!box) return;
+
+  box.innerHTML = `
+    <svg class="w-8 h-8 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+    </svg>
+    <p class="text-sm font-semibold text-slate-200 mb-1">Delete permanently?</p>
+    <p class="text-xs text-slate-400 mb-4">This will permanently delete this session and all its data. This cannot be undone.</p>
+    <div class="flex gap-2 justify-center">
+      <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
+      <button id="confirm-delete-btn" class="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors">Delete</button>
+    </div>`;
+
+  box.querySelector("#confirm-cancel-btn").addEventListener("click", () => showRatingModal(sessionId));
+  box.querySelector("#confirm-delete-btn").addEventListener("click", async () => {
+    closeRatingModal();
+    try {
+      await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
+      if (SESSION_ID === sessionId) {
+        location.href = '/?session=';
+      } else {
+        document.getElementById('session-' + sessionId)?.remove();
+      }
+    } catch (err) {
+      console.error('Permanent delete failed:', err);
     }
-  } catch (err) {
-    console.error('Permanent delete failed:', err);
-  }
+  });
 }
 
 async function doArchiveWithRating(sessionId, rating) {

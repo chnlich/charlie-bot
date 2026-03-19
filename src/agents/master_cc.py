@@ -33,8 +33,9 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
   prompt_text = prompt_file.read_text(encoding="utf-8")
   prompt_text = prompt_text.replace("YOUR_SESSION_UUID", session_meta.id)
   parts = [prompt_text]
-  if cfg.memory_file.exists():
-    parts.append(cfg.memory_file.read_text(encoding="utf-8"))
+  for mf in [cfg.memory_file, cfg.memory_host_file]:
+    if mf.exists():
+      parts.append(mf.read_text(encoding="utf-8"))
 
   if session_meta.rewind_summary:
     parts.append(

@@ -177,6 +177,10 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "MEMORY.md"
 
   @property
+  def memory_host_file(self) -> Path:
+    return self.charliebot_home / 'MEMORY.host.md'
+
+  @property
   def config_file(self) -> Path:
     return self.charliebot_home / "config.yaml"
 

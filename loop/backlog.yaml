@@ -810,3 +810,20 @@
   status: pending
   created: '2026-03-18T12:00:00Z'
   priority: medium
+- id: '058'
+  title: Extract worker directory cleanup into _cleanup_worker_directory helper
+  description: 'PURPOSE — Reduce the 85-line _finalize_worker() in core/spawner.py
+    by extracting the 50-line self-contained directory cleanup block (L446-496) into
+    a focused _cleanup_worker_directory() helper. The cleanup handles two distinct
+    cases — git worktree removal with prune for repo-based workers, and shutil.rmtree
+    for repoless temp directories — each with its own error handling and logging.
+    Inlining this logic obscures the simple three-phase structure of finalization
+    (update status, clean up directory, notify completion). HOW — Create async def
+    _cleanup_worker_directory(thread, skip_cleanup: bool) -> None containing the
+    existing cleanup branches. Call from _finalize_worker in place of the inline
+    block. Pure refactoring, no behavior change. Brings _finalize_worker under the
+    50-line target at ~35 lines.'
+  category: maintainability
+  status: pending
+  created: '2026-03-19T12:00:00Z'
+  priority: medium

@@ -240,7 +240,7 @@ class CodexBackend(AgentBackend):
     lines = []
     for todo in items:
       status = todo.get("status", "pending")
-      label = todo.get("label", todo.get("content", ""))
+      label = todo.get("label", todo.get("content", todo.get("step", "")))
       marker = {"completed": "[x]", "in_progress": "[~]"}.get(status, "[ ]")
       lines.append(f"- {marker} {label}")
     if not lines:

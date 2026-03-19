@@ -53,6 +53,22 @@ async def events_viewer(
       })
 
 
+@router.get("/perfetto", response_class=HTMLResponse)
+async def perfetto_viewer(
+    request: Request,
+    trace: str,
+    title: str | None = None,
+):
+  """Render the Perfetto trace viewer page."""
+  return templates.TemplateResponse(
+      "perfetto.html", {
+          "request": request,
+          "trace_url": trace,
+          "trace_path": trace,
+          "title": title,
+      })
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(
     request: Request,

@@ -288,3 +288,116 @@ async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
         FakeThreadManager(),
     )
   monkeypatch.undo()
+
+
+@pytest.mark.asyncio
+async def test_spawn_worker_repoless_disables_review_and_uses_home_cwd(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+      ],
+  )
+  events_log = tmp_path / "events.jsonl"
+  thread = ThreadMetadata(
+      id="thread-1",
+      session_id="session-id",
+      description="Prompt task",
+      require_review=True,
+  )
+  captures: dict[str, Any] = {}
+
+  class FakeSessionManager:
+    async def get_session(self, session_id: str) -> Any:
+      return SessionMetadata(id=session_id, name="Test Session")
+
+    async def save_chat_event(self, session_id: str, event: dict[str, Any]) -> None:
+      captures["chat_event"] = event
+
+    async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
+      captures["broadcast_event"] = event
+
+  class FakeThreadManager:
+    async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+      return thread
+
+    async def save_metadata(self, meta: ThreadMetadata) -> None:
+      captures["saved_thread"] = meta
+
+    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
+      return events_log
+
+    async def update_status(
+        self,
+        session_id: str,
+        thread_id: str,
+        status: Any,
+        pid: Optional[int] = None,
+        exit_code: Optional[int] = None,
+    ) -> None:
+      captures["status"] = status
+      captures["exit_code"] = exit_code
+
+  class FakeWorker:
+    def __init__(
+        self,
+        thread_metadata: ThreadMetadata,
+        working_dir: Path,
+        events_log_path: Path,
+        task_description: str,
+        worker_cfg: CharlieBotConfig,
+        backend_option: Optional[BackendOption] = None,
+        extra_env: Optional[dict[str, str]] = None,
+        on_spawned: Optional[callable] = None,
+        instructions_content: Optional[str] = None,
+    ) -> None:
+      captures["worker_dir"] = working_dir
+      captures["worker_backend"] = backend_option
+
+    async def run(self) -> int:
+      return 0
+
+    async def terminate(self) -> None:
+      return None
+
+  async def fake_notify_completion(
+      session_id: str,
+      description: str,
+      thread_meta: ThreadMetadata,
+      exit_code: int,
+      thread_mgr: Any,
+      session_mgr: Any,
+      notify_cfg: CharlieBotConfig,
+      quota_exhausted: bool = False,
+      error: str = "",
+  ) -> None:
+    captures["notify_exit_code"] = exit_code
+    captures["notify_require_review"] = thread_meta.require_review
+    captures["notify_repo_path"] = thread_meta.repo_path
+    captures["notify_worktree_path"] = thread_meta.worktree_path
+    captures["notify_branch_name"] = thread_meta.branch_name
+
+  monkeypatch = pytest.MonkeyPatch()
+  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+
+  await spawner.spawn_worker(
+      session_id="session-id",
+      description="Prompt task",
+      thread_id="thread-1",
+      cfg=cfg,
+      session_mgr=FakeSessionManager(),
+      thread_mgr=FakeThreadManager(),
+      repo_path=None,
+      resolved_backend="codex-o3",
+      resolved_model="o3-pro",
+  )
+  monkeypatch.undo()
+
+  assert captures["worker_dir"] == Path.home()
+  assert captures["notify_exit_code"] == 0
+  assert captures["notify_require_review"] is False
+  assert captures["notify_repo_path"] is None
+  assert captures["notify_worktree_path"] is None
+  assert captures["notify_branch_name"] is None

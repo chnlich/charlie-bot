@@ -484,6 +484,12 @@ async def spawn_worker(
       log.info("spawn_worker_no_repo", session=session_id, thread_id=thread.id, detail="running without worktree")
 
       backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
+      # Repo-less tasks cannot produce a review/merge artifact.
+      thread.branch_name = None
+      thread.repo_path = None
+      thread.worktree_path = None
+      thread.require_review = False
+      thread.context = context
       thread.backend = backend_option.id
       thread.model = backend_option.model
       await thread_mgr.save_metadata(thread)

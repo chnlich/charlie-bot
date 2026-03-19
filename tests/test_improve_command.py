@@ -176,8 +176,8 @@ def test_prompt_building_with_summaries():
   assert "Added token validation" in prompt
 
 
-def test_prompt_caps_at_five_summaries():
-  """Only last 5 iteration summaries are included."""
+def test_prompt_includes_all_summaries():
+  """All iteration summaries are included, no cap."""
   iterations = [
       ImproveIteration(iteration=i, worker_thread_id=f"t{i}", summary=f"Change {i}", status="completed")
       for i in range(1, 8)
@@ -185,11 +185,8 @@ def test_prompt_caps_at_five_summaries():
   state = ImproveState(goal="big refactor", max_iterations=10, current_iteration=8, iterations=iterations)
   prompt = build_improve_worker_prompt(state)
 
-  # Should include iterations 3-7 (last 5), not 1-2
-  assert "Change 1" not in prompt
-  assert "Change 2" not in prompt
-  assert "Change 3" in prompt
-  assert "Change 7" in prompt
+  for i in range(1, 8):
+    assert f"Change {i}" in prompt
 
 
 # ---------------------------------------------------------------------------

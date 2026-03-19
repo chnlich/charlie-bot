@@ -74,9 +74,7 @@ def build_improve_worker_prompt(state: ImproveState) -> str:
   max_iter = state.max_iterations
 
   prev_lines = ""
-  # Cap at last 5 iterations to avoid prompt bloat
-  recent = state.iterations[-5:] if state.iterations else []
-  for it in recent:
+  for it in state.iterations:
     if it.summary:
       prev_lines += f"**Iteration {it.iteration}:** {it.summary}\n"
 
@@ -243,13 +241,12 @@ async def _spawn_improve_worker(
   create_logged_task(
       spawn_worker(
           session_id,
-          description,
+          prompt,
           thread.id,
           cfg,
           session_mgr,
           thread_mgr,
           repo_path=state.repo_path,
-          prompt_override=prompt,
           resolved_backend=resolved_backend,
           resolved_model=resolved_model,
       ),

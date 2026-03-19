@@ -94,13 +94,19 @@ def _build_review_prompt(
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
       f"3. Verify the changes address the user's actual intent (from context research above).\n"
-      f"4. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
-      f"5. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
-      f"6. If you find issues, fix them and commit with descriptive messages.\n"
-      f"7. Stash untracked/modified files then rebase: "
+      f"4. **Scope check**: Flag any changes NOT requested in the task — extra flags, altered defaults,\n"
+      f"   new parameters, behavioral changes. Workers must only do what was asked.\n"
+      f"5. **Think divergently**: Beyond the diff, consider what could go wrong.\n"
+      f"   - Do changed values make sense? Cross-check against existing defaults and conventions.\n"
+      f"   - Are there edge cases, regressions, or interactions with other code the worker missed?\n"
+      f"   - Would this change surprise someone reading the code for the first time?\n"
+      f"6. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
+      f"7. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
+      f"8. If you find issues, fix them and commit with descriptive messages.\n"
+      f"9. Stash untracked/modified files then rebase: "
       f"`git stash --include-untracked && git rebase {base_branch}`\n"
-      f"8. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"9. Push to remote: `cd {repo_path} && git push`")
+      f"10. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
+      f"11. Push to remote: `cd {repo_path} && git push`")
 
 
 async def _git_current_branch(repo_path: Path) -> str:

@@ -400,10 +400,7 @@ async def _finalize_worker(
   # Clean up the thread's worktree now that the worker/reviewer process has exited.
   # Skip cleanup if a reviewer will be spawned — it needs the worktree.
   skip_cleanup = (
-      exit_code == 0
-      and getattr(thread, 'require_review', False)
-      and not getattr(thread, 'review_of', None)
-  )
+      exit_code == 0 and getattr(thread, 'require_review', False) and not getattr(thread, 'review_of', None))
   if not skip_cleanup and getattr(thread, 'worktree_path', None) and getattr(thread, 'repo_path', None):
     wt = Path(thread.worktree_path)
     if wt.exists():
@@ -476,22 +473,37 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    if repo_path is None:
-      repos = await asyncio.to_thread(cfg.discover_repos)
-      if not repos:
-        log.error("spawn_worker_no_repo", session=session_id, detail="no repos found in workspace_dirs")
-        error_msg = "no repos found in workspace_dirs"
-      else:
-        repo_path = repos[0]["path"]
-        log.info("spawn_worker_repo_defaulted", session=session_id, repo=repo_path)
-
-    if not error_msg:
+    if repo_path is not None:
       resolved_repo = Path(repo_path).resolve()
 
       worker = await _create_worktree_and_process(
           session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
           resolved_backend, resolved_model)
+    else:
+      # Repo-less worker (e.g. prompt-only scheduled tasks): no worktree needed.
+      log.info("spawn_worker_no_repo", session=session_id, thread_id=thread.id, detail="running without worktree")
 
+      backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
+      thread.backend = backend_option.id
+      thread.model = backend_option.model
+      await thread_mgr.save_metadata(thread)
+
+      subagent_instructions = await asyncio.to_thread(_read_subagent_instructions, cfg)
+      events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
+
+      worker_prompt = prompt_override or description
+      worker = Worker(
+          thread,
+          Path.home(),
+          events_log,
+          worker_prompt,
+          cfg,
+          backend_option=backend_option,
+          on_spawned=thread_mgr.save_metadata,
+          instructions_content=subagent_instructions,
+      )
+
+    if not error_msg:
       exit_code, quota_exhausted, error_msg = await _stream_worker_events(
           worker, session_id, description, thread, thread_mgr, session_mgr)
 

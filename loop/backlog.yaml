@@ -788,7 +788,7 @@
     catch TimeoutError to proc.kill() and log a warning. ~5 lines changed, no behavioral
     change for normal operation. Directly follows from the gap left by item 053.'
   category: error-handling
-  status: approved
+  status: done
   created: '2026-03-18T12:00:00Z'
   priority: high
 - id: '057'

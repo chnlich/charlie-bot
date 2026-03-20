@@ -716,7 +716,7 @@
     Net removal of ~30 lines of boilerplate across 4 files, consistent use of the
     dependency-injection pattern already established in the codebase.
   category: duplication
-  status: approved
+  status: done
   created: '2026-03-15T12:00:00Z'
   priority: medium
 - id: '053'
@@ -824,7 +824,7 @@
     refactoring, no behavior change. Brings _finalize_worker under the 50-line target
     at ~35 lines.'
   category: maintainability
-  status: approved
+  status: done
   created: '2026-03-19T12:00:00Z'
   priority: medium
 - id: 059

@@ -12,6 +12,7 @@
     #topbar a { color: #7dd3fc; font-size: 13px; text-decoration: none; white-space: nowrap; }
     #topbar a:hover { text-decoration: underline; }
     #topbar .spacer { flex: 1; }
+    #topbar .warn { color: #fbbf24; font-size: 13px; }
     #status { display: flex; align-items: center; justify-content: center; flex: 1; font-size: 15px; color: #94a3b8; }
     #status.error { color: #fca5a5; }
     #perfetto-iframe { flex: 1; border: none; width: 100%; display: none; }
@@ -19,7 +20,8 @@
 </head>
 <body>
   <div id="topbar">
-    <span class="trace-name">{{ title or trace_path }}</span>
+    <span class="trace-name" id="trace-label">{{ title or trace_dir or trace_names[0] }}</span>
+    <span class="warn" id="warn-text"></span>
     <span class="spacer"></span>
     <a href="#" id="open-new-tab">Open in new tab</a>
   </div>
@@ -29,12 +31,15 @@
 
   <script>
     const PERFETTO_UI = 'https://ui.perfetto.dev';
-    const traceUrl = '{{ trace_url }}';
-    const traceTitle = '{{ title or trace_path }}';
+    const traceUrls = {{ trace_urls | tojson }};
+    const traceNames = {{ trace_names | tojson }};
+    const traceTitle = {{ (title or trace_dir or trace_names[0]) | tojson }};
 
     const statusEl = document.getElementById('status');
     const iframeEl = document.getElementById('perfetto-iframe');
     const openNewTabLink = document.getElementById('open-new-tab');
+    const traceLabelEl = document.getElementById('trace-label');
+    const warnEl = document.getElementById('warn-text');
 
     let traceBuffer = null;
 
@@ -43,22 +48,103 @@
       statusEl.classList.add('error');
     }
 
-    async function fetchTrace() {
-      try {
-        const resp = await fetch(traceUrl);
-        if (!resp.ok) {
-          if (resp.status === 404) {
-            showError('Error: trace file not found.');
-          } else {
-            showError('Error: failed to fetch trace (HTTP ' + resp.status + ').');
-          }
-          return null;
+    function updateStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function basename(name) {
+      // Extract a short label from filename, e.g. 'rank000' from 'trace_rank000_step001.json'
+      const m = name.match(/rank(\d+)/i);
+      return m ? 'rank' + m[1] : name.replace(/\.json$/i, '');
+    }
+
+    async function fetchOneTrace(url, index) {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${traceNames[index]}`);
+      return resp.arrayBuffer();
+    }
+
+    function isJsonTrace(buf) {
+      // Check if the first non-whitespace byte looks like JSON ('{' or '[')
+      const view = new Uint8Array(buf, 0, Math.min(buf.byteLength, 64));
+      for (let i = 0; i < view.length; i++) {
+        const ch = view[i];
+        if (ch === 0x20 || ch === 0x09 || ch === 0x0a || ch === 0x0d) continue;
+        return ch === 0x7b || ch === 0x5b; // '{' or '['
+      }
+      return false;
+    }
+
+    function mergeJsonTraces(buffers) {
+      const allEvents = [];
+      for (let i = 0; i < buffers.length; i++) {
+        const text = new TextDecoder().decode(buffers[i].buf);
+        const json = JSON.parse(text);
+        const events = json.traceEvents || (Array.isArray(json) ? json : []);
+        const label = basename(traceNames[buffers[i].idx]);
+        for (const evt of events) {
+          evt.pid = label;
+          allEvents.push(evt);
         }
-        return await resp.arrayBuffer();
-      } catch (e) {
-        showError('Error: failed to fetch trace — ' + e.message);
+      }
+      const merged = JSON.stringify({ traceEvents: allEvents });
+      return new TextEncoder().encode(merged).buffer;
+    }
+
+    async function fetchAllTraces() {
+      const total = traceUrls.length;
+      let loaded = 0;
+      const errors = [];
+
+      if (total > 1) {
+        traceLabelEl.textContent = `${total} traces` + (traceTitle ? ` from ${traceTitle}` : '');
+      }
+
+      const results = await Promise.allSettled(traceUrls.map((url, i) => {
+        return fetchOneTrace(url, i).then(buf => {
+          loaded++;
+          updateStatus(`Loading ${loaded}/${total}...`);
+          return { buf, idx: i };
+        });
+      }));
+
+      const successes = [];
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          successes.push(r.value);
+        } else {
+          errors.push(r.reason.message);
+        }
+      }
+
+      if (successes.length === 0) {
+        showError('Error: all traces failed to load. ' + errors[0]);
         return null;
       }
+
+      if (errors.length > 0) {
+        warnEl.textContent = `⚠ ${errors.length} trace(s) failed to load`;
+        warnEl.title = errors.join('\n');
+      }
+
+      // Single trace — pass through as-is
+      if (successes.length === 1) {
+        return successes[0].buf;
+      }
+
+      // Multiple traces — try JSON merge
+      if (isJsonTrace(successes[0].buf)) {
+        try {
+          return mergeJsonTraces(successes);
+        } catch (e) {
+          warnEl.textContent = '⚠ JSON merge failed, showing first trace only';
+          return successes[0].buf;
+        }
+      }
+
+      // Non-JSON (protobuf) — can't merge, use first
+      warnEl.textContent = '⚠ Non-JSON traces cannot be merged, showing first trace only';
+      return successes[0].buf;
     }
 
     function sendToPerfetto(target, buffer, origin) {
@@ -96,7 +182,7 @@
 
     openNewTabLink.addEventListener('click', async (e) => {
       e.preventDefault();
-      const buf = traceBuffer || await fetchTrace();
+      const buf = traceBuffer || await fetchAllTraces();
       if (!buf) return;
       const win = window.open(PERFETTO_UI);
       if (!win) {
@@ -107,7 +193,7 @@
     });
 
     (async () => {
-      traceBuffer = await fetchTrace();
+      traceBuffer = await fetchAllTraces();
       if (!traceBuffer) return;
       loadInIframe(traceBuffer);
     })();

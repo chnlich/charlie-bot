@@ -1,10 +1,11 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
+import fnmatch
 import socket
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -56,15 +57,37 @@ async def events_viewer(
 @router.get("/perfetto", response_class=HTMLResponse)
 async def perfetto_viewer(
     request: Request,
-    trace: str,
+    trace: list[str] = Query(default=[]),
+    dir: str | None = None,
+    pattern: str = "*.json",
     title: str | None = None,
 ):
-  """Render the Perfetto trace viewer page."""
+  """Render the Perfetto trace viewer page.
+
+  Supports single trace, multiple traces, and directory auto-discovery.
+  """
+  trace_urls: list[str] = list(trace)
+
+  if dir:
+    dir_path = Path(dir)
+    if dir_path.is_dir():
+      filenames = sorted(f.name for f in dir_path.iterdir() if f.is_file() and fnmatch.fnmatch(f.name, pattern))
+      dir_stripped = dir.rstrip("/")
+      trace_urls.extend(f"/files/{dir_stripped}/{name}" for name in filenames)
+    else:
+      log.warning("perfetto_dir_not_found", dir=dir)
+
+  if not trace_urls:
+    raise HTTPException(status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")
+
+  trace_names = [url.rsplit("/", 1)[-1] for url in trace_urls]
+
   return templates.TemplateResponse(
       "perfetto.html", {
           "request": request,
-          "trace_url": trace,
-          "trace_path": trace,
+          "trace_urls": trace_urls,
+          "trace_names": trace_names,
+          "trace_dir": dir,
           "title": title,
       })
 

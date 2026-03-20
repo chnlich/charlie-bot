@@ -480,7 +480,7 @@ async def _finalize_worker(
         else:
           log.info("worktree_removed", thread_id=thread.id, path=str(wt))
         # Prune stale worktree refs
-        await asyncio.create_subprocess_exec(
+        prune_proc = await asyncio.create_subprocess_exec(
             "git",
             "worktree",
             "prune",
@@ -488,6 +488,11 @@ async def _finalize_worker(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        try:
+          await asyncio.wait_for(prune_proc.communicate(), timeout=30.0)
+        except asyncio.TimeoutError:
+          prune_proc.kill()
+          log.warning("worktree_prune_timeout", thread_id=thread.id)
       except Exception as wt_err:
         log.warning("worktree_cleanup_error", thread_id=thread.id, error=str(wt_err))
 

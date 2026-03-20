@@ -807,7 +807,7 @@
     ~5 lines changed, asyncio is already imported in api/files.py via FastAPI transitive
     deps but may need an explicit import.'
   category: performance
-  status: approved
+  status: done
   created: '2026-03-18T12:00:00Z'
   priority: medium
 - id: 058

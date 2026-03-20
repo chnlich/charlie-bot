@@ -1,5 +1,6 @@
 """File server router — serves files and directory listings from the filesystem."""
 
+import asyncio
 import html
 import mimetypes
 from datetime import datetime, timezone
@@ -88,14 +89,14 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
 @router.get("/{path:path}")
 async def serve_file(path: str):
   """Serve a file or directory listing from the filesystem."""
-  fs_path = (Path("/") / path).resolve()
+  fs_path = await asyncio.to_thread(lambda: (Path("/") / path).resolve())
 
-  if not fs_path.exists():
+  if not await asyncio.to_thread(fs_path.exists):
     raise HTTPException(status_code=404, detail="Not found")
 
-  if fs_path.is_dir():
+  if await asyncio.to_thread(fs_path.is_dir):
     url_prefix = f"/files/{path}" if path else "/files"
-    listing = _dir_listing_html(fs_path, url_prefix)
+    listing = await asyncio.to_thread(_dir_listing_html, fs_path, url_prefix)
     return HTMLResponse(listing)
 
   # Serve the file with auto-detected MIME type

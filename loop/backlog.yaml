@@ -788,7 +788,7 @@
     catch TimeoutError to proc.kill() and log a warning. ~5 lines changed, no behavioral
     change for normal operation. Directly follows from the gap left by item 053.'
   category: error-handling
-  status: pending
+  status: approved
   created: '2026-03-18T12:00:00Z'
   priority: high
 - id: '057'
@@ -810,7 +810,7 @@
   status: pending
   created: '2026-03-18T12:00:00Z'
   priority: medium
-- id: '058'
+- id: 058
   title: Extract worker directory cleanup into _cleanup_worker_directory helper
   description: 'PURPOSE — Reduce the 85-line _finalize_worker() in core/spawner.py
     by extracting the 50-line self-contained directory cleanup block (L446-496) into
@@ -819,15 +819,15 @@
     for repoless temp directories — each with its own error handling and logging.
     Inlining this logic obscures the simple three-phase structure of finalization
     (update status, clean up directory, notify completion). HOW — Create async def
-    _cleanup_worker_directory(thread, skip_cleanup: bool) -> None containing the
-    existing cleanup branches. Call from _finalize_worker in place of the inline
-    block. Pure refactoring, no behavior change. Brings _finalize_worker under the
-    50-line target at ~35 lines.'
+    _cleanup_worker_directory(thread, skip_cleanup: bool) -> None containing the existing
+    cleanup branches. Call from _finalize_worker in place of the inline block. Pure
+    refactoring, no behavior change. Brings _finalize_worker under the 50-line target
+    at ~35 lines.'
   category: maintainability
   status: pending
   created: '2026-03-19T12:00:00Z'
   priority: medium
-- id: '059'
+- id: 059
   title: Extract shared YAML load/save helpers to eliminate repeated boilerplate
   description: 'PURPOSE — Eliminate 8 duplicated yaml.safe_load(path.read_text())
     call sites and 4 duplicated yaml.dump/safe_dump call sites across 4 files, fixing
@@ -838,30 +838,29 @@
     side similarly varies between yaml.dump and yaml.safe_dump, with inconsistent
     default_flow_style and sort_keys options. HOW — Add load_yaml(path, default=None)
     and save_yaml(path, data, sort_keys=False) helpers in a new core/yaml_utils.py
-    module. load_yaml handles encoding="utf-8", safe_load, and default fallback.
-    save_yaml uses safe_dump with allow_unicode=True and consistent formatting. Replace
-    all 12 inline call sites with one-liner calls. ~15 lines for the module, 1-line
-    change per call site. Ensures consistent encoding and serialization behavior across
-    all YAML consumers.'
+    module. load_yaml handles encoding="utf-8", safe_load, and default fallback. save_yaml
+    uses safe_dump with allow_unicode=True and consistent formatting. Replace all
+    12 inline call sites with one-liner calls. ~15 lines for the module, 1-line change
+    per call site. Ensures consistent encoding and serialization behavior across all
+    YAML consumers.'
   category: duplication
   status: pending
   created: '2026-03-19T12:00:00Z'
   priority: low
 - id: '060'
   title: Extract shared kill_process_group helper to deduplicate 8 call sites
-  description: 'PURPOSE — Eliminate 8 repetitions of the same try/except-guarded
-    os.killpg(os.getpgid(pid), signal) pattern scattered across 5 files, reducing
-    boilerplate and ensuring consistent error handling for process termination.
-    Currently agents/backends/base.py (4 sites), core/latex.py (1), core/autonamer.py
-    (1), core/slash_commands.py (1), and api/threads.py (1) each inline the identical
-    pattern: try: os.killpg(os.getpgid(proc.pid), signal.SIG*) / except
-    (ProcessLookupError, PermissionError): pass — with minor variations in whether
-    a log.debug call follows the except. HOW — Add a kill_process_group(pid, sig=signal.SIGTERM)
-    helper in a shared location (e.g. core/process.py or extend core/tasks.py).
-    The helper wraps os.killpg(os.getpgid(pid), sig) in the standard try/except
-    guard with optional structlog debug on ProcessLookupError. Replace all 8 inline
-    blocks with one-liner calls. ~8 lines for the helper, 8 call sites reduced from
-    3-5 lines each to 1 line. Also enables the SIGTERM-wait-SIGKILL escalation
+  description: 'PURPOSE — Eliminate 8 repetitions of the same try/except-guarded os.killpg(os.getpgid(pid),
+    signal) pattern scattered across 5 files, reducing boilerplate and ensuring consistent
+    error handling for process termination. Currently agents/backends/base.py (4 sites),
+    core/latex.py (1), core/autonamer.py (1), core/slash_commands.py (1), and api/threads.py
+    (1) each inline the identical pattern: try: os.killpg(os.getpgid(proc.pid), signal.SIG*)
+    / except (ProcessLookupError, PermissionError): pass — with minor variations in
+    whether a log.debug call follows the except. HOW — Add a kill_process_group(pid,
+    sig=signal.SIGTERM) helper in a shared location (e.g. core/process.py or extend
+    core/tasks.py). The helper wraps os.killpg(os.getpgid(pid), sig) in the standard
+    try/except guard with optional structlog debug on ProcessLookupError. Replace
+    all 8 inline blocks with one-liner calls. ~8 lines for the helper, 8 call sites
+    reduced from 3-5 lines each to 1 line. Also enables the SIGTERM-wait-SIGKILL escalation
     pattern in AgentBackend.run() and terminate() to be expressed more clearly.'
   status: pending
   created: '2026-03-19T12:00:00Z'

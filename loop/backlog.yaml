@@ -844,7 +844,7 @@
     per call site. Ensures consistent encoding and serialization behavior across all
     YAML consumers.'
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-19T12:00:00Z'
   priority: low
 - id: '060'

@@ -426,36 +426,13 @@ async def _stream_worker_events(
     return -1, False, str(e)
 
 
-async def _finalize_worker(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    exit_code: int,
-    thread_mgr: ThreadManager,
-    session_mgr: SessionManager,
-    cfg: CharlieBotConfig,
-    quota_exhausted: bool = False,
-    error: str = "",
-) -> None:
-  """Update thread status and notify completion."""
-  if quota_exhausted:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED)
-  elif error:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1)
-  elif exit_code == 0:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0)
-    log.info("worker_completed", thread_id=thread.id)
-  else:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
-    log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
+async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) -> None:
+  """Remove the worker's worktree or temp directory after it finishes."""
+  if skip_cleanup:
+    return
 
-  # Clean up the thread's worktree now that the worker/reviewer process has exited.
-  # Skip cleanup if a reviewer will be spawned — it needs the worktree.
-  can_spawn_reviewer = all(getattr(thread, attr, None) for attr in ('repo_path', 'branch_name', 'worktree_path'))
-  skip_cleanup = (
-      exit_code == 0 and getattr(thread, 'require_review', False) and not getattr(thread, 'review_of', None) and
-      can_spawn_reviewer)
-  if not skip_cleanup and getattr(thread, 'worktree_path', None) and getattr(thread, 'repo_path', None):
+  # Git worktree removal for repo-based workers.
+  if getattr(thread, 'worktree_path', None) and getattr(thread, 'repo_path', None):
     wt = Path(thread.worktree_path)
     if wt.exists():
       try:
@@ -495,9 +472,10 @@ async def _finalize_worker(
           log.warning("worktree_prune_timeout", thread_id=thread.id)
       except Exception as wt_err:
         log.warning("worktree_cleanup_error", thread_id=thread.id, error=str(wt_err))
+    return
 
   # Clean up temp dir for repoless workers (no repo_path, temp dir as worktree_path).
-  if not skip_cleanup and getattr(thread, 'worktree_path', None) and not getattr(thread, 'repo_path', None):
+  if getattr(thread, 'worktree_path', None):
     tmp = Path(thread.worktree_path)
     if tmp.exists() and tmp.name.startswith('charliebot-repoless-'):
       try:
@@ -505,6 +483,38 @@ async def _finalize_worker(
         log.info("repoless_tmpdir_removed", thread_id=thread.id, path=str(tmp))
       except Exception as tmp_err:
         log.warning("repoless_tmpdir_cleanup_error", thread_id=thread.id, error=str(tmp_err))
+
+
+async def _finalize_worker(
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    exit_code: int,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    quota_exhausted: bool = False,
+    error: str = "",
+) -> None:
+  """Update thread status and notify completion."""
+  if quota_exhausted:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED)
+  elif error:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1)
+  elif exit_code == 0:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0)
+    log.info("worker_completed", thread_id=thread.id)
+  else:
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
+    log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
+
+  # Clean up the thread's worktree/temp directory.
+  # Skip cleanup if a reviewer will be spawned — it needs the worktree.
+  can_spawn_reviewer = all(getattr(thread, attr, None) for attr in ('repo_path', 'branch_name', 'worktree_path'))
+  skip_cleanup = (
+      exit_code == 0 and getattr(thread, 'require_review', False) and not getattr(thread, 'review_of', None) and
+      can_spawn_reviewer)
+  await _cleanup_worker_directory(thread, skip_cleanup)
 
   await _notify_completion(
       session_id,

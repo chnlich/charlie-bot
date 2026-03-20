@@ -716,7 +716,7 @@
     Net removal of ~30 lines of boilerplate across 4 files, consistent use of the
     dependency-injection pattern already established in the codebase.
   category: duplication
-  status: pending
+  status: approved
   created: '2026-03-15T12:00:00Z'
   priority: medium
 - id: '053'

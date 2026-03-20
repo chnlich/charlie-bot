@@ -824,7 +824,7 @@
     refactoring, no behavior change. Brings _finalize_worker under the 50-line target
     at ~35 lines.'
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-03-19T12:00:00Z'
   priority: medium
 - id: 059

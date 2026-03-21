@@ -19,17 +19,8 @@ _MODEL_REASONING_EFFORT_CONFIG = 'model_reasoning_effort="xhigh"'
 class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, **kwargs):
-    model = kwargs.pop("model", "gpt-5.3-codex")
-    instructions_content = kwargs.pop("instructions_content", None)
-    resume_session_id = kwargs.pop("resume_session_id", None)
-    extra_flags = kwargs.pop("extra_flags", None)
-    super().__init__(
-        model=model,
-        instructions_content=instructions_content,
-        resume_session_id=resume_session_id,
-        extra_flags=extra_flags,
-        **kwargs)
+  def __init__(self, *, model="gpt-5.3-codex", **kwargs):
+    super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}

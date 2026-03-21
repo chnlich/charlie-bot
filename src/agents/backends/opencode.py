@@ -15,16 +15,7 @@ class OpenCodeBackend(AgentBackend):
   """Runs an `opencode run --format json` subprocess and translates NDJSON events to CC-compatible format."""
 
   def __init__(self, **kwargs):
-    model = kwargs.pop("model", None)
-    instructions_content = kwargs.pop("instructions_content", None)
-    resume_session_id = kwargs.pop("resume_session_id", None)
-    extra_flags = kwargs.pop("extra_flags", None)
-    super().__init__(
-        model=model,
-        instructions_content=instructions_content,
-        resume_session_id=resume_session_id,
-        extra_flags=extra_flags,
-        **kwargs)
+    super().__init__(**kwargs)
     self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
     self._session_id_emitted = False
 

@@ -865,3 +865,25 @@
   status: done
   created: '2026-03-19T12:00:00Z'
   priority: low
+- id: '061'
+  title: Extract cleanup phase from AgentBackend.run() and deduplicate shutdown escalation
+  description: 'PURPOSE — Improve readability of the 115-line async-generator template
+    method that underpins every agent subprocess execution, and deduplicate the SIGTERM-wait-SIGKILL
+    shutdown escalation repeated between run() and terminate(). AgentBackend.run()
+    in agents/backends/base.py is the second-longest function in the codebase (after
+    master_cc.py:run_message at 134 lines) and mixes subprocess setup, NDJSON read
+    loop with post-result timeout and tool-call tracking, and process cleanup with
+    escalation — all in one method. The cleanup escalation (L258-267) duplicates the
+    same pattern in terminate() (L275-281): call kill_process_group with SIGTERM, asyncio.wait_for
+    on proc.wait(), then escalate to SIGKILL on timeout. HOW — Extract async def _graceful_shutdown(timeout)
+    for the shared SIGTERM-wait-SIGKILL pattern. Extract async def _drain_and_cleanup()
+    containing the stderr-drain (L254-257) and process-wait block that calls _graceful_shutdown().
+    terminate() becomes a 3-line method. run() ends with a single await self._drain_and_cleanup()
+    call instead of 18 inline lines. Reduces run() from 115 to ~97 lines and eliminates
+    the duplicated escalation pattern. Pure refactoring, no behavior change. Natural
+    follow-up to item 060 which extracted kill_process_group and noted this opportunity.
+    Follows the pattern from items 003, 021, 041, and 058 which split other long functions.'
+  category: maintainability
+  status: pending
+  created: '2026-03-21T12:00:00Z'
+  priority: medium

@@ -21,16 +21,13 @@ BASE_COMMAND: list[str] = [
 class ClaudeCodeBackend(AgentBackend):
   """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
 
-  def __init__(self, **kwargs):
-    model = kwargs.pop("model", None)
-    instructions_content = kwargs.pop("instructions_content", None)
-    extra_flags = kwargs.pop("extra_flags", None)
-    super().__init__(model=model, instructions_content=instructions_content, extra_flags=extra_flags, **kwargs)
+  def __init__(self, *, model=None, **kwargs):
+    super().__init__(model=model, **kwargs)
     self._cmd: list[str] = list(BASE_COMMAND)
-    if model:
-      self._cmd += ["--model", model]
-    if extra_flags:
-      self._cmd += extra_flags
+    if self._model:
+      self._cmd += ["--model", self._model]
+    if self._extra_flags:
+      self._cmd += self._extra_flags
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Write CLAUDE.md into the cwd so Claude Code auto-detects it."""

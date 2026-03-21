@@ -14,17 +14,8 @@ log = structlog.get_logger()
 class GeminiCliBackend(AgentBackend):
   """Runs a `gemini` CLI subprocess in stream-json mode and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, **kwargs):
-    model = kwargs.pop("model", "gemini-3-pro-preview")
-    instructions_content = kwargs.pop("instructions_content", None)
-    resume_session_id = kwargs.pop("resume_session_id", None)
-    extra_flags = kwargs.pop("extra_flags", None)
-    super().__init__(
-        model=model,
-        instructions_content=instructions_content,
-        resume_session_id=resume_session_id,
-        extra_flags=extra_flags,
-        **kwargs)
+  def __init__(self, *, model="gemini-3-pro-preview", **kwargs):
+    super().__init__(model=model, **kwargs)
     self._gemini_bin = resolve_binary("gemini", str(Path.home() / ".local" / "bin"))
     self._text_buffer = ""
 

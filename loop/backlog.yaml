@@ -862,6 +862,6 @@
     all 8 inline blocks with one-liner calls. ~8 lines for the helper, 8 call sites
     reduced from 3-5 lines each to 1 line. Also enables the SIGTERM-wait-SIGKILL escalation
     pattern in AgentBackend.run() and terminate() to be expressed more clearly.'
-  status: approved
+  status: done
   created: '2026-03-19T12:00:00Z'
   priority: low

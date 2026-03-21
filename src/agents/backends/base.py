@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import shutil
 import signal
 import time
@@ -12,6 +11,8 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 import structlog
+
+from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
@@ -258,18 +259,12 @@ class AgentBackend(ABC):
       await asyncio.wait_for(self._proc.wait(), timeout=_CLEANUP_TIMEOUT)
     except asyncio.TimeoutError:
       log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
-      try:
-        os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-      except (ProcessLookupError, PermissionError):
-        pass
+      kill_process_group(self._proc.pid, signal.SIGTERM)
       try:
         await asyncio.wait_for(self._proc.wait(), timeout=_CLEANUP_TIMEOUT)
       except asyncio.TimeoutError:
         log.warning("backend_sigkill_after_result", pid=self._proc.pid)
-        try:
-          os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-          pass
+        kill_process_group(self._proc.pid, signal.SIGKILL)
     self.exit_code = self._proc.returncode or 0
     self.stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 
@@ -277,16 +272,10 @@ class AgentBackend(ABC):
     """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""
     if self._proc is None or self._proc.returncode is not None:
       return
-    try:
-      os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-      log.debug("backend_terminate_pid_gone", pid=self._proc.pid)
+    if not kill_process_group(self._proc.pid, signal.SIGTERM):
       return
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=5.0)
     except asyncio.TimeoutError:
       log.warning("backend_terminate_timeout", pid=self._proc.pid)
-      try:
-        os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-      except (ProcessLookupError, PermissionError):
-        pass
+      kill_process_group(self._proc.pid, signal.SIGKILL)

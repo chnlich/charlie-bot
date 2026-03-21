@@ -1,9 +1,9 @@
 """Thread management API routes."""
 
 import asyncio
-import os
-import signal
 from datetime import datetime, timezone
+
+from src.core.process import kill_process_group
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -121,10 +121,7 @@ async def cancel_thread(
     raise HTTPException(status_code=404, detail="Thread not found")
 
   if thread.pid:
-    try:
-      os.killpg(os.getpgid(thread.pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-      log.debug("cancel_pid_gone", pid=thread.pid, thread=thread_id)
+    kill_process_group(thread.pid)
 
   await thread_mgr.update_status(session_id, thread_id, ThreadStatus.CANCELLED)
   return {"ok": True}

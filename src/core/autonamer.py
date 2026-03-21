@@ -1,7 +1,6 @@
 """Auto-name sessions after the first chat turn using Gemini or Claude CLI."""
 
 import asyncio
-import os
 import re
 import signal
 
@@ -10,6 +9,7 @@ import structlog
 from src.agents.gemini_provider import GeminiProvider
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
+from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 
@@ -71,12 +71,7 @@ async def _generate_name_via_claude_cli(prompt: str) -> str:
   try:
     stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=30.0)
   except asyncio.TimeoutError:
-    try:
-      os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-      pass
-    except Exception as kill_err:
-      log.debug('autonamer_kill_failed', error=str(kill_err))
+    kill_process_group(proc.pid, signal.SIGKILL)
     raise
   if proc.returncode != 0:
     raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")

@@ -1,11 +1,12 @@
 """LaTeX project configuration and compilation."""
 
 import asyncio
-import os
 import signal
 from pathlib import Path
 
 import structlog
+
+from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
@@ -154,12 +155,7 @@ async def compile_latex() -> dict:
       log.info('latex_compile_done')
     return {'ok': ok, 'log': output}
   except asyncio.TimeoutError:
-    try:
-      os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-      pass
-    except Exception as kill_err:
-      log.debug('latex_compile_kill_failed', error=str(kill_err))
+    kill_process_group(proc.pid, signal.SIGKILL)
     log.warning('latex_compile_timeout')
     return {'ok': False, 'log': 'Compilation timed out after 60s'}
   except Exception as e:

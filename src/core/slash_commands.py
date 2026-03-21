@@ -1,7 +1,6 @@
 """Slash command loading and execution."""
 
 import asyncio
-import os
 import signal
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +9,8 @@ from typing import Optional
 import structlog
 import yaml
 from pydantic import BaseModel
+
+from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
@@ -83,12 +84,7 @@ async def execute_shell_command(
     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
   except asyncio.TimeoutError:
     log.warning('slash_shell_timeout', cmd=cmd, timeout=timeout)
-    try:
-      os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-      pass
-    except Exception as kill_err:
-      log.debug('slash_shell_kill_failed', error=str(kill_err))
+    kill_process_group(proc.pid, signal.SIGKILL)
     return {'stdout': '', 'stderr': 'Command timed out', 'exit_code': -1}
 
   return {

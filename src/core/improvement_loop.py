@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import yaml
 import structlog
 
 from src.core.config import ImprovementLoopConfig
 from src.core.git import git_add_commit_push
+from src.core.yaml_utils import load_yaml, save_yaml
 
 log = structlog.get_logger()
 
@@ -20,7 +20,7 @@ def _load_backlog(backlog_path: Path) -> list[dict]:
   """Load backlog items from YAML. Returns empty list if file missing."""
   if not backlog_path.exists():
     return []
-  data = yaml.safe_load(backlog_path.read_text()) or []
+  data = load_yaml(backlog_path, default=[])
   if isinstance(data, list):
     return data
   return data.get('items', data.get('backlog', []))
@@ -29,7 +29,7 @@ def _load_backlog(backlog_path: Path) -> list[dict]:
 def _save_backlog(backlog_path: Path, items: list[dict]) -> None:
   """Write backlog items back to YAML (block style)."""
   backlog_path.parent.mkdir(parents=True, exist_ok=True)
-  backlog_path.write_text(yaml.dump(items, default_flow_style=False, allow_unicode=True, sort_keys=False))
+  save_yaml(backlog_path, items)
 
 
 def _next_id(items: list[dict], prefix: str) -> str:

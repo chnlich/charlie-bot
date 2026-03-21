@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
-import yaml
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.core.git import git_add_commit_push
 from src.core.tasks import create_logged_task
+from src.core.yaml_utils import load_yaml, save_yaml
 
 log = structlog.get_logger()
 
@@ -37,7 +37,7 @@ def _load_all_items(repo_path: Path) -> list[dict]:
     items = []
     for yaml_file in sorted(backlogs_dir.glob('*.yaml')):
       source = yaml_file.stem
-      file_items = yaml.safe_load(yaml_file.read_text(encoding='utf-8')) or []
+      file_items = load_yaml(yaml_file, default=[])
       for item in file_items:
         item['_source'] = source
       items.extend(file_items)
@@ -46,7 +46,7 @@ def _load_all_items(repo_path: Path) -> list[dict]:
   path = repo_path / 'loop' / 'backlog.yaml'
   if not path.exists():
     return []
-  items = yaml.safe_load(path.read_text(encoding='utf-8')) or []
+  items = load_yaml(path, default=[])
   for item in items:
     item.setdefault('_source', 'backlog')
   return items
@@ -64,7 +64,7 @@ def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) ->
     if source:
       files = [f for f in files if f.stem == source]
     for yaml_file in files:
-      items = yaml.safe_load(yaml_file.read_text(encoding='utf-8')) or []
+      items = load_yaml(yaml_file, default=[])
       if any(str(i.get('id')) == item_id for i in items):
         return yaml_file, items
     return None, None
@@ -72,7 +72,7 @@ def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) ->
   path = repo_path / 'loop' / 'backlog.yaml'
   if not path.exists():
     return None, None
-  items = yaml.safe_load(path.read_text(encoding='utf-8')) or []
+  items = load_yaml(path, default=[])
   if any(str(i.get('id')) == item_id for i in items):
     return path, items
   return None, None
@@ -105,7 +105,7 @@ async def get_history(repo: str | None = None):
   def _load() -> list[dict]:
     items: list[dict] = []
     for f in files:
-      items.extend(yaml.safe_load(f.read_text(encoding='utf-8')) or [])
+      items.extend(load_yaml(f, default=[]))
     items.sort(key=lambda e: e.get('timestamp', ''), reverse=True)
     return items
 
@@ -172,8 +172,7 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
   if updated is None:
     return JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)
 
-  await asyncio.to_thread(
-      yaml_path.write_text, yaml.safe_dump(items, allow_unicode=True, sort_keys=False), encoding='utf-8')
+  await asyncio.to_thread(save_yaml, yaml_path, items)
   log.info('backlog_updated', item_id=item_id, file=str(yaml_path), **patch.model_dump(exclude_none=True))
 
   git_rel = str(yaml_path.relative_to(repo_path))

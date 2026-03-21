@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
-import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.core.config import get_scheduled_tasks
+from src.core.yaml_utils import load_yaml, save_yaml
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -18,13 +18,11 @@ CRON_PATH = Path.home() / '.charliebot' / 'config.d' / 'cron.yaml'
 
 
 def _read_cron_yaml() -> dict:
-  if not CRON_PATH.exists():
-    return {'scheduled_tasks': []}
-  return yaml.safe_load(CRON_PATH.read_text()) or {'scheduled_tasks': []}
+  return load_yaml(CRON_PATH, default={'scheduled_tasks': []})
 
 
 def _write_cron_yaml(data: dict):
-  CRON_PATH.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
+  save_yaml(CRON_PATH, data)
 
 
 class TaskUpdate(BaseModel):

@@ -4,13 +4,13 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import yaml
 import structlog
 from pydantic import BaseModel, model_validator
 
 log = structlog.get_logger()
 
 from src.core.models import BackendOption
+from src.core.yaml_utils import load_yaml
 
 
 class ImprovementLoopConfig(BaseModel):
@@ -214,10 +214,7 @@ def load_config() -> CharlieBotConfig:
   home = Path.home() / ".charliebot"
   config_path = home / "config.yaml"
 
-  yaml_data: dict = {}
-  if config_path.exists():
-    with open(config_path) as f:
-      yaml_data = yaml.safe_load(f) or {}
+  yaml_data: dict = load_yaml(config_path, default={})
 
   yaml_data.setdefault("charliebot_home", str(home))
   return CharlieBotConfig(**yaml_data)
@@ -256,7 +253,7 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
     return _cron_tasks
   if mtime != _cron_mtime:
     try:
-      data = yaml.safe_load(cron_path.read_text()) or {}
+      data = load_yaml(cron_path, default={})
       raw_tasks = data.get("scheduled_tasks", [])
       for t in raw_tasks:
         if isinstance(t, dict) and t.get("repo"):

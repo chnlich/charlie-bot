@@ -2,7 +2,6 @@
 
 import asyncio
 import shutil
-import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
@@ -355,12 +354,12 @@ async def _create_repoless_process(
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
   worker_prompt = prompt_override or description
-  tmp_dir = Path(tempfile.mkdtemp(prefix='charliebot-repoless-'))
+  thread_dir = cfg.sessions_dir / session_id / 'threads' / thread.id
 
   # Repo-less tasks cannot produce branch/worktree review artifacts.
   thread.branch_name = None
   thread.repo_path = None
-  thread.worktree_path = str(tmp_dir)
+  thread.worktree_path = str(thread_dir)
   thread.require_review = False
   thread.context = context
   await thread_mgr.save_metadata(thread)
@@ -375,7 +374,7 @@ async def _create_repoless_process(
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
       thread,
-      tmp_dir,
+      thread_dir,
       events_log,
       worker_prompt,
       cfg,

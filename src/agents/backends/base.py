@@ -251,14 +251,22 @@ class AgentBackend(ABC):
 
     await self._drain_and_cleanup(_CLEANUP_TIMEOUT)
 
-  async def _graceful_shutdown(self, timeout: float) -> None:
-    """Send SIGTERM to the process group; escalate to SIGKILL if it doesn't exit within timeout."""
-    if not kill_process_group(self._proc.pid, signal.SIGTERM):
+  async def _graceful_shutdown(
+      self,
+      timeout: float,
+      *,
+      timeout_log_event: str,
+      wait_even_if_sigterm_not_sent: bool = False,
+  ) -> None:
+    """Send SIGTERM, wait for exit, and escalate to SIGKILL if the process does not exit in time."""
+    assert self._proc is not None
+    sigterm_sent = kill_process_group(self._proc.pid, signal.SIGTERM)
+    if not sigterm_sent and not wait_even_if_sigterm_not_sent:
       return
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
-      log.warning("backend_sigkill_escalation", pid=self._proc.pid)
+      log.warning(timeout_log_event, pid=self._proc.pid)
       kill_process_group(self._proc.pid, signal.SIGKILL)
 
   async def _drain_and_cleanup(self, timeout: float) -> None:
@@ -272,7 +280,11 @@ class AgentBackend(ABC):
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
       log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
-      await self._graceful_shutdown(timeout)
+      await self._graceful_shutdown(
+          timeout,
+          timeout_log_event="backend_sigkill_after_result",
+          wait_even_if_sigterm_not_sent=True,
+      )
     self.exit_code = self._proc.returncode or 0
     self.stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 
@@ -280,4 +292,4 @@ class AgentBackend(ABC):
     """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""
     if self._proc is None or self._proc.returncode is not None:
       return
-    await self._graceful_shutdown(5.0)
+    await self._graceful_shutdown(5.0, timeout_log_event="backend_terminate_timeout")

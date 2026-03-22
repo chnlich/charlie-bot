@@ -58,6 +58,7 @@ def main() -> None:
         "session_id": args.session,
         "repo_path": args.repo,
         "description": description,
+        "require_review": False,
     }
     try:
       resp = requests.post(f"{base_url}/api/internal/delegate", json=payload, timeout=30, verify=False)

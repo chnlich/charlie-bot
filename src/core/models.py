@@ -164,3 +164,4 @@ class DelegateRequest(BaseModel):
   description: str
   repo_path: Optional[str] = None
   context: Optional[str] = None
+  require_review: bool = True

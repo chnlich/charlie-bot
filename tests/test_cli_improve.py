@@ -1,8 +1,10 @@
-"""Tests for src/cli/improve.py."""
+"""Tests for src/cli/improve.py and the /api/internal/improve endpoint."""
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.cli.improve import main
 
@@ -16,91 +18,88 @@ def _mock_config(tmp_path: Path):
   return cfg
 
 
-def test_main_runs_iterations(tmp_path: Path):
-  """main() delegates each iteration and collects summaries."""
+def test_main_posts_to_improve_endpoint(tmp_path: Path):
+  """main() posts to /api/internal/improve and returns immediately."""
   cfg = _mock_config(tmp_path)
-  session_id = "test-session"
-  (cfg.sessions_dir / session_id).mkdir(parents=True, exist_ok=True)
 
-  # Mock responses for 2 iterations
-  delegate_resp = MagicMock()
-  delegate_resp.json.return_value = {"thread_id": "t1"}
-  delegate_resp.raise_for_status = MagicMock()
+  resp_mock = MagicMock()
+  resp_mock.json.return_value = {"status": "started", "session_id": "s1", "iterations": 2}
+  resp_mock.raise_for_status = MagicMock()
 
-  thread_resp = MagicMock()
-  thread_resp.json.return_value = {"status": "completed"}
-  thread_resp.raise_for_status = MagicMock()
-
-  events_resp = MagicMock()
-  events_resp.json.return_value = [
-      {"type": "assistant", "content": "Made improvements to auth module."},
-  ]
-  events_resp.raise_for_status = MagicMock()
-
-  def mock_post(url, **kwargs):
-    return delegate_resp
-
-  def mock_get(url, **kwargs):
-    if "/events" in url:
-      return events_resp
-    return thread_resp
-
-  with patch("sys.argv", ["improve", "--session", session_id, "--repo", "/tmp/repo", "--iterations", "2", "--goal", "optimize"]), \
+  with patch("sys.argv", ["improve", "--session", "s1", "--repo", "/tmp/repo", "--iterations", "2", "--goal", "optimize"]), \
        patch("src.cli.improve.get_config", return_value=cfg), \
-       patch("src.cli.improve.requests.post", side_effect=mock_post) as post_mock, \
-       patch("src.cli.improve.requests.get", side_effect=mock_get) as get_mock, \
-       patch("src.cli.improve.time.sleep"):
+       patch("src.cli.improve.requests.post", return_value=resp_mock) as post_mock:
     main()
 
-  # Should have posted twice (once per iteration)
-  assert post_mock.call_count == 2
+  # Should have posted exactly once to the improve endpoint
+  post_mock.assert_called_once()
+  call_args = post_mock.call_args
+  assert "/api/internal/improve" in call_args[0][0]
+  payload = call_args[1]["json"]
+  assert payload["session_id"] == "s1"
+  assert payload["repo_path"] == "/tmp/repo"
+  assert payload["iterations"] == 2
+  assert payload["goal"] == "optimize"
 
 
-def test_main_stops_when_state_stopped(tmp_path: Path):
-  """main() stops early when improve_state.json has status=stopped."""
+def test_main_exits_on_request_error(tmp_path: Path):
+  """main() exits with code 1 on request failure."""
   cfg = _mock_config(tmp_path)
-  session_id = "stop-session"
-  state_dir = cfg.sessions_dir / session_id
-  state_dir.mkdir(parents=True, exist_ok=True)
 
-  # Write stopped state before starting
-  (state_dir / "improve_state.json").write_text(json.dumps({
-      "goal": "optimize",
-      "max_iterations": 5,
-      "status": "stopped",
-  }))
-
-  with patch("sys.argv", ["improve", "--session", session_id, "--repo", "/tmp/repo", "--iterations", "3", "--goal", "optimize"]), \
+  import requests as req_lib
+  with patch("sys.argv", ["improve", "--session", "s1", "--repo", "/tmp/repo", "--goal", "fix"]), \
        patch("src.cli.improve.get_config", return_value=cfg), \
-       patch("src.cli.improve.requests.post") as post_mock, \
-       patch("src.cli.improve.time.sleep"):
-    main()
-
-  # Should not have delegated any iterations
-  post_mock.assert_not_called()
+       patch("src.cli.improve.requests.post", side_effect=req_lib.RequestException("conn error")):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+    assert exc_info.value.code == 1
 
 
-def test_main_handles_failed_thread(tmp_path: Path):
-  """main() continues when a thread completes with failed status."""
-  cfg = _mock_config(tmp_path)
-  session_id = "fail-session"
-  (cfg.sessions_dir / session_id).mkdir(parents=True, exist_ok=True)
+# ---------------------------------------------------------------------------
+# Tests for the /api/internal/improve endpoint
+# ---------------------------------------------------------------------------
 
-  delegate_resp = MagicMock()
-  delegate_resp.json.return_value = {"thread_id": "t1"}
-  delegate_resp.raise_for_status = MagicMock()
 
-  thread_resp = MagicMock()
-  thread_resp.json.return_value = {"status": "failed"}
-  thread_resp.raise_for_status = MagicMock()
+@pytest.mark.asyncio
+async def test_improve_endpoint_creates_background_task():
+  """POST /api/internal/improve returns immediately and creates a background task."""
+  from src.api.internal import start_improve_loop
+  from src.core.models import ImproveRequest
 
-  events_resp = MagicMock()
-  events_resp.json.return_value = []
-  events_resp.raise_for_status = MagicMock()
+  req = ImproveRequest(session_id="s1", repo_path="/tmp/repo", iterations=3, goal="optimize")
 
-  with patch("sys.argv", ["improve", "--session", session_id, "--repo", "/tmp/repo", "--iterations", "1", "--goal", "fix"]), \
-       patch("src.cli.improve.get_config", return_value=cfg), \
-       patch("src.cli.improve.requests.post", return_value=delegate_resp), \
-       patch("src.cli.improve.requests.get", side_effect=lambda url, **kw: events_resp if "/events" in url else thread_resp), \
-       patch("src.cli.improve.time.sleep"):
-    main()
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = MagicMock()  # session exists
+
+  thread_mgr = AsyncMock()
+
+  mock_task = MagicMock()
+  with patch("src.api.internal.get_config") as mock_cfg, \
+       patch("src.api.internal.create_logged_task", return_value=mock_task) as mock_create_task:
+    mock_cfg.return_value = MagicMock()
+    result = await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+
+  assert result["status"] == "started"
+  assert result["session_id"] == "s1"
+  assert result["iterations"] == 3
+  mock_create_task.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_improve_endpoint_returns_404_for_missing_session():
+  """POST /api/internal/improve returns 404 when session doesn't exist."""
+  from fastapi import HTTPException
+
+  from src.api.internal import start_improve_loop
+  from src.core.models import ImproveRequest
+
+  req = ImproveRequest(session_id="missing", repo_path="/tmp/repo", iterations=1, goal="fix")
+
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = None
+
+  thread_mgr = AsyncMock()
+
+  with pytest.raises(HTTPException) as exc_info:
+    await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+  assert exc_info.value.status_code == 404

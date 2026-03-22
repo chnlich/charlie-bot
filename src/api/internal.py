@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_session_manager, get_thread_manager
 from src.core.config import get_config
-from src.core.models import DelegateRequest
+from src.core.improve_command import run_improve_loop
+from src.core.models import DelegateRequest, ImproveRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
@@ -66,3 +67,33 @@ async def delegate_task(
       "thread_id": thread.id,
       "description": req.description,
   }
+
+
+@router.post("/improve")
+async def start_improve_loop(
+    req: ImproveRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+):
+  """Launch an iterative improvement loop as a background task."""
+  meta = await session_mgr.get_session(req.session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  cfg = get_config()
+  create_logged_task(
+      run_improve_loop(
+          session_id=req.session_id,
+          repo_path=req.repo_path,
+          iterations=req.iterations,
+          goal=req.goal,
+          cfg=cfg,
+          session_mgr=session_mgr,
+          thread_mgr=thread_mgr,
+      ),
+      name=f"improve-loop-{req.session_id}",
+  )
+
+  log.info("improve_loop_started", session=req.session_id, iterations=req.iterations, goal=req.goal)
+
+  return {"status": "started", "session_id": req.session_id, "iterations": req.iterations}

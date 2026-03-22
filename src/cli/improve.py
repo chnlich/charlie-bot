@@ -1,4 +1,4 @@
-"""CLI script for master CC to run iterative improvement loops.
+"""CLI script for master CC to start an iterative improvement loop.
 
 Called by the master Claude Code instance via its run_command tool:
 
@@ -7,12 +7,15 @@ Called by the master Claude Code instance via its run_command tool:
     --repo /path/to/repo \
     --iterations 3 \
     --goal 'optimize step time'
+
+The CLI posts to the server-side /api/internal/improve endpoint and returns
+immediately. The iteration loop runs as a background async task on the server.
+Master CC will be notified via _trigger_master when the loop completes.
 """
 
 import argparse
 import json
 import sys
-import time
 
 import requests
 
@@ -29,95 +32,22 @@ def main() -> None:
 
   cfg = get_config()
   port = cfg.server_port
-  base_url = f"https://localhost:{port}"
-  state_path = cfg.sessions_dir / args.session / "improve_state.json"
 
-  previous_summaries: list[str] = []
-
-  for i in range(1, args.iterations + 1):
-    # Check if stopped
-    if state_path.exists():
-      try:
-        state_data = json.loads(state_path.read_text())
-        if state_data.get("status") == "stopped":
-          print(f"Improve loop stopped by user at iteration {i}.")
-          break
-      except (json.JSONDecodeError, OSError):
-        pass
-
-    # Build iteration description
-    desc_parts = [f"Iterative improvement — iteration {i}/{args.iterations}", f"Goal: {args.goal}"]
-    if previous_summaries:
-      desc_parts.append("Previous iterations:")
-      for idx, summary in enumerate(previous_summaries, 1):
-        desc_parts.append(f"  Iteration {idx}: {summary}")
-    description = "\n".join(desc_parts)
-
-    # Delegate to a worker
-    payload = {
-        "session_id": args.session,
-        "repo_path": args.repo,
-        "description": description,
-        "require_review": False,
-    }
-    try:
-      resp = requests.post(f"{base_url}/api/internal/delegate", json=payload, timeout=30, verify=False)
-      resp.raise_for_status()
-      result = resp.json()
-      thread_id = result.get("thread_id")
-    except requests.RequestException as e:
-      print(json.dumps({"error": f"Failed to delegate iteration {i}: {e}"}), file=sys.stderr)
-      sys.exit(1)
-
-    if not thread_id:
-      print(json.dumps({"error": f"No thread_id returned for iteration {i}"}), file=sys.stderr)
-      sys.exit(1)
-
-    # Poll until thread completes
-    while True:
-      time.sleep(5)
-      try:
-        resp = requests.get(
-            f"{base_url}/api/threads/{args.session}/threads/{thread_id}",
-            timeout=10,
-            verify=False,
-        )
-        resp.raise_for_status()
-        thread_data = resp.json()
-        status = thread_data.get("status")
-        if status in ("completed", "failed", "cancelled"):
-          break
-      except requests.RequestException:
-        continue
-
-    # Extract summary from thread events
-    summary = ""
-    try:
-      resp = requests.get(
-          f"{base_url}/api/threads/{args.session}/threads/{thread_id}/events",
-          timeout=10,
-          verify=False,
-      )
-      resp.raise_for_status()
-      events = resp.json()
-      # Find last assistant message
-      for event in reversed(events):
-        if event.get("type") == "assistant" and event.get("content"):
-          summary = event["content"][:500]
-          break
-    except requests.RequestException:
-      summary = f"Iteration {i} completed (could not retrieve summary)."
-
-    previous_summaries.append(summary)
-    print(f"Iteration {i}/{args.iterations}: {summary[:200]}")
-
-  # Print final JSON summary
-  print(json.dumps({
-      "type": "improve_completed",
+  payload = {
+      "session_id": args.session,
+      "repo_path": args.repo,
+      "iterations": args.iterations,
       "goal": args.goal,
-      "iterations_completed": len(previous_summaries),
-      "summaries": previous_summaries,
-  }, indent=2))
+  }
+
+  try:
+    resp = requests.post(f"https://localhost:{port}/api/internal/improve", json=payload, timeout=30, verify=False)
+    resp.raise_for_status()
+    result = resp.json()
+    print(json.dumps(result, indent=2))
+  except requests.RequestException as e:
+    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    sys.exit(1)
 
 
 if __name__ == "__main__":

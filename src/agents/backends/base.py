@@ -249,22 +249,30 @@ class AgentBackend(ABC):
             _saw_result = True
             _result_time = time.monotonic()
 
-    # Drain stderr and wait for process exit with a timeout.
-    assert self._proc.stderr is not None
+    await self._drain_and_cleanup(_CLEANUP_TIMEOUT)
+
+  async def _graceful_shutdown(self, timeout: float) -> None:
+    """Send SIGTERM to the process group; escalate to SIGKILL if it doesn't exit within timeout."""
+    if not kill_process_group(self._proc.pid, signal.SIGTERM):
+      return
     try:
-      stderr_bytes = await asyncio.wait_for(self._proc.stderr.read(), timeout=_CLEANUP_TIMEOUT)
+      await asyncio.wait_for(self._proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+      log.warning("backend_sigkill_escalation", pid=self._proc.pid)
+      kill_process_group(self._proc.pid, signal.SIGKILL)
+
+  async def _drain_and_cleanup(self, timeout: float) -> None:
+    """Drain stderr, wait for process exit, and escalate to kill if needed."""
+    assert self._proc is not None and self._proc.stderr is not None
+    try:
+      stderr_bytes = await asyncio.wait_for(self._proc.stderr.read(), timeout=timeout)
     except asyncio.TimeoutError:
       stderr_bytes = b""
     try:
-      await asyncio.wait_for(self._proc.wait(), timeout=_CLEANUP_TIMEOUT)
+      await asyncio.wait_for(self._proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
       log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
-      kill_process_group(self._proc.pid, signal.SIGTERM)
-      try:
-        await asyncio.wait_for(self._proc.wait(), timeout=_CLEANUP_TIMEOUT)
-      except asyncio.TimeoutError:
-        log.warning("backend_sigkill_after_result", pid=self._proc.pid)
-        kill_process_group(self._proc.pid, signal.SIGKILL)
+      await self._graceful_shutdown(timeout)
     self.exit_code = self._proc.returncode or 0
     self.stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 
@@ -272,10 +280,4 @@ class AgentBackend(ABC):
     """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""
     if self._proc is None or self._proc.returncode is not None:
       return
-    if not kill_process_group(self._proc.pid, signal.SIGTERM):
-      return
-    try:
-      await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
-      log.warning("backend_terminate_timeout", pid=self._proc.pid)
-      kill_process_group(self._proc.pid, signal.SIGKILL)
+    await self._graceful_shutdown(5.0)

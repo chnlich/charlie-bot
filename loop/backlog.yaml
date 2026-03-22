@@ -885,6 +885,6 @@
     item 060 which extracted kill_process_group and noted this opportunity. Follows
     the pattern from items 003, 021, 041, and 058 which split other long functions.'
   category: maintainability
-  status: approved
+  status: done
   created: '2026-03-21T12:00:00Z'
   priority: medium

@@ -103,8 +103,13 @@ async def execute_command(
       goal = parts[1] if len(parts) > 1 else ''
     if not goal:
       return {'error': 'Usage: /improve [max_iterations] <goal>'}
-    from src.core.improve_command import start_improve_loop
-    create_logged_task(start_improve_loop(session_id, goal, max_iterations, cfg, session_mgr, thread_mgr))
+    from src.core.improve_command import ImproveState, build_improve_master_prompt, save_improve_state
+
+    state = ImproveState(goal=goal, max_iterations=max_iterations, status='running')
+    save_improve_state(session_id, state, cfg)
+
+    prompt = build_improve_master_prompt(session_id, goal, max_iterations, cfg)
+    create_logged_task(run_and_finalize(cfg, meta, prompt, session_mgr))
     return JSONResponse(
         status_code=202,
         content={

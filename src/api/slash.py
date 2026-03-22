@@ -1,7 +1,6 @@
 """Slash command API routes."""
 
 import asyncio
-import shlex
 
 import structlog
 from fastapi import APIRouter, Depends, Request
@@ -95,33 +94,17 @@ async def execute_command(
   if name == 'improve':
     args_text = req.args.strip()
     if not args_text:
-      return {'error': 'Usage: /improve [--repo <path>] [max_iterations] <goal>'}
-    # Parse --repo flag from args.
-    repo_path = None
-    try:
-      tokens = shlex.split(args_text)
-    except ValueError:
-      tokens = args_text.split()
-    if '--repo' in tokens:
-      idx = tokens.index('--repo')
-      if idx + 1 < len(tokens):
-        repo_path = tokens[idx + 1]
-        tokens = tokens[:idx] + tokens[idx + 2:]
-      else:
-        return {'error': 'Usage: /improve [--repo <path>] [max_iterations] <goal>'}
-    remaining = ' '.join(tokens)
-    parts = remaining.split(None, 1)
+      return {'error': 'Usage: /improve [max_iterations] <goal>'}
+    parts = args_text.split(None, 1)
     max_iterations = 5
-    goal = remaining
-    if parts and parts[0].isdigit():
+    goal = args_text
+    if parts[0].isdigit():
       max_iterations = int(parts[0])
       goal = parts[1] if len(parts) > 1 else ''
     if not goal:
-      return {'error': 'Usage: /improve [--repo <path>] [max_iterations] <goal>'}
+      return {'error': 'Usage: /improve [max_iterations] <goal>'}
     from src.core.improve_command import start_improve_loop
-    create_logged_task(
-        start_improve_loop(session_id, goal, max_iterations, cfg, session_mgr, thread_mgr, repo_path=repo_path)
-    )
+    create_logged_task(start_improve_loop(session_id, goal, max_iterations, cfg, session_mgr, thread_mgr))
     return JSONResponse(
         status_code=202,
         content={

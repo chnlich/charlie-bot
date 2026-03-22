@@ -62,6 +62,7 @@ class Worker:
     """Spawn the Worker and stream its output. Returns exit code."""
     env = {**os.environ, **self._extra_env}
     env.pop("CLAUDECODE", None)  # Allow worker to spawn Claude Code subprocess
+    env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
     async def _on_spawn(pid: int) -> None:
       self._thread.pid = pid

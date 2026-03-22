@@ -231,3 +231,72 @@ async def test_stop_already_completed(tmp_path: Path):
 
   result = await stop_improve_loop(session_id, cfg)
   assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Spawner integration: improve loop without review
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_successful_worker_no_review_triggers_continue_improve_loop():
+  """A successful improve-loop worker without review should call continue_improve_loop, not _trigger_master."""
+  from src.core.spawner import _maybe_spawn_reviewer
+
+  session_id = "improve-session"
+  thread = MagicMock()
+  thread.id = "thread-1"
+
+  thread_meta = MagicMock()
+  thread_meta.id = "thread-1"
+  thread_meta.review_of = None
+  thread_meta.require_review = False
+  thread_meta.improve_loop = True
+
+  thread_mgr = AsyncMock()
+  thread_mgr.get_thread = AsyncMock(return_value=thread_meta)
+
+  session_mgr = AsyncMock()
+  cfg = MagicMock()
+
+  with patch("src.core.improve_command.continue_improve_loop", new_callable=AsyncMock) as mock_continue, \
+       patch("src.core.spawner._trigger_master", new_callable=AsyncMock) as mock_master:
+    await _maybe_spawn_reviewer(
+        session_id, thread, 0, "events summary", "full summary", thread_mgr, session_mgr, cfg
+    )
+
+    mock_continue.assert_awaited_once_with(
+        session_id, thread_meta, "events summary", cfg, session_mgr, thread_mgr
+    )
+    mock_master.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_successful_worker_no_review_no_improve_triggers_master():
+  """A successful worker without review and without improve_loop should call _trigger_master."""
+  from src.core.spawner import _maybe_spawn_reviewer
+
+  session_id = "normal-session"
+  thread = MagicMock()
+  thread.id = "thread-1"
+
+  thread_meta = MagicMock()
+  thread_meta.id = "thread-1"
+  thread_meta.review_of = None
+  thread_meta.require_review = False
+  thread_meta.improve_loop = False
+
+  thread_mgr = AsyncMock()
+  thread_mgr.get_thread = AsyncMock(return_value=thread_meta)
+
+  session_mgr = AsyncMock()
+  cfg = MagicMock()
+
+  with patch("src.core.spawner._trigger_master", new_callable=AsyncMock) as mock_master, \
+       patch("src.core.improve_command.continue_improve_loop", new_callable=AsyncMock) as mock_continue:
+    await _maybe_spawn_reviewer(
+        session_id, thread, 0, "events summary", "full summary", thread_mgr, session_mgr, cfg
+    )
+
+    mock_master.assert_awaited_once_with(session_id, "full summary", cfg, session_mgr)
+    mock_continue.assert_not_awaited()

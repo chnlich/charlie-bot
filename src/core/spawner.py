@@ -875,6 +875,11 @@ async def _maybe_spawn_reviewer(
 
   if exit_code == 0 and not thread_meta.review_of:
     if not thread_meta.require_review:
+      # Check if part of improve loop
+      if thread_meta.improve_loop:
+        from src.core.improve_command import continue_improve_loop
+        await continue_improve_loop(session_id, thread_meta, events_summary, cfg, session_mgr, thread_mgr)
+        return
       # No review needed — trigger master directly
       await _trigger_master(session_id, full_summary, cfg, session_mgr)
       return

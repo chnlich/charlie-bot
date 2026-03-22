@@ -11,8 +11,6 @@ from src.core.config import CharlieBotConfig
 
 log = structlog.get_logger()
 
-# Lazy imports for run_improve_loop to avoid circular dependencies at module level.
-
 # ---------------------------------------------------------------------------
 # State models
 # ---------------------------------------------------------------------------
@@ -120,9 +118,7 @@ async def run_improve_loop(
   triggers the master CC with the combined summary.
   """
   from src.core.ndjson import parse_ndjson_file
-  from src.core.sessions import SessionManager  # noqa: F811
   from src.core.spawner import _trigger_master, resolve_session_subagent_backend_model, spawn_worker
-  from src.core.threads import ThreadManager  # noqa: F811
 
   previous_summaries: list[str] = []
 
@@ -214,3 +210,14 @@ async def run_improve_loop(
 
   except Exception:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
+    # Notify master CC about the failure so the user isn't left waiting.
+    try:
+      combined = json.dumps({
+          "type": "improve_failed",
+          "goal": goal,
+          "iterations_completed": len(previous_summaries),
+          "summaries": previous_summaries,
+      }, indent=2)
+      await _trigger_master(session_id, combined, cfg, session_mgr)
+    except Exception:
+      log.error("improve_loop_trigger_master_on_failure_failed", session=session_id, exc_info=True)

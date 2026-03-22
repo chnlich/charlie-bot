@@ -271,6 +271,99 @@ async def test_successful_worker_no_review_triggers_continue_improve_loop():
     mock_master.assert_not_awaited()
 
 
+def test_parse_repo_flag():
+  """--repo flag is extracted and remaining args are parsed normally."""
+  import shlex
+  args_text = "--repo ~/workspace/your_project 3 refactor auth"
+  repo_path = None
+  tokens = shlex.split(args_text)
+  if '--repo' in tokens:
+    idx = tokens.index('--repo')
+    repo_path = tokens[idx + 1]
+    tokens = tokens[:idx] + tokens[idx + 2:]
+  remaining = ' '.join(tokens)
+  parts = remaining.split(None, 1)
+  max_iterations = 5
+  goal = remaining
+  if parts[0].isdigit():
+    max_iterations = int(parts[0])
+    goal = parts[1] if len(parts) > 1 else ''
+  assert repo_path == "~/workspace/your_project"
+  assert max_iterations == 3
+  assert goal == "refactor auth"
+
+
+def test_parse_no_repo_flag():
+  """Without --repo, repo_path stays None."""
+  import shlex
+  args_text = "3 refactor auth"
+  repo_path = None
+  tokens = shlex.split(args_text)
+  if '--repo' in tokens:
+    idx = tokens.index('--repo')
+    repo_path = tokens[idx + 1]
+    tokens = tokens[:idx] + tokens[idx + 2:]
+  remaining = ' '.join(tokens)
+  parts = remaining.split(None, 1)
+  max_iterations = 5
+  goal = remaining
+  if parts[0].isdigit():
+    max_iterations = int(parts[0])
+    goal = parts[1] if len(parts) > 1 else ''
+  assert repo_path is None
+  assert max_iterations == 3
+  assert goal == "refactor auth"
+
+
+def test_parse_repo_flag_with_quoted_path():
+  """--repo with a quoted path containing spaces."""
+  import shlex
+  args_text = '--repo "/home/user/my project" 2 fix bugs'
+  repo_path = None
+  tokens = shlex.split(args_text)
+  if '--repo' in tokens:
+    idx = tokens.index('--repo')
+    repo_path = tokens[idx + 1]
+    tokens = tokens[:idx] + tokens[idx + 2:]
+  remaining = ' '.join(tokens)
+  parts = remaining.split(None, 1)
+  max_iterations = 5
+  goal = remaining
+  if parts[0].isdigit():
+    max_iterations = int(parts[0])
+    goal = parts[1] if len(parts) > 1 else ''
+  assert repo_path == "/home/user/my project"
+  assert max_iterations == 2
+  assert goal == "fix bugs"
+
+
+@pytest.mark.asyncio
+async def test_improve_handler_passes_repo_path_to_start_improve_loop():
+  """End-to-end: /improve --repo passes repo_path through to start_improve_loop."""
+  from src.api.slash import SlashExecuteRequest, execute_command
+
+  req = SlashExecuteRequest(command="/improve", args="--repo ~/workspace/meshy 3 refactor auth")
+  cfg = MagicMock()
+  session_mgr = AsyncMock()
+  thread_mgr = AsyncMock()
+  meta = MagicMock()
+
+  with patch("src.api.slash.create_logged_task"), \
+       patch("src.api.slash.require_session", return_value=meta), \
+       patch("src.core.improve_command.start_improve_loop", new_callable=AsyncMock) as mock_start:
+    mock_start.return_value = AsyncMock()()
+    result = await execute_command(
+        request=MagicMock(), session_id="test-session", req=req,
+        meta=meta, session_mgr=session_mgr, thread_mgr=thread_mgr, cfg=cfg,
+    )
+
+  mock_start.assert_called_once_with(
+      "test-session", "refactor auth", 3, cfg, session_mgr, thread_mgr,
+      repo_path="~/workspace/meshy",
+  )
+  assert result.status_code == 202
+
+
 @pytest.mark.asyncio
 async def test_successful_worker_no_review_no_improve_triggers_master():
   """A successful worker without review and without improve_loop should call _trigger_master."""

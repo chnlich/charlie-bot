@@ -165,3 +165,11 @@ class DelegateRequest(BaseModel):
   repo_path: Optional[str] = None
   context: Optional[str] = None
   require_review: bool = True
+
+
+class ImproveRequest(BaseModel):
+  """Request body for the internal improve endpoint."""
+  session_id: str
+  repo_path: str
+  iterations: int = 3
+  goal: str

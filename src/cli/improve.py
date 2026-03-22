@@ -78,7 +78,7 @@ def main() -> None:
       time.sleep(5)
       try:
         resp = requests.get(
-            f"{base_url}/api/sessions/{args.session}/threads/{thread_id}",
+            f"{base_url}/api/threads/{args.session}/threads/{thread_id}",
             timeout=10,
             verify=False,
         )
@@ -94,7 +94,7 @@ def main() -> None:
     summary = ""
     try:
       resp = requests.get(
-          f"{base_url}/api/sessions/{args.session}/threads/{thread_id}/events",
+          f"{base_url}/api/threads/{args.session}/threads/{thread_id}/events",
           timeout=10,
           verify=False,
       )

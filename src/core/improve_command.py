@@ -169,13 +169,22 @@ async def run_improve_loop(
       status = thread_meta.status.value if thread_meta else "unknown"
 
       # Extract summary from events.jsonl
+      # Prefer the "result" event's result field (CC final output), fallback to last assistant text.
       summary = ""
       events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
       events = parse_ndjson_file(events_path)
       for event in reversed(events):
-        if event.get("type") == "assistant" and event.get("content"):
-          summary = event["content"][:500]
+        if event.get("type") == "result" and event.get("result"):
+          summary = event["result"][:500]
           break
+        if event.get("type") == "assistant":
+          msg = event.get("message", {})
+          for block in msg.get("content", []):
+            if block.get("type") == "text" and block.get("text"):
+              summary = block["text"][:500]
+              break
+          if summary:
+            break
       if not summary:
         summary = f"Iteration {i} {status} (no summary available)."
 

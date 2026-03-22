@@ -87,7 +87,7 @@ def main() -> None:
         status = thread_data.get("status")
         if status in ("completed", "failed", "cancelled"):
           break
-      except requests.ConnectionError:
+      except requests.RequestException:
         continue
 
     # Extract summary from thread events

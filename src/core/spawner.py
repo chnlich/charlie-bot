@@ -863,11 +863,6 @@ async def _maybe_spawn_reviewer(
 
   if exit_code == 0 and not thread_meta.review_of:
     if not thread_meta.require_review:
-      # Check if part of improve loop
-      if thread_meta.improve_loop:
-        from src.core.improve_command import continue_improve_loop
-        await continue_improve_loop(session_id, thread_meta, events_summary, cfg, session_mgr, thread_mgr)
-        return
       # No review needed — trigger master directly
       await _trigger_master(session_id, full_summary, cfg, session_mgr)
       return
@@ -910,24 +905,10 @@ async def _maybe_spawn_reviewer(
             review_of=thread_meta.review_of,
         )
 
-    # Check if this is part of an improve loop
-    original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
-    if original_thread and original_thread.improve_loop:
-      from src.core.improve_command import continue_improve_loop
-      await continue_improve_loop(session_id, original_thread, events_summary, cfg, session_mgr, thread_mgr)
-      return  # Don't trigger master for intermediate iterations
-
     # Review done (success or retries exhausted) -> combine summaries, trigger master.
     original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
     await _trigger_master(session_id, combined, cfg, session_mgr)
-    return
-
-  # Failed/cancelled worker — check if part of improve loop before triggering master
-  if thread_meta.improve_loop:
-    from src.core.improve_command import continue_improve_loop
-    # Mark as failed but continue the loop
-    await continue_improve_loop(session_id, thread_meta, events_summary, cfg, session_mgr, thread_mgr)
     return
 
   # Failed/cancelled worker -> trigger master immediately

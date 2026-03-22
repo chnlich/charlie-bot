@@ -28,7 +28,6 @@ class ThreadManager:
       review_of: Optional[str] = None,
       context: Optional[str] = None,
       require_review: bool = True,
-      improve_loop: bool = False,
   ) -> ThreadMetadata:
     """Create a new thread directory and metadata."""
     thread = ThreadMetadata(
@@ -38,7 +37,6 @@ class ThreadManager:
         review_of=review_of,
         context=context,
         require_review=require_review,
-        improve_loop=improve_loop,
     )
 
     thread_dir = self._thread_dir(session_meta.id, thread.id)

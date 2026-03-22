@@ -1,7 +1,6 @@
 """Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
 import asyncio
-import shutil
 import time
 import traceback
 from datetime import datetime, timezone
@@ -472,16 +471,6 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) 
       except Exception as wt_err:
         log.warning("worktree_cleanup_error", thread_id=thread.id, error=str(wt_err))
     return
-
-  # Clean up temp dir for repoless workers (no repo_path, temp dir as worktree_path).
-  if getattr(thread, 'worktree_path', None):
-    tmp = Path(thread.worktree_path)
-    if tmp.exists() and tmp.name.startswith('charliebot-repoless-'):
-      try:
-        await asyncio.to_thread(shutil.rmtree, str(tmp))
-        log.info("repoless_tmpdir_removed", thread_id=thread.id, path=str(tmp))
-      except Exception as tmp_err:
-        log.warning("repoless_tmpdir_cleanup_error", thread_id=thread.id, error=str(tmp_err))
 
 
 async def _finalize_worker(

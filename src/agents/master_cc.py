@@ -224,6 +224,7 @@ async def run_message(
   env = {**os.environ}
   env.pop("CLAUDECODE", None)
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
+  env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
   log.info("master_cc_starting", session=session_meta.id, cwd=cwd)
 

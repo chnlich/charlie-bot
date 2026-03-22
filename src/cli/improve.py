@@ -84,7 +84,7 @@ def main() -> None:
         resp.raise_for_status()
         thread_data = resp.json()
         status = thread_data.get("status")
-        if status in ("completed", "failed"):
+        if status in ("completed", "failed", "cancelled"):
           break
       except requests.RequestException:
         continue

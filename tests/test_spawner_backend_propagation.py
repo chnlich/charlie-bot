@@ -154,20 +154,20 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_finalize_worker_cleans_repoless_tmpdir_when_review_is_not_spawnable(
+async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg = _build_cfg()
-  repoless_dir = tmp_path / "charliebot-repoless-test"
-  repoless_dir.mkdir()
-  (repoless_dir / "artifact.txt").write_text("tmp", encoding="utf-8")
+  thread_dir = tmp_path / "sessions" / "session-id" / "threads" / "thread-1"
+  thread_dir.mkdir(parents=True)
+  (thread_dir / "artifact.txt").write_text("tmp", encoding="utf-8")
 
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
       description="Prompt-only task",
-      worktree_path=str(repoless_dir),
+      worktree_path=str(thread_dir),
       require_review=True,
   )
   captures: dict[str, Any] = {}
@@ -212,7 +212,7 @@ async def test_finalize_worker_cleans_repoless_tmpdir_when_review_is_not_spawnab
   assert captures["status"] == ThreadStatus.COMPLETED
   assert captures["exit_code"] == 0
   assert captures["notified"] is True
-  assert not repoless_dir.exists()
+  assert thread_dir.exists()
 
 
 @pytest.mark.asyncio
@@ -353,7 +353,7 @@ async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_spawn_worker_repoless_disables_review_and_uses_temp_cwd(tmp_path: Path) -> None:
+async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
@@ -457,10 +457,9 @@ async def test_spawn_worker_repoless_disables_review_and_uses_temp_cwd(tmp_path:
   )
   monkeypatch.undo()
 
+  expected_thread_dir = cfg.sessions_dir / "session-id" / "threads" / "thread-1"
   worker_dir = captures["worker_dir"]
-  assert worker_dir != Path.home()
-  assert worker_dir.name.startswith("charliebot-repoless-")
-  assert not worker_dir.exists()
+  assert worker_dir == expected_thread_dir
   assert captures["notify_exit_code"] == 0
   assert captures["notify_require_review"] is False
   assert captures["notify_repo_path"] is None

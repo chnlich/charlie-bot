@@ -87,7 +87,7 @@ You are starting an iterative improvement loop.
 
 ### Instructions
 1. Determine the target repository from the session context.
-2. Propose a plan to the user and wait for their approval.
+2. Confirm with the user: show the repo path and goal summary, and ask if they are ready to start. Do NOT propose per-iteration methods or a detailed plan — workers are fully autonomous and decide their own approach.
 3. After approval, run the following command:
    ```
    python -m src.cli.improve --session {session_id} --repo <repo> --iterations {max_iterations} --goal '{goal}'

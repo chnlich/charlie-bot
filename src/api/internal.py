@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_session_manager, get_thread_manager
 from src.core.config import get_config
-from src.core.improve_command import run_improve_loop
+from src.core.improve_command import ImproveState, run_improve_loop, save_improve_state
 from src.core.models import DelegateRequest, ImproveRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
@@ -81,6 +81,9 @@ async def start_improve_loop(
     raise HTTPException(status_code=404, detail="Session not found")
 
   cfg = get_config()
+  state = ImproveState(goal=req.goal, max_iterations=req.iterations, status='running')
+  save_improve_state(req.session_id, state, cfg)
+
   create_logged_task(
       run_improve_loop(
           session_id=req.session_id,

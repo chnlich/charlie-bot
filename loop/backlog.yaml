@@ -888,3 +888,24 @@
   status: done
   created: '2026-03-21T12:00:00Z'
   priority: medium
+- id: '062'
+  title: Split run_improve_loop into phases and adopt extract_text_from_message
+  description: 'PURPOSE — Reduce the 2nd-longest function in the codebase (run_improve_loop,
+    128 lines) to ~50 lines by extracting three clear phases, and adopt the established
+    extract_text_from_message helper (backlog item 045) instead of duplicating CC
+    event content-block iteration inline. Lines 170-189 manually navigate event[message][content][]
+    blocks to extract summary text — the exact pattern extract_text_from_message (api/message_utils.py:17)
+    already handles, and which 5 other files already use. Additionally, the completion
+    and failure JSON payloads (lines 204-210, 213-220, 227-233) share identical structure
+    (goal, iterations_completed, summaries) with only the type field differing. HOW
+    — Extract _extract_iteration_summary(events, iteration, status) -> str that checks
+    for result events first, then falls back to extract_text_from_message for assistant
+    events, with a default placeholder. Extract _build_summary_payload(type, goal,
+    summaries) -> dict for the shared JSON structure used by completion broadcast,
+    master trigger, and failure notification. The main function becomes a short orchestrator:
+    loop calling helpers, then broadcast + trigger. Follows the pattern from items
+    003, 021, 027, 041, 058, and 061 which split other long functions.'
+  category: maintainability
+  status: pending
+  created: '2026-03-23T12:00:00Z'
+  priority: medium

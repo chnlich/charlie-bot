@@ -28,6 +28,7 @@ _HELP_ENTRY = {
     'name': 'help',
     'scope': 'builtin',
     'description': 'Show available slash commands',
+    'params': [],
 }
 
 _RUN_ENTRY = {
@@ -35,6 +36,9 @@ _RUN_ENTRY = {
     'scope': 'builtin',
     'description': 'Manually trigger a scheduled task',
     'args': '<task-name>',
+    'params': [
+        {'name': 'task_name', 'label': 'Task name', 'type': 'text', 'required': True, 'placeholder': 'e.g. daily-report'},
+    ],
 }
 
 _IMPROVE_ENTRY = {
@@ -42,19 +46,28 @@ _IMPROVE_ENTRY = {
     'scope': 'builtin',
     'description': 'Run iterative improvement loop',
     'args': '[max_iterations] <goal>',
+    'params': [
+        {'name': 'max_iterations', 'label': 'Max iterations', 'type': 'number', 'default': '5',
+         'placeholder': 'Default: 5'},
+        {'name': 'goal', 'label': 'Goal', 'type': 'text', 'required': True, 'placeholder': 'What to improve...'},
+    ],
 }
 
 _STOP_IMPROVE_ENTRY = {
     'name': 'stop-improve',
     'scope': 'builtin',
     'description': 'Stop an active improve loop after current iteration',
+    'params': [],
 }
 
 
 async def _build_command_list() -> list[dict]:
   """Return the full command list: YAML commands + built-ins."""
   cmds = await asyncio.to_thread(load_slash_commands)
-  result = [{'name': c.name, 'scope': c.scope, 'description': c.description, 'args': c.args} for c in cmds]
+  result = [{
+      'name': c.name, 'scope': c.scope, 'description': c.description, 'args': c.args,
+      'params': [p.model_dump(exclude_defaults=True) for p in c.params],
+  } for c in cmds]
   result.append(_HELP_ENTRY)
   result.append(_RUN_ENTRY)
   result.append(_IMPROVE_ENTRY)

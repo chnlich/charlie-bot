@@ -7,6 +7,7 @@ from typing import Optional
 import structlog
 from pydantic import BaseModel
 
+from src.api.message_utils import extract_text_from_message
 from src.core.config import CharlieBotConfig
 
 log = structlog.get_logger()
@@ -98,6 +99,33 @@ The improve state file is at: {state_path}"""
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_iteration_summary(events: list[dict], iteration: int, status: str) -> str:
+  """Extract a summary from worker events, preferring the result event."""
+  for event in reversed(events):
+    if event.get("type") == "result" and event.get("result"):
+      return event["result"][:500]
+    if event.get("type") == "assistant":
+      text = extract_text_from_message(event.get("message"))
+      if text:
+        return text[:500]
+  return f"Iteration {iteration} {status} (no summary available)."
+
+
+def _build_summary_payload(payload_type: str, goal: str, summaries: list[str]) -> dict:
+  """Build the shared JSON structure for completion/failure broadcasts."""
+  return {
+      "type": payload_type,
+      "goal": goal,
+      "iterations_completed": len(summaries),
+      "summaries": summaries,
+  }
+
+
+# ---------------------------------------------------------------------------
 # Server-side improve loop
 # ---------------------------------------------------------------------------
 
@@ -144,14 +172,9 @@ async def run_improve_loop(
         log.error("improve_loop_session_missing", session=session_id)
         break
 
-      # Create thread
+      # Create thread and spawn worker
       thread = await thread_mgr.create_thread(meta, description, require_review=False)
-
-      # Resolve backend/model
-      resolved_backend, resolved_model = await resolve_session_subagent_backend_model(
-          session_id, cfg, session_mgr)
-
-      # Spawn worker and AWAIT it (spawn_worker is async and awaitable)
+      resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
       await spawn_worker(
           session_id,
           description,
@@ -164,69 +187,34 @@ async def run_improve_loop(
           resolved_model=resolved_model,
       )
 
-      # Read thread metadata to get status
+      # Extract summary
       thread_meta = await thread_mgr.get_thread(session_id, thread.id)
       status = thread_meta.status.value if thread_meta else "unknown"
-
-      # Extract summary from events.jsonl
-      # Prefer the "result" event's result field (CC final output), fallback to last assistant text.
-      summary = ""
       events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
       events = parse_ndjson_file(events_path)
-      for event in reversed(events):
-        if event.get("type") == "result" and event.get("result"):
-          summary = event["result"][:500]
-          break
-        if event.get("type") == "assistant":
-          msg = event.get("message", {})
-          for block in msg.get("content", []):
-            if block.get("type") == "text" and block.get("text"):
-              summary = block["text"][:500]
-              break
-          if summary:
-            break
-      if not summary:
-        summary = f"Iteration {i} {status} (no summary available)."
-
+      summary = _extract_iteration_summary(events, i, status)
       previous_summaries.append(summary)
       log.info("improve_iteration_completed", session=session_id, iteration=i, status=status)
 
       # Broadcast progress event
-      await session_mgr.persist_and_broadcast(session_id, {
-          "type": "improve_iteration_completed",
-          "iteration": i,
-          "total_iterations": iterations,
-          "status": status,
-          "summary": summary[:200],
-      })
+      await session_mgr.persist_and_broadcast(
+          session_id, {
+              "type": "improve_iteration_completed",
+              "iteration": i,
+              "total_iterations": iterations,
+              "status": status,
+              "summary": summary[:200],
+          })
 
-    # Broadcast completion event
-    await session_mgr.persist_and_broadcast(session_id, {
-        "type": "improve_completed",
-        "goal": goal,
-        "iterations_completed": len(previous_summaries),
-        "summaries": previous_summaries,
-    })
-
-    # Trigger master CC with the combined summary
-    combined = json.dumps({
-        "type": "improve_completed",
-        "goal": goal,
-        "iterations_completed": len(previous_summaries),
-        "summaries": previous_summaries,
-    }, indent=2)
-    await _trigger_master(session_id, combined, cfg, session_mgr)
+    # Broadcast completion and trigger master CC
+    payload = _build_summary_payload("improve_completed", goal, previous_summaries)
+    await session_mgr.persist_and_broadcast(session_id, payload)
+    await _trigger_master(session_id, json.dumps(payload, indent=2), cfg, session_mgr)
 
   except Exception:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
-    # Notify master CC about the failure so the user isn't left waiting.
     try:
-      combined = json.dumps({
-          "type": "improve_failed",
-          "goal": goal,
-          "iterations_completed": len(previous_summaries),
-          "summaries": previous_summaries,
-      }, indent=2)
-      await _trigger_master(session_id, combined, cfg, session_mgr)
+      failure_payload = _build_summary_payload("improve_failed", goal, previous_summaries)
+      await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     except Exception:
       log.error("improve_loop_trigger_master_on_failure_failed", session=session_id, exc_info=True)

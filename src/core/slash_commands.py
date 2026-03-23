@@ -17,6 +17,16 @@ log = structlog.get_logger()
 _SLASH_COMMANDS_FILE = Path.home() / '.charliebot' / 'slash_commands.yaml'
 
 
+class SlashCommandParam(BaseModel):
+  name: str
+  label: str = ''
+  type: str = 'text'  # text, number, select, checkbox
+  default: Optional[str] = None
+  placeholder: str = ''
+  required: bool = False
+  options: list[str] = []  # for type=select
+
+
 class SlashCommand(BaseModel):
   name: str
   scope: str  # 'shell' or 'prompt'
@@ -27,6 +37,7 @@ class SlashCommand(BaseModel):
   args: Optional[str] = None  # Description string for help text
   cwd: Optional[str] = None
   claude_code_flags: list[str] = []  # Extra CLI flags passed to Claude Code subprocess (scope=prompt only)
+  params: list[SlashCommandParam] = []
 
 
 def load_slash_commands() -> list[SlashCommand]:

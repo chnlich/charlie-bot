@@ -3,6 +3,7 @@
 import asyncio
 import json
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -23,6 +24,9 @@ from src.core.streaming import streaming_manager
 log = structlog.get_logger()
 
 
+_METADATA_CACHE_TTL = 5.0  # seconds
+
+
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
@@ -31,6 +35,9 @@ class SessionManager:
     # In-memory cache: session_id -> list[dict] of parsed NDJSON events.
     # Populated on first read, kept in sync by save_chat_event().
     self._events_cache: dict[str, list[dict]] = {}
+    # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp).
+    # TTL-based to avoid repeated disk reads within the same poll cycle.
+    self._metadata_cache: dict[str, tuple[SessionMetadata, float]] = {}
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -52,7 +59,13 @@ class SessionManager:
     return meta
 
   async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
-    """Load session metadata from disk."""
+    """Load session metadata, using in-memory cache when available."""
+    cached = self._metadata_cache.get(session_id)
+    if cached is not None:
+      meta, ts = cached
+      if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
+        return meta.model_copy()
+      del self._metadata_cache[session_id]
     path = self._metadata_path(session_id)
     if not path.exists():
       return None
@@ -61,13 +74,16 @@ class SessionManager:
     if not raw.strip():
       log.warning("session_metadata_empty", session_id=session_id, path=str(path))
       return None
-    return SessionMetadata.model_validate_json(raw)
+    meta = SessionMetadata.model_validate_json(raw)
+    self._metadata_cache[session_id] = (meta, time.monotonic())
+    return meta.model_copy()
 
   async def list_sessions(
       self,
       status: Optional[SessionStatus] = None,
       starred: Optional[bool] = None,
       scheduled: Optional[bool] = None,
+      include_running_status: bool = False,
   ) -> list[SessionMetadata]:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
     if not self._cfg.sessions_dir.exists():
@@ -85,9 +101,10 @@ class SessionManager:
       if scheduled is not None and bool(meta.scheduled_task) != scheduled:
         continue
       sessions.append(meta)
-    running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in sessions))
-    for meta, running in zip(sessions, running_flags):
-      meta.has_running_tasks = bool(meta.thinking_since) or running
+    if include_running_status:
+      running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in sessions))
+      for meta, running in zip(sessions, running_flags):
+        meta.has_running_tasks = bool(meta.thinking_since) or running
     # Normalise to offset-aware (UTC) so naive vs aware datetimes don't explode
     for s in sessions:
       if s.updated_at.tzinfo is None:
@@ -95,7 +112,11 @@ class SessionManager:
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 
-  async def search_sessions(self, query: str) -> list[SessionMetadata]:
+  async def search_sessions(
+      self,
+      query: str,
+      include_running_status: bool = False,
+  ) -> list[SessionMetadata]:
     """Search active sessions by name and chat event content (case-insensitive)."""
     query_lower = query.lower()
     if not self._cfg.sessions_dir.exists():
@@ -119,9 +140,10 @@ class SessionManager:
             results.append(meta)
         except OSError as e:
           log.debug('search_read_failed', session_id=meta.id, error=str(e))
-    running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in results))
-    for meta, running in zip(results, running_flags):
-      meta.has_running_tasks = bool(meta.thinking_since) or running
+    if include_running_status:
+      running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in results))
+      for meta, running in zip(results, running_flags):
+        meta.has_running_tasks = bool(meta.thinking_since) or running
     for s in results:
       if s.updated_at.tzinfo is None:
         s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
@@ -233,6 +255,7 @@ class SessionManager:
       return False
     await asyncio.to_thread(shutil.rmtree, session_dir)
     self._events_cache.pop(session_id, None)
+    self._invalidate_cache(session_id)
     log.info("session_deleted_permanently", session_id=session_id)
     return True
 
@@ -267,15 +290,16 @@ class SessionManager:
       fresh.cc_session_id = cc_session_id
       await self._save_metadata(fresh)
 
-  def list_active_session_ids(self) -> list[str]:
-    """Return IDs of active sessions by reading only metadata.json status.
+  def list_active_session_ids(self) -> list[SessionMetadata]:
+    """Return metadata for active sessions by reading metadata.json files.
 
-    Sync method — skips _has_running_tasks and full SessionMetadata hydration,
-    much cheaper than list_sessions() for the /usage endpoint.
+    Sync method — returns full SessionMetadata objects so callers avoid
+    a second disk read. Populates the metadata cache as a side-effect.
     """
     if not self._cfg.sessions_dir.exists():
       return []
-    ids: list[str] = []
+    results: list[SessionMetadata] = []
+    now = time.monotonic()
     for d in self._cfg.sessions_dir.iterdir():
       if not d.is_dir():
         continue
@@ -283,12 +307,14 @@ class SessionManager:
       if not meta_path.exists():
         continue
       try:
-        raw = json.loads(meta_path.read_text(encoding="utf-8"))
-        if raw.get("status") == SessionStatus.ACTIVE:
-          ids.append(d.name)
-      except (json.JSONDecodeError, OSError) as e:
+        raw = meta_path.read_text(encoding="utf-8")
+        meta = SessionMetadata.model_validate_json(raw)
+        if meta.status == SessionStatus.ACTIVE:
+          self._metadata_cache[d.name] = (meta, now)
+          results.append(meta.model_copy())
+      except (json.JSONDecodeError, OSError, ValueError) as e:
         log.debug("list_active_ids_skip", dir=d.name, error=str(e))
-    return ids
+    return results
 
   # ---------------------------------------------------------------------------
   # Chat event persistence (NDJSON — for WebSocket catch-up)
@@ -381,6 +407,10 @@ class SessionManager:
   # Private helpers
   # ---------------------------------------------------------------------------
 
+  def _invalidate_cache(self, session_id: str) -> None:
+    """Remove a session from the metadata cache."""
+    self._metadata_cache.pop(session_id, None)
+
   async def _update_field(self, session_id: str, field: str, value: Any, log_event: str) -> Optional[SessionMetadata]:
     """Get a session, set one field, save, and log. Returns None if session not found."""
     meta = await self.get_session(session_id)
@@ -448,6 +478,7 @@ class SessionManager:
     path.parent.mkdir(parents=True, exist_ok=True)
     async with aiofiles.open(path, "w") as f:
       await f.write(meta.model_dump_json(indent=2))
+    self._metadata_cache[meta.id] = (meta.model_copy(), time.monotonic())
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id

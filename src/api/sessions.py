@@ -30,7 +30,7 @@ router = APIRouter()
 
 @router.get("/", response_model=list[SessionMetadata])
 async def list_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
-  return await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False)
+  return await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True)
 
 
 @router.post("/", response_model=SessionMetadata)
@@ -83,19 +83,19 @@ async def list_projects():
 @router.get("/archived", response_model=list[SessionMetadata])
 async def list_archived_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List archived sessions, newest first."""
-  return await session_mgr.list_sessions(status=SessionStatus.ARCHIVED)
+  return await session_mgr.list_sessions(status=SessionStatus.ARCHIVED, include_running_status=True)
 
 
 @router.get("/waiting", response_model=list[SessionMetadata])
 async def list_waiting_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List waiting sessions, newest first."""
-  return await session_mgr.list_sessions(status=SessionStatus.WAITING)
+  return await session_mgr.list_sessions(status=SessionStatus.WAITING, include_running_status=True)
 
 
 @router.get("/starred", response_model=list[SessionMetadata])
 async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List starred sessions, newest first."""
-  return await session_mgr.list_sessions(starred=True)
+  return await session_mgr.list_sessions(starred=True, include_running_status=True)
 
 
 @router.get("/scheduled", response_model=list[SessionMetadata])
@@ -104,7 +104,7 @@ async def list_scheduled_sessions(
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """List sessions with a scheduled task, newest first."""
-  sessions = await session_mgr.list_sessions(scheduled=True)
+  sessions = await session_mgr.list_sessions(scheduled=True, include_running_status=True)
   task_map = {t.name: t for t in get_scheduled_tasks()}
   for s in sessions:
     task = task_map.get(s.scheduled_task)
@@ -125,29 +125,23 @@ async def list_scheduled_sessions(
 @router.get('/status')
 async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_manager)):
   """Return {session_id: {has_unread, has_running_tasks}} for all active sessions."""
-  session_ids = await asyncio.to_thread(session_mgr.list_active_session_ids)
-
-  async def _fetch(sid: str) -> tuple[str, dict | None]:
-    try:
-      meta = await session_mgr.get_session(sid)
-      if not meta:
-        return sid, None
-      has_running = bool(meta.thinking_since) or await session_mgr._has_running_tasks(sid)
-      return sid, {"has_unread": bool(meta.has_unread), "has_running_tasks": has_running}
-    except Exception:
-      log.warning("status_fetch_failed", session_id=sid, exc_info=True)
-      return sid, None
-
-  pairs = await asyncio.gather(*[_fetch(sid) for sid in session_ids])
-  return {sid: s for sid, s in pairs if s}
+  sessions = await asyncio.to_thread(session_mgr.list_active_session_ids)
+  if not sessions:
+    return {}
+  running_flags = await asyncio.gather(*(session_mgr._has_running_tasks(m.id) for m in sessions))
+  result: dict[str, dict] = {}
+  for meta, running in zip(sessions, running_flags):
+    has_running = bool(meta.thinking_since) or running
+    result[meta.id] = {"has_unread": bool(meta.has_unread), "has_running_tasks": has_running}
+  return result
 
 
 @router.get('/search', response_model=list[SessionMetadata])
 async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
   """Full-text search across session names and chat content."""
   if not q.strip():
-    return await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
-  return await session_mgr.search_sessions(q.strip())
+    return await session_mgr.list_sessions(status=SessionStatus.ACTIVE, include_running_status=True)
+  return await session_mgr.search_sessions(q.strip(), include_running_status=True)
 
 
 @router.get('/{session_id}/view')

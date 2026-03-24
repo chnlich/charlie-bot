@@ -90,7 +90,7 @@ class Scheduler:
     session_mgr = SessionManager(cfg)
 
     # Cache all sessions once to avoid O(N) list_sessions() calls per tick.
-    all_sessions = await session_mgr.list_sessions()
+    all_sessions = await session_mgr.list_sessions(include_running_status=False)
     session_cache: dict[str, SessionMetadata] = {}
     for s in all_sessions:
       if s.scheduled_task and s.scheduled_task not in session_cache:
@@ -314,7 +314,7 @@ class Scheduler:
       if cached is not None:
         return cached
     else:
-      sessions = await session_mgr.list_sessions()
+      sessions = await session_mgr.list_sessions(include_running_status=False)
       for s in sessions:
         if s.scheduled_task == task_name:
           return s

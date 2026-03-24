@@ -91,7 +91,7 @@ You are starting an iterative improvement loop.
 2. Confirm with the user: show the repo path and goal summary, and ask if they are ready to start. Do NOT propose per-iteration methods or a detailed plan — workers are fully autonomous and decide their own approach.
 3. After approval, run the following command:
    ```
-   python -m src.cli.improve --session {session_id} --repo <repo> --iterations {max_iterations} --goal '{goal}'
+   python -m src.cli.improve --session {session_id} --repo <repo> --iterations {max_iterations} --goal '<the goal above>'
    ```
 4. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
 

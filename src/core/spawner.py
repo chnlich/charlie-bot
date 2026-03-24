@@ -583,15 +583,24 @@ async def _trigger_master(
   """Best-effort trigger of the master agent to process a worker result."""
   try:
     session_meta = await session_mgr.get_session(session_id)
-    if not session_meta or not session_meta.cc_session_id:
-      log.debug("trigger_master_skipped", session=session_id, reason="no cc_session_id")
+    if not session_meta:
+      log.error("trigger_master_session_not_found", session=session_id)
       return
+
+    master_summary = summary
+    if not session_meta.cc_session_id and session_meta.scheduled_task:
+      master_summary = (
+          f"[Auto-triggered scheduled task result for '{session_meta.scheduled_task}']\n"
+          "Review the worker/reviewer results below. Check: was the branch merged? "
+          "Are there errors? Summarize the outcome.\n\n"
+          f"{summary}"
+      )
 
     try:
       new_cc_session_id = await run_message(
           cfg,
           session_meta,
-          summary,
+          master_summary,
           session_mgr.persist_and_broadcast,
           session_mgr.save_metadata,
           mark_unread=session_mgr.mark_unread,
@@ -620,7 +629,7 @@ async def _trigger_master(
       new_cc_session_id = await run_message(
           cfg,
           retry_session_meta,
-          summary,
+          master_summary,
           session_mgr.persist_and_broadcast,
           session_mgr.save_metadata,
           mark_unread=session_mgr.mark_unread,

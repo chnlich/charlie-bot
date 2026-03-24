@@ -81,10 +81,62 @@
         const text = new TextDecoder().decode(buffers[i].buf);
         const json = JSON.parse(text);
         const events = json.traceEvents || (Array.isArray(json) ? json : []);
-        const label = basename(traceNames[buffers[i].idx]);
+        const rankLabel = basename(traceNames[buffers[i].idx]);
+
+        // Pass 1: scan metadata to build original pid -> label map
+        const pidLabel = {};  // original pid -> 'CPU' or 'GPU N'
         for (const evt of events) {
-          evt.pid = label;
+          if (evt.ph === 'M' && evt.name === 'process_labels' && evt.args) {
+            const lbl = evt.args.labels || '';
+            pidLabel[evt.pid] = lbl;  // e.g. 'CPU' or 'GPU 0'
+          }
+        }
+
+        // Pass 2: build synthetic pid mapping
+        // CPU -> rankLabel, GPU N -> rankLabel + '/GPU N'
+        const pidMap = {};
+        for (const [origPid, lbl] of Object.entries(pidLabel)) {
+          if (lbl === 'CPU') {
+            pidMap[origPid] = rankLabel;
+          } else {
+            pidMap[origPid] = rankLabel + '/' + lbl;
+          }
+        }
+
+        // Compute sort indices: CPU on top, then GPUs in order
+        const baseSortIndex = i * 10000;
+        const syntheticMeta = {};  // synthetic pid -> sort_index
+        for (const [origPid, lbl] of Object.entries(pidLabel)) {
+          const synPid = pidMap[origPid];
+          if (lbl === 'CPU') {
+            syntheticMeta[synPid] = { sortIndex: baseSortIndex, label: rankLabel + ' CPU' };
+          } else {
+            const gpuMatch = lbl.match(/GPU\s*(\d+)/i);
+            const gpuIdx = gpuMatch ? parseInt(gpuMatch[1], 10) : 0;
+            syntheticMeta[synPid] = { sortIndex: baseSortIndex + 1000 + gpuIdx, label: rankLabel + ' ' + lbl };
+          }
+        }
+
+        // Pass 3: remap events
+        for (const evt of events) {
+          if (evt.ph === 'M' && evt.name && evt.name.startsWith('process_')) {
+            // Drop original process-level metadata to avoid conflicts
+            continue;
+          }
+          if (pidMap[evt.pid] !== undefined) {
+            evt.pid = pidMap[evt.pid];
+          } else {
+            // Unknown pid — assign to rank's CPU group as fallback
+            evt.pid = rankLabel;
+          }
           allEvents.push(evt);
+        }
+
+        // Emit synthetic metadata events for each new process
+        for (const [synPid, meta] of Object.entries(syntheticMeta)) {
+          allEvents.push({ ph: 'M', pid: synPid, tid: 0, name: 'process_name', args: { name: meta.label } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: 0, name: 'process_labels', args: { labels: meta.label } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: 0, name: 'process_sort_index', args: { sort_index: meta.sortIndex } });
         }
       }
       const merged = JSON.stringify({ traceEvents: allEvents });

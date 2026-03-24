@@ -472,14 +472,16 @@ function addWorkerCard(threadId, description, createdAt, backend) {
 let thinkingInterval = null;
 let thinkingStart = null;
 
-function startThinking() {
+function startThinking(opts) {
   masterThinking = true;
   thinkingStart = thinkingStart || Date.now();
   document.getElementById('thinking').classList.remove('hidden');
   updateThinkingTime();
   thinkingInterval = setInterval(updateThinkingTime, 1000);
-  document.getElementById('send-btn').disabled = true;
-  document.getElementById('send-btn').classList.add('opacity-50');
+  if (!(opts && opts.keepSendEnabled)) {
+    document.getElementById('send-btn').disabled = true;
+    document.getElementById('send-btn').classList.add('opacity-50');
+  }
   setSessionSpinner(SESSION_ID, true);
 }
 

@@ -78,8 +78,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Connect WebSocket
   connectWS();
 
-  // Poll sidebar status every 3s to correct WS drift
-  statusPollInterval = setInterval(pollSessionStatus, 3000);
+  // Poll sidebar status to correct WS drift (adaptive: 3s when tasks running, 10s idle)
+  function scheduleStatusPoll() {
+    statusPollInterval = setInterval(() => {
+      pollSessionStatus().then(anyRunning => {
+        const desired = anyRunning ? 3000 : 10000;
+        if (desired !== statusPollMs) {
+          statusPollMs = desired;
+          clearInterval(statusPollInterval);
+          scheduleStatusPoll();
+        }
+      });
+    }, statusPollMs);
+  }
+  scheduleStatusPoll();
   workersPollInterval = setInterval(pollWorkers, 3000);
 
   // Reconnect immediately on tab becoming visible (mobile Chrome background kills WS)

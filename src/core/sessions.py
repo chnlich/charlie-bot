@@ -415,9 +415,33 @@ class SessionManager:
     return await asyncio.to_thread(_check)
 
   async def _next_session_name(self) -> str:
-    """Generate 'Session 0', 'Session 1', etc. based on existing count."""
-    existing = await self.list_sessions()
-    return f"Session {len(existing)}"
+    """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.
+
+    Reads the next number from sessions_dir/.counter (O(1) instead of listing
+    all sessions). Falls back to counting directories if the file is missing.
+    """
+    counter_path = self._cfg.sessions_dir / ".counter"
+
+    def _read_and_increment() -> int:
+      self._cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+      if counter_path.exists():
+        try:
+          n = int(counter_path.read_text().strip())
+        except (ValueError, OSError):
+          n = self._count_session_dirs()
+      else:
+        n = self._count_session_dirs()
+      counter_path.write_text(str(n + 1))
+      return n
+
+    n = await asyncio.to_thread(_read_and_increment)
+    return f"Session {n}"
+
+  def _count_session_dirs(self) -> int:
+    """Count existing session directories for backward-compat counter init."""
+    if not self._cfg.sessions_dir.exists():
+      return 0
+    return sum(1 for d in self._cfg.sessions_dir.iterdir() if d.is_dir())
 
   async def _save_metadata(self, meta: SessionMetadata) -> None:
     path = self._metadata_path(meta.id)

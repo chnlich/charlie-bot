@@ -79,6 +79,23 @@ function renderSlashSidebarParams(cmd) {
     const label = document.createElement('label');
     label.className = 'block text-xs text-slate-400 mb-1';
     label.textContent = (p.label || p.name) + (p.required ? ' *' : '');
+    if (p.required) {
+      const reqBadge = document.createElement('span');
+      reqBadge.className = 'param-badge param-badge-required';
+      reqBadge.textContent = 'required';
+      label.appendChild(reqBadge);
+    }
+    if (p.type === 'number') {
+      const typeBadge = document.createElement('span');
+      typeBadge.className = 'param-badge';
+      typeBadge.textContent = 'integer';
+      label.appendChild(typeBadge);
+    } else if (p.type === 'select') {
+      const typeBadge = document.createElement('span');
+      typeBadge.className = 'param-badge';
+      typeBadge.textContent = 'select';
+      label.appendChild(typeBadge);
+    }
     wrapper.appendChild(label);
 
     let input;
@@ -101,6 +118,13 @@ function renderSlashSidebarParams(cmd) {
       input.type = 'checkbox';
       input.className = 'rounded bg-slate-800 border-slate-600';
       if (p.default === 'true') input.checked = true;
+    } else if (p.type === 'text') {
+      input = document.createElement('textarea');
+      input.rows = 2;
+      input.className = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 resize-none';
+      if (p.placeholder) input.placeholder = p.placeholder;
+      if (p.default) input.value = p.default;
+      input.addEventListener('input', function() { autoResize(this); });
     } else {
       input = document.createElement('input');
       input.type = p.type === 'number' ? 'number' : 'text';

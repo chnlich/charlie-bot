@@ -342,12 +342,17 @@ function updateSpinner() {
 
 // Poll-based sidebar status (corrects WS drift)
 let statusPollInterval = null;
+let statusPollInflight = false;
+let statusPollMs = 3000;
 
 function pollSessionStatus() {
-  fetch('/api/sessions/status')
+  if (statusPollInflight) return Promise.resolve(false);
+  statusPollInflight = true;
+  return fetch('/api/sessions/status')
     .then(r => r.ok ? r.json() : null)
     .then(data => {
-      if (!data) return;
+      if (!data) return false;
+      let anyRunning = false;
       for (const [sid, st] of Object.entries(data)) {
         if (sid !== SESSION_ID) sessionUnread[sid] = st.has_unread;
         if (sid === SESSION_ID) {
@@ -355,9 +360,12 @@ function pollSessionStatus() {
         } else {
           setSessionSpinner(sid, st.has_running_tasks);
         }
+        if (st.has_running_tasks) anyRunning = true;
       }
+      return anyRunning;
     })
-    .catch(() => {});  // Silently ignore poll failures
+    .catch(() => false)
+    .finally(() => { statusPollInflight = false; });
 }
 
 // Poll-based workers tab updates (replaces WS-driven addWorkerCard/updateWorkerStatus)

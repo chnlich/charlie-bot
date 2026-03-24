@@ -2,6 +2,7 @@
 
 import fnmatch
 import socket
+import subprocess
 from pathlib import Path
 
 import structlog
@@ -17,6 +18,26 @@ from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
+
+_REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def _get_git_version() -> str:
+  """Return git short hash + commit date (e.g. 'bc6b882 · 03-24'), or '' on failure."""
+  try:
+    short_hash = subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=_REPO_ROOT, text=True, timeout=5,
+    ).strip()
+    commit_date = subprocess.check_output(
+        ["git", "log", "-1", "--format=%cd", "--date=format:%m-%d"],
+        cwd=_REPO_ROOT, text=True, timeout=5,
+    ).strip()
+    return f"{short_hash} · {commit_date}"
+  except Exception:
+    log.warning("git_version_failed")
+    return ""
+
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
@@ -155,4 +176,5 @@ async def index(
           "load_errors": load_errors,
           "auth_enabled": bool(cfg.charliebot_access_key),
           "hostname": socket.gethostname(),
+          "version": _get_git_version(),
       })

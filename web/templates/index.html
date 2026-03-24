@@ -60,7 +60,7 @@
     <aside id="sidebar" class="flex-shrink-0 bg-slate-850 border-r border-slate-700 flex flex-col" style="width: 320px">
       <!-- Logo -->
       <div class="p-4 border-b border-slate-700">
-        <h1 class="text-lg font-bold text-blue-400">CharlieBot</h1>
+        <h1 class="text-lg font-bold text-blue-400">CharlieBot{% if version %} <span class="text-xs text-slate-500 font-normal hidden sm:inline">{{ version }}</span>{% endif %}</h1>
       </div>
 
       <!-- New session -->

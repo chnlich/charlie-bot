@@ -120,8 +120,8 @@ function renderSlashSidebarParams(cmd) {
       if (p.default === 'true') input.checked = true;
     } else if (p.type === 'text') {
       input = document.createElement('textarea');
-      input.rows = 2;
-      input.className = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 resize-none';
+      input.rows = 6;
+      input.className = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 resize-y';
       if (p.placeholder) input.placeholder = p.placeholder;
       if (p.default) input.value = p.default;
       input.addEventListener('input', function() { autoResize(this); });

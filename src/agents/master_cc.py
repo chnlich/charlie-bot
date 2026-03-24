@@ -98,14 +98,13 @@ async def _finalize_session(
     auto_trigger: bool = False,
 ) -> None:
   """Clean up after run_message: update thinking state, broadcast errors/done, check tex."""
-  if not auto_trigger:
-    _active_procs.pop(session_meta.id, None)
-    # Decrement active-task counter; only clear thinking when ALL tasks finish
-    _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
+  _active_procs.pop(session_meta.id, None)
+  # Decrement active-task counter; only clear thinking when ALL tasks finish
+  _active_tasks[session_meta.id] = max(_active_tasks.get(session_meta.id, 1) - 1, 0)
   still_thinking = _active_tasks.get(session_meta.id, 0) > 0
 
   thinking_seconds = None
-  if not auto_trigger and not still_thinking:
+  if not still_thinking:
     if session_meta.thinking_since:
       thinking_seconds = int((datetime.now(timezone.utc) - session_meta.thinking_since).total_seconds())
     session_meta.thinking_since = None
@@ -116,6 +115,7 @@ async def _finalize_session(
             "type": "running_changed",
             "session_id": session_meta.id,
             "has_running_tasks": False,
+            "auto_trigger": auto_trigger,
         })
 
   if error_msg:
@@ -196,21 +196,23 @@ async def run_message(
     session_meta.updated_at = datetime.now(timezone.utc)
 
   # Track concurrent tasks; only set thinking_since on the first one.
-  # Auto-triggered runs (worker completions) skip task counting and thinking state
-  # to avoid disabling the mobile send button on page reload.
-  if not auto_trigger:
-    _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1
-    if _active_tasks[session_meta.id] == 1:
-      session_meta.thinking_since = datetime.now(timezone.utc)
-    if save_metadata:
-      await save_metadata(session_meta)
-    if _active_tasks[session_meta.id] == 1:
-      await streaming_manager.broadcast(
-          'sidebar', {
-              'type': 'running_changed',
-              'session_id': session_meta.id,
-              'has_running_tasks': True,
-          })
+  # All runs (including auto-triggered) participate in thinking state so the
+  # sidebar correctly shows the session as running.  The auto_trigger flag is
+  # forwarded to the frontend so it can keep the send button enabled during
+  # background processing (user can still type while auto-triggered master works).
+  _active_tasks[session_meta.id] = _active_tasks.get(session_meta.id, 0) + 1
+  if _active_tasks[session_meta.id] == 1:
+    session_meta.thinking_since = datetime.now(timezone.utc)
+  if save_metadata:
+    await save_metadata(session_meta)
+  if _active_tasks[session_meta.id] == 1:
+    await streaming_manager.broadcast(
+        'sidebar', {
+            'type': 'running_changed',
+            'session_id': session_meta.id,
+            'has_running_tasks': True,
+            'auto_trigger': auto_trigger,
+        })
 
   from src.agents.backends.registry import build_backend
   option = backend_option or cfg.backend_options[0]
@@ -247,8 +249,7 @@ async def run_message(
         instructions_content=instructions_content,
         resume_session_id=session_meta.cc_session_id if option.type in ("codex", "gemini", "opencode") else None,
     )
-    if not auto_trigger:
-      _active_procs[session_meta.id] = backend
+    _active_procs[session_meta.id] = backend
 
     prompt = _build_prompt(user_content, is_voice)
 

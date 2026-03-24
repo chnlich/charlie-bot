@@ -106,9 +106,15 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Sidebar spinner update for non-current sessions — handle before catchup guard
+  // Sidebar spinner update — handle before catchup guard
   if (t === 'running_changed') {
-    if (ev.session_id !== SESSION_ID) setSessionSpinner(ev.session_id, ev.has_running_tasks);
+    if (ev.session_id !== SESSION_ID) {
+      setSessionSpinner(ev.session_id, ev.has_running_tasks);
+    } else if (ev.auto_trigger) {
+      // Auto-triggered runs: show spinner/status but keep send button enabled
+      if (ev.has_running_tasks) startThinking({keepSendEnabled: true});
+      else stopThinking();
+    }
     return;
   }
 

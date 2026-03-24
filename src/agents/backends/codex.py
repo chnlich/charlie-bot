@@ -24,6 +24,8 @@ class CodexBackend(AgentBackend):
     self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
+    # Track the last rendered todo snapshot to suppress duplicate started/completed payloads.
+    self._last_todo_text: dict[str, str] = {}
 
   def _build_command(self, prompt: str) -> list[str]:
     effective_prompt = self._effective_prompt(prompt)
@@ -58,6 +60,7 @@ class CodexBackend(AgentBackend):
     cmd.append(effective_prompt)
 
     self._last_agent_text.clear()
+    self._last_todo_text.clear()
     return cmd
 
   def _prepare_env(self, env: dict) -> dict:
@@ -228,6 +231,8 @@ class CodexBackend(AgentBackend):
     if item.get("type") != "todo_list":
       return []
     items = item.get("items", [])
+    if not isinstance(items, list):
+      return []
     lines = []
     for todo in items:
       if not isinstance(todo, dict):
@@ -237,9 +242,18 @@ class CodexBackend(AgentBackend):
         continue
       marker = self._todo_marker(todo)
       lines.append(f"- {marker} {label}")
+    item_id = item.get("id", "")
     if not lines:
+      if item_id:
+        self._last_todo_text.pop(item_id, None)
       return []
-    return [make_text_event("\n".join(lines))]
+    text = "\n".join(lines)
+    if item_id:
+      previous = self._last_todo_text.get(item_id)
+      if previous == text:
+        return []
+      self._last_todo_text[item_id] = text
+    return [make_text_event(text)]
 
   def _extract_todo_label(self, todo: dict) -> str:
     """Return the first non-empty todo label across old and current Codex schemas."""

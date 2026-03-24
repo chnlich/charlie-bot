@@ -120,3 +120,61 @@ def test_translate_todo_list_suppresses_blank_items(monkeypatch) -> None:
           }],
       },
   }]
+
+
+def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  started = backend.translate_event({
+      "type": "item.started",
+      "item": {
+          "id": "todo-1",
+          "type": "todo_list",
+          "items": [
+              {"text": "Inspect the code", "completed": False},
+              {"text": "Patch the bug", "completed": False},
+          ],
+      },
+  })
+  completed_without_changes = backend.translate_event({
+      "type": "item.completed",
+      "item": {
+          "id": "todo-1",
+          "type": "todo_list",
+          "items": [
+              {"text": "Inspect the code", "completed": False},
+              {"text": "Patch the bug", "completed": False},
+          ],
+      },
+  })
+  updated = backend.translate_event({
+      "type": "item.updated",
+      "item": {
+          "id": "todo-1",
+          "type": "todo_list",
+          "items": [
+              {"text": "Inspect the code", "completed": True},
+              {"text": "Patch the bug", "completed": False},
+          ],
+      },
+  })
+
+  assert started == [{
+      "type": "assistant",
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": "- [ ] Inspect the code\n- [ ] Patch the bug",
+          }],
+      },
+  }]
+  assert completed_without_changes == []
+  assert updated == [{
+      "type": "assistant",
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": "- [x] Inspect the code\n- [ ] Patch the bug",
+          }],
+      },
+  }]

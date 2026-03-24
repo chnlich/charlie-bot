@@ -230,13 +230,34 @@ class CodexBackend(AgentBackend):
     items = item.get("items", [])
     lines = []
     for todo in items:
-      status = todo.get("status", "pending")
-      label = todo.get("label", todo.get("content", todo.get("step", "")))
-      marker = {"completed": "[x]", "in_progress": "[~]"}.get(status, "[ ]")
+      if not isinstance(todo, dict):
+        continue
+      label = self._extract_todo_label(todo)
+      if not label:
+        continue
+      marker = self._todo_marker(todo)
       lines.append(f"- {marker} {label}")
     if not lines:
       return []
     return [make_text_event("\n".join(lines))]
+
+  def _extract_todo_label(self, todo: dict) -> str:
+    """Return the first non-empty todo label across old and current Codex schemas."""
+    for key in ("text", "label", "content", "step"):
+      value = todo.get(key, "")
+      if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+          return stripped
+    return ""
+
+  def _todo_marker(self, todo: dict) -> str:
+    status = todo.get("status")
+    if isinstance(status, str):
+      return {"completed": "[x]", "in_progress": "[~]"}.get(status, "[ ]")
+    if todo.get("completed") is True:
+      return "[x]"
+    return "[ ]"
 
   def _handle_error(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})

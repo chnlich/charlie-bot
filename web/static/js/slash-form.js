@@ -78,7 +78,7 @@ function renderSlashSidebarParams(cmd) {
     const wrapper = document.createElement('div');
     const label = document.createElement('label');
     label.className = 'block text-xs text-slate-400 mb-1';
-    label.textContent = (p.label || p.name) + (p.required ? ' *' : '');
+    label.textContent = p.label || p.name;
     if (p.required) {
       const reqBadge = document.createElement('span');
       reqBadge.className = 'param-badge param-badge-required';

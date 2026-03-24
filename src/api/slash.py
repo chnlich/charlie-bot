@@ -48,7 +48,7 @@ _IMPROVE_ENTRY = {
     'args': '[max_iterations] <goal>',
     'params': [
         {'name': 'max_iterations', 'label': 'Max iterations', 'type': 'number', 'required': True,
-         'placeholder': 'Number of iterations'},
+         'default': '5', 'placeholder': 'Number of iterations'},
         {'name': 'goal', 'label': 'Goal', 'type': 'text', 'required': True, 'placeholder': 'What to improve...'},
     ],
 }

@@ -105,7 +105,7 @@ async def index(
   """Render the full page. All data loaded here."""
   load_errors: list[str] = []
   try:
-    sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False)
+    sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True)
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []

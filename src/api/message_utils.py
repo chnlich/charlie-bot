@@ -45,7 +45,7 @@ async def build_session_view_data(
   try:
     await session_mgr.mark_read(session_id)
   except Exception:
-    log.warning("mark_read_failed", session_id=session_id)
+    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
   return SessionViewData(raw_events=raw_events, messages=messages, threads=threads, usage=usage)
 
 

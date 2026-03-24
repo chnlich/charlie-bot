@@ -40,7 +40,7 @@ def load_improve_state(session_id: str, cfg: CharlieBotConfig) -> Optional[Impro
   try:
     return ImproveState.model_validate_json(path.read_text())
   except Exception:
-    log.warning("improve_state_corrupted", session=session_id, path=str(path))
+    log.warning("improve_state_corrupted", session=session_id, path=str(path), exc_info=True)
     return None
 
 
@@ -218,3 +218,4 @@ async def run_improve_loop(
       await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     except Exception:
       log.error("improve_loop_trigger_master_on_failure_failed", session=session_id, exc_info=True)
+

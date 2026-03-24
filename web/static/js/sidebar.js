@@ -92,10 +92,11 @@ async function switchSession(sessionId) {
   const inp = document.getElementById('msg-input');
   if (inp) { inp.value = draft || ''; autoResize(inp); }
 
-  // Resume thinking if session was mid-thought
+  // Resume thinking if session was mid-thought.
+  // Keep send button enabled — see app.js comment.
   if (THINKING_SINCE) {
     thinkingStart = new Date(THINKING_SINCE).getTime();
-    startThinking();
+    startThinking({keepSendEnabled: true});
   }
 
   updateSpinner();

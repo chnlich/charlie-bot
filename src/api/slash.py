@@ -45,10 +45,10 @@ _IMPROVE_ENTRY = {
     'name': 'improve',
     'scope': 'builtin',
     'description': 'Run iterative improvement loop',
-    'args': '[max_iterations] <goal>',
+    'args': '<max_iterations> <goal>',
     'params': [
         {'name': 'max_iterations', 'label': 'Max iterations', 'type': 'number', 'required': True,
-         'default': '5', 'placeholder': 'Number of iterations'},
+         'placeholder': 'Number of iterations'},
         {'name': 'goal', 'label': 'Goal', 'type': 'text', 'required': True, 'placeholder': 'What to improve...'},
     ],
 }
@@ -107,15 +107,14 @@ async def execute_command(
   if name == 'improve':
     args_text = req.args.strip()
     if not args_text:
-      return {'error': 'Usage: /improve [max_iterations] <goal>'}
+      return {'error': 'Usage: /improve <max_iterations> <goal>'}
     parts = args_text.split(None, 1)
-    max_iterations = 5
-    goal = args_text
-    if parts[0].isdigit():
-      max_iterations = int(parts[0])
-      goal = parts[1] if len(parts) > 1 else ''
+    if not parts[0].isdigit():
+      return {'error': 'Usage: /improve <max_iterations> <goal>'}
+    max_iterations = int(parts[0])
+    goal = parts[1].strip() if len(parts) > 1 else ''
     if not goal:
-      return {'error': 'Usage: /improve [max_iterations] <goal>'}
+      return {'error': 'Usage: /improve <max_iterations> <goal>'}
     from src.core.improve_command import ImproveState, build_improve_master_prompt, save_improve_state
 
     state = ImproveState(goal=goal, max_iterations=max_iterations, status='running')

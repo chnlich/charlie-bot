@@ -249,7 +249,10 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
   cron_path = Path.home() / ".charliebot" / "config.d" / "cron.yaml"
   try:
     mtime = cron_path.stat().st_mtime
-  except OSError:
+  except FileNotFoundError:
+    return _cron_tasks
+  except OSError as e:
+    log.warning("cron_config_stat_failed", error=str(e))
     return _cron_tasks
   if mtime != _cron_mtime:
     try:

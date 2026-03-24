@@ -579,8 +579,13 @@ async def spawn_worker(
             cfg,
             quota_exhausted=quota_exhausted,
             error=error_msg)
-      except Exception:
+      except Exception as e:
         log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
+        try:
+          await session_mgr.persist_and_broadcast(
+              session_id, {"type": "error", "content": f"Worker finalization failed: {e}"})
+        except Exception:
+          log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
 
 
 async def _trigger_master(

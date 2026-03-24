@@ -24,6 +24,14 @@ from src.core.notifications import send_telegram
 
 log = structlog.get_logger()
 
+_CODING_PRINCIPLES = (
+    "## Coding Principles\n"
+    "The codebase has a single user. Apply these principles:\n"
+    "- **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery.\n"
+    "- **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.\n"
+    "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n"
+)
+
 
 def _read_subagent_instructions(cfg: CharlieBotConfig) -> Optional[str]:
   """Read SUBAGENT_PROMPT.md content for use as instructions_content."""
@@ -60,7 +68,7 @@ def _build_worker_prompt(
       f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
       f"## Task\n{description}")
 
-  return f"{session_info}\n{worktree_section}"
+  return f"{session_info}\n{_CODING_PRINCIPLES}\n{worktree_section}"
 
 
 def _build_review_prompt(
@@ -87,11 +95,7 @@ def _build_review_prompt(
       f"2. Read the original worker's log: `{worker_log}`\n"
       f"   - Understand what the worker did and any decisions it made.\n"
       f"3. Delegator's context hint: {context_hint}\n\n"
-      f"## Coding Principles\n"
-      f"The codebase has a single user. Apply these principles when reviewing:\n"
-      f"- **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery.\n"
-      f"- **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.\n"
-      f"- **No defensive programming**: do not add guards for scenarios that cannot happen.\n\n"
+      f"{_CODING_PRINCIPLES}\n"
       f"## Review Checklist\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
       f"1. `cd {wt_path}`\n"

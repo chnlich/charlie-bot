@@ -3,7 +3,7 @@
 import asyncio
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
@@ -601,6 +601,19 @@ async def _trigger_master(
       log.error("trigger_master_session_not_found", session=session_id)
       return
 
+    if (session_meta.scheduled_task and session_meta.cc_session_id and session_meta.cc_session_started_at):
+      pt = ZoneInfo('America/Los_Angeles')
+      now_pt = datetime.now(pt)
+      # Most recent Saturday 1:00 AM PT
+      days_since_sat = (now_pt.weekday() - 5) % 7
+      last_sat_1am_pt = now_pt.replace(hour=1, minute=0, second=0, microsecond=0) - timedelta(days=days_since_sat)
+      last_sat_1am_utc = last_sat_1am_pt.astimezone(timezone.utc)
+      if session_meta.cc_session_started_at < last_sat_1am_utc < datetime.now(timezone.utc):
+        log.info('scheduled_cc_session_expired', session=session_id, started_at=str(session_meta.cc_session_started_at))
+        session_meta.cc_session_id = None
+        session_meta.cc_session_started_at = None
+        await session_mgr.save_metadata(session_meta)
+
     master_summary = summary
     if not session_meta.cc_session_id and session_meta.scheduled_task:
       master_summary = (
@@ -659,6 +672,11 @@ async def _trigger_master(
 
     if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:
       await session_mgr.persist_cc_session_id(session_id, new_cc_session_id)
+      # persist_cc_session_id only saves cc_session_id; also persist cc_session_started_at.
+      fresh = await session_mgr.get_session(session_id)
+      if fresh:
+        fresh.cc_session_started_at = datetime.now(timezone.utc)
+        await session_mgr.save_metadata(fresh)
   except Exception as e:
     log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
 

@@ -930,3 +930,25 @@
   status: pending
   created: '2026-03-25T12:00:00Z'
   priority: medium
+- id: '064'
+  title: Centralize event type strings into constants module
+  description: 'PURPOSE — Eliminate ~34 raw event-type string literals scattered across
+    10+ files, reducing typo risk and making event schema changes a single-point edit.
+    Currently, strings like "assistant", "error", "user", "result", "master_done",
+    "task_delegated", "worker_summary", "handler_result", "context_compacted", and
+    "thinking" are hardcoded at both construction sites (chat.py, master_cc.py, worker.py,
+    spawner.py, scheduler.py, streaming.py, internal.py, and the base.py factory helpers
+    from item 042) and consumer sites (message_utils.py SIMPLE_HANDLERS dispatch table
+    from item 029, improve_command.py, chat.py, base.py tool-call tracking). A misspelled
+    type string silently produces a broken event that passes through the system undetected.
+    HOW — Add a module-level constants class in a new src/core/event_types.py with
+    one attribute per event type (e.g. ASSISTANT = "assistant", ERROR = "error"). Replace
+    all ~34 inline string literals with constant references. ~15 lines for the module,
+    1-line change per call site. The base.py factory helpers (make_text_event, make_error_event,
+    etc.) and the message_utils.py SIMPLE_HANDLERS dict become the primary consumers,
+    propagating type safety to all code that already uses those abstractions. Complements
+    items 029 (dispatch table) and 042 (event factories) which centralized event handling
+    and construction but left the type strings as raw literals.'
+  status: pending
+  created: '2026-03-25T12:00:00Z'
+  priority: medium

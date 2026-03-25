@@ -909,3 +909,24 @@
   status: done
   created: '2026-03-23T12:00:00Z'
   priority: medium
+- id: '063'
+  title: Extract resume-recovery retry logic from _trigger_master into helper
+  description: 'PURPOSE — Eliminate duplicated run_message call block in _trigger_master
+    (spawner.py:591, 91 lines) and make the resume-recovery retry pattern testable
+    in isolation. Lines 627-636 and 656-665 contain two nearly identical 9-line run_message()
+    invocations sharing 8 identical keyword arguments — only the first positional
+    (session_meta vs retry_session_meta with cc_session_id cleared) differs. The surrounding
+    try/except with _is_resume_not_found_error check, logging, and model_copy adds
+    another 15 lines of interleaved retry orchestration. HOW — Extract async def
+    _run_message_with_resume_recovery(cfg, session_meta, summary, session_mgr) -> Optional[str]
+    that encapsulates the full pattern: (1) call run_message with session_meta,
+    (2) on resume-not-found error, log, clear cc_session_id via model_copy, retry,
+    (3) log recovery success, (4) return new_cc_session_id. _trigger_master becomes
+    a ~55-line function: load session, check weekly expiry, wrap scheduled summary,
+    call _run_message_with_resume_recovery, persist cc_session_id. Pure refactoring,
+    no behavior change. Follows the pattern from items 003, 021, 027, 041, 058, 061,
+    and 062 which split other long functions in spawner.py.'
+  category: maintainability
+  status: pending
+  created: '2026-03-25T12:00:00Z'
+  priority: medium

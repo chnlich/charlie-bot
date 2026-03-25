@@ -184,6 +184,18 @@ async def rewind_session(
   return meta
 
 
+@router.post('/{session_id}/fork', response_model=SessionMetadata)
+async def fork_session(
+    session_id: str,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Create a new session by forking, copying all events."""
+  meta = await session_mgr.fork_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail='Session not found')
+  return meta
+
+
 @router.get("/{session_id}", response_model=SessionMetadata)
 async def get_session(meta: SessionMetadata = Depends(require_session)):
   return meta

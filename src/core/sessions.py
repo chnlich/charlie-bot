@@ -202,6 +202,57 @@ class SessionManager:
     log.info('session_rewound', new_session=meta.id, parent=parent_id, event_index=event_index)
     return meta
 
+  async def fork_session(self, parent_id: str) -> Optional[SessionMetadata]:
+    """Create a new session by forking an existing one, copying ALL events."""
+    parent = await self.get_session(parent_id)
+    if not parent:
+      return None
+
+    parent_events_path = self._chat_events_path(parent_id)
+    if not parent_events_path.exists():
+      return None
+    lines_text = await asyncio.to_thread(parent_events_path.read_text, encoding='utf-8')
+    lines = lines_text.splitlines()
+
+    # Generate a text summary from user+assistant messages for CC context
+    summary_parts = []
+    for line_text in lines:
+      try:
+        ev = json.loads(line_text)
+      except (json.JSONDecodeError, ValueError) as e:
+        log.debug('fork_parse_skip', line=line_text[:120], error=str(e))
+        continue
+      t = ev.get('type')
+      if t == 'user' and 'content' in ev:
+        summary_parts.append(f'User: {ev["content"]}')
+      elif t == 'assistant':
+        text = extract_text_from_message(ev.get('message'))
+        if text:
+          summary_parts.append(f'Assistant: {text}')
+    summary = '\n\n'.join(summary_parts)
+    if len(summary) > 4000:
+      summary = summary[:4000] + '\n\n[... truncated]'
+
+    # Create the new session inheriting parent's backend
+    meta = SessionMetadata(
+      name=f'Fork: {parent.name}',
+      parent_session_id=parent_id,
+      rewind_summary=summary,
+      backend=parent.backend,
+    )
+    session_dir = self._session_dir(meta.id)
+    for subdir in ['data', 'threads']:
+      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    # Copy ALL chat events to new session
+    events_path = self._chat_events_path(meta.id)
+    await asyncio.to_thread(events_path.write_text, '\n'.join(lines) + '\n', encoding='utf-8')
+
+    await self._save_metadata(meta)
+
+    log.info('session_forked', new_session=meta.id, parent=parent_id)
+    return meta
+
   async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:
     """Rename a session and return the updated metadata."""
     meta = await self.get_session(session_id)

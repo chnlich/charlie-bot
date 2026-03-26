@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
-from src.api import backlog, chat, cron, files, internal, latex, pages, sessions, slash, threads, voice
+from src.api import backlog, cc_usage, chat, cron, files, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager
 from src.core.config import get_config
@@ -50,6 +50,8 @@ async def lifespan(app: FastAPI):
   app.state.scheduler = scheduler
   await scheduler.start()
 
+  await cc_usage.start_poller()
+
   yield
 
   await scheduler.stop()
@@ -79,6 +81,7 @@ app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
 app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
 app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
+app.include_router(cc_usage.router, prefix="/api", tags=["cc-usage"])
 
 # File server (filesystem browser)
 app.include_router(files.router, prefix="/files", tags=["files"])

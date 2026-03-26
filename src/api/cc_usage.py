@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 import httpx
 import structlog
@@ -30,16 +30,6 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://console.anthropic.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_BETA = "oauth-2025-04-20"
-
-
-# ---------------------------------------------------------------------------
-# Provider protocol
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class UsageProvider(Protocol):
-  async def fetch(self) -> dict[str, Any] | None: ...
 
 
 class CcOpusProvider:
@@ -219,3 +209,12 @@ async def start_poller() -> None:
   global _poller_task
   _poller_task = asyncio.create_task(_poll_loop())
   log.info("cc_usage_poller_started")
+
+
+async def stop_poller() -> None:
+  """Cancel the background usage poller. Call from the app lifespan shutdown."""
+  global _poller_task
+  if _poller_task is not None:
+    _poller_task.cancel()
+    _poller_task = None
+    log.info("cc_usage_poller_stopped")

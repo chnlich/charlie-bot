@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
 
   yield
 
+  await cc_usage.stop_poller()
   await scheduler.stop()
   await streaming_manager.close_all()
   log.info("charliebot_shutdown")

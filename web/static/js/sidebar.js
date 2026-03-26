@@ -512,8 +512,27 @@ function updateThinkingTime() {
 
 async function cancelMaster() {
   try {
-    await fetch(`/api/chat/${SESSION_ID}/cancel`, { method: 'POST' });
+    const res = await fetch(`/api/chat/${SESSION_ID}/cancel`, { method: 'POST' });
+    if (res.ok) return;
+
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.detail || body.error || body.message || '';
+    } catch (_err) {
+      detail = '';
+    }
+
+    if (res.status === 404 && detail === 'No active master agent') {
+      // Backend already broadcasts a visible assistant_error for this case.
+      return;
+    }
+
+    const suffix = detail || (`HTTP ${res.status}`);
+    showToast(`Cancel failed: ${suffix}`, true);
+    console.error('Cancel master failed:', res.status, detail || res.statusText);
   } catch (err) {
+    showToast('Cancel failed: network error. Please try again.', true);
     console.error('Cancel master failed:', err);
   }
 }

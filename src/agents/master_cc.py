@@ -287,8 +287,11 @@ async def cancel_master(session_id: str) -> bool:
 
   Returns True if a backend was found and terminate() was called, False otherwise.
   """
+  log.info("master_cancel_requested", session=session_id)
   backend = _active_procs.get(session_id)
   if backend is None:
+    log.info("master_cancel_no_active_master", session=session_id)
     return False
   await backend.terminate()
+  log.info("master_cancel_succeeded", session=session_id)
   return True

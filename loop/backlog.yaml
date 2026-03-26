@@ -917,22 +917,22 @@
     invocations sharing 8 identical keyword arguments — only the first positional
     (session_meta vs retry_session_meta with cc_session_id cleared) differs. The surrounding
     try/except with _is_resume_not_found_error check, logging, and model_copy adds
-    another 15 lines of interleaved retry orchestration. HOW — Extract async def
-    _run_message_with_resume_recovery(cfg, session_meta, summary, session_mgr) -> Optional[str]
-    that encapsulates the full pattern: (1) call run_message with session_meta,
-    (2) on resume-not-found error, log, clear cc_session_id via model_copy, retry,
-    (3) log recovery success, (4) return new_cc_session_id. _trigger_master becomes
-    a ~55-line function: load session, check weekly expiry, wrap scheduled summary,
-    call _run_message_with_resume_recovery, persist cc_session_id. Pure refactoring,
-    no behavior change. Follows the pattern from items 003, 021, 027, 041, 058, 061,
-    and 062 which split other long functions in spawner.py.'
+    another 15 lines of interleaved retry orchestration. HOW — Extract async def _run_message_with_resume_recovery(cfg,
+    session_meta, summary, session_mgr) -> Optional[str] that encapsulates the full
+    pattern: (1) call run_message with session_meta, (2) on resume-not-found error,
+    log, clear cc_session_id via model_copy, retry, (3) log recovery success, (4)
+    return new_cc_session_id. _trigger_master becomes a ~55-line function: load session,
+    check weekly expiry, wrap scheduled summary, call _run_message_with_resume_recovery,
+    persist cc_session_id. Pure refactoring, no behavior change. Follows the pattern
+    from items 003, 021, 027, 041, 058, 061, and 062 which split other long functions
+    in spawner.py.'
   category: maintainability
   status: pending
   created: '2026-03-25T12:00:00Z'
   priority: medium
 - id: '064'
   title: Centralize event type strings into constants module
-  description: 'PURPOSE — Eliminate ~34 raw event-type string literals scattered across
+  description: PURPOSE — Eliminate ~34 raw event-type string literals scattered across
     10+ files, reducing typo risk and making event schema changes a single-point edit.
     Currently, strings like "assistant", "error", "user", "result", "master_done",
     "task_delegated", "worker_summary", "handler_result", "context_compacted", and
@@ -942,13 +942,14 @@
     from item 029, improve_command.py, chat.py, base.py tool-call tracking). A misspelled
     type string silently produces a broken event that passes through the system undetected.
     HOW — Add a module-level constants class in a new src/core/event_types.py with
-    one attribute per event type (e.g. ASSISTANT = "assistant", ERROR = "error"). Replace
-    all ~34 inline string literals with constant references. ~15 lines for the module,
-    1-line change per call site. The base.py factory helpers (make_text_event, make_error_event,
-    etc.) and the message_utils.py SIMPLE_HANDLERS dict become the primary consumers,
-    propagating type safety to all code that already uses those abstractions. Complements
-    items 029 (dispatch table) and 042 (event factories) which centralized event handling
-    and construction but left the type strings as raw literals.'
-  status: pending
+    one attribute per event type (e.g. ASSISTANT = "assistant", ERROR = "error").
+    Replace all ~34 inline string literals with constant references. ~15 lines for
+    the module, 1-line change per call site. The base.py factory helpers (make_text_event,
+    make_error_event, etc.) and the message_utils.py SIMPLE_HANDLERS dict become the
+    primary consumers, propagating type safety to all code that already uses those
+    abstractions. Complements items 029 (dispatch table) and 042 (event factories)
+    which centralized event handling and construction but left the type strings as
+    raw literals.
+  status: approved
   created: '2026-03-25T12:00:00Z'
   priority: medium

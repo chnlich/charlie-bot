@@ -39,6 +39,9 @@ def _get_git_version() -> str:
     return ""
 
 
+_RUNTIME_GIT_VERSION = _get_git_version()
+
+
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
 
@@ -176,5 +179,5 @@ async def index(
           "load_errors": load_errors,
           "auth_enabled": bool(cfg.charliebot_access_key),
           "hostname": socket.gethostname(),
-          "version": _get_git_version(),
+          "version": _RUNTIME_GIT_VERSION,
       })

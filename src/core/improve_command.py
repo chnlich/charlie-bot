@@ -90,11 +90,11 @@ You are starting an iterative improvement loop.
 ### Instructions
 1. Determine the target repository from the session context.
 2. Confirm with the user: show the repo path and goal summary, and ask if they are ready to start. Do NOT propose per-iteration methods or a detailed plan — workers are fully autonomous and decide their own approach.
-3. After approval, run the following command:
+3. After approval, choose a descriptive `--branch-prefix` based on the goal (e.g. `improve/fix-precision`, `improve/optimize-step-time`). If the user mentions a Linear ticket, include it (e.g. `ALG-865/chaoli/20260326/fix-precision`). Then run:
    ```
-   python -m src.cli.improve --session {session_id} --repo <repo> --iterations {max_iterations} --goal '<the goal above>'
+   python -m src.cli.improve --session {session_id} --repo <repo> --iterations {max_iterations} --goal '<the goal above>' --branch-prefix '<your chosen prefix>'
    ```
-   Each iteration automatically builds on the previous iteration's branch, so changes chain together. Optional: add `--branch-prefix <prefix>` to name iteration branches as `<prefix>/iter1`, `<prefix>/iter2`, etc.
+   Each iteration creates `<prefix>/iter1`, `<prefix>/iter2`, etc., automatically chaining on the previous iteration's code.
 4. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
 
 The improve state file is at: {state_path}"""

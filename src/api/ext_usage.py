@@ -236,7 +236,6 @@ _codex_provider = CodexProvider()
 
 async def _poll_loop() -> None:
   """Background loop that fetches usage data every POLL_INTERVAL_SECONDS."""
-  global _cached_usage
 
   while True:
     try:
@@ -248,10 +247,10 @@ async def _poll_loop() -> None:
       )
 
       if isinstance(cc_result, Exception):
-        log.exception("ext_usage_cc_poll_error", error=str(cc_result))
+        log.error("ext_usage_cc_poll_error", error=str(cc_result))
         cc_result = None
       if isinstance(codex_result, Exception):
-        log.exception("ext_usage_codex_poll_error", error=str(codex_result))
+        log.error("ext_usage_codex_poll_error", error=str(codex_result))
         codex_result = None
 
       if cc_result is not None:

@@ -237,6 +237,8 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     updateUsageDisplay(ev);
   } else if (t === 'tex_edit_proposed') {
     showDiffModal();
+  } else if (t === 'cc_usage') {
+    renderCcUsage(ev);
   } else if (t === 'context_compacted') {
     const trigger = ev.trigger || 'auto';
     const preTokens = ev.pre_tokens;

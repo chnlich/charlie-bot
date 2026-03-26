@@ -240,6 +240,7 @@ async def run_improve_loop(
 
   previous_summaries: list[str] = []
   prev_branch: Optional[str] = None
+  meta = None  # session metadata; assigned each iteration but needed after the inner loop
 
   try:
     for i in range(1, iterations + 1):

@@ -1042,7 +1042,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     blocks = msg.get("content") or []
     tool_parts = [
         f"[tool_use: {b.get('name', '?')}]" for b in (blocks if isinstance(blocks, list) else [])
-        if isinstance(b, dict) and b.get("type") == "tool_use"
+        if isinstance(b, dict) and b.get("type") == ET.TOOL_USE
     ]
     parts = ([text] if text else []) + tool_parts
     return " ".join(parts)[:300] if parts else ""
@@ -1053,7 +1053,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     rate_type = rli.get("rateLimitType", "unknown")
     return f"Rate limit {status} ({rate_type})"
 
-  if ev_type in ("thinking", "error", "complete", "tool_result", "tool_use", "file_write"):
+  if ev_type in (ET.THINKING, ET.ERROR, ET.COMPLETE, ET.TOOL_RESULT, ET.TOOL_USE, ET.FILE_WRITE):
     content = ev.get("content", ev.get("message", ""))
     if isinstance(content, list):
       text = extract_text_from_message({"content": content})

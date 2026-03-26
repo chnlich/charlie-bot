@@ -953,3 +953,22 @@
   status: done
   created: '2026-03-25T12:00:00Z'
   priority: medium
+- id: '065'
+  title: Extract shared _summarize_event_lines helper to deduplicate rewind and fork
+  description: 'PURPOSE — Eliminate 17 identical lines of event-parsing and summary-building
+    code duplicated between rewind_session (L172-189) and fork_session (L218-235)
+    in core/sessions.py, ensuring bug fixes and format changes apply in both paths.
+    Both functions repeat the exact same block: iterate JSON lines, parse each with
+    json.loads, skip parse errors with log.debug, extract user content and assistant
+    text via extract_text_from_message, join with double newlines, and truncate to
+    4000 characters. The only difference is the log event name (rewind_parse_skip
+    vs fork_parse_skip). HOW — Extract a module-level helper _summarize_event_lines(lines:
+    list[str]) -> str in core/sessions.py that encapsulates the parse-extract-join-truncate
+    pipeline. Both rewind_session and fork_session call it as summary = _summarize_event_lines(kept_lines
+    or lines). ~17 lines for the helper, each call site drops from 17 lines to 1.
+    The log.debug event name can use a generic "summary_parse_skip". Pure refactoring,
+    no behavior change. Follows the pattern from items 016, 045, and 059 which extracted
+    shared helpers for repeated inline logic.'
+  status: pending
+  created: '2026-03-26T12:00:00Z'
+  priority: medium

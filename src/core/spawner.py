@@ -588,6 +588,62 @@ async def spawn_worker(
           log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
 
 
+async def _run_message_with_resume_recovery(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    summary: str,
+    session_mgr: SessionManager,
+) -> Optional[str]:
+  """Call run_message, retrying once with cc_session_id cleared on stale-resume errors."""
+  try:
+    return await run_message(
+        cfg,
+        session_meta,
+        summary,
+        session_mgr.persist_and_broadcast,
+        session_mgr.save_metadata,
+        mark_unread=session_mgr.mark_unread,
+        skip_user_event=True,
+        auto_trigger=True,
+    )
+  except Exception as e:
+    if not _is_resume_not_found_error(e):
+      raise
+
+    stale_cc_session_id = session_meta.cc_session_id
+    log.warning(
+        "trigger_master_invalid_resume_detected",
+        session=session_meta.id,
+        cc_session_id=stale_cc_session_id,
+        error=str(e),
+    )
+
+    retry_session_meta = session_meta.model_copy(deep=True)
+    retry_session_meta.cc_session_id = None
+    log.info(
+        "trigger_master_retry_without_resume",
+        session=session_meta.id,
+        stale_cc_session_id=stale_cc_session_id,
+    )
+    new_cc_session_id = await run_message(
+        cfg,
+        retry_session_meta,
+        summary,
+        session_mgr.persist_and_broadcast,
+        session_mgr.save_metadata,
+        mark_unread=session_mgr.mark_unread,
+        skip_user_event=True,
+        auto_trigger=True,
+    )
+    log.info(
+        "trigger_master_resume_recovery_succeeded",
+        session=session_meta.id,
+        stale_cc_session_id=stale_cc_session_id,
+        recovered_cc_session_id=new_cc_session_id,
+    )
+    return new_cc_session_id
+
+
 async def _trigger_master(
     session_id: str,
     summary: str,
@@ -623,52 +679,7 @@ async def _trigger_master(
           f"{summary}"
       )
 
-    try:
-      new_cc_session_id = await run_message(
-          cfg,
-          session_meta,
-          master_summary,
-          session_mgr.persist_and_broadcast,
-          session_mgr.save_metadata,
-          mark_unread=session_mgr.mark_unread,
-          skip_user_event=True,
-          auto_trigger=True,
-      )
-    except Exception as e:
-      if not _is_resume_not_found_error(e):
-        raise
-
-      stale_cc_session_id = session_meta.cc_session_id
-      log.warning(
-          "trigger_master_invalid_resume_detected",
-          session=session_id,
-          cc_session_id=stale_cc_session_id,
-          error=str(e),
-      )
-
-      retry_session_meta = session_meta.model_copy(deep=True)
-      retry_session_meta.cc_session_id = None
-      log.info(
-          "trigger_master_retry_without_resume",
-          session=session_id,
-          stale_cc_session_id=stale_cc_session_id,
-      )
-      new_cc_session_id = await run_message(
-          cfg,
-          retry_session_meta,
-          master_summary,
-          session_mgr.persist_and_broadcast,
-          session_mgr.save_metadata,
-          mark_unread=session_mgr.mark_unread,
-          skip_user_event=True,
-          auto_trigger=True,
-      )
-      log.info(
-          "trigger_master_resume_recovery_succeeded",
-          session=session_id,
-          stale_cc_session_id=stale_cc_session_id,
-          recovered_cc_session_id=new_cc_session_id,
-      )
+    new_cc_session_id = await _run_message_with_resume_recovery(cfg, session_meta, master_summary, session_mgr)
 
     if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:
       await session_mgr.persist_cc_session_id(session_id, new_cc_session_id)

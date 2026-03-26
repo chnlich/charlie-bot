@@ -30,14 +30,14 @@ function renderCcUsage(data) {
   if (!strip) return;
 
   const buckets = [
-    {key: '5h', bar: 'cc-usage-5h-bar', pct: 'cc-usage-5h-pct', reset: 'cc-usage-5h-reset'},
-    {key: '7d', bar: 'cc-usage-7d-bar', pct: 'cc-usage-7d-pct', reset: 'cc-usage-7d-reset'},
+    {key: 'five_hour', bar: 'cc-usage-5h-bar', pct: 'cc-usage-5h-pct', reset: 'cc-usage-5h-reset'},
+    {key: 'seven_day', bar: 'cc-usage-7d-bar', pct: 'cc-usage-7d-pct', reset: 'cc-usage-7d-reset'},
   ];
 
   for (const b of buckets) {
     const bucket = data[b.key];
     if (!bucket) continue;
-    const pct = typeof bucket.percent === 'number' ? bucket.percent : 0;
+    const pct = typeof bucket.utilization === 'number' ? bucket.utilization : 0;
     const barEl = document.getElementById(b.bar);
     const pctEl = document.getElementById(b.pct);
     const resetEl = document.getElementById(b.reset);
@@ -55,8 +55,8 @@ function renderCcUsage(data) {
 function _refreshResetTimers() {
   if (!_ccUsageData) return;
   const buckets = [
-    {key: '5h', el: 'cc-usage-5h-reset'},
-    {key: '7d', el: 'cc-usage-7d-reset'},
+    {key: 'five_hour', el: 'cc-usage-5h-reset'},
+    {key: 'seven_day', el: 'cc-usage-7d-reset'},
   ];
   for (const b of buckets) {
     const bucket = _ccUsageData[b.key];

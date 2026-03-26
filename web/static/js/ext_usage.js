@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
-// Claude Code external usage strip
+// External tool usage strip (multi-provider: CC Opus, Codex)
 // ---------------------------------------------------------------------------
-let _ccUsageData = null;
+let _extUsageData = null;
 
 function formatResetTime(isoString) {
   const now = Date.now();
@@ -24,14 +24,16 @@ function _barColor(pct) {
   return 'bg-emerald-500';
 }
 
-function renderCcUsage(data) {
-  _ccUsageData = data;
-  const strip = document.getElementById('cc-usage-strip');
-  if (!strip) return;
+// Map provider key to DOM ID prefix: 'cc-opus' -> 'cc', 'codex' -> 'codex'
+function _providerPrefix(providerKey) {
+  if (providerKey === 'cc-opus') return 'cc';
+  return providerKey;
+}
 
+function _renderProvider(prefix, data) {
   const buckets = [
-    {key: 'five_hour', bar: 'cc-usage-5h-bar', pct: 'cc-usage-5h-pct', reset: 'cc-usage-5h-reset'},
-    {key: 'seven_day', bar: 'cc-usage-7d-bar', pct: 'cc-usage-7d-pct', reset: 'cc-usage-7d-reset'},
+    {key: 'five_hour', bar: 'ext-usage-' + prefix + '-5h-bar', pct: 'ext-usage-' + prefix + '-5h-pct', reset: 'ext-usage-' + prefix + '-5h-reset'},
+    {key: 'seven_day', bar: 'ext-usage-' + prefix + '-7d-bar', pct: 'ext-usage-' + prefix + '-7d-pct', reset: 'ext-usage-' + prefix + '-7d-reset'},
   ];
 
   for (const b of buckets) {
@@ -48,38 +50,53 @@ function renderCcUsage(data) {
     if (pctEl) pctEl.textContent = Math.round(pct) + '%';
     if (resetEl && bucket.resets_at) resetEl.textContent = formatResetTime(bucket.resets_at);
   }
+}
+
+function renderExtUsage(data) {
+  _extUsageData = data;
+  const strip = document.getElementById('ext-usage-strip');
+  if (!strip) return;
+
+  const providers = data.providers || {};
+  for (const [key, providerData] of Object.entries(providers)) {
+    _renderProvider(_providerPrefix(key), providerData);
+  }
 
   strip.classList.remove('hidden');
 }
 
 function _refreshResetTimers() {
-  if (!_ccUsageData) return;
-  const buckets = [
-    {key: 'five_hour', el: 'cc-usage-5h-reset'},
-    {key: 'seven_day', el: 'cc-usage-7d-reset'},
-  ];
-  for (const b of buckets) {
-    const bucket = _ccUsageData[b.key];
-    if (!bucket || !bucket.resets_at) continue;
-    const el = document.getElementById(b.el);
-    if (el) el.textContent = formatResetTime(bucket.resets_at);
+  if (!_extUsageData) return;
+  const providers = _extUsageData.providers || {};
+  for (const [key, providerData] of Object.entries(providers)) {
+    const prefix = _providerPrefix(key);
+    const buckets = [
+      {key: 'five_hour', el: 'ext-usage-' + prefix + '-5h-reset'},
+      {key: 'seven_day', el: 'ext-usage-' + prefix + '-7d-reset'},
+    ];
+    for (const b of buckets) {
+      const bucket = providerData[b.key];
+      if (!bucket || !bucket.resets_at) continue;
+      const el = document.getElementById(b.el);
+      if (el) el.textContent = formatResetTime(bucket.resets_at);
+    }
   }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  fetch('/api/cc-usage')
+  fetch('/api/ext-usage')
     .then(r => r.json())
-    .then(data => renderCcUsage(data))
-    .catch(err => console.warn('cc-usage fetch failed:', err));
+    .then(data => renderExtUsage(data))
+    .catch(err => console.warn('ext-usage fetch failed:', err));
 
   // Refresh countdown timers every 60s (client-side only)
   setInterval(_refreshResetTimers, 60000);
 
   // Re-fetch usage data every 10 minutes
   setInterval(() => {
-    fetch('/api/cc-usage')
+    fetch('/api/ext-usage')
       .then(r => r.json())
-      .then(data => renderCcUsage(data))
-      .catch(err => console.warn('cc-usage poll failed:', err));
+      .then(data => renderExtUsage(data))
+      .catch(err => console.warn('ext-usage poll failed:', err));
   }, 600000);
 });

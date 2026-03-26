@@ -94,7 +94,7 @@ You are starting an iterative improvement loop.
    ```
    python -m src.cli.improve --session {session_id} --repo <repo> --iterations {max_iterations} --goal '<the goal above>'
    ```
-   Optional: add `--branch-prefix <prefix>` to name iteration branches as `<prefix>/iter1`, `<prefix>/iter2`, etc. When used, each iteration builds on the previous iteration's branch, so changes chain together.
+   Each iteration automatically builds on the previous iteration's branch, so changes chain together. Optional: add `--branch-prefix <prefix>` to name iteration branches as `<prefix>/iter1`, `<prefix>/iter2`, etc.
 4. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
 
 The improve state file is at: {state_path}"""

@@ -1,9 +1,9 @@
-"""Claude Code external usage poller and API route."""
+"""External tool usage poller and API route (Claude Code, Codex)."""
 
 import asyncio
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +18,10 @@ log = structlog.get_logger()
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Cached usage data (module-level)
+# Cached usage data (module-level, keyed by provider name)
 # ---------------------------------------------------------------------------
 
-_cached_usage: dict[str, Any] | None = None
+_cached_usage: dict[str, dict] = {}
 _poller_task: asyncio.Task | None = None
 
 POLL_INTERVAL_SECONDS = 10 * 60  # 10 minutes
@@ -48,7 +48,7 @@ class CcOpusProvider:
 
     # Refresh token if expired
     if expires_at and time.time() >= expires_at:
-      log.info("cc_usage_token_expired, refreshing")
+      log.info("ext_usage_token_expired, refreshing")
       access_token = await _refresh_access_token(creds["refresh_token"])
       if access_token is None:
         return None
@@ -64,7 +64,7 @@ class CcOpusProvider:
 
       if resp.status_code == 429:
         self._backoff_seconds = min((self._backoff_seconds or 30) * 2, 30 * 60)
-        log.warning("cc_usage_rate_limited", backoff_seconds=self._backoff_seconds)
+        log.warning("ext_usage_rate_limited", backoff_seconds=self._backoff_seconds)
         return None
 
       # Reset backoff on success
@@ -73,7 +73,78 @@ class CcOpusProvider:
       return _transform_response(resp.json())
 
 
-# Codex provider can be added later.
+class CodexProvider:
+  """Reads usage from ~/.codex/sessions/ JSONL files."""
+
+  SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+
+  async def fetch(self) -> dict[str, Any] | None:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, self._fetch_sync)
+
+  def _fetch_sync(self) -> dict[str, Any] | None:
+    jsonl_path = self._find_latest_session_file()
+    if jsonl_path is None:
+      return None
+
+    text = jsonl_path.read_text()
+    lines = text.splitlines()
+
+    # Scan lines in reverse for the latest token_count event
+    for line in reversed(lines):
+      line = line.strip()
+      if not line:
+        continue
+      try:
+        event = json.loads(line)
+      except json.JSONDecodeError:
+        continue
+      if event.get("type") != "event_msg":
+        continue
+      payload = event.get("payload", {})
+      if payload.get("type") != "token_count":
+        continue
+
+      rate_limits = payload.get("rate_limits", {})
+      primary = rate_limits.get("primary", {})
+      secondary = rate_limits.get("secondary", {})
+
+      now = datetime.now(timezone.utc).isoformat()
+      return {
+        "five_hour": {
+          "utilization": primary.get("used_percent", 0.0),
+          "resets_at": datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
+            if "resets_at" in primary else "",
+        },
+        "seven_day": {
+          "utilization": secondary.get("used_percent", 0.0),
+          "resets_at": datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
+            if "resets_at" in secondary else "",
+        },
+        "fetched_at": now,
+        "provider": "codex",
+      }
+
+    return None
+
+  def _find_latest_session_file(self) -> Path | None:
+    """Walk SESSIONS_DIR/YYYY/MM/DD/ backwards from today, checking 3 days."""
+    if not self.SESSIONS_DIR.exists():
+      return None
+
+    today = date.today()
+    for days_ago in range(3):
+      d = today - timedelta(days=days_ago)
+      day_dir = self.SESSIONS_DIR / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.day:02d}"
+      if not day_dir.exists():
+        continue
+
+      # Find most recent rollout-*.jsonl by modification time
+      candidates = sorted(day_dir.glob("rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+      if candidates:
+        return candidates[0]
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +155,7 @@ class CcOpusProvider:
 def _read_credentials() -> dict[str, Any] | None:
   """Read OAuth credentials from ~/.claude/.credentials.json."""
   if not CREDENTIALS_PATH.exists():
-    log.warning("cc_usage_credentials_not_found", path=str(CREDENTIALS_PATH))
+    log.warning("ext_usage_credentials_not_found", path=str(CREDENTIALS_PATH))
     return None
 
   data = json.loads(CREDENTIALS_PATH.read_text())
@@ -94,7 +165,7 @@ def _read_credentials() -> dict[str, Any] | None:
   expires_at = oauth.get("expiresAt")
 
   if not access_token:
-    log.warning("cc_usage_no_access_token")
+    log.warning("ext_usage_no_access_token")
     return None
 
   return {
@@ -130,7 +201,7 @@ async def _refresh_access_token(refresh_token: str) -> str | None:
     creds_data["claudeAiOauth"]["expiresAt"] = new_expires
   CREDENTIALS_PATH.write_text(json.dumps(creds_data, indent=2))
 
-  log.info("cc_usage_token_refreshed")
+  log.info("ext_usage_token_refreshed")
   return new_access
 
 
@@ -159,7 +230,8 @@ def _transform_response(raw: dict[str, Any]) -> dict[str, Any]:
 # Background poller
 # ---------------------------------------------------------------------------
 
-_provider = CcOpusProvider()
+_cc_provider = CcOpusProvider()
+_codex_provider = CodexProvider()
 
 
 async def _poll_loop() -> None:
@@ -168,21 +240,39 @@ async def _poll_loop() -> None:
 
   while True:
     try:
-      result = await _provider.fetch()
-      if result is not None:
-        _cached_usage = result
-        # Broadcast to sidebar channel
-        await streaming_manager.broadcast("sidebar", {"type": "cc_usage", **result})
+      # Poll both providers
+      cc_result, codex_result = await asyncio.gather(
+        _cc_provider.fetch(),
+        _codex_provider.fetch(),
+        return_exceptions=True,
+      )
+
+      if isinstance(cc_result, Exception):
+        log.exception("ext_usage_cc_poll_error", error=str(cc_result))
+        cc_result = None
+      if isinstance(codex_result, Exception):
+        log.exception("ext_usage_codex_poll_error", error=str(codex_result))
+        codex_result = None
+
+      if cc_result is not None:
+        _cached_usage["cc-opus"] = cc_result
+      if codex_result is not None:
+        _cached_usage["codex"] = codex_result
+
+      # Broadcast to sidebar channel
+      if _cached_usage:
+        await streaming_manager.broadcast(
+          "sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)}
+        )
         log.info(
-          "cc_usage_fetched",
-          five_hour=result["five_hour"]["utilization"],
-          seven_day=result["seven_day"]["utilization"],
+          "ext_usage_fetched",
+          providers=list(_cached_usage.keys()),
         )
     except Exception:
-      log.exception("cc_usage_poll_error")
+      log.exception("ext_usage_poll_error")
 
     # Use provider backoff if rate-limited, otherwise normal interval
-    wait = _provider._backoff_seconds if _provider._backoff_seconds > 0 else POLL_INTERVAL_SECONDS
+    wait = _cc_provider._backoff_seconds if _cc_provider._backoff_seconds > 0 else POLL_INTERVAL_SECONDS
     await asyncio.sleep(wait)
 
 
@@ -191,12 +281,12 @@ async def _poll_loop() -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/cc-usage")
-async def get_cc_usage() -> dict[str, Any]:
-  """Return cached Claude Code usage data."""
-  if _cached_usage is None:
+@router.get("/ext-usage")
+async def get_ext_usage() -> dict[str, Any]:
+  """Return cached external tool usage data."""
+  if not _cached_usage:
     return {"error": "Usage data not yet available"}
-  return _cached_usage
+  return {"providers": dict(_cached_usage)}
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +298,7 @@ async def start_poller() -> None:
   """Start the background usage poller. Call from the app lifespan."""
   global _poller_task
   _poller_task = asyncio.create_task(_poll_loop())
-  log.info("cc_usage_poller_started")
+  log.info("ext_usage_poller_started")
 
 
 async def stop_poller() -> None:
@@ -217,4 +307,4 @@ async def stop_poller() -> None:
   if _poller_task is not None:
     _poller_task.cancel()
     _poller_task = None
-    log.info("cc_usage_poller_stopped")
+    log.info("ext_usage_poller_stopped")

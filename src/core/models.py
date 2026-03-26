@@ -174,3 +174,4 @@ class ImproveRequest(BaseModel):
   repo_path: str
   iterations: int = 3
   goal: str
+  branch_prefix: Optional[str] = None

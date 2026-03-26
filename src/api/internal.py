@@ -94,6 +94,7 @@ async def start_improve_loop(
           cfg=cfg,
           session_mgr=session_mgr,
           thread_mgr=thread_mgr,
+          branch_prefix=req.branch_prefix,
       ),
       name=f"improve-loop-{req.session_id}",
   )

@@ -950,6 +950,6 @@
     abstractions. Complements items 029 (dispatch table) and 042 (event factories)
     which centralized event handling and construction but left the type strings as
     raw literals.
-  status: approved
+  status: done
   created: '2026-03-25T12:00:00Z'
   priority: medium

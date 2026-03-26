@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager, require_session
 from src.api.message_utils import extract_text_from_message
+from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SendMessageRequest, SessionMetadata
@@ -75,7 +76,7 @@ async def send_message(
 
     if dispatch.kind != 'not_found':
       user_event = {
-          "type": "user",
+          "type": ET.USER,
           "content": content,
           "timestamp": datetime.now(timezone.utc).isoformat(),
           "is_voice": False,
@@ -95,9 +96,9 @@ async def send_message(
 
       elif dispatch.kind == 'error':
         error_text = dispatch.error or f'Failed to dispatch /{name}'
-        asst_event = {"type": "assistant", "message": {"content": [{"type": "text", "text": error_text}]}}
+        asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": error_text}]}}
         await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = {"type": "master_done", "exit_code": 1, "still_thinking": False}
+        done_event = {"type": ET.MASTER_DONE, "exit_code": 1, "still_thinking": False}
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -106,9 +107,9 @@ async def send_message(
         out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
             result['stdout'] or result['stderr'] or '(no output)')
         md_out = '```\n' + out + '\n```'
-        asst_event = {"type": "assistant", "message": {"content": [{"type": "text", "text": md_out}]}}
+        asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": md_out}]}}
         await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = {"type": "master_done", "exit_code": 0, "still_thinking": False}
+        done_event = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -174,8 +175,8 @@ async def run_and_finalize(
     log.exception("master_cc_run_failed", session=meta.id)
     # run_message() should handle and emit failures, but keep this as a
     # last-resort guard so the UI never gets stuck in "Thinking...".
-    error_event = {"type": "assistant_error", "content": f"Agent error: {e}"}
-    done_event = {"type": "master_done", "exit_code": 1, "still_thinking": False}
+    error_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {e}"}
+    done_event = {"type": ET.MASTER_DONE, "exit_code": 1, "still_thinking": False}
     await session_mgr.persist_and_broadcast(meta.id, error_event)
     await session_mgr.persist_and_broadcast(meta.id, done_event)
 
@@ -190,7 +191,7 @@ async def _auto_name(
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_meta.id)
   assistant_text = ""
   for ev in events:
-    if ev.get("type") == "assistant":
+    if ev.get("type") == ET.ASSISTANT:
       assistant_text += extract_text_from_message(ev.get("message"))
 
   if not assistant_text:

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from src.api.chat import run_and_finalize
 from src.api.deps import get_session_manager, get_thread_manager, require_session
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
@@ -101,7 +102,7 @@ async def execute_command(
 
   # Built-in /help
   if name == 'help':
-    return {'type': 'help', 'commands': await _build_command_list()}
+    return {'type': ET.HELP, 'commands': await _build_command_list()}
 
   # Built-in /improve
   if name == 'improve':
@@ -125,7 +126,7 @@ async def execute_command(
     return JSONResponse(
         status_code=202,
         content={
-            'type': 'improve_started',
+            'type': ET.IMPROVE_STARTED,
             'goal': goal,
             'max_iterations': max_iterations,
         },
@@ -136,7 +137,7 @@ async def execute_command(
     from src.core.improve_command import stop_improve_loop
     stopped = await stop_improve_loop(session_id, cfg)
     if stopped:
-      return {'type': 'improve_stopped', 'message': 'Improve loop will stop after current iteration'}
+      return {'type': ET.IMPROVE_STOPPED, 'message': 'Improve loop will stop after current iteration'}
     return {'error': 'No active improve loop in this session'}
 
   # Built-in /run <task-name>
@@ -158,7 +159,7 @@ async def execute_command(
     return JSONResponse(
         status_code=202,
         content={
-            'type': 'task_triggered',
+            'type': ET.TASK_TRIGGERED,
             'task': task_name,
             'session_id': result['session_id'],
             'thread_id': result['thread_id'],
@@ -177,7 +178,7 @@ async def execute_command(
   if dispatch.kind == 'shell_result':
     result = dispatch.shell_result
     return {
-        'type': 'shell_result',
+        'type': ET.SHELL_RESULT,
         'command': name,
         'stdout': result['stdout'],
         'stderr': result['stderr'],
@@ -188,6 +189,6 @@ async def execute_command(
     create_logged_task(
         run_and_finalize(
             cfg, meta, dispatch.substituted_prompt, session_mgr, extra_claude_flags=dispatch.claude_code_flags))
-    return JSONResponse(status_code=202, content={'type': 'prompt_dispatched', 'command': name})
+    return JSONResponse(status_code=202, content={'type': ET.PROMPT_DISPATCHED, 'command': name})
 
   return {'error': f'Unexpected dispatch result for /{name}'}

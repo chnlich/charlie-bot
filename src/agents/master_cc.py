@@ -8,6 +8,7 @@ from typing import Optional
 import structlog
 
 from src.agents.backends.base import AgentBackend
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
 from src.core.models import BackendOption, SessionMetadata
@@ -112,21 +113,21 @@ async def _finalize_session(
       await save_metadata(session_meta)
     await streaming_manager.broadcast(
         "sidebar", {
-            "type": "running_changed",
+            "type": ET.RUNNING_CHANGED,
             "session_id": session_meta.id,
             "has_running_tasks": False,
             "auto_trigger": auto_trigger,
         })
 
   if error_msg:
-    err_event = {"type": "assistant_error", "content": f"Agent error: {error_msg}"}
+    err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
     await persist_and_broadcast(session_meta.id, err_event)
 
   # Mark session unread so other viewers see the new output
   if mark_unread:
     await mark_unread(session_meta.id)
 
-  done_event = {"type": "master_done", "exit_code": exit_code, "still_thinking": still_thinking}
+  done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking": still_thinking}
   if thinking_seconds is not None:
     done_event["thinking_seconds"] = thinking_seconds
   await persist_and_broadcast(session_meta.id, done_event)
@@ -134,7 +135,7 @@ async def _finalize_session(
   if should_check_tex:
     proposal = await asyncio.to_thread(check_tex_changed)
     if proposal:
-      tex_event = {'type': 'tex_edit_proposed'}
+      tex_event = {'type': ET.TEX_EDIT_PROPOSED}
       await persist_and_broadcast(session_meta.id, tex_event)
       log.info('tex_edit_proposed', session=session_meta.id)
     else:
@@ -187,7 +188,7 @@ async def run_message(
   # Persist the user message so it survives page refresh (WebSocket catch-up)
   if not skip_user_event:
     user_event = {
-        "type": "user",
+        "type": ET.USER,
         "content": user_content,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "is_voice": is_voice
@@ -208,7 +209,7 @@ async def run_message(
   if _active_tasks[session_meta.id] == 1:
     await streaming_manager.broadcast(
         'sidebar', {
-            'type': 'running_changed',
+            'type': ET.RUNNING_CHANGED,
             'session_id': session_meta.id,
             'has_running_tasks': True,
             'auto_trigger': auto_trigger,

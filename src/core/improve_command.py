@@ -8,6 +8,7 @@ import structlog
 from pydantic import BaseModel
 
 from src.api.message_utils import extract_text_from_message
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 
 log = structlog.get_logger()
@@ -106,9 +107,9 @@ The improve state file is at: {state_path}"""
 def _extract_iteration_summary(events: list[dict], iteration: int, status: str) -> str:
   """Extract a summary from worker events, preferring the result event."""
   for event in reversed(events):
-    if event.get("type") == "result" and event.get("result"):
+    if event.get("type") == ET.RESULT and event.get("result"):
       return event["result"][:500]
-    if event.get("type") == "assistant":
+    if event.get("type") == ET.ASSISTANT:
       text = extract_text_from_message(event.get("message"))
       if text:
         return text[:500]
@@ -199,7 +200,7 @@ async def run_improve_loop(
       # Broadcast progress event
       await session_mgr.persist_and_broadcast(
           session_id, {
-              "type": "improve_iteration_completed",
+              "type": ET.IMPROVE_ITERATION_COMPLETED,
               "iteration": i,
               "total_iterations": iterations,
               "status": status,
@@ -207,14 +208,14 @@ async def run_improve_loop(
           })
 
     # Broadcast completion and trigger master CC
-    payload = _build_summary_payload("improve_completed", goal, previous_summaries)
+    payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
     await session_mgr.persist_and_broadcast(session_id, payload)
     await _trigger_master(session_id, json.dumps(payload, indent=2), cfg, session_mgr)
 
   except Exception:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
     try:
-      failure_payload = _build_summary_payload("improve_failed", goal, previous_summaries)
+      failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
       await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     except Exception:
       log.error("improve_loop_trigger_master_on_failure_failed", session=session_id, exc_info=True)

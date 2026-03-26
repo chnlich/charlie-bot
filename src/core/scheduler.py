@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from croniter import croniter
 
+from src.core import event_types as ET
 from src.core.backup import BACKUP_DIR, apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.improvement_loop import determine_action
@@ -184,7 +185,7 @@ class Scheduler:
     try:
       result = await handler()
       event = {
-          'type': 'handler_result',
+          'type': ET.HANDLER_RESULT,
           'task': task_cfg.name,
           'status': 'ok',
           'message': str(result) if result is not None else 'done',
@@ -193,7 +194,7 @@ class Scheduler:
     except Exception as e:
       log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
       event = {
-          'type': 'handler_result',
+          'type': ET.HANDLER_RESULT,
           'task': task_cfg.name,
           'status': 'error',
           'message': str(e),
@@ -281,7 +282,7 @@ class Scheduler:
     )
 
     event = {
-        "type": "task_delegated",
+        "type": ET.TASK_DELEGATED,
         "task": task_cfg.name,
         "description": event_description,
         "session_id": session.id,

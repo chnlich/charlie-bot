@@ -6,6 +6,8 @@ from typing import Callable, TYPE_CHECKING
 
 import structlog
 
+from src.core import event_types as ET
+
 if TYPE_CHECKING:
   from src.core.models import ThreadMetadata
   from src.core.sessions import SessionManager
@@ -72,36 +74,36 @@ def _context_compacted_msg(ev: dict) -> dict:
 # Each handler returns a message dict (role + content + any extras) or None to
 # skip the event.  The loop adds event_index and a default timestamp.
 _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
-    'master_done':
+    ET.MASTER_DONE:
         lambda ev: None if ev.get('still_thinking') else {
             'role': 'separator',
             'thinking_seconds': ev.get('thinking_seconds'),
         },
-    'assistant_error':
+    ET.ASSISTANT_ERROR:
         lambda ev: {
             'role': 'system',
             'content': f"Error: {ev.get('content', '')}",
         },
-    'error':
+    ET.ERROR:
         lambda ev: {
             'role': 'system',
             'content': f"Error: {ev.get('content') or ev.get('message') or 'Unknown error'}",
         },
-    'task_delegated':
+    ET.TASK_DELEGATED:
         lambda ev: {
             'role': 'task_delegated',
             'content': f"Task delegated: {ev.get('description', '')}",
             'timestamp': ev.get('timestamp') or ev.get('created_at'),
         },
-    'worker_summary':
+    ET.WORKER_SUMMARY:
         lambda ev: {
             'role': 'worker_summary',
             'content': ev.get('content', ''),
             'full_content': ev.get('full_content', ''),
         },
-    'handler_result':
+    ET.HANDLER_RESULT:
         _handler_result_msg,
-    'context_compacted':
+    ET.CONTEXT_COMPACTED:
         _context_compacted_msg,
 }
 
@@ -128,7 +130,7 @@ def events_to_messages(events: list[dict]) -> list[dict]:
 
   for idx, ev in enumerate(events):
     t = ev.get("type")
-    if t == "user":
+    if t == ET.USER:
       # Skip CC-internal user events (tool results) — they have a "message" field
       # but no top-level "content". Only real user messages have "content".
       if "message" in ev and "content" not in ev:
@@ -142,7 +144,7 @@ def events_to_messages(events: list[dict]) -> list[dict]:
               "event_index": idx,
               "timestamp": ev.get("timestamp"),
           })
-    elif t == "assistant":
+    elif t == ET.ASSISTANT:
       last_event_idx = idx
       if not assistant_buf:
         last_assistant_ts = ev.get("timestamp")

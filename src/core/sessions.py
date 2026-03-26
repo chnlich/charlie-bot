@@ -11,6 +11,7 @@ from typing import Any, Optional
 import aiofiles
 import structlog
 
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
@@ -273,7 +274,7 @@ class SessionManager:
     await self._save_metadata(meta)
     await streaming_manager.broadcast(
         "sidebar", {
-            "type": "unread_changed",
+            "type": ET.UNREAD_CHANGED,
             "session_id": session_id,
             "has_unread": False,
         })
@@ -288,7 +289,7 @@ class SessionManager:
     await self._save_metadata(meta)
     await streaming_manager.broadcast(
         "sidebar", {
-            "type": "unread_changed",
+            "type": ET.UNREAD_CHANGED,
             "session_id": session_id,
             "has_unread": True,
         })

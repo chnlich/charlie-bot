@@ -14,6 +14,7 @@ from src.agents.master_cc import run_message
 from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND
 from src.agents.worker import QuotaExhaustedException, Worker
+from src.core import event_types as ET
 from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
@@ -194,7 +195,7 @@ def _build_worker_event(
 ) -> dict:
   """Build a worker_summary event dict."""
   event = {
-      "type": "worker_summary",
+      "type": ET.WORKER_SUMMARY,
       "thread_id": thread_id,
       "content": content,
       "status": status,
@@ -583,7 +584,7 @@ async def spawn_worker(
         log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
         try:
           await session_mgr.persist_and_broadcast(
-              session_id, {"type": "error", "content": f"Worker finalization failed: {e}"})
+              session_id, {"type": ET.ERROR, "content": f"Worker finalization failed: {e}"})
         except Exception:
           log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
 
@@ -1032,10 +1033,10 @@ async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: Thre
 
 def _extract_event_content(ev: dict, ev_type: str) -> str:
   """Extract human-readable content from a Claude Code stream-json event."""
-  if ev_type == "result":
+  if ev_type == ET.RESULT:
     return str(ev.get("result", ""))[:500]
 
-  if ev_type == "assistant":
+  if ev_type == ET.ASSISTANT:
     msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
     text = extract_text_from_message(msg)
     blocks = msg.get("content") or []

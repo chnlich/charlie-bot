@@ -125,10 +125,16 @@ async def send_message(
 async def cancel_master_agent(
     session_id: str,
     _meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
 ):
   """Send SIGTERM to the running master CC agent for this session."""
   found = await cancel_master(session_id)
   if not found:
+    await session_mgr.persist_and_broadcast(
+        session_id, {
+            "type": "assistant_error",
+            "content": "No active master agent to cancel.",
+        })
     raise HTTPException(status_code=404, detail="No active master agent")
   return {"ok": True}
 

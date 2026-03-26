@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -97,6 +98,7 @@ async def _finalize_session(
     save_metadata=None,
     mark_unread=None,
     auto_trigger: bool = False,
+    finish_extras: Optional[dict] = None,
 ) -> None:
   """Clean up after run_message: update thinking state, broadcast errors/done, check tex."""
   _active_procs.pop(session_meta.id, None)
@@ -141,7 +143,13 @@ async def _finalize_session(
     else:
       clear_snapshot()
 
-  log.info("master_cc_finished", session=session_meta.id, exit_code=exit_code, still_thinking=still_thinking)
+  log.info(
+      "master_cc_finished",
+      session=session_meta.id,
+      exit_code=exit_code,
+      still_thinking=still_thinking,
+      **(finish_extras or {}),
+  )
 
 
 async def run_message(
@@ -219,6 +227,7 @@ async def run_message(
   option = backend_option or cfg.backend_options[0]
 
   extra_flags: list[str] = []
+  resume_session = bool(session_meta.cc_session_id)
   if session_meta.cc_session_id and option.type not in ("codex", "gemini", "opencode"):
     extra_flags = ["--resume", session_meta.cc_session_id]
   if extra_claude_flags:
@@ -229,16 +238,35 @@ async def run_message(
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
   env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
-  log.info("master_cc_starting", session=session_meta.id, cwd=cwd)
+  prompt = _build_prompt(user_content, is_voice)
+
+  log.info(
+      "master_cc_starting",
+      session=session_meta.id,
+      backend=option.type,
+      model=option.model,
+      prompt_chars=len(prompt),
+      resume_session=resume_session,
+      cwd=cwd,
+  )
 
   cc_session_id: Optional[str] = session_meta.cc_session_id
   exit_code = 1
   error_msg: Optional[str] = None
 
+  # Monotonic timing
+  t_start = time.monotonic()
+  t_spawn: Optional[float] = None
+  t_first_event: Optional[float] = None
+  t_first_assistant: Optional[float] = None
+
   async def _on_spawn(pid: int) -> None:
-    log.info("master_cc_spawned", session=session_meta.id, pid=pid)
+    nonlocal t_spawn
+    t_spawn = time.monotonic()
+    log.info("master_cc_spawned", session=session_meta.id, pid=pid, backend=option.type, model=option.model)
 
   backend: Optional[AgentBackend] = None
+  saw_first_assistant = False
 
   try:
     backend = build_backend(
@@ -252,9 +280,42 @@ async def run_message(
     )
     _active_procs[session_meta.id] = backend
 
-    prompt = _build_prompt(user_content, is_voice)
-
     async for event in backend.run(prompt, cwd, env):
+      # Track first backend event
+      if t_first_event is None:
+        t_first_event = time.monotonic()
+        spawn_ref = t_spawn if t_spawn is not None else t_start
+        spawn_to_first_ms = int((t_first_event - spawn_ref) * 1000)
+        log.info(
+            "master_cc_first_event",
+            session=session_meta.id,
+            event_type=event.get("type"),
+            spawn_to_first_event_ms=spawn_to_first_ms,
+        )
+        if spawn_to_first_ms > 10_000:
+          log.warning(
+              "master_cc_slow_first_event",
+              session=session_meta.id,
+              spawn_to_first_event_ms=spawn_to_first_ms,
+          )
+
+      # Track first assistant text
+      if not saw_first_assistant and event.get("type") == ET.ASSISTANT:
+        msg = event.get("message", {})
+        content_blocks = msg.get("content") if isinstance(msg, dict) else None
+        if content_blocks:
+          for block in content_blocks:
+            if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+              saw_first_assistant = True
+              t_first_assistant = time.monotonic()
+              first_assistant_ms = int((t_first_assistant - t_start) * 1000)
+              log.info(
+                  "master_cc_first_assistant_text",
+                  session=session_meta.id,
+                  first_assistant_ms=first_assistant_ms,
+              )
+              break
+
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, persist_and_broadcast)
 
     exit_code = backend.exit_code
@@ -268,6 +329,34 @@ async def run_message(
     error_msg = str(e)
 
   finally:
+    total_ms = int((time.monotonic() - t_start) * 1000)
+
+    # Build finish extras
+    finish_extras: dict = {
+        "backend": option.type,
+        "model": option.model,
+        "total_ms": total_ms,
+        "stderr_present": bool(backend and backend.stderr_text),
+    }
+    if t_first_event is not None:
+      spawn_ref = t_spawn if t_spawn is not None else t_start
+      finish_extras["spawn_to_first_event_ms"] = int((t_first_event - spawn_ref) * 1000)
+    if t_first_assistant is not None:
+      finish_extras["first_assistant_ms"] = int((t_first_assistant - t_start) * 1000)
+    if backend and hasattr(backend, "result") and backend.result:
+      usage = getattr(backend.result, "usage", None) or (
+          backend.result.get("usage") if isinstance(backend.result, dict) else None)
+      if usage:
+        if isinstance(usage, dict):
+          finish_extras["input_tokens"] = usage.get("input_tokens")
+          finish_extras["output_tokens"] = usage.get("output_tokens")
+        else:
+          finish_extras["input_tokens"] = getattr(usage, "input_tokens", None)
+          finish_extras["output_tokens"] = getattr(usage, "output_tokens", None)
+
+    if total_ms > 120_000:
+      log.warning("master_cc_slow_total", session=session_meta.id, total_ms=total_ms)
+
     await _finalize_session(
         session_meta,
         exit_code,
@@ -277,6 +366,7 @@ async def run_message(
         save_metadata=save_metadata,
         mark_unread=mark_unread,
         auto_trigger=auto_trigger,
+        finish_extras=finish_extras,
     )
 
   return cc_session_id

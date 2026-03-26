@@ -66,8 +66,17 @@ async def send_message(
   if req.uploaded_files:
     content += "\n\n[Attached files]\n" + "\n".join(f"- {p}" for p in req.uploaded_files)
 
+  is_slash = content.startswith('/')
+  log.info(
+      "send_message",
+      session=session_id,
+      content_chars=len(content),
+      uploaded_files_count=len(req.uploaded_files) if req.uploaded_files else 0,
+      is_slash=is_slash,
+  )
+
   # Slash command interception
-  if content.startswith('/'):
+  if is_slash:
     space_idx = content.find(' ')
     name = content[1:space_idx] if space_idx != -1 else content[1:]
     args = content[space_idx + 1:].strip() if space_idx != -1 else ''
@@ -150,6 +159,7 @@ async def run_and_finalize(
     skip_user_event: bool = False,
 ) -> None:
   """Run master CC, persist cc_session_id, and auto-name the session."""
+  log.info("run_and_finalize_start", session=meta.id, backend=meta.backend)
   backend_id = meta.backend
   backend_option = cfg.get_backend_option(backend_id)
   if backend_option is None and backend_id.startswith("codex"):

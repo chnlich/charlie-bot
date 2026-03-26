@@ -7,6 +7,8 @@ from typing import Any, Awaitable, Callable
 import structlog
 from fastapi import WebSocket
 
+from src.core import event_types as ET
+
 log = structlog.get_logger()
 
 
@@ -72,7 +74,7 @@ async def handle_compact_boundary(
   pre_tokens = meta.get("pre_tokens")
   log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)
   compact_event: dict[str, Any] = {
-      "type": "context_compacted",
+      "type": ET.CONTEXT_COMPACTED,
       "trigger": trigger,
       "pre_tokens": pre_tokens,
   }

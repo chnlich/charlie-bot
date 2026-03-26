@@ -7,6 +7,7 @@ from pathlib import Path
 import structlog
 
 from src.agents.backends.base import AgentBackend, make_error_event, make_result_event, make_text_event, resolve_binary
+from src.core import event_types as ET
 
 log = structlog.get_logger()
 
@@ -104,10 +105,10 @@ class OpenCodeBackend(AgentBackend):
       # Emit tool_use event
       results.append(
           {
-              "type": "assistant",
+              "type": ET.ASSISTANT,
               "message": {
                   "content": [{
-                      "type": "tool_use",
+                      "type": ET.TOOL_USE,
                       "name": tool_name,
                       "id": call_id,
                       "input": input_data,
@@ -117,7 +118,7 @@ class OpenCodeBackend(AgentBackend):
       # Emit tool_result event only when output is present
       if output:
         results.append({
-            "type": "tool_result",
+            "type": ET.TOOL_RESULT,
             "tool_use_id": call_id,
             "content": output,
         })

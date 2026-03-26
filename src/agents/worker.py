@@ -12,6 +12,7 @@ import structlog
 from src.agents.backends.base import AgentBackend
 from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.registry import build_backend
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, ThreadMetadata
 from src.core.ndjson import append_ndjson
@@ -99,7 +100,7 @@ class Worker:
 
     if self._backend.stderr_text:
       stderr_event = {
-          "type": "error",
+          "type": ET.ERROR,
           "content": self._backend.stderr_text,
           "timestamp": datetime.now(timezone.utc).isoformat(),
       }
@@ -109,7 +110,7 @@ class Worker:
 
     # Emit final completion event
     final_event = {
-        "type": "complete" if exit_code == 0 else "error",
+        "type": ET.COMPLETE if exit_code == 0 else ET.ERROR,
         "status": "success" if exit_code == 0 else "failed",
         "exit_code": exit_code,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -145,7 +146,7 @@ class Worker:
         await log_file.flush()
         raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
 
-    if event_type == "error" and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
+    if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
       await log_file.write(json.dumps(event_data) + "\n")
       await log_file.flush()
       raise QuotaExhaustedException(event_data.get("message", "Quota exhausted"))

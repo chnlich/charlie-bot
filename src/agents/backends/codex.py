@@ -8,6 +8,7 @@ import structlog
 from src.agents.backends.base import (
     AgentBackend, make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
     resolve_binary)
+from src.core import event_types as ET
 
 log = structlog.get_logger()
 
@@ -170,7 +171,7 @@ class CodexBackend(AgentBackend):
           text += part.get("text", "")
     if not text:
       return []
-    return [{"type": "thinking", "content": text}]
+    return [{"type": ET.THINKING, "content": text}]
 
   def _handle_command_execution(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})
@@ -191,7 +192,7 @@ class CodexBackend(AgentBackend):
     filename = item.get("filename", "")
     if not filename:
       return []
-    return [{"type": "file_write", "path": filename}]
+    return [{"type": ET.FILE_WRITE, "path": filename}]
 
   def _handle_mcp_tool_call(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})

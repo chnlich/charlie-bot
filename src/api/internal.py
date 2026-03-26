@@ -4,6 +4,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_session_manager, get_thread_manager
+from src.core import event_types as ET
 from src.core.config import get_config
 from src.core.improve_command import ImproveState, run_improve_loop, save_improve_state
 from src.core.models import DelegateRequest, ImproveRequest
@@ -52,7 +53,7 @@ async def delegate_task(
 
   # Save and broadcast task_delegated event so cursor stays in sync on reconnect
   task_event = {
-      "type": "task_delegated",
+      "type": ET.TASK_DELEGATED,
       "thread_id": thread.id,
       "description": req.description,
       "timestamp": thread.created_at.isoformat(),

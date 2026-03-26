@@ -7,6 +7,7 @@ import signal
 import structlog
 
 from src.agents.gemini_provider import GeminiProvider
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.process import kill_process_group
@@ -136,12 +137,12 @@ async def maybe_auto_name(
 
     channel = f"session:{session_meta.id}"
     await streaming_manager.broadcast(channel, {
-        "type": "session_renamed",
+        "type": ET.SESSION_RENAMED,
         "name": name,
     })
     await streaming_manager.broadcast(
         "sidebar", {
-            "type": "session_renamed",
+            "type": ET.SESSION_RENAMED,
             "session_id": session_meta.id,
             "name": name,
         })

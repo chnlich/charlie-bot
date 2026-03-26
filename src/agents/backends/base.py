@@ -12,6 +12,7 @@ from typing import Awaitable, Callable, Optional
 
 import structlog
 
+from src.core import event_types as ET
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
@@ -36,12 +37,12 @@ def resolve_binary(name: str, fallback_dir: str) -> str:
 
 def make_text_event(text: str) -> dict:
   """Build a CC-compatible assistant-text event."""
-  return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+  return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
 
 
 def make_error_event(msg: str) -> dict:
   """Build a CC-compatible error event."""
-  return {"type": "error", "message": msg, "content": msg}
+  return {"type": ET.ERROR, "message": msg, "content": msg}
 
 
 def make_result_event(
@@ -53,7 +54,7 @@ def make_result_event(
 ) -> dict:
   """Build a CC-compatible result/usage event."""
   return {
-      "type": "result",
+      "type": ET.RESULT,
       "result": "",
       "usage":
           {
@@ -68,12 +69,12 @@ def make_result_event(
 
 def make_tool_use_event(name: str, input_data: dict) -> dict:
   """Build a CC-compatible tool_use event (flat format)."""
-  return {"type": "tool_use", "name": name, "input": input_data}
+  return {"type": ET.TOOL_USE, "name": name, "input": input_data}
 
 
 def make_tool_result_event(tool_name: str, content: str) -> dict:
   """Build a CC-compatible tool_result event keyed by tool_name."""
-  return {"type": "tool_result", "tool_name": tool_name, "content": content}
+  return {"type": ET.TOOL_RESULT, "tool_name": tool_name, "content": content}
 
 
 class AgentBackend(ABC):
@@ -216,29 +217,29 @@ class AgentBackend(ABC):
 
         # Track pending tool calls — wrapped format (OpenCode/GLM-5):
         # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
-        if evt_type == "assistant":
+        if evt_type == ET.ASSISTANT:
           for item in translated.get("message", {}).get("content", []):
-            if isinstance(item, dict) and item.get("type") == "tool_use":
+            if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
               tool_id = item.get("id", "")
               if tool_id:
                 _pending_tool_calls.add(tool_id)
 
         # Track pending tool calls — flat format (Codex/Gemini):
         # {type: 'tool_use', id: '...', name: '...'}
-        if evt_type == "tool_use":
+        if evt_type == ET.TOOL_USE:
           tool_id = translated.get("id", "")
           if tool_id:
             _pending_tool_calls.add(tool_id)
 
         # Clear pending tool calls on tool_result events.
-        if evt_type == "tool_result":
+        if evt_type == ET.TOOL_RESULT:
           tool_use_id = translated.get("tool_use_id", "")
           if tool_use_id:
             _pending_tool_calls.discard(tool_use_id)
 
         yield translated
 
-        if not _saw_result and evt_type == "result":
+        if not _saw_result and evt_type == ET.RESULT:
           if _pending_tool_calls:
             log.debug(
                 "backend_result_suppressed_pending_tools",

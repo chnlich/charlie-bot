@@ -274,6 +274,8 @@ async def _create_worktree_and_process(
     prompt_override: Optional[str],
     resolved_backend: str,
     resolved_model: str,
+    base_branch: Optional[str] = None,
+    branch_name_override: Optional[str] = None,
 ) -> Worker:
   """Create worktree, build prompt, resolve backend, and construct Worker."""
   worktree_path: Optional[Path] = None
@@ -291,11 +293,11 @@ async def _create_worktree_and_process(
     worktree_path = Path(thread.worktree_path).resolve()
   else:
     # Get current branch as the base for the worktree
-    base_branch = await _git_current_branch(resolved_repo)
+    base_branch = base_branch or await _git_current_branch(resolved_repo)
 
     # Compute branch name and worktree path
     ts = int(time.time())
-    branch_name = f"charliebot/task-{ts}-{thread.id[:8]}"
+    branch_name = branch_name_override or f"charliebot/task-{ts}-{thread.id[:8]}"
     wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
 
     # Ensure worktree parent dir exists and create worktree before launch.
@@ -538,6 +540,8 @@ async def spawn_worker(
     prompt_override: Optional[str] = None,
     resolved_backend: str = "",
     resolved_model: str = "",
+    base_branch: Optional[str] = None,
+    branch_name_override: Optional[str] = None,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   thread = None
@@ -559,7 +563,7 @@ async def spawn_worker(
       resolved_repo = Path(repo_path).resolve()
       worker = await _create_worktree_and_process(
           session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
-          resolved_backend, resolved_model)
+          resolved_backend, resolved_model, base_branch, branch_name_override)
 
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, description, thread, thread_mgr, session_mgr)

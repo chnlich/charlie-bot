@@ -94,6 +94,7 @@ You are starting an iterative improvement loop.
    ```
    python -m src.cli.improve --session {session_id} --repo <repo> --iterations {max_iterations} --goal '<the goal above>'
    ```
+   Optional: add `--branch-prefix <prefix>` to name iteration branches as `<prefix>/iter1`, `<prefix>/iter2`, etc. When used, each iteration builds on the previous iteration's branch, so changes chain together.
 4. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
 
 The improve state file is at: {state_path}"""
@@ -139,6 +140,7 @@ async def run_improve_loop(
     cfg: CharlieBotConfig,
     session_mgr: "SessionManager",
     thread_mgr: "ThreadManager",
+    branch_prefix: Optional[str] = None,
 ) -> None:
   """Run the iterative improvement loop as a server-side async task.
 
@@ -150,6 +152,7 @@ async def run_improve_loop(
   from src.core.spawner import _trigger_master, resolve_session_subagent_backend_model, spawn_worker
 
   previous_summaries: list[str] = []
+  prev_branch: Optional[str] = None
 
   try:
     for i in range(1, iterations + 1):
@@ -176,6 +179,7 @@ async def run_improve_loop(
       # Create thread and spawn worker
       thread = await thread_mgr.create_thread(meta, description, require_review=False)
       resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
+      branch_name_override = f"{branch_prefix}/iter{i}" if branch_prefix else None
       await spawn_worker(
           session_id,
           description,
@@ -186,11 +190,15 @@ async def run_improve_loop(
           repo_path=repo_path,
           resolved_backend=resolved_backend,
           resolved_model=resolved_model,
+          base_branch=prev_branch,
+          branch_name_override=branch_name_override,
       )
 
       # Extract summary
       thread_meta = await thread_mgr.get_thread(session_id, thread.id)
       status = thread_meta.status.value if thread_meta else "unknown"
+      if thread_meta and thread_meta.branch_name:
+        prev_branch = thread_meta.branch_name
       events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
       events = parse_ndjson_file(events_path)
       summary = _extract_iteration_summary(events, i, status)

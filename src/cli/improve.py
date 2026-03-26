@@ -28,6 +28,7 @@ def main() -> None:
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument("--goal", required=True, help="Improvement goal")
+  parser.add_argument("--branch-prefix", default=None, help="Branch prefix for iteration branches (e.g. 'improve/perf')")
   args = parser.parse_args()
 
   cfg = get_config()
@@ -38,6 +39,7 @@ def main() -> None:
       "repo_path": args.repo,
       "iterations": args.iterations,
       "goal": args.goal,
+      "branch_prefix": args.branch_prefix,
   }
 
   try:

@@ -927,7 +927,7 @@
     from items 003, 021, 027, 041, 058, 061, and 062 which split other long functions
     in spawner.py.'
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-03-25T12:00:00Z'
   priority: medium
 - id: '064'

@@ -336,23 +336,12 @@ async def run_message(
         "backend": option.type,
         "model": option.model,
         "total_ms": total_ms,
-        "stderr_present": bool(backend and backend.stderr_text),
     }
     if t_first_event is not None:
       spawn_ref = t_spawn if t_spawn is not None else t_start
       finish_extras["spawn_to_first_event_ms"] = int((t_first_event - spawn_ref) * 1000)
     if t_first_assistant is not None:
       finish_extras["first_assistant_ms"] = int((t_first_assistant - t_start) * 1000)
-    if backend and hasattr(backend, "result") and backend.result:
-      usage = getattr(backend.result, "usage", None) or (
-          backend.result.get("usage") if isinstance(backend.result, dict) else None)
-      if usage:
-        if isinstance(usage, dict):
-          finish_extras["input_tokens"] = usage.get("input_tokens")
-          finish_extras["output_tokens"] = usage.get("output_tokens")
-        else:
-          finish_extras["input_tokens"] = getattr(usage, "input_tokens", None)
-          finish_extras["output_tokens"] = getattr(usage, "output_tokens", None)
 
     if total_ms > 120_000:
       log.warning("master_cc_slow_total", session=session_meta.id, total_ms=total_ms)

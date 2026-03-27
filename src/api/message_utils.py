@@ -51,6 +51,46 @@ async def build_session_view_data(
   return SessionViewData(raw_events=raw_events, messages=messages, threads=threads, usage=usage)
 
 
+@dataclass
+class FastSessionViewData:
+  """Data from tail-loading: messages from the last N events + usage from cache."""
+  messages: list[dict]
+  threads: list['ThreadMetadata']
+  usage: dict | None
+  total_event_count: int
+  has_more: bool
+
+
+async def build_session_view_data_fast(
+    session_id: str,
+    session_mgr: 'SessionManager',
+    thread_mgr: 'ThreadManager',
+    limit: int = 200,
+) -> FastSessionViewData:
+  """Fast path: load only the tail events + cached usage. No full event scan."""
+  tail_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, limit)
+  threads_task = thread_mgr.list_threads(session_id)
+  (tail_events, total_count, has_more), threads = await asyncio.gather(tail_task, threads_task)
+
+  # Offset so event_index values match real file line positions
+  offset = total_count - len(tail_events)
+  messages = events_to_messages(tail_events, event_index_offset=offset)
+
+  usage = session_mgr.get_usage_cached(session_id)
+  if usage is None and tail_events:
+    usage = session_mgr.usage_from_events(tail_events)
+
+  try:
+    await session_mgr.mark_read(session_id)
+  except Exception:
+    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+
+  return FastSessionViewData(
+      messages=messages, threads=threads, usage=usage,
+      total_event_count=total_count, has_more=has_more,
+  )
+
+
 def _handler_result_msg(ev: dict) -> dict:
   icon = '\u2713' if ev.get('status') == 'ok' else '\u2717'
   return {
@@ -108,8 +148,14 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
 }
 
 
-def events_to_messages(events: list[dict]) -> list[dict]:
-  """Convert raw chat_events.jsonl entries into displayable messages."""
+def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[dict]:
+  """Convert raw chat_events.jsonl entries into displayable messages.
+
+  Args:
+    events: parsed NDJSON event dicts.
+    event_index_offset: added to each local index so event_index values
+      match real file line positions (used by tail-loading).
+  """
   messages = []
   assistant_buf = ""
   last_event_idx = 0
@@ -129,6 +175,7 @@ def events_to_messages(events: list[dict]) -> list[dict]:
       last_assistant_ts = None
 
   for idx, ev in enumerate(events):
+    idx += event_index_offset
     t = ev.get("type")
     if t == ET.USER:
       # Skip CC-internal user events (tool results) — they have a "message" field

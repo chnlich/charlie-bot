@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from starlette.responses import Response
 
 from src.api.deps import get_session_manager, get_thread_manager, require_session
-from src.api.message_utils import build_session_view_data
+from src.api.message_utils import build_session_view_data, build_session_view_data_fast, events_to_messages
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
@@ -151,21 +151,47 @@ async def get_session_view(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Return all data needed to render a session chat panel (SPA switch)."""
+  """Return data needed to render a session chat panel (SPA switch).
+
+  Uses tail-loading: only the last 200 events are parsed and returned.
+  The response includes has_more so the frontend can paginate backwards.
+  """
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
   meta.has_running_tasks = bool(meta.thinking_since) or await session_mgr._has_running_tasks(session_id)
-  view = await build_session_view_data(session_id, session_mgr, thread_mgr)
+  view = await build_session_view_data_fast(session_id, session_mgr, thread_mgr)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
   return {
       "session": meta.model_dump(mode="json"),
       "messages": view.messages,
       "threads": [t.model_dump(mode="json") for t in view.threads],
-      "event_count": len(view.raw_events),
+      "event_count": view.total_event_count,
       "usage": view.usage,
       "active_backend": active_backend,
+      "has_more": view.has_more,
   }
+
+
+@router.get('/{session_id}/events')
+async def get_session_events_page(
+    session_id: str,
+    before: int,
+    limit: int = 200,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Paginate backwards through session events.
+
+  Returns events with line indices [max(0, before-limit), before) and a
+  has_more flag indicating whether earlier events exist.
+  """
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  start = max(0, before - limit)
+  events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)
+  messages = events_to_messages(events, event_index_offset=start)
+  return {"messages": messages, "has_more": has_more}
 
 
 @router.post('/{session_id}/rewind', response_model=SessionMetadata)

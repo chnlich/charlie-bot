@@ -24,8 +24,29 @@ from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
 
-
 _METADATA_CACHE_TTL = 5.0  # seconds
+
+
+def _summarize_event_lines(lines: list[str]) -> str:
+  """Parse JSONL event lines and build a user/assistant text summary, truncated to 4000 chars."""
+  summary_parts = []
+  for line_text in lines:
+    try:
+      ev = json.loads(line_text)
+    except (json.JSONDecodeError, ValueError) as e:
+      log.debug('summary_parse_skip', line=line_text[:120], error=str(e))
+      continue
+    t = ev.get('type')
+    if t == 'user' and 'content' in ev:
+      summary_parts.append(f'User: {ev["content"]}')
+    elif t == 'assistant':
+      text = extract_text_from_message(ev.get('message'))
+      if text:
+        summary_parts.append(f'Assistant: {text}')
+  summary = '\n\n'.join(summary_parts)
+  if len(summary) > 4000:
+    summary = summary[:4000] + '\n\n[... truncated]'
+  return summary
 
 
 class SessionManager:
@@ -172,24 +193,7 @@ class SessionManager:
     lines = lines_text.splitlines()
     kept_lines = lines[:event_index + 1]
 
-    # Generate a text summary from user+assistant messages for CC context
-    summary_parts = []
-    for line_text in kept_lines:
-      try:
-        ev = json.loads(line_text)
-      except (json.JSONDecodeError, ValueError) as e:
-        log.debug('rewind_parse_skip', line=line_text[:120], error=str(e))
-        continue
-      t = ev.get('type')
-      if t == 'user' and 'content' in ev:
-        summary_parts.append(f'User: {ev["content"]}')
-      elif t == 'assistant':
-        text = extract_text_from_message(ev.get('message'))
-        if text:
-          summary_parts.append(f'Assistant: {text}')
-    summary = '\n\n'.join(summary_parts)
-    if len(summary) > 4000:
-      summary = summary[:4000] + '\n\n[... truncated]'
+    summary = _summarize_event_lines(kept_lines)
 
     # Create the new session
     meta = SessionMetadata(name=f'Rewind: {parent.name}', parent_session_id=parent_id, rewind_summary=summary)
@@ -218,24 +222,7 @@ class SessionManager:
     lines_text = await asyncio.to_thread(parent_events_path.read_text, encoding='utf-8')
     lines = lines_text.splitlines()
 
-    # Generate a text summary from user+assistant messages for CC context
-    summary_parts = []
-    for line_text in lines:
-      try:
-        ev = json.loads(line_text)
-      except (json.JSONDecodeError, ValueError) as e:
-        log.debug('fork_parse_skip', line=line_text[:120], error=str(e))
-        continue
-      t = ev.get('type')
-      if t == 'user' and 'content' in ev:
-        summary_parts.append(f'User: {ev["content"]}')
-      elif t == 'assistant':
-        text = extract_text_from_message(ev.get('message'))
-        if text:
-          summary_parts.append(f'Assistant: {text}')
-    summary = '\n\n'.join(summary_parts)
-    if len(summary) > 4000:
-      summary = summary[:4000] + '\n\n[... truncated]'
+    summary = _summarize_event_lines(lines)
 
     # Create the new session inheriting parent's backend
     meta = SessionMetadata(

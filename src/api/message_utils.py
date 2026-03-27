@@ -77,8 +77,6 @@ async def build_session_view_data_fast(
   messages = events_to_messages(tail_events, event_index_offset=offset)
 
   usage = session_mgr.get_usage_cached(session_id)
-  if usage is None and tail_events:
-    usage = session_mgr.usage_from_events(tail_events)
 
   try:
     await session_mgr.mark_read(session_id)

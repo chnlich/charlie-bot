@@ -400,24 +400,20 @@ class SessionManager:
       return self._events_cache[session_id]
     events = parse_ndjson_file(self._chat_events_path(session_id))
     self._events_cache[session_id] = events
-    # Bootstrap usage cache from full event list if not already present
-    if session_id not in self._usage_cache:
-      usage = self.usage_from_events(events)
-      if usage:
-        self._usage_cache[session_id] = usage
+    # Always derive usage from a full load so the cache stays exact.
+    usage = self.usage_from_events(events)
+    if usage:
+      self._usage_cache[session_id] = usage
+    else:
+      self._usage_cache.pop(session_id, None)
     return events
 
   def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk. Does NOT populate _events_cache.
 
     Returns (events, total_line_count, has_more).
-    Also bootstraps _usage_cache if not present.
     """
     events, total, has_more = parse_ndjson_tail(self._chat_events_path(session_id), limit)
-    if session_id not in self._usage_cache and events:
-      usage = self.usage_from_events(events)
-      if usage:
-        self._usage_cache[session_id] = usage
     return events, total, has_more
 
   def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:

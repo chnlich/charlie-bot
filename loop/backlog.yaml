@@ -969,6 +969,6 @@
     The log.debug event name can use a generic "summary_parse_skip". Pure refactoring,
     no behavior change. Follows the pattern from items 016, 045, and 059 which extracted
     shared helpers for repeated inline logic.'
-  status: pending
+  status: approved
   created: '2026-03-26T12:00:00Z'
   priority: medium

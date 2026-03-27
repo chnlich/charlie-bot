@@ -3,9 +3,27 @@
 // ---------------------------------------------------------------------------
 let _extUsageData = null;
 
-function formatResetTime(isoString) {
+function _parseTimestampMs(isoString) {
+  if (!isoString) return NaN;
+  return new Date(isoString).getTime();
+}
+
+function _shouldWaitForFreshCodexCapData(providerKey, providerData, bucket) {
+  if (providerKey !== 'codex') return false;
+
+  const reset = _parseTimestampMs(bucket.resets_at);
+  if (!Number.isFinite(reset) || reset > Date.now()) return false;
+
+  const observedAt = _parseTimestampMs(providerData.token_count_observed_at);
+  return Number.isFinite(observedAt) && observedAt < reset;
+}
+
+function formatResetTime(providerKey, providerData, bucket) {
   const now = Date.now();
-  const reset = new Date(isoString).getTime();
+  const reset = _parseTimestampMs(bucket.resets_at);
+  if (_shouldWaitForFreshCodexCapData(providerKey, providerData, bucket)) {
+    return 'waiting for fresh cap data';
+  }
   let diff = reset - now;
   if (diff < 0) return 'reset overdue';
   const days = Math.floor(diff / 86400000);
@@ -30,7 +48,7 @@ function _providerPrefix(providerKey) {
   return providerKey;
 }
 
-function _renderProvider(prefix, data) {
+function _renderProvider(providerKey, prefix, data) {
   const buckets = [
     {key: 'five_hour', bar: 'ext-usage-' + prefix + '-5h-bar', pct: 'ext-usage-' + prefix + '-5h-pct', reset: 'ext-usage-' + prefix + '-5h-reset'},
     {key: 'seven_day', bar: 'ext-usage-' + prefix + '-7d-bar', pct: 'ext-usage-' + prefix + '-7d-pct', reset: 'ext-usage-' + prefix + '-7d-reset'},
@@ -48,7 +66,7 @@ function _renderProvider(prefix, data) {
       barEl.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
     }
     if (pctEl) pctEl.textContent = Math.round(pct) + '%';
-    if (resetEl && bucket.resets_at) resetEl.textContent = formatResetTime(bucket.resets_at);
+    if (resetEl && bucket.resets_at) resetEl.textContent = formatResetTime(providerKey, data, bucket);
   }
 }
 
@@ -59,7 +77,7 @@ function renderExtUsage(data) {
 
   const providers = data.providers || {};
   for (const [key, providerData] of Object.entries(providers)) {
-    _renderProvider(_providerPrefix(key), providerData);
+    _renderProvider(key, _providerPrefix(key), providerData);
   }
 
   strip.classList.remove('hidden');
@@ -78,7 +96,7 @@ function _refreshResetTimers() {
       const bucket = providerData[b.key];
       if (!bucket || !bucket.resets_at) continue;
       const el = document.getElementById(b.el);
-      if (el) el.textContent = formatResetTime(bucket.resets_at);
+      if (el) el.textContent = formatResetTime(key, providerData, bucket);
     }
   }
 }

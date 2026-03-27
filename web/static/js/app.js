@@ -75,6 +75,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Init scroll-to-top pagination for tail-loaded sessions
+  initScrollPagination();
+
   // Connect WebSocket
   connectWS();
 

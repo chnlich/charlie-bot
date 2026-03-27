@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateRelativeTimes();
   // Render markdown for server-rendered assistant messages
   document.querySelectorAll('[data-md]').forEach(el => {
+    el.dataset.raw = el.textContent;
     el.innerHTML = marked.parse(el.textContent);
   });
   // Render bubble timestamps (server sends raw ISO, JS formats to local TZ)

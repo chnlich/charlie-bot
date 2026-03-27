@@ -43,7 +43,7 @@ async def build_session_view_data(
   threads_task = thread_mgr.list_threads(session_id)
   raw_events, threads = await asyncio.gather(events_task, threads_task)
   messages = events_to_messages(raw_events)
-  usage = session_mgr.usage_from_events(raw_events)
+  usage = session_mgr.get_usage_cached(session_id) or session_mgr.usage_from_events(raw_events)
   try:
     await session_mgr.mark_read(session_id)
   except Exception:

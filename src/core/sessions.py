@@ -36,6 +36,9 @@ class SessionManager:
     # In-memory cache: session_id -> list[dict] of parsed NDJSON events.
     # Populated on first read, kept in sync by save_chat_event().
     self._events_cache: dict[str, list[dict]] = {}
+    # In-memory usage cache: session_id -> usage dict (context_tokens, context_limit, total_cost_usd, model).
+    # Incrementally updated on each 'result' event via save_chat_event(), avoiding O(n) rescans.
+    self._usage_cache: dict[str, dict] = {}
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp).
     # TTL-based to avoid repeated disk reads within the same poll cycle.
     self._metadata_cache: dict[str, tuple[SessionMetadata, float]] = {}
@@ -298,6 +301,7 @@ class SessionManager:
     """Mark a session as archived (does not delete files)."""
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._events_cache.pop(session_id, None)
+    self._usage_cache.pop(session_id, None)
     return meta
 
   async def delete_session_permanently(self, session_id: str) -> bool:
@@ -307,6 +311,7 @@ class SessionManager:
       return False
     await asyncio.to_thread(shutil.rmtree, session_dir)
     self._events_cache.pop(session_id, None)
+    self._usage_cache.pop(session_id, None)
     self._invalidate_cache(session_id)
     log.info("session_deleted_permanently", session_id=session_id)
     return True
@@ -380,6 +385,9 @@ class SessionManager:
     # Keep in-memory cache in sync
     if session_id in self._events_cache:
       self._events_cache[session_id].append(event)
+    # Incrementally update usage cache on result events
+    if event.get('type') == 'result':
+      self._update_usage_cache(session_id, event)
 
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     """Persist event (injecting timestamp) then broadcast to the session WebSocket channel."""
@@ -392,6 +400,11 @@ class SessionManager:
       return self._events_cache[session_id]
     events = parse_ndjson_file(self._chat_events_path(session_id))
     self._events_cache[session_id] = events
+    # Bootstrap usage cache from full event list if not already present
+    if session_id not in self._usage_cache:
+      usage = self.usage_from_events(events)
+      if usage:
+        self._usage_cache[session_id] = usage
     return events
 
   def _chat_events_path(self, session_id: str) -> Path:
@@ -454,6 +467,27 @@ class SessionManager:
         "total_cost_usd": round(total_cost, 4),
         "model": model,
     }
+
+  def get_usage_cached(self, session_id: str) -> dict | None:
+    """Return cached usage data for a session, or None if not yet computed."""
+    return self._usage_cache.get(session_id)
+
+  def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
+    """Incrementally update the usage cache from a single 'result' event."""
+    cached = self._usage_cache.get(session_id) or {
+        "context_tokens": 0, "context_limit": 200_000, "total_cost_usd": 0.0, "model": "",
+    }
+    cached["total_cost_usd"] = round(cached["total_cost_usd"] + result_event.get("total_cost_usd", 0.0), 4)
+    u = result_event.get("usage", {})
+    ctx = u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+    if ctx > 0:
+      cached["context_tokens"] = ctx
+      model_usage = result_event.get("modelUsage", {})
+      for model_name, info in model_usage.items():
+        cached["model"] = model_name
+        cached["context_limit"] = info.get("contextWindow", 200_000)
+        break
+    self._usage_cache[session_id] = cached
 
   # ---------------------------------------------------------------------------
   # Private helpers

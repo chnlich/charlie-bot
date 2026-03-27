@@ -5,6 +5,7 @@ Called by the master Claude Code instance via its run_command tool:
   python -m src.cli.improve \
     --session SESSION_ID \
     --repo /path/to/repo \
+    --base-branch main \
     --iterations 3 \
     --goal 'optimize step time'
 
@@ -28,6 +29,7 @@ def main() -> None:
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument("--goal", required=True, help="Improvement goal")
+  parser.add_argument("--base-branch", required=True, help="Base branch for iteration worktrees")
   parser.add_argument("--branch-prefix", default=None, help="Branch prefix for iteration branches (e.g. 'improve/perf')")
   args = parser.parse_args()
 
@@ -37,6 +39,7 @@ def main() -> None:
   payload = {
       "session_id": args.session,
       "repo_path": args.repo,
+      "base_branch": args.base_branch,
       "iterations": args.iterations,
       "goal": args.goal,
       "branch_prefix": args.branch_prefix,

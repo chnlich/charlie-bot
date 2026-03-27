@@ -228,6 +228,7 @@ async def run_improve_loop(
     cfg: CharlieBotConfig,
     session_mgr: "SessionManager",
     thread_mgr: "ThreadManager",
+    base_branch: Optional[str] = None,
     branch_prefix: Optional[str] = None,
 ) -> None:
   """Run the iterative improvement loop as a server-side async task.
@@ -240,7 +241,7 @@ async def run_improve_loop(
   from src.core.spawner import _trigger_master, resolve_session_subagent_backend_model, spawn_worker
 
   previous_summaries: list[str] = []
-  prev_branch: Optional[str] = None
+  prev_branch: Optional[str] = base_branch
   meta = None  # session metadata; assigned each iteration but needed after the inner loop
 
   improve_id = branch_prefix.replace('/', '-') if branch_prefix else f'improve-{int(time.time())}'

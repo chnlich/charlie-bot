@@ -5,6 +5,7 @@ Called by the master Claude Code instance via its run_command tool:
   python -m src.cli.delegate \
     --session SESSION_ID \
     --repo /path/to/repo \
+    --base-branch main \
     --description "implement feature X"
 """
 
@@ -22,6 +23,7 @@ def main() -> None:
   parser.add_argument("--session", required=True, help="Session ID")
   parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
   parser.add_argument("--description", required=True, help="Task description")
+  parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")
   parser.add_argument("--context", default=None, help="Business context for reviewers")
   args = parser.parse_args()
 
@@ -31,6 +33,7 @@ def main() -> None:
   payload = {
       "session_id": args.session,
       "description": args.description,
+      "base_branch": args.base_branch,
   }
   if args.repo is not None:
     payload["repo_path"] = args.repo

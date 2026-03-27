@@ -36,6 +36,7 @@ def _make_original_thread(
       session_id="session-id",
       description="Do work",
       branch_name="charliebot/task-1",
+      base_branch="main",
       repo_path="/tmp/repo",
       worktree_path="/tmp/worktrees/charliebot-task-1",
       backend=backend,

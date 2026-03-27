@@ -49,6 +49,7 @@ class ThreadMetadata(BaseModel):
   exit_code: Optional[int] = None
   cli_command: Optional[str] = None
   branch_name: Optional[str] = None
+  base_branch: Optional[str] = None
   repo_path: Optional[str] = None
   worktree_path: Optional[str] = None
   review_of: Optional[str] = None
@@ -163,6 +164,7 @@ class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str
   description: str
+  base_branch: str
   repo_path: Optional[str] = None
   context: Optional[str] = None
   require_review: bool = True
@@ -172,6 +174,7 @@ class ImproveRequest(BaseModel):
   """Request body for the internal improve endpoint."""
   session_id: str
   repo_path: str
+  base_branch: str
   iterations: int = 3
   goal: str
   branch_prefix: Optional[str] = None

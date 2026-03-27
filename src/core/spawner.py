@@ -50,6 +50,8 @@ def _build_worker_prompt(
     branch_name: str,
     wt_path: str,
     session_meta: SessionMetadata,
+    improve_dir: Optional[str] = None,
+    iteration_number: Optional[int] = None,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   session_info = (f"## Session Info\n"
@@ -69,7 +71,25 @@ def _build_worker_prompt(
       f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
       f"## Task\n{description}")
 
-  return f"{session_info}\n{_CODING_PRINCIPLES}\n{worktree_section}"
+  iteration_reports_section = ""
+  if improve_dir and iteration_number is not None:
+    iteration_reports_section = (
+        f"\n\n## Iteration Reports\n"
+        f"Previous iteration reports are in: {improve_dir}/\n"
+        f"Read all iter_*.md files there before starting work.\n\n"
+        f"When you finish, write your report to: {improve_dir}/iter_{iteration_number:04d}.md\n"
+        f"Use this format:\n"
+        f"```\n"
+        f"## Iter {iteration_number} — {{completed|failed}}\n"
+        f"### Changes\n"
+        f"- bullet points of what you changed\n"
+        f"### Result\n"
+        f"- test outcomes, measurements\n"
+        f"### Next\n"
+        f"- suggestions for next iteration, what to avoid\n"
+        f"```")
+
+  return f"{session_info}\n{_CODING_PRINCIPLES}\n{worktree_section}{iteration_reports_section}"
 
 
 def _build_review_prompt(
@@ -276,6 +296,8 @@ async def _create_worktree_and_process(
     resolved_model: str,
     base_branch: Optional[str] = None,
     branch_name_override: Optional[str] = None,
+    improve_dir: Optional[str] = None,
+    iteration_number: Optional[int] = None,
 ) -> Worker:
   """Create worktree, build prompt, resolve backend, and construct Worker."""
   worktree_path: Optional[Path] = None
@@ -314,7 +336,8 @@ async def _create_worktree_and_process(
     # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
     worker_prompt = _build_worker_prompt(
-        description, resolved_repo, base_branch, branch_name, str(wt_path), session_meta)
+        description, resolved_repo, base_branch, branch_name, str(wt_path), session_meta,
+        improve_dir=improve_dir, iteration_number=iteration_number)
     worktree_path = wt_path.resolve()
 
   if worktree_path is None:
@@ -542,6 +565,8 @@ async def spawn_worker(
     resolved_model: str = "",
     base_branch: Optional[str] = None,
     branch_name_override: Optional[str] = None,
+    improve_dir: Optional[str] = None,
+    iteration_number: Optional[int] = None,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   thread = None
@@ -563,7 +588,7 @@ async def spawn_worker(
       resolved_repo = Path(repo_path).resolve()
       worker = await _create_worktree_and_process(
           session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
-          resolved_backend, resolved_model, base_branch, branch_name_override)
+          resolved_backend, resolved_model, base_branch, branch_name_override, improve_dir, iteration_number)
 
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, description, thread, thread_mgr, session_mgr)

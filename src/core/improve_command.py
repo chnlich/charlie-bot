@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -242,6 +243,10 @@ async def run_improve_loop(
   prev_branch: Optional[str] = None
   meta = None  # session metadata; assigned each iteration but needed after the inner loop
 
+  improve_id = branch_prefix.replace('/', '-') if branch_prefix else f'improve-{int(time.time())}'
+  improve_dir = cfg.sessions_dir / session_id / 'improve' / improve_id
+  improve_dir.mkdir(parents=True, exist_ok=True)
+
   try:
     for i in range(1, iterations + 1):
       while True:  # Retry loop for quota failures
@@ -253,10 +258,6 @@ async def run_improve_loop(
 
         # Build iteration description
         desc_parts = [f"Iterative improvement — iteration {i}/{iterations}", f"Goal: {goal}"]
-        if previous_summaries:
-          desc_parts.append("Previous iterations:")
-          for idx, summary in enumerate(previous_summaries, 1):
-            desc_parts.append(f"  Iteration {idx}: {summary}")
         description = "\n".join(desc_parts)
 
         # Get session metadata
@@ -281,6 +282,8 @@ async def run_improve_loop(
             resolved_model=resolved_model,
             base_branch=prev_branch,
             branch_name_override=branch_name_override,
+            improve_dir=str(improve_dir),
+            iteration_number=i,
         )
 
         # Check for quota failure
@@ -302,6 +305,12 @@ async def run_improve_loop(
         events = parse_ndjson_file(events_path)
         summary = _extract_iteration_summary(events, i, status)
         previous_summaries.append(summary)
+
+        # Write fallback report if the worker didn't write one
+        report_path = improve_dir / f'iter_{i:04d}.md'
+        if not report_path.exists():
+          report_path.write_text(summary)
+
         log.info("improve_iteration_completed", session=session_id, iteration=i, status=status)
 
         # Broadcast progress event

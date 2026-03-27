@@ -330,6 +330,7 @@ async def _create_worktree_and_process(
     thread.branch_name = branch_name
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
+    thread.base_branch = base_branch
     thread.context = context
     await thread_mgr.save_metadata(thread)
 
@@ -834,7 +835,7 @@ async def _spawn_review_worker(
     return False
   repo_path, branch_name, wt_path = prerequisites
 
-  base_branch = await _git_current_branch(repo_path)
+  base_branch = original_thread.base_branch or await _git_current_branch(repo_path)
   worker_backend, worker_model = _require_thread_backend_model(original_thread)
 
   backend_result = _select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)

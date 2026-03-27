@@ -142,6 +142,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
       session_mgr=FakeSessionManager(),
       thread_mgr=FakeThreadManager(),
       repo_path=str(repo_path),
+      base_branch="main",
       resolved_backend="codex-o3",
       resolved_model="o3-pro",
   )
@@ -151,6 +152,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   assert captures["worker_dir"] == captures["git_create_worktree"]["wt_path"].resolve()
   assert captures["worker_dir"] != repo_path
   assert thread.worktree_path == str(captures["git_create_worktree"]["wt_path"])
+  assert thread.base_branch == "main"
 
 
 @pytest.mark.asyncio
@@ -281,6 +283,7 @@ async def test_spawn_review_worker_propagates_backend_model(
       session_id="session-id",
       description="Do work",
       branch_name="charliebot/task-1",
+      base_branch="main",
       repo_path="/tmp/repo",
       worktree_path="/tmp/worktrees/charliebot-task-1",
       backend="codex-o3",
@@ -335,6 +338,7 @@ async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
       session_id="session-id",
       description="Do work",
       branch_name="charliebot/task-1",
+      base_branch="main",
       repo_path="/tmp/repo",
       worktree_path="/tmp/worktrees/charliebot-task-1",
       backend="codex-o3",

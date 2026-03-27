@@ -19,7 +19,7 @@ from src.core.models import (
     SessionStatus,
 )
 from src.api.message_utils import extract_text_from_message
-from src.core.ndjson import append_ndjson, parse_ndjson_file
+from src.core.ndjson import append_ndjson, parse_ndjson_file, parse_ndjson_range, parse_ndjson_tail
 from src.core.streaming import streaming_manager
 
 log = structlog.get_logger()
@@ -406,6 +406,23 @@ class SessionManager:
       if usage:
         self._usage_cache[session_id] = usage
     return events
+
+  def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
+    """Load only the last *limit* events from disk. Does NOT populate _events_cache.
+
+    Returns (events, total_line_count, has_more).
+    Also bootstraps _usage_cache if not present.
+    """
+    events, total, has_more = parse_ndjson_tail(self._chat_events_path(session_id), limit)
+    if session_id not in self._usage_cache and events:
+      usage = self.usage_from_events(events)
+      if usage:
+        self._usage_cache[session_id] = usage
+    return events, total, has_more
+
+  def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:
+    """Load events in line range [start, end). Returns (events, has_more)."""
+    return parse_ndjson_range(self._chat_events_path(session_id), start, end)
 
   def _chat_events_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"

@@ -160,6 +160,9 @@ function showTextModal(title, text) {
 }
 
 function closeTextModal() {
+  const contentEl = document.getElementById('text-modal-content');
+  contentEl.classList.remove('prose-msg');
+  contentEl.innerHTML = '';
   document.getElementById('text-modal-overlay').style.display = 'none';
 }
 

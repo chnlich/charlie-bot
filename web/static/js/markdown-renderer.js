@@ -15,7 +15,11 @@
       highlighted = hljs.highlightAuto(trimmed).value;
     }
     const displayLang = lang || 'text';
-    return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
+    const isMarkdown = (lang === 'markdown' || lang === 'md');
+    const renderBtn = isMarkdown
+      ? '<button class="copy-btn" onclick="renderMarkdown(this)">Render</button>'
+      : '';
+    return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
   };
   renderer.link = function(token) {
     const title = token.title ? ` title="${token.title}"` : '';
@@ -48,6 +52,19 @@ document.querySelectorAll('#sidebar a[href]').forEach(function(a) {
     }
   });
 });
+
+function renderMarkdown(btn) {
+  const pre = btn.closest('.code-block').querySelector('pre');
+  const raw = pre.textContent;
+  const rendered = marked.parse(raw);
+  const titleEl = document.getElementById('text-modal-title');
+  const contentEl = document.getElementById('text-modal-content');
+  const overlay = document.getElementById('text-modal-overlay');
+  titleEl.textContent = 'Rendered Markdown';
+  contentEl.innerHTML = rendered;
+  contentEl.classList.add('prose-msg');
+  overlay.style.display = 'flex';
+}
 
 function copyCode(btn) {
   const pre = btn.closest('.code-block').querySelector('pre');

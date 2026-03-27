@@ -39,7 +39,7 @@
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
   </script>
 </head>
-<body class="dark bg-slate-900 text-slate-100 h-dvh overflow-hidden">
+<body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
   <!-- Auth overlay (shown when access key is required but not yet provided) -->
   <div id="auth-overlay" class="fixed inset-0 z-[9999] bg-slate-900 flex items-center justify-center" style="display:none">
     <div class="w-full max-w-sm px-6">
@@ -54,7 +54,7 @@
     </div>
   </div>
 
-  <div class="flex h-dvh">
+  <div class="flex" style="height:var(--app-h,100dvh)">
 
     <!-- ==================== SIDEBAR ==================== -->
     <aside id="sidebar" class="flex-shrink-0 bg-slate-850 border-r border-slate-700 flex flex-col" style="width: 320px">

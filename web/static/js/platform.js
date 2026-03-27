@@ -24,8 +24,20 @@ const platform = (function() {
   }
 
   window.addEventListener('resize', _update);
+
+  // Track visual viewport height to handle mobile keyboard resize.
+  // On Android Chrome, dvh/innerHeight do NOT shrink when the keyboard opens —
+  // only visualViewport.height reflects the actual visible area.
+  function _syncAppHeight() {
+    const h = (window.visualViewport && isTouchDevice)
+      ? window.visualViewport.height + 'px'
+      : '100dvh';
+    document.documentElement.style.setProperty('--app-h', h);
+  }
+  _syncAppHeight();
+
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', _update);
+    window.visualViewport.addEventListener('resize', () => { _update(); _syncAppHeight(); });
   }
 
   return {

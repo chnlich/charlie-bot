@@ -88,44 +88,7 @@ class CodexProvider:
       return None
 
     text = jsonl_path.read_text()
-    lines = text.splitlines()
-
-    # Scan lines in reverse for the latest token_count event
-    for line in reversed(lines):
-      line = line.strip()
-      if not line:
-        continue
-      try:
-        event = json.loads(line)
-      except json.JSONDecodeError:
-        continue
-      if event.get("type") != "event_msg":
-        continue
-      payload = event.get("payload", {})
-      if payload.get("type") != "token_count":
-        continue
-
-      rate_limits = payload.get("rate_limits", {})
-      primary = rate_limits.get("primary", {})
-      secondary = rate_limits.get("secondary", {})
-
-      now = datetime.now(timezone.utc).isoformat()
-      return {
-        "five_hour": {
-          "utilization": primary.get("used_percent", 0.0),
-          "resets_at": datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
-            if "resets_at" in primary else "",
-        },
-        "seven_day": {
-          "utilization": secondary.get("used_percent", 0.0),
-          "resets_at": datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
-            if "resets_at" in secondary else "",
-        },
-        "fetched_at": now,
-        "provider": "codex",
-      }
-
-    return None
+    return _extract_latest_codex_usage(text.splitlines())
 
   def _find_latest_session_file(self) -> Path | None:
     """Walk SESSIONS_DIR/YYYY/MM/DD/ backwards from today, checking 3 days."""
@@ -172,6 +135,61 @@ def _read_credentials() -> dict[str, Any] | None:
     "access_token": access_token,
     "refresh_token": refresh_token,
     "expires_at": expires_at,
+  }
+
+
+def _extract_latest_codex_usage(
+    lines: list[str],
+    *,
+    fetched_at: str | None = None,
+) -> dict[str, Any] | None:
+  """Parse the latest Codex token_count event from a session JSONL file."""
+  effective_fetched_at = fetched_at or datetime.now(timezone.utc).isoformat()
+
+  # Scan lines in reverse for the latest token_count event
+  for line in reversed(lines):
+    line = line.strip()
+    if not line:
+      continue
+    try:
+      event = json.loads(line)
+    except json.JSONDecodeError:
+      continue
+    if event.get("type") != "event_msg":
+      continue
+    payload = event.get("payload", {})
+    if payload.get("type") != "token_count":
+      continue
+    return _transform_codex_response(event, fetched_at=effective_fetched_at)
+
+  return None
+
+
+def _transform_codex_response(
+    event: dict[str, Any],
+    *,
+    fetched_at: str,
+) -> dict[str, Any]:
+  """Transform a Codex token_count event into our cached usage format."""
+  payload = event.get("payload", {})
+  rate_limits = payload.get("rate_limits", {})
+  primary = rate_limits.get("primary", {})
+  secondary = rate_limits.get("secondary", {})
+
+  return {
+    "five_hour": {
+      "utilization": primary.get("used_percent", 0.0),
+      "resets_at": datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
+        if "resets_at" in primary else "",
+    },
+    "seven_day": {
+      "utilization": secondary.get("used_percent", 0.0),
+      "resets_at": datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
+        if "resets_at" in secondary else "",
+    },
+    "fetched_at": fetched_at,
+    "provider": "codex",
+    "token_count_observed_at": event.get("timestamp", ""),
   }
 
 

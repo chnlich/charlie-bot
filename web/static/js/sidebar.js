@@ -224,6 +224,7 @@ async function loadOlderIfNeeded(container) {
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
+  if (!Number.isFinite(sessionEarliestEventIndex)) return;
 
   sessionLoadingMore = true;
   const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionEarliestEventIndex + '&limit=200';

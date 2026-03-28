@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
-from src.api import backlog, chat, cron, ext_usage, files, internal, latex, pages, sessions, slash, threads, voice
+from src.api import backlog, chat, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager
 from src.core.config import get_config
@@ -82,6 +82,7 @@ app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
 app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
 app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
+app.include_router(git.router, prefix="/api/git", tags=["git"])
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
 
 # File server (filesystem browser)

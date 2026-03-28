@@ -143,7 +143,9 @@ function handleInputKey(e) {
     e.preventDefault();
     const input = document.getElementById('msg-input');
     const val = input ? input.value.trim() : '';
-    if (val.startsWith('/')) {
+    if (val.startsWith('/w ') && handleSlashW(input)) {
+      sendMessage();
+    } else if (val.startsWith('/')) {
       const spaceIdx = val.indexOf(' ');
       const name = spaceIdx === -1 ? val.slice(1) : val.slice(1, spaceIdx);
       const args = spaceIdx === -1 ? '' : val.slice(spaceIdx + 1).trim();

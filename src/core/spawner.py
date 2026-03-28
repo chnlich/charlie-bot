@@ -119,7 +119,7 @@ def _build_review_prompt(
       f"{_CODING_PRINCIPLES}\n"
       f"## Review Checklist\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
-      f"IMPORTANT: NEVER run git push from the worktree. All pushes must happen from {repo_path} after merging.\n\n"
+      f"IMPORTANT: NEVER run git push from the worktree. All pushes must happen from `{repo_path}` after merging.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
       f"3. Verify the changes address the user's actual intent (from context research above).\n"

@@ -119,6 +119,7 @@ def _build_review_prompt(
       f"{_CODING_PRINCIPLES}\n"
       f"## Review Checklist\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
+      f"IMPORTANT: NEVER run git push from the worktree. All pushes must happen from {repo_path} after merging.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
       f"3. Verify the changes address the user's actual intent (from context research above).\n"
@@ -134,7 +135,8 @@ def _build_review_prompt(
       f"9. Stash untracked/modified files: `git stash --include-untracked`\n"
       f"10. Rebase onto base branch: `git rebase {base_branch}`\n"
       f"11. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"12. Push to remote: `cd {repo_path} && git pull --ff-only && git push`")
+      f"12. Push to remote: `cd {repo_path} && git pull --ff-only && git push origin {base_branch}`\n"
+      f"13. Verify: `git log --oneline -1 {base_branch}` and `git log --oneline -1 origin/{base_branch}` must show the same commit.")
 
 
 async def _git_current_branch(repo_path: Path) -> str:

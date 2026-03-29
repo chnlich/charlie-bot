@@ -45,7 +45,13 @@ def main() -> None:
     result = resp.json()
     print(json.dumps(result, indent=2))
   except requests.RequestException as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    msg = str(e)
+    if e.response is not None:
+      try:
+        msg = e.response.json()["detail"]
+      except (ValueError, KeyError):
+        pass
+    print(json.dumps({"error": msg}), file=sys.stderr)
     sys.exit(1)
 
 

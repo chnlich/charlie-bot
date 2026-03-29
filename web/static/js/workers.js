@@ -52,25 +52,24 @@ function renderThreadEvents(threadId, events) {
   function toolSummary(e) {
     const input = e.input || {};
     if (e.tool_name === 'Bash' || e.tool_name === 'bash') {
-      const cmd = input.command || '';
-      return escapeHtml(cmd.substring(0, 80));
+      return {text: input.command || '', limit: 80};
     }
     if (e.tool_name === 'Edit' || e.tool_name === 'Write') {
-      return escapeHtml(input.file_path || '');
+      return {text: input.file_path || '', limit: 0};
     }
     if (e.tool_name === 'Read') {
-      return escapeHtml(input.file_path || '');
+      return {text: input.file_path || '', limit: 0};
     }
     if (e.tool_name === 'Glob') {
-      return escapeHtml(input.pattern || '');
+      return {text: input.pattern || '', limit: 0};
     }
     if (e.tool_name === 'Grep') {
-      return escapeHtml((input.pattern || '') + (input.path ? ' in ' + input.path : ''));
+      return {text: (input.pattern || '') + (input.path ? ' in ' + input.path : ''), limit: 0};
     }
     const first = Object.values(input)[0];
-    if (!first) return '';
+    if (!first) return {text: '', limit: 0};
     const display = typeof first === 'object' ? JSON.stringify(first) : String(first);
-    return escapeHtml(display.substring(0, 60));
+    return {text: display, limit: 60};
   }
 
   const parts = filtered.map(e => {
@@ -90,10 +89,19 @@ function renderThreadEvents(threadId, events) {
 
     if (e.type === 'tool_use') {
       const name = e.tool_name || 'tool';
-      const summary = toolSummary(e);
+      const {text, limit} = toolSummary(e);
+      const hasMore = limit > 0 && text.length > limit;
+      const short = hasMore ? text.substring(0, limit) : text;
+      let summaryHtml;
+      if (hasMore) {
+        const id = 'tu-' + Math.random().toString(36).slice(2);
+        summaryHtml = `${escapeHtml(short)}<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline">Show more</button></span><span id="${id}-full" style="display:none">${escapeHtml(text.substring(limit))}</span>`;
+      } else {
+        summaryHtml = escapeHtml(short);
+      }
       return `<div class="py-1.5 px-3 my-0.5 flex items-center gap-2">
         <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">${escapeHtml(name)}</span>
-        <span class="text-xs text-slate-400 truncate flex-1">${summary}</span>
+        <span class="text-xs text-slate-400 ${hasMore ? '' : 'truncate '}flex-1">${summaryHtml}</span>
         ${tsHtml}
       </div>`;
     }

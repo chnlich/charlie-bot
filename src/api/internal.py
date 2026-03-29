@@ -34,18 +34,19 @@ async def delegate_task(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
+  # Takeoff gate: block delegation unless the user explicitly approved.
+  # This must run synchronously here so the API can return HTTP 403.
+  try:
+    _check_takeoff_gate(req.session_id)
+  except DelegationBlockedError as e:
+    raise HTTPException(status_code=403, detail=str(e))
+
   # Create thread immediately so it's visible in the UI
   thread = await thread_mgr.create_thread(meta, req.description, context=req.context, require_review=req.require_review)
 
   # Resolve backend/model from session config before spawning
   cfg = get_config()
   resolved_backend, resolved_model = await resolve_session_subagent_backend_model(req.session_id, cfg, session_mgr)
-
-  # Takeoff gate: block delegation unless the user explicitly approved
-  try:
-    _check_takeoff_gate(req.session_id)
-  except DelegationBlockedError as e:
-    raise HTTPException(status_code=403, detail=str(e))
 
   # Fire-and-forget: spawn worker in background
   create_logged_task(
@@ -61,6 +62,7 @@ async def delegate_task(
           context=req.context,
           resolved_backend=resolved_backend,
           resolved_model=resolved_model,
+          require_takeoff=True,
       ))
 
   # Save and broadcast task_delegated event so cursor stays in sync on reconnect

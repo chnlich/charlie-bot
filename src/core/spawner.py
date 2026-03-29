@@ -97,6 +97,9 @@ def _build_review_prompt(
     wt_path: str,
     repo_path: Path,
     base_branch: str,
+    session_id: str,
+    original_thread_id: str,
+    sessions_dir: Path,
     context: Optional[str] = None,
     user_request: Optional[str] = None,
     worker_summary: Optional[str] = None,
@@ -113,13 +116,20 @@ def _build_review_prompt(
     context_lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
   context_lines.append(f"**Delegator hint:** {context_hint}")
   context_section = "\n".join(context_lines)
+  chat_log_path = sessions_dir / session_id / "data" / "chat_events.jsonl"
+  worker_log_path = sessions_dir / session_id / "threads" / original_thread_id / "data" / "events.jsonl"
   return (
       f"## Code Review\n"
       f"You are reviewing another worker's code changes.\n\n"
       f"## Context\n"
       f"{context_section}\n\n"
+      f"If the summary above is insufficient or you are unsure about intent, "
+      f"read the full logs: Session: `{chat_log_path}`, Worker: `{worker_log_path}`\n\n"
       f"{_CODING_PRINCIPLES}\n"
       f"## Review Checklist\n"
+      f"IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "
+      f"Only fix clear bugs, correctness issues, or scope violations. "
+      f"Do not refactor, restyle, or improve code that is functionally correct.\n\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
       f"IMPORTANT: NEVER run git push from the worktree. All pushes must happen from `{repo_path}` after merging.\n\n"
       f"1. `cd {wt_path}`\n"
@@ -908,6 +918,9 @@ async def _spawn_review_worker(
       wt_path,
       repo_path,
       base_branch,
+      session_id=session_id,
+      original_thread_id=original_thread.id,
+      sessions_dir=cfg.sessions_dir,
       context=original_thread.context,
       user_request=user_request,
       worker_summary=worker_summary)

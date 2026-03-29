@@ -70,6 +70,7 @@ class BackendOption(BaseModel):
   label: str
   type: str  # 'cc-claude' | 'cc-kimi'
   model: Optional[str] = None
+  effort: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

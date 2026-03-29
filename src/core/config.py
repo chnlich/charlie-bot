@@ -105,7 +105,7 @@ class CharlieBotConfig(BaseModel):
 
   # Backend options available for model switching
   backend_options: list[BackendOption] = [
-      BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6"),
+      BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6", effort="max"),
       BackendOption(id="kimi-k2.5", label="CC \u00b7 Kimi K2.5", type="cc-kimi", model="kimi-k2.5"),
       BackendOption(id="codex-gpt-5-3", label="Codex \u00b7 gpt-5.3-codex", type="codex", model="gpt-5.3-codex"),
       BackendOption(id="gemini-3-pro", label="Gemini \u00b7 3 Pro", type="gemini", model="gemini-3-pro-preview"),

@@ -169,6 +169,7 @@ class DelegateRequest(BaseModel):
   repo_path: Optional[str] = None
   context: Optional[str] = None
   require_review: bool = True
+  force_takeoff: bool = False
 
 
 class ImproveRequest(BaseModel):

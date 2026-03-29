@@ -25,7 +25,6 @@ def main() -> None:
   parser.add_argument("--description", required=True, help="Task description")
   parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")
   parser.add_argument("--context", default=None, help="Business context for reviewers")
-  parser.add_argument("--force-takeoff", action="store_true", default=False, help="Skip the takeoff gate check")
   args = parser.parse_args()
 
   cfg = get_config()
@@ -39,8 +38,6 @@ def main() -> None:
     payload["repo_path"] = args.repo
   if args.context is not None:
     payload["context"] = args.context
-  if args.force_takeoff:
-    payload["force_takeoff"] = True
 
   try:
     resp = requests.post(f"{cfg.server_base_url}/api/internal/delegate", json=payload, timeout=30, verify=False)

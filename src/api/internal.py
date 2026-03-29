@@ -36,11 +36,10 @@ async def delegate_task(
 
   # Takeoff gate: block delegation unless the user explicitly approved.
   # This must run synchronously here so the API can return HTTP 403.
-  if not req.force_takeoff:
-    try:
-      _check_takeoff_gate(req.session_id)
-    except DelegationBlockedError as e:
-      raise HTTPException(status_code=403, detail=str(e))
+  try:
+    _check_takeoff_gate(req.session_id)
+  except DelegationBlockedError as e:
+    raise HTTPException(status_code=403, detail=str(e))
 
   # Create thread immediately so it's visible in the UI
   thread = await thread_mgr.create_thread(meta, req.description, context=req.context, require_review=req.require_review)
@@ -64,7 +63,6 @@ async def delegate_task(
           resolved_backend=resolved_backend,
           resolved_model=resolved_model,
           require_takeoff=True,
-          force_takeoff=req.force_takeoff,
       ))
 
   # Save and broadcast task_delegated event so cursor stays in sync on reconnect

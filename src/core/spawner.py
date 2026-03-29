@@ -676,10 +676,9 @@ async def spawn_worker(
     improve_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
     require_takeoff: bool = False,
-    force_takeoff: bool = False,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
-  if require_takeoff and not force_takeoff:
+  if require_takeoff:
     _check_takeoff_gate(session_id)
 
   thread = None

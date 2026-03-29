@@ -36,11 +36,15 @@ def _load_all_items(repo_path: Path) -> list[dict]:
   if backlogs_dir.is_dir():
     items = []
     for yaml_file in sorted(backlogs_dir.glob('*.yaml')):
-      source = yaml_file.stem
-      file_items = load_yaml(yaml_file, default=[])
-      for item in file_items:
-        item['_source'] = source
-      items.extend(file_items)
+      try:
+        source = yaml_file.stem
+        file_items = load_yaml(yaml_file, default=[])
+        for item in file_items:
+          item['_source'] = source
+        items.extend(file_items)
+      except Exception as exc:
+        log.error('backlog_yaml_parse_error', file=str(yaml_file), error=str(exc), exc_info=exc)
+        continue
     return items
 
   path = repo_path / 'loop' / 'backlog.yaml'

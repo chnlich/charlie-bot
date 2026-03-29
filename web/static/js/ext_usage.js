@@ -57,7 +57,9 @@ function _renderProvider(providerKey, prefix, data) {
   for (const b of buckets) {
     const bucket = data[b.key];
     if (!bucket) continue;
-    const pct = typeof bucket.utilization === 'number' ? bucket.utilization : 0;
+    let pct = typeof bucket.utilization === 'number' ? bucket.utilization : 0;
+    const stale = _shouldWaitForFreshCodexCapData(providerKey, data, bucket);
+    if (stale) pct = 0;
     const barEl = document.getElementById(b.bar);
     const pctEl = document.getElementById(b.pct);
     const resetEl = document.getElementById(b.reset);
@@ -65,7 +67,7 @@ function _renderProvider(providerKey, prefix, data) {
       barEl.style.width = Math.min(pct, 100).toFixed(1) + '%';
       barEl.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
     }
-    if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+    if (pctEl) pctEl.textContent = stale ? '\u2014' : Math.round(pct) + '%';
     if (resetEl && bucket.resets_at) resetEl.textContent = formatResetTime(providerKey, data, bucket);
   }
 }

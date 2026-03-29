@@ -148,30 +148,49 @@ async def _extract_review_context(
 ) -> tuple[Optional[str], Optional[str]]:
   """Extract user request and worker summary from JSONL logs for review context.
 
-  Returns (user_request, worker_summary). Either may be None if extraction fails.
+  Returns (user_request, worker_summary). Falls back to (None, None) if extraction is incomplete.
   """
   user_request: Optional[str] = None
   worker_summary: Optional[str] = None
+  has_user_request = False
+  has_worker_summary = False
 
   try:
     chat_log = sessions_dir / session_id / "data" / "chat_events.jsonl"
     events = await asyncio.to_thread(parse_ndjson_file, chat_log)
     for ev in events:
       if ev.get("type") == ET.TASK_DELEGATED and ev.get("thread_id") == thread_id:
-        user_request = ev.get("description")
+        user_request_value = ev.get("description")
+        if isinstance(user_request_value, str):
+          normalized_request = user_request_value.strip()
+          if normalized_request:
+            user_request = normalized_request
+            has_user_request = True
         break
   except Exception as e:
     log.warning("review_context_chat_events_failed", session=session_id, thread=thread_id, error=str(e))
+  if not has_user_request:
+    log.warning("review_context_user_request_unavailable", session=session_id, thread=thread_id)
 
   try:
     worker_log = sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
     events = await asyncio.to_thread(parse_ndjson_file, worker_log)
     for ev in reversed(events):
       if ev.get("type") == ET.RESULT:
-        worker_summary = ev.get("result")
+        worker_summary_value = ev.get("result")
+        if isinstance(worker_summary_value, str):
+          normalized_summary = worker_summary_value.strip()
+          if normalized_summary:
+            worker_summary = normalized_summary
+            has_worker_summary = True
         break
   except Exception as e:
     log.warning("review_context_worker_events_failed", session=session_id, thread=thread_id, error=str(e))
+  if not has_worker_summary:
+    log.warning("review_context_worker_summary_unavailable", session=session_id, thread=thread_id)
+
+  if not has_user_request or not has_worker_summary:
+    return None, None
 
   return user_request, worker_summary
 

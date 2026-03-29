@@ -252,7 +252,7 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str) -
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"resolved backend '{backend_id}' is not configured")
-  return BackendOption(id=option.id, label=option.label, type=option.type, model=model)
+  return option.model_copy(update={"model": model})
 
 
 async def resolve_session_subagent_backend_model(

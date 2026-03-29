@@ -13,7 +13,7 @@ def _build_cfg() -> CharlieBotConfig:
       charliebot_home=Path("/tmp/charliebot-test"),
       worktree_dir="/tmp/worktrees",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6", effort="max"),
           BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
       ],
   )
@@ -21,9 +21,10 @@ def _build_cfg() -> CharlieBotConfig:
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   cfg = _build_cfg()
-  opt = spawner.resolve_backend_option(cfg, "codex-o3", "o3-pro")
-  assert opt.id == "codex-o3"
-  assert opt.model == "o3-pro"
+  opt = spawner.resolve_backend_option(cfg, "claude-opus-4.6", "claude-opus-4-6")
+  assert opt.id == "claude-opus-4.6"
+  assert opt.model == "claude-opus-4-6"
+  assert opt.effort == "max"
 
   with pytest.raises(ValueError, match="not configured"):
     spawner.resolve_backend_option(cfg, "missing", "o3")

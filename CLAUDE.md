@@ -1,15 +1,9 @@
 # CharlieBot Worker Instructions
 
 ## Git Worktree Workflow
-You MUST isolate your work in a git worktree to avoid interfering with other
-parallel workers. 
-Follow the worktree steps exactly:
-1. Create the worktree branch.
-2. Work entirely inside the worktree directory.
-3. Commit your changes with descriptive messages.
-4. Rebase onto the base branch.
-5. Fast-forward merge back into the base branch.
-6. Remove the worktree when done.
+A git worktree is pre-created for you. Work entirely inside it.
+Do NOT create, rebase, merge, push, or remove worktrees — the system handles
+lifecycle automatically.
 
 ## Coding Standards
 - Google Code Style

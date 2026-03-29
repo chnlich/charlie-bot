@@ -97,25 +97,27 @@ def _build_review_prompt(
     wt_path: str,
     repo_path: Path,
     base_branch: str,
-    session_id: str,
-    original_thread_id: str,
-    sessions_dir: Path,
     context: Optional[str] = None,
+    user_request: Optional[str] = None,
+    worker_summary: Optional[str] = None,
 ) -> str:
   """Build the prompt for a review worker."""
   context_hint = context or '(none provided)'
-  chat_log = f"{sessions_dir}/{session_id}/data/chat_events.jsonl"
-  worker_log = f"{sessions_dir}/{session_id}/threads/{original_thread_id}/data/events.jsonl"
+  context_lines: list[str] = []
+  if user_request or worker_summary:
+    if user_request:
+      context_lines.append(f"**User request:** {user_request}")
+    if worker_summary:
+      context_lines.append(f"**Worker summary:** {worker_summary}")
+  else:
+    context_lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
+  context_lines.append(f"**Delegator hint:** {context_hint}")
+  context_section = "\n".join(context_lines)
   return (
       f"## Code Review\n"
       f"You are reviewing another worker's code changes.\n\n"
-      f"## Context Research\n"
-      f"Before reviewing the code, understand the intent behind the changes:\n"
-      f"1. Read the session conversation: `{chat_log}`\n"
-      f"   - Focus on user messages to understand what was requested and why.\n"
-      f"2. Read the original worker's log: `{worker_log}`\n"
-      f"   - Understand what the worker did and any decisions it made.\n"
-      f"3. Delegator's context hint: {context_hint}\n\n"
+      f"## Context\n"
+      f"{context_section}\n\n"
       f"{_CODING_PRINCIPLES}\n"
       f"## Review Checklist\n"
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
@@ -137,6 +139,41 @@ def _build_review_prompt(
       f"11. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
       f"12. Push to remote: `cd {repo_path} && git pull --ff-only && git push origin {base_branch}`\n"
       f"13. Verify: `git log --oneline -1 {base_branch}` and `git log --oneline -1 origin/{base_branch}` must show the same commit.")
+
+
+async def _extract_review_context(
+    session_id: str,
+    thread_id: str,
+    sessions_dir: Path,
+) -> tuple[Optional[str], Optional[str]]:
+  """Extract user request and worker summary from JSONL logs for review context.
+
+  Returns (user_request, worker_summary). Either may be None if extraction fails.
+  """
+  user_request: Optional[str] = None
+  worker_summary: Optional[str] = None
+
+  try:
+    chat_log = sessions_dir / session_id / "data" / "chat_events.jsonl"
+    events = await asyncio.to_thread(parse_ndjson_file, chat_log)
+    for ev in events:
+      if ev.get("type") == ET.TASK_DELEGATED and ev.get("thread_id") == thread_id:
+        user_request = ev.get("description")
+        break
+  except Exception as e:
+    log.warning("review_context_chat_events_failed", session=session_id, thread=thread_id, error=str(e))
+
+  try:
+    worker_log = sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
+    events = await asyncio.to_thread(parse_ndjson_file, worker_log)
+    for ev in reversed(events):
+      if ev.get("type") == ET.RESULT:
+        worker_summary = ev.get("result")
+        break
+  except Exception as e:
+    log.warning("review_context_worker_events_failed", session=session_id, thread=thread_id, error=str(e))
+
+  return user_request, worker_summary
 
 
 async def _git_current_branch(repo_path: Path) -> str:
@@ -845,15 +882,16 @@ async def _spawn_review_worker(
     return False
   resolved_backend, resolved_model, tried_backends = backend_result
 
+  user_request, worker_summary = await _extract_review_context(session_id, original_thread.id, cfg.sessions_dir)
+
   review_prompt = _build_review_prompt(
       branch_name,
       wt_path,
       repo_path,
       base_branch,
-      session_id=session_id,
-      original_thread_id=original_thread.id,
-      sessions_dir=cfg.sessions_dir,
-      context=original_thread.context)
+      context=original_thread.context,
+      user_request=user_request,
+      worker_summary=worker_summary)
 
   session_meta = await session_mgr.get_session(session_id)
   review_thread = await thread_mgr.create_thread(

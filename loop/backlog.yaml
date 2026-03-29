@@ -972,3 +972,20 @@
   status: done
   created: '2026-03-26T12:00:00Z'
   priority: medium
+- id: '066'
+  title: Add thread-to-session reverse index in ThreadManager
+  description: 'PURPOSE — Eliminate the O(n) session-directory scan in server.py _find_events_file
+    (L218-228) that runs on every thread WebSocket connection. Connecting to /ws/threads/{thread_id}
+    triggers a linear scan of all session directories calling Path.exists() to locate
+    the thread''s events.jsonl file. As sessions accumulate this adds per-connection
+    latency proportional to session count. ThreadManager.create_thread already knows
+    both IDs but there is no reverse lookup by thread_id alone. HOW — Add a dict
+    _thread_session_index: dict[str, str] mapping thread_id to session_id in core/threads.py,
+    populated automatically during create_thread and lazily during get_thread and
+    list_threads calls. Expose a resolve_events_file(thread_id) method that checks
+    the index first and falls back to the directory scan only on cache miss. Replace
+    _find_events_file in server.py with a call to the new method. ~15 lines for
+    the index logic, 1-line change in server.py. No behavior change for callers.'
+  status: pending
+  created: '2026-03-29T12:00:00Z'
+  priority: medium

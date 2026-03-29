@@ -231,11 +231,20 @@ class AgentBackend(ABC):
           if tool_id:
             _pending_tool_calls.add(tool_id)
 
-        # Clear pending tool calls on tool_result events.
+        # Clear pending tool calls on tool_result events — flat format.
         if evt_type == ET.TOOL_RESULT:
           tool_use_id = translated.get("tool_use_id", "")
           if tool_use_id:
             _pending_tool_calls.discard(tool_use_id)
+
+        # Clear pending tool calls — wrapped format (Claude Code):
+        # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
+        if evt_type == ET.USER:
+          for item in translated.get("message", {}).get("content", []):
+            if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
+              tool_use_id = item.get("tool_use_id", "")
+              if tool_use_id:
+                _pending_tool_calls.discard(tool_use_id)
 
         yield translated
 

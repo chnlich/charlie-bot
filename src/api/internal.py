@@ -9,7 +9,12 @@ from src.core.config import get_config
 from src.core.improve_command import ImproveState, run_improve_loop, save_improve_state
 from src.core.models import DelegateRequest, ImproveRequest
 from src.core.sessions import SessionManager
-from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
+from src.core.spawner import (
+    DelegationBlockedError,
+    _check_takeoff_gate,
+    resolve_session_subagent_backend_model,
+    spawn_worker,
+)
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
@@ -35,6 +40,12 @@ async def delegate_task(
   # Resolve backend/model from session config before spawning
   cfg = get_config()
   resolved_backend, resolved_model = await resolve_session_subagent_backend_model(req.session_id, cfg, session_mgr)
+
+  # Takeoff gate: block delegation unless the user explicitly approved
+  try:
+    _check_takeoff_gate(req.session_id)
+  except DelegationBlockedError as e:
+    raise HTTPException(status_code=403, detail=str(e))
 
   # Fire-and-forget: spawn worker in background
   create_logged_task(

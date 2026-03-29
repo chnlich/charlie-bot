@@ -159,6 +159,12 @@ class CharlieBotConfig(BaseModel):
     return self.subprocess_buffer_limit_mb * 1024 * 1024
 
   @property
+  def server_base_url(self) -> str:
+    """Return the base URL for the server, using https if SSL is configured."""
+    scheme = "https" if self.ssl_certfile else "http"
+    return f"{scheme}://{self.server_host}:{self.server_port}"
+
+  @property
   def sessions_dir(self) -> Path:
     return self.charliebot_home / "sessions"
 

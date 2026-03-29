@@ -28,7 +28,6 @@ def main() -> None:
   args = parser.parse_args()
 
   cfg = get_config()
-  port = cfg.server_port
 
   payload = {
       "session_id": args.session,
@@ -41,7 +40,7 @@ def main() -> None:
     payload["context"] = args.context
 
   try:
-    resp = requests.post(f"https://localhost:{port}/api/internal/delegate", json=payload, timeout=30, verify=False)
+    resp = requests.post(f"{cfg.server_base_url}/api/internal/delegate", json=payload, timeout=30, verify=False)
     resp.raise_for_status()
     result = resp.json()
     print(json.dumps(result, indent=2))

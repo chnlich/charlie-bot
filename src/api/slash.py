@@ -33,25 +33,52 @@ _HELP_ENTRY = {
 }
 
 _RUN_ENTRY = {
-    'name': 'run',
-    'scope': 'builtin',
-    'description': 'Manually trigger a scheduled task',
-    'args': '<task-name>',
-    'params': [
-        {'name': 'task_name', 'label': 'Task name', 'type': 'text', 'required': True, 'placeholder': 'e.g. daily-report'},
-    ],
+    'name':
+        'run',
+    'scope':
+        'builtin',
+    'description':
+        'Manually trigger a scheduled task',
+    'args':
+        '<task-name>',
+    'params':
+        [
+            {
+                'name': 'task_name',
+                'label': 'Task name',
+                'type': 'text',
+                'required': True,
+                'placeholder': 'e.g. daily-report'
+            },
+        ],
 }
 
 _IMPROVE_ENTRY = {
-    'name': 'improve',
-    'scope': 'builtin',
-    'description': 'Run iterative improvement loop',
-    'args': '<max_iterations> <goal>',
-    'params': [
-        {'name': 'max_iterations', 'label': 'Max iterations', 'type': 'number', 'required': True,
-         'placeholder': 'Number of iterations'},
-        {'name': 'goal', 'label': 'Goal', 'type': 'text', 'required': True, 'placeholder': 'What to improve...'},
-    ],
+    'name':
+        'improve',
+    'scope':
+        'builtin',
+    'description':
+        'Run iterative improvement loop',
+    'args':
+        '<max_iterations> <goal>',
+    'params':
+        [
+            {
+                'name': 'max_iterations',
+                'label': 'Max iterations',
+                'type': 'number',
+                'required': True,
+                'placeholder': 'Number of iterations'
+            },
+            {
+                'name': 'goal',
+                'label': 'Goal',
+                'type': 'text',
+                'required': True,
+                'placeholder': 'What to improve...'
+            },
+        ],
 }
 
 _STOP_IMPROVE_ENTRY = {
@@ -65,10 +92,15 @@ _STOP_IMPROVE_ENTRY = {
 async def _build_command_list() -> list[dict]:
   """Return the full command list: YAML commands + built-ins."""
   cmds = await asyncio.to_thread(load_slash_commands)
-  result = [{
-      'name': c.name, 'scope': c.scope, 'description': c.description, 'args': c.args,
-      'params': [p.model_dump(exclude_defaults=True) for p in c.params],
-  } for c in cmds]
+  result = [
+      {
+          'name': c.name,
+          'scope': c.scope,
+          'description': c.description,
+          'args': c.args,
+          'params': [p.model_dump(exclude_defaults=True) for p in c.params],
+      } for c in cmds
+  ]
   result.append(_HELP_ENTRY)
   result.append(_RUN_ENTRY)
   result.append(_IMPROVE_ENTRY)

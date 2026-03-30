@@ -84,8 +84,11 @@ async def build_session_view_data_fast(
     log.warning("mark_read_failed", session_id=session_id, exc_info=True)
 
   return FastSessionViewData(
-      messages=messages, threads=threads, usage=usage,
-      total_event_count=total_count, has_more=has_more,
+      messages=messages,
+      threads=threads,
+      usage=usage,
+      total_event_count=total_count,
+      has_more=has_more,
   )
 
 

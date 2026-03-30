@@ -55,11 +55,11 @@ class CcOpusProvider:
 
     async with httpx.AsyncClient(timeout=30) as client:
       resp = await client.get(
-        USAGE_URL,
-        headers={
-          "Authorization": f"Bearer {access_token}",
-          "anthropic-beta": ANTHROPIC_BETA,
-        },
+          USAGE_URL,
+          headers={
+              "Authorization": f"Bearer {access_token}",
+              "anthropic-beta": ANTHROPIC_BETA,
+          },
       )
 
       if resp.status_code == 429:
@@ -132,9 +132,9 @@ def _read_credentials() -> dict[str, Any] | None:
     return None
 
   return {
-    "access_token": access_token,
-    "refresh_token": refresh_token,
-    "expires_at": expires_at,
+      "access_token": access_token,
+      "refresh_token": refresh_token,
+      "expires_at": expires_at,
   }
 
 
@@ -177,19 +177,25 @@ def _transform_codex_response(
   secondary = rate_limits.get("secondary", {})
 
   return {
-    "five_hour": {
-      "utilization": primary.get("used_percent", 0.0),
-      "resets_at": datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
-        if "resets_at" in primary else "",
-    },
-    "seven_day": {
-      "utilization": secondary.get("used_percent", 0.0),
-      "resets_at": datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
-        if "resets_at" in secondary else "",
-    },
-    "fetched_at": fetched_at,
-    "provider": "codex",
-    "token_count_observed_at": event.get("timestamp", ""),
+      "five_hour":
+          {
+              "utilization":
+                  primary.get("used_percent", 0.0),
+              "resets_at":
+                  datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
+                  if "resets_at" in primary else "",
+          },
+      "seven_day":
+          {
+              "utilization":
+                  secondary.get("used_percent", 0.0),
+              "resets_at":
+                  datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
+                  if "resets_at" in secondary else "",
+          },
+      "fetched_at": fetched_at,
+      "provider": "codex",
+      "token_count_observed_at": event.get("timestamp", ""),
   }
 
 
@@ -197,12 +203,12 @@ async def _refresh_access_token(refresh_token: str) -> str | None:
   """Refresh the OAuth access token and save new credentials."""
   async with httpx.AsyncClient(timeout=30) as client:
     resp = await client.post(
-      TOKEN_REFRESH_URL,
-      json={
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
-      },
+        TOKEN_REFRESH_URL,
+        json={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": CLIENT_ID,
+        },
     )
     resp.raise_for_status()
     token_data = resp.json()
@@ -231,16 +237,18 @@ def _transform_response(raw: dict[str, Any]) -> dict[str, Any]:
   seven_day = raw.get("sevenDay", raw.get("seven_day", {}))
 
   return {
-    "five_hour": {
-      "utilization": five_hour.get("utilization", 0.0),
-      "resets_at": five_hour.get("resetsAt", five_hour.get("resets_at", "")),
-    },
-    "seven_day": {
-      "utilization": seven_day.get("utilization", 0.0),
-      "resets_at": seven_day.get("resetsAt", seven_day.get("resets_at", "")),
-    },
-    "fetched_at": now,
-    "provider": "cc-opus",
+      "five_hour":
+          {
+              "utilization": five_hour.get("utilization", 0.0),
+              "resets_at": five_hour.get("resetsAt", five_hour.get("resets_at", "")),
+          },
+      "seven_day":
+          {
+              "utilization": seven_day.get("utilization", 0.0),
+              "resets_at": seven_day.get("resetsAt", seven_day.get("resets_at", "")),
+          },
+      "fetched_at": now,
+      "provider": "cc-opus",
   }
 
 
@@ -259,9 +267,9 @@ async def _poll_loop() -> None:
     try:
       # Poll both providers
       cc_result, codex_result = await asyncio.gather(
-        _cc_provider.fetch(),
-        _codex_provider.fetch(),
-        return_exceptions=True,
+          _cc_provider.fetch(),
+          _codex_provider.fetch(),
+          return_exceptions=True,
       )
 
       if isinstance(cc_result, Exception):
@@ -278,12 +286,10 @@ async def _poll_loop() -> None:
 
       # Broadcast to sidebar channel
       if _cached_usage:
-        await streaming_manager.broadcast(
-          "sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)}
-        )
+        await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)})
         log.info(
-          "ext_usage_fetched",
-          providers=list(_cached_usage.keys()),
+            "ext_usage_fetched",
+            providers=list(_cached_usage.keys()),
         )
     except Exception:
       log.exception("ext_usage_poll_error")

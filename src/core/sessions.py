@@ -198,10 +198,10 @@ class SessionManager:
 
     # Create the new session inheriting parent's backend
     meta = SessionMetadata(
-      name=f'Clone: {parent.name}',
-      parent_session_id=parent_id,
-      rewind_summary=summary,
-      backend=parent.backend,
+        name=f'Clone: {parent.name}',
+        parent_session_id=parent_id,
+        rewind_summary=summary,
+        backend=parent.backend,
     )
     session_dir = self._session_dir(meta.id)
     for subdir in ['data', 'threads']:
@@ -224,9 +224,9 @@ class SessionManager:
 
     # Create new session with empty history
     meta = SessionMetadata(
-      name=f'Elon-e: {parent.name}',
-      parent_session_id=parent_id,
-      backend=parent.backend,
+        name=f'Elon-e: {parent.name}',
+        parent_session_id=parent_id,
+        backend=parent.backend,
     )
     session_dir = self._session_dir(meta.id)
     for subdir in ['data', 'threads']:
@@ -484,7 +484,10 @@ class SessionManager:
   def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
     """Incrementally update the usage cache from a single 'result' event."""
     cached = self._usage_cache.get(session_id) or {
-        "context_tokens": 0, "context_limit": 200_000, "total_cost_usd": 0.0, "model": "",
+        "context_tokens": 0,
+        "context_limit": 200_000,
+        "total_cost_usd": 0.0,
+        "model": "",
     }
     cached["total_cost_usd"] = round(cached["total_cost_usd"] + result_event.get("total_cost_usd", 0.0), 4)
     u = result_event.get("usage", {})

@@ -27,11 +27,15 @@ def _get_git_version() -> str:
   try:
     short_hash = subprocess.check_output(
         ["git", "rev-parse", "--short", "HEAD"],
-        cwd=_REPO_ROOT, text=True, timeout=5,
+        cwd=_REPO_ROOT,
+        text=True,
+        timeout=5,
     ).strip()
     commit_date = subprocess.check_output(
         ["git", "log", "-1", "--format=%cd", "--date=format:%m-%d"],
-        cwd=_REPO_ROOT, text=True, timeout=5,
+        cwd=_REPO_ROOT,
+        text=True,
+        timeout=5,
     ).strip()
     return f"{short_hash} · {commit_date}"
   except Exception:
@@ -40,7 +44,6 @@ def _get_git_version() -> str:
 
 
 _RUNTIME_GIT_VERSION = _get_git_version()
-
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
@@ -71,7 +74,9 @@ async def events_viewer(
     raise HTTPException(status_code=404, detail="Session not found")
 
   return templates.TemplateResponse(
-      request, "events_viewer.html", context={
+      request,
+      "events_viewer.html",
+      context={
           "session": session,
           "session_id": session_id,
           "events_url": f"/api/sessions/{session_id}/events.jsonl",
@@ -108,7 +113,9 @@ async def perfetto_viewer(
   trace_names = [url.rsplit("/", 1)[-1] for url in trace_urls]
 
   return templates.TemplateResponse(
-      request, "perfetto.html", context={
+      request,
+      "perfetto.html",
+      context={
           "trace_urls": trace_urls,
           "trace_names": trace_names,
           "trace_dir": dir,
@@ -127,7 +134,8 @@ async def index(
   """Render the full page. All data loaded here."""
   load_errors: list[str] = []
   try:
-    sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True)
+    sessions = await session_mgr.list_sessions(
+        status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True)
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []
@@ -163,7 +171,9 @@ async def index(
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
 
   return templates.TemplateResponse(
-      request, "index.html", context={
+      request,
+      "index.html",
+      context={
           "sessions": sessions,
           "active_session": active_session,
           "messages": messages,

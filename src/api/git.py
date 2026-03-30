@@ -15,11 +15,11 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
   if not (repo_path / ".git").exists() and not repo_path.name == ".git":
     raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
   result = subprocess.run(
-    ["git", "branch", "-a", "--sort=-committerdate", "--format=%(refname:short)"],
-    cwd=repo_path,
-    capture_output=True,
-    text=True,
-    timeout=10,
+      ["git", "branch", "-a", "--sort=-committerdate", "--format=%(refname:short)"],
+      cwd=repo_path,
+      capture_output=True,
+      text=True,
+      timeout=10,
   )
   if result.returncode != 0:
     raise HTTPException(status_code=500, detail=result.stderr.strip())

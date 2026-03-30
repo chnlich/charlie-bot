@@ -31,8 +31,7 @@ _CODING_PRINCIPLES = (
     "The codebase has a single user. Apply these principles:\n"
     "- **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery.\n"
     "- **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.\n"
-    "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n"
-)
+    "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n")
 
 
 def _read_subagent_instructions(cfg: CharlieBotConfig) -> Optional[str]:
@@ -149,7 +148,8 @@ def _build_review_prompt(
       f"10. Rebase onto base branch: `git rebase {base_branch}`\n"
       f"11. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
       f"12. Push to remote: `cd {repo_path} && git pull --ff-only && git push origin {base_branch}`\n"
-      f"13. Verify: `git log --oneline -1 {base_branch}` and `git log --oneline -1 origin/{base_branch}` must show the same commit.")
+      f"13. Verify: `git log --oneline -1 {base_branch}` and `git log --oneline -1 origin/{base_branch}` must show the same commit."
+  )
 
 
 async def _extract_review_context(
@@ -406,8 +406,14 @@ async def _create_worktree_and_process(
     # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
     worker_prompt = _build_worker_prompt(
-        description, resolved_repo, base_branch, branch_name, str(wt_path), session_meta,
-        improve_dir=improve_dir, iteration_number=iteration_number)
+        description,
+        resolved_repo,
+        base_branch,
+        branch_name,
+        str(wt_path),
+        session_meta,
+        improve_dir=improve_dir,
+        iteration_number=iteration_number)
     worktree_path = wt_path.resolve()
 
   if worktree_path is None:
@@ -725,7 +731,10 @@ async def spawn_worker(
         log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
         try:
           await session_mgr.persist_and_broadcast(
-              session_id, {"type": ET.ERROR, "content": f"Worker finalization failed: {e}"})
+              session_id, {
+                  "type": ET.ERROR,
+                  "content": f"Worker finalization failed: {e}"
+              })
         except Exception:
           log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
 
@@ -818,8 +827,7 @@ async def _trigger_master(
           f"[Auto-triggered scheduled task result for '{session_meta.scheduled_task}']\n"
           "Review the worker/reviewer results below. Check: was the branch merged? "
           "Are there errors? Summarize the outcome.\n\n"
-          f"{summary}"
-      )
+          f"{summary}")
 
     new_cc_session_id = await _run_message_with_resume_recovery(cfg, session_meta, master_summary, session_mgr)
 

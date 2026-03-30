@@ -994,3 +994,21 @@
   status: pending
   created: '2026-03-29T12:00:00Z'
   priority: medium
+- id: '067'
+  title: Extract built-in /improve and /run handlers from execute_command
+  description: 'PURPOSE — Reduce the 4th-longest function in the codebase (execute_command,
+    api/slash.py, 104 lines) by extracting the two largest built-in command handlers
+    into dedicated async functions. The /improve handler (L108-133, 26 lines) performs
+    argument parsing, validation, ImproveState creation, prompt building, and task firing.
+    The /run handler (L144-167, 24 lines) validates the task name against scheduled
+    tasks, looks up the scheduler from app state, invokes run_task_now, and formats
+    the result. Both are self-contained blocks with clear inputs and outputs separated
+    by early returns. HOW — Extract async _handle_improve(args, session_id, meta, cfg,
+    session_mgr) and async _handle_run(args, request) as module-level functions returning
+    the response dict or JSONResponse. The /help (3 lines) and /stop-improve (6 lines)
+    handlers are small enough to stay inline. execute_command becomes a ~48-line dispatcher.
+    Pure refactoring, no behavior change. Follows the pattern from items 003, 021,
+    027, 041, 058, 061, 062, and 063 which split other long functions.'
+  status: pending
+  created: '2026-03-30T12:00:00Z'
+  priority: medium

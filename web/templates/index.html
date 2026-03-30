@@ -178,7 +178,7 @@
           <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap">{% if session_usage %}${{ '%.2f' % session_usage.total_cost_usd }}{% endif %}</span>
         </div>
         <button id="fork-session-btn" onclick="forkSession(SESSION_ID)"
-                class="text-slate-500 hover:text-green-400 transition-colors ml-2" title="Fork session">
+                class="text-slate-500 hover:text-green-400 transition-colors ml-2" title="Clone session">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>
         </button>
         <a href="/sessions/{{ active_session.id }}/events"
@@ -301,9 +301,13 @@
           <div class="flex items-center gap-3 py-2 px-4 separator-line group/sep">
             <div class="flex-1 border-t border-slate-600/40"></div>
             <span class="text-xs text-slate-500 whitespace-nowrap">response complete{% if msg.thinking_seconds is not none %} &middot; {{ msg.thinking_seconds }}s{% endif %}</span>
-            <button onclick="rewindSession('{{ active_session.id }}', {{ msg.event_index }})"
-                    class="p-0.5 text-slate-500 hover:text-blue-400" title="Rewind to here">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"/></svg>
+            <button onclick="forkSession('{{ active_session.id }}', {{ msg.event_index }})"
+                    class="p-0.5 text-slate-500 hover:text-green-400" title="Clone to here">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>
+            </button>
+            <button onclick="eloneSession('{{ active_session.id }}', {{ msg.event_index }})"
+                    class="p-0.5 text-slate-500 hover:text-yellow-400" title="Elon-e: retry with a fresh perspective">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             </button>
             <div class="flex-1 border-t border-slate-600/40"></div>
           </div>

@@ -329,9 +329,13 @@ function renderSingleMessage(msg, sessionId) {
     return '<div class="flex items-center gap-3 py-2 px-4 separator-line group/sep">'
       + '<div class="flex-1 border-t border-slate-600/40"></div>'
       + '<span class="text-xs text-slate-500 whitespace-nowrap">response complete' + timeStr + '</span>'
-      + '<button onclick="rewindSession(\'' + sessionId + '\', ' + msg.event_index + ')"'
-      + ' class="p-0.5 text-slate-500 hover:text-blue-400" title="Rewind to here">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.333 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"/></svg>'
+      + '<button onclick="forkSession(\'' + sessionId + '\', ' + msg.event_index + ')"'
+      + ' class="p-0.5 text-slate-500 hover:text-green-400" title="Clone to here">'
+      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>'
+      + '</button>'
+      + '<button onclick="eloneSession(\'' + sessionId + '\', ' + msg.event_index + ')"'
+      + ' class="p-0.5 text-slate-500 hover:text-yellow-400" title="Elon-e: retry with a fresh perspective">'
+      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>'
       + '</button>'
       + '<div class="flex-1 border-t border-slate-600/40"></div></div>';
   }
@@ -1371,12 +1375,29 @@ async function deleteCronTask() {
 }
 
 // ---------------------------------------------------------------------------
-// Session rewind
+// Session clone (fork) and Elon-e
 // ---------------------------------------------------------------------------
-async function rewindSession(sessionId, eventIndex) {
-  if (!confirm('Rewind session to this point? A new session will be created.')) return;
+async function forkSession(sessionId, eventIndex = null) {
   try {
-    const res = await fetch("/api/sessions/" + sessionId + "/rewind", {
+    const opts = {method: 'POST'};
+    if (eventIndex != null) {
+      opts.headers = {'Content-Type': 'application/json'};
+      opts.body = JSON.stringify({event_index: eventIndex});
+    }
+    const res = await fetch('/api/sessions/' + sessionId + '/fork', opts);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    location.href = '/?session=' + data.id;
+  } catch (err) {
+    console.error('Clone failed:', err);
+    alert('Clone failed: ' + err.message);
+  }
+}
+
+async function eloneSession(sessionId, eventIndex) {
+  if (!confirm('Elon-e this session? The current session will be archived.')) return;
+  try {
+    const res = await fetch('/api/sessions/' + sessionId + '/elone', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({event_index: eventIndex}),
@@ -1385,19 +1406,7 @@ async function rewindSession(sessionId, eventIndex) {
     const data = await res.json();
     location.href = '/?session=' + data.id;
   } catch (err) {
-    console.error('Rewind failed:', err);
-    alert('Rewind failed: ' + err.message);
-  }
-}
-
-async function forkSession(id) {
-  try {
-    const res = await fetch('/api/sessions/' + id + '/fork', {method: 'POST'});
-    if (!res.ok) throw new Error(await res.text());
-    const newMeta = await res.json();
-    switchSession(newMeta.id);
-  } catch (err) {
-    console.error('Fork failed:', err);
-    alert('Fork failed: ' + err.message);
+    console.error('Elon-e failed:', err);
+    alert('Elon-e failed: ' + err.message);
   }
 }

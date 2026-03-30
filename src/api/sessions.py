@@ -194,31 +194,58 @@ async def get_session_events_page(
   return {"messages": messages, "has_more": has_more}
 
 
-@router.post('/{session_id}/rewind', response_model=SessionMetadata)
-async def rewind_session(
+@router.post('/{session_id}/fork', response_model=SessionMetadata)
+async def fork_session(
     session_id: str,
-    body: dict,
+    body: dict | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
-  """Create a new session by rewinding to a specific event index."""
-  event_index = body.get('event_index')
-  if event_index is None:
-    raise HTTPException(status_code=400, detail='event_index is required')
-  meta = await session_mgr.rewind_session(session_id, int(event_index))
+  """Clone a session. Optional body {"event_index": N} for partial clone."""
+  event_index = None
+  if body and 'event_index' in body:
+    event_index = int(body['event_index'])
+  meta = await session_mgr.fork_session(session_id, event_index=event_index)
   if not meta:
     raise HTTPException(status_code=404, detail='Session not found')
   return meta
 
 
-@router.post('/{session_id}/fork', response_model=SessionMetadata)
-async def fork_session(
+@router.post('/{session_id}/elone', response_model=SessionMetadata)
+async def elone_session(
     session_id: str,
+    body: dict,
     session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Create a new session by forking, copying all events."""
-  meta = await session_mgr.fork_session(session_id)
+  """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
+  event_index = body.get('event_index')
+  if event_index is None:
+    raise HTTPException(status_code=400, detail='event_index is required')
+  event_index = int(event_index)
+
+  meta = await session_mgr.elone_session(session_id, event_index)
   if not meta:
     raise HTTPException(status_code=404, detail='Session not found')
+
+  # Build bootstrap prompt
+  parent_events_path = session_mgr.get_chat_events_path(session_id)
+  bootstrap_prompt = (
+    "You're taking over a task from a previous session where I wasn't satisfied.\n\n"
+    f"Parent session: {session_id}\n"
+    f"Events file: {parent_events_path} (read up to line {event_index})\n\n"
+    "Your mission:\n"
+    "1. Read the parent conversation\n"
+    "2. Identify what I was trying to achieve\n"
+    "3. Analyze what went wrong with the previous approach\n"
+    "4. State your critique concisely\n"
+    "5. Propose a better approach and ask me to confirm before proceeding"
+  )
+
+  # Write synthetic user event and auto-start the assistant
+  from src.api.chat import run_and_finalize
+  from src.core.tasks import create_logged_task
+  create_logged_task(run_and_finalize(cfg, meta, bootstrap_prompt, session_mgr, skip_user_event=False))
+
   return meta
 
 

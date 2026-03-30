@@ -71,8 +71,7 @@ async def events_viewer(
     raise HTTPException(status_code=404, detail="Session not found")
 
   return templates.TemplateResponse(
-      "events_viewer.html", {
-          "request": request,
+      request, "events_viewer.html", context={
           "session": session,
           "session_id": session_id,
           "events_url": f"/api/sessions/{session_id}/events.jsonl",
@@ -109,8 +108,7 @@ async def perfetto_viewer(
   trace_names = [url.rsplit("/", 1)[-1] for url in trace_urls]
 
   return templates.TemplateResponse(
-      "perfetto.html", {
-          "request": request,
+      request, "perfetto.html", context={
           "trace_urls": trace_urls,
           "trace_names": trace_names,
           "trace_dir": dir,
@@ -165,8 +163,7 @@ async def index(
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
 
   return templates.TemplateResponse(
-      "index.html", {
-          "request": request,
+      request, "index.html", context={
           "sessions": sessions,
           "active_session": active_session,
           "messages": messages,

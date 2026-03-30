@@ -11,17 +11,17 @@ Share files and directories with the user by generating links to the CharlieBot 
 ## URL Format
 
 ```
-https://<hostname>:<port>/files/<absolute-path>
+<base_url>/files/<absolute-path>
 ```
 
-Where `<hostname>` is the CharlieBot server hostname and `<port>` is `server_port` from `~/.charliebot/config.yaml`. Check HOST MEMORY for the actual values on the current host.
+Where `<base_url>` is the CharlieBot URL resolved from HOST MEMORY (look for the **CharlieBot URL** entry).
 
 The path after `/files/` is the absolute filesystem path (without leading `/`). Examples:
 
 | Filesystem path | URL |
 |---|---|
-| `/data/checkpoints/foo/trace.json` | `https://<hostname>:<port>/files/data/checkpoints/foo/trace.json` |
-| `/home/user/results/` | `https://<hostname>:<port>/files/home/user/results/` |
+| `/data/checkpoints/foo/trace.json` | `<base_url>/files/data/checkpoints/foo/trace.json` |
+| `/home/user/results/` | `<base_url>/files/home/user/results/` |
 
 ## Behavior
 
@@ -39,6 +39,6 @@ Whenever you need to present a file to the user (logs, traces, checkpoints, imag
 ## Rules
 
 1. Always verify the file/directory exists before sharing the link (use `ls` or `Glob`)
-2. Resolve hostname and port from HOST MEMORY or `~/.charliebot/config.yaml` — never hardcode them
+2. Resolve base URL from HOST MEMORY — never hardcode hostnames or ports
 3. Present the link in markdown format: `[descriptive text](url)`
 4. For Perfetto traces (`.json` files from training), remind the user to open them at https://ui.perfetto.dev

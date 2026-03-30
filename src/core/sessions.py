@@ -175,58 +175,30 @@ class SessionManager:
     results.sort(key=lambda s: s.updated_at, reverse=True)
     return results
 
-  async def rewind_session(self, parent_id: str, event_index: int) -> Optional[SessionMetadata]:
-    """Create a new session by rewinding an existing one to a specific event index.
+  async def fork_session(self, parent_id: str, event_index: int | None = None) -> Optional[SessionMetadata]:
+    """Create a new session by cloning an existing one.
 
-    Copies chat_events.jsonl lines 0..event_index (inclusive) from the parent session,
-    generates a context summary, and creates a new session with the rewound history.
+    If event_index is set, only events [0..event_index] (inclusive) are copied.
+    Otherwise all events are copied (full clone).
     """
     parent = await self.get_session(parent_id)
     if not parent:
       return None
 
-    # Read parent events and slice up to event_index (inclusive)
     parent_events_path = self._chat_events_path(parent_id)
     if not parent_events_path.exists():
       return None
     lines_text = await asyncio.to_thread(parent_events_path.read_text, encoding='utf-8')
     lines = lines_text.splitlines()
-    kept_lines = lines[:event_index + 1]
 
-    summary = _summarize_event_lines(kept_lines)
-
-    # Create the new session
-    meta = SessionMetadata(name=f'Rewind: {parent.name}', parent_session_id=parent_id, rewind_summary=summary)
-    session_dir = self._session_dir(meta.id)
-    for subdir in ['data', 'threads']:
-      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
-
-    # Write the truncated chat events
-    events_path = self._chat_events_path(meta.id)
-    await asyncio.to_thread(events_path.write_text, '\n'.join(kept_lines) + '\n', encoding='utf-8')
-
-    await self._save_metadata(meta)
-
-    log.info('session_rewound', new_session=meta.id, parent=parent_id, event_index=event_index)
-    return meta
-
-  async def fork_session(self, parent_id: str) -> Optional[SessionMetadata]:
-    """Create a new session by forking an existing one, copying ALL events."""
-    parent = await self.get_session(parent_id)
-    if not parent:
-      return None
-
-    parent_events_path = self._chat_events_path(parent_id)
-    if not parent_events_path.exists():
-      return None
-    lines_text = await asyncio.to_thread(parent_events_path.read_text, encoding='utf-8')
-    lines = lines_text.splitlines()
+    if event_index is not None:
+      lines = lines[:event_index + 1]
 
     summary = _summarize_event_lines(lines)
 
     # Create the new session inheriting parent's backend
     meta = SessionMetadata(
-      name=f'Fork: {parent.name}',
+      name=f'Clone: {parent.name}',
       parent_session_id=parent_id,
       rewind_summary=summary,
       backend=parent.backend,
@@ -235,14 +207,51 @@ class SessionManager:
     for subdir in ['data', 'threads']:
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    # Copy ALL chat events to new session
+    # Copy chat events to new session
     events_path = self._chat_events_path(meta.id)
     await asyncio.to_thread(events_path.write_text, '\n'.join(lines) + '\n', encoding='utf-8')
 
     await self._save_metadata(meta)
 
-    log.info('session_forked', new_session=meta.id, parent=parent_id)
+    log.info('session_cloned', new_session=meta.id, parent=parent_id, event_index=event_index)
     return meta
+
+  async def elone_session(self, parent_id: str, event_index: int) -> Optional[SessionMetadata]:
+    """Create an Elon-e session: empty history, archive + thumbs-down the parent."""
+    parent = await self.get_session(parent_id)
+    if not parent:
+      return None
+
+    # Create new session with empty history
+    meta = SessionMetadata(
+      name=f'Elon-e: {parent.name}',
+      parent_session_id=parent_id,
+      backend=parent.backend,
+    )
+    session_dir = self._session_dir(meta.id)
+    for subdir in ['data', 'threads']:
+      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    # Create empty chat_events.jsonl
+    events_path = self._chat_events_path(meta.id)
+    await asyncio.to_thread(events_path.write_text, '', encoding='utf-8')
+
+    await self._save_metadata(meta)
+
+    # Auto-archive and thumbs-down the parent
+    parent.status = SessionStatus.ARCHIVED
+    parent.rating = 'thumbs_down'
+    parent.updated_at = datetime.now(timezone.utc)
+    await self._save_metadata(parent)
+    self._events_cache.pop(parent_id, None)
+    self._usage_cache.pop(parent_id, None)
+
+    log.info('session_eloned', new_session=meta.id, parent=parent_id, event_index=event_index)
+    return meta
+
+  def get_chat_events_path(self, session_id: str) -> Path:
+    """Return the absolute path to a session's chat_events.jsonl."""
+    return self._chat_events_path(session_id)
 
   async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:
     """Rename a session and return the updated metadata."""

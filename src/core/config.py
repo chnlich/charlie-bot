@@ -107,7 +107,8 @@ class CharlieBotConfig(BaseModel):
   # Additional backends (Codex/Gemini/Kimi/etc.) must be configured via
   # ~/.charliebot/config.yaml -> backend_options.
   backend_options: list[BackendOption] = [
-      BackendOption(id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6", effort="max"),
+      BackendOption(
+          id="claude-opus-4.6", label="CC \u00b7 Opus 4.6", type="cc-claude", model="claude-opus-4-6", effort="max"),
   ]
 
   # Ordered preference list for reviewer backend selection.

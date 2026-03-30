@@ -30,7 +30,8 @@ def main() -> None:
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument("--goal", required=True, help="Improvement goal")
   parser.add_argument("--base-branch", required=True, help="Base branch for iteration worktrees")
-  parser.add_argument("--branch-prefix", default=None, help="Branch prefix for iteration branches (e.g. 'improve/perf')")
+  parser.add_argument(
+      "--branch-prefix", default=None, help="Branch prefix for iteration branches (e.g. 'improve/perf')")
   args = parser.parse_args()
 
   cfg = get_config()

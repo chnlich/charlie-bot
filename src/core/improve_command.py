@@ -195,7 +195,12 @@ async def _wait_for_quota_recovery(
           if wait_seconds > 0:
             msg = f"Quota exhausted, waiting until {resets_at_str} (+60s buffer)..."
             log.info("quota_waiting", session=session_id, resets_at=resets_at_str, wait_seconds=wait_seconds)
-            await session_mgr.persist_and_broadcast(session_id, {"type": ET.IMPROVE_ITERATION_COMPLETED, "status": "quota_waiting", "summary": msg})
+            await session_mgr.persist_and_broadcast(
+                session_id, {
+                    "type": ET.IMPROVE_ITERATION_COMPLETED,
+                    "status": "quota_waiting",
+                    "summary": msg
+                })
             wait_seconds = min(wait_seconds, _QUOTA_POLL_INTERVAL)  # cap individual sleeps to check stop signal
             await asyncio.sleep(wait_seconds)
             continue
@@ -204,13 +209,23 @@ async def _wait_for_quota_recovery(
 
       # High utilization but no parseable resets_at — fall through to polling
       msg = "Quota exhausted, retrying in 10 minutes..."
-      await session_mgr.persist_and_broadcast(session_id, {"type": ET.IMPROVE_ITERATION_COMPLETED, "status": "quota_waiting", "summary": msg})
+      await session_mgr.persist_and_broadcast(
+          session_id, {
+              "type": ET.IMPROVE_ITERATION_COMPLETED,
+              "status": "quota_waiting",
+              "summary": msg
+          })
       log.info("quota_polling_fallback", session=session_id)
       await asyncio.sleep(_QUOTA_POLL_INTERVAL)
     else:
       # Usage API unavailable — poll fallback
       msg = "Quota exhausted, retrying in 10 minutes..."
-      await session_mgr.persist_and_broadcast(session_id, {"type": ET.IMPROVE_ITERATION_COMPLETED, "status": "quota_waiting", "summary": msg})
+      await session_mgr.persist_and_broadcast(
+          session_id, {
+              "type": ET.IMPROVE_ITERATION_COMPLETED,
+              "status": "quota_waiting",
+              "summary": msg
+          })
       log.info("quota_polling_no_usage_data", session=session_id)
       await asyncio.sleep(_QUOTA_POLL_INTERVAL)
 
@@ -342,4 +357,3 @@ async def run_improve_loop(
       await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     except Exception:
       log.error("improve_loop_trigger_master_on_failure_failed", session=session_id, exc_info=True)
-

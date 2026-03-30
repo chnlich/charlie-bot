@@ -1053,3 +1053,19 @@
   status: pending
   created: '2026-03-30T12:00:00Z'
   priority: medium
+- id: '070'
+  title: Use kill_process_group instead of os.kill in orphan recovery
+  description: 'PURPOSE — Fix orphan recovery leaving child processes behind. _recover_orphaned_threads
+    in core/init.py:123 uses os.kill(pid, 15) to terminate orphaned workers, but worker
+    subprocesses are started with start_new_session=True (base.py), giving each its
+    own process group. os.kill only signals the group leader, leaving child processes
+    (e.g. git, node) running as new orphans — the recovery function creates the very
+    problem it solves. Also uses magic number 15 instead of signal.SIGTERM. HOW — Replace
+    os.kill(pid, 15) with kill_process_group(pid, signal.SIGTERM) from src.core.process,
+    matching all other kill sites in the codebase (items 039 and 060 established this
+    pattern). Update the except clause to catch (ProcessLookupError, PermissionError)
+    instead of (OSError, ProcessLookupError) for consistency. Add imports for signal
+    and kill_process_group. 3-line change total.'
+  status: pending
+  created: '2026-03-30T12:00:00Z'
+  priority: high

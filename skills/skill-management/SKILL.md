@@ -1,0 +1,41 @@
+---
+name: skill-management
+description: >
+  CharlieBot skill directory layout, sync rules, and CLI tool mappings.
+  Use when creating, installing, or syncing skills across Claude Code, Codex, and Gemini CLI.
+---
+
+# Skill Management
+
+## Skill Sources (canonical)
+
+| Location | Scope | Description |
+|----------|-------|-------------|
+| `<charlie-bot-repo>/skills/` | General (shared across hosts) | Integration skills, self-knowledge |
+| `~/.charliebot/skills/` | Host-specific (per-machine) | Domain skills tied to local repos/hardware |
+
+## CLI Tool Skill Directories
+
+| CLI Tool | User Skills Path | Shared Standard | Notes |
+|----------|-----------------|-----------------|-------|
+| **Claude Code** | `~/.claude/skills/<name>/SKILL.md` | Proprietary | Also reads `.claude/skills/` at project level |
+| **Codex CLI** | `~/.agents/skills/<name>/SKILL.md` | Agent Skills (open standard) | `.system/` in `~/.codex/skills/` is Codex built-in; user skills go in `~/.agents/skills/` |
+| **Gemini CLI** | `~/.gemini/skills/<name>/SKILL.md` OR `~/.agents/skills/<name>/SKILL.md` | Agent Skills (open standard) | `~/.agents/skills/` takes precedence over `~/.gemini/skills/` |
+
+### Deduplication
+
+Codex and Gemini both read `~/.agents/skills/`, so syncing to **two** targets covers all three CLIs:
+
+1. `~/.claude/skills/` — Claude Code
+2. `~/.agents/skills/` — Codex + Gemini (shared)
+
+## Sync Rules
+
+- Each skill entry in target dirs is a **symlink** pointing to the canonical source
+- Never overwrite non-symlink entries or dotfiles (e.g. Codex `.system/`)
+- Remove stale symlinks whose targets no longer exist
+- Sync script: `<charlie-bot-repo>/scripts/sync-skills.sh`
+
+## File Name Convention
+
+All three CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file.

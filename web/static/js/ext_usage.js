@@ -18,6 +18,25 @@ function _shouldWaitForFreshCodexCapData(providerKey, providerData, bucket) {
   return Number.isFinite(observedAt) && observedAt < reset;
 }
 
+function _formatLocalHMS(isoString) {
+  const d = new Date(isoString);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return hh + ':' + mm + ':' + ss;
+}
+
+function _formatFiveHourReset(providerKey, providerData, bucket) {
+  const stale = _shouldWaitForFreshCodexCapData(providerKey, providerData, bucket);
+  const resetHMS = _formatLocalHMS(bucket.resets_at);
+  if (stale) return '(stale \u2013 ' + resetHMS + ')';
+  const sampledAt = (providerKey === 'codex' && providerData.token_count_observed_at)
+    ? providerData.token_count_observed_at
+    : providerData.fetched_at;
+  const sampledHMS = _formatLocalHMS(sampledAt);
+  return '(' + sampledHMS + ' \u2013 ' + resetHMS + ')';
+}
+
 function formatResetTime(providerKey, providerData, bucket) {
   const now = Date.now();
   const reset = _parseTimestampMs(bucket.resets_at);
@@ -68,7 +87,11 @@ function _renderProvider(providerKey, prefix, data) {
       barEl.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
     }
     if (pctEl) pctEl.textContent = stale ? '\u2014' : Math.round(pct) + '%';
-    if (resetEl && bucket.resets_at) resetEl.textContent = formatResetTime(providerKey, data, bucket);
+    if (resetEl && bucket.resets_at) {
+      resetEl.textContent = b.key === 'five_hour'
+        ? _formatFiveHourReset(providerKey, data, bucket)
+        : formatResetTime(providerKey, data, bucket);
+    }
   }
 }
 
@@ -98,7 +121,11 @@ function _refreshResetTimers() {
       const bucket = providerData[b.key];
       if (!bucket || !bucket.resets_at) continue;
       const el = document.getElementById(b.el);
-      if (el) el.textContent = formatResetTime(key, providerData, bucket);
+      if (el) {
+        el.textContent = b.key === 'five_hour'
+          ? _formatFiveHourReset(key, providerData, bucket)
+          : formatResetTime(key, providerData, bucket);
+      }
     }
   }
 }

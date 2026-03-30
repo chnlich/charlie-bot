@@ -1012,3 +1012,44 @@
   status: pending
   created: '2026-03-30T12:00:00Z'
   priority: medium
+- id: '068'
+  title: Centralize hardcoded timeout values into named constants module
+  description: 'PURPOSE — 17+ timeout literals (10, 30, 60 seconds) are scattered across
+    9 files (spawner.py, latex.py, autonamer.py, notifications.py, ext_usage.py, git.py,
+    pages.py, delegate.py, improve.py) with no documentation of why each value was
+    chosen. Adjusting a timeout policy (e.g. increasing subprocess timeouts during
+    debugging) requires hunting through multiple files. HOW — Create src/core/timeouts.py
+    with named constants grouped by domain: SUBPROCESS_GIT_TIMEOUT (10s), HTTP_CLIENT_TIMEOUT
+    (30s), LATEX_COMPILE_TIMEOUT (60s), NOTIFICATION_TIMEOUT (10s), AUTONAMER_TIMEOUT
+    (30s), etc. Replace all bare numeric timeout= arguments with the corresponding
+    constant. Each constant gets a one-line comment explaining the rationale. Leave
+    backend-internal timeouts (_POST_RESULT_TIMEOUT, _CLEANUP_TIMEOUT in base.py) as-is
+    since they are already named constants. Pure mechanical replacement, no behavior
+    change.'
+  status: pending
+  created: '2026-03-30T12:00:00Z'
+  priority: low
+- id: '069'
+  title: Extract timing instrumentation from run_message into _RunTimingTracker helper
+    class
+  description: 'PURPOSE — Reduce the longest function in the codebase (run_message,
+    207 lines) by ~45 lines by extracting the timing/instrumentation concern that is
+    interleaved throughout the function into a self-contained helper class. Currently
+    58 lines of monotonic timing code are spread across 5 locations in run_message:
+    4 timing variable declarations (L253-260), a 4-line _on_spawn callback (L263-266),
+    17 lines of first-event timing with slow-start warning (L284-300), 16 lines of
+    first-assistant-text timing with content-block iteration (L302-317), and 17 lines
+    of finish-extras construction with slow-total warning (L332-348). This timing logic
+    is completely orthogonal to the core event-processing flow but obscures it. HOW
+    — Create a _RunTimingTracker class in master_cc.py with __init__(session_id, backend_type,
+    model), on_spawn(pid), on_event(event), and build_finish_extras() methods. The
+    event loop body drops from 37 lines to 2 lines: tracker.on_event(event) then _handle_event().
+    The _on_spawn callback becomes tracker.on_spawn. The finally block replaces 17
+    lines of timing dict construction with finish_extras = tracker.build_finish_extras().
+    ~30 lines for the class, net reduction of ~25 lines in run_message, bringing it
+    to ~180 lines. Pure refactoring, no behavior change. Follows the pattern from
+    items 003, 061, and 062 which split other long functions by extracting orthogonal
+    concerns.'
+  status: pending
+  created: '2026-03-30T12:00:00Z'
+  priority: medium

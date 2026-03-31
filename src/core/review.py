@@ -12,6 +12,7 @@ from src.core.models import BackendOption, ThreadMetadata
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
+from src.core.git import git_current_branch
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
@@ -235,7 +236,6 @@ async def spawn_review_worker(
   Returns True if a reviewer was spawned, False if all backends are exhausted.
   """
   from src.core.spawner import (
-      _git_current_branch,
       _require_thread_backend_model,
       _short_desc,
       spawn_worker,
@@ -254,7 +254,7 @@ async def spawn_review_worker(
     return False
   repo_path, branch_name, wt_path = prerequisites
 
-  base_branch = original_thread.base_branch or await _git_current_branch(repo_path)
+  base_branch = original_thread.base_branch or await git_current_branch(repo_path)
   worker_backend, worker_model = _require_thread_backend_model(original_thread)
 
   backend_result = select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)

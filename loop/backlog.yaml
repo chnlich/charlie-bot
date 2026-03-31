@@ -1153,3 +1153,28 @@
   status: pending
   created: '2026-03-31T12:00:00Z'
   priority: low
+- id: '075'
+  title: Extract shared _enrich_and_sort helper to deduplicate list_sessions and search_sessions
+    tail
+  description: 'PURPOSE — Eliminate 18 duplicated lines of running-status enrichment,
+    timezone normalization, and sorting repeated verbatim between list_sessions (L129-137)
+    and search_sessions (L168-175) in core/sessions.py. The same bool(meta.thinking_since)
+    or running expression also appears in api/sessions.py:159 (all_sessions_status)
+    and :187 (get_session_view) — 4 call sites total for what is conceptually a single
+    "enrich session metadata for display" operation. A bug fix to the running-status
+    logic (e.g. adding a new signal beyond thinking_since) would need to be applied
+    in all 4 places independently. HOW — Add a private method _enrich_and_sort(self,
+    sessions: list[SessionMetadata], include_running_status: bool) -> list[SessionMetadata]
+    to SessionManager that encapsulates: (1) optionally batch-check _has_running_tasks
+    via asyncio.gather and set has_running_tasks = bool(meta.thinking_since) or running,
+    (2) normalize timezone-naive updated_at to UTC, (3) sort by updated_at descending.
+    Replace the 9-line tail in list_sessions and search_sessions with a single call
+    to await self._enrich_and_sort(sessions, include_running_status). For api/sessions.py
+    call sites, expose a public enrich_running_status(meta) single-session variant
+    or let callers use the batch method. ~12 lines for the helper, each call site drops
+    from 9 lines to 1. Pure refactoring, no behavior change. Follows the pattern from
+    items 002 (_update_field) and 065 (_summarize_event_lines) which extracted shared
+    helpers for repeated inline logic in the same file.'
+  status: pending
+  created: '2026-03-31T14:00:00Z'
+  priority: medium

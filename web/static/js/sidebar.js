@@ -314,6 +314,16 @@ function renderSingleMessage(msg, sessionId) {
       + 'Plan</div>'
       + '<div class="prose-msg" data-md>' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
   }
+  if (msg.role === 'clone_start') {
+    return '<div class="flex items-center gap-3 py-3 px-4">'
+      + '<div class="flex-1 border-t border-purple-500/40"></div>'
+      + '<div class="flex items-center gap-2 text-purple-400 text-xs">'
+      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>'
+      + '<span>Cloned from <a href="/?session=' + encodeURIComponent(msg.parent_session_id || '')
+      + '" class="text-purple-300 hover:text-purple-200 underline">'
+      + escapeHtml(msg.content || '') + '</a></span></div>'
+      + '<div class="flex-1 border-t border-purple-500/40"></div></div>';
+  }
   if (msg.role === 'separator') {
     const timeStr = msg.thinking_seconds != null ? ' &middot; ' + msg.thinking_seconds + 's' : '';
     return '<div class="flex items-center gap-3 py-2 px-4 separator-line group/sep">'

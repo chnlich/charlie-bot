@@ -147,3 +147,23 @@ test('ensureActiveSessionViewPolling only schedules while the active session is 
   context.stopActiveSessionViewPolling();
   assert.deepEqual(clears, [1]);
 });
+
+test('renderSingleMessage preserves clone_start banners for SPA rebuilds', () => {
+  const {context} = buildContext();
+  context.escapeHtml = (value) => String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+  const html = context.renderSingleMessage({
+    role: 'clone_start',
+    content: 'Parent & Session',
+    parent_session_id: 'parent/session?tab=chat',
+  }, 'session-a');
+
+  assert.match(html, /Cloned from/);
+  assert.match(html, /href="\/\?session=parent%2Fsession%3Ftab%3Dchat"/);
+  assert.match(html, /Parent &amp; Session/);
+});

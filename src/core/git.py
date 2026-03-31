@@ -6,6 +6,8 @@ from pathlib import Path
 
 import structlog
 
+from src.core.timeouts import SUBPROCESS_GIT_WRITE_TIMEOUT
+
 log = structlog.get_logger()
 
 
@@ -13,7 +15,7 @@ async def git_add_commit_push(
     repo_path: Path,
     files: list[str],
     message: str,
-    timeout: int = 60,
+    timeout: int = SUBPROCESS_GIT_WRITE_TIMEOUT,
 ) -> None:
   """Git add, commit, and push with subprocess timeouts.
 

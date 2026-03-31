@@ -18,6 +18,7 @@ from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
 from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
+from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC, SUBPROCESS_GIT_WRITE_TIMEOUT
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
@@ -104,10 +105,10 @@ async def _git_current_branch(repo_path: Path) -> str:
       stderr=asyncio.subprocess.PIPE,
   )
   try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except asyncio.TimeoutError:
     proc.kill()
-    raise RuntimeError(f'git rev-parse timed out after 30s in {repo_path}')
+    raise RuntimeError(f'git rev-parse timed out after {SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}')
   if proc.returncode != 0:
     err_msg = stderr.decode().strip()
     if 'unknown revision' in err_msg:
@@ -132,10 +133,10 @@ async def _git_create_worktree(repo_path: Path, base_branch: str, branch_name: s
       stderr=asyncio.subprocess.PIPE,
   )
   try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
   except asyncio.TimeoutError:
     proc.kill()
-    raise RuntimeError(f'git worktree add timed out after 60s for {branch_name}')
+    raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}')
   if proc.returncode != 0:
     out = stdout.decode().strip()
     err = stderr.decode().strip()
@@ -429,7 +430,7 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) 
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-          _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+          _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
         except asyncio.TimeoutError:
           proc.kill()
           log.warning("worktree_remove_timeout", thread_id=thread.id, path=str(wt))
@@ -448,7 +449,7 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) 
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-          await asyncio.wait_for(prune_proc.communicate(), timeout=30.0)
+          await asyncio.wait_for(prune_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
         except asyncio.TimeoutError:
           prune_proc.kill()
           log.warning("worktree_prune_timeout", thread_id=thread.id)

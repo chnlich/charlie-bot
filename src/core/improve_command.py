@@ -15,10 +15,11 @@ from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import ThreadStatus
+from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
 log = structlog.get_logger()
 
-_QUOTA_POLL_INTERVAL = 10 * 60  # 10 minutes fallback when usage API unavailable
+_QUOTA_POLL_INTERVAL = IMPROVE_QUOTA_POLL_INTERVAL
 
 # ---------------------------------------------------------------------------
 # State models

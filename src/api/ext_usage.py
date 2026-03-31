@@ -12,6 +12,7 @@ import structlog
 from fastapi import APIRouter
 
 from src.core.streaming import streaming_manager
+from src.core.timeouts import EXT_USAGE_POLL_INTERVAL, HTTP_OAUTH_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -24,7 +25,7 @@ router = APIRouter()
 _cached_usage: dict[str, dict] = {}
 _poller_task: asyncio.Task | None = None
 
-POLL_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+POLL_INTERVAL_SECONDS = EXT_USAGE_POLL_INTERVAL
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://console.anthropic.com/v1/oauth/token"
@@ -53,7 +54,7 @@ class CcOpusProvider:
       if access_token is None:
         return None
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=HTTP_OAUTH_TIMEOUT) as client:
       resp = await client.get(
           USAGE_URL,
           headers={
@@ -201,7 +202,7 @@ def _transform_codex_response(
 
 async def _refresh_access_token(refresh_token: str) -> str | None:
   """Refresh the OAuth access token and save new credentials."""
-  async with httpx.AsyncClient(timeout=30) as client:
+  async with httpx.AsyncClient(timeout=HTTP_OAUTH_TIMEOUT) as client:
     resp = await client.post(
         TOKEN_REFRESH_URL,
         json={

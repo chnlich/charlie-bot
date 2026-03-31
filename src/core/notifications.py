@@ -4,6 +4,7 @@ import httpx
 import structlog
 
 from src.core.config import CharlieBotConfig
+from src.core.timeouts import NOTIFICATION_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -29,7 +30,7 @@ async def send_telegram(message: str, cfg: CharlieBotConfig) -> None:
   }
 
   async with httpx.AsyncClient() as client:
-    resp = await client.post(url, json=payload, timeout=10.0)
+    resp = await client.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
 
   if resp.status_code == 200:
     log.info("telegram_sent", chat_id=cfg.telegram_chat_id, length=len(truncated))

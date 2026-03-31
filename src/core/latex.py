@@ -7,6 +7,7 @@ from pathlib import Path
 import structlog
 
 from src.core.process import kill_process_group
+from src.core.timeouts import LATEX_COMPILE_TIMEOUT, SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
 log = structlog.get_logger()
 
@@ -100,7 +101,7 @@ async def get_git_info() -> dict | None:
         stderr=asyncio.subprocess.DEVNULL,
     )
     try:
-      root_out, _ = await asyncio.wait_for(root_proc.communicate(), timeout=30.0)
+      root_out, _ = await asyncio.wait_for(root_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
     except asyncio.TimeoutError:
       root_proc.kill()
       log.warning('get_git_info_timeout', cmd='rev-parse --show-toplevel')
@@ -120,7 +121,7 @@ async def get_git_info() -> dict | None:
         stderr=asyncio.subprocess.DEVNULL,
     )
     try:
-      branch_out, _ = await asyncio.wait_for(branch_proc.communicate(), timeout=30.0)
+      branch_out, _ = await asyncio.wait_for(branch_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
     except asyncio.TimeoutError:
       branch_proc.kill()
       log.warning('get_git_info_timeout', cmd='rev-parse --abbrev-ref HEAD')
@@ -146,7 +147,7 @@ async def compile_latex() -> dict:
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=LATEX_COMPILE_TIMEOUT)
     output = stdout.decode('utf-8', errors='replace')
     ok = proc.returncode == 0
     if not ok:
@@ -157,7 +158,7 @@ async def compile_latex() -> dict:
   except asyncio.TimeoutError:
     kill_process_group(proc.pid, signal.SIGKILL)
     log.warning('latex_compile_timeout')
-    return {'ok': False, 'log': 'Compilation timed out after 60s'}
+    return {'ok': False, 'log': f'Compilation timed out after {LATEX_COMPILE_TIMEOUT}s'}
   except Exception as e:
     log.warning('latex_compile_error', error=str(e))
     return {'ok': False, 'log': str(e)}

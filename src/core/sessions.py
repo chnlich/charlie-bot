@@ -202,6 +202,7 @@ class SessionManager:
         parent_session_id=parent_id,
         rewind_summary=summary,
         backend=parent.backend,
+        group=parent.group,
     )
     session_dir = self._session_dir(meta.id)
     for subdir in ['data', 'threads']:
@@ -236,6 +237,7 @@ class SessionManager:
         name=f'Elon-e: {parent.name}',
         parent_session_id=parent_id,
         backend=parent.backend,
+        group=parent.group,
     )
     session_dir = self._session_dir(meta.id)
     for subdir in ['data', 'threads']:

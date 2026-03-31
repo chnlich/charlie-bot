@@ -26,6 +26,21 @@ function _formatLocalHMS(isoString) {
   return hh + ':' + mm + ':' + ss;
 }
 
+function _providerRateLimitState(providerKey, providerData) {
+  if (providerKey !== 'codex') return '';
+  return providerData.rate_limits_state || '';
+}
+
+function _providerStateLabel(state) {
+  if (state === 'business-unlimited') return 'business / unlimited';
+  return '';
+}
+
+function _bucketStateResetLabel(bucketKey, state) {
+  if (state !== 'business-unlimited') return '';
+  return bucketKey === 'five_hour' ? 'no 5h cap' : 'no 7d cap';
+}
+
 function _formatFiveHourReset(providerKey, providerData, bucket) {
   const stale = _shouldWaitForFreshCodexCapData(providerKey, providerData, bucket);
   const resetHMS = _formatLocalHMS(bucket.resets_at);
@@ -68,6 +83,14 @@ function _providerPrefix(providerKey) {
 }
 
 function _renderProvider(providerKey, prefix, data) {
+  const rateLimitState = _providerRateLimitState(providerKey, data);
+  const stateEl = document.getElementById('ext-usage-' + prefix + '-state');
+  if (stateEl) {
+    const stateLabel = _providerStateLabel(rateLimitState);
+    stateEl.textContent = stateLabel;
+    stateEl.classList.toggle('hidden', !stateLabel);
+  }
+
   const buckets = [
     {key: 'five_hour', bar: 'ext-usage-' + prefix + '-5h-bar', pct: 'ext-usage-' + prefix + '-5h-pct', reset: 'ext-usage-' + prefix + '-5h-reset'},
     {key: 'seven_day', bar: 'ext-usage-' + prefix + '-7d-bar', pct: 'ext-usage-' + prefix + '-7d-pct', reset: 'ext-usage-' + prefix + '-7d-reset'},
@@ -76,21 +99,32 @@ function _renderProvider(providerKey, prefix, data) {
   for (const b of buckets) {
     const bucket = data[b.key];
     if (!bucket) continue;
-    let pct = typeof bucket.utilization === 'number' ? bucket.utilization : 0;
-    const stale = _shouldWaitForFreshCodexCapData(providerKey, data, bucket);
-    if (stale) pct = 0;
     const barEl = document.getElementById(b.bar);
     const pctEl = document.getElementById(b.pct);
     const resetEl = document.getElementById(b.reset);
+    if (rateLimitState) {
+      if (barEl) {
+        barEl.style.width = '0.0%';
+        barEl.className = 'h-full rounded-full transition-all duration-300 bg-slate-600';
+      }
+      if (pctEl) pctEl.textContent = 'plan';
+      if (resetEl) resetEl.textContent = _bucketStateResetLabel(b.key, rateLimitState);
+      continue;
+    }
+    let pct = typeof bucket.utilization === 'number' ? bucket.utilization : 0;
+    const stale = _shouldWaitForFreshCodexCapData(providerKey, data, bucket);
+    if (stale) pct = 0;
     if (barEl) {
       barEl.style.width = Math.min(pct, 100).toFixed(1) + '%';
       barEl.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
     }
     if (pctEl) pctEl.textContent = stale ? '\u2014' : Math.round(pct) + '%';
-    if (resetEl && bucket.resets_at) {
-      resetEl.textContent = b.key === 'five_hour'
-        ? _formatFiveHourReset(providerKey, data, bucket)
-        : formatResetTime(providerKey, data, bucket);
+    if (resetEl) {
+      resetEl.textContent = bucket.resets_at
+        ? (b.key === 'five_hour'
+          ? _formatFiveHourReset(providerKey, data, bucket)
+          : formatResetTime(providerKey, data, bucket))
+        : '\u2014';
     }
   }
 }

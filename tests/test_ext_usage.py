@@ -56,6 +56,7 @@ def test_extract_latest_codex_usage_adds_token_count_observed_at() -> None:
     "provider": "codex",
     "token_count_observed_at": "2026-03-27T18:29:35.694Z",
   }
+  assert "rate_limits_state" not in usage
 
 
 def test_extract_latest_codex_usage_uses_latest_token_count_event() -> None:
@@ -117,6 +118,7 @@ def test_extract_latest_codex_usage_handles_null_rate_limit_buckets() -> None:
     },
     "fetched_at": fetched_at,
     "provider": "codex",
+    "rate_limits_state": "business-unlimited",
     "token_count_observed_at": "2026-03-27T18:39:35.694Z",
   }
 

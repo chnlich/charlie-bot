@@ -213,6 +213,7 @@ async function rejectTexEdit() {
 function initLatexResize() {
   const handle = document.getElementById('latex-resize-handle');
   const panel = document.getElementById('latex-panel');
+  if (!handle || !panel) return;
   const container = panel.parentElement;
   const saved = localStorage.getItem('latex-panel-pct');
   if (saved) panel.style.width = saved + '%';

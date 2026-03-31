@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 from datetime import datetime, timezone
 
 import yaml
@@ -10,6 +11,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import get_config
+from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
@@ -119,10 +121,7 @@ def _recover_orphaned_threads(cfg) -> None:
       # Kill orphaned worker process if still alive
       pid = meta.get("pid")
       if pid:
-        try:
-          os.kill(pid, 15)  # SIGTERM
-        except (OSError, ProcessLookupError) as e:
-          log.debug("sigterm_failed", pid=pid, error=str(e))
+        kill_process_group(pid, signal.SIGTERM)
       # Mark as failed
       meta["status"] = "failed"
       meta["exit_code"] = -1

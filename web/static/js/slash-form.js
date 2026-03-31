@@ -41,7 +41,7 @@ async function populateSlashSidebarSelect() {
   const select = document.getElementById('slash-sidebar-select');
   if (!select) return;
   select.innerHTML = '<option value="">Select a command...</option>';
-  for (const cmd of slashSidebarCommands) {
+  for (const cmd of slashSidebarCommands.filter(c => !c.frontendOnly)) {
     const opt = document.createElement('option');
     opt.value = cmd.name;
     opt.textContent = '/' + cmd.name + (cmd.description ? ' — ' + cmd.description : '');

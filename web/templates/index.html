@@ -356,6 +356,7 @@
         <div class="border-t border-slate-700 p-4">
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
+          <div id="context-chip" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
           <div class="flex gap-2 items-end input-row">
             <span
@@ -530,12 +531,16 @@
   <!-- ==================== SLASH COMMAND SIDEBAR ==================== -->
   <div id="slash-sidebar" class="slash-sidebar">
     <div class="slash-sidebar-header">
-      <span class="text-sm font-semibold text-slate-200">Slash Commands</span>
+      <div class="flex gap-1">
+        <button id="sidebar-tab-commands" class="sidebar-tab active" onclick="switchSidebarTab('commands')">Commands</button>
+        <button id="sidebar-tab-context" class="sidebar-tab" onclick="switchSidebarTab('context')">Context</button>
+      </div>
       <button onclick="toggleSlashSidebar()" class="text-slate-500 hover:text-slate-300 p-1" title="Close (Esc)">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
-    <div class="slash-sidebar-body">
+    <!-- Commands tab (existing content, unchanged) -->
+    <div id="sidebar-panel-commands" class="slash-sidebar-body">
       <div class="mb-3">
         <label class="block text-xs text-slate-400 mb-1">Command</label>
         <select id="slash-sidebar-select" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" onchange="onSlashSidebarCommandChange()">
@@ -544,7 +549,24 @@
       </div>
       <div id="slash-sidebar-params" class="space-y-3"></div>
     </div>
-    <div class="slash-sidebar-footer">
+    <!-- Context tab -->
+    <div id="sidebar-panel-context" class="slash-sidebar-body hidden">
+      <div class="mb-4">
+        <label class="block text-xs text-slate-400 mb-1">Repo</label>
+        <select id="ctx-repo-select" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" onchange="onCtxRepoChange()">
+          <option value="">None</option>
+        </select>
+      </div>
+      <div class="mb-4">
+        <label class="block text-xs text-slate-400 mb-1">Branch</label>
+        <select id="ctx-branch-select" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" onchange="onCtxBranchChange()">
+          <option value="">Default</option>
+        </select>
+      </div>
+      <p class="text-xs text-slate-500">Select a repo and branch. Your messages will automatically include this context.</p>
+    </div>
+    <!-- Footer: only visible on Commands tab -->
+    <div id="slash-sidebar-footer" class="slash-sidebar-footer">
       <div id="slash-sidebar-preview" class="text-xs font-mono text-slate-500 mb-2 min-h-[1.25rem] truncate"></div>
       <button onclick="submitSlashSidebarForm()" id="slash-sidebar-run" class="w-full px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled>Run Command</button>
     </div>
@@ -561,6 +583,7 @@
   <script src="/static/js/tabs.js"></script>
   <script src="/static/js/slash-commands.js"></script>
   <script src="/static/js/slash-form.js"></script>
+  <script src="/static/js/context-panel.js"></script>
   <script src="/static/js/file-upload.js"></script>
   <script src="/static/js/chat.js"></script>
   <script src="/static/js/websocket.js"></script>

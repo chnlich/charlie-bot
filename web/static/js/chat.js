@@ -38,6 +38,7 @@ async function sendMessage() {
   const input = document.getElementById('msg-input');
   const content = input.value.trim();
   if ((!content && !uploadedFiles.length) || !SESSION_ID) return;
+  const contentWithCtx = applyWorkingContext(content);
 
   // Snapshot and clear uploaded files before sending
   const filePaths = uploadedFiles.map(f => f.path);
@@ -60,7 +61,7 @@ async function sendMessage() {
     await fetch(`/api/chat/${SESSION_ID}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, uploaded_files: filePaths }),
+      body: JSON.stringify({ content: contentWithCtx, uploaded_files: filePaths }),
     });
   } catch (err) {
     console.error('Send failed:', err);

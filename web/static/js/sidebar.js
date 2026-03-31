@@ -85,6 +85,7 @@ async function switchSession(sessionId) {
   sessionUnread[sessionId] = false;
   const unreadDot = document.getElementById('unread-' + sessionId);
   if (unreadDot) unreadDot.classList.add('hidden');
+  markSessionRead(sessionId);
 
   // Reconnect WebSocket
   reconnectDelay = 1000;

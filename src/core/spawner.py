@@ -754,6 +754,7 @@ async def _run_message_with_resume_recovery(
         session_mgr.persist_and_broadcast,
         session_mgr.save_metadata,
         mark_unread=session_mgr.mark_unread,
+        clear_thinking_since=session_mgr.clear_thinking_since,
         skip_user_event=True,
         auto_trigger=True,
     )
@@ -783,6 +784,7 @@ async def _run_message_with_resume_recovery(
         session_mgr.persist_and_broadcast,
         session_mgr.save_metadata,
         mark_unread=session_mgr.mark_unread,
+        clear_thinking_since=session_mgr.clear_thinking_since,
         skip_user_event=True,
         auto_trigger=True,
     )

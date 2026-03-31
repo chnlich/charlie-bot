@@ -25,6 +25,7 @@ from src.core.streaming import streaming_manager
 log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 5.0  # seconds
+_CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 
 def _summarize_event_lines(lines: list[str]) -> str:
@@ -49,6 +50,70 @@ def _summarize_event_lines(lines: list[str]) -> str:
   return summary
 
 
+def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, int] | None:
+  """Return context usage from a native Codex token_count event."""
+  if event.get("type") != "event_msg":
+    return None
+  payload = event.get("payload") or {}
+  if payload.get("type") != "token_count":
+    return None
+  info = payload.get("info") or {}
+  total_usage = info.get("total_token_usage") or {}
+  input_tokens = total_usage.get("input_tokens")
+  cached_input_tokens = total_usage.get("cached_input_tokens")
+  context_limit = info.get("model_context_window")
+  if input_tokens is None or cached_input_tokens is None or context_limit is None:
+    return None
+  return {
+      "context_tokens": input_tokens + cached_input_tokens,
+      "context_limit": context_limit,
+  }
+
+
+def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, int] | None:
+  """Scan a native Codex rollout log backwards for the latest usable token_count event."""
+  if not path.exists():
+    return None
+
+  chunk_size = 8192
+  with open(path, "rb") as f:
+    f.seek(0, 2)
+    pos = f.tell()
+    carry = b""
+
+    while pos > 0:
+      read_size = min(chunk_size, pos)
+      pos -= read_size
+      f.seek(pos)
+      chunk = f.read(read_size)
+      parts = (chunk + carry).split(b"\n")
+      carry = parts[0] if pos > 0 else b""
+      lines = parts[1:] if pos > 0 else parts
+
+      for raw_line in reversed(lines):
+        line = raw_line.strip()
+        if not line:
+          continue
+        try:
+          event = json.loads(line)
+        except json.JSONDecodeError as e:
+          log.debug("codex_rollout_parse_skip", path=str(path), error=str(e))
+          continue
+        usage = _extract_codex_rollout_usage_event(event)
+        if usage is not None:
+          return usage
+
+    if carry.strip():
+      try:
+        event = json.loads(carry)
+      except json.JSONDecodeError as e:
+        log.debug("codex_rollout_parse_skip", path=str(path), error=str(e))
+      else:
+        return _extract_codex_rollout_usage_event(event)
+
+  return None
+
+
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
@@ -63,6 +128,9 @@ class SessionManager:
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp).
     # TTL-based to avoid repeated disk reads within the same poll cycle.
     self._metadata_cache: dict[str, tuple[SessionMetadata, float]] = {}
+    # Native Codex rollout helpers keyed by native thread id.
+    self._codex_rollout_path_cache: dict[str, Path] = {}
+    self._codex_rollout_usage_cache: dict[str, tuple[int, int, dict | None]] = {}
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -482,6 +550,51 @@ class SessionManager:
   def _chat_events_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"
 
+  async def resolve_session_usage(
+      self,
+      session_id: str,
+      session_meta: SessionMetadata,
+      events: list[dict] | None = None,
+  ) -> dict | None:
+    """Resolve display usage for a session view.
+
+    Non-Codex backends keep the existing CharlieBot result-derived behavior.
+    Codex backends override context usage from the native rollout log when the
+    native thread id can be resolved.
+    """
+    usage = self.get_usage_cached(session_id)
+    if usage is None and events is not None:
+      usage = self.usage_from_events(events)
+      if usage is not None:
+        self._usage_cache[session_id] = usage
+    if usage is None and events is None:
+      await asyncio.to_thread(self.load_chat_events_sync, session_id)
+      usage = self.get_usage_cached(session_id)
+
+    if not self._is_codex_backend(session_meta.backend):
+      return usage
+
+    native_thread_id = await asyncio.to_thread(
+        self._resolve_codex_thread_id,
+        session_id,
+        session_meta.cc_session_id,
+        events,
+    )
+    if not native_thread_id:
+      return usage
+
+    native_usage = await asyncio.to_thread(self._load_codex_rollout_usage, native_thread_id)
+    if native_usage is None:
+      return usage
+
+    merged_usage = dict(usage or {})
+    merged_usage["context_tokens"] = native_usage["context_tokens"]
+    merged_usage["context_limit"] = native_usage["context_limit"]
+    merged_usage.setdefault("total_cost_usd", 0.0)
+    merged_usage.setdefault("model", "")
+    self._usage_cache[session_id] = merged_usage
+    return merged_usage
+
   # ---------------------------------------------------------------------------
   # Usage / token tracking
   # ---------------------------------------------------------------------------
@@ -563,6 +676,95 @@ class SessionManager:
         cached["context_limit"] = info.get("contextWindow", 200_000)
         break
     self._usage_cache[session_id] = cached
+
+  def _is_codex_backend(self, backend_id: str) -> bool:
+    option_getter = getattr(self._cfg, "get_backend_option", None)
+    if callable(option_getter):
+      option = option_getter(backend_id)
+      if option is not None:
+        return option.type == "codex"
+    return backend_id.startswith("codex")
+
+  @staticmethod
+  def _extract_translated_session_id(events: list[dict]) -> str | None:
+    for event in events:
+      session_id = event.get("session_id")
+      if isinstance(session_id, str) and session_id:
+        return session_id
+    return None
+
+  def _read_translated_session_id(self, session_id: str) -> str | None:
+    cached_events = self._events_cache.get(session_id)
+    if cached_events is not None:
+      cached_session_id = self._extract_translated_session_id(cached_events)
+      if cached_session_id:
+        return cached_session_id
+
+    path = self._chat_events_path(session_id)
+    if not path.exists():
+      return None
+
+    with open(path, "r", encoding="utf-8") as f:
+      for raw_line in f:
+        line = raw_line.strip()
+        if not line:
+          continue
+        try:
+          event = json.loads(line)
+        except json.JSONDecodeError as e:
+          log.debug("translated_session_id_parse_skip", path=str(path), error=str(e))
+          continue
+        session_id_value = event.get("session_id")
+        if isinstance(session_id_value, str) and session_id_value:
+          return session_id_value
+    return None
+
+  def _resolve_codex_thread_id(
+      self,
+      session_id: str,
+      persisted_session_id: str | None,
+      events: list[dict] | None = None,
+  ) -> str | None:
+    if persisted_session_id:
+      return persisted_session_id
+    if events is not None:
+      live_session_id = self._extract_translated_session_id(events)
+      if live_session_id:
+        return live_session_id
+    return self._read_translated_session_id(session_id)
+
+  def _find_codex_rollout_path(self, native_thread_id: str) -> Path | None:
+    cached_path = self._codex_rollout_path_cache.get(native_thread_id)
+    if cached_path is not None and cached_path.exists():
+      return cached_path
+
+    if not _CODEX_SESSIONS_DIR.exists():
+      return None
+
+    matches = list(_CODEX_SESSIONS_DIR.rglob(f"rollout-*{native_thread_id}.jsonl"))
+    if not matches:
+      return None
+
+    matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    rollout_path = matches[0]
+    self._codex_rollout_path_cache[native_thread_id] = rollout_path
+    return rollout_path
+
+  def _load_codex_rollout_usage(self, native_thread_id: str) -> dict | None:
+    rollout_path = self._find_codex_rollout_path(native_thread_id)
+    if rollout_path is None:
+      return None
+
+    stat = rollout_path.stat()
+    cached_usage = self._codex_rollout_usage_cache.get(native_thread_id)
+    if cached_usage is not None:
+      cached_mtime_ns, cached_size, usage = cached_usage
+      if cached_mtime_ns == stat.st_mtime_ns and cached_size == stat.st_size:
+        return usage
+
+    usage = _extract_latest_codex_rollout_usage(rollout_path)
+    self._codex_rollout_usage_cache[native_thread_id] = (stat.st_mtime_ns, stat.st_size, usage)
+    return usage
 
   # ---------------------------------------------------------------------------
   # Private helpers

@@ -41,9 +41,12 @@ async def build_session_view_data(
   """Load events + threads in parallel, derive messages and usage, and mark read."""
   events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
   threads_task = thread_mgr.list_threads(session_id)
-  raw_events, threads = await asyncio.gather(events_task, threads_task)
+  session_task = session_mgr.get_session(session_id)
+  raw_events, threads, session_meta = await asyncio.gather(events_task, threads_task, session_task)
+  if session_meta is None:
+    raise ValueError(f"session '{session_id}' metadata missing during view build")
   messages = events_to_messages(raw_events)
-  usage = session_mgr.get_usage_cached(session_id) or session_mgr.usage_from_events(raw_events)
+  usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
   try:
     await session_mgr.mark_read(session_id)
   except Exception:
@@ -67,16 +70,19 @@ async def build_session_view_data_fast(
     thread_mgr: 'ThreadManager',
     limit: int = 200,
 ) -> FastSessionViewData:
-  """Fast path: load only the tail events + cached usage. No full event scan."""
+  """Fast path: load only the tail events and resolve usage separately."""
   tail_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, limit)
   threads_task = thread_mgr.list_threads(session_id)
-  (tail_events, total_count, has_more), threads = await asyncio.gather(tail_task, threads_task)
+  session_task = session_mgr.get_session(session_id)
+  (tail_events, total_count, has_more), threads, session_meta = await asyncio.gather(tail_task, threads_task, session_task)
+  if session_meta is None:
+    raise ValueError(f"session '{session_id}' metadata missing during fast view build")
 
   # Offset so event_index values match real file line positions
   offset = total_count - len(tail_events)
   messages = events_to_messages(tail_events, event_index_offset=offset)
 
-  usage = session_mgr.get_usage_cached(session_id)
+  usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
 
   try:
     await session_mgr.mark_read(session_id)

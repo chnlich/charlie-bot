@@ -121,6 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     thinkingStart = new Date(THINKING_SINCE).getTime();
     startThinking({keepSendEnabled: true});
   }
+  ensureActiveSessionViewPolling();
 
   // SPA back/forward navigation
   window.addEventListener('popstate', () => {

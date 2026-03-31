@@ -1051,7 +1051,7 @@
     to ~180 lines. Pure refactoring, no behavior change. Follows the pattern from
     items 003, 061, and 062 which split other long functions by extracting orthogonal
     concerns.'
-  status: pending
+  status: approved
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: '070'

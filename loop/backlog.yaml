@@ -1131,3 +1131,25 @@
   status: done
   created: '2026-03-30T22:00:00Z'
   priority: medium
+- id: '074'
+  title: Simplify _wait_for_quota_recovery by merging duplicate fallback branches and
+    fixing stale event-type literals
+  description: 'PURPOSE — Reduce the 69-line _wait_for_quota_recovery function in
+    improve_command.py by ~15 lines by eliminating two identical fallback branches,
+    and fix 4 remaining raw event-type string literals left over from backlog item
+    064 (centralize event type strings). HOW — (1) In improve_command.py _wait_for_quota_recovery
+    (L211-231), the "high utilization but no resets_at" branch and the "usage API
+    unavailable" branch are identical: same message, same persist_and_broadcast call,
+    same asyncio.sleep. Merge them by removing the else clause and falling through
+    from the if-usage-is-not-None block when quota is still high, so both cases share
+    one broadcast+sleep block at the end of the while loop body. (2) Fix 4 raw event-type
+    strings that should use ET constants: api/chat.py:144 uses "assistant_error" instead
+    of ET.ASSISTANT_ERROR, core/sessions.py:500 uses "result" instead of ET.RESULT,
+    core/spawner.py:433 uses "user" instead of ET.USER, agents/backends/codex.py:279
+    uses "error" instead of ET.ERROR. Each is a one-line fix, adding an import of
+    event_types as ET where not already present. Also remove the unused AUTONAMER_TIMEOUT
+    import from core/autonamer.py:17 (the hardcoded timeout=30.0 on line 118 should
+    use the constant instead). Total: ~20 lines changed across 5 files.'
+  status: pending
+  created: '2026-03-31T12:00:00Z'
+  priority: low

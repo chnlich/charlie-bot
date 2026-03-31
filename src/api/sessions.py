@@ -255,7 +255,8 @@ async def elone_session(
   # Build bootstrap prompt
   parent_events_path = session_mgr.get_chat_events_path(session_id)
   bootstrap_prompt = (
-      "You're taking over a task from a previous session where user wasn't satisfied.\n\n"
+      "You're taking over a task from a previous session where user wasn't satisfied.\n"
+      "Usually the dissatisfaction is with the last assistant response before the takeover point.\n\n"
       f"Parent session: {session_id}\n"
       f"Events file: {parent_events_path} (read up to line {event_index})\n\n"
       "Your mission:\n"

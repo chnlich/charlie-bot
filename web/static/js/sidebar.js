@@ -169,7 +169,7 @@ function renderSessionView(data) {
   container.innerHTML = loadMoreHtml + parts.join('') + streamHtml;
 
   // Parse markdown
-  container.querySelectorAll('[data-md]').forEach(el => { el.dataset.raw = el.textContent; el.innerHTML = marked.parse(el.textContent); });
+  container.querySelectorAll('[data-md]').forEach(el => { el.dataset.raw = el.textContent; el.innerHTML = marked.parse(fixNestedFences(el.textContent)); });
   // Render bubble timestamps
   container.querySelectorAll('.bubble-time[data-ts]').forEach(el => { el.textContent = formatBubbleTime(el.dataset.ts); });
   // Format system pill title attributes
@@ -262,7 +262,7 @@ async function loadOlderIfNeeded(container) {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = data.messages.map(msg => renderSingleMessage(msg, SESSION_ID)).join('');
     // Parse markdown + timestamps in the temp container
-    tempDiv.querySelectorAll('[data-md]').forEach(el => { el.dataset.raw = el.textContent; el.innerHTML = marked.parse(el.textContent); });
+    tempDiv.querySelectorAll('[data-md]').forEach(el => { el.dataset.raw = el.textContent; el.innerHTML = marked.parse(fixNestedFences(el.textContent)); });
     tempDiv.querySelectorAll('.bubble-time[data-ts]').forEach(el => { el.textContent = formatBubbleTime(el.dataset.ts); });
     tempDiv.querySelectorAll('.rounded-full[title]').forEach(el => {
       const t = el.getAttribute('title');

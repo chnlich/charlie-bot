@@ -1,4 +1,69 @@
 // ---------------------------------------------------------------------------
+// Fix nested code fences so marked.js doesn't close the outer fence early.
+// When an outer ``` fence contains inner ``` fences, upgrade the outer
+// delimiter to use more backticks/tildes than any nested fence.
+// ---------------------------------------------------------------------------
+function fixNestedFences(md) {
+  var lines = md.split('\n');
+  var stack = [];
+  var upgrades = {};  // lineIndex -> newLen
+  var fenceRe = /^(`{3,}|~{3,})(.*)/;
+
+  for (var i = 0; i < lines.length; i++) {
+    var m = lines[i].match(fenceRe);
+    if (!m) continue;
+
+    var delim = m[1];
+    var char = delim[0];
+    var len = delim.length;
+    var info = m[2].trim();
+
+    // Check if this closes the top-of-stack fence:
+    // same char, len >= top.len, and no info string (bare fence).
+    var top = stack.length > 0 ? stack[stack.length - 1] : null;
+    if (top && char === top.char && len >= top.len && info === '') {
+      // Closing fence
+      if (top.maxInner > 0 && top.len <= top.maxInner) {
+        var newLen = top.maxInner + 1;
+        upgrades[top.line] = newLen;
+        upgrades[i] = newLen;
+      }
+      var effectiveLen = (upgrades[top.line] != null) ? upgrades[top.line] : top.len;
+      stack.pop();
+      // Update parent's maxInner with effective len of the popped fence
+      if (stack.length > 0) {
+        var parent = stack[stack.length - 1];
+        if (effectiveLen > parent.maxInner) parent.maxInner = effectiveLen;
+      }
+    } else {
+      // Opening fence
+      if (stack.length > 0) {
+        var parent = stack[stack.length - 1];
+        if (len > parent.maxInner) parent.maxInner = len;
+      }
+      stack.push({line: i, char: char, len: len, maxInner: 0});
+    }
+  }
+
+  // Apply upgrades in reverse line order
+  var upgradeLines = Object.keys(upgrades).map(Number).sort(function(a, b) { return b - a; });
+  for (var j = 0; j < upgradeLines.length; j++) {
+    var lineIdx = upgradeLines[j];
+    var newLen = upgrades[lineIdx];
+    var line = lines[lineIdx];
+    var oldMatch = line.match(fenceRe);
+    if (!oldMatch) continue;
+    var oldLen = oldMatch[1].length;
+    var charType = oldMatch[1][0];
+    var newDelim = '';
+    for (var k = 0; k < newLen; k++) newDelim += charType;
+    lines[lineIdx] = newDelim + line.slice(oldLen);
+  }
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Marked.js renderer: highlight.js syntax highlighting + code block headers
 // ---------------------------------------------------------------------------
 (function() {
@@ -64,7 +129,7 @@ function renderMarkdown(btn) {
     // Fallback: use code block content (may be truncated)
     raw = btn.closest('.code-block').querySelector('pre').textContent;
   }
-  const rendered = marked.parse(raw);
+  const rendered = marked.parse(fixNestedFences(raw));
   const titleEl = document.getElementById('text-modal-title');
   const contentEl = document.getElementById('text-modal-content');
   const overlay = document.getElementById('text-modal-overlay');

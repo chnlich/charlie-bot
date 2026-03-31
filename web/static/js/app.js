@@ -25,7 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Render markdown for server-rendered assistant messages
   document.querySelectorAll('[data-md]').forEach(el => {
     el.dataset.raw = el.textContent;
-    el.innerHTML = marked.parse(el.textContent);
+    el.innerHTML = marked.parse(fixNestedFences(el.textContent));
   });
   // Render bubble timestamps (server sends raw ISO, JS formats to local TZ)
   document.querySelectorAll('.bubble-time[data-ts]').forEach(el => {

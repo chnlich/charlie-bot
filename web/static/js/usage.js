@@ -54,7 +54,7 @@ function showStreaming(content) {
   const container = document.getElementById('messages');
   const wasAtBottom = shouldAutoScroll(container);
   el.classList.remove('hidden');
-  inner.innerHTML = marked.parse(content);
+  inner.innerHTML = marked.parse(fixNestedFences(content));
   if (wasAtBottom) {
     container.scrollTop = container.scrollHeight;
   } else {

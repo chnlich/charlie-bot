@@ -20,6 +20,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchInput) { searchInput.value = urlQuery; handleSidebarSearch(urlQuery); }
   } else if (['all', 'starred', 'archived', 'waiting', 'scheduled'].includes(urlFilter)) {
     switchSidebarFilter(urlFilter);
+  } else {
+    switchSidebarFilter('all');
   }
   updateRelativeTimes();
   // Render markdown for server-rendered assistant messages

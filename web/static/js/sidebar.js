@@ -187,24 +187,9 @@ function renderSessionView(data) {
   container.scrollTop = container.scrollHeight;
 
   // Render workers tab
-  renderWorkersTab(data.threads, session.id);
+  renderWorkersTab(data.threads, session.id, data.triggers || []);
 
-  // Update workers badge
-  const btn = document.getElementById('btn-workers');
-  if (btn) {
-    const badge = btn.querySelector('span');
-    if (data.threads.length > 0) {
-      if (badge) { badge.textContent = data.threads.length; }
-      else {
-        const s = document.createElement('span');
-        s.className = 'ml-1 text-xs bg-slate-600 px-1.5 py-0.5 rounded-full';
-        s.textContent = data.threads.length;
-        btn.appendChild(s);
-      }
-    } else if (badge) {
-      badge.remove();
-    }
-  }
+  updateWorkersTabBadge();
 
   // Restore whichever tab was active before the session switch
   const activeBtn = document.querySelector('#btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
@@ -368,16 +353,31 @@ function renderUsageFromData(usage) {
   if (cost) cost.textContent = '$' + (usage.total_cost_usd || 0).toFixed(2);
 }
 
-function renderWorkersTab(threads, sessionId) {
+const PT_TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
+  hour: '2-digit',
+  hour12: false,
+  minute: '2-digit',
+  timeZone: 'America/Los_Angeles',
+});
+
+function formatTriggerTimeLabel(status, fireAt) {
+  if (status === 'cancelled') return 'cancelled';
+  const prefix = status === 'fired' ? 'fired at ' : 'fires at ';
+  return prefix + PT_TIME_FORMAT.format(new Date(fireAt)) + ' PT';
+}
+
+function renderWorkersTab(threads, sessionId, triggers) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
 
-  if (!threads || !threads.length) {
+  triggers = triggers || [];
+
+  if ((!threads || !threads.length) && !triggers.length) {
     container.innerHTML = '<div id="no-workers-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">No worker threads</div>';
     return;
   }
 
-  const cards = threads.map(t => {
+  const threadCards = (threads || []).map(t => {
     const statusColors = {running: 'bg-blue-500', completed: 'bg-green-500', failed: 'bg-red-500', cancelled: 'bg-slate-500', idle: 'bg-slate-500'};
     const dotColor = statusColors[t.status] || 'bg-slate-500';
     const pulse = t.status === 'running' ? ' animate-pulse' : '';
@@ -410,7 +410,31 @@ function renderWorkersTab(threads, sessionId) {
       + '</div></div>';
   });
 
-  container.innerHTML = cards.join('');
+  const triggerCards = triggers.map(tr => {
+    const borderClass = tr.status === 'pending' ? 'border-amber-500/50 border-dashed'
+      : tr.status === 'fired' ? 'border-green-500/50' : 'border-slate-600';
+    const iconColor = tr.status === 'pending' ? 'text-amber-400'
+      : tr.status === 'fired' ? 'text-green-400' : 'text-slate-500';
+    const strikeClass = tr.status === 'cancelled' ? ' line-through text-slate-500' : '';
+    const timeLabel = formatTriggerTimeLabel(tr.status, tr.fire_at);
+    const cancelBtn = tr.status === 'pending'
+      ? '<button onclick="event.stopPropagation(); cancelTrigger(\'' + tr.id + '\', \'' + sessionId + '\')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel trigger"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
+      : '';
+    return '<div id="trigger-card-' + tr.id + '" class="bg-slate-800 rounded-xl border ' + borderClass + ' overflow-hidden">'
+      + '<div class="flex items-center gap-3 px-4 py-3">'
+      + '<svg id="trigger-dot-' + tr.id + '" class="w-4 h-4 flex-shrink-0 ' + iconColor + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+      + '<circle cx="12" cy="12" r="10" stroke-width="2"/>'
+      + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>'
+      + '</svg>'
+      + '<div class="flex-1 min-w-0">'
+      + '<p class="text-sm truncate' + strikeClass + '">' + escapeHtml(tr.message || '') + '</p>'
+      + '<p id="trigger-status-' + tr.id + '" class="text-xs text-slate-500" data-fire-at="' + escapeHtml(tr.fire_at || '') + '">' + timeLabel + '</p>'
+      + '</div>'
+      + cancelBtn
+      + '</div></div>';
+  });
+
+  container.innerHTML = threadCards.join('') + triggerCards.join('');
 }
 
 function updateSidebarHighlight(newSessionId) {
@@ -525,15 +549,24 @@ function pollWorkers() {
   if (!pollSessionId) return;
   fetch('/api/threads/' + pollSessionId + '/list')
     .then(r => r.ok ? r.json() : null)
-    .then(threads => {
-      if (!threads || pollSessionId !== SESSION_ID) return;
-      for (const t of threads) {
-        const existing = document.getElementById('thread-dot-' + t.id);
-        if (!existing) {
-          addWorkerCard(t.id, t.description, t.created_at, t.backend || '');
-          if (t.status !== 'running') updateWorkerStatus(t.id, t.status);
+    .then(items => {
+      if (!items || pollSessionId !== SESSION_ID) return;
+      for (const item of items) {
+        if (item.type === 'trigger') {
+          const existing = document.getElementById('trigger-dot-' + item.id);
+          if (!existing) {
+            addTriggerCard(item.id, item.message, item.fire_at, item.created_at, item.status);
+          } else {
+            updateTriggerStatus(item.id, item.status);
+          }
         } else {
-          updateWorkerStatus(t.id, t.status);
+          const existing = document.getElementById('thread-dot-' + item.id);
+          if (!existing) {
+            addWorkerCard(item.id, item.description, item.created_at, item.backend || '');
+            if (item.status !== 'running') updateWorkerStatus(item.id, item.status);
+          } else {
+            updateWorkerStatus(item.id, item.status);
+          }
         }
       }
     })
@@ -543,7 +576,8 @@ function pollWorkers() {
 function updateWorkersTabBadge() {
   var btn = document.getElementById('btn-workers');
   if (!btn) return;
-  var count = document.querySelectorAll('[id^="thread-dot-"]').length;
+  var count = document.querySelectorAll('[id^="thread-dot-"]').length
+    + document.querySelectorAll('[id^="trigger-dot-"]').length;
   var badge = btn.querySelector('span');
   if (count > 0) {
     if (!badge) {
@@ -622,6 +656,89 @@ function addWorkerCard(threadId, description, createdAt, backend) {
     </div>`;
   container.prepend(card);
   updateWorkersTabBadge();
+}
+
+// ---------------------------------------------------------------------------
+// Trigger card functions
+// ---------------------------------------------------------------------------
+
+function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
+  const container = document.getElementById('tab-workers');
+  if (!container) return;
+  document.getElementById('no-workers-placeholder')?.remove();
+  if (document.getElementById('trigger-dot-' + triggerId)) return;
+
+  const borderClass = status === 'pending' ? 'border-amber-500/50 border-dashed'
+    : status === 'fired' ? 'border-green-500/50' : 'border-slate-600';
+  const iconColor = status === 'pending' ? 'text-amber-400'
+    : status === 'fired' ? 'text-green-400' : 'text-slate-500';
+  const strikeClass = status === 'cancelled' ? 'line-through text-slate-500' : '';
+  const timeLabel = formatTriggerTimeLabel(status, fireAt);
+
+  const cancelBtn = status === 'pending'
+    ? '<button onclick="event.stopPropagation(); cancelTrigger(\'' + triggerId + '\', \'' + SESSION_ID + '\')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel trigger"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
+    : '';
+
+  const card = document.createElement('div');
+  card.className = 'bg-slate-800 rounded-xl border ' + borderClass + ' overflow-hidden';
+  card.id = 'trigger-card-' + triggerId;
+  card.innerHTML = '<div class="flex items-center gap-3 px-4 py-3">'
+    + '<svg id="trigger-dot-' + triggerId + '" class="w-4 h-4 flex-shrink-0 ' + iconColor + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+    + '<circle cx="12" cy="12" r="10" stroke-width="2"/>'
+    + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>'
+    + '</svg>'
+    + '<div class="flex-1 min-w-0">'
+    + '<p class="text-sm truncate ' + strikeClass + '">' + escapeHtml(message) + '</p>'
+    + '<p id="trigger-status-' + triggerId + '" class="text-xs text-slate-500" data-fire-at="' + escapeHtml(fireAt || '') + '">' + timeLabel + '</p>'
+    + '</div>'
+    + cancelBtn
+    + '</div>';
+  container.appendChild(card);
+  updateWorkersTabBadge();
+}
+
+function updateTriggerStatus(triggerId, status) {
+  const icon = document.getElementById('trigger-dot-' + triggerId);
+  const text = document.getElementById('trigger-status-' + triggerId);
+  const card = document.getElementById('trigger-card-' + triggerId);
+  if (!icon) return;
+
+  const iconColor = status === 'pending' ? 'text-amber-400'
+    : status === 'fired' ? 'text-green-400' : 'text-slate-500';
+  icon.className = 'w-4 h-4 flex-shrink-0 ' + iconColor;
+
+  if (card) {
+    card.className = 'bg-slate-800 rounded-xl border overflow-hidden '
+      + (status === 'pending' ? 'border-amber-500/50 border-dashed'
+        : status === 'fired' ? 'border-green-500/50' : 'border-slate-600');
+  }
+
+  if (text) {
+    const fireAt = text.dataset.fireAt || '';
+    if (status === 'cancelled') {
+      text.textContent = 'cancelled';
+    } else if (fireAt) {
+      text.textContent = formatTriggerTimeLabel(status, fireAt);
+    }
+  }
+
+  // Hide cancel button for non-pending
+  if (status !== 'pending' && card) {
+    const cancelBtn = card.querySelector('button[title="Cancel trigger"]');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+  }
+
+  // Add strikethrough for cancelled
+  if (status === 'cancelled' && card) {
+    const msg = card.querySelector('p.text-sm');
+    if (msg) { msg.classList.add('line-through', 'text-slate-500'); }
+  }
+}
+
+function cancelTrigger(triggerId, sessionId) {
+  fetch('/api/internal/triggers/' + sessionId + '/' + triggerId + '/cancel', {method: 'POST'})
+    .then(r => { if (r.ok) updateTriggerStatus(triggerId, 'cancelled'); })
+    .catch(err => console.error('Cancel trigger failed:', err));
 }
 
 // ---------------------------------------------------------------------------

@@ -12,11 +12,12 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api import backlog, chat, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
-from src.api.deps import get_session_manager
+from src.api.deps import get_session_manager, set_trigger_manager
 from src.core.config import get_config
 from src.core.init import init_charliebot_home
 from src.core.scheduler import Scheduler
 from src.core.streaming import streaming_manager
+from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI):
   scheduler = Scheduler(cfg)
   app.state.scheduler = scheduler
   await scheduler.start()
+
+  session_mgr = get_session_manager()
+  trigger_mgr = TriggerManager(cfg, session_mgr)
+  set_trigger_manager(trigger_mgr)
+  app.state.trigger_mgr = trigger_mgr
+  await trigger_mgr.recover_pending()
 
   await ext_usage.start_poller()
 

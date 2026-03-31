@@ -398,7 +398,7 @@
       <div id="tab-workers" class="flex-1 overflow-y-auto p-4 space-y-3 hidden">
         {% set backend_label_map = {} %}
         {% for opt in backend_options %}{% if backend_label_map.update({opt.id: opt.label}) %}{% endif %}{% endfor %}
-        {% if threads %}
+        {% if threads or triggers %}
         {% for t in threads %}
         <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
           <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750" onclick="toggleThreadDetail('{{ t.id }}', '{{ active_session.id }}')">
@@ -427,6 +427,26 @@
             <div id="thread-events-{{ t.id }}" class="p-4 max-h-96 overflow-y-auto">
               <p class="text-xs text-slate-500">Loading events...</p>
             </div>
+          </div>
+        </div>
+        {% endfor %}
+        {% for tr in triggers %}
+        {% set trigger_border = 'border-amber-500/50 border-dashed' if tr.status.value == 'pending' else ('border-green-500/50' if tr.status.value == 'fired' else 'border-slate-600') %}
+        <div class="bg-slate-800 rounded-xl border {{ trigger_border }} overflow-hidden" id="trigger-card-{{ tr.id }}">
+          <div class="flex items-center gap-3 px-4 py-3">
+            <svg id="trigger-dot-{{ tr.id }}" class="w-4 h-4 flex-shrink-0 {% if tr.status.value == 'pending' %}text-amber-400{% elif tr.status.value == 'fired' %}text-green-400{% else %}text-slate-500{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke-width="2"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>
+            </svg>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm truncate {% if tr.status.value == 'cancelled' %}line-through text-slate-500{% endif %}">{{ tr.message }}</p>
+              <p id="trigger-status-{{ tr.id }}" class="text-xs text-slate-500">{% if tr.status.value == 'pending' %}fires at {{ tr.fire_at.astimezone(pt_tz).strftime("%H:%M PT") }}{% elif tr.status.value == 'fired' %}fired{% if tr.fired_at %} at {{ tr.fired_at.astimezone(pt_tz).strftime("%H:%M PT") }}{% endif %}{% else %}cancelled{% endif %}</p>
+            </div>
+            {% if tr.status.value == 'pending' %}
+            <button onclick="event.stopPropagation(); cancelTrigger('{{ tr.id }}', '{{ active_session.id }}')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel trigger">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+            {% endif %}
           </div>
         </div>
         {% endfor %}

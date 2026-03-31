@@ -3,11 +3,11 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.deps import get_session_manager, get_thread_manager
+from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
 from src.core import event_types as ET
 from src.core.config import get_config
 from src.core.improve_command import ImproveState, run_improve_loop, save_improve_state
-from src.core.models import DelegateRequest, ImproveRequest
+from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import (
     DelegationBlockedError,
@@ -17,6 +17,7 @@ from src.core.spawner import (
 )
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 
@@ -117,3 +118,34 @@ async def start_improve_loop(
   log.info("improve_loop_started", session=req.session_id, iterations=req.iterations, goal=req.goal)
 
   return {"status": "started", "session_id": req.session_id, "iterations": req.iterations}
+
+
+@router.post("/schedule-trigger")
+async def schedule_trigger(
+    req: ScheduleTriggerRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
+):
+  """Schedule a delayed trigger that will wake the master CC after a delay."""
+  meta = await session_mgr.get_session(req.session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  trigger = await trigger_mgr.create_trigger(req.session_id, req.delay_seconds, req.message)
+  log.info("trigger_scheduled", session=req.session_id, trigger_id=trigger.id)
+
+  return {"trigger_id": trigger.id, "fire_at": trigger.fire_at.isoformat()}
+
+
+@router.post("/triggers/{session_id}/{trigger_id}/cancel")
+async def cancel_trigger(
+    session_id: str,
+    trigger_id: str,
+    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
+):
+  """Cancel a pending trigger."""
+  try:
+    await trigger_mgr.cancel_trigger(session_id, trigger_id)
+  except FileNotFoundError as exc:
+    raise HTTPException(status_code=404, detail="Trigger not found") from exc
+  return {"ok": True}

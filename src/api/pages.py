@@ -4,23 +4,26 @@ import fnmatch
 import socket
 import subprocess
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from src.api.deps import get_session_manager, get_thread_manager
+from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
 from src.api.message_utils import build_session_view_data
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
+from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
+_PT_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def _get_git_version() -> str:
@@ -145,6 +148,7 @@ async def index(
   active_session = None
   messages: list[dict] = []
   threads = []
+  triggers = []
   raw_events: list[dict] = []
   session_usage = None
   if session:
@@ -163,6 +167,11 @@ async def index(
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")
+      try:
+        trigger_mgr = get_trigger_manager()
+        triggers = await trigger_mgr.list_triggers(session)
+      except Exception:
+        log.exception("load_triggers_failed", session_id=session)
   elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
@@ -179,6 +188,8 @@ async def index(
           "active_session": active_session,
           "messages": messages,
           "threads": threads,
+          "triggers": triggers,
+          "pt_tz": _PT_TZ,
           "event_count": len(raw_events),
           "session_usage": session_usage,
           "backend_options": cfg.backend_options,

@@ -32,6 +32,12 @@ class SessionStatus(str, Enum):
   WAITING = "waiting"
 
 
+class TriggerStatus(str, Enum):
+  PENDING = "pending"
+  FIRED = "fired"
+  CANCELLED = "cancelled"
+
+
 # ---------------------------------------------------------------------------
 # Thread Models
 # ---------------------------------------------------------------------------
@@ -58,6 +64,21 @@ class ThreadMetadata(BaseModel):
   model: Optional[str] = None
   require_review: bool = True
   tried_backends: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Trigger Models
+# ---------------------------------------------------------------------------
+
+
+class PendingTrigger(BaseModel):
+  id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+  session_id: str
+  fire_at: datetime
+  message: str
+  created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  status: TriggerStatus = TriggerStatus.PENDING
+  fired_at: Optional[datetime] = None
 
 
 # ---------------------------------------------------------------------------
@@ -194,3 +215,10 @@ class ImproveRequest(BaseModel):
   iterations: int = 3
   goal: str
   branch_prefix: Optional[str] = None
+
+
+class ScheduleTriggerRequest(BaseModel):
+  """Request body for the internal schedule-trigger endpoint."""
+  session_id: str
+  delay_seconds: int
+  message: str

@@ -243,6 +243,9 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     appendMessage('system', `${icon} ${ev.task}: ${ev.message || ''}`, false, ev.timestamp);
   } else if (t === 'result') {
     updateUsageDisplay(ev);
+    // Codex result events carry translated usage; refresh from session view
+    // immediately so fast turns do not leave the header on stale values.
+    pollActiveSessionView();
   } else if (t === 'tex_edit_proposed') {
     showDiffModal();
   } else if (t === 'ext_usage') {

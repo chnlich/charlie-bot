@@ -103,7 +103,7 @@ class _WorkItem:
   session_meta: SessionMetadata
   user_content: str
   persist_and_broadcast: object  # async callable
-  save_metadata: object  # async callable or None
+  update_thinking_state: object  # async callable or None
   mark_unread: object  # async callable or None
   clear_thinking_since: object  # async callable or None
   is_voice: bool
@@ -352,7 +352,7 @@ async def run_message(
     session_meta: SessionMetadata,
     user_content: str,
     persist_and_broadcast,
-    save_metadata=None,
+    update_thinking_state=None,
     mark_unread=None,
     clear_thinking_since=None,
     skip_user_event: bool = False,
@@ -369,7 +369,8 @@ async def run_message(
     user_content: The user's message text.
     persist_and_broadcast: Coroutine to persist each event (injecting timestamp)
       then broadcast to the session WebSocket channel.
-    save_metadata: Coroutine to persist session metadata updates.
+    update_thinking_state: Coroutine to persist thinking_since and updated_at
+      by re-reading fresh metadata from disk, avoiding clobbering other fields.
     mark_unread: Coroutine to mark the session unread for other viewers.
     clear_thinking_since: Coroutine to clear thinking_since by re-reading fresh
       metadata from disk, avoiding clobbering has_unread. Also saves cc_session_id.
@@ -403,8 +404,8 @@ async def run_message(
   consumer_already_running = (session_meta.id in _session_consumers and not _session_consumers[session_meta.id].done())
   if not consumer_already_running:
     session_meta.thinking_since = datetime.now(timezone.utc)
-    if save_metadata:
-      await save_metadata(session_meta)
+    if update_thinking_state:
+      await update_thinking_state(session_meta.id, session_meta.thinking_since, session_meta.updated_at)
     await streaming_manager.broadcast(
         'sidebar', {
             'type': ET.RUNNING_CHANGED,
@@ -415,8 +416,8 @@ async def run_message(
   else:
     # Still save metadata even when consumer is already running
     # (e.g. updated_at changed above).
-    if save_metadata:
-      await save_metadata(session_meta)
+    if update_thinking_state:
+      await update_thinking_state(session_meta.id, session_meta.thinking_since, session_meta.updated_at)
 
   # Create a future for the caller to await.
   loop = asyncio.get_running_loop()
@@ -427,7 +428,7 @@ async def run_message(
       session_meta=session_meta,
       user_content=user_content,
       persist_and_broadcast=persist_and_broadcast,
-      save_metadata=save_metadata,
+      update_thinking_state=update_thinking_state,
       mark_unread=mark_unread,
       clear_thinking_since=clear_thinking_since,
       is_voice=is_voice,

@@ -14,6 +14,9 @@ let switching = false;
 let sessionHasMore = false;
 let sessionEarliestEventIndex = Infinity;
 let sessionLoadingMore = false;
+let activeSessionViewPollInterval = null;
+let activeSessionViewPollInflight = false;
+const ACTIVE_SESSION_VIEW_POLL_MS = 3000;
 
 async function switchSession(sessionId) {
   // Welcome screen — no SPA state to swap, fall back to full load
@@ -33,6 +36,7 @@ async function switchSession(sessionId) {
 
   // Stop thinking indicator
   if (masterThinking) stopThinking();
+  stopActiveSessionViewPolling();
 
   // Clean up transient UI state from previous session
   resetVoiceState();
@@ -106,6 +110,7 @@ async function switchSession(sessionId) {
   updateSpinner();
   updateSidebarHighlight(sessionId);
   pollSessionStatus();
+  ensureActiveSessionViewPolling();
 
   // Restart workers poll for the new session
   if (workersPollInterval) clearInterval(workersPollInterval);
@@ -442,6 +447,48 @@ function updateSpinner() {
   setSessionSpinner(SESSION_ID, masterThinking || anyRunning);
 }
 
+function stopActiveSessionViewPolling() {
+  if (activeSessionViewPollInterval) {
+    clearInterval(activeSessionViewPollInterval);
+    activeSessionViewPollInterval = null;
+  }
+}
+
+function ensureActiveSessionViewPolling() {
+  if (!SESSION_ID || (!masterThinking && !THINKING_SINCE)) {
+    stopActiveSessionViewPolling();
+    return;
+  }
+  if (activeSessionViewPollInterval) return;
+  activeSessionViewPollInterval = setInterval(pollActiveSessionView, ACTIVE_SESSION_VIEW_POLL_MS);
+}
+
+async function pollActiveSessionView() {
+  if (activeSessionViewPollInflight || !SESSION_ID || (!masterThinking && !THINKING_SINCE)) return;
+
+  const pollSessionId = SESSION_ID;
+  activeSessionViewPollInflight = true;
+  try {
+    const res = await fetch('/api/sessions/' + pollSessionId + '/view');
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    if (pollSessionId !== SESSION_ID) return;
+
+    THINKING_SINCE = data.session.thinking_since || null;
+    usageTotalCost = data.usage ? (data.usage.total_cost_usd || 0) : 0;
+    renderUsageFromData(data.usage);
+
+    if (!THINKING_SINCE && masterThinking) {
+      stopThinking();
+    }
+  } catch (err) {
+    console.error('pollActiveSessionView failed:', err);
+  } finally {
+    activeSessionViewPollInflight = false;
+    ensureActiveSessionViewPolling();
+  }
+}
+
 // Poll-based sidebar status (corrects WS drift)
 let statusPollInterval = null;
 let statusPollInflight = false;
@@ -594,6 +641,7 @@ function startThinking(opts) {
     document.getElementById('send-btn').classList.add('opacity-50');
   }
   setSessionSpinner(SESSION_ID, true);
+  ensureActiveSessionViewPolling();
 }
 
 function stopThinking() {
@@ -603,6 +651,7 @@ function stopThinking() {
   thinkingStart = null;
   document.getElementById('send-btn').disabled = false;
   document.getElementById('send-btn').classList.remove('opacity-50');
+  stopActiveSessionViewPolling();
   if (!switching) updateSpinner();
 }
 

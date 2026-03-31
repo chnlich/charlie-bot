@@ -171,3 +171,21 @@ test('session_group_changed preserves active sidebar search', () => {
 
   assert.deepEqual(sidebarActions, [{type: 'search', value: 'alpha'}]);
 });
+
+test('result event triggers an immediate session usage refresh', () => {
+  const {context} = buildContext('session-a');
+  let usageEvent = null;
+  let pollCalls = 0;
+
+  context.updateUsageDisplay = (ev) => {
+    usageEvent = ev;
+  };
+  context.pollActiveSessionView = () => {
+    pollCalls += 1;
+  };
+
+  context.handleWSEvent({type: 'result', total_cost_usd: 1.25}, 'session-a', 0);
+
+  assert.deepEqual(usageEvent, {type: 'result', total_cost_usd: 1.25});
+  assert.equal(pollCalls, 1);
+});

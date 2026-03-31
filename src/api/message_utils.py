@@ -146,6 +146,12 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _handler_result_msg,
     ET.CONTEXT_COMPACTED:
         _context_compacted_msg,
+    ET.CLONE_START:
+        lambda ev: {
+            "role": "clone_start",
+            "content": ev.get("parent_session_name", "Unknown session"),
+            "parent_session_id": ev.get("parent_session_id", ""),
+        },
 }
 
 

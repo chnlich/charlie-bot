@@ -211,6 +211,15 @@ class SessionManager:
     events_path = self._chat_events_path(meta.id)
     await asyncio.to_thread(events_path.write_text, '\n'.join(lines) + '\n', encoding='utf-8')
 
+    # Append clone_start banner event
+    clone_event = {
+        "type": ET.CLONE_START,
+        "parent_session_id": parent_id,
+        "parent_session_name": parent.name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    await append_ndjson(events_path, clone_event)
+
     await self._save_metadata(meta)
 
     log.info('session_cloned', new_session=meta.id, parent=parent_id, event_index=event_index)

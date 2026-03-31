@@ -29,8 +29,9 @@ class ClaudeCodeBackend(AgentBackend):
       self._cmd += ["--model", self._model]
     if self._extra_flags:
       self._cmd += self._extra_flags
-    if self._effort:
-      self._cmd += ["--effort", self._effort]
+    # TODO: re-enable when Claude Code version supports --effort
+    # if self._effort:
+    #   self._cmd += ["--effort", self._effort]
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Write CLAUDE.md into the cwd so Claude Code auto-detects it."""

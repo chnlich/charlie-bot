@@ -1090,7 +1090,7 @@
     lines, making both files easier to navigate. Follows the pattern from items 047
     (extracted core/git.py) and 060 (extracted core/process.py) which carved out cohesive
     sub-modules from large files.'
-  status: pending
+  status: approved
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: '072'

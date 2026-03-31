@@ -115,7 +115,7 @@ async def _generate_name_via_claude_cli(prompt: str, system_prompt: str) -> str:
       start_new_session=True,
   )
   try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=AUTONAMER_TIMEOUT)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=30.0)
   except asyncio.TimeoutError:
     kill_process_group(proc.pid, signal.SIGKILL)
     raise

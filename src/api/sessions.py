@@ -101,8 +101,8 @@ async def list_starred_sessions(session_mgr: SessionManager = Depends(get_sessio
 
 @router.get("/groups")
 async def list_groups(session_mgr: SessionManager = Depends(get_session_manager)):
-  """Return sorted distinct group names across all active sessions."""
-  sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  """Return sorted distinct group names across all sessions."""
+  sessions = await session_mgr.list_sessions()
   groups = sorted({s.group for s in sessions if s.group})
   return groups
 

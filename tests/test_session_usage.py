@@ -7,7 +7,7 @@ import pytest
 
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
-from src.core.sessions import SessionManager
+from src.core.sessions import SessionManager, _extract_codex_rollout_usage_event
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -34,6 +34,37 @@ def _write_codex_rollout(codex_root: Path, native_thread_id: str, lines: list[di
   rollout_dir.mkdir(parents=True, exist_ok=True)
   rollout_path = rollout_dir / f"rollout-2026-03-31T20-42-51-{native_thread_id}.jsonl"
   rollout_path.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+
+
+def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
+  usage = _extract_codex_rollout_usage_event(
+      {
+          "timestamp": "2026-03-25T17:50:36.349Z",
+          "type": "event_msg",
+          "payload": {
+              "type": "token_count",
+              "info": {
+                  "total_token_usage": {
+                      "input_tokens": 1252236,
+                      "cached_input_tokens": 950016,
+                      "output_tokens": 14789,
+                  },
+                  "last_token_usage": {
+                      "input_tokens": 176028,
+                      "cached_input_tokens": 168832,
+                      "output_tokens": 782,
+                      "total_tokens": 176810,
+                  },
+                  "model_context_window": 258400,
+              },
+          },
+      }
+  )
+
+  assert usage == {
+      "context_tokens": 176028,
+      "context_limit": 258400,
+  }
 
 
 @pytest.mark.asyncio
@@ -77,9 +108,15 @@ async def test_resolve_session_usage_reads_live_codex_thread_id_from_chat_events
                   "type": "token_count",
                   "info": {
                       "total_token_usage": {
-                          "input_tokens": 27163,
-                          "cached_input_tokens": 22016,
-                          "output_tokens": 1027,
+                          "input_tokens": 1431555,
+                          "cached_input_tokens": 1126656,
+                          "output_tokens": 16521,
+                      },
+                      "last_token_usage": {
+                          "input_tokens": 179319,
+                          "cached_input_tokens": 176640,
+                          "output_tokens": 1732,
+                          "total_tokens": 181051,
                       },
                       "model_context_window": 258400,
                   },
@@ -95,7 +132,7 @@ async def test_resolve_session_usage_reads_live_codex_thread_id_from_chat_events
   )
 
   assert usage == {
-      "context_tokens": 49179,
+      "context_tokens": 179319,
       "context_limit": 258400,
       "total_cost_usd": 0.0,
       "model": "",
@@ -151,6 +188,12 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
                           "cached_input_tokens": 1001472,
                           "output_tokens": 15186,
                       },
+                      "last_token_usage": {
+                          "input_tokens": 176028,
+                          "cached_input_tokens": 168832,
+                          "output_tokens": 782,
+                          "total_tokens": 176810,
+                      },
                       "model_context_window": 258400,
                   },
               },
@@ -161,7 +204,7 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage == {
-      "context_tokens": 2100901,
+      "context_tokens": 176028,
       "context_limit": 258400,
       "total_cost_usd": 1.25,
       "model": "codex-gpt-5.4",

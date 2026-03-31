@@ -59,14 +59,16 @@ def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, int] 
   if payload.get("type") != "token_count":
     return None
   info = payload.get("info") or {}
-  total_usage = info.get("total_token_usage") or {}
-  input_tokens = total_usage.get("input_tokens")
-  cached_input_tokens = total_usage.get("cached_input_tokens")
+  last_usage = info.get("last_token_usage") or {}
+  input_tokens = last_usage.get("input_tokens")
   context_limit = info.get("model_context_window")
-  if input_tokens is None or cached_input_tokens is None or context_limit is None:
+  if input_tokens is None or context_limit is None:
     return None
   return {
-      "context_tokens": input_tokens + cached_input_tokens,
+      # Codex reports the active prompt window in last_token_usage.input_tokens.
+      # total_token_usage is cumulative for the whole session and cached_input_tokens
+      # is an informational subset, not an additive context-window component.
+      "context_tokens": input_tokens,
       "context_limit": context_limit,
   }
 

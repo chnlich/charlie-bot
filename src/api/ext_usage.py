@@ -173,9 +173,9 @@ def _transform_codex_response(
 ) -> dict[str, Any]:
   """Transform a Codex token_count event into our cached usage format."""
   payload = event.get("payload", {})
-  rate_limits = payload.get("rate_limits", {})
-  primary = rate_limits.get("primary", {})
-  secondary = rate_limits.get("secondary", {})
+  rate_limits = payload.get("rate_limits") or {}
+  primary = rate_limits.get("primary") or {}
+  secondary = rate_limits.get("secondary") or {}
 
   return {
       "five_hour":

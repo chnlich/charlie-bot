@@ -12,6 +12,7 @@ const WEBSOCKET_JS = fs.readFileSync(
 function buildContext(sessionId) {
   const messages = [];
   const timers = [];
+  const sidebarActions = [];
 
   class FakeWebSocket {
     static instances = [];
@@ -54,6 +55,7 @@ function buildContext(sessionId) {
     reconnectDelay: 1000,
     thinkingStart: null,
     sessionUnread: {},
+    localStorage: {getItem: () => null},
     location: {protocol: 'http:', host: 'localhost:8000'},
     console: {log: () => {}, error: () => {}},
     marked: {parse: (txt) => txt},
@@ -76,15 +78,25 @@ function buildContext(sessionId) {
     showDiffModal: () => {},
     startThinking: () => {},
     stopThinking: () => {},
+    switchSidebarFilter: (filter) => {
+      sidebarActions.push({type: 'filter', value: filter});
+    },
+    handleSidebarSearch: (query) => {
+      sidebarActions.push({type: 'search', value: query});
+    },
+    currentFilter: 'all',
     document: {
-      getElementById: () => null,
+      getElementById: (id) => {
+        if (id === 'sidebar-search') return null;
+        return null;
+      },
       createElement: () => ({className: '', innerHTML: '', dataset: {}}),
     },
   };
 
   vm.createContext(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
-  return {context, FakeWebSocket, messages, timers};
+  return {context, FakeWebSocket, messages, timers, sidebarActions};
 }
 
 test('ignores stale socket events after rapid session switch', () => {
@@ -137,4 +149,25 @@ test('disconnectWS detaches handlers and delayed stale callbacks are ignored', (
 
   delayedMessage({data: JSON.stringify({type: 'user', content: 'should be ignored'})});
   assert.equal(messages.length, 0);
+});
+
+test('session_group_changed refreshes the active sidebar filter', () => {
+  const {context, sidebarActions} = buildContext('session-a');
+
+  context.handleWSEvent({type: 'session_group_changed', session_id: 'session-a', group: 'Work'}, 'session-a', 0);
+
+  assert.deepEqual(sidebarActions, [{type: 'filter', value: 'all'}]);
+});
+
+test('session_group_changed preserves active sidebar search', () => {
+  const {context, sidebarActions} = buildContext('session-a');
+
+  context.document.getElementById = (id) => {
+    if (id === 'sidebar-search') return {value: 'alpha'};
+    return null;
+  };
+
+  context.handleWSEvent({type: 'session_group_changed', session_id: 'session-a', group: 'Work'}, 'session-a', 0);
+
+  assert.deepEqual(sidebarActions, [{type: 'search', value: 'alpha'}]);
 });

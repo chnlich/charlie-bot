@@ -95,6 +95,14 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
+  if (t === 'session_group_changed') {
+    const searchInput = document.getElementById('sidebar-search');
+    const query = searchInput ? searchInput.value.trim() : '';
+    if (query) handleSidebarSearch(query);
+    else switchSidebarFilter(currentFilter);
+    return;
+  }
+
   // Sidebar unread indicator — handle before catchup guard
   if (t === 'unread_changed') {
     sessionUnread[ev.session_id] = ev.has_unread;

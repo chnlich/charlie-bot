@@ -334,7 +334,15 @@ class SessionManager:
 
   async def set_group(self, session_id: str, group: Optional[str]) -> Optional[SessionMetadata]:
     """Set or clear the group for a session."""
-    return await self._update_field(session_id, "group", group, "session_group_set")
+    meta = await self._update_field(session_id, "group", group, "session_group_set")
+    if meta:
+      await streaming_manager.broadcast(
+          "sidebar", {
+              "type": ET.SESSION_GROUP_CHANGED,
+              "session_id": session_id,
+              "group": group,
+          })
+    return meta
 
   async def rename_group(self, old_name: str, new_name: str) -> int:
     """Rename a group across all sessions. Returns the count of updated sessions."""

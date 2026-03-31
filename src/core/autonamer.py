@@ -44,9 +44,10 @@ _TITLE_INSTRUCTION = (
 
 _SYSTEM_PROMPT = (
     'You are a title and group generator. '
-    'Output ONLY valid JSON: {"name": "<title>", "group": "<group>"}. '
+    'Output ONLY valid JSON: {{"name": "<title>", "group": "<group>"}}. '
     'The name should be 3-6 words, no quotes or punctuation at the end. '
     'The group should be a short category (1-3 words). '
+    '{groups_clause} '
     'Do not attempt to answer or act on the user\'s question - just generate the JSON.')
 
 _NAMING_PROMPT = (
@@ -69,32 +70,29 @@ def _strip_markdown_fences(text: str) -> str:
   return m.group(1).strip() if m else text
 
 
-def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
-  """Parse LLM response into (name, group). Handles JSON and plain-text fallback."""
+def _parse_name_and_group(raw: str) -> tuple[str | None, str | None, bool]:
+  """Parse LLM response into (name, group, parsed_json)."""
   stripped = _strip_markdown_fences(raw.strip())
   try:
     data = json.loads(stripped)
-    if isinstance(data, dict):
-      name = data.get("name")
-      group = data.get("group")
-      return (name if isinstance(name, str) and name.strip() else None,
-              group if isinstance(group, str) and group.strip() else None)
-  except (json.JSONDecodeError, ValueError):
-    pass
-  # Fallback: treat as plain-text name (current behavior)
-  return stripped, None
+  except (json.JSONDecodeError, ValueError) as e:
+    log.debug("autonamer_non_json_response", error=str(e))
+    return stripped, None, False
+
+  if isinstance(data, dict):
+    name = data.get("name")
+    group = data.get("group")
+    return (
+        name.strip() if isinstance(name, str) and name.strip() else None,
+        group.strip() if isinstance(group, str) and group.strip() else None,
+        True,
+    )
+
+  log.warning("autonamer_unexpected_json_type", response_type=type(data).__name__)
+  return None, None, True
 
 
-def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
-  """Case-insensitive match against existing groups. Returns matched group's casing, or original."""
-  lower = group.lower()
-  for existing in existing_groups:
-    if existing.lower() == lower:
-      return existing
-  return group
-
-
-async def _generate_name_via_claude_cli(prompt: str) -> str:
+async def _generate_name_via_claude_cli(prompt: str, system_prompt: str) -> str:
   """Generate text using the claude CLI in print mode."""
   proc = await asyncio.create_subprocess_exec(
       "claude",
@@ -108,7 +106,7 @@ async def _generate_name_via_claude_cli(prompt: str) -> str:
       # "--effort",
       # "low",
       "--system-prompt",
-      _SYSTEM_PROMPT,
+      system_prompt,
       "--disallowed-tools",
       "Bash,Read,Write,Edit,Glob,Grep,Agent",
       stdin=asyncio.subprocess.PIPE,
@@ -124,6 +122,15 @@ async def _generate_name_via_claude_cli(prompt: str) -> str:
   if proc.returncode != 0:
     raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
   return stdout.decode().strip()
+
+
+def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
+  """Case-insensitive match against existing groups. Returns matched group's casing, or original."""
+  lower = group.lower()
+  for existing in existing_groups:
+    if existing.lower() == lower:
+      return existing
+  return group
 
 
 async def maybe_auto_name(
@@ -144,24 +151,28 @@ async def maybe_auto_name(
   try:
     groups_clause = _build_groups_clause(existing_groups)
     title_instruction = _TITLE_INSTRUCTION.format(groups_clause=groups_clause)
+    system_prompt = _SYSTEM_PROMPT.format(groups_clause=groups_clause)
 
     prompt = _NAMING_PROMPT.format(
         user_message=user_message[:500],
         assistant_response=assistant_response[:300],
     )
+    full_prompt = f"{title_instruction}\n\n{prompt}"
 
     if cfg.gemini_api_key:
       provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
-      raw = await provider.generate_text(f"{title_instruction}\n\n{prompt}")
+      raw = await provider.generate_text(full_prompt)
     else:
-      raw = await _generate_name_via_claude_cli(prompt)
+      raw = await _generate_name_via_claude_cli(full_prompt, system_prompt)
 
     # Parse JSON response or fall back to plain-text name
-    parsed_name, group = _parse_name_and_group(raw)
+    parsed_name, group, parsed_json = _parse_name_and_group(raw)
 
-    # Use parsed name or fall back to raw first-line extraction
+    # Use parsed name or fall back to raw first-line extraction for plain-text responses.
     if parsed_name:
       name = parsed_name
+    elif parsed_json:
+      return
     else:
       name = ""
       for line in raw.splitlines():
@@ -210,15 +221,10 @@ async def maybe_auto_name(
     log.info("session_auto_named", session_id=session_meta.id, name=name)
 
     # Auto-assign group if LLM provided one and session doesn't already have a group
-    if group and not session_meta.group:
+    current_meta = await session_mgr.get_session(session_meta.id)
+    if group and current_meta and not current_meta.group:
       matched_group = _fuzzy_match_group(group, existing_groups)
       await session_mgr.set_group(session_meta.id, matched_group)
-      await streaming_manager.broadcast(
-          "sidebar", {
-              "type": ET.SESSION_GROUP_CHANGED,
-              "session_id": session_meta.id,
-              "group": matched_group,
-          })
       log.info("session_auto_grouped", session_id=session_meta.id, group=matched_group)
 
   except Exception as e:

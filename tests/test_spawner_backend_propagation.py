@@ -5,7 +5,7 @@ import pytest
 
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
-from src.core import spawner
+from src.core import review, spawner
 
 
 def _build_cfg() -> CharlieBotConfig:
@@ -277,7 +277,7 @@ async def test_spawn_review_worker_propagates_backend_model(
 
   monkeypatch.setattr(spawner, "_git_current_branch", fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(spawner, "create_logged_task", fake_create_logged_task)
+  monkeypatch.setattr(review, "create_logged_task", fake_create_logged_task)
 
   original = ThreadMetadata(
       id="origin-thread-id",
@@ -291,7 +291,7 @@ async def test_spawn_review_worker_propagates_backend_model(
       model="o3-pro",
   )
 
-  await spawner._spawn_review_worker(
+  await review.spawn_review_worker(
       "session-id",
       original,
       cfg,
@@ -347,7 +347,7 @@ async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
   )
 
   with pytest.raises(ValueError, match="missing model metadata"):
-    await spawner._spawn_review_worker(
+    await review.spawn_review_worker(
         "session-id",
         original,
         cfg,

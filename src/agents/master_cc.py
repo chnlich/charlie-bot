@@ -18,6 +18,74 @@ from src.core.streaming import handle_compact_boundary, streaming_manager
 
 log = structlog.get_logger()
 
+
+class _RunTimingTracker:
+  """Tracks monotonic timing milestones during a single _run_cc execution."""
+
+  def __init__(self, session_id: str, backend_type: str, model: str) -> None:
+    self._session_id = session_id
+    self._backend_type = backend_type
+    self._model = model
+    self._t_start = time.monotonic()
+    self._t_spawn: Optional[float] = None
+    self._t_first_event: Optional[float] = None
+    self._t_first_assistant: Optional[float] = None
+    self._saw_first_assistant = False
+
+  async def on_spawn(self, pid: int) -> None:
+    self._t_spawn = time.monotonic()
+    log.info("master_cc_spawned", session=self._session_id, pid=pid, backend=self._backend_type, model=self._model)
+
+  def on_event(self, event: dict) -> None:
+    if self._t_first_event is None:
+      self._t_first_event = time.monotonic()
+      spawn_ref = self._t_spawn if self._t_spawn is not None else self._t_start
+      spawn_to_first_ms = int((self._t_first_event - spawn_ref) * 1000)
+      log.info(
+          "master_cc_first_event",
+          session=self._session_id,
+          event_type=event.get("type"),
+          spawn_to_first_event_ms=spawn_to_first_ms,
+      )
+      if spawn_to_first_ms > 10_000:
+        log.warning(
+            "master_cc_slow_first_event",
+            session=self._session_id,
+            spawn_to_first_event_ms=spawn_to_first_ms,
+        )
+
+    if not self._saw_first_assistant and event.get("type") == ET.ASSISTANT:
+      msg = event.get("message", {})
+      content_blocks = msg.get("content") if isinstance(msg, dict) else None
+      if content_blocks:
+        for block in content_blocks:
+          if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+            self._saw_first_assistant = True
+            self._t_first_assistant = time.monotonic()
+            log.info(
+                "master_cc_first_assistant_text",
+                session=self._session_id,
+                first_assistant_ms=int((self._t_first_assistant - self._t_start) * 1000),
+            )
+            break
+
+  def build_finish_extras(self) -> dict:
+    total_ms = int((time.monotonic() - self._t_start) * 1000)
+    extras: dict = {
+        "backend": self._backend_type,
+        "model": self._model,
+        "total_ms": total_ms,
+    }
+    if self._t_first_event is not None:
+      spawn_ref = self._t_spawn if self._t_spawn is not None else self._t_start
+      extras["spawn_to_first_event_ms"] = int((self._t_first_event - spawn_ref) * 1000)
+    if self._t_first_assistant is not None:
+      extras["first_assistant_ms"] = int((self._t_first_assistant - self._t_start) * 1000)
+    if total_ms > 120_000:
+      log.warning("master_cc_slow_total", session=self._session_id, total_ms=total_ms)
+    return extras
+
+
 # Per-session FIFO queue for serializing run_message calls.
 _session_queues: dict[str, asyncio.Queue] = {}
 
@@ -157,19 +225,8 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   exit_code = 1
   error_msg: Optional[str] = None
 
-  # Monotonic timing
-  t_start = time.monotonic()
-  t_spawn: Optional[float] = None
-  t_first_event: Optional[float] = None
-  t_first_assistant: Optional[float] = None
-
-  async def _on_spawn(pid: int) -> None:
-    nonlocal t_spawn
-    t_spawn = time.monotonic()
-    log.info("master_cc_spawned", session=session_meta.id, pid=pid, backend=option.type, model=option.model)
-
+  tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
   backend: Optional[AgentBackend] = None
-  saw_first_assistant = False
 
   try:
     backend = build_backend(
@@ -177,48 +234,14 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
         cfg,
         extra_flags=extra_flags or None,
         buffer_limit=cfg.subprocess_buffer_limit,
-        on_spawn=_on_spawn,
+        on_spawn=tracker.on_spawn,
         instructions_content=instructions_content,
         resume_session_id=session_meta.cc_session_id if option.type in ("codex", "gemini", "opencode") else None,
     )
     _active_procs[session_meta.id] = backend
 
     async for event in backend.run(prompt, cwd, env):
-      # Track first backend event
-      if t_first_event is None:
-        t_first_event = time.monotonic()
-        spawn_ref = t_spawn if t_spawn is not None else t_start
-        spawn_to_first_ms = int((t_first_event - spawn_ref) * 1000)
-        log.info(
-            "master_cc_first_event",
-            session=session_meta.id,
-            event_type=event.get("type"),
-            spawn_to_first_event_ms=spawn_to_first_ms,
-        )
-        if spawn_to_first_ms > 10_000:
-          log.warning(
-              "master_cc_slow_first_event",
-              session=session_meta.id,
-              spawn_to_first_event_ms=spawn_to_first_ms,
-          )
-
-      # Track first assistant text
-      if not saw_first_assistant and event.get("type") == ET.ASSISTANT:
-        msg = event.get("message", {})
-        content_blocks = msg.get("content") if isinstance(msg, dict) else None
-        if content_blocks:
-          for block in content_blocks:
-            if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
-              saw_first_assistant = True
-              t_first_assistant = time.monotonic()
-              first_assistant_ms = int((t_first_assistant - t_start) * 1000)
-              log.info(
-                  "master_cc_first_assistant_text",
-                  session=session_meta.id,
-                  first_assistant_ms=first_assistant_ms,
-              )
-              break
-
+      tracker.on_event(event)
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.persist_and_broadcast)
 
     exit_code = backend.exit_code
@@ -233,22 +256,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 
   finally:
     _active_procs.pop(session_meta.id, None)
-    total_ms = int((time.monotonic() - t_start) * 1000)
-
-    # Build finish extras
-    finish_extras: dict = {
-        "backend": option.type,
-        "model": option.model,
-        "total_ms": total_ms,
-    }
-    if t_first_event is not None:
-      spawn_ref = t_spawn if t_spawn is not None else t_start
-      finish_extras["spawn_to_first_event_ms"] = int((t_first_event - spawn_ref) * 1000)
-    if t_first_assistant is not None:
-      finish_extras["first_assistant_ms"] = int((t_first_assistant - t_start) * 1000)
-
-    if total_ms > 120_000:
-      log.warning("master_cc_slow_total", session=session_meta.id, total_ms=total_ms)
+    finish_extras = tracker.build_finish_extras()
 
     if error_msg:
       err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}

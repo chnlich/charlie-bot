@@ -1027,7 +1027,7 @@
     backend-internal timeouts (_POST_RESULT_TIMEOUT, _CLEANUP_TIMEOUT in base.py)
     as-is since they are already named constants. Pure mechanical replacement, no
     behavior change.'
-  status: done
+  status: approved
   created: '2026-03-30T12:00:00Z'
   priority: low
 - id: 069

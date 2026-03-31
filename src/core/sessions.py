@@ -462,6 +462,24 @@ class SessionManager:
       fresh.cc_session_id = cc_session_id
       await self._save_metadata(fresh)
 
+  async def update_thinking_state(
+      self,
+      session_id: str,
+      thinking_since: Optional[datetime],
+      updated_at: Optional[datetime] = None,
+  ) -> None:
+    """Persist thinking_since (and optionally updated_at) without clobbering unrelated fields.
+
+    Re-reads fresh metadata from disk before writing, so concurrent changes
+    to fields like 'group' are preserved.
+    """
+    fresh = await self.get_session(session_id)
+    if fresh:
+      fresh.thinking_since = thinking_since
+      if updated_at is not None:
+        fresh.updated_at = updated_at
+      await self._save_metadata(fresh)
+
   async def clear_thinking_since(self, session_id: str, cc_session_id: Optional[str] = None) -> None:
     """Clear thinking_since without clobbering unrelated metadata fields (e.g. has_unread).
 

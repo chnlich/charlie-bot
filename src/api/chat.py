@@ -170,7 +170,7 @@ async def run_and_finalize(
         meta,
         content,
         session_mgr.persist_and_broadcast,
-        session_mgr.save_metadata,
+        session_mgr.update_thinking_state,
         mark_unread=session_mgr.mark_unread,
         clear_thinking_since=session_mgr.clear_thinking_since,
         skip_user_event=skip_user_event,

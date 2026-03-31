@@ -172,6 +172,7 @@ async def run_and_finalize(
         session_mgr.persist_and_broadcast,
         session_mgr.save_metadata,
         mark_unread=session_mgr.mark_unread,
+        clear_thinking_since=session_mgr.clear_thinking_since,
         skip_user_event=skip_user_event,
         backend_option=backend_option,
         is_voice=is_voice,

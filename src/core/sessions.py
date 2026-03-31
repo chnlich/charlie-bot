@@ -343,6 +343,13 @@ class SessionManager:
       fresh.cc_session_id = cc_session_id
       await self._save_metadata(fresh)
 
+  async def clear_thinking_since(self, session_id: str) -> None:
+    """Clear thinking_since without clobbering unrelated metadata fields (e.g. has_unread)."""
+    fresh = await self.get_session(session_id)
+    if fresh:
+      fresh.thinking_since = None
+      await self._save_metadata(fresh)
+
   def list_active_session_ids(self) -> list[SessionMetadata]:
     """Return metadata for active sessions by reading metadata.json files.
 

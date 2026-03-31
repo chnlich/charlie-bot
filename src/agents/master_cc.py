@@ -37,6 +37,7 @@ class _WorkItem:
   persist_and_broadcast: object  # async callable
   save_metadata: object  # async callable or None
   mark_unread: object  # async callable or None
+  clear_thinking_since: object  # async callable or None
   is_voice: bool
   auto_trigger: bool
   backend_option: Optional[BackendOption]
@@ -306,8 +307,8 @@ async def _session_consumer(session_id: str) -> None:
 
         if not still_thinking:
           item.session_meta.thinking_since = None
-          if item.save_metadata:
-            await item.save_metadata(item.session_meta)
+          if item.clear_thinking_since:
+            await item.clear_thinking_since(session_id)
           await streaming_manager.broadcast(
               "sidebar", {
                   "type": ET.RUNNING_CHANGED,
@@ -345,6 +346,7 @@ async def run_message(
     persist_and_broadcast,
     save_metadata=None,
     mark_unread=None,
+    clear_thinking_since=None,
     skip_user_event: bool = False,
     is_voice: bool = False,
     auto_trigger: bool = False,
@@ -361,6 +363,8 @@ async def run_message(
       then broadcast to the session WebSocket channel.
     save_metadata: Coroutine to persist session metadata updates.
     mark_unread: Coroutine to mark the session unread for other viewers.
+    clear_thinking_since: Coroutine to clear thinking_since by re-reading fresh
+      metadata from disk, avoiding clobbering has_unread.
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
 
@@ -417,6 +421,7 @@ async def run_message(
       persist_and_broadcast=persist_and_broadcast,
       save_metadata=save_metadata,
       mark_unread=mark_unread,
+      clear_thinking_since=clear_thinking_since,
       is_voice=is_voice,
       auto_trigger=auto_trigger,
       backend_option=backend_option,

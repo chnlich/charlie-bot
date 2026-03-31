@@ -1092,3 +1092,21 @@
   status: pending
   created: '2026-03-30T12:00:00Z'
   priority: medium
+- id: '072'
+  title: Consolidate git subprocess helpers from spawner.py into core/git.py
+  description: 'PURPOSE — core/git.py (created by item 047) contains only git_add_commit_push,
+    yet spawner.py still has three private git subprocess helpers that follow the same
+    create-subprocess, wait-with-timeout, handle-error pattern: _git_current_branch
+    (L209-231, 23 lines), _git_create_worktree (L234-266, 33 lines), and inline worktree
+    remove + prune in _cleanup_worker_directory (L548-581, ~34 lines). Consolidating
+    these ~90 lines into core/git.py makes it a proper git operations module, reduces
+    spawner.py (1216 lines, largest file), and makes the operations reusable. HOW —
+    Move _git_current_branch and _git_create_worktree to core/git.py as git_current_branch
+    and git_create_worktree (drop underscore for public API). Extract the worktree-remove
+    and worktree-prune subprocess blocks from _cleanup_worker_directory into git_worktree_remove
+    and git_worktree_prune in core/git.py. Update spawner.py to import from core.git.
+    Pure move refactoring, no logic changes. Completes the consolidation started by item
+    047.'
+  status: pending
+  created: '2026-03-30T20:00:00Z'
+  priority: low

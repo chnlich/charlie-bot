@@ -336,6 +336,34 @@ class SessionManager:
     """Set or clear the group for a session."""
     return await self._update_field(session_id, "group", group, "session_group_set")
 
+  async def rename_group(self, old_name: str, new_name: str) -> int:
+    """Rename a group across all sessions. Returns the count of updated sessions."""
+    all_sessions = await self.list_sessions()
+    count = 0
+    for meta in all_sessions:
+      if meta.group == old_name:
+        meta.group = new_name
+        meta.updated_at = datetime.now(timezone.utc)
+        await self._save_metadata(meta)
+        count += 1
+    if count:
+      log.info("group_renamed", old_name=old_name, new_name=new_name, count=count)
+    return count
+
+  async def delete_group(self, group: str) -> int:
+    """Remove a group from all sessions (set to null). Returns the count of updated sessions."""
+    all_sessions = await self.list_sessions()
+    count = 0
+    for meta in all_sessions:
+      if meta.group == group:
+        meta.group = None
+        meta.updated_at = datetime.now(timezone.utc)
+        await self._save_metadata(meta)
+        count += 1
+    if count:
+      log.info("group_deleted", group=group, count=count)
+    return count
+
   async def save_metadata(self, meta: SessionMetadata) -> None:
     """Public wrapper for _save_metadata."""
     await self._save_metadata(meta)

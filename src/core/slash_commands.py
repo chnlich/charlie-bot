@@ -11,6 +11,7 @@ import yaml
 from pydantic import BaseModel
 
 from src.core.process import kill_process_group
+from src.core.timeouts import SLASH_COMMAND_DEFAULT_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -33,7 +34,7 @@ class SlashCommand(BaseModel):
   description: str
   command: Optional[str] = None
   prompt: Optional[str] = None
-  timeout: int = 10
+  timeout: int = SLASH_COMMAND_DEFAULT_TIMEOUT
   args: Optional[str] = None  # Description string for help text
   cwd: Optional[str] = None
   claude_code_flags: list[str] = []  # Extra CLI flags passed to Claude Code subprocess (scope=prompt only)
@@ -68,7 +69,7 @@ async def execute_shell_command(
     cmd_template: str,
     args: str = '',
     session_dir: str = '',
-    timeout: int = 10,
+    timeout: int = SLASH_COMMAND_DEFAULT_TIMEOUT,
     cwd: Optional[str] = None,
 ) -> dict:
   """Run a shell command template and return {stdout, stderr, exit_code}.

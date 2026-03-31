@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
+from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT
+
 router = APIRouter()
 
 
@@ -19,7 +21,7 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
       cwd=repo_path,
       capture_output=True,
       text=True,
-      timeout=10,
+      timeout=SUBPROCESS_GIT_READ_TIMEOUT,
   )
   if result.returncode != 0:
     raise HTTPException(status_code=500, detail=result.stderr.strip())

@@ -21,6 +21,7 @@ import sys
 import requests
 
 from src.core.config import get_config
+from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
 
 
 def main() -> None:
@@ -46,7 +47,8 @@ def main() -> None:
   }
 
   try:
-    resp = requests.post(f"{cfg.server_base_url}/api/internal/improve", json=payload, timeout=30, verify=False)
+    resp = requests.post(
+        f"{cfg.server_base_url}/api/internal/improve", json=payload, timeout=HTTP_INTERNAL_API_TIMEOUT, verify=False)
     resp.raise_for_status()
     result = resp.json()
     print(json.dumps(result, indent=2))

@@ -16,6 +16,7 @@ from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
+from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -29,13 +30,13 @@ def _get_git_version() -> str:
         ["git", "rev-parse", "--short", "HEAD"],
         cwd=_REPO_ROOT,
         text=True,
-        timeout=5,
+        timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
     ).strip()
     commit_date = subprocess.check_output(
         ["git", "log", "-1", "--format=%cd", "--date=format:%m-%d"],
         cwd=_REPO_ROOT,
         text=True,
-        timeout=5,
+        timeout=SUBPROCESS_GIT_VERSION_TIMEOUT,
     ).strip()
     return f"{short_hash} · {commit_date}"
   except Exception:

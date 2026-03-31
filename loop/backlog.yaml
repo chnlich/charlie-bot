@@ -1108,7 +1108,7 @@
     and git_worktree_prune in core/git.py. Update spawner.py to import from core.git.
     Pure move refactoring, no logic changes. Completes the consolidation started by
     item 047.'
-  status: approved
+  status: done
   created: '2026-03-30T20:00:00Z'
   priority: low
 - id: '073'

@@ -31,7 +31,7 @@ function formatBubbleTime(isoStr) {
 }
 
 async function sendMessage() {
-  if (typeof uploadsInFlight !== 'undefined' && uploadsInFlight > 0) {
+  if (uploadsInFlight > 0) {
     showToast('Please wait for uploads to finish', true);
     return;
   }

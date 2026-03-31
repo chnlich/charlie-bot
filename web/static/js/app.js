@@ -141,7 +141,7 @@ function handleInputKey(e) {
   if (handleSlashPopupKey(e)) return;
   if (e.key === 'Enter' && !e.shiftKey && platform.enterSendsMessage) {
     e.preventDefault();
-    if (typeof uploadsInFlight !== 'undefined' && uploadsInFlight > 0) {
+    if (uploadsInFlight > 0) {
       showToast('Please wait for uploads to finish', true);
       return;
     }

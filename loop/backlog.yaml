@@ -1110,3 +1110,23 @@
   status: pending
   created: '2026-03-30T20:00:00Z'
   priority: low
+- id: '073'
+  title: Wrap sync file I/O in asyncio.to_thread in ext_usage.py credentials helpers
+  description: 'PURPOSE — Prevent event-loop blocking during usage polling and token
+    refresh in api/ext_usage.py. Two credentials helpers perform sync file I/O directly
+    on the event loop: _read_credentials() (L118-138) calls CREDENTIALS_PATH.exists()
+    and .read_text() synchronously and is invoked from async CcOpusProvider.fetch()
+    at L42 without asyncio.to_thread; _refresh_access_token() (L202-229) is an async
+    function that calls .read_text() (L221) and .write_text() (L226) synchronously
+    inline. These block the event loop on every 10-minute poll cycle and on every
+    token refresh. Notably, the adjacent CodexProvider.fetch() (L81-83) already correctly
+    wraps its sync I/O in run_in_executor, making this an inconsistency within the
+    same file. HOW — Wrap the _read_credentials() call at L42 with await asyncio.to_thread(_read_credentials).
+    In _refresh_access_token(), extract the read-modify-write block (L221-226) into
+    a local _update_creds() closure and call it via await asyncio.to_thread(_update_creds).
+    asyncio is already imported. ~5 lines changed total. Follows the established
+    pattern from items 024, 034, 035, 043, 044, 046, and 057 which wrapped identical
+    sync I/O anti-patterns in other async functions.'
+  status: pending
+  created: '2026-03-30T22:00:00Z'
+  priority: medium

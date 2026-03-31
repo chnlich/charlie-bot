@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from starlette.responses import Response
 
-from src.api.deps import get_session_manager, get_thread_manager, require_session
+from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager, require_session
 from src.api.message_utils import build_session_view_data_fast, events_to_messages
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
@@ -186,11 +186,14 @@ async def get_session_view(
     raise HTTPException(status_code=404, detail="Session not found")
   meta.has_running_tasks = bool(meta.thinking_since) or await session_mgr._has_running_tasks(session_id)
   view = await build_session_view_data_fast(session_id, session_mgr, thread_mgr)
+  trigger_mgr = get_trigger_manager()
+  triggers = await trigger_mgr.list_triggers(session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
   return {
       "session": meta.model_dump(mode="json"),
       "messages": view.messages,
       "threads": [t.model_dump(mode="json") for t in view.threads],
+      "triggers": [tr.model_dump(mode="json") for tr in triggers],
       "event_count": view.total_event_count,
       "usage": view.usage,
       "active_backend": active_backend,

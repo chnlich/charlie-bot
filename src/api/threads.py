@@ -8,7 +8,7 @@ from src.core.process import kill_process_group
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.deps import get_thread_manager
+from src.api.deps import get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message
 from src.core.models import (
     ThreadMetadata,
@@ -17,6 +17,7 @@ from src.core.models import (
 )
 from src.core.ndjson import parse_ndjson_file
 from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 
@@ -27,11 +28,13 @@ router = APIRouter()
 async def list_threads(
     session_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
+    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
 ) -> list[dict]:
-  """Return thread summaries for a session, sorted by created_at descending."""
+  """Return mixed list of thread and trigger summaries, sorted by created_at descending."""
   threads = await thread_mgr.list_threads(session_id)
-  return [
+  thread_items = [
       {
+          "type": "thread",
           "id": t.id,
           "description": t.description,
           "status": t.status.value,
@@ -40,6 +43,22 @@ async def list_threads(
           "backend": t.backend,
       } for t in threads
   ]
+
+  triggers = await trigger_mgr.list_triggers(session_id)
+  trigger_items = [
+      {
+          "type": "trigger",
+          "id": tr.id,
+          "message": tr.message,
+          "status": tr.status.value,
+          "fire_at": tr.fire_at.isoformat(),
+          "created_at": tr.created_at.isoformat(),
+      } for tr in triggers
+  ]
+
+  combined = thread_items + trigger_items
+  combined.sort(key=lambda x: x["created_at"], reverse=True)
+  return combined
 
 
 @router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadata)

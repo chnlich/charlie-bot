@@ -6,10 +6,12 @@ from src.core.config import get_config
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
 
 # Module-level singletons (created once per process)
 _session_manager: SessionManager | None = None
 _thread_manager: ThreadManager | None = None
+_trigger_manager: TriggerManager | None = None
 
 
 def get_session_manager() -> SessionManager:
@@ -24,6 +26,19 @@ def get_thread_manager() -> ThreadManager:
   if _thread_manager is None:
     _thread_manager = ThreadManager(get_config())
   return _thread_manager
+
+
+def get_trigger_manager() -> TriggerManager:
+  global _trigger_manager
+  if _trigger_manager is None:
+    _trigger_manager = TriggerManager(get_config(), get_session_manager())
+  return _trigger_manager
+
+
+def set_trigger_manager(mgr: TriggerManager) -> None:
+  """Set the trigger manager singleton (called from server lifespan)."""
+  global _trigger_manager
+  _trigger_manager = mgr
 
 
 async def require_session(

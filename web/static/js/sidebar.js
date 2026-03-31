@@ -954,6 +954,98 @@ async function toggleSessionStar(id, currentlyStarred) {
   }
 }
 
+async function showGroupSelector(sessionId, currentGroup) {
+  // Fetch existing groups
+  let groups = [];
+  try {
+    const res = await fetch('/api/sessions/groups');
+    if (res.ok) groups = await res.json();
+  } catch (err) {
+    console.error('Fetch groups failed:', err);
+  }
+
+  // Remove any existing modal
+  document.getElementById('group-modal-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'group-modal-overlay';
+  overlay.className = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
+
+  const groupButtons = groups.map(g => {
+    const isActive = g === currentGroup;
+    const activeClass = isActive ? 'bg-purple-600/30 text-purple-300 border-purple-500/50' : 'bg-slate-700 hover:bg-slate-600 text-slate-300 border-transparent';
+    return `<button data-group="${escapeHtml(g)}" class="w-full text-left px-3 py-2 rounded-lg text-sm border transition-colors ${activeClass}">${escapeHtml(g)}</button>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72"
+         onclick="event.stopPropagation()">
+      <p class="text-sm text-slate-300 mb-3 font-semibold">Set Group</p>
+      <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">
+        ${currentGroup ? `<button data-group="" class="w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-400 transition-colors">Remove group</button>` : ''}
+        ${groupButtons}
+      </div>
+      <div class="flex gap-2">
+        <input id="new-group-input" type="text" placeholder="New group name..."
+               class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-purple-500">
+        <button id="new-group-btn" class="px-3 py-1.5 text-sm rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition-colors">Add</button>
+      </div>
+    </div>`;
+
+  // Handle existing group clicks
+  overlay.querySelectorAll('[data-group]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const group = btn.dataset.group || null;
+      document.getElementById('group-modal-overlay')?.remove();
+      setSessionGroup(sessionId, group);
+    });
+  });
+
+  // Handle new group
+  const addNewGroup = () => {
+    const input = document.getElementById('new-group-input');
+    const name = input.value.trim();
+    if (!name) return;
+    document.getElementById('group-modal-overlay')?.remove();
+    setSessionGroup(sessionId, name);
+  };
+  overlay.querySelector('#new-group-btn').addEventListener('click', addNewGroup);
+  overlay.querySelector('#new-group-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addNewGroup();
+    if (e.key === 'Escape') document.getElementById('group-modal-overlay')?.remove();
+  });
+
+  // Close on overlay click
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  // Close on Escape
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      document.getElementById('group-modal-overlay')?.remove();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
+
+  document.body.appendChild(overlay);
+  document.getElementById('new-group-input').focus();
+}
+
+async function setSessionGroup(sessionId, group) {
+  try {
+    await fetch(`/api/sessions/${sessionId}/group`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({group}),
+    });
+    // Refresh the sidebar
+    switchSidebarFilter(currentFilter);
+  } catch (err) {
+    console.error('Set group failed:', err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Grouped scheduled task rendering
 // ---------------------------------------------------------------------------
@@ -1069,6 +1161,161 @@ function toggleCronGroup(key) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Grouped session list rendering (by session.group)
+// ---------------------------------------------------------------------------
+function renderGroupedSessionList(sessions, filter) {
+  const nav = document.getElementById('session-list');
+  if (!sessions.length) {
+    nav.innerHTML = '<p class="text-slate-500 text-sm px-3 py-2">No sessions yet</p>';
+    return;
+  }
+  // Group by s.group
+  const groups = {};
+  sessions.forEach(s => {
+    const key = s.group || '';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(s);
+  });
+  // Sort: named groups alphabetically, '' (no group) last
+  const sortedKeys = Object.keys(groups).sort((a, b) => {
+    if (a === '') return 1;
+    if (b === '') return -1;
+    return a.localeCompare(b);
+  });
+  // Load collapsed state from localStorage (expanded by default)
+  let collapsedState = {};
+  try { collapsedState = JSON.parse(localStorage.getItem('session-group-collapsed') || '{}'); } catch (e) {}
+
+  let html = '';
+  for (const key of sortedKeys) {
+    const label = key || '(No group)';
+    const groupSessions = groups[key];
+    const isCollapsed = collapsedState[key] === true; // expanded by default
+    const chevronClass = isCollapsed ? '' : 'rotate-90';
+    const safeKey = escapeHtml(key);
+
+    html += `<div class="session-group" data-sgroup-key="${safeKey}">
+      <div class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-700/30 rounded-lg select-none"
+           onclick="toggleSessionGroup('${safeKey}')">
+        <svg class="w-3 h-3 text-slate-500 transition-transform session-group-chevron ${chevronClass}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+        <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
+        <span class="text-xs text-slate-500 ml-auto">${groupSessions.length}</span>
+      </div>
+      <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
+        ${groupSessions.map(s => renderSessionItem(s, filter)).join('')}
+      </div>
+    </div>`;
+  }
+  nav.innerHTML = html;
+  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  updateRelativeTimes();
+}
+
+function toggleSessionGroup(key) {
+  let collapsedState = {};
+  try { collapsedState = JSON.parse(localStorage.getItem('session-group-collapsed') || '{}'); } catch (e) {}
+  const wasCollapsed = collapsedState[key] === true;
+  collapsedState[key] = !wasCollapsed;
+  localStorage.setItem('session-group-collapsed', JSON.stringify(collapsedState));
+
+  const items = document.querySelector(`[data-sgroup-items="${key}"]`);
+  if (items) items.classList.toggle('hidden');
+  const group = document.querySelector(`[data-sgroup-key="${key}"]`);
+  if (group) {
+    const chevron = group.querySelector('.session-group-chevron');
+    if (chevron) chevron.classList.toggle('rotate-90');
+  }
+}
+
+function renderSessionItem(s, filter) {
+  const starSvg = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
+  const isActive = SESSION_ID === s.id;
+  const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
+  const starFill = s.starred ? 'currentColor' : 'none';
+  const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
+  const activeBtnClass = isActive ? '!opacity-100' : '';
+  const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
+  const timeIso = s.updated_at || '';
+  let actions = '';
+  if (filter === 'archived') {
+    const ratingBadge = s.rating === 'thumbs_up' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs up">👍</span>'
+      : s.rating === 'neutral' ? '<span class="text-xs flex-shrink-0" title="Rated: neutral">—</span>'
+      : s.rating === 'thumbs_down' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs down">👎</span>'
+      : '';
+    actions = `
+      ${ratingBadge}
+      <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
+              class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
+        <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
+      </button>
+      <button onclick="event.preventDefault(); event.stopPropagation(); unarchiveSession('${s.id}')"
+              class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Unarchive">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/></svg>
+      </button>`;
+  } else if (filter === 'waiting') {
+    actions = `
+      <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
+              class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
+        <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
+      </button>
+      <button onclick="event.preventDefault(); event.stopPropagation(); unwaitSession('${s.id}')"
+              class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Reactivate">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      </button>
+      <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
+              class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>`;
+  } else {
+    const gearBtn = (filter === 'scheduled' && s.scheduled_task) ? `
+      <button onclick="event.preventDefault(); event.stopPropagation(); openCronEditor('${escapeHtml(s.scheduled_task)}')"
+              class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Edit task config">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>` : '';
+    const groupBtn = `
+      <button onclick="event.preventDefault(); event.stopPropagation(); showGroupSelector('${s.id}', ${s.group ? "'" + escapeHtml(s.group).replace(/'/g, "\\'") + "'" : 'null'})"
+              class="opacity-0 group-hover:opacity-100 p-1 hover:text-purple-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Set group">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>
+      </button>`;
+    actions = `
+      <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
+              class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
+        <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
+      </button>
+      <button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+              class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Rename">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+      </button>
+      ${groupBtn}
+      <button onclick="event.preventDefault(); event.stopPropagation(); waitSession('${s.id}')"
+              class="opacity-0 group-hover:opacity-100 p-1 hover:text-amber-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Mark waiting">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </button>
+      <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
+              class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+      </button>
+      ${gearBtn}`;
+  }
+  return `<a href="/?session=${s.id}&filter=${filter}"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
+     ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+     onclick="event.preventDefault(); switchSession('${s.id}')"
+     id="session-${s.id}">
+    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
+    ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
+    <span class="flex-1 min-w-0">
+      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
+      ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : `<span class="block text-xs text-slate-500 session-time" data-time="${timeIso}">${timeStr}</span>`}
+    </span>
+    ${actions}
+  </a>`;
+}
+
 function renderSessionList(sessions, filter) {
   if (filter === 'scheduled') {
     renderGroupedScheduledList(sessions);
@@ -1087,86 +1334,12 @@ function renderSessionList(sessions, filter) {
     nav.innerHTML = `<p class="text-slate-500 text-sm px-3 py-2">${labels[filter]}</p>`;
     return;
   }
-  const starSvg = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
-  nav.innerHTML = sessions.map(s => {
-    const isActive = SESSION_ID === s.id;
-    const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
-    const starFill = s.starred ? 'currentColor' : 'none';
-    const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
-    const activeBtnClass = isActive ? '!opacity-100' : '';
-    const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
-    const timeIso = s.updated_at || '';
-    // Action buttons differ by filter
-    let actions = '';
-    if (filter === 'archived') {
-      const ratingBadge = s.rating === 'thumbs_up' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs up">👍</span>'
-        : s.rating === 'neutral' ? '<span class="text-xs flex-shrink-0" title="Rated: neutral">—</span>'
-        : s.rating === 'thumbs_down' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs down">👎</span>'
-        : '';
-      actions = `
-        ${ratingBadge}
-        <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
-                class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
-          <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
-        </button>
-        <button onclick="event.preventDefault(); event.stopPropagation(); unarchiveSession('${s.id}')"
-                class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Unarchive">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/></svg>
-        </button>`;
-    } else if (filter === 'waiting') {
-      actions = `
-        <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
-                class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
-          <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
-        </button>
-        <button onclick="event.preventDefault(); event.stopPropagation(); unwaitSession('${s.id}')"
-                class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Reactivate">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-        </button>
-        <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
-                class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-        </button>`;
-    } else {
-      const gearBtn = (filter === 'scheduled' && s.scheduled_task) ? `
-        <button onclick="event.preventDefault(); event.stopPropagation(); openCronEditor('${escapeHtml(s.scheduled_task)}')"
-                class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Edit task config">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>` : '';
-      actions = `
-        <button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
-                class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
-          <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${starSvg}</svg>
-        </button>
-        <button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
-                class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Rename">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-        </button>
-        <button onclick="event.preventDefault(); event.stopPropagation(); waitSession('${s.id}')"
-                class="opacity-0 group-hover:opacity-100 p-1 hover:text-amber-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Mark waiting">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        </button>
-        <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
-                class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-        </button>
-        ${gearBtn}`;
-    }
-    return `<a href="/?session=${s.id}&filter=${filter}"
-       class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
-       ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
-       onclick="event.preventDefault(); switchSession('${s.id}')"
-       id="session-${s.id}">
-      <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-      <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
-      ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
-      <span class="flex-1 min-w-0">
-        <span class="truncate block session-name">${escapeHtml(s.name)}</span>
-        ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : `<span class="block text-xs text-slate-500 session-time" data-time="${timeIso}">${timeStr}</span>`}
-      </span>
-      ${actions}
-    </a>`;
-  }).join('');
+  // Use grouped rendering if not search and any session has a group
+  if (filter !== 'search' && sessions.some(s => s.group)) {
+    renderGroupedSessionList(sessions, filter);
+    return;
+  }
+  nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('');
   // Resync sessionUnread dict from fresh DOM data
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();

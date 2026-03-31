@@ -19,6 +19,7 @@ from src.core.models import (
     RenameSessionRequest,
     SessionMetadata,
     SessionStatus,
+    SetGroupRequest,
     ThreadMetadata,
 )
 from src.core.sessions import SessionManager
@@ -96,6 +97,14 @@ async def list_waiting_sessions(session_mgr: SessionManager = Depends(get_sessio
 async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List starred sessions, newest first."""
   return await session_mgr.list_sessions(starred=True, include_running_status=True)
+
+
+@router.get("/groups")
+async def list_groups(session_mgr: SessionManager = Depends(get_session_manager)):
+  """Return sorted distinct group names across all active sessions."""
+  sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  groups = sorted({s.group for s in sessions if s.group})
+  return groups
 
 
 @router.get("/scheduled", response_model=list[SessionMetadata])
@@ -343,6 +352,18 @@ async def rename_session(
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
   meta = await session_mgr.rename_session(session_id, req.name)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  return meta
+
+
+@router.post("/{session_id}/group", response_model=SessionMetadata)
+async def set_session_group(
+    session_id: str,
+    req: SetGroupRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  meta = await session_mgr.set_group(session_id, req.group)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
   return meta

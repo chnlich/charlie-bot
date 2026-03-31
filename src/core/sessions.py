@@ -332,6 +332,10 @@ class SessionManager:
     """Unstar a session."""
     return await self._update_field(session_id, "starred", False, "session_unstarred")
 
+  async def set_group(self, session_id: str, group: Optional[str]) -> Optional[SessionMetadata]:
+    """Set or clear the group for a session."""
+    return await self._update_field(session_id, "group", group, "session_group_set")
+
   async def save_metadata(self, meta: SessionMetadata) -> None:
     """Public wrapper for _save_metadata."""
     await self._save_metadata(meta)

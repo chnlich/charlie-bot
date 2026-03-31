@@ -107,6 +107,8 @@ class SessionMetadata(BaseModel):
   rewind_summary: Optional[str] = None  # context summary from parent session
   # Rating
   rating: Optional[SessionRating] = None
+  # Grouping
+  group: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +161,10 @@ class RenameSessionRequest(BaseModel):
 
 class RateSessionRequest(BaseModel):
   rating: SessionRating
+
+
+class SetGroupRequest(BaseModel):
+  group: Optional[str] = None
 
 
 class DelegateRequest(BaseModel):

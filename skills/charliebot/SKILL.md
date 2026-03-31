@@ -1,6 +1,6 @@
 ---
 name: charliebot
-description: CharlieBot self-knowledge and operating guidance.
+description: CharlieBot architecture, conventions, and feature reference. Use when modifying or discussing charlie-bot, its frontend, workers, sessions, scheduler, or backup system.
 version: 1.0.0
 ---
 
@@ -123,6 +123,48 @@ Manage via `/run <name>` or the API.
 - Use git worktrees for branch operations by default.
 - For `charlie-bot`, after a verified worktree change, it is okay to merge back into the main checkout automatically.
 - For other repos, especially `your_project`, keep the main checkout untouched unless the user explicitly approves otherwise.
+
+---
+
+## Workers & Sessions — Architecture Notes
+
+- **NEVER use `discover_repos()[0]` to get repo context for a derived/downstream task** (review workers, retries, continuations, chained tasks). `discover_repos()` returns repos in non-deterministic order. Always propagate `repo_path` explicitly from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` is only safe at the top-level entry point (user delegation, CLI). This is a recurring bug — always propagate repo_path explicitly.
+- Session CLAUDE.md: Each session gets a real `CLAUDE.md` file at `~/.charliebot/sessions/{id}/CLAUDE.md`, created by concatenating `MASTER_AGENT_PROMPT.md` + `MEMORY.md`. Done in `_ensure_master_claude_md()` (master_cc.py), called on every `run_message()`. Stale symlinks auto-removed.
+- Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
+- Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
+
+---
+
+## Sidebar & Frontend
+
+- New sidebar filter panels: When adding a filter panel (like "scheduled"), also add the filter name to the URL filter restoration array in `web/static/js/app.js` (`switchSidebarFilter` init). Without it, the page load doesn't restore the filter and falls back to "All".
+
+---
+
+## Skills System
+
+Custom CC skills live in `~/.charliebot/skills/`, symlinked to `~/.claude/skills/`. Skills with `user-invocable: false` are auto-loaded by CC when contextually relevant.
+
+---
+
+## Backup
+
+Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered retention. Manual backup trigger must be independent and must not affect the auto-backup schedule.
+
+---
+
+## Voice Input
+
+For voice-transcribed messages fed to CC, prepend: "The following message is from voice transcription and might not be accurate. Please ask first for any words that are unclear or might be wrong." Voice output (Gemini transcription) must be simplified Chinese or English only — never traditional Chinese.
+
+---
+
+## Improvement Decisions (Feb 2026)
+
+**Not needed (single-user):** test suite, SQLite (JSON preferred), worker retry/backoff, worker resource limits, rate limiting/auth.
+**Done:** session full-text search, error handling consistency, session rewind.
+**Planned:** worker templates as slash commands.
+**Deferred:** metrics/observability, notifications, multi-repo dashboard, semantic search, cost tracking, mobile UX, keyboard shortcuts.
 
 ---
 

@@ -142,7 +142,7 @@ async def test_empty_preference_uses_worker_backend(monkeypatch: pytest.MonkeyPa
   cfg = _build_cfg(model_preference=[])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -159,7 +159,7 @@ async def test_preference_selects_different_backend(monkeypatch: pytest.MonkeyPa
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -177,7 +177,7 @@ async def test_preference_skips_same_backend(monkeypatch: pytest.MonkeyPatch) ->
   cfg = _build_cfg(model_preference=["codex-o3", "claude-opus-4.6"])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -195,7 +195,7 @@ async def test_preference_skips_invalid_falls_back(monkeypatch: pytest.MonkeyPat
   cfg = _build_cfg(model_preference=["nonexistent-1", "nonexistent-2"])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -212,7 +212,7 @@ async def test_preference_all_same_as_worker_falls_back(monkeypatch: pytest.Monk
   cfg = _build_cfg(model_preference=["codex-o3"])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -230,7 +230,7 @@ async def test_preference_skips_invalid_then_selects_valid(monkeypatch: pytest.M
   cfg = _build_cfg(model_preference=["nonexistent", "kimi-k2.5"])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -251,7 +251,7 @@ async def test_retry_skips_tried_backend(monkeypatch: pytest.MonkeyPatch) -> Non
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -272,7 +272,7 @@ async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytes
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
   captured: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
 
@@ -292,7 +292,7 @@ async def test_retry_all_backends_exhausted_returns_false(monkeypatch: pytest.Mo
   """When all backends including worker are tried, returns False."""
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
 
   result = await review.spawn_review_worker(
       "session-id", _make_original_thread(backend="codex-o3", model="o3"),
@@ -309,7 +309,7 @@ async def test_tried_backends_propagated_to_review_thread(monkeypatch: pytest.Mo
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
   thread_mgr = FakeThreadManager()
 
-  monkeypatch.setattr(spawner, "_git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task({}))
 

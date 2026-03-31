@@ -130,8 +130,8 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     captures["notify_exit_code"] = exit_code
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "_git_current_branch", fake_git_current_branch)
-  monkeypatch.setattr(spawner, "_git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(spawner, "git_current_branch", fake_git_current_branch)
+  monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner, "Worker", FakeWorker)
   monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
 
@@ -275,7 +275,7 @@ async def test_spawn_review_worker_propagates_backend_model(
         pass
     return DummyTask()
 
-  monkeypatch.setattr(spawner, "_git_current_branch", fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", fake_create_logged_task)
 
@@ -332,7 +332,7 @@ async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
     return "main"
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "_git_current_branch", fake_git_current_branch)
+  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
 
   original = ThreadMetadata(
       id="origin-thread-id",

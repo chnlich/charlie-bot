@@ -31,6 +31,10 @@ function formatBubbleTime(isoStr) {
 }
 
 async function sendMessage() {
+  if (typeof uploadsInFlight !== 'undefined' && uploadsInFlight > 0) {
+    showToast('Please wait for uploads to finish', true);
+    return;
+  }
   const input = document.getElementById('msg-input');
   const content = input.value.trim();
   if ((!content && !uploadedFiles.length) || !SESSION_ID) return;

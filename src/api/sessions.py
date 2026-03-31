@@ -239,15 +239,15 @@ async def elone_session(
   # Build bootstrap prompt
   parent_events_path = session_mgr.get_chat_events_path(session_id)
   bootstrap_prompt = (
-      "You're taking over a task from a previous session where I wasn't satisfied.\n\n"
+      "You're taking over a task from a previous session where user wasn't satisfied.\n\n"
       f"Parent session: {session_id}\n"
       f"Events file: {parent_events_path} (read up to line {event_index})\n\n"
       "Your mission:\n"
       "1. Read the parent conversation\n"
-      "2. Identify what I was trying to achieve\n"
+      "2. Identify what the user was trying to achieve\n"
       "3. Analyze what went wrong with the previous approach\n"
       "4. State your critique concisely\n"
-      "5. Propose a better approach and ask me to confirm before proceeding")
+      "5. Propose a better approach and ask the user to confirm before proceeding")
 
   # Write synthetic user event and auto-start the assistant
   from src.api.chat import run_and_finalize

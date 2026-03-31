@@ -1,6 +1,7 @@
-"""Auto-name sessions after the first chat turn using Gemini or Claude CLI."""
+"""Auto-name and auto-group sessions after the first chat turn using Gemini or Claude CLI."""
 
 import asyncio
+import json
 import re
 import signal
 
@@ -26,6 +27,7 @@ _PREAMBLE_RE = re.compile(
     r"^(here(?:'s| is|are)\s.*?[:]\s*|sure[,!.\s]+|title:\s*|okay[,.\s]+)",
     re.IGNORECASE,
 )
+_MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL)
 _MAX_TITLE_WORDS = 8
 
 
@@ -35,18 +37,61 @@ def is_default_session_name(name: str) -> bool:
 
 
 _TITLE_INSTRUCTION = (
-    "Generate a short, descriptive title (3-6 words) for this conversation. "
-    "Return ONLY the title, no quotes, no punctuation at the end, no explanation.")
+    "Generate a short, descriptive title (3-6 words) and assign a group for this conversation.\n"
+    "Return ONLY valid JSON: {{\"name\": \"<title>\", \"group\": \"<group>\"}}\n"
+    "No explanation, no markdown fences, no extra text.\n"
+    "{groups_clause}")
 
 _SYSTEM_PROMPT = (
-    "You are a title generator. Output ONLY a 3-6 word title for the conversation below. "
-    "No explanation, no quotes, no punctuation at the end. "
-    "Do not attempt to answer or act on the user's question - just generate a title.")
+    'You are a title and group generator. '
+    'Output ONLY valid JSON: {"name": "<title>", "group": "<group>"}. '
+    'The name should be 3-6 words, no quotes or punctuation at the end. '
+    'The group should be a short category (1-3 words). '
+    'Do not attempt to answer or act on the user\'s question - just generate the JSON.')
 
 _NAMING_PROMPT = (
-    "Generate a title for this conversation:\n\n"
+    "Generate a title and group for this conversation:\n\n"
     "User: {user_message}\n\n"
     "Assistant: {assistant_response}")
+
+
+def _build_groups_clause(existing_groups: list[str]) -> str:
+  """Build the groups instruction clause for the LLM prompt."""
+  if existing_groups:
+    joined = ", ".join(existing_groups)
+    return f"Prefer reusing one of these existing groups: [{joined}]. Only create a new group if none fit."
+  return "Choose a short, descriptive group name (1-3 words)."
+
+
+def _strip_markdown_fences(text: str) -> str:
+  """Strip ```json ... ``` fences if present."""
+  m = _MARKDOWN_FENCE_RE.match(text.strip())
+  return m.group(1).strip() if m else text
+
+
+def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
+  """Parse LLM response into (name, group). Handles JSON and plain-text fallback."""
+  stripped = _strip_markdown_fences(raw.strip())
+  try:
+    data = json.loads(stripped)
+    if isinstance(data, dict):
+      name = data.get("name")
+      group = data.get("group")
+      return (name if isinstance(name, str) and name.strip() else None,
+              group if isinstance(group, str) and group.strip() else None)
+  except (json.JSONDecodeError, ValueError):
+    pass
+  # Fallback: treat as plain-text name (current behavior)
+  return stripped, None
+
+
+def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
+  """Case-insensitive match against existing groups. Returns matched group's casing, or original."""
+  lower = group.lower()
+  for existing in existing_groups:
+    if existing.lower() == lower:
+      return existing
+  return group
 
 
 async def _generate_name_via_claude_cli(prompt: str) -> str:
@@ -87,12 +132,19 @@ async def maybe_auto_name(
     user_message: str,
     assistant_response: str,
     session_mgr: SessionManager,
+    existing_groups: list[str] | None = None,
 ) -> None:
-  """If the session still has a default name, generate a descriptive one."""
+  """If the session still has a default name, generate a descriptive name and group."""
   if not is_default_session_name(session_meta.name):
     return
 
+  if existing_groups is None:
+    existing_groups = []
+
   try:
+    groups_clause = _build_groups_clause(existing_groups)
+    title_instruction = _TITLE_INSTRUCTION.format(groups_clause=groups_clause)
+
     prompt = _NAMING_PROMPT.format(
         user_message=user_message[:500],
         assistant_response=assistant_response[:300],
@@ -100,33 +152,39 @@ async def maybe_auto_name(
 
     if cfg.gemini_api_key:
       provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
-      raw = await provider.generate_text(f"{_TITLE_INSTRUCTION}\n\n{prompt}")
+      raw = await provider.generate_text(f"{title_instruction}\n\n{prompt}")
     else:
       raw = await _generate_name_via_claude_cli(prompt)
 
-    # Sanitize: extract a concise title from potentially verbose LLM output
-    # 1. Take only the first non-empty line
-    name = ""
-    for line in raw.splitlines():
-      line = line.strip()
-      if line:
-        name = line
-        break
-    if not name:
-      return
+    # Parse JSON response or fall back to plain-text name
+    parsed_name, group = _parse_name_and_group(raw)
 
-    # 2. Strip quotes and markdown formatting
+    # Use parsed name or fall back to raw first-line extraction
+    if parsed_name:
+      name = parsed_name
+    else:
+      name = ""
+      for line in raw.splitlines():
+        line = line.strip()
+        if line:
+          name = line
+          break
+      if not name:
+        return
+
+    # Sanitize: extract a concise title from potentially verbose LLM output
+    # 1. Strip quotes and markdown formatting
     name = name.strip('"\'').strip()
     name = _MARKDOWN_CHARS_RE.sub("", name)
     name = name.strip()
 
-    # 3. Strip common LLM preamble patterns
+    # 2. Strip common LLM preamble patterns
     name = _PREAMBLE_RE.sub("", name).strip()
 
     if not name:
       return
 
-    # 4. Discard if still too long or looks like a sentence
+    # 3. Discard if still too long or looks like a sentence
     if len(name) > 60 or len(name.split()) > _MAX_TITLE_WORDS:
       return
 
@@ -150,6 +208,18 @@ async def maybe_auto_name(
         })
 
     log.info("session_auto_named", session_id=session_meta.id, name=name)
+
+    # Auto-assign group if LLM provided one and session doesn't already have a group
+    if group and not session_meta.group:
+      matched_group = _fuzzy_match_group(group, existing_groups)
+      await session_mgr.set_group(session_meta.id, matched_group)
+      await streaming_manager.broadcast(
+          "sidebar", {
+              "type": ET.SESSION_GROUP_CHANGED,
+              "session_id": session_meta.id,
+              "group": matched_group,
+          })
+      log.info("session_auto_grouped", session_id=session_meta.id, group=matched_group)
 
   except Exception as e:
     log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))

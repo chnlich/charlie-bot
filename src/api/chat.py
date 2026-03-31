@@ -204,7 +204,7 @@ async def _auto_name(
     user_message: str,
     session_mgr: SessionManager,
 ) -> None:
-  """Extract assistant response from saved events and auto-name the session."""
+  """Extract assistant response from saved events and auto-name/group the session."""
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_meta.id)
   assistant_text = ""
   for ev in events:
@@ -214,4 +214,8 @@ async def _auto_name(
   if not assistant_text:
     return
 
-  await maybe_auto_name(cfg, session_meta, user_message, assistant_text, session_mgr)
+  # Collect existing group names so the LLM can reuse them
+  all_sessions = await session_mgr.list_sessions()
+  existing_groups = sorted({s.group for s in all_sessions if s.group})
+
+  await maybe_auto_name(cfg, session_meta, user_message, assistant_text, session_mgr, existing_groups)

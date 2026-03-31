@@ -101,6 +101,10 @@ def test_extract_latest_codex_usage_handles_null_rate_limit_buckets() -> None:
       "rate_limits": {
         "primary": None,
         "secondary": None,
+        "credits": {
+          "unlimited": True,
+        },
+        "plan_type": "business",
       },
     },
   })]
@@ -119,6 +123,37 @@ def test_extract_latest_codex_usage_handles_null_rate_limit_buckets() -> None:
     "fetched_at": fetched_at,
     "provider": "codex",
     "rate_limits_state": "business-unlimited",
+    "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+  }
+
+
+def test_extract_latest_codex_usage_does_not_assume_business_state_without_metadata() -> None:
+  fetched_at = "2026-03-27T18:40:00+00:00"
+  lines = [json.dumps({
+    "timestamp": "2026-03-27T18:39:35.694Z",
+    "type": "event_msg",
+    "payload": {
+      "type": "token_count",
+      "rate_limits": {
+        "primary": None,
+        "secondary": None,
+      },
+    },
+  })]
+
+  usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
+
+  assert usage == {
+    "five_hour": {
+      "utilization": 0.0,
+      "resets_at": "",
+    },
+    "seven_day": {
+      "utilization": 0.0,
+      "resets_at": "",
+    },
+    "fetched_at": fetched_at,
+    "provider": "codex",
     "token_count_observed_at": "2026-03-27T18:39:35.694Z",
   }
 

@@ -176,6 +176,7 @@ def _transform_codex_response(
   rate_limits = payload.get("rate_limits") or {}
   primary = rate_limits.get("primary")
   secondary = rate_limits.get("secondary")
+  credits = rate_limits.get("credits")
 
   usage = {
       "five_hour":
@@ -202,7 +203,11 @@ def _transform_codex_response(
       "primary" in rate_limits and
       "secondary" in rate_limits and
       primary is None and
-      secondary is None
+      secondary is None and
+      (
+          (isinstance(credits, dict) and credits.get("unlimited") is True) or
+          rate_limits.get("plan_type") == "business"
+      )
   ):
     usage["rate_limits_state"] = "business-unlimited"
   return usage

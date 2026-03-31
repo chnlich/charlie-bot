@@ -1067,7 +1067,7 @@
     pattern). Update the except clause to catch (ProcessLookupError, PermissionError)
     instead of (OSError, ProcessLookupError) for consistency. Add imports for signal
     and kill_process_group. 3-line change total.
-  status: approved
+  status: done
   created: '2026-03-30T12:00:00Z'
   priority: high
 - id: '071'

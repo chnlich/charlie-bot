@@ -1,7 +1,6 @@
 """Initialize ~/.charliebot/ directory structure on first run."""
 
 import json
-import os
 import signal
 from datetime import datetime, timezone
 

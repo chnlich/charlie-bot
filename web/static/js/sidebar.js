@@ -813,7 +813,7 @@ function doDeletePermanently(sessionId) {
       if (SESSION_ID === sessionId) {
         location.href = '/?session=';
       } else {
-        document.getElementById('session-' + sessionId)?.remove();
+        switchSidebarFilter(currentFilter);
       }
     } catch (err) {
       console.error('Permanent delete failed:', err);
@@ -835,7 +835,7 @@ async function doArchiveWithRating(sessionId, rating) {
     if (SESSION_ID === sessionId) {
       location.href = '/?session=';
     } else {
-      document.getElementById('session-' + sessionId)?.remove();
+      switchSidebarFilter(currentFilter);
     }
   } catch (err) {
     console.error('Archive failed:', err);
@@ -845,7 +845,7 @@ async function doArchiveWithRating(sessionId, rating) {
 async function unarchiveSession(id) {
   try {
     await fetch(`/api/sessions/${id}/unarchive`, { method: 'POST' });
-    document.getElementById('session-' + id)?.remove();
+    switchSidebarFilter(currentFilter);
   } catch (err) {
     console.error('Unarchive failed:', err);
   }
@@ -900,7 +900,7 @@ async function waitSession(id) {
     if (SESSION_ID === id) {
       location.href = '/?session=';
     } else {
-      document.getElementById('session-' + id)?.remove();
+      switchSidebarFilter(currentFilter);
     }
   } catch (err) {
     console.error('Wait failed:', err);
@@ -910,7 +910,7 @@ async function waitSession(id) {
 async function unwaitSession(id) {
   try {
     await fetch(`/api/sessions/${id}/unwait`, { method: 'POST' });
-    document.getElementById('session-' + id)?.remove();
+    switchSidebarFilter(currentFilter);
   } catch (err) {
     console.error('Unwait failed:', err);
   }
@@ -996,7 +996,7 @@ async function toggleSessionStar(id, currentlyStarred) {
     await fetch(`/api/sessions/${id}/${endpoint}`, { method: 'POST' });
     // If viewing starred filter and we just unstarred, remove from list
     if (currentFilter === 'starred' && currentlyStarred) {
-      document.getElementById('session-' + id)?.remove();
+      switchSidebarFilter(currentFilter);
     }
   } catch (err) {
     console.error('Star toggle failed:', err);

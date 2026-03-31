@@ -375,11 +375,16 @@ class SessionManager:
       fresh.cc_session_id = cc_session_id
       await self._save_metadata(fresh)
 
-  async def clear_thinking_since(self, session_id: str) -> None:
-    """Clear thinking_since without clobbering unrelated metadata fields (e.g. has_unread)."""
+  async def clear_thinking_since(self, session_id: str, cc_session_id: Optional[str] = None) -> None:
+    """Clear thinking_since without clobbering unrelated metadata fields (e.g. has_unread).
+
+    If cc_session_id is provided, also persist it (avoids race with persist_cc_session_id).
+    """
     fresh = await self.get_session(session_id)
     if fresh:
       fresh.thinking_since = None
+      if cc_session_id and fresh.cc_session_id != cc_session_id:
+        fresh.cc_session_id = cc_session_id
       await self._save_metadata(fresh)
 
   def list_active_session_ids(self) -> list[SessionMetadata]:

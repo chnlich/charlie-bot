@@ -308,7 +308,7 @@ async def _session_consumer(session_id: str) -> None:
         if not still_thinking:
           item.session_meta.thinking_since = None
           if item.clear_thinking_since:
-            await item.clear_thinking_since(session_id)
+            await item.clear_thinking_since(session_id, cc_session_id)
           await streaming_manager.broadcast(
               "sidebar", {
                   "type": ET.RUNNING_CHANGED,
@@ -364,7 +364,7 @@ async def run_message(
     save_metadata: Coroutine to persist session metadata updates.
     mark_unread: Coroutine to mark the session unread for other viewers.
     clear_thinking_since: Coroutine to clear thinking_since by re-reading fresh
-      metadata from disk, avoiding clobbering has_unread.
+      metadata from disk, avoiding clobbering has_unread. Also saves cc_session_id.
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
 

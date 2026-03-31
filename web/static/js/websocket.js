@@ -254,5 +254,13 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     if (trigger) msg += ' (' + trigger + ')';
     if (preTokens) msg += ' — was ' + Math.round(preTokens / 1000) + 'k tokens';
     appendMessage('system', msg, false, ev.timestamp);
+  } else if (t === 'clone_start') {
+    if (streamBuf) {
+      if (catchupDone) hideStreaming();
+      appendMessage('assistant', streamBuf, false, streamTs);
+      streamBuf = '';
+      streamTs = null;
+    }
+    appendCloneBanner(ev.parent_session_name || 'Unknown session', ev.parent_session_id || '');
   }
 }

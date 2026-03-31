@@ -297,6 +297,19 @@
               {% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}
             </div>
           </div>
+          {% elif msg.role == 'clone_start' %}
+          <div class="flex items-center gap-3 py-3 px-4">
+            <div class="flex-1 border-t border-purple-500/40"></div>
+            <div class="flex items-center gap-2 text-purple-400 text-xs">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/>
+              </svg>
+              <span>Cloned from
+                <a href="/?session={{ msg.parent_session_id }}" class="text-purple-300 hover:text-purple-200 underline">{{ msg.content }}</a>
+              </span>
+            </div>
+            <div class="flex-1 border-t border-purple-500/40"></div>
+          </div>
           {% elif msg.role == 'separator' %}
           <div class="flex items-center gap-3 py-2 px-4 separator-line group/sep">
             <div class="flex-1 border-t border-slate-600/40"></div>

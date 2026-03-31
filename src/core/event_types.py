@@ -30,6 +30,9 @@ HANDLER_RESULT = "handler_result"
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
 
+# -- Clone / fork ------------------------------------------------------------
+CLONE_START = "clone_start"
+
 # -- Improve loop ------------------------------------------------------------
 IMPROVE_ITERATION_COMPLETED = "improve_iteration_completed"
 IMPROVE_COMPLETED = "improve_completed"

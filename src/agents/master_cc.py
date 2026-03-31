@@ -296,8 +296,7 @@ async def _session_consumer(session_id: str) -> None:
         # Broadcast MASTER_DONE
         thinking_seconds = None
         if not still_thinking and item.session_meta.thinking_since:
-          thinking_seconds = int(
-              (datetime.now(timezone.utc) - item.session_meta.thinking_since).total_seconds())
+          thinking_seconds = int((datetime.now(timezone.utc) - item.session_meta.thinking_since).total_seconds())
 
         done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking": still_thinking}
         if thinking_seconds is not None:
@@ -389,8 +388,7 @@ async def run_message(
 
   # If no consumer is running for this session, set thinking state now.
   # If a consumer is already running, thinking is already active.
-  consumer_already_running = (
-      session_meta.id in _session_consumers and not _session_consumers[session_meta.id].done())
+  consumer_already_running = (session_meta.id in _session_consumers and not _session_consumers[session_meta.id].done())
   if not consumer_already_running:
     session_meta.thinking_since = datetime.now(timezone.utc)
     if save_metadata:

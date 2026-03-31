@@ -1,6 +1,7 @@
 """Regression tests for session group change broadcasts and group inheritance."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -98,3 +99,46 @@ async def test_elone_session_inherits_none_group(tmp_path: Path) -> None:
 
   assert child is not None
   assert child.group is None
+
+
+@pytest.mark.asyncio
+async def test_update_thinking_state_preserves_newer_group_from_disk(tmp_path: Path) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  cfg = SimpleNamespace(sessions_dir=mgr._cfg.sessions_dir)
+  concurrent_mgr = SessionManager(cfg)
+  verify_mgr = SessionManager(cfg)
+  meta = SessionMetadata(name="Session 1")
+  await mgr._save_metadata(meta)
+
+  # Populate mgr's metadata cache with a stale pre-group snapshot.
+  await mgr.get_session(meta.id)
+
+  concurrent_meta = await concurrent_mgr.get_session(meta.id)
+  assert concurrent_meta is not None
+  concurrent_meta.group = "Research"
+  await concurrent_mgr.save_metadata(concurrent_meta)
+
+  thinking_since = datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc)
+  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
+  await mgr.update_thinking_state(meta.id, thinking_since, updated_at)
+
+  updated = await verify_mgr.get_session(meta.id)
+  assert updated is not None
+  assert updated.group == "Research"
+  assert updated.thinking_since == thinking_since
+  assert updated.updated_at == updated_at
+
+
+@pytest.mark.asyncio
+async def test_update_thinking_state_can_leave_existing_thinking_since_unchanged(tmp_path: Path) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  meta = SessionMetadata(name="Session 1", thinking_since=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc))
+  await mgr._save_metadata(meta)
+
+  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
+  await mgr.update_thinking_state(meta.id, updated_at=updated_at)
+
+  updated = await mgr.get_session(meta.id)
+  assert updated is not None
+  assert updated.thinking_since == datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc)
+  assert updated.updated_at == updated_at

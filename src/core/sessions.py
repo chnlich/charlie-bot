@@ -26,6 +26,7 @@ log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 5.0  # seconds
 _CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+_UNSET = object()
 
 
 def _summarize_event_lines(lines: list[str]) -> str:
@@ -465,17 +466,19 @@ class SessionManager:
   async def update_thinking_state(
       self,
       session_id: str,
-      thinking_since: Optional[datetime],
+      thinking_since: Optional[datetime] | object = _UNSET,
       updated_at: Optional[datetime] = None,
   ) -> None:
-    """Persist thinking_since (and optionally updated_at) without clobbering unrelated fields.
+    """Persist thinking_since and/or updated_at without clobbering unrelated fields.
 
     Re-reads fresh metadata from disk before writing, so concurrent changes
     to fields like 'group' are preserved.
     """
+    self._invalidate_cache(session_id)
     fresh = await self.get_session(session_id)
     if fresh:
-      fresh.thinking_since = thinking_since
+      if thinking_since is not _UNSET:
+        fresh.thinking_since = thinking_since
       if updated_at is not None:
         fresh.updated_at = updated_at
       await self._save_metadata(fresh)

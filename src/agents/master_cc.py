@@ -417,7 +417,7 @@ async def run_message(
     # Still save metadata even when consumer is already running
     # (e.g. updated_at changed above).
     if update_thinking_state:
-      await update_thinking_state(session_meta.id, session_meta.thinking_since, session_meta.updated_at)
+      await update_thinking_state(session_meta.id, updated_at=session_meta.updated_at)
 
   # Create a future for the caller to await.
   loop = asyncio.get_running_loop()

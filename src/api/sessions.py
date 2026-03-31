@@ -15,7 +15,9 @@ from src.api.message_utils import build_session_view_data_fast, events_to_messag
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
+    DeleteGroupRequest,
     RateSessionRequest,
+    RenameGroupRequest,
     RenameSessionRequest,
     SessionMetadata,
     SessionStatus,
@@ -105,6 +107,20 @@ async def list_groups(session_mgr: SessionManager = Depends(get_session_manager)
   sessions = await session_mgr.list_sessions()
   groups = sorted({s.group for s in sessions if s.group})
   return groups
+
+
+@router.post("/groups/rename")
+async def rename_group(req: RenameGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)):
+  """Rename a group across all sessions."""
+  count = await session_mgr.rename_group(req.old_name, req.new_name)
+  return {"updated": count}
+
+
+@router.post("/groups/delete")
+async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)):
+  """Remove a group from all sessions (sets group to null)."""
+  count = await session_mgr.delete_group(req.group)
+  return {"updated": count}
 
 
 @router.get("/scheduled", response_model=list[SessionMetadata])

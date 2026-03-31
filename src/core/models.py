@@ -167,6 +167,15 @@ class SetGroupRequest(BaseModel):
   group: Optional[str] = None
 
 
+class RenameGroupRequest(BaseModel):
+  old_name: str
+  new_name: str
+
+
+class DeleteGroupRequest(BaseModel):
+  group: str
+
+
 class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str

@@ -1178,3 +1178,27 @@
   status: pending
   created: '2026-03-31T14:00:00Z'
   priority: medium
+- id: '076'
+  title: Refactor _check_takeoff_gate to use SessionManager instead of hardcoded path
+    and raw file I/O
+  description: 'PURPOSE — Eliminate a hardcoded session data path and raw sync file
+    I/O that bypasses SessionManager encapsulation. core/spawner.py _check_takeoff_gate
+    (L418-449) constructs the chat_events.jsonl path inline (Path.home() / ".charliebot"
+    / "sessions" / session_id / "data" / "chat_events.jsonl") instead of going through
+    SessionManager._chat_events_path(). It then calls events_path.read_text() and
+    manually parses every JSON line in reverse to find the last user message. This
+    duplicates path construction logic, bypasses the in-memory _events_cache that
+    SessionManager maintains for active sessions, and performs unnecessary full-file
+    reads for sessions that are already loaded. HOW — Change _check_takeoff_gate to
+    accept a SessionManager parameter. Use session_mgr.load_chat_events_sync(session_id)
+    which returns cached events when available or populates the cache on first read.
+    Iterate the returned list in reverse for the last user event, replacing the manual
+    JSON parsing loop. Also wrap the call in asyncio.to_thread at the spawn_worker
+    call site (L471-472) since load_chat_events_sync may do file I/O on cache miss.
+    The function shrinks from 32 lines to ~15 lines and eliminates the only remaining
+    inline session-path construction outside SessionManager. ~20 lines changed across
+    1 file.'
+  category: maintainability
+  status: pending
+  created: '2026-03-31T18:00:00Z'
+  priority: medium

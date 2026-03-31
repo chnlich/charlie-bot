@@ -174,30 +174,38 @@ def _transform_codex_response(
   """Transform a Codex token_count event into our cached usage format."""
   payload = event.get("payload", {})
   rate_limits = payload.get("rate_limits") or {}
-  primary = rate_limits.get("primary") or {}
-  secondary = rate_limits.get("secondary") or {}
+  primary = rate_limits.get("primary")
+  secondary = rate_limits.get("secondary")
 
-  return {
+  usage = {
       "five_hour":
           {
               "utilization":
-                  primary.get("used_percent", 0.0),
+                  (primary or {}).get("used_percent", 0.0),
               "resets_at":
                   datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
-                  if "resets_at" in primary else "",
+                  if isinstance(primary, dict) and "resets_at" in primary else "",
           },
       "seven_day":
           {
               "utilization":
-                  secondary.get("used_percent", 0.0),
+                  (secondary or {}).get("used_percent", 0.0),
               "resets_at":
                   datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
-                  if "resets_at" in secondary else "",
+                  if isinstance(secondary, dict) and "resets_at" in secondary else "",
           },
       "fetched_at": fetched_at,
       "provider": "codex",
       "token_count_observed_at": event.get("timestamp", ""),
   }
+  if (
+      "primary" in rate_limits and
+      "secondary" in rate_limits and
+      primary is None and
+      secondary is None
+  ):
+    usage["rate_limits_state"] = "business-unlimited"
+  return usage
 
 
 async def _refresh_access_token(refresh_token: str) -> str | None:

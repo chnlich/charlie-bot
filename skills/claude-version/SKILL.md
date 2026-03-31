@@ -55,7 +55,7 @@ cp -r /tmp/package/* ~/.local/share/claude/versions/<VERSION>-node/
 # 2. Create wrapper script
 cat > ~/.local/share/claude/versions/<VERSION> << 'EOF'
 #!/bin/bash
-exec "$(dirname "$0")/../../../.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" | sort -V | tail -1)/bin/node" \
+exec "$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" | sort -V | tail -1)/bin/node" \
      "$HOME/.local/share/claude/versions/<VERSION>-node/cli.js" "$@"
 EOF
 chmod +x ~/.local/share/claude/versions/<VERSION>

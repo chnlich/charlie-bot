@@ -39,6 +39,7 @@ IMPROVE_FAILED = "improve_failed"
 RUNNING_CHANGED = "running_changed"
 UNREAD_CHANGED = "unread_changed"
 SESSION_RENAMED = "session_renamed"
+SESSION_GROUP_CHANGED = "session_group_changed"
 
 # -- LaTeX -------------------------------------------------------------------
 TEX_EDIT_PROPOSED = "tex_edit_proposed"

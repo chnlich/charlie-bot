@@ -143,7 +143,9 @@ Manage via `/run <name>` or the API.
 
 ## Skills System
 
-Custom CC skills live in `~/.charliebot/skills/`, symlinked to `~/.claude/skills/`. Skills with `user-invocable: false` are auto-loaded by CC when contextually relevant.
+Shared skills live in `<charlie-bot-repo>/skills/`; host-specific skills live in
+`~/.charliebot/skills/`. Both sync into `~/.claude/skills/`.
+Skills with `user-invocable: false` are auto-loaded by CC when contextually relevant.
 
 ---
 

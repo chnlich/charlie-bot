@@ -973,7 +973,8 @@
   created: '2026-03-26T12:00:00Z'
   priority: medium
 - id: '066'
-  title: Add thread-to-session reverse index in ThreadManager with directory-scan fallback
+  title: Add thread-to-session reverse index in ThreadManager with directory-scan
+    fallback
   description: 'PURPOSE — Eliminate the O(n) session-directory scan in server.py _find_events_file
     (L218-228) that runs on every thread WebSocket connection. Connecting to /ws/threads/{thread_id}
     triggers a linear scan of all session directories calling Path.exists() to locate
@@ -996,56 +997,56 @@
   priority: medium
 - id: '067'
   title: Extract built-in /improve and /run handlers from execute_command
-  description: 'PURPOSE — Reduce the 4th-longest function in the codebase (execute_command,
+  description: PURPOSE — Reduce the 4th-longest function in the codebase (execute_command,
     api/slash.py, 104 lines) by extracting the two largest built-in command handlers
     into dedicated async functions. The /improve handler (L108-133, 26 lines) performs
-    argument parsing, validation, ImproveState creation, prompt building, and task firing.
-    The /run handler (L144-167, 24 lines) validates the task name against scheduled
-    tasks, looks up the scheduler from app state, invokes run_task_now, and formats
-    the result. Both are self-contained blocks with clear inputs and outputs separated
-    by early returns. HOW — Extract async _handle_improve(args, session_id, meta, cfg,
-    session_mgr) and async _handle_run(args, request) as module-level functions returning
-    the response dict or JSONResponse. The /help (3 lines) and /stop-improve (6 lines)
-    handlers are small enough to stay inline. execute_command becomes a ~48-line dispatcher.
-    Pure refactoring, no behavior change. Follows the pattern from items 003, 021,
-    027, 041, 058, 061, 062, and 063 which split other long functions.'
+    argument parsing, validation, ImproveState creation, prompt building, and task
+    firing. The /run handler (L144-167, 24 lines) validates the task name against
+    scheduled tasks, looks up the scheduler from app state, invokes run_task_now,
+    and formats the result. Both are self-contained blocks with clear inputs and outputs
+    separated by early returns. HOW — Extract async _handle_improve(args, session_id,
+    meta, cfg, session_mgr) and async _handle_run(args, request) as module-level functions
+    returning the response dict or JSONResponse. The /help (3 lines) and /stop-improve
+    (6 lines) handlers are small enough to stay inline. execute_command becomes a
+    ~48-line dispatcher. Pure refactoring, no behavior change. Follows the pattern
+    from items 003, 021, 027, 041, 058, 061, 062, and 063 which split other long functions.
   status: pending
   created: '2026-03-30T12:00:00Z'
   priority: medium
-- id: '068'
+- id: 068
   title: Centralize hardcoded timeout values into named constants module
-  description: 'PURPOSE — 17+ timeout literals (10, 30, 60 seconds) are scattered across
-    9 files (spawner.py, latex.py, autonamer.py, notifications.py, ext_usage.py, git.py,
-    pages.py, delegate.py, improve.py) with no documentation of why each value was
-    chosen. Adjusting a timeout policy (e.g. increasing subprocess timeouts during
+  description: 'PURPOSE — 17+ timeout literals (10, 30, 60 seconds) are scattered
+    across 9 files (spawner.py, latex.py, autonamer.py, notifications.py, ext_usage.py,
+    git.py, pages.py, delegate.py, improve.py) with no documentation of why each value
+    was chosen. Adjusting a timeout policy (e.g. increasing subprocess timeouts during
     debugging) requires hunting through multiple files. HOW — Create src/core/timeouts.py
     with named constants grouped by domain: SUBPROCESS_GIT_TIMEOUT (10s), HTTP_CLIENT_TIMEOUT
     (30s), LATEX_COMPILE_TIMEOUT (60s), NOTIFICATION_TIMEOUT (10s), AUTONAMER_TIMEOUT
     (30s), etc. Replace all bare numeric timeout= arguments with the corresponding
     constant. Each constant gets a one-line comment explaining the rationale. Leave
-    backend-internal timeouts (_POST_RESULT_TIMEOUT, _CLEANUP_TIMEOUT in base.py) as-is
-    since they are already named constants. Pure mechanical replacement, no behavior
-    change.'
+    backend-internal timeouts (_POST_RESULT_TIMEOUT, _CLEANUP_TIMEOUT in base.py)
+    as-is since they are already named constants. Pure mechanical replacement, no
+    behavior change.'
   status: pending
   created: '2026-03-30T12:00:00Z'
   priority: low
-- id: '069'
+- id: 069
   title: Extract timing instrumentation from run_message into _RunTimingTracker helper
     class
   description: 'PURPOSE — Reduce the longest function in the codebase (run_message,
-    207 lines) by ~45 lines by extracting the timing/instrumentation concern that is
-    interleaved throughout the function into a self-contained helper class. Currently
+    207 lines) by ~45 lines by extracting the timing/instrumentation concern that
+    is interleaved throughout the function into a self-contained helper class. Currently
     58 lines of monotonic timing code are spread across 5 locations in run_message:
     4 timing variable declarations (L253-260), a 4-line _on_spawn callback (L263-266),
     17 lines of first-event timing with slow-start warning (L284-300), 16 lines of
     first-assistant-text timing with content-block iteration (L302-317), and 17 lines
-    of finish-extras construction with slow-total warning (L332-348). This timing logic
-    is completely orthogonal to the core event-processing flow but obscures it. HOW
-    — Create a _RunTimingTracker class in master_cc.py with __init__(session_id, backend_type,
-    model), on_spawn(pid), on_event(event), and build_finish_extras() methods. The
-    event loop body drops from 37 lines to 2 lines: tracker.on_event(event) then _handle_event().
-    The _on_spawn callback becomes tracker.on_spawn. The finally block replaces 17
-    lines of timing dict construction with finish_extras = tracker.build_finish_extras().
+    of finish-extras construction with slow-total warning (L332-348). This timing
+    logic is completely orthogonal to the core event-processing flow but obscures
+    it. HOW — Create a _RunTimingTracker class in master_cc.py with __init__(session_id,
+    backend_type, model), on_spawn(pid), on_event(event), and build_finish_extras()
+    methods. The event loop body drops from 37 lines to 2 lines: tracker.on_event(event)
+    then _handle_event(). The _on_spawn callback becomes tracker.on_spawn. The finally
+    block replaces 17 lines of timing dict construction with finish_extras = tracker.build_finish_extras().
     ~30 lines for the class, net reduction of ~25 lines in run_message, bringing it
     to ~180 lines. Pure refactoring, no behavior change. Follows the pattern from
     items 003, 061, and 062 which split other long functions by extracting orthogonal
@@ -1055,58 +1056,58 @@
   priority: medium
 - id: '070'
   title: Use kill_process_group instead of os.kill in orphan recovery
-  description: 'PURPOSE — Fix orphan recovery leaving child processes behind. _recover_orphaned_threads
+  description: PURPOSE — Fix orphan recovery leaving child processes behind. _recover_orphaned_threads
     in core/init.py:123 uses os.kill(pid, 15) to terminate orphaned workers, but worker
     subprocesses are started with start_new_session=True (base.py), giving each its
     own process group. os.kill only signals the group leader, leaving child processes
     (e.g. git, node) running as new orphans — the recovery function creates the very
-    problem it solves. Also uses magic number 15 instead of signal.SIGTERM. HOW — Replace
-    os.kill(pid, 15) with kill_process_group(pid, signal.SIGTERM) from src.core.process,
+    problem it solves. Also uses magic number 15 instead of signal.SIGTERM. HOW —
+    Replace os.kill(pid, 15) with kill_process_group(pid, signal.SIGTERM) from src.core.process,
     matching all other kill sites in the codebase (items 039 and 060 established this
     pattern). Update the except clause to catch (ProcessLookupError, PermissionError)
     instead of (OSError, ProcessLookupError) for consistency. Add imports for signal
-    and kill_process_group. 3-line change total.'
-  status: pending
+    and kill_process_group. 3-line change total.
+  status: approved
   created: '2026-03-30T12:00:00Z'
   priority: high
 - id: '071'
   title: Extract review pipeline from spawner.py into core/review.py
   description: 'PURPOSE — Reduce the largest module in the codebase (spawner.py, 1216
-    lines, 30 functions) by ~26% by extracting the self-contained review pipeline into
-    a dedicated module. Six private functions totalling ~322 lines form a cohesive
+    lines, 30 functions) by ~26% by extracting the self-contained review pipeline
+    into a dedicated module. Six private functions totalling ~322 lines form a cohesive
     unit with a clear entry point (_maybe_spawn_reviewer, called from _finalize_worker):
     _build_review_prompt (58 lines, L95), _extract_review_context (52 lines, L155),
-    _validate_review_prerequisites (31 lines, L856), _select_reviewer_backend (42 lines,
-    L888), _spawn_review_worker (73 lines, L932), and _maybe_spawn_reviewer (66 lines,
-    L1056). These functions only interact with spawner.py through well-defined interfaces
-    (ThreadMetadata, SessionManager, ThreadManager, CharlieBotConfig, and two shared
-    helpers: resolve_backend_option and _require_thread_backend_model). HOW — Create
-    src/core/review.py containing the 6 functions, importing shared types and the two
-    helpers from spawner.py. In spawner.py, replace the 6 function definitions with
-    a single import of maybe_spawn_reviewer from core.review (dropping the underscore
+    _validate_review_prerequisites (31 lines, L856), _select_reviewer_backend (42
+    lines, L888), _spawn_review_worker (73 lines, L932), and _maybe_spawn_reviewer
+    (66 lines, L1056). These functions only interact with spawner.py through well-defined
+    interfaces (ThreadMetadata, SessionManager, ThreadManager, CharlieBotConfig, and
+    two shared helpers: resolve_backend_option and _require_thread_backend_model).
+    HOW — Create src/core/review.py containing the 6 functions, importing shared types
+    and the two helpers from spawner.py. In spawner.py, replace the 6 function definitions
+    with a single import of maybe_spawn_reviewer from core.review (dropping the underscore
     since it becomes a module-level public API). Update _finalize_worker to call review.maybe_spawn_reviewer.
-    Pure move refactoring, no logic changes. Reduces spawner.py from 1216 to ~894 lines,
-    making both files easier to navigate. Follows the pattern from items 047 (extracted
-    core/git.py) and 060 (extracted core/process.py) which carved out cohesive sub-modules
-    from large files.'
+    Pure move refactoring, no logic changes. Reduces spawner.py from 1216 to ~894
+    lines, making both files easier to navigate. Follows the pattern from items 047
+    (extracted core/git.py) and 060 (extracted core/process.py) which carved out cohesive
+    sub-modules from large files.'
   status: pending
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: '072'
   title: Consolidate git subprocess helpers from spawner.py into core/git.py
   description: 'PURPOSE — core/git.py (created by item 047) contains only git_add_commit_push,
-    yet spawner.py still has three private git subprocess helpers that follow the same
-    create-subprocess, wait-with-timeout, handle-error pattern: _git_current_branch
+    yet spawner.py still has three private git subprocess helpers that follow the
+    same create-subprocess, wait-with-timeout, handle-error pattern: _git_current_branch
     (L209-231, 23 lines), _git_create_worktree (L234-266, 33 lines), and inline worktree
     remove + prune in _cleanup_worker_directory (L548-581, ~34 lines). Consolidating
     these ~90 lines into core/git.py makes it a proper git operations module, reduces
-    spawner.py (1216 lines, largest file), and makes the operations reusable. HOW —
-    Move _git_current_branch and _git_create_worktree to core/git.py as git_current_branch
+    spawner.py (1216 lines, largest file), and makes the operations reusable. HOW
+    — Move _git_current_branch and _git_create_worktree to core/git.py as git_current_branch
     and git_create_worktree (drop underscore for public API). Extract the worktree-remove
     and worktree-prune subprocess blocks from _cleanup_worker_directory into git_worktree_remove
     and git_worktree_prune in core/git.py. Update spawner.py to import from core.git.
-    Pure move refactoring, no logic changes. Completes the consolidation started by item
-    047.'
+    Pure move refactoring, no logic changes. Completes the consolidation started by
+    item 047.'
   status: pending
   created: '2026-03-30T20:00:00Z'
   priority: low
@@ -1124,9 +1125,9 @@
     same file. HOW — Wrap the _read_credentials() call at L42 with await asyncio.to_thread(_read_credentials).
     In _refresh_access_token(), extract the read-modify-write block (L221-226) into
     a local _update_creds() closure and call it via await asyncio.to_thread(_update_creds).
-    asyncio is already imported. ~5 lines changed total. Follows the established
-    pattern from items 024, 034, 035, 043, 044, 046, and 057 which wrapped identical
-    sync I/O anti-patterns in other async functions.'
+    asyncio is already imported. ~5 lines changed total. Follows the established pattern
+    from items 024, 034, 035, 043, 044, 046, and 057 which wrapped identical sync
+    I/O anti-patterns in other async functions.'
   status: pending
   created: '2026-03-30T22:00:00Z'
   priority: medium

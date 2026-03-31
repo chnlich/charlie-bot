@@ -39,7 +39,7 @@ class CcOpusProvider:
     self._backoff_seconds = 0.0
 
   async def fetch(self) -> dict[str, Any] | None:
-    creds = _read_credentials()
+    creds = await asyncio.to_thread(_read_credentials)
     if creds is None:
       return None
 
@@ -218,12 +218,15 @@ async def _refresh_access_token(refresh_token: str) -> str | None:
   new_expires = token_data.get("expires_at")
 
   # Save back to credentials file
-  creds_data = json.loads(CREDENTIALS_PATH.read_text())
-  creds_data["claudeAiOauth"]["accessToken"] = new_access
-  creds_data["claudeAiOauth"]["refreshToken"] = new_refresh
-  if new_expires:
-    creds_data["claudeAiOauth"]["expiresAt"] = new_expires
-  CREDENTIALS_PATH.write_text(json.dumps(creds_data, indent=2))
+  def _update_creds() -> None:
+    creds_data = json.loads(CREDENTIALS_PATH.read_text())
+    creds_data["claudeAiOauth"]["accessToken"] = new_access
+    creds_data["claudeAiOauth"]["refreshToken"] = new_refresh
+    if new_expires:
+      creds_data["claudeAiOauth"]["expiresAt"] = new_expires
+    CREDENTIALS_PATH.write_text(json.dumps(creds_data, indent=2))
+
+  await asyncio.to_thread(_update_creds)
 
   log.info("ext_usage_token_refreshed")
   return new_access

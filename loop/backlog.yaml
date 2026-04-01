@@ -1416,3 +1416,25 @@
   status: pending
   created: '2026-04-01T22:00:00Z'
   priority: medium
+- id: '086'
+  title: Enforce timezone-aware datetimes at the pydantic model level using AwareDatetime
+  description: 'PURPOSE — Eliminate 3 scattered runtime timezone-normalization guards
+    (sessions.py:206, sessions.py:244, improvement_loop.py:109) that check .tzinfo
+    is None and patch naive datetimes to UTC after deserialization. These guards are
+    easy to forget when adding new call sites and mask the real problem: the model
+    accepts naive datetimes on parse. A naive datetime reaching a comparison with an
+    aware one causes a TypeError crash — the guards exist only to prevent that. HOW
+    — Define a reusable UtcDatetime annotated type in core/models.py using Annotated[datetime,
+    BeforeValidator(ensure_utc)] where ensure_utc(v) calls v.replace(tzinfo=timezone.utc)
+    if v.tzinfo is None, preserving backward compatibility with existing on-disk JSON
+    that may contain naive ISO strings. Replace all 11 bare datetime annotations across
+    SessionMetadata (created_at, updated_at, thinking_since, cc_session_started_at),
+    ThreadMetadata (created_at, started_at, completed_at), PendingTrigger (fire_at,
+    created_at, fired_at), and WorkerEvent (timestamp) with UtcDatetime (or Optional[UtcDatetime]).
+    Delete the 3 runtime normalization blocks in sessions.py and improvement_loop.py.
+    ~5 lines for the type definition, 11 annotation changes, 3 deleted blocks. Pure
+    type-safety improvement, no behavior change for well-formed data.'
+  category: correctness
+  status: pending
+  created: '2026-04-01T23:00:00Z'
+  priority: medium

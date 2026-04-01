@@ -1364,3 +1364,29 @@
   status: pending
   created: '2026-04-01T18:00:00Z'
   priority: medium
+- id: '084'
+  title: Extract shared CLI post_internal_api helper to deduplicate request/error
+    handling across 3 CLI scripts
+  description: 'PURPOSE — Eliminate duplicated HTTP request and error-handling boilerplate
+    across all three CLI scripts and fix an inconsistency where improve.py silently
+    discards server error details. delegate.py (L43-57), schedule_trigger.py (L36-54),
+    and improve.py (L49-57) each inline the same pattern: requests.post to an internal
+    API endpoint, raise_for_status, json-dump the response, and handle RequestException
+    with sys.exit(1). delegate.py and schedule_trigger.py correctly extract the server
+    error detail via e.response.json()["detail"] (8 identical lines each), but improve.py
+    (L55-56) only prints str(e) — losing the structured error detail that the /api/internal/improve
+    endpoint returns on 4xx/5xx responses. This means improve failures show a generic
+    "422 Client Error" instead of the actual validation message. HOW — Add a post_internal_api(endpoint,
+    payload) -> dict helper in a new src/cli/common.py module (or extend src/cli/__init__.py)
+    that encapsulates: (1) get_config() for server_base_url, (2) requests.post with
+    HTTP_INTERNAL_API_TIMEOUT and verify=False, (3) raise_for_status, (4) return resp.json().
+    Wrap the call in a try/except requests.RequestException that extracts e.response.json()["detail"]
+    when available, prints the JSON error to stderr, and calls sys.exit(1). Each CLI
+    script''s main() becomes: build payload dict, call post_internal_api, print result.
+    ~15 lines for the helper, each CLI script drops by ~8 lines. Fixes the improve.py
+    error-detail gap and ensures all future CLI scripts get consistent error handling
+    for free.'
+  category: duplication
+  status: pending
+  created: '2026-04-01T20:00:00Z'
+  priority: low

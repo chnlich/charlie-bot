@@ -1228,3 +1228,29 @@
   status: pending
   created: '2026-03-31T20:00:00Z'
   priority: medium
+- id: '078'
+  title: Replace defensive getattr() on pydantic ThreadMetadata with direct attribute
+    access
+  description: 'PURPOSE — Align spawner.py with the project''s fail-fast principle
+    by removing unnecessary defensive getattr() calls on a pydantic model whose fields
+    are guaranteed to exist. ThreadMetadata (core/models.py) is a Pydantic BaseModel
+    with all accessed fields declared as proper class attributes with defaults —
+    worktree_path (Optional[str] = None), repo_path (Optional[str] = None), branch_name
+    (Optional[str] = None), require_review (bool = True), and review_of (Optional[str]
+    = None). Pydantic guarantees these attributes exist on every instance, making
+    getattr(thread, "attr", default) equivalent to thread.attr but obscuring the
+    actual field types and defaults from the reader. HOW — In core/spawner.py, replace
+    3 defensive getattr() call sites with direct attribute access: (1) L358: change
+    getattr(thread, "worktree_path", None) and getattr(thread, "repo_path", None)
+    to thread.worktree_path and thread.repo_path; (2) L396: change all(getattr(thread,
+    attr, None) for attr in (...)) to all([thread.repo_path, thread.branch_name,
+    thread.worktree_path]); (3) L398: change getattr(thread, "require_review", False)
+    and not getattr(thread, "review_of", None) to thread.require_review and not
+    thread.review_of. 3 lines changed in 1 file. No behavior change since the getattr
+    defaults already match the pydantic field defaults. Eliminates false impression
+    that these attributes might be absent and makes the type checker aware of the
+    actual field types.'
+  category: maintainability
+  status: pending
+  created: '2026-03-31T22:00:00Z'
+  priority: low

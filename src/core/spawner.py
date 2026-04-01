@@ -530,6 +530,10 @@ async def _run_message_with_resume_recovery(
     session_mgr: SessionManager,
 ) -> Optional[str]:
   """Call run_message, retrying once with cc_session_id cleared on stale-resume errors."""
+  backend_id = session_meta.backend
+  backend_option = cfg.get_backend_option(backend_id)
+  if backend_option is None and backend_id.startswith("codex"):
+    backend_option = next((o for o in cfg.backend_options if o.type == "codex"), None)
   try:
     return await run_message(
         cfg,
@@ -541,6 +545,7 @@ async def _run_message_with_resume_recovery(
         clear_thinking_since=session_mgr.clear_thinking_since,
         skip_user_event=True,
         auto_trigger=True,
+        backend_option=backend_option,
     )
   except Exception as e:
     if not _is_resume_not_found_error(e):
@@ -571,6 +576,7 @@ async def _run_message_with_resume_recovery(
         clear_thinking_since=session_mgr.clear_thinking_since,
         skip_user_event=True,
         auto_trigger=True,
+        backend_option=backend_option,
     )
     log.info(
         "trigger_master_resume_recovery_succeeded",

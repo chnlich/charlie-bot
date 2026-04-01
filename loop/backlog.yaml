@@ -1275,3 +1275,27 @@
   status: pending
   created: '2026-03-31T23:00:00Z'
   priority: low
+- id: '080'
+  title: Migrate gemini_provider.py from deprecated google-generativeai to google-genai
+    SDK
+  description: 'PURPOSE — Eliminate the FutureWarning emitted on every import and
+    ensure continued security and bug-fix updates. The google-generativeai package
+    (v0.8.6) has officially ended all support; the deprecation notice states "All support
+    for the google.generativeai package has ended. It will no longer be receiving updates
+    or bug fixes. Please switch to the google.genai package as soon as possible." The
+    warning fires on every server start and module import, adding noise to logs. More
+    critically, the package will not receive security patches, and future Python or
+    protobuf version bumps may break it without recourse. HOW — Replace import google.generativeai
+    as genai with from google import genai in src/agents/gemini_provider.py. Adapt
+    the 3 API call sites: (1) genai.configure(api_key=...) becomes client = genai.Client(api_key=...),
+    (2) genai.GenerativeModel(model) becomes client.models, (3) model.generate_content(prompt)
+    becomes client.models.generate_content(model=model_id, contents=prompt). Store
+    the client instance as self._client instead of calling genai.configure() globally
+    (which is not thread-safe). Update pyproject.toml or requirements to replace google-generativeai
+    with google-genai. The migration scope is small — only 1 file (47 lines) with
+    3 call sites, plus the dependency declaration. The new SDK has a different but
+    well-documented API surface documented at https://github.com/google-gemini/python-genai.'
+  category: maintainability
+  status: pending
+  created: '2026-04-01T12:00:00Z'
+  priority: high

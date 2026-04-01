@@ -77,6 +77,17 @@
 
     function mergeJsonTraces(buffers) {
       const allEvents = [];
+      const tidMap = new Map();  // 'rankIndex:originalTid' -> synthetic numeric tid
+      let nextTid = 1;
+
+      function getNumericTid(rankIndex, originalTid) {
+        const key = rankIndex + ':' + originalTid;
+        if (!tidMap.has(key)) {
+          tidMap.set(key, nextTid++);
+        }
+        return tidMap.get(key);
+      }
+
       for (let i = 0; i < buffers.length; i++) {
         const text = new TextDecoder().decode(buffers[i].buf);
         const json = JSON.parse(text);
@@ -117,29 +128,41 @@
           }
         }
 
+        // Track which (rankIndex, originalTid) pairs we've already emitted thread_name for
+        const emittedThreadNames = new Set();
+
         // Pass 3: remap events
         for (const evt of events) {
           if (evt.ph === 'M' && evt.name && evt.name.startsWith('process_')) {
             // Drop original process-level metadata to avoid conflicts
             continue;
           }
-          if (pidMap[evt.pid] !== undefined) {
-            evt.pid = pidMap[evt.pid];
-          } else {
-            // Unknown pid — assign to rank's CPU group as fallback
-            evt.pid = rankLabel;
-          }
+          const remappedPid = (pidMap[evt.pid] !== undefined) ? pidMap[evt.pid] : rankLabel;
+          evt.pid = remappedPid;
           if (evt.tid !== undefined) {
-            evt.tid = rankLabel + '/' + evt.tid;
+            const originalTid = evt.tid;
+            const syntheticTid = getNumericTid(i, originalTid);
+            evt.tid = syntheticTid;
+
+            // Emit thread_name metadata event on first encounter
+            const threadKey = i + ':' + originalTid;
+            if (!emittedThreadNames.has(threadKey)) {
+              emittedThreadNames.add(threadKey);
+              allEvents.push({
+                ph: 'M', pid: remappedPid, tid: syntheticTid,
+                name: 'thread_name', args: { name: rankLabel + '/' + originalTid }
+              });
+            }
           }
           allEvents.push(evt);
         }
 
         // Emit synthetic metadata events for each new process
+        const metaTid = getNumericTid(i, 'meta');
         for (const [synPid, meta] of Object.entries(syntheticMeta)) {
-          allEvents.push({ ph: 'M', pid: synPid, tid: rankLabel + '/meta', name: 'process_name', args: { name: meta.label } });
-          allEvents.push({ ph: 'M', pid: synPid, tid: rankLabel + '/meta', name: 'process_labels', args: { labels: meta.label } });
-          allEvents.push({ ph: 'M', pid: synPid, tid: rankLabel + '/meta', name: 'process_sort_index', args: { sort_index: meta.sortIndex } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: metaTid, name: 'process_name', args: { name: meta.label } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: metaTid, name: 'process_labels', args: { labels: meta.label } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: metaTid, name: 'process_sort_index', args: { sort_index: meta.sortIndex } });
         }
       }
       const merged = JSON.stringify({ traceEvents: allEvents });

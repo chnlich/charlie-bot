@@ -1299,3 +1299,24 @@
   status: pending
   created: '2026-04-01T12:00:00Z'
   priority: high
+- id: '081'
+  title: Wrap blocking sync I/O in asyncio.to_thread in improve_command.py
+  description: 'PURPOSE — Prevent event-loop blocking during the improve loop, which
+    runs as a long-lived server-side async task. Two parse_ndjson_file() calls (L151
+    in is_quota_failure, L322 in run_improve_loop) read potentially large NDJSON event
+    logs synchronously on the event loop. Additionally, improve_dir.mkdir() (L265),
+    report_path.exists() (L328), and report_path.write_text() (L329) perform sync
+    filesystem I/O inline. Every other call site in the codebase (threads.py:84,
+    review.py:99/116, spawner.py:741) already correctly wraps parse_ndjson_file in
+    asyncio.to_thread — improve_command.py is the only file that does not, making
+    this an inconsistency. The improve loop processes multiple iterations sequentially,
+    so blocking the event loop here stalls WebSocket broadcasts and UI updates for
+    all sessions during each iteration''s summary extraction. HOW — Wrap both
+    parse_ndjson_file calls with await asyncio.to_thread(parse_ndjson_file, events_path).
+    Wrap the mkdir, exists, and write_text calls with asyncio.to_thread. asyncio
+    is already imported. ~5 lines changed, matching the established pattern from items
+    034, 035, 043, 044, 046, and 057.'
+  category: performance
+  status: pending
+  created: '2026-04-01T14:00:00Z'
+  priority: medium

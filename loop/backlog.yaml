@@ -1202,3 +1202,29 @@
   status: pending
   created: '2026-03-31T18:00:00Z'
   priority: medium
+- id: '077'
+  title: Optimize parse_ndjson_tail to single-pass using collections.deque
+  description: 'PURPOSE — Halve the I/O for every page load and session switch that
+    uses the fast-view path. parse_ndjson_tail in core/ndjson.py (L29-74) reads the
+    file twice: first a full forward scan to count total lines (for _ in f: total +=
+    1), then a backwards seek-from-end to collect the last N lines. For a session with
+    10,000 events this means reading ~10 MB twice on every build_session_view_data_fast
+    call (api/message_utils.py:67), which runs on every session switch and sidebar refresh.
+    The total line count is needed by the caller (message_utils.py:82) to compute
+    event_index_offset = total_count - len(tail_events) so that event indices in the
+    UI match real file line positions. HOW — Replace the two-pass algorithm with a
+    single forward pass using collections.deque(maxlen=limit). Read the file once,
+    counting total lines while appending parsed events to a bounded deque that automatically
+    discards old entries. Return (list(deque), total, total > limit). This is O(n)
+    single-pass instead of O(2n) two-pass, halving file I/O. The deque approach is
+    simpler than the current backwards-seek logic (which also has a subtle bug: the
+    forward total counts all lines including blank ones, but the backward scan only
+    collects non-blank lines, so total and len(tail_events) can disagree when blank
+    lines are present, causing event_index_offset to be slightly wrong). The fix
+    eliminates this inconsistency by counting only parseable lines in both total and
+    tail. ~15 lines for the new implementation replacing ~40 lines of the current
+    two-pass approach, net reduction of ~25 lines.'
+  category: performance
+  status: pending
+  created: '2026-03-31T20:00:00Z'
+  priority: medium

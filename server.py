@@ -9,6 +9,7 @@ from pathlib import Path
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from src.api import backlog, chat, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
@@ -74,6 +75,7 @@ app = FastAPI(
   lifespan=lifespan,
 )
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(AuthMiddleware)
 
 # Page router (GET / — Jinja2 rendered)

@@ -1254,3 +1254,24 @@
   status: pending
   created: '2026-03-31T22:00:00Z'
   priority: low
+- id: '079'
+  title: Consolidate double save_metadata calls in worker spawn path
+  description: 'PURPOSE — Eliminate redundant disk writes during every worker spawn.
+    Both _create_worktree_and_process (spawner.py L218 + L248) and _create_repoless_process
+    (L289 + L294) call thread_mgr.save_metadata(thread) twice in quick succession:
+    once after setting worktree/context fields, then again 5-10 lines later after
+    resolving backend/model. The backend resolution (resolve_backend_option) is a
+    pure in-memory dict lookup that cannot fail, so the intermediate save provides
+    no crash-recovery benefit. Combined with the third save in _stream_worker_events
+    (L326 for status/started_at) and the fourth via on_spawned callback (worker.py
+    L72 for PID), each worker spawn performs 4 sequential metadata writes to disk.
+    HOW — In both _create_worktree_and_process and _create_repoless_process, move
+    the backend_option resolution and thread.backend/thread.model assignment above
+    the single save_metadata call, then delete the second save_metadata call. This
+    reduces the spawn path from 4 saves to 3 with zero behavioral change — all fields
+    are still persisted before the worker starts running. ~6 lines deleted across
+    2 functions, no new code added.'
+  category: performance
+  status: pending
+  created: '2026-03-31T23:00:00Z'
+  priority: low

@@ -1342,3 +1342,25 @@
   status: pending
   created: '2026-04-01T16:00:00Z'
   priority: high
+- id: '083'
+  title: Extract shared worker-construction tail from _create_worktree_and_process and
+    _create_repoless_process
+  description: 'PURPOSE — Eliminate 20 duplicated lines of backend resolution, subagent
+    instructions loading, and Worker instantiation repeated verbatim between _create_worktree_and_process
+    (spawner.py L245-264) and _create_repoless_process (L291-308). Both functions
+    share an identical 4-step tail after their divergent setup logic: (1) resolve_backend_option
+    + update thread.backend/model + save_metadata, (2) asyncio.to_thread(_read_subagent_instructions),
+    (3) thread_mgr.get_events_log_path, (4) Worker(...) construction with 7 identical
+    keyword arguments differing only in the cwd parameter (worktree_path vs thread_dir).
+    A change to Worker construction (e.g. adding a new kwarg) requires updating both
+    sites independently. HOW — Extract an async helper _resolve_and_build_worker(thread,
+    cwd, worker_prompt, session_id, cfg, thread_mgr, resolved_backend, resolved_model)
+    that encapsulates steps 1-4 and returns a Worker. Both _create_worktree_and_process
+    and _create_repoless_process call it as their final statement, passing only their
+    divergent cwd value. Each function drops by ~10 lines. Complements item 079 which
+    merges the double save_metadata within each function but does not address the
+    cross-function duplication. Pure refactoring, no behavior change.'
+  category: duplication
+  status: pending
+  created: '2026-04-01T18:00:00Z'
+  priority: medium

@@ -129,14 +129,17 @@
             // Unknown pid — assign to rank's CPU group as fallback
             evt.pid = rankLabel;
           }
+          if (evt.tid !== undefined) {
+            evt.tid = rankLabel + '/' + evt.tid;
+          }
           allEvents.push(evt);
         }
 
         // Emit synthetic metadata events for each new process
         for (const [synPid, meta] of Object.entries(syntheticMeta)) {
-          allEvents.push({ ph: 'M', pid: synPid, tid: 0, name: 'process_name', args: { name: meta.label } });
-          allEvents.push({ ph: 'M', pid: synPid, tid: 0, name: 'process_labels', args: { labels: meta.label } });
-          allEvents.push({ ph: 'M', pid: synPid, tid: 0, name: 'process_sort_index', args: { sort_index: meta.sortIndex } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: rankLabel + '/meta', name: 'process_name', args: { name: meta.label } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: rankLabel + '/meta', name: 'process_labels', args: { labels: meta.label } });
+          allEvents.push({ ph: 'M', pid: synPid, tid: rankLabel + '/meta', name: 'process_sort_index', args: { sort_index: meta.sortIndex } });
         }
       }
       const merged = JSON.stringify({ traceEvents: allEvents });

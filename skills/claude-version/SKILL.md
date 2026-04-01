@@ -1,3 +1,9 @@
+---
+name: claude-version
+description: Manage Claude Code CLI versions across official installer and npm global installs.
+version: 1.0.0
+---
+
 # Claude CLI Version Management
 
 Manage Claude Code CLI versions — install, switch, rollback, list.

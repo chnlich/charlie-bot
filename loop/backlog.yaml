@@ -1390,3 +1390,29 @@
   status: pending
   created: '2026-04-01T20:00:00Z'
   priority: low
+- id: '085'
+  title: Reuse a shared httpx.AsyncClient instead of creating one per HTTP call
+  description: 'PURPOSE — Eliminate per-call TCP connection pool and TLS handshake overhead
+    from 3 httpx.AsyncClient instantiations across 2 files, and prevent potential resource
+    leaks on exception paths. Currently ext_usage.py creates and destroys an AsyncClient
+    on every usage poll (CcOpusProvider.fetch at L57) and every token refresh (_refresh_access_token
+    at L218), and notifications.py creates one on every Telegram notification (send_telegram
+    at L32). The usage poller runs every 10 minutes, so 2 connection pools are established
+    and torn down per cycle. Each AsyncClient() call negotiates a fresh TLS session
+    to api.anthropic.com, console.anthropic.com, or api.telegram.org — adding ~100-300ms
+    of latency per call that connection reuse would eliminate after the first request.
+    Additionally, if an exception occurs between client creation and the async-with
+    exit, the client may not be properly closed. HOW — Create a module-level shared
+    httpx.AsyncClient instance in a new src/core/http.py module with a get_http_client()
+    accessor that lazily creates the singleton and a close_http_client() coroutine for
+    shutdown cleanup. Register close_http_client in the FastAPI lifespan handler (server.py)
+    alongside the existing streaming_manager.shutdown(). Replace the 3 async-with httpx.AsyncClient()
+    blocks in ext_usage.py and notifications.py with client = get_http_client() (no
+    context manager needed since the lifecycle is managed at app level). Per-call timeout
+    overrides can be passed via httpx request options. ~10 lines for the module, 3
+    one-line changes at call sites, 1 line added to server.py lifespan. Connection
+    keepalive handles the rest automatically.'
+  category: performance
+  status: pending
+  created: '2026-04-01T22:00:00Z'
+  priority: medium

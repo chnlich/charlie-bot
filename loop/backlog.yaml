@@ -1320,3 +1320,25 @@
   status: pending
   created: '2026-04-01T14:00:00Z'
   priority: medium
+- id: '082'
+  title: Add explicit asyncio.CancelledError handling to long-running orchestration
+    functions
+  description: 'PURPOSE — Prevent subprocess and worktree leaks when async tasks are
+    cancelled (browser close, server shutdown, /stop-improve). Since Python 3.8,
+    asyncio.CancelledError is a BaseException, not Exception — so the broad except
+    Exception clauses in spawn_worker (spawner.py:498), _run_cc (master_cc.py:253),
+    and run_improve_loop (improve_command.py:354) do not catch it. While the finally
+    blocks still execute, they do not explicitly terminate the in-flight subprocess
+    before cleanup runs, meaning the backend process may continue running as an orphan
+    after the task is cancelled. Only scheduler.py currently handles CancelledError
+    (L58, L80). HOW — Add except asyncio.CancelledError blocks in three functions:
+    (1) spawn_worker — call worker.terminate() before re-raising so the subprocess
+    is killed before _finalize_worker runs in finally; (2) _run_cc — call backend.terminate()
+    and remove from _active_procs before re-raising; (3) run_improve_loop — broadcast
+    an improve_cancelled event and re-raise. Each block logs a warning, ensures subprocess
+    termination, then re-raises to preserve cancellation semantics. ~5 lines per
+    function, 15 lines total across 3 files. No behavior change for normal execution.'
+  category: error-handling
+  status: pending
+  created: '2026-04-01T16:00:00Z'
+  priority: high

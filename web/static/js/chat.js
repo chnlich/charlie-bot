@@ -11,8 +11,14 @@ function shouldAutoScroll(container, threshold = 150) {
 function bumpCurrentSessionToTop() {
   const nav = document.getElementById('session-list');
   const el = document.getElementById('session-' + SESSION_ID);
-  if (!nav || !el || nav.firstElementChild === el) return;
-  nav.insertBefore(el, nav.firstElementChild);
+  if (!nav || !el) return;
+
+  const groupItems = el.closest('.session-group-items');
+  const parent = groupItems || nav;
+  if (parent.firstElementChild !== el) {
+    parent.insertBefore(el, parent.firstElementChild);
+  }
+
   const timeEl = el.querySelector('.session-time');
   if (timeEl) {
     const now = new Date().toISOString();

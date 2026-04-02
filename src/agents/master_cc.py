@@ -360,6 +360,8 @@ async def run_message(
     auto_trigger: bool = False,
     backend_option: Optional[BackendOption] = None,
     extra_claude_flags: Optional[list[str]] = None,
+    display_content: Optional[str] = None,
+    uploaded_files: Optional[list[dict]] = None,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -376,6 +378,9 @@ async def run_message(
       metadata from disk, avoiding clobbering has_unread. Also saves cc_session_id.
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
+    display_content: User-visible content persisted to the chat log. Defaults
+      to ``user_content`` when omitted.
+    uploaded_files: Structured uploaded-file metadata persisted on the user event.
 
   Returns:
     The CC session ID (for --resume on subsequent messages), or None.
@@ -392,10 +397,12 @@ async def run_message(
   if not skip_user_event:
     user_event = {
         "type": ET.USER,
-        "content": user_content,
+        "content": user_content if display_content is None else display_content,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "is_voice": is_voice
     }
+    if uploaded_files:
+      user_event["uploaded_files"] = uploaded_files
     await persist_and_broadcast(session_meta.id, user_event)
     session_meta.updated_at = datetime.now(timezone.utc)
 

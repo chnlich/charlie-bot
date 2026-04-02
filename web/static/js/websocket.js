@@ -140,7 +140,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
       streamTs = null;
     }
     // Only show if sent from another tab (this tab already added it optimistically)
-    if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice, ev.timestamp);
+    if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice, ev.timestamp, ev.uploaded_files);
     pendingUserMsg = false;
   } else if (t === 'assistant') {
     const blocks = (ev.message || {}).content || [];

@@ -89,6 +89,8 @@ function buildContext() {
     setSessionSpinner: () => {},
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     escapeHtml: (v) => v,
+    renderUserMessageBubble: (content, isVoice, timestamp, uploadedFiles) =>
+      `<div data-content="${content || ''}" data-voice="${isVoice ? '1' : '0'}" data-ts="${timestamp || ''}" data-files="${(uploadedFiles || []).length}"></div>`,
     renderSingleMessage: () => '',
     renderWorkersTab: () => {},
     switchTab: () => {},
@@ -166,4 +168,16 @@ test('renderSingleMessage preserves clone_start banners for SPA rebuilds', () =>
   assert.match(html, /Cloned from/);
   assert.match(html, /href="\/\?session=parent%2Fsession%3Ftab%3Dchat"/);
   assert.match(html, /Parent &amp; Session/);
+});
+
+test('renderSingleMessage passes uploaded_files through for user attachment bubbles', () => {
+  const {context} = buildContext();
+
+  const html = context.renderSingleMessage({
+    role: 'user',
+    content: '',
+    uploaded_files: [{filename: 'report.pdf', path: '/tmp/report.pdf'}],
+  }, 'session-a');
+
+  assert.match(html, /data-files="1"/);
 });

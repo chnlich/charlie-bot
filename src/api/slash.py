@@ -5,13 +5,14 @@ import asyncio
 import structlog
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.api.chat import run_and_finalize
 from src.api.deps import get_session_manager, get_thread_manager, require_session
+from src.api.message_utils import build_agent_input_content, serialize_uploaded_files
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
-from src.core.models import SessionMetadata
+from src.core.models import SessionMetadata, UploadedFileRef
 from src.core.sessions import SessionManager
 from src.core.slash_commands import dispatch_slash_command, load_slash_commands
 from src.core.tasks import create_logged_task
@@ -111,6 +112,19 @@ async def _build_command_list() -> list[dict]:
 class SlashExecuteRequest(BaseModel):
   command: str
   args: str = ''
+  uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
+
+
+def _build_user_event(content: str, uploaded_files: list[dict]) -> dict:
+  """Build a persisted user event for slash commands."""
+  event = {
+      'type': ET.USER,
+      'content': content,
+      'is_voice': False,
+  }
+  if uploaded_files:
+    event['uploaded_files'] = uploaded_files
+  return event
 
 
 @router.get('/commands')
@@ -131,14 +145,17 @@ async def execute_command(
 ):
   """Execute a slash command for a session."""
   name = req.command.lstrip('/')
+  args_text = req.args.strip()
+  uploaded_files = serialize_uploaded_files(req.uploaded_files)
+  display_text = f"/{name}" + (f" {args_text}" if args_text else "")
 
   # Built-in /help
   if name == 'help':
+    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
     return {'type': ET.HELP, 'commands': await _build_command_list()}
 
   # Built-in /improve
   if name == 'improve':
-    args_text = req.args.strip()
     if not args_text:
       return {'error': 'Usage: /improve <max_iterations> <goal>'}
     parts = args_text.split(None, 1)
@@ -154,7 +171,16 @@ async def execute_command(
     save_improve_state(session_id, state, cfg)
 
     prompt = build_improve_master_prompt(session_id, goal, max_iterations, cfg)
-    create_logged_task(run_and_finalize(cfg, meta, prompt, session_mgr))
+    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
+    create_logged_task(
+        run_and_finalize(
+            cfg,
+            meta,
+            build_agent_input_content(prompt, uploaded_files),
+            session_mgr,
+            skip_user_event=True,
+            display_content=display_text,
+            uploaded_files=uploaded_files))
     return JSONResponse(
         status_code=202,
         content={
@@ -169,12 +195,13 @@ async def execute_command(
     from src.core.improve_command import stop_improve_loop
     stopped = await stop_improve_loop(session_id, cfg)
     if stopped:
+      await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
       return {'type': ET.IMPROVE_STOPPED, 'message': 'Improve loop will stop after current iteration'}
     return {'error': 'No active improve loop in this session'}
 
   # Built-in /run <task-name>
   if name == 'run':
-    task_name = req.args.strip()
+    task_name = args_text
     if not task_name:
       names = [t.name for t in get_scheduled_tasks() if t.enabled]
       if not names:
@@ -188,6 +215,7 @@ async def execute_command(
     except ValueError as e:
       log.debug("slash_command_value_error", error=str(e))
       return {'error': str(e)}
+    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
     return JSONResponse(
         status_code=202,
         content={
@@ -209,6 +237,7 @@ async def execute_command(
 
   if dispatch.kind == 'shell_result':
     result = dispatch.shell_result
+    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
     return {
         'type': ET.SHELL_RESULT,
         'command': name,
@@ -218,9 +247,17 @@ async def execute_command(
     }
 
   if dispatch.kind == 'prompt':
+    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
     create_logged_task(
         run_and_finalize(
-            cfg, meta, dispatch.substituted_prompt, session_mgr, extra_claude_flags=dispatch.claude_code_flags))
+            cfg,
+            meta,
+            build_agent_input_content(dispatch.substituted_prompt, uploaded_files),
+            session_mgr,
+            extra_claude_flags=dispatch.claude_code_flags,
+            skip_user_event=True,
+            display_content=display_text,
+            uploaded_files=uploaded_files))
     return JSONResponse(status_code=202, content={'type': ET.PROMPT_DISPATCHED, 'command': name})
 
   return {'error': f'Unexpected dispatch result for /{name}'}

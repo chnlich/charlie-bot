@@ -252,7 +252,19 @@
           <div class="flex justify-end">
             <div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
               {% if msg.is_voice %}<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>{% endif %}
-              <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+              {% if msg.content %}<div class="whitespace-pre-wrap">{{ msg.content }}</div>{% endif %}
+              {% if msg.uploaded_files %}
+              <div class="message-attachments{% if msg.content %} mt-2{% endif %}">
+                {% for file in msg.uploaded_files %}
+                <div class="message-attachment" title="{{ file.path }}">
+                  <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+                  </svg>
+                  <span>{{ file.filename }}</span>
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
               {% if msg.timestamp %}<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="{{ msg.timestamp }}"></div>{% endif %}
             </div>
           </div>

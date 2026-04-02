@@ -61,19 +61,30 @@ function navigateSlashPopup(direction) {
   next?.scrollIntoView({ block: 'nearest' });
 }
 
-async function executeSlashCommand(name, args) {
+async function executeSlashCommand(name, args, options = {}) {
   if (!SESSION_ID) return;
   const input = document.getElementById('msg-input');
   if (input) { input.value = ''; input.style.height = 'auto'; }
-  const displayText = args ? `/${name} ${args}` : `/${name}`;
+  if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
+  const displayText = options.displayText || (args ? `/${name} ${args}` : `/${name}`);
+  const uploadedFiles = Array.isArray(options.uploadedFiles) ? options.uploadedFiles : getUploadedFilesForPayload();
+  const payloadFiles = uploadedFiles.map((file) => ({
+    filename: file.filename,
+    path: file.path,
+    size: file.size,
+  }));
   try {
     const res = await fetch(`/api/slash/${SESSION_ID}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: name, args: args }),
+      body: JSON.stringify({ command: name, args: args, uploaded_files: payloadFiles }),
     });
     const data = await res.json();
     if (data.error) { showToast(data.error, true); return; }
+    clearSentUploadedFiles(uploadedFiles.map((file) => file.id));
+    pendingUserMsg = true;
+    appendMessage('user', displayText, false, new Date().toISOString(), payloadFiles);
+    bumpCurrentSessionToTop();
     if (data.type === 'help') {
       const rows = (data.commands || []).map(c =>
         `| \`/${c.name}\` | ${escapeHtml(c.description || '')} |`
@@ -81,12 +92,14 @@ async function executeSlashCommand(name, args) {
       const md = `**Available slash commands**\n\n| Command | Description |\n|---------|-------------|\n${rows}`;
       appendMessage('assistant', md);
     } else if (data.type === 'shell_result') {
-      appendMessage('user', displayText);
       const out = data.exit_code !== 0 && data.stderr ? data.stderr : (data.stdout || data.stderr || '(no output)');
       appendMessage('assistant', '```\n' + out + '\n```');
     } else if (data.type === 'prompt_dispatched') {
-      appendMessage('user', displayText);
       startThinking();
+    } else if (data.type === 'improve_started') {
+      startThinking();
+    } else if (data.type === 'improve_stopped') {
+      appendMessage('system', data.message || 'Improve loop will stop after current iteration');
     } else if (data.type === 'task_triggered') {
       appendMessage('system', `Scheduled task "${data.task}" triggered — session ${data.session_id.slice(0, 8)}, thread ${data.thread_id.slice(0, 8)}`);
     }

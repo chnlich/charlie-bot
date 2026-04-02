@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager, require_session
-from src.api.message_utils import extract_text_from_message
+from src.api.message_utils import build_agent_input_content, extract_text_from_message, serialize_uploaded_files
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
@@ -21,6 +21,19 @@ from src.core.tasks import create_logged_task
 log = structlog.get_logger()
 
 router = APIRouter()
+
+
+def _build_user_event(content: str, uploaded_files: list[dict], *, is_voice: bool = False) -> dict:
+  """Build the persisted user event payload for chat history and websocket updates."""
+  event = {
+      "type": ET.USER,
+      "content": content,
+      "timestamp": datetime.now(timezone.utc).isoformat(),
+      "is_voice": is_voice,
+  }
+  if uploaded_files:
+    event["uploaded_files"] = uploaded_files
+  return event
 
 
 @router.post("/{session_id}/upload")
@@ -61,46 +74,40 @@ async def send_message(
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
-  # Build content, appending any uploaded file paths.
-  content = req.content
-  if req.uploaded_files:
-    content += "\n\n[Attached files]\n" + "\n".join(f"- {p}" for p in req.uploaded_files)
+  uploaded_files = serialize_uploaded_files(req.uploaded_files)
+  content = build_agent_input_content(req.content, uploaded_files)
 
-  is_slash = content.startswith('/')
+  is_slash = req.content.startswith('/')
   log.info(
       "send_message",
       session=session_id,
       content_chars=len(content),
-      uploaded_files_count=len(req.uploaded_files) if req.uploaded_files else 0,
+      uploaded_files_count=len(uploaded_files),
       is_slash=is_slash,
   )
 
   # Slash command interception
   if is_slash:
-    space_idx = content.find(' ')
-    name = content[1:space_idx] if space_idx != -1 else content[1:]
-    args = content[space_idx + 1:].strip() if space_idx != -1 else ''
+    space_idx = req.content.find(' ')
+    name = req.content[1:space_idx] if space_idx != -1 else req.content[1:]
+    args = req.content[space_idx + 1:].strip() if space_idx != -1 else ''
 
     dispatch = await dispatch_slash_command(name, args, session_dir=str(cfg.sessions_dir / session_id))
 
     if dispatch.kind != 'not_found':
-      user_event = {
-          "type": ET.USER,
-          "content": content,
-          "timestamp": datetime.now(timezone.utc).isoformat(),
-          "is_voice": False,
-      }
-      await session_mgr.persist_and_broadcast(session_id, user_event)
+      await session_mgr.persist_and_broadcast(session_id, _build_user_event(req.content, uploaded_files))
 
       if dispatch.kind == 'prompt':
         create_logged_task(
             run_and_finalize(
                 cfg,
                 meta,
-                dispatch.substituted_prompt,
+                build_agent_input_content(dispatch.substituted_prompt, uploaded_files),
                 session_mgr,
                 extra_claude_flags=dispatch.claude_code_flags,
-                skip_user_event=True))
+                skip_user_event=True,
+                display_content=req.content,
+                uploaded_files=uploaded_files))
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
       elif dispatch.kind == 'error':
@@ -125,7 +132,14 @@ async def send_message(
     # Unknown /xxx — fall through to normal run_and_finalize (e.g. /compact)
 
   # Fire-and-forget: spawn master CC in a background task
-  create_logged_task(run_and_finalize(cfg, meta, content, session_mgr))
+  create_logged_task(
+      run_and_finalize(
+          cfg,
+          meta,
+          content,
+          session_mgr,
+          display_content=req.content,
+          uploaded_files=uploaded_files))
 
   return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -157,6 +171,8 @@ async def run_and_finalize(
     is_voice: bool = False,
     extra_claude_flags: list[str] | None = None,
     skip_user_event: bool = False,
+    display_content: str | None = None,
+    uploaded_files: list[dict] | None = None,
 ) -> None:
   """Run master CC, persist cc_session_id, and auto-name the session."""
   log.info("run_and_finalize_start", session=meta.id, backend=meta.backend)
@@ -177,6 +193,8 @@ async def run_and_finalize(
         backend_option=backend_option,
         is_voice=is_voice,
         extra_claude_flags=extra_claude_flags,
+        display_content=display_content,
+        uploaded_files=uploaded_files,
     )
     # Persist CC session ID if newly assigned.
     # Re-read fresh metadata from disk to avoid overwriting has_unread
@@ -187,7 +205,7 @@ async def run_and_finalize(
 
     # Auto-name session after first turn if still using default name
     if is_default_session_name(meta.name):
-      create_logged_task(_auto_name(cfg, meta, content, session_mgr))
+      create_logged_task(_auto_name(cfg, meta, display_content or content, session_mgr))
   except Exception as e:
     log.exception("master_cc_run_failed", session=meta.id)
     # run_message() should handle and emit failures, but keep this as a

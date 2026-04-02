@@ -164,9 +164,15 @@ class CreateSessionRequest(BaseModel):
   backend: Optional[str] = None
 
 
+class UploadedFileRef(BaseModel):
+  filename: str
+  path: str
+  size: Optional[int] = None
+
+
 class SendMessageRequest(BaseModel):
   content: str
-  uploaded_files: list[str] = []
+  uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
 
 
 class VoiceTranscriptionResponse(BaseModel):

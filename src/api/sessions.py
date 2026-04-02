@@ -33,7 +33,12 @@ router = APIRouter()
 
 @router.get("/", response_model=list[SessionMetadata])
 async def list_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
-  return await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True)
+  return await session_mgr.list_sessions(
+      status=SessionStatus.ACTIVE,
+      scheduled=False,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
 
 
 @router.post("/", response_model=SessionMetadata)
@@ -86,19 +91,31 @@ async def list_projects():
 @router.get("/archived", response_model=list[SessionMetadata])
 async def list_archived_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List archived sessions, newest first."""
-  return await session_mgr.list_sessions(status=SessionStatus.ARCHIVED, include_running_status=True)
+  return await session_mgr.list_sessions(
+      status=SessionStatus.ARCHIVED,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
 
 
 @router.get("/waiting", response_model=list[SessionMetadata])
 async def list_waiting_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List waiting sessions, newest first."""
-  return await session_mgr.list_sessions(status=SessionStatus.WAITING, include_running_status=True)
+  return await session_mgr.list_sessions(
+      status=SessionStatus.WAITING,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
 
 
 @router.get("/starred", response_model=list[SessionMetadata])
 async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List starred sessions, newest first."""
-  return await session_mgr.list_sessions(starred=True, include_running_status=True)
+  return await session_mgr.list_sessions(
+      starred=True,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
 
 
 @router.get("/groups")
@@ -129,7 +146,11 @@ async def list_scheduled_sessions(
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """List sessions with a scheduled task, newest first."""
-  sessions = await session_mgr.list_sessions(scheduled=True, include_running_status=True)
+  sessions = await session_mgr.list_sessions(
+      scheduled=True,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
   task_map = {t.name: t for t in get_scheduled_tasks()}
   for s in sessions:
     task = task_map.get(s.scheduled_task)
@@ -149,15 +170,24 @@ async def list_scheduled_sessions(
 
 @router.get('/status')
 async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_manager)):
-  """Return {session_id: {has_unread, has_running_tasks}} for all active sessions."""
+  """Return derived sidebar state for all active sessions."""
   sessions = await asyncio.to_thread(session_mgr.list_active_session_ids)
   if not sessions:
     return {}
-  running_flags = await asyncio.gather(*(session_mgr._has_running_tasks(m.id) for m in sessions))
+  await session_mgr._populate_sidebar_state(
+      sessions,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
   result: dict[str, dict] = {}
-  for meta, running in zip(sessions, running_flags):
-    has_running = bool(meta.thinking_since) or running
-    result[meta.id] = {"has_unread": bool(meta.has_unread), "has_running_tasks": has_running}
+  for meta in sessions:
+    result[meta.id] = {
+        "has_unread": bool(meta.has_unread),
+        "has_running_tasks": meta.has_running_tasks,
+        "has_pending_trigger": meta.has_pending_trigger,
+        "pending_trigger_count": meta.pending_trigger_count,
+        "next_trigger_at": meta.next_trigger_at.isoformat() if meta.next_trigger_at else None,
+    }
   return result
 
 
@@ -165,8 +195,16 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
 async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
   """Full-text search across session names and chat content."""
   if not q.strip():
-    return await session_mgr.list_sessions(status=SessionStatus.ACTIVE, include_running_status=True)
-  return await session_mgr.search_sessions(q.strip(), include_running_status=True)
+    return await session_mgr.list_sessions(
+        status=SessionStatus.ACTIVE,
+        include_running_status=True,
+        include_pending_trigger_status=True,
+    )
+  return await session_mgr.search_sessions(
+      q.strip(),
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
 
 
 @router.get('/{session_id}/view')
@@ -184,7 +222,11 @@ async def get_session_view(
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  meta.has_running_tasks = bool(meta.thinking_since) or await session_mgr._has_running_tasks(session_id)
+  await session_mgr._populate_sidebar_state(
+      [meta],
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
   view = await build_session_view_data_fast(session_id, session_mgr, thread_mgr)
   trigger_mgr = get_trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)

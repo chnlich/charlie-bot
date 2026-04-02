@@ -87,7 +87,10 @@ function buildContext() {
     startThinking: () => {},
     stopThinking: () => {},
     setSessionSpinner: () => {},
+    relativeTime: (txt) => txt,
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
+    formatNextRun: (txt) => txt,
+    formatLastRun: (txt) => txt,
     escapeHtml: (v) => v,
     renderUserMessageBubble: (content, isVoice, timestamp, uploadedFiles) =>
       `<div data-content="${content || ''}" data-voice="${isVoice ? '1' : '0'}" data-ts="${timestamp || ''}" data-files="${(uploadedFiles || []).length}"></div>`,
@@ -180,4 +183,116 @@ test('renderSingleMessage passes uploaded_files through for user attachment bubb
   }, 'session-a');
 
   assert.match(html, /data-files="1"/);
+});
+
+test('pollSessionStatus updates pending trigger indicators from the status endpoint', async () => {
+  const {context} = buildContext();
+  const spinnerUpdates = [];
+  const pendingUpdates = [];
+
+  context.fetch = async (url) => {
+    assert.equal(url, '/api/sessions/status');
+    return {
+      ok: true,
+      async json() {
+        return {
+          'session-a': {
+            has_unread: false,
+            has_running_tasks: false,
+            has_pending_trigger: true,
+            pending_trigger_count: 2,
+            next_trigger_at: '2026-04-02T06:00:00Z',
+          },
+          'session-b': {
+            has_unread: true,
+            has_running_tasks: true,
+            has_pending_trigger: false,
+            pending_trigger_count: 0,
+            next_trigger_at: null,
+          },
+        };
+      },
+    };
+  };
+  context.setSessionSpinner = (sid, visible) => {
+    spinnerUpdates.push({sid, visible});
+  };
+  context.setSessionPendingTriggerIndicator = (sid, status) => {
+    pendingUpdates.push({sid, status});
+  };
+
+  const anyRunning = await context.pollSessionStatus();
+
+  assert.equal(anyRunning, true);
+  assert.deepEqual(spinnerUpdates, [
+    {sid: 'session-a', visible: false},
+    {sid: 'session-b', visible: true},
+  ]);
+  assert.deepEqual(pendingUpdates, [
+    {
+      sid: 'session-a',
+      status: {
+        has_unread: false,
+        has_running_tasks: false,
+        has_pending_trigger: true,
+        pending_trigger_count: 2,
+        next_trigger_at: '2026-04-02T06:00:00Z',
+      },
+    },
+    {
+      sid: 'session-b',
+      status: {
+        has_unread: true,
+        has_running_tasks: true,
+        has_pending_trigger: false,
+        pending_trigger_count: 0,
+        next_trigger_at: null,
+      },
+    },
+  ]);
+});
+
+test('renderSessionItem shows separate delayed-trigger and scheduled indicators', () => {
+  const {context} = buildContext();
+
+  const html = context.renderSessionItem({
+    id: 'session-a',
+    name: 'Wake later',
+    updated_at: '2026-04-02T04:00:00Z',
+    has_running_tasks: false,
+    has_unread: false,
+    has_pending_trigger: true,
+    pending_trigger_count: 1,
+    next_trigger_at: '2026-04-02T06:00:00Z',
+    scheduled_task: 'nightly',
+    schedule_enabled: true,
+    starred: false,
+  }, 'search');
+
+  assert.match(html, /id="pending-trigger-session-a"/);
+  assert.match(html, /1 pending delayed trigger/);
+  assert.match(html, /Scheduled: nightly/);
+});
+
+test('renderScheduledSessionItem keeps delayed-trigger and cron indicators distinct', () => {
+  const {context} = buildContext();
+
+  const html = context.renderScheduledSessionItem({
+    id: 'session-a',
+    name: 'Wake later',
+    has_running_tasks: false,
+    has_unread: false,
+    has_pending_trigger: true,
+    pending_trigger_count: 2,
+    next_trigger_at: '2026-04-02T06:00:00Z',
+    scheduled_task: 'nightly',
+    schedule_enabled: true,
+    schedule_cron: '0 2 * * *',
+    schedule_timezone: 'UTC',
+    starred: false,
+  });
+
+  assert.match(html, /id="pending-trigger-session-a"/);
+  assert.match(html, /2 pending delayed triggers/);
+  assert.match(html, /Scheduled: nightly/);
 });

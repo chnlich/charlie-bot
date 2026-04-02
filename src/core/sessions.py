@@ -27,6 +27,18 @@ log = structlog.get_logger()
 _METADATA_CACHE_TTL = 5.0  # seconds
 _CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 _UNSET = object()
+_TRANSIENT_METADATA_FIELDS = {
+    "has_running_tasks",
+    "has_pending_trigger",
+    "pending_trigger_count",
+    "next_trigger_at",
+    "schedule_cron",
+    "schedule_enabled",
+    "schedule_next_run",
+    "schedule_timezone",
+    "schedule_project",
+    "schedule_allow_failure",
+}
 
 
 def _summarize_event_lines(lines: list[str]) -> str:
@@ -180,6 +192,7 @@ class SessionManager:
       starred: Optional[bool] = None,
       scheduled: Optional[bool] = None,
       include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
   ) -> list[SessionMetadata]:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
     if not self._cfg.sessions_dir.exists():
@@ -197,10 +210,11 @@ class SessionManager:
       if scheduled is not None and bool(meta.scheduled_task) != scheduled:
         continue
       sessions.append(meta)
-    if include_running_status:
-      running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in sessions))
-      for meta, running in zip(sessions, running_flags):
-        meta.has_running_tasks = bool(meta.thinking_since) or running
+    await self._populate_sidebar_state(
+        sessions,
+        include_running_status=include_running_status,
+        include_pending_trigger_status=include_pending_trigger_status,
+    )
     # Normalise to offset-aware (UTC) so naive vs aware datetimes don't explode
     for s in sessions:
       if s.updated_at.tzinfo is None:
@@ -212,6 +226,7 @@ class SessionManager:
       self,
       query: str,
       include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
   ) -> list[SessionMetadata]:
     """Search active sessions by name and chat event content (case-insensitive)."""
     query_lower = query.lower()
@@ -236,10 +251,11 @@ class SessionManager:
             results.append(meta)
         except OSError as e:
           log.debug('search_read_failed', session_id=meta.id, error=str(e))
-    if include_running_status:
-      running_flags = await asyncio.gather(*(self._has_running_tasks(m.id) for m in results))
-      for meta, running in zip(results, running_flags):
-        meta.has_running_tasks = bool(meta.thinking_since) or running
+    await self._populate_sidebar_state(
+        results,
+        include_running_status=include_running_status,
+        include_pending_trigger_status=include_pending_trigger_status,
+    )
     for s in results:
       if s.updated_at.tzinfo is None:
         s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
@@ -830,6 +846,81 @@ class SessionManager:
 
     return await asyncio.to_thread(_check)
 
+  async def _get_pending_trigger_state(self, session_id: str) -> tuple[int, Optional[datetime]]:
+    """Return the number of pending delayed triggers and the earliest fire time."""
+
+    def _check() -> tuple[int, Optional[datetime]]:
+      triggers_dir = self._session_dir(session_id) / "triggers"
+      if not triggers_dir.exists():
+        return 0, None
+
+      pending_count = 0
+      next_trigger_at: Optional[datetime] = None
+      for trigger_path in triggers_dir.glob("*.json"):
+        try:
+          trigger = json.loads(trigger_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+          log.debug("trigger_meta_read_failed", trigger_path=str(trigger_path), error=str(e))
+          continue
+        if trigger.get("status") != "pending":
+          continue
+
+        pending_count += 1
+        fire_at_raw = trigger.get("fire_at")
+        if not fire_at_raw:
+          continue
+        try:
+          fire_at = datetime.fromisoformat(fire_at_raw.replace("Z", "+00:00"))
+        except ValueError as e:
+          log.debug("trigger_fire_at_parse_failed", trigger_path=str(trigger_path), error=str(e))
+          continue
+        if fire_at.tzinfo is None:
+          fire_at = fire_at.replace(tzinfo=timezone.utc)
+        if next_trigger_at is None or fire_at < next_trigger_at:
+          next_trigger_at = fire_at
+
+      return pending_count, next_trigger_at
+
+    return await asyncio.to_thread(_check)
+
+  async def _populate_sidebar_state(
+      self,
+      sessions: list[SessionMetadata],
+      include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
+  ) -> None:
+    """Populate derived sidebar-only state on session metadata objects."""
+    if not sessions:
+      return
+
+    running_future = None
+    trigger_future = None
+    if include_running_status:
+      running_future = asyncio.gather(*(self._has_running_tasks(meta.id) for meta in sessions))
+    if include_pending_trigger_status:
+      trigger_future = asyncio.gather(*(self._get_pending_trigger_state(meta.id) for meta in sessions))
+
+    if running_future and trigger_future:
+      running_flags, trigger_states = await asyncio.gather(running_future, trigger_future)
+    elif running_future:
+      running_flags = await running_future
+      trigger_states = None
+    elif trigger_future:
+      running_flags = None
+      trigger_states = await trigger_future
+    else:
+      return
+
+    if running_flags is not None:
+      for meta, running in zip(sessions, running_flags):
+        meta.has_running_tasks = bool(meta.thinking_since) or running
+
+    if trigger_states is not None:
+      for meta, (pending_count, next_trigger_at) in zip(sessions, trigger_states):
+        meta.has_pending_trigger = pending_count > 0
+        meta.pending_trigger_count = pending_count
+        meta.next_trigger_at = next_trigger_at
+
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.
 
@@ -862,9 +953,10 @@ class SessionManager:
   async def _save_metadata(self, meta: SessionMetadata) -> None:
     path = self._metadata_path(meta.id)
     path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
     async with aiofiles.open(path, "w") as f:
-      await f.write(meta.model_dump_json(indent=2))
-    self._metadata_cache[meta.id] = (meta.model_copy(), time.monotonic())
+      await f.write(serialized)
+    self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic())
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id

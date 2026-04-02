@@ -33,6 +33,26 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
     spawner.resolve_backend_option(cfg, "codex-o3", "")
 
 
+def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
+  prompt = spawner._build_worker_prompt(
+      description="Improve the CLI",
+      repo_path=Path("/tmp/repo"),
+      base_branch="main",
+      branch_name="improve/test/iter2",
+      wt_path="/tmp/worktrees/improve-test-iter2",
+      session_meta=SessionMetadata(id="session-id", name="Improve Session"),
+      improve_dir="/tmp/improve",
+      iteration_number=2,
+  )
+
+  assert "Treat them as advisory evidence and hints only." in prompt
+  assert "may inform your judgment, but they must not dictate your plan for this iteration." in prompt
+  assert "### What Changed" in prompt
+  assert "### Evidence" in prompt
+  assert "### Advisory Notes" in prompt
+  assert "### Next" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_resolve_requested_subagent_backend_model_uses_requested_backend() -> None:
   cfg = _build_cfg()

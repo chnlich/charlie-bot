@@ -147,6 +147,8 @@ def test_build_improve_master_prompt_contains_goal(tmp_path: Path):
   assert "python -m src.cli.improve" in prompt
   assert "~/.charliebot/config.yaml" in prompt
   assert "--backend <id>" in prompt
+  assert "the user should provide the destination and constraints, not a roadmap" in prompt
+  assert "Workers are fully autonomous and choose their own approach" in prompt
 
 
 def test_build_improve_master_prompt_contains_state_path(tmp_path: Path):

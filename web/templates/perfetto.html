@@ -79,6 +79,8 @@
       const allEvents = [];
       const tidMap = new Map();  // 'rankIndex:originalTid' -> synthetic numeric tid
       let nextTid = 1;
+      const flowIdMap = new Map();  // 'rankIndex:originalFlowId' -> synthetic numeric flow id
+      let nextFlowId = 1;
 
       function getNumericTid(rankIndex, originalTid) {
         const key = rankIndex + ':' + originalTid;
@@ -86,6 +88,14 @@
           tidMap.set(key, nextTid++);
         }
         return tidMap.get(key);
+      }
+
+      function getNumericFlowId(rankIndex, originalId) {
+        const key = rankIndex + ':' + originalId;
+        if (!flowIdMap.has(key)) {
+          flowIdMap.set(key, nextFlowId++);
+        }
+        return flowIdMap.get(key);
       }
 
       for (let i = 0; i < buffers.length; i++) {
@@ -152,6 +162,11 @@
                 ph: 'M', pid: remappedPid, tid: syntheticTid,
                 name: 'thread_name', args: { name: rankLabel + '/' + originalTid }
               });
+            }
+          }
+          if (evt.ph === 's' || evt.ph === 't' || evt.ph === 'f') {
+            if (evt.id !== undefined) {
+              evt.id = getNumericFlowId(i, evt.id);
             }
           }
           allEvents.push(evt);

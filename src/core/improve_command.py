@@ -97,14 +97,15 @@ You are starting an iterative improvement loop.
 
 ### Instructions
 1. Determine the target repository and base branch from the session context.
-2. Confirm with the user: show the repo path and goal summary, and ask if they are ready to start. Do NOT propose per-iteration methods or a detailed plan — workers are fully autonomous and decide their own approach.
-3. If the user requests a specific backend, it must be a configured `backend_options.id` from `~/.charliebot/config.yaml`; include `--backend <id>` in the command only when explicitly requested.
-4. After approval, choose a descriptive `--branch-prefix` based on the goal (e.g. `improve/fix-precision`, `improve/optimize-step-time`). If the user mentions a Linear ticket, include it (e.g. `ALG-865/chaoli/20260326/fix-precision`). Then run:
+2. Confirm with the user: show the repo path, restate the final goal, and capture only the constraints or success criteria that must be preserved. Keep the prompt final-goal driven: the user should provide the destination and constraints, not a roadmap, per-iteration plan, or implementation recipe.
+3. Do NOT propose per-iteration methods, milestones, or a detailed plan. Workers are fully autonomous and choose their own approach for each iteration.
+4. If the user requests a specific backend, it must be a configured `backend_options.id` from `~/.charliebot/config.yaml`; include `--backend <id>` in the command only when explicitly requested.
+5. After approval, choose a descriptive `--branch-prefix` based on the goal (e.g. `improve/fix-precision`, `improve/optimize-step-time`). If the user mentions a Linear ticket, include it (e.g. `ALG-865/chaoli/20260326/fix-precision`). Then run:
    ```
    python -m src.cli.improve --session {session_id} --repo <repo> --base-branch <base-branch> --iterations {max_iterations} --goal '<the goal above>' --branch-prefix '<your chosen prefix>'
    ```
    Each iteration creates `<prefix>/iter1`, `<prefix>/iter2`, etc., automatically chaining on the previous iteration's code.
-5. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
+6. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
 
 The improve state file is at: {state_path}"""
 

@@ -5,6 +5,18 @@
 // unread dot after the spinner hides.
 const sessionUnread = {};
 
+function pendingTriggerTitle(count) {
+  const normalized = Number(count) || 0;
+  if (normalized === 1) return '1 pending delayed trigger';
+  if (normalized > 1) return `${normalized} pending delayed triggers`;
+  return 'Pending delayed trigger';
+}
+
+function renderPendingTriggerIndicator(session) {
+  const count = Number(session.pending_trigger_count) || 0;
+  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count))}"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/></svg>`;
+}
+
 // ---------------------------------------------------------------------------
 // SPA-style session switching
 // ---------------------------------------------------------------------------
@@ -478,6 +490,17 @@ function setSessionSpinner(sid, visible) {
   if (dot) dot.classList.toggle('hidden', visible || !sessionUnread[sid]);
 }
 
+function setSessionPendingTriggerIndicator(sid, status) {
+  const icon = document.getElementById('pending-trigger-' + sid);
+  if (!icon) return;
+  const hasPending = !!(status && status.has_pending_trigger);
+  const count = Number(status && status.pending_trigger_count) || 0;
+  icon.classList.toggle('hidden', !hasPending);
+  icon.dataset.count = String(count);
+  icon.dataset.nextTriggerAt = (status && status.next_trigger_at) || '';
+  icon.title = pendingTriggerTitle(count);
+}
+
 function updateSpinner() {
   var anyRunning = Array.from(document.querySelectorAll('[id^="thread-status-"]'))
     .some(function(el) { return el.textContent === 'running'; });
@@ -546,6 +569,7 @@ function pollSessionStatus() {
         } else {
           setSessionSpinner(sid, st.has_running_tasks);
         }
+        setSessionPendingTriggerIndicator(sid, st);
         if (st.has_running_tasks) anyRunning = true;
       }
       return anyRunning;
@@ -1268,6 +1292,7 @@ function renderScheduledSessionItem(s) {
      id="session-${s.id}">
     <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
+    ${renderPendingTriggerIndicator(s)}
     <svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
@@ -1535,6 +1560,7 @@ function renderSessionItem(s, filter) {
      id="session-${s.id}">
     <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.has_running_tasks ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
+    ${renderPendingTriggerIndicator(s)}
     ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>

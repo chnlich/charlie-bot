@@ -139,7 +139,11 @@ async def index(
   load_errors: list[str] = []
   try:
     sessions = await session_mgr.list_sessions(
-        status=SessionStatus.ACTIVE, scheduled=False, include_running_status=True)
+        status=SessionStatus.ACTIVE,
+        scheduled=False,
+        include_running_status=True,
+        include_pending_trigger_status=True,
+    )
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []

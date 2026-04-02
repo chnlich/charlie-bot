@@ -105,6 +105,9 @@ class SessionMetadata(BaseModel):
   status: SessionStatus = SessionStatus.ACTIVE
   has_unread: bool = False
   has_running_tasks: bool = False
+  has_pending_trigger: bool = False
+  pending_trigger_count: int = 0
+  next_trigger_at: Optional[datetime] = None
   starred: bool = False
   thinking_since: Optional[datetime] = None
   created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

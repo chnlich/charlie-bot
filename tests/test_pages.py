@@ -1,10 +1,12 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
 
 from src.api import pages
 from src.core.config import CharlieBotConfig
+from src.core.models import SessionMetadata
 
 
 class FakeSessionManager:
@@ -13,6 +15,7 @@ class FakeSessionManager:
       status=None,
       scheduled=False,
       include_running_status=True,
+      include_pending_trigger_status=False,
   ) -> list[object]:
     return []
 
@@ -62,3 +65,56 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
   assert response_one.context["version"] == "abc1234 · 03-24"
   assert response_two.context["version"] == "abc1234 · 03-24"
   assert git_lookup_calls == 0
+
+
+class PendingTriggerSessionManager(FakeSessionManager):
+  def __init__(self, session: SessionMetadata):
+    self._session = session
+
+  async def list_sessions(
+      self,
+      status=None,
+      scheduled=False,
+      include_running_status=True,
+      include_pending_trigger_status=False,
+  ) -> list[object]:
+    return [self._session.model_copy()]
+
+  async def get_session(self, session_id: str) -> SessionMetadata | None:
+    if session_id != self._session.id:
+      return None
+    return self._session.model_copy()
+
+
+@pytest.mark.asyncio
+async def test_index_renders_pending_trigger_indicator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  session = SessionMetadata(
+      id="session-with-trigger",
+      name="Wake later",
+      has_pending_trigger=True,
+      pending_trigger_count=2,
+  )
+
+  async def fake_build_session_view_data(*args, **kwargs) -> SimpleNamespace:
+    return SimpleNamespace(raw_events=[], messages=[], threads=[], usage=None)
+
+  class FakeTriggerManager:
+    async def list_triggers(self, session_id: str) -> list[object]:
+      return []
+
+  monkeypatch.setattr(pages, "build_session_view_data", fake_build_session_view_data)
+  monkeypatch.setattr(pages, "get_trigger_manager", lambda: FakeTriggerManager())
+
+  response = await pages.index(
+      request=_build_request(),
+      session=session.id,
+      session_mgr=PendingTriggerSessionManager(session),
+      thread_mgr=object(),
+      cfg=cfg,
+  )
+
+  body = response.body.decode("utf-8")
+  assert 'id="pending-trigger-session-with-trigger"' in body
+  assert '2 pending delayed triggers' in body
+  assert 'text-amber-400' in body

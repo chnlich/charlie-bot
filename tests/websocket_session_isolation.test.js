@@ -67,8 +67,8 @@ function buildContext(sessionId) {
     clearTimeout: () => {},
     hideStreaming: () => {},
     showStreaming: () => {},
-    appendMessage: (role, content, isVoice) => {
-      messages.push({role, content, isVoice: !!isVoice});
+    appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
+      messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles: uploadedFiles || []});
     },
     setSessionSpinner: () => {},
     addWorkerCard: () => {},
@@ -188,4 +188,18 @@ test('result event triggers an immediate session usage refresh', () => {
 
   assert.deepEqual(usageEvent, {type: 'result', total_cost_usd: 1.25});
   assert.equal(pollCalls, 1);
+});
+
+test('user websocket events forward structured uploaded_files to the renderer', () => {
+  const {context, messages} = buildContext('session-a');
+
+  context.handleWSEvent({
+    type: 'user',
+    content: '',
+    uploaded_files: [{filename: 'report.pdf', path: '/tmp/report.pdf'}],
+  }, 'session-a', 0);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.deepEqual(messages[0].uploadedFiles, [{filename: 'report.pdf', path: '/tmp/report.pdf'}]);
 });

@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
+_ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
+
 
 def extract_text_from_message(msg: dict | None) -> str:
   """Join text from content blocks of a CC assistant message."""
@@ -22,6 +24,63 @@ def extract_text_from_message(msg: dict | None) -> str:
   if not isinstance(blocks, list):
     return ""
   return "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+
+
+def serialize_uploaded_files(uploaded_files: list[object] | None) -> list[dict]:
+  """Convert uploaded-file models or dicts into JSON-serializable dicts."""
+  serialized: list[dict] = []
+  for uploaded_file in uploaded_files or []:
+    if hasattr(uploaded_file, "model_dump"):
+      serialized.append(uploaded_file.model_dump(mode="json", exclude_none=True))
+    elif isinstance(uploaded_file, dict):
+      serialized.append(uploaded_file)
+    elif isinstance(uploaded_file, str):
+      filename = uploaded_file.replace("\\", "/").rstrip("/").split("/")[-1] or uploaded_file
+      serialized.append({"filename": filename, "path": uploaded_file})
+    else:
+      raise TypeError(f"Unsupported uploaded file payload: {type(uploaded_file)!r}")
+  return serialized
+
+
+def build_agent_input_content(content: str, uploaded_files: list[dict] | None = None) -> str:
+  """Append absolute attachment paths to the agent-visible message."""
+  paths = [str(f.get("path", "")).strip() for f in uploaded_files or [] if str(f.get("path", "")).strip()]
+  if not paths:
+    return content
+  return content + _ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
+
+
+def strip_attached_files_block(content: str) -> tuple[str, list[dict]]:
+  """Split a legacy attachment footer from user-visible content."""
+  if _ATTACHED_FILES_MARKER not in content:
+    return content, []
+
+  body, marker, attachments_block = content.rpartition(_ATTACHED_FILES_MARKER)
+  if not marker:
+    return content, []
+
+  uploaded_files: list[dict] = []
+  for line in attachments_block.splitlines():
+    if not line.startswith("- "):
+      return content, []
+    path = line[2:].strip()
+    if not path:
+      return content, []
+    filename = path.replace("\\", "/").rstrip("/").split("/")[-1] or path
+    uploaded_files.append({"filename": filename, "path": path})
+
+  return body, uploaded_files
+
+
+def normalize_user_message_event(ev: dict) -> dict:
+  """Return display content + structured uploads for a raw user event."""
+  content = ev.get("content", "")
+  uploaded_files = serialize_uploaded_files(ev.get("uploaded_files"))
+  if uploaded_files:
+    return {"content": content, "uploaded_files": uploaded_files}
+
+  stripped_content, legacy_files = strip_attached_files_block(content)
+  return {"content": stripped_content, "uploaded_files": legacy_files}
 
 
 @dataclass
@@ -196,10 +255,12 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
       if "message" in ev and "content" not in ev:
         continue
       _flush()
+      normalized = normalize_user_message_event(ev)
       messages.append(
           {
               "role": "user",
-              "content": ev.get("content", ""),
+              "content": normalized["content"],
+              "uploaded_files": normalized["uploaded_files"],
               "is_voice": ev.get("is_voice", False),
               "event_index": idx,
               "timestamp": ev.get("timestamp"),

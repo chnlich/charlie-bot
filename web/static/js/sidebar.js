@@ -279,9 +279,12 @@ async function loadOlderIfNeeded(container) {
 function renderSingleMessage(msg, sessionId) {
   const tsDiv = msg.timestamp ? '<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="' + msg.timestamp + '"></div>' : '';
   if (msg.role === 'user') {
-    const voiceSpan = msg.is_voice ? '<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>' : '';
-    return '<div class="flex justify-end"><div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">'
-      + voiceSpan + '<div class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
+    return '<div class="flex justify-end">' + renderUserMessageBubble(
+      msg.content,
+      msg.is_voice,
+      msg.timestamp,
+      msg.uploaded_files
+    ) + '</div>';
   }
   if (msg.role === 'assistant') {
     return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">'

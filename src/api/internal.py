@@ -96,6 +96,11 @@ async def start_improve_loop(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
+  try:
+    _check_takeoff_gate(req.session_id)
+  except DelegationBlockedError as e:
+    raise HTTPException(status_code=403, detail=str(e))
+
   cfg = get_config()
   state = ImproveState(goal=req.goal, max_iterations=req.iterations, status='running')
   save_improve_state(req.session_id, state, cfg)

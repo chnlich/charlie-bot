@@ -179,10 +179,6 @@
           </div>
           <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap">{% if session_usage %}${{ '%.2f' % session_usage.total_cost_usd }}{% endif %}</span>
         </div>
-        <button id="fork-session-btn" onclick="forkSession(SESSION_ID)"
-                class="text-slate-500 hover:text-green-400 transition-colors ml-2" title="Clone session">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>
-        </button>
         <a href="/sessions/{{ active_session.id }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

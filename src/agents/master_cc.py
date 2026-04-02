@@ -132,7 +132,7 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
     parts.append(
         f"""# Session Rewind Context
 
-This session was rewound from a previous conversation. Here is the conversation summary up to the rewind point:
+This session was rewound from a previous conversation (parent session: {session_meta.parent_session_id}). Here is the conversation summary up to the rewind point:
 
 {session_meta.rewind_summary}
 

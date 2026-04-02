@@ -167,6 +167,16 @@ class CreateSessionRequest(BaseModel):
   backend: Optional[str] = None
 
 
+class ForkSessionRequest(BaseModel):
+  event_index: Optional[int] = None
+  backend: Optional[str] = None
+
+
+class EloneSessionRequest(BaseModel):
+  event_index: int
+  backend: Optional[str] = None
+
+
 class UploadedFileRef(BaseModel):
   filename: str
   path: str

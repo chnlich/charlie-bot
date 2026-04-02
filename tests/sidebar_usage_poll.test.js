@@ -9,15 +9,93 @@ const SIDEBAR_JS = fs.readFileSync(
   'utf8'
 );
 
-function buildContext() {
+function createClassList(initial = '') {
+  const names = new Set(String(initial).split(/\s+/).filter(Boolean));
+  return {
+    add: (...items) => items.forEach((item) => { if (item) names.add(item); }),
+    remove: (...items) => items.forEach((item) => names.delete(item)),
+    contains: (item) => names.has(item),
+    toggle: (item, force) => {
+      if (force === undefined) {
+        if (names.has(item)) {
+          names.delete(item);
+          return false;
+        }
+        names.add(item);
+        return true;
+      }
+      if (force) names.add(item);
+      else names.delete(item);
+      return !!force;
+    },
+    toString: () => Array.from(names).join(' '),
+  };
+}
+
+function createElement(overrides = {}) {
+  let innerHTML = overrides.innerHTML || '';
+  const element = {
+    tagName: overrides.tagName || 'DIV',
+    value: overrides.value || '',
+    textContent: overrides.textContent || '',
+    checked: overrides.checked || false,
+    disabled: overrides.disabled || false,
+    readOnly: overrides.readOnly || false,
+    dataset: overrides.dataset || {},
+    style: overrides.style || {},
+    children: [],
+    options: [],
+    classList: createClassList(overrides.className || ''),
+    appendChild(child) {
+      this.children.push(child);
+      if (child && child.tagName === 'OPTION') {
+        this.options.push(child);
+        if (child.selected || !this.value) this.value = child.value;
+      }
+      return child;
+    },
+    prepend(child) {
+      this.children.unshift(child);
+      return child;
+    },
+    remove() {
+      this.removed = true;
+    },
+    setAttribute(name, value) {
+      this[name] = value;
+    },
+    getAttribute(name) {
+      return this[name];
+    },
+  };
+
+  Object.defineProperty(element, 'innerHTML', {
+    get() {
+      return innerHTML;
+    },
+    set(value) {
+      innerHTML = value;
+      element.children = [];
+      element.options = [];
+    },
+  });
+
+  return Object.assign(element, overrides);
+}
+
+function buildContext(overrides = {}) {
   const fetchCalls = [];
+  const fetchRequests = [];
   const intervals = [];
   const clears = [];
+  const alerts = [];
+  const elements = overrides.elements || new Map();
 
   const context = {
     SESSION_ID: 'session-a',
     THINKING_SINCE: null,
     DRAFT_KEY: null,
+    ACTIVE_BACKEND_ID: overrides.ACTIVE_BACKEND_ID || 'claude-opus-4.6',
     masterThinking: false,
     usageTotalCost: 0,
     switching: false,
@@ -36,19 +114,29 @@ function buildContext() {
     location: {href: '', protocol: 'http:', host: 'localhost:8000'},
     history: {pushState: () => {}},
     console: {error: () => {}, log: () => {}},
-    fetch: async (url) => {
+    fetch: async (url, opts = {}) => {
       fetchCalls.push(url);
+      fetchRequests.push({url, opts});
+      if (url.endsWith('/view')) {
+        return {
+          ok: true,
+          async json() {
+            return {
+              session: {id: 'session-a', thinking_since: '2026-03-31T20:42:52Z'},
+              usage: {
+                context_tokens: 49179,
+                context_limit: 258400,
+                total_cost_usd: 1.25,
+              },
+              active_backend: context.ACTIVE_BACKEND_ID,
+            };
+          },
+        };
+      }
       return {
         ok: true,
         async json() {
-          return {
-            session: {id: 'session-a', thinking_since: '2026-03-31T20:42:52Z'},
-            usage: {
-              context_tokens: 49179,
-              context_limit: 258400,
-              total_cost_usd: 1.25,
-            },
-          };
+          return {id: 'session-b', backend: context.ACTIVE_BACKEND_ID};
         },
       };
     },
@@ -60,17 +148,13 @@ function buildContext() {
       clears.push(id);
     },
     document: {
-      getElementById: () => null,
+      getElementById: (id) => elements.get(id) || null,
       querySelectorAll: () => [],
       querySelector: () => null,
-      createElement: () => ({
-        className: '',
-        innerHTML: '',
-        appendChild: () => {},
-        remove: () => {},
-        prepend: () => {},
-        classList: {add: () => {}, remove: () => {}, toggle: () => {}},
-      }),
+      createElement: (tagName) => createElement({tagName: String(tagName).toUpperCase()}),
+      body: createElement({tagName: 'BODY'}),
+      addEventListener: () => {},
+      removeEventListener: () => {},
     },
     disconnectWS: () => {},
     connectWS: () => {},
@@ -104,12 +188,25 @@ function buildContext() {
     showScrollToBottom: () => {},
     loadedThreads: {clear: () => {}},
     _backlogLoaded: false,
-    BACKEND_OPTIONS: {},
+    BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
+    alert: (message) => {
+      alerts.push(message);
+    },
   };
 
   vm.createContext(context);
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
-  return {context, fetchCalls, intervals, clears};
+  return {context, fetchCalls, fetchRequests, intervals, clears, alerts, elements};
+}
+
+function buildSessionActionElements() {
+  return new Map([
+    ['session-action-modal-overlay', createElement({className: 'hidden'})],
+    ['session-action-modal-title', createElement()],
+    ['session-action-modal-body', createElement()],
+    ['session-action-backend', createElement({tagName: 'SELECT'})],
+    ['session-action-modal-confirm', createElement()],
+  ]);
 }
 
 test('pollActiveSessionView refreshes usage from the session view endpoint', async () => {
@@ -295,4 +392,92 @@ test('renderScheduledSessionItem keeps delayed-trigger and cron indicators disti
   assert.match(html, /id="pending-trigger-session-a"/);
   assert.match(html, /2 pending delayed triggers/);
   assert.match(html, /Scheduled: nightly/);
+});
+
+test('forkSession opens the reusable modal with the active backend selected by default', () => {
+  const elements = buildSessionActionElements();
+  const {context} = buildContext({
+    ACTIVE_BACKEND_ID: 'codex-o3',
+    BACKEND_OPTIONS: {
+      'claude-opus-4.6': 'Opus',
+      'codex-o3': 'Codex',
+    },
+    elements,
+  });
+
+  context.forkSession('session-a');
+
+  assert.equal(elements.get('session-action-modal-overlay').classList.contains('hidden'), false);
+  assert.equal(elements.get('session-action-backend').value, 'codex-o3');
+  assert.deepEqual(
+    elements.get('session-action-backend').options.map((option) => option.value),
+    ['claude-opus-4.6', 'codex-o3']
+  );
+  assert.equal(elements.get('session-action-modal-confirm').textContent, 'Clone');
+});
+
+test('closeSessionActionModal hides the modal without sending a request', () => {
+  const elements = buildSessionActionElements();
+  const {context, fetchCalls} = buildContext({
+    ACTIVE_BACKEND_ID: 'codex-o3',
+    BACKEND_OPTIONS: {'codex-o3': 'Codex'},
+    elements,
+  });
+
+  context.forkSession('session-a');
+  context.closeSessionActionModal();
+
+  assert.equal(elements.get('session-action-modal-overlay').classList.contains('hidden'), true);
+  assert.deepEqual(fetchCalls, []);
+});
+
+test('submitSessionActionModal sends backend and null event_index for header clone', async () => {
+  const elements = buildSessionActionElements();
+  const {context, fetchRequests} = buildContext({
+    ACTIVE_BACKEND_ID: 'codex-o3',
+    BACKEND_OPTIONS: {
+      'claude-opus-4.6': 'Opus',
+      'codex-o3': 'Codex',
+    },
+    elements,
+  });
+
+  context.forkSession('session-a');
+  await context.submitSessionActionModal();
+
+  assert.equal(fetchRequests[0].url, '/api/sessions/session-a/fork');
+  assert.deepEqual(JSON.parse(fetchRequests[0].opts.body), {
+    event_index: null,
+    backend: 'codex-o3',
+  });
+});
+
+test('submitSessionActionModal sends backend and event_index for message-level clone and Elon-e', async () => {
+  const elements = buildSessionActionElements();
+  const {context, fetchRequests} = buildContext({
+    ACTIVE_BACKEND_ID: 'claude-opus-4.6',
+    BACKEND_OPTIONS: {
+      'claude-opus-4.6': 'Opus',
+      'codex-o3': 'Codex',
+    },
+    elements,
+  });
+
+  context.forkSession('session-a', 12);
+  elements.get('session-action-backend').value = 'codex-o3';
+  await context.submitSessionActionModal();
+
+  context.eloneSession('session-a', 18);
+  await context.submitSessionActionModal();
+
+  assert.equal(fetchRequests[0].url, '/api/sessions/session-a/fork');
+  assert.deepEqual(JSON.parse(fetchRequests[0].opts.body), {
+    event_index: 12,
+    backend: 'codex-o3',
+  });
+  assert.equal(fetchRequests[1].url, '/api/sessions/session-a/elone');
+  assert.deepEqual(JSON.parse(fetchRequests[1].opts.body), {
+    event_index: 18,
+    backend: 'claude-opus-4.6',
+  });
 });

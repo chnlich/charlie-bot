@@ -29,6 +29,31 @@ let sessionLoadingMore = false;
 let activeSessionViewPollInterval = null;
 let activeSessionViewPollInflight = false;
 const ACTIVE_SESSION_VIEW_POLL_MS = 3000;
+let sessionActionModalState = null;
+
+function getDefaultBackendId() {
+  const backendIds = Object.keys(BACKEND_OPTIONS || {});
+  return backendIds.length ? backendIds[0] : 'claude-opus-4.6';
+}
+
+function getActiveBackendId() {
+  return globalThis.ACTIVE_BACKEND_ID || getDefaultBackendId();
+}
+
+function setActiveBackendId(backendId) {
+  globalThis.ACTIVE_BACKEND_ID = backendId || getDefaultBackendId();
+}
+
+function updateActiveBackendBadges() {
+  const activeBackendId = getActiveBackendId();
+  const activeBackendLabel = BACKEND_OPTIONS[activeBackendId] || activeBackendId;
+
+  const backendBadge = document.getElementById('backend-badge');
+  if (backendBadge) backendBadge.textContent = activeBackendLabel;
+
+  const inputModelBadge = document.getElementById('input-model-badge');
+  if (inputModelBadge) inputModelBadge.textContent = activeBackendLabel;
+}
 
 async function switchSession(sessionId) {
   // Welcome screen — no SPA state to swap, fall back to full load
@@ -137,6 +162,7 @@ async function switchSession(sessionId) {
 function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages;
+  setActiveBackendId(data.active_backend);
 
   // Store pagination state from tail-loaded response
   sessionHasMore = !!data.has_more;
@@ -156,14 +182,7 @@ function renderSessionView(data) {
   }
 
   // Update backend badge
-  const backendBadge = document.getElementById('backend-badge');
-  if (backendBadge) {
-    backendBadge.textContent = BACKEND_OPTIONS[data.active_backend] || data.active_backend;
-  }
-  const inputModelBadge = document.getElementById('input-model-badge');
-  if (inputModelBadge) {
-    inputModelBadge.textContent = BACKEND_OPTIONS[data.active_backend] || data.active_backend;
-  }
+  updateActiveBackendBadges();
 
   // Update events viewer link
   const evLink = document.querySelector('a[href*="/events"]');
@@ -535,6 +554,8 @@ async function pollActiveSessionView() {
     if (pollSessionId !== SESSION_ID) return;
 
     THINKING_SINCE = data.session.thinking_since || null;
+    setActiveBackendId(data.active_backend);
+    updateActiveBackendBadges();
     usageTotalCost = data.usage ? (data.usage.total_cost_usd || 0) : 0;
     renderUsageFromData(data.usage);
 
@@ -1804,36 +1825,105 @@ async function deleteCronTask() {
 // ---------------------------------------------------------------------------
 // Session clone (fork) and Elon-e
 // ---------------------------------------------------------------------------
-async function forkSession(sessionId, eventIndex = null) {
-  try {
-    const opts = {method: 'POST'};
-    if (eventIndex != null) {
-      opts.headers = {'Content-Type': 'application/json'};
-      opts.body = JSON.stringify({event_index: eventIndex});
-    }
-    const res = await fetch('/api/sessions/' + sessionId + '/fork', opts);
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    location.href = '/?session=' + data.id;
-  } catch (err) {
-    console.error('Clone failed:', err);
-    alert('Clone failed: ' + err.message);
+function populateSessionActionBackendSelect(selectedBackendId) {
+  const select = document.getElementById('session-action-backend');
+  if (!select) return;
+
+  select.innerHTML = '';
+  for (const [backendId, label] of Object.entries(BACKEND_OPTIONS || {})) {
+    const option = document.createElement('option');
+    option.value = backendId;
+    option.textContent = label;
+    option.selected = backendId === selectedBackendId;
+    select.appendChild(option);
+  }
+
+  if (!select.value) {
+    select.value = selectedBackendId || getDefaultBackendId();
   }
 }
 
-async function eloneSession(sessionId, eventIndex) {
-  if (!confirm('Elon-e this session? The current session will be archived.')) return;
+function openSessionActionModal({
+  action,
+  sessionId,
+  eventIndex = null,
+  title,
+  bodyText,
+  confirmLabel,
+  failureLabel,
+}) {
+  const overlay = document.getElementById('session-action-modal-overlay');
+  const titleEl = document.getElementById('session-action-modal-title');
+  const bodyEl = document.getElementById('session-action-modal-body');
+  const confirmEl = document.getElementById('session-action-modal-confirm');
+
+  sessionActionModalState = {action, sessionId, eventIndex, failureLabel};
+  populateSessionActionBackendSelect(getActiveBackendId());
+
+  if (titleEl) titleEl.textContent = title;
+  if (bodyEl) bodyEl.textContent = bodyText;
+  if (confirmEl) confirmEl.textContent = confirmLabel;
+  if (overlay) {
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+  }
+}
+
+function closeSessionActionModal() {
+  const overlay = document.getElementById('session-action-modal-overlay');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    overlay.classList.remove('flex');
+  }
+  sessionActionModalState = null;
+}
+
+async function submitSessionActionModal() {
+  if (!sessionActionModalState) return;
+
+  const {action, sessionId, eventIndex, failureLabel} = sessionActionModalState;
+  const backendSelect = document.getElementById('session-action-backend');
+  const backend = backendSelect ? backendSelect.value : getActiveBackendId();
+
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/elone', {
+    const res = await fetch('/api/sessions/' + sessionId + '/' + action, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({event_index: eventIndex}),
+      body: JSON.stringify({event_index: eventIndex, backend}),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
+    closeSessionActionModal();
     location.href = '/?session=' + data.id;
   } catch (err) {
-    console.error('Elon-e failed:', err);
-    alert('Elon-e failed: ' + err.message);
+    console.error(failureLabel + ' failed:', err);
+    alert(failureLabel + ' failed: ' + err.message);
   }
+}
+
+function forkSession(sessionId, eventIndex = null) {
+  const isPartialClone = eventIndex != null;
+  openSessionActionModal({
+    action: 'fork',
+    sessionId,
+    eventIndex,
+    title: isPartialClone ? 'Clone to Here' : 'Clone Session',
+    bodyText: isPartialClone
+      ? 'Create a new session from this response boundary and choose the backend for the clone.'
+      : 'Create a full clone of this session and choose the backend for the clone.',
+    confirmLabel: 'Clone',
+    failureLabel: 'Clone',
+  });
+}
+
+function eloneSession(sessionId, eventIndex) {
+  openSessionActionModal({
+    action: 'elone',
+    sessionId,
+    eventIndex,
+    title: 'Elon-e Session',
+    bodyText: 'Start a fresh takeover session from this point. Warning: the current session will be archived and rated thumbs down.',
+    confirmLabel: 'Elon-e',
+    failureLabel: 'Elon-e',
+  });
 }

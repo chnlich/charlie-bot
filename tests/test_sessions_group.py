@@ -20,9 +20,14 @@ def _make_session_mgr(tmp_path: Path) -> SessionManager:
   return SessionManager(cfg)
 
 
-async def _seed_parent(mgr: SessionManager, *, group: str | None = "Work") -> SessionMetadata:
+async def _seed_parent(
+    mgr: SessionManager,
+    *,
+    group: str | None = "Work",
+    backend: str = "claude-opus-4.6",
+) -> SessionMetadata:
   """Create and persist a parent session with chat events."""
-  parent = SessionMetadata(name="Parent", group=group)
+  parent = SessionMetadata(name="Parent", group=group, backend=backend)
   await mgr._save_metadata(parent)
   events_path = mgr._chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +71,7 @@ async def test_fork_session_inherits_group(tmp_path: Path) -> None:
 
   assert child is not None
   assert child.group == "Research"
+  assert child.backend == parent.backend
 
 
 @pytest.mark.asyncio
@@ -77,6 +83,19 @@ async def test_fork_session_inherits_none_group(tmp_path: Path) -> None:
 
   assert child is not None
   assert child.group is None
+  assert child.backend == parent.backend
+
+
+@pytest.mark.asyncio
+async def test_fork_session_accepts_backend_override(tmp_path: Path) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  parent = await _seed_parent(mgr, group="Research", backend="claude-opus-4.6")
+
+  child = await mgr.fork_session(parent.id, backend="codex-o3")
+
+  assert child is not None
+  assert child.group == "Research"
+  assert child.backend == "codex-o3"
 
 
 @pytest.mark.asyncio
@@ -88,6 +107,7 @@ async def test_elone_session_inherits_group(tmp_path: Path) -> None:
 
   assert child is not None
   assert child.group == "Research"
+  assert child.backend == parent.backend
 
 
 @pytest.mark.asyncio
@@ -99,6 +119,19 @@ async def test_elone_session_inherits_none_group(tmp_path: Path) -> None:
 
   assert child is not None
   assert child.group is None
+  assert child.backend == parent.backend
+
+
+@pytest.mark.asyncio
+async def test_elone_session_accepts_backend_override(tmp_path: Path) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  parent = await _seed_parent(mgr, group="Research", backend="claude-opus-4.6")
+
+  child = await mgr.elone_session(parent.id, event_index=0, backend="codex-o3")
+
+  assert child is not None
+  assert child.group == "Research"
+  assert child.backend == "codex-o3"
 
 
 @pytest.mark.asyncio

@@ -262,7 +262,12 @@ class SessionManager:
     results.sort(key=lambda s: s.updated_at, reverse=True)
     return results
 
-  async def fork_session(self, parent_id: str, event_index: int | None = None) -> Optional[SessionMetadata]:
+  async def fork_session(
+      self,
+      parent_id: str,
+      event_index: int | None = None,
+      backend: str | None = None,
+  ) -> Optional[SessionMetadata]:
     """Create a new session by cloning an existing one.
 
     If event_index is set, only events [0..event_index] (inclusive) are copied.
@@ -283,12 +288,12 @@ class SessionManager:
 
     summary = _summarize_event_lines(lines)
 
-    # Create the new session inheriting parent's backend
+    # Create the new session, inheriting the parent backend unless overridden.
     meta = SessionMetadata(
         name=f'Clone: {parent.name}',
         parent_session_id=parent_id,
         rewind_summary=summary,
-        backend=parent.backend,
+        backend=backend or parent.backend,
         group=parent.group,
     )
     session_dir = self._session_dir(meta.id)
@@ -310,10 +315,21 @@ class SessionManager:
 
     await self._save_metadata(meta)
 
-    log.info('session_cloned', new_session=meta.id, parent=parent_id, event_index=event_index)
+    log.info(
+        'session_cloned',
+        new_session=meta.id,
+        parent=parent_id,
+        event_index=event_index,
+        backend=meta.backend,
+    )
     return meta
 
-  async def elone_session(self, parent_id: str, event_index: int) -> Optional[SessionMetadata]:
+  async def elone_session(
+      self,
+      parent_id: str,
+      event_index: int,
+      backend: str | None = None,
+  ) -> Optional[SessionMetadata]:
     """Create an Elon-e session: empty history, archive + thumbs-down the parent."""
     parent = await self.get_session(parent_id)
     if not parent:
@@ -323,7 +339,7 @@ class SessionManager:
     meta = SessionMetadata(
         name=f'Elon-e: {parent.name}',
         parent_session_id=parent_id,
-        backend=parent.backend,
+        backend=backend or parent.backend,
         group=parent.group,
     )
     session_dir = self._session_dir(meta.id)
@@ -344,7 +360,13 @@ class SessionManager:
     self._events_cache.pop(parent_id, None)
     self._usage_cache.pop(parent_id, None)
 
-    log.info('session_eloned', new_session=meta.id, parent=parent_id, event_index=event_index)
+    log.info(
+        'session_eloned',
+        new_session=meta.id,
+        parent=parent_id,
+        event_index=event_index,
+        backend=meta.backend,
+    )
     return meta
 
   def get_chat_events_path(self, session_id: str) -> Path:

@@ -148,6 +148,7 @@ def test_build_improve_master_prompt_contains_goal(tmp_path: Path):
   assert session_id in prompt
   assert "5" in prompt
   assert "python -m src.cli.improve" in prompt
+  assert "--base-branch <base-branch>" in prompt
 
 
 def test_build_improve_master_prompt_contains_state_path(tmp_path: Path):

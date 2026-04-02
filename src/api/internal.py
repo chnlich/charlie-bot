@@ -42,12 +42,19 @@ async def delegate_task(
   except DelegationBlockedError as e:
     raise HTTPException(status_code=403, detail=str(e))
 
+  cfg = get_config()
+  try:
+    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(
+        req.session_id,
+        cfg,
+        session_mgr,
+        requested_backend=req.backend,
+    )
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
   # Create thread immediately so it's visible in the UI
   thread = await thread_mgr.create_thread(meta, req.description, context=req.context, require_review=req.require_review)
-
-  # Resolve backend/model from session config before spawning
-  cfg = get_config()
-  resolved_backend, resolved_model = await resolve_session_subagent_backend_model(req.session_id, cfg, session_mgr)
 
   # Fire-and-forget: spawn worker in background
   create_logged_task(
@@ -102,6 +109,16 @@ async def start_improve_loop(
     raise HTTPException(status_code=403, detail=str(e))
 
   cfg = get_config()
+  try:
+    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(
+        req.session_id,
+        cfg,
+        session_mgr,
+        requested_backend=req.backend,
+    )
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
   state = ImproveState(goal=req.goal, max_iterations=req.iterations, status='running')
   save_improve_state(req.session_id, state, cfg)
 
@@ -116,11 +133,20 @@ async def start_improve_loop(
           thread_mgr=thread_mgr,
           base_branch=req.base_branch,
           branch_prefix=req.branch_prefix,
+          resolved_backend=resolved_backend,
+          resolved_model=resolved_model,
       ),
       name=f"improve-loop-{req.session_id}",
   )
 
-  log.info("improve_loop_started", session=req.session_id, iterations=req.iterations, goal=req.goal)
+  log.info(
+      "improve_loop_started",
+      session=req.session_id,
+      iterations=req.iterations,
+      goal=req.goal,
+      backend=resolved_backend,
+      model=resolved_model,
+  )
 
   return {"status": "started", "session_id": req.session_id, "iterations": req.iterations}
 

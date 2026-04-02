@@ -31,6 +31,7 @@ def main() -> None:
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument("--goal", required=True, help="Improvement goal")
   parser.add_argument("--base-branch", required=True, help="Base branch for iteration worktrees")
+  parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
   parser.add_argument(
       "--branch-prefix", default=None, help="Branch prefix for iteration branches (e.g. 'improve/perf')")
   args = parser.parse_args()
@@ -45,6 +46,8 @@ def main() -> None:
       "goal": args.goal,
       "branch_prefix": args.branch_prefix,
   }
+  if args.backend is not None:
+    payload["backend"] = args.backend
 
   try:
     resp = requests.post(
@@ -53,7 +56,13 @@ def main() -> None:
     result = resp.json()
     print(json.dumps(result, indent=2))
   except requests.RequestException as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    msg = str(e)
+    if e.response is not None:
+      try:
+        msg = e.response.json()["detail"]
+      except (ValueError, KeyError):
+        pass
+    print(json.dumps({"error": msg}), file=sys.stderr)
     sys.exit(1)
 
 

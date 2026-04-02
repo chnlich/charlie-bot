@@ -221,6 +221,7 @@ class DelegateRequest(BaseModel):
   session_id: str
   description: str
   base_branch: str
+  backend: Optional[str] = None
   repo_path: Optional[str] = None
   context: Optional[str] = None
   require_review: bool = True
@@ -231,6 +232,7 @@ class ImproveRequest(BaseModel):
   session_id: str
   repo_path: str
   base_branch: str
+  backend: Optional[str] = None
   iterations: int = 3
   goal: str
   branch_prefix: Optional[str] = None

@@ -30,6 +30,7 @@ Source code: `~/workspace/charlie-bot/src/core/`
 - The user is **on the loop** (reviewing), not **in the loop** (executing)
 - The goal prompt should specify **what to achieve** and **constraints**, NOT specific methods or directions — let workers explore creatively
 - Workers inherit the session's repo path and subagent backend
+- Optional backend selection for `/improve` and delegation must use a configured `backend_options.id` from `~/.charliebot/config.yaml`
 
 **Master agent's role when user asks for /improve:**
 1. Help the user formulate a concise goal string
@@ -56,6 +57,11 @@ python -m src.cli.delegate \
 2. Worker runs with the description as prompt
 3. On success → auto-review agent checks and merges
 4. Master receives combined worker+reviewer summary
+
+**Backend selection:**
+- `~/.charliebot/config.yaml` `backend_options` is the source of truth for worker/reviewer backend ids and default models
+- Internal `--backend` selections for delegation and `/improve` must point to one of those configured ids
+- Code defaults in `src/core/config.py` are bootstrap fallbacks only; do not treat them as the authoritative backend catalog
 
 **When to use delegation vs /improve:**
 - **Delegation**: one-shot tasks with clear specifications (implement X, fix Y)

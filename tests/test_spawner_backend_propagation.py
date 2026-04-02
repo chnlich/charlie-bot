@@ -34,6 +34,56 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_session_subagent_backend_model_uses_session_default() -> None:
+  cfg = _build_cfg()
+
+  class FakeSessionManager:
+    async def get_session(self, session_id: str) -> SessionMetadata:
+      return SessionMetadata(id=session_id, name="Test Session", backend="claude-opus-4.6")
+
+  backend, model = await spawner.resolve_session_subagent_backend_model("session-id", cfg, FakeSessionManager())
+
+  assert backend == "claude-opus-4.6"
+  assert model == "claude-opus-4-6"
+
+
+@pytest.mark.asyncio
+async def test_resolve_session_subagent_backend_model_honors_requested_backend_override() -> None:
+  cfg = _build_cfg()
+
+  class FakeSessionManager:
+    async def get_session(self, session_id: str) -> SessionMetadata:
+      return SessionMetadata(id=session_id, name="Test Session", backend="claude-opus-4.6")
+
+  backend, model = await spawner.resolve_session_subagent_backend_model(
+      "session-id",
+      cfg,
+      FakeSessionManager(),
+      requested_backend="codex-o3",
+  )
+
+  assert backend == "codex-o3"
+  assert model == "o3"
+
+
+@pytest.mark.asyncio
+async def test_resolve_session_subagent_backend_model_rejects_unknown_requested_backend() -> None:
+  cfg = _build_cfg()
+
+  class FakeSessionManager:
+    async def get_session(self, session_id: str) -> SessionMetadata:
+      return SessionMetadata(id=session_id, name="Test Session", backend="claude-opus-4.6")
+
+  with pytest.raises(ValueError, match="requested backend 'missing-backend' is not in backend_options"):
+    await spawner.resolve_session_subagent_backend_model(
+        "session-id",
+        cfg,
+        FakeSessionManager(),
+        requested_backend="missing-backend",
+    )
+
+
+@pytest.mark.asyncio
 async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",

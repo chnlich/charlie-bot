@@ -246,6 +246,8 @@ async def run_improve_loop(
     thread_mgr: "ThreadManager",
     base_branch: Optional[str] = None,
     branch_prefix: Optional[str] = None,
+    resolved_backend: str = "",
+    resolved_model: str = "",
 ) -> None:
   """Run the iterative improvement loop as a server-side async task.
 
@@ -254,7 +256,7 @@ async def run_improve_loop(
   triggers the master CC with the combined summary.
   """
   from src.core.ndjson import parse_ndjson_file
-  from src.core.spawner import _trigger_master, resolve_session_subagent_backend_model, spawn_worker
+  from src.core.spawner import _trigger_master, spawn_worker
 
   previous_summaries: list[str] = []
   prev_branch: Optional[str] = base_branch
@@ -263,6 +265,12 @@ async def run_improve_loop(
   improve_id = branch_prefix.replace('/', '-') if branch_prefix else f'improve-{int(time.time())}'
   improve_dir = cfg.sessions_dir / session_id / 'improve' / improve_id
   improve_dir.mkdir(parents=True, exist_ok=True)
+  log.info(
+      "improve_loop_backend_pinned",
+      session=session_id,
+      backend=resolved_backend,
+      model=resolved_model,
+  )
 
   try:
     for i in range(1, iterations + 1):
@@ -285,7 +293,6 @@ async def run_improve_loop(
 
         # Create thread and spawn worker
         thread = await thread_mgr.create_thread(meta, description, require_review=False)
-        resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
         branch_name_override = f"{branch_prefix}/iter{i}" if branch_prefix else None
         await spawn_worker(
             session_id,

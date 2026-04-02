@@ -140,19 +140,30 @@ async def resolve_session_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
+    requested_backend: Optional[str] = None,
 ) -> tuple[str, str]:
-  """Resolve backend+model from the session default, with strict validation."""
+  """Resolve backend+model from a configured backend id, with strict validation."""
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' not found")
-  backend_id = session_meta.backend
+
+  if requested_backend is None:
+    backend_id = session_meta.backend
+    source = "session backend"
+  else:
+    backend_id = requested_backend
+    source = "requested backend"
+
   if not backend_id:
-    raise ValueError(f"session '{session_id}' has no backend configured")
+    if requested_backend is None:
+      raise ValueError(f"session '{session_id}' has no backend configured")
+    raise ValueError("requested backend is required")
+
   option = cfg.get_backend_option(backend_id)
   if option is None:
-    raise ValueError(f"session backend '{backend_id}' is not in backend_options")
+    raise ValueError(f"{source} '{backend_id}' is not in backend_options")
   if not option.model:
-    raise ValueError(f"session backend '{backend_id}' has no default model")
+    raise ValueError(f"{source} '{backend_id}' has no default model")
   return option.id, option.model
 
 

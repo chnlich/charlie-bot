@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from src.api.chat import run_and_finalize
 from src.api.deps import get_session_manager, get_thread_manager, require_session
-from src.api.message_utils import build_agent_input_content, serialize_uploaded_files
+from src.api.message_utils import build_agent_input_content, build_user_event, serialize_uploaded_files
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata, UploadedFileRef
@@ -115,18 +115,6 @@ class SlashExecuteRequest(BaseModel):
   uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
 
 
-def _build_user_event(content: str, uploaded_files: list[dict]) -> dict:
-  """Build a persisted user event for slash commands."""
-  event = {
-      'type': ET.USER,
-      'content': content,
-      'is_voice': False,
-  }
-  if uploaded_files:
-    event['uploaded_files'] = uploaded_files
-  return event
-
-
 @router.get('/commands')
 async def list_commands():
   """Return all available slash commands including built-in /help."""
@@ -151,7 +139,7 @@ async def execute_command(
 
   # Built-in /help
   if name == 'help':
-    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
+    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     return {'type': ET.HELP, 'commands': await _build_command_list()}
 
   # Built-in /improve
@@ -171,7 +159,7 @@ async def execute_command(
     save_improve_state(session_id, state, cfg)
 
     prompt = build_improve_master_prompt(session_id, goal, max_iterations, cfg)
-    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
+    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     create_logged_task(
         run_and_finalize(
             cfg,
@@ -195,7 +183,7 @@ async def execute_command(
     from src.core.improve_command import stop_improve_loop
     stopped = await stop_improve_loop(session_id, cfg)
     if stopped:
-      await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
+      await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
       return {'type': ET.IMPROVE_STOPPED, 'message': 'Improve loop will stop after current iteration'}
     return {'error': 'No active improve loop in this session'}
 
@@ -215,7 +203,7 @@ async def execute_command(
     except ValueError as e:
       log.debug("slash_command_value_error", error=str(e))
       return {'error': str(e)}
-    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
+    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     return JSONResponse(
         status_code=202,
         content={
@@ -237,7 +225,7 @@ async def execute_command(
 
   if dispatch.kind == 'shell_result':
     result = dispatch.shell_result
-    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
+    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     return {
         'type': ET.SHELL_RESULT,
         'command': name,
@@ -247,7 +235,7 @@ async def execute_command(
     }
 
   if dispatch.kind == 'prompt':
-    await session_mgr.persist_and_broadcast(session_id, _build_user_event(display_text, uploaded_files))
+    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     create_logged_task(
         run_and_finalize(
             cfg,

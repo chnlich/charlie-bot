@@ -71,10 +71,12 @@ async def test_stale_resume_id_retries_once_without_resume_and_persists_new_id(m
   session_mgr = FakeSessionManager(meta)
   call_resume_ids: list[Optional[str]] = []
   call_backend_options: list[BackendOption] = []
+  call_flags: list[tuple[bool, bool]] = []
 
   async def fake_run_message(*args: object, **kwargs: object) -> Optional[str]:
     call_resume_ids.append(args[1].cc_session_id)
     call_backend_options.append(kwargs["backend_option"])
+    call_flags.append((kwargs["skip_user_event"], kwargs["auto_trigger"]))
     if len(call_resume_ids) == 1:
       raise RuntimeError("Codex --resume failed: conversation not found")
     return "fresh-id"
@@ -89,6 +91,7 @@ async def test_stale_resume_id_retries_once_without_resume_and_persists_new_id(m
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3", "codex-o3"]
   assert [backend_option.model for backend_option in call_backend_options] == ["o3", "o3"]
   assert call_backend_options[0] is call_backend_options[1]
+  assert call_flags == [(True, True), (True, True)]
   assert session_mgr._meta is not None
   assert session_mgr._meta.cc_session_id == "fresh-id"
   assert session_mgr.persisted_cc_session_ids == ["fresh-id"]
@@ -137,10 +140,12 @@ async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -
   session_mgr = FakeSessionManager(meta)
   call_resume_ids: list[Optional[str]] = []
   call_backend_options: list[BackendOption] = []
+  call_flags: list[tuple[bool, bool]] = []
 
   async def fake_run_message(*args: object, **kwargs: object) -> Optional[str]:
     call_resume_ids.append(args[1].cc_session_id)
     call_backend_options.append(kwargs["backend_option"])
+    call_flags.append((kwargs["skip_user_event"], kwargs["auto_trigger"]))
     return "valid-id"
 
   mock_log = Mock()
@@ -151,6 +156,7 @@ async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -
 
   assert call_resume_ids == ["valid-id"]
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3"]
+  assert call_flags == [(True, True)]
   assert session_mgr._meta is not None
   assert session_mgr._meta.cc_session_id == "valid-id"
   assert not any(call.args[0] == "trigger_master_retry_without_resume" for call in mock_log.info.call_args_list)

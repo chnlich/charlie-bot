@@ -7,6 +7,7 @@ from pathlib import Path
 import aiofiles
 import structlog
 
+from src.api.message_utils import build_user_event
 from src.core.config import CharlieBotConfig
 from src.core.models import PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
@@ -103,11 +104,17 @@ class TriggerManager:
     if fresh.status != TriggerStatus.PENDING:
       return
 
+    trigger_message = f"[Scheduled trigger fired] {fresh.message}"
+    await self._session_mgr.persist_and_broadcast(
+        fresh.session_id,
+        build_user_event(trigger_message),
+    )
+
     # Wake the master CC
     from src.core.spawner import _trigger_master
     await _trigger_master(
-      trigger.session_id,
-      f"[Scheduled trigger fired] {trigger.message}",
+      fresh.session_id,
+      trigger_message,
       self._cfg,
       self._session_mgr,
     )
@@ -116,7 +123,7 @@ class TriggerManager:
     fresh.fired_at = datetime.now(timezone.utc)
     await self._save_trigger(fresh)
     self._tasks.pop(trigger.id, None)
-    log.info("trigger_fired", trigger_id=trigger.id, session=trigger.session_id)
+    log.info("trigger_fired", trigger_id=trigger.id, session=fresh.session_id)
 
   def _triggers_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id / "triggers"

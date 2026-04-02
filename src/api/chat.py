@@ -1,7 +1,6 @@
 """Chat API routes — triggers master CC process, returns 202 Accepted."""
 
 import asyncio
-from datetime import datetime, timezone
 
 import aiofiles
 import structlog
@@ -9,7 +8,12 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager, require_session
-from src.api.message_utils import build_agent_input_content, extract_text_from_message, serialize_uploaded_files
+from src.api.message_utils import (
+    build_agent_input_content,
+    build_user_event,
+    extract_text_from_message,
+    serialize_uploaded_files,
+)
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
@@ -21,19 +25,6 @@ from src.core.tasks import create_logged_task
 log = structlog.get_logger()
 
 router = APIRouter()
-
-
-def _build_user_event(content: str, uploaded_files: list[dict], *, is_voice: bool = False) -> dict:
-  """Build the persisted user event payload for chat history and websocket updates."""
-  event = {
-      "type": ET.USER,
-      "content": content,
-      "timestamp": datetime.now(timezone.utc).isoformat(),
-      "is_voice": is_voice,
-  }
-  if uploaded_files:
-    event["uploaded_files"] = uploaded_files
-  return event
 
 
 @router.post("/{session_id}/upload")
@@ -95,7 +86,7 @@ async def send_message(
     dispatch = await dispatch_slash_command(name, args, session_dir=str(cfg.sessions_dir / session_id))
 
     if dispatch.kind != 'not_found':
-      await session_mgr.persist_and_broadcast(session_id, _build_user_event(req.content, uploaded_files))
+      await session_mgr.persist_and_broadcast(session_id, build_user_event(req.content, uploaded_files))
 
       if dispatch.kind == 'prompt':
         create_logged_task(

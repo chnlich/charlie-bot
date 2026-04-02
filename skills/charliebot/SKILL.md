@@ -122,8 +122,8 @@ Schedules a one-shot delayed wake-up. After `delay` seconds, the master agent re
 
 **Use case:** monitoring long-running background processes (training, builds). Set up a bash watcher:
 ```bash
-wait $PID && python -m src.cli.schedule_trigger \
-  --session "$SESSION_ID" --delay 1 --message "Training finished (exit $?)"
+wait "$PID"; status=$?; python -m src.cli.schedule_trigger \
+  --session "$SESSION_ID" --delay 1 --message "Training exited (status $status)"
 ```
 Master gets auto-triggered on process exit instead of requiring manual check-in.
 

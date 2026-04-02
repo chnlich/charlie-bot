@@ -170,8 +170,8 @@ async def list_scheduled_sessions(
 
 @router.get('/status')
 async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_manager)):
-  """Return derived sidebar state for all active sessions."""
-  sessions = await asyncio.to_thread(session_mgr.list_active_session_ids)
+  """Return derived sidebar state for every session shown in the sidebar."""
+  sessions = await session_mgr.list_sessions()
   if not sessions:
     return {}
   await session_mgr._populate_sidebar_state(

@@ -109,3 +109,27 @@ async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Pat
   assert status[session.id]["has_pending_trigger"] is True
   assert status[session.id]["pending_trigger_count"] == 1
   assert status[session.id]["next_trigger_at"] == trigger.fire_at.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Archived wake"))
+
+  meta = await session_mgr.get_session(session.id)
+  assert meta is not None
+  meta.status = SessionStatus.ARCHIVED
+  await session_mgr._save_metadata(meta)
+
+  trigger = PendingTrigger(
+      id="pending-archived",
+      session_id=session.id,
+      fire_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+      message="archived status",
+  )
+  _write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-archived.json", trigger)
+
+  status = await sessions_api.all_sessions_status(session_mgr=session_mgr)
+  assert status[session.id]["has_pending_trigger"] is True
+  assert status[session.id]["pending_trigger_count"] == 1

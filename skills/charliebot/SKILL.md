@@ -174,6 +174,43 @@ Skills with `user-invocable: false` are auto-loaded by CC when contextually rele
 
 ---
 
+## Code Server (VS Code Web)
+
+A self-hosted VS Code instance running as a web service for browsing code in the browser with full IDE features (syntax highlighting, file tree, search, go-to-definition).
+
+**Setup:**
+1. Install (one-time, no root needed):
+   ```bash
+   curl -fsSL https://code-server.dev/install.sh | sh -s -- --method standalone
+   ```
+   Binary installs to `~/.local/bin/code-server`.
+
+2. Config at `~/.config/code-server/config.yaml`:
+   ```yaml
+   bind-addr: 0.0.0.0:<PORT>
+   auth: none
+   cert: <path-to-tls-cert>
+   cert-key: <path-to-tls-key>
+   ```
+   Port and TLS cert paths are host-specific — see HOST MEMORY in MEMORY.md for the current host values.
+
+3. Start:
+   ```bash
+   ~/.local/bin/code-server --disable-telemetry --disable-update-check <default-folder>
+   ```
+
+**Usage:**
+- Open any folder via URL: `https://<host>:<port>/?folder=/path/to/dir`
+- Can browse any filesystem path — not limited to the startup directory
+- No authentication needed when behind Tailscale
+- Shares the same TLS cert as CharlieBot
+
+**Features:** File tree, syntax highlighting, Ctrl+P (quick open), Ctrl+Shift+F (project search), Ctrl+Click (go-to-definition with language extensions), minimap, git diff view.
+
+**Note:** Not auto-started. Run the start command manually. Process is not managed by CharlieBot.
+
+---
+
 ## Backup
 
 Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered retention. Manual backup trigger must be independent and must not affect the auto-backup schedule.

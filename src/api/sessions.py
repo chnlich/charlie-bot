@@ -16,6 +16,8 @@ from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
     DeleteGroupRequest,
+    EloneSessionRequest,
+    ForkSessionRequest,
     RateSessionRequest,
     RenameGroupRequest,
     RenameSessionRequest,
@@ -29,6 +31,54 @@ from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 router = APIRouter()
+
+
+def _default_backend_id(cfg: CharlieBotConfig) -> str:
+  return cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
+
+
+def _resolve_requested_backend(
+    requested_backend: str | None,
+    cfg: CharlieBotConfig,
+    *,
+    fallback_backend: str | None = None,
+) -> str:
+  """Resolve an optional backend override with codex-family alias support."""
+  valid_backend_ids = {opt.id for opt in cfg.backend_options}
+  resolved_fallback = fallback_backend or _default_backend_id(cfg)
+
+  if requested_backend is not None and requested_backend in valid_backend_ids:
+    log.info("using_requested_backend", backend=requested_backend)
+    return requested_backend
+
+  if requested_backend is not None and requested_backend.startswith("codex"):
+    codex_option = next((opt for opt in cfg.backend_options if opt.type == "codex"), None)
+    if codex_option:
+      log.info("using_requested_backend_family_match", requested=requested_backend, backend=codex_option.id)
+      return codex_option.id
+    log.info(
+        "using_fallback_backend",
+        reason="codex_family_requested_but_no_codex_backend",
+        requested=requested_backend,
+        fallback=resolved_fallback,
+    )
+    return resolved_fallback
+
+  reason = "backend_is_none" if requested_backend is None else "backend_not_in_valid_ids"
+  log.info(
+      "using_fallback_backend",
+      reason=reason,
+      requested=requested_backend,
+      fallback=resolved_fallback,
+  )
+  if requested_backend is not None and requested_backend not in valid_backend_ids:
+    log.warning(
+        "invalid_backend_requested",
+        requested=requested_backend,
+        valid=list(valid_backend_ids),
+        fallback=resolved_fallback,
+    )
+  return resolved_fallback
 
 
 @router.get("/", response_model=list[SessionMetadata])
@@ -47,35 +97,7 @@ async def create_session(
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  # Validate backend: if not provided or empty, use default
-  valid_backend_ids = {opt.id for opt in cfg.backend_options}
-  log.info("valid_backend_ids", ids=list(valid_backend_ids))
-
-  if req.backend is not None and req.backend in valid_backend_ids:
-    backend = req.backend
-    log.info("using_requested_backend", backend=backend)
-  elif req.backend is not None and req.backend.startswith("codex"):
-    codex_option = next((opt for opt in cfg.backend_options if opt.type == "codex"), None)
-    if codex_option:
-      backend = codex_option.id
-      log.info("using_requested_backend_family_match", requested=req.backend, backend=backend)
-    else:
-      backend = cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
-      log.info(
-          "using_default_backend",
-          reason="codex_family_requested_but_no_codex_backend",
-          requested=req.backend,
-          default=backend)
-  else:
-    backend = cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
-    log.info(
-        "using_default_backend",
-        reason="backend_is_none" if req.backend is None else "backend_not_in_valid_ids",
-        requested=req.backend,
-        default=backend)
-    if req.backend is not None and req.backend not in valid_backend_ids:
-      log.warning("invalid_backend_requested", requested=req.backend, valid=list(valid_backend_ids), fallback=backend)
-
+  backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   return await session_mgr.create_session(req, backend=backend)
 
@@ -267,35 +289,40 @@ async def get_session_events_page(
 @router.post('/{session_id}/fork', response_model=SessionMetadata)
 async def fork_session(
     session_id: str,
-    body: dict | None = None,
+    body: ForkSessionRequest | None = None,
+    parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Clone a session. Optional body {"event_index": N} for partial clone."""
-  event_index = None
-  if body and 'event_index' in body:
-    event_index = int(body['event_index'])
-  meta = await session_mgr.fork_session(session_id, event_index=event_index)
+  """Clone a session. Optional body supports event_index and backend override."""
+  backend = _resolve_requested_backend(
+      body.backend if body else None,
+      cfg,
+      fallback_backend=parent.backend,
+  )
+  meta = await session_mgr.fork_session(
+      session_id,
+      event_index=body.event_index if body else None,
+      backend=backend,
+  )
   if not meta:
-    raise HTTPException(status_code=404, detail='Session not found')
+    raise HTTPException(status_code=404, detail="Session not found")
   return meta
 
 
 @router.post('/{session_id}/elone', response_model=SessionMetadata)
 async def elone_session(
     session_id: str,
-    body: dict,
+    body: EloneSessionRequest,
+    parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
-  event_index = body.get('event_index')
-  if event_index is None:
-    raise HTTPException(status_code=400, detail='event_index is required')
-  event_index = int(event_index)
-
-  meta = await session_mgr.elone_session(session_id, event_index)
+  backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
+  meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
   if not meta:
-    raise HTTPException(status_code=404, detail='Session not found')
+    raise HTTPException(status_code=404, detail="Session not found")
 
   # Build bootstrap prompt
   parent_events_path = session_mgr.get_chat_events_path(session_id)
@@ -303,7 +330,7 @@ async def elone_session(
       "You're taking over a task from a previous session where user wasn't satisfied.\n"
       "Usually the dissatisfaction is with the last assistant response before the takeover point.\n\n"
       f"Parent session: {session_id}\n"
-      f"Events file: {parent_events_path} (read up to line {event_index})\n\n"
+      f"Events file: {parent_events_path} (read up to line {body.event_index})\n\n"
       "Your mission:\n"
       "1. Read the parent conversation\n"
       "2. Identify what the user was trying to achieve\n"

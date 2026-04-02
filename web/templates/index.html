@@ -36,6 +36,7 @@
       {{ opt.id|tojson }}: {{ opt.label|tojson }},
       {% endfor %}
     };
+    globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
   </script>
 </head>
@@ -587,6 +588,33 @@
 
   <!-- ==================== RENAME INPUT (floating) ==================== -->
   <input id="rename-input" class="hidden fixed z-50 bg-slate-800 border border-blue-500 rounded-lg px-3 py-1.5 text-sm focus:outline-none" onkeydown="handleRenameKey(event)" onblur="commitRename()">
+
+  <div id="session-action-modal-overlay" class="hidden fixed inset-0 z-[9999] bg-black/60 items-center justify-center" onclick="closeSessionActionModal()">
+    <div class="w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-800 shadow-xl" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+        <h3 id="session-action-modal-title" class="text-sm font-semibold text-slate-100">Clone Session</h3>
+        <button onclick="closeSessionActionModal()" class="text-slate-500 hover:text-slate-300 p-1" title="Close">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="px-5 py-4 space-y-4">
+        <p id="session-action-modal-body" class="text-sm text-slate-300"></p>
+        <div>
+          <label for="session-action-backend" class="block text-xs text-slate-400 mb-1.5">Backend</label>
+          <select id="session-action-backend"
+                  class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"></select>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 px-5 py-4 border-t border-slate-700">
+        <button onclick="closeSessionActionModal()" class="px-3 py-2 rounded-lg border border-slate-600 text-sm text-slate-300 hover:bg-slate-700 transition-colors">Cancel</button>
+        <button id="session-action-modal-confirm"
+                onclick="submitSessionActionModal()"
+                class="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium text-white transition-colors">Clone</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ==================== JAVASCRIPT ==================== -->
   <script src="/static/js/platform.js"></script>

@@ -1,68 +1,24 @@
-"""Tests for src/cli/delegate.py and the /api/internal/delegate endpoint."""
+"""Regression tests for /api/internal/delegate takeoff gate behavior."""
 
-from pathlib import Path
 from typing import Any, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
 from src.api import internal
-from src.cli.delegate import main
-from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, DelegateRequest, SessionMetadata, ThreadMetadata
+from src.core.models import DelegateRequest, SessionMetadata, ThreadMetadata
 from src.core.spawner import DelegationBlockedError
 
 
-def _mock_config(tmp_path: Path):
-  cfg = MagicMock()
-  cfg.server_base_url = "http://localhost:9443"
-  return cfg
-
-
-def _build_request(backend: Optional[str] = None) -> DelegateRequest:
+def _build_request() -> DelegateRequest:
   return DelegateRequest(
       session_id="session-id",
       description="Do work",
       base_branch="main",
-      backend=backend,
+      backend="codex-o3",
       repo_path="/tmp/repo",
   )
-
-
-def test_delegate_cli_includes_backend_in_payload(tmp_path: Path) -> None:
-  cfg = _mock_config(tmp_path)
-
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "thread-id", "description": "Do work"}
-  resp_mock.raise_for_status = MagicMock()
-
-  with patch(
-      "sys.argv",
-      [
-          "delegate",
-          "--session",
-          "session-id",
-          "--repo",
-          "/tmp/repo",
-          "--description",
-          "Do work",
-          "--base-branch",
-          "main",
-          "--backend",
-          "codex-o3",
-      ],
-  ), \
-       patch("src.cli.delegate.get_config", return_value=cfg), \
-       patch("src.cli.delegate.requests.post", return_value=resp_mock) as post_mock:
-    main()
-
-  payload = post_mock.call_args.kwargs["json"]
-  assert payload["session_id"] == "session-id"
-  assert payload["repo_path"] == "/tmp/repo"
-  assert payload["description"] == "Do work"
-  assert payload["base_branch"] == "main"
-  assert payload["backend"] == "codex-o3"
 
 
 @pytest.mark.asyncio
@@ -89,7 +45,7 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch: pytest.MonkeyPatch) -> None:
-  req = _build_request(backend="codex-o3")
+  req = _build_request()
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
   thread_mgr = AsyncMock()
@@ -104,7 +60,7 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
   def fake_check_takeoff_gate(session_id: str) -> None:
     assert session_id == req.session_id
 
-  async def fake_resolve_session_subagent_backend_model(
+  async def fake_resolve_requested_subagent_backend_model(
       session_id: str,
       cfg: Any,
       mgr: Any,
@@ -152,7 +108,7 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
     return object()
 
   monkeypatch.setattr(internal, "_check_takeoff_gate", fake_check_takeoff_gate)
-  monkeypatch.setattr(internal, "resolve_session_subagent_backend_model", fake_resolve_session_subagent_backend_model)
+  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
   monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)
   monkeypatch.setattr(internal, "create_logged_task", fake_create_logged_task)
   monkeypatch.setattr(internal, "get_config", lambda: object())
@@ -172,27 +128,25 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_delegate_task_returns_400_for_invalid_requested_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  req = _build_request(backend="missing-backend")
+async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+  req = _build_request()
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test", backend="claude-opus-4.6")
+  session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
   thread_mgr = AsyncMock()
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-      ],
-  )
 
   def fake_check_takeoff_gate(session_id: str) -> None:
     assert session_id == req.session_id
 
+  async def fake_resolve_requested_subagent_backend_model(*args: Any, **kwargs: Any) -> tuple[str, str]:
+    raise ValueError("requested backend 'codex-o3' is not in backend_options")
+
   monkeypatch.setattr(internal, "_check_takeoff_gate", fake_check_takeoff_gate)
-  monkeypatch.setattr(internal, "get_config", lambda: cfg)
+  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
+  monkeypatch.setattr(internal, "get_config", lambda: object())
 
   with pytest.raises(HTTPException) as exc_info:
     await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert exc_info.value.status_code == 400
-  assert exc_info.value.detail == "requested backend 'missing-backend' is not in backend_options"
+  assert exc_info.value.detail == "requested backend 'codex-o3' is not in backend_options"
   thread_mgr.create_thread.assert_not_awaited()

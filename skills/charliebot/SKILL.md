@@ -106,6 +106,31 @@ Manage via `/run <name>` or the API.
 
 ---
 
+## Delayed Triggers (`schedule_trigger`)
+
+**Source:** `src/cli/schedule_trigger.py`, `src/core/triggers.py`
+
+**Usage:**
+```bash
+python -m src.cli.schedule_trigger \
+  --session SESSION_ID \
+  --delay SECONDS \
+  --message "Check PID 12345"
+```
+
+Schedules a one-shot delayed wake-up. After `delay` seconds, the master agent receives `[Scheduled trigger fired] <message>`.
+
+**Use case:** monitoring long-running background processes (training, builds). Set up a bash watcher:
+```bash
+wait $PID && python -m src.cli.schedule_trigger \
+  --session "$SESSION_ID" --delay 1 --message "Training finished (exit $?)"
+```
+Master gets auto-triggered on process exit instead of requiring manual check-in.
+
+**Persistence:** triggers save to `sessions/{id}/triggers/*.json` and auto-recover on server restart via `TriggerManager.recover_pending()`.
+
+---
+
 ## Worker & Review Workflow
 
 **Source:** `src/core/spawner.py` (800+ lines)
@@ -181,6 +206,7 @@ For voice-transcribed messages fed to CC, prepend: "The following message is fro
 | Slash commands | `slash_commands.py` |
 | Backlog state machine | `improvement_loop.py` |
 | Scheduler | `scheduler.py` |
+| Delayed triggers | `triggers.py` |
 | Sessions | `sessions.py` |
 | Config | `config.py` |
 

@@ -136,35 +136,48 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str) -
   return option.model_copy(update={"model": model})
 
 
+def _resolve_configured_backend_model(
+    cfg: CharlieBotConfig,
+    backend_id: str,
+    *,
+    source: str,
+) -> tuple[str, str]:
+  """Resolve a configured backend option id to its default backend+model pair."""
+  if not backend_id:
+    raise ValueError(f"{source} backend is required")
+  option = cfg.get_backend_option(backend_id)
+  if option is None:
+    raise ValueError(f"{source} backend '{backend_id}' is not in backend_options")
+  if not option.model:
+    raise ValueError(f"{source} backend '{backend_id}' has no default model")
+  return option.id, option.model
+
+
 async def resolve_session_subagent_backend_model(
+    session_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+) -> tuple[str, str]:
+  """Resolve backend+model from the session default, with strict validation."""
+  session_meta = await session_mgr.get_session(session_id)
+  if session_meta is None:
+    raise ValueError(f"session '{session_id}' not found")
+  return _resolve_configured_backend_model(cfg, session_meta.backend, source="session")
+
+
+async def resolve_requested_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     requested_backend: Optional[str] = None,
 ) -> tuple[str, str]:
-  """Resolve backend+model from a configured backend id, with strict validation."""
+  """Resolve backend+model from an explicit configured backend or the session default."""
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' not found")
-
-  if requested_backend is None:
-    backend_id = session_meta.backend
-    source = "session backend"
-  else:
-    backend_id = requested_backend
-    source = "requested backend"
-
-  if not backend_id:
-    if requested_backend is None:
-      raise ValueError(f"session '{session_id}' has no backend configured")
-    raise ValueError("requested backend is required")
-
-  option = cfg.get_backend_option(backend_id)
-  if option is None:
-    raise ValueError(f"{source} '{backend_id}' is not in backend_options")
-  if not option.model:
-    raise ValueError(f"{source} '{backend_id}' has no default model")
-  return option.id, option.model
+  if requested_backend is not None:
+    return _resolve_configured_backend_model(cfg, requested_backend, source="requested")
+  return _resolve_configured_backend_model(cfg, session_meta.backend, source="session")
 
 
 def _require_thread_backend_model(thread: ThreadMetadata) -> tuple[str, str]:

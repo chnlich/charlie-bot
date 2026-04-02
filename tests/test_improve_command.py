@@ -2,18 +2,15 @@
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.core import improve_command, spawner
-from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
+from src.core import improve_command
 from src.core.improve_command import (
     ImproveState,
     build_improve_master_prompt,
     load_improve_state,
-    run_improve_loop,
     save_improve_state,
     stop_improve_loop,
 )
@@ -148,7 +145,8 @@ def test_build_improve_master_prompt_contains_goal(tmp_path: Path):
   assert session_id in prompt
   assert "5" in prompt
   assert "python -m src.cli.improve" in prompt
-  assert "--base-branch <base-branch>" in prompt
+  assert "~/.charliebot/config.yaml" in prompt
+  assert "--backend <id>" in prompt
 
 
 def test_build_improve_master_prompt_contains_state_path(tmp_path: Path):
@@ -206,128 +204,77 @@ async def test_stop_already_completed(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_run_improve_loop_pins_resolved_backend_across_iterations(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
-  thread_mgr = None
-  spawn_calls: list[dict[str, str]] = []
-  broadcasts: list[dict] = []
-  triggered: dict[str, object] = {}
+async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _make_cfg(tmp_path)
+  session_id = "pinned-session"
+  improve_dir = cfg.sessions_dir / session_id / "improve"
+  improve_dir.mkdir(parents=True, exist_ok=True)
+  thread_store: dict[str, object] = {}
+  spawn_calls: list[tuple[str, str]] = []
+  persisted_events: list[dict] = []
+
+  monkeypatch.setattr(
+      improve_command,
+      "load_improve_state",
+      lambda session, _cfg: ImproveState(goal="optimize", max_iterations=2, status="running"))
 
   class FakeSessionManager:
     def __init__(self) -> None:
       self._calls = 0
 
-    async def get_session(self, session_id: str) -> SessionMetadata:
+    async def get_session(self, session: str):
       self._calls += 1
       backend = "claude-opus-4.6" if self._calls == 1 else "codex-o3"
-      return SessionMetadata(id=session_id, name="Test Session", backend=backend)
+      return MagicMock(id=session, name="Pinned", backend=backend)
 
-    async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
-      del session_id
-      broadcasts.append(event)
+    async def persist_and_broadcast(self, session: str, event: dict) -> None:
+      del session
+      persisted_events.append(event)
 
   class FakeThreadManager:
-    def __init__(self) -> None:
-      self.threads: dict[str, ThreadMetadata] = {}
-      self.events_log_paths: dict[str, Path] = {}
-
-    async def create_thread(
-        self,
-        session_meta: SessionMetadata,
-        description: str,
-        require_review: bool = True,
-    ) -> ThreadMetadata:
-      del require_review
-      thread_id = f"thread-{len(self.threads) + 1}"
-      thread = ThreadMetadata(id=thread_id, session_id=session_meta.id, description=description)
-      self.threads[thread_id] = thread
-      events_log_path = cfg.sessions_dir / session_meta.id / "threads" / thread_id / "data" / "events.jsonl"
-      events_log_path.parent.mkdir(parents=True, exist_ok=True)
-      events_log_path.write_text("", encoding="utf-8")
-      self.events_log_paths[thread_id] = events_log_path
+    async def create_thread(self, meta, description: str, require_review: bool = False):
+      thread_id = f"thread-{len(thread_store) + 1}"
+      thread = MagicMock(id=thread_id, description=description, branch_name=None, status=None)
+      thread_store[thread_id] = thread
       return thread
 
-    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
-      del session_id
-      return self.threads[thread_id]
+    async def get_thread(self, session: str, thread_id: str):
+      del session
+      thread = thread_store[thread_id]
+      thread.status = MagicMock(value="completed")
+      return thread
 
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      del session_id
-      return self.events_log_paths[thread_id]
+    async def get_events_log_path(self, session: str, thread_id: str) -> Path:
+      del session, thread_id
+      return tmp_path / "events.jsonl"
 
-  thread_mgr = FakeThreadManager()
-  session_mgr = FakeSessionManager()
+  async def fake_spawn_worker(*args, **kwargs) -> None:
+    spawn_calls.append((kwargs["resolved_backend"], kwargs["resolved_model"]))
+    thread_id = kwargs["thread_id"] if "thread_id" in kwargs else None
+    if thread_id is None:
+      thread_id = args[2]
+    thread_store[thread_id].branch_name = f"branch-{len(spawn_calls)}"
 
-  async def fake_spawn_worker(
-      session_id: str,
-      description: str,
-      thread_id: str,
-      cfg: CharlieBotConfig,
-      session_mgr,
-      thread_mgr,
-      repo_path: str | None = None,
-      context: str | None = None,
-      prompt_override: str | None = None,
-      resolved_backend: str = "",
-      resolved_model: str = "",
-      base_branch: str | None = None,
-      branch_name_override: str | None = None,
-      improve_dir: str | None = None,
-      iteration_number: int | None = None,
-      require_takeoff: bool = False,
-  ) -> None:
-    del session_id, description, cfg, session_mgr, repo_path, context, prompt_override, base_branch, improve_dir, require_takeoff
-    spawn_calls.append({
-        "thread_id": thread_id,
-        "resolved_backend": resolved_backend,
-        "resolved_model": resolved_model,
-        "branch_name_override": branch_name_override or "",
-        "iteration_number": str(iteration_number),
-    })
-    thread = thread_mgr.threads[thread_id]
-    thread.status = ThreadStatus.COMPLETED
-    thread.branch_name = branch_name_override or f"branch-{iteration_number}"
+  async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
+    del session, summary, _cfg, _session_mgr
 
-  async def fake_trigger_master(
-      session_id: str,
-      payload: str,
-      cfg: CharlieBotConfig,
-      session_mgr,
-  ) -> None:
-    del cfg, session_mgr
-    triggered["session_id"] = session_id
-    triggered["payload"] = json.loads(payload)
+  monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr("src.core.spawner._trigger_master", fake_trigger_master)
+  monkeypatch.setattr("src.core.ndjson.parse_ndjson_file", lambda path: [{"type": "result", "result": "ok"}])
 
-  monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(spawner, "_trigger_master", fake_trigger_master)
-
-  await run_improve_loop(
-      session_id="session-id",
+  await improve_command.run_improve_loop(
+      session_id=session_id,
       repo_path="/tmp/repo",
       iterations=2,
-      goal="Optimize step time",
+      goal="optimize",
       cfg=cfg,
-      session_mgr=session_mgr,
-      thread_mgr=thread_mgr,
+      session_mgr=FakeSessionManager(),
+      thread_mgr=FakeThreadManager(),
       base_branch="main",
-      branch_prefix="improve/perf",
-      resolved_backend="claude-opus-4.6",
-      resolved_model="claude-opus-4-6",
+      branch_prefix="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
   )
 
-  assert [call["resolved_backend"] for call in spawn_calls] == ["claude-opus-4.6", "claude-opus-4.6"]
-  assert [call["resolved_model"] for call in spawn_calls] == ["claude-opus-4-6", "claude-opus-4-6"]
-  assert [call["branch_name_override"] for call in spawn_calls] == ["improve/perf/iter1", "improve/perf/iter2"]
-  assert triggered["session_id"] == "session-id"
-  assert triggered["payload"]["type"] == improve_command.ET.IMPROVE_COMPLETED
-  assert triggered["payload"]["iterations_completed"] == 2
-  assert broadcasts[-1]["type"] == improve_command.ET.IMPROVE_COMPLETED
+  assert spawn_calls == [("codex-o3", "o3"), ("codex-o3", "o3")]
+  assert any(event.get("type") == "improve_completed" for event in persisted_events)

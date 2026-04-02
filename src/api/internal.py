@@ -12,7 +12,7 @@ from src.core.sessions import SessionManager
 from src.core.spawner import (
     DelegationBlockedError,
     _check_takeoff_gate,
-    resolve_session_subagent_backend_model,
+    resolve_requested_subagent_backend_model,
     spawn_worker,
 )
 from src.core.tasks import create_logged_task
@@ -42,14 +42,11 @@ async def delegate_task(
   except DelegationBlockedError as e:
     raise HTTPException(status_code=403, detail=str(e))
 
+  # Resolve backend/model from session config before spawning
   cfg = get_config()
   try:
-    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(
-        req.session_id,
-        cfg,
-        session_mgr,
-        requested_backend=req.backend,
-    )
+    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+        req.session_id, cfg, session_mgr, requested_backend=req.backend)
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -110,12 +107,8 @@ async def start_improve_loop(
 
   cfg = get_config()
   try:
-    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(
-        req.session_id,
-        cfg,
-        session_mgr,
-        requested_backend=req.backend,
-    )
+    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+        req.session_id, cfg, session_mgr, requested_backend=req.backend)
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -139,14 +132,7 @@ async def start_improve_loop(
       name=f"improve-loop-{req.session_id}",
   )
 
-  log.info(
-      "improve_loop_started",
-      session=req.session_id,
-      iterations=req.iterations,
-      goal=req.goal,
-      backend=resolved_backend,
-      model=resolved_model,
-  )
+  log.info("improve_loop_started", session=req.session_id, iterations=req.iterations, goal=req.goal)
 
   return {"status": "started", "session_id": req.session_id, "iterations": req.iterations}
 

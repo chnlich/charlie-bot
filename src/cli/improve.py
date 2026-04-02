@@ -42,6 +42,7 @@ def main() -> None:
       "session_id": args.session,
       "repo_path": args.repo,
       "base_branch": args.base_branch,
+      "backend": args.backend,
       "iterations": args.iterations,
       "goal": args.goal,
       "branch_prefix": args.branch_prefix,

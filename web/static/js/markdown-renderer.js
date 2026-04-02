@@ -7,16 +7,16 @@ function fixNestedFences(md) {
   var lines = md.split('\n');
   var stack = [];
   var upgrades = {};  // lineIndex -> newLen
-  var fenceRe = /^(`{3,}|~{3,})(.*)/;
+  var fenceRe = /^( {0,3})(`{3,}|~{3,})(.*)/;
 
   for (var i = 0; i < lines.length; i++) {
     var m = lines[i].match(fenceRe);
     if (!m) continue;
 
-    var delim = m[1];
+    var delim = m[2];
     var char = delim[0];
     var len = delim.length;
-    var info = m[2].trim();
+    var info = m[3].trim();
 
     // Check if this closes the top-of-stack fence:
     // same char, len >= top.len, and no info string (bare fence).
@@ -53,11 +53,12 @@ function fixNestedFences(md) {
     var line = lines[lineIdx];
     var oldMatch = line.match(fenceRe);
     if (!oldMatch) continue;
-    var oldLen = oldMatch[1].length;
-    var charType = oldMatch[1][0];
+    var indent = oldMatch[1];
+    var oldLen = oldMatch[2].length;
+    var charType = oldMatch[2][0];
     var newDelim = '';
     for (var k = 0; k < newLen; k++) newDelim += charType;
-    lines[lineIdx] = newDelim + line.slice(oldLen);
+    lines[lineIdx] = indent + newDelim + line.slice(indent.length + oldLen);
   }
 
   return lines.join('\n');

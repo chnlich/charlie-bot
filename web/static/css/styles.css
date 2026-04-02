@@ -125,6 +125,11 @@ body.resizing { cursor: col-resize; user-select: none; }
     #tab-buttons button { white-space: nowrap; }
     #usage-indicator { display: none !important; }
     .input-buttons button { min-width: 44px; min-height: 44px; }
+    /* ext-usage-strip: wrap CC / Codex onto separate rows */
+    #ext-usage-strip { flex-wrap: wrap; gap: 0.25rem 0.75rem; }
+    #ext-usage-strip > span.text-slate-700 { display: none; }  /* hide │ separator */
+    #ext-usage-strip [id$="-reset"] { display: none; }  /* hide verbose reset timestamps */
+    #ext-usage-strip .w-24 { width: 4rem; }  /* shrink bars from w-24 (6rem) to 4rem */
 }
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -213,4 +218,7 @@ body { overscroll-behavior: none; }
   .input-buttons button { min-width: 44px; min-height: 44px; }
   #session-list a { min-height: 44px; }
   .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  /* ext-usage-strip: hide 7d bars, shrink further */
+  #ext-usage-strip > div:has([id*="-7d-"]) { display: none; }
+  #ext-usage-strip .w-24 { width: 3rem; }
 }

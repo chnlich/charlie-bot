@@ -1,7 +1,8 @@
-"""Shared helpers for converting raw chat events into displayable messages."""
+"""Shared helpers for chat message persistence and rendering."""
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, TYPE_CHECKING
 
 import structlog
@@ -48,6 +49,19 @@ def build_agent_input_content(content: str, uploaded_files: list[dict] | None = 
   if not paths:
     return content
   return content + _ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
+
+
+def build_user_event(content: str, uploaded_files: list[dict] | None = None, *, is_voice: bool = False) -> dict:
+  """Build the persisted user event payload for chat history and websocket updates."""
+  event = {
+      "type": ET.USER,
+      "content": content,
+      "timestamp": datetime.now(timezone.utc).isoformat(),
+      "is_voice": is_voice,
+  }
+  if uploaded_files:
+    event["uploaded_files"] = uploaded_files
+  return event
 
 
 def strip_attached_files_block(content: str) -> tuple[str, list[dict]]:

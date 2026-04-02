@@ -63,6 +63,10 @@ function navigateSlashPopup(direction) {
 
 async function executeSlashCommand(name, args, options = {}) {
   if (!SESSION_ID) return;
+  if (uploadsInFlight > 0) {
+    showToast('Please wait for uploads to finish', true);
+    return;
+  }
   const input = document.getElementById('msg-input');
   if (input) { input.value = ''; input.style.height = 'auto'; }
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
@@ -73,6 +77,7 @@ async function executeSlashCommand(name, args, options = {}) {
     path: file.path,
     size: file.size,
   }));
+  pendingUserMsg = true;
   try {
     const res = await fetch(`/api/slash/${SESSION_ID}/execute`, {
       method: 'POST',
@@ -80,9 +85,12 @@ async function executeSlashCommand(name, args, options = {}) {
       body: JSON.stringify({ command: name, args: args, uploaded_files: payloadFiles }),
     });
     const data = await res.json();
-    if (data.error) { showToast(data.error, true); return; }
+    if (data.error) {
+      pendingUserMsg = false;
+      showToast(data.error, true);
+      return;
+    }
     clearSentUploadedFiles(uploadedFiles.map((file) => file.id));
-    pendingUserMsg = true;
     appendMessage('user', displayText, false, new Date().toISOString(), payloadFiles);
     bumpCurrentSessionToTop();
     if (data.type === 'help') {
@@ -105,6 +113,7 @@ async function executeSlashCommand(name, args, options = {}) {
     }
   } catch (err) {
     console.error('executeSlashCommand failed:', err);
+    pendingUserMsg = false;
     showToast('Slash command failed: ' + err.message, true);
   }
 }

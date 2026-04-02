@@ -12,6 +12,10 @@ const FILE_UPLOAD_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'file-upload.js'),
   'utf8'
 );
+const SLASH_COMMANDS_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'slash-commands.js'),
+  'utf8'
+);
 
 function escapeHtml(value) {
   return String(value)
@@ -117,6 +121,66 @@ function loadFileUploadScript(fetchImpl) {
   return {context, fileChips, sendButton};
 }
 
+function loadSlashCommandsScript(fetchImpl, overrides = {}) {
+  const messages = [];
+  const toasts = [];
+  const clearedIds = [];
+  const input = {
+    value: '/help',
+    style: {height: '42px'},
+  };
+  const localStorage = {
+    removed: [],
+    removeItem(key) {
+      this.removed.push(key);
+    },
+  };
+  const context = {
+    SESSION_ID: 'session-a',
+    DRAFT_KEY: 'draft-session-a',
+    uploadsInFlight: 0,
+    pendingUserMsg: false,
+    console: {error: () => {}},
+    fetch: fetchImpl,
+    localStorage,
+    showToast: (message, isError) => {
+      toasts.push({message, isError: !!isError});
+    },
+    getUploadedFilesForPayload: () => [],
+    clearSentUploadedFiles: (ids) => {
+      clearedIds.push(ids);
+    },
+    appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
+      messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles});
+    },
+    bumpCurrentSessionToTop: () => {},
+    startThinking: () => {},
+    escapeHtml,
+    document: {
+      getElementById(id) {
+        if (id === 'msg-input') return input;
+        return null;
+      },
+      createElement() {
+        let text = '';
+        return {
+          set textContent(value) {
+            text = String(value);
+          },
+          get innerHTML() {
+            return escapeHtml(text);
+          },
+        };
+      },
+    },
+    ...overrides,
+  };
+
+  vm.createContext(context);
+  vm.runInContext(SLASH_COMMANDS_JS, context, {filename: 'slash-commands.js'});
+  return {context, messages, toasts, clearedIds, input, localStorage};
+}
+
 test('normalizeUserMessage strips legacy attachment footers and keeps file names for rendering', () => {
   const context = loadChatScript();
 
@@ -169,4 +233,58 @@ test('uploadFile marks successful uploads as sendable', async () => {
   assert.equal(context.getUploadedFilesForPayload().length, 1);
   assert.equal(context.getUploadedFilesForPayload()[0].path, '/tmp/ready.txt');
   assert.equal(sendButton.hasAttribute('disabled'), false);
+});
+
+test('executeSlashCommand marks a pending user message before the request resolves', async () => {
+  let resolveFetch;
+  const fetchPromise = new Promise((resolve) => {
+    resolveFetch = resolve;
+  });
+  const {context, messages, clearedIds} = loadSlashCommandsScript(() => fetchPromise);
+
+  const uploadedFiles = [{id: 7, filename: 'report.pdf', path: '/tmp/report.pdf', size: 12}];
+  const commandPromise = context.executeSlashCommand('help', '', {displayText: '/help', uploadedFiles});
+
+  assert.equal(context.pendingUserMsg, true);
+
+  resolveFetch({
+    async json() {
+      return {type: 'help', commands: []};
+    },
+  });
+  await commandPromise;
+
+  assert.equal(messages[0].role, 'user');
+  assert.equal(JSON.stringify(messages[0].uploadedFiles), JSON.stringify([
+    {filename: 'report.pdf', path: '/tmp/report.pdf', size: 12},
+  ]));
+  assert.deepEqual(clearedIds, [[7]]);
+});
+
+test('executeSlashCommand clears pendingUserMsg when the server returns an error', async () => {
+  const {context, messages, toasts} = loadSlashCommandsScript(async () => ({
+    async json() {
+      return {error: 'bad command'};
+    },
+  }));
+
+  await context.executeSlashCommand('bad', '');
+
+  assert.equal(context.pendingUserMsg, false);
+  assert.equal(messages.length, 0);
+  assert.deepEqual(toasts, [{message: 'bad command', isError: true}]);
+});
+
+test('executeSlashCommand blocks submission while uploads are still in flight', async () => {
+  let fetchCalls = 0;
+  const {context, toasts} = loadSlashCommandsScript(async () => {
+    fetchCalls += 1;
+    return {async json() { return {type: 'help', commands: []}; }};
+  }, {uploadsInFlight: 1});
+
+  await context.executeSlashCommand('help', '');
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(context.pendingUserMsg, false);
+  assert.deepEqual(toasts, [{message: 'Please wait for uploads to finish', isError: true}]);
 });

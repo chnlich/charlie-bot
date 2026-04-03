@@ -1440,10 +1440,10 @@
   priority: medium
 - id: '087'
   title: 'Code health: fix formatting, unused imports, and long functions'
-  description: 'Re-confirmed by automated scan on 2026-04-03 (originally found 2026-04-01).
-    All prior issues persist; one new formatting file added. (1) FORMATTING — 5 files
-    have yapf diffs (was 4): src/core/triggers.py (indentation in _fire_trigger),
-    src/core/spawner.py (string concat alignment in _build_worker_prompt — NEW),
+  description: 'Re-confirmed by automated scan on 2026-04-03 (3rd consecutive scan,
+    originally found 2026-04-01). All prior issues persist unchanged. (1) FORMATTING
+    — 5 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
+    src/core/spawner.py (string concat alignment in _build_worker_prompt),
     src/api/ext_usage.py (dict formatting and long boolean expression in parse_rate_limit_usage),
     src/api/message_utils.py (tuple unpacking line wrap in build_fast_session_view),
     src/api/chat.py (function call wrapping in send_message). Run `yapf -i` on these files.
@@ -1451,8 +1451,8 @@
     src/api/pages.py:21 imports TriggerManager but never uses it. Delete both import lines.
     (3) TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:30 both
     say "TODO: re-enable when Claude Code version supports --effort". Resolve or convert to a
-    tracked issue once the --effort flag ships. (4) LONG FUNCTIONS — 29 functions exceed 50 lines
-    (was 28). Worst offenders: run_improve_loop() 129 lines (src/core/improve_command.py:241),
+    tracked issue once the --effort flag ships. (4) LONG FUNCTIONS — 29 functions exceed 50 lines.
+    Worst offenders: run_improve_loop() 129 lines (src/core/improve_command.py:241),
     execute_command() 127 lines (src/api/slash.py:125), run_message() 113 lines
     (src/agents/master_cc.py:350), run() 107 lines (src/agents/backends/base.py:156), _run_cc()
     104 lines (src/agents/master_cc.py:181). Consider extracting helper functions from the top 5

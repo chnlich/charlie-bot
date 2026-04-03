@@ -1,5 +1,7 @@
 """ClaudeCodeBackend — concrete AgentBackend wrapping the Claude Code CLI."""
 
+from pathlib import Path
+
 import structlog
 
 from src.agents.backends.base import AgentBackend
@@ -30,6 +32,14 @@ class ClaudeCodeBackend(AgentBackend):
     # TODO: re-enable when Claude Code version supports --effort
     # if self._effort:
     #   self._cmd += ["--effort", self._effort]
+
+  def _prepare_cwd(self, cwd: str) -> None:
+    """Write CLAUDE.md into the cwd so Claude Code auto-detects it."""
+    if not self._instructions_content:
+      return
+    claude_md = Path(cwd) / "CLAUDE.md"
+    claude_md.write_text(self._instructions_content, encoding="utf-8")
+    log.debug("claude_code_wrote_claude_md", path=str(claude_md))
 
   def _build_command(self, prompt: str) -> list[str]:
     return self._cmd + [prompt]

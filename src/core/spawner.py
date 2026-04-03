@@ -35,15 +35,6 @@ _CODING_PRINCIPLES = (
     "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n")
 
 
-def _read_subagent_instructions(cfg: CharlieBotConfig) -> Optional[str]:
-  """Read SUBAGENT_PROMPT.md content for use as instructions_content."""
-  prompt_file = cfg.subagent_prompt_file
-  if prompt_file.exists():
-    return prompt_file.read_text(encoding="utf-8")
-  log.warning("subagent_prompt_file_missing", path=str(prompt_file))
-  return None
-
-
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
@@ -91,7 +82,25 @@ def _build_worker_prompt(
         f"- optional hints, risks, or ideas future iterations may consider; advisory only, not a required plan\n"
         f"```")
 
-  return f"{session_info}\n{_CODING_PRINCIPLES}\n{worktree_section}{iteration_reports_section}"
+  skills_section = (
+      "## Skills Discovery\n"
+      "- **Before starting any task**, check for skills relevant to the target repo or task domain.\n"
+      "  - Look in **`~/.charliebot/skills/`** (canonical source — always available regardless of CLI backend).\n"
+      "  - Alternatively: `~/.claude/skills/` (Claude Code) or `~/.agents/skills/` (Codex/Gemini).\n"
+      "- **Read matching skills first** to avoid wasting time on environment setup, tooling issues, "
+      "or reinventing existing workflows.\n"
+      "- **Mandatory for your_project / your_project tasks**: you MUST read the `your_project` and/or "
+      "`your_project` skill BEFORE writing any code, running any command, or submitting any job. "
+      "This includes profiling, metrics analysis, data processing — not just training. "
+      "Starting work without reading the skill is forbidden.\n")
+
+  role_section = (
+      "## Role\n"
+      "- You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.\n"
+      "- Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.\n")
+
+  return (f"{session_info}\n{_CODING_PRINCIPLES}\n{skills_section}\n{role_section}\n"
+          f"{worktree_section}{iteration_reports_section}")
 
 
 def _short_desc(description: str, limit: int = 120) -> str:
@@ -272,9 +281,6 @@ async def _create_worktree_and_process(
   thread.model = backend_option.model
   await thread_mgr.save_metadata(thread)
 
-  # Read subagent instructions (SUBAGENT_PROMPT.md) for all backends
-  subagent_instructions = await asyncio.to_thread(_read_subagent_instructions, cfg)
-
   # Build Worker
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
@@ -285,7 +291,6 @@ async def _create_worktree_and_process(
       cfg,
       backend_option=backend_option,
       on_spawned=thread_mgr.save_metadata,
-      instructions_content=subagent_instructions,
   )
 
 
@@ -318,8 +323,6 @@ async def _create_repoless_process(
   thread.model = backend_option.model
   await thread_mgr.save_metadata(thread)
 
-  subagent_instructions = await asyncio.to_thread(_read_subagent_instructions, cfg)
-
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
       thread,
@@ -329,7 +332,6 @@ async def _create_repoless_process(
       cfg,
       backend_option=backend_option,
       on_spawned=thread_mgr.save_metadata,
-      instructions_content=subagent_instructions,
   )
 
 

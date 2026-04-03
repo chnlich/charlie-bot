@@ -174,11 +174,6 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
 
   @property
-  def subagent_prompt_file(self) -> Path:
-    """The subagent (worker) prompt template: ~/.charliebot/SUBAGENT_PROMPT.md."""
-    return self.charliebot_home / "SUBAGENT_PROMPT.md"
-
-  @property
   def memory_file(self) -> Path:
     return self.charliebot_home / "MEMORY.md"
 

@@ -1,7 +1,5 @@
 """ClaudeCodeBackend — concrete AgentBackend wrapping the Claude Code CLI."""
 
-from pathlib import Path
-
 import structlog
 
 from src.agents.backends.base import AgentBackend

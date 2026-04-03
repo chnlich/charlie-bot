@@ -28,8 +28,16 @@ class CodexBackend(AgentBackend):
     # Track the last rendered todo snapshot to suppress duplicate started/completed payloads.
     self._last_todo_text: dict[str, str] = {}
 
+  def _prepare_cwd(self, cwd: str) -> None:
+    """Write AGENTS.md into the cwd so Codex auto-detects it."""
+    if not self._instructions_content:
+      return
+    agents_md = Path(cwd) / 'AGENTS.md'
+    agents_md.write_text(self._instructions_content, encoding='utf-8')
+    log.debug('codex_wrote_agents_md', path=str(agents_md))
+
   def _build_command(self, prompt: str) -> list[str]:
-    effective_prompt = self._effective_prompt(prompt)
+    effective_prompt = prompt
 
     if self._resume_session_id:
       cmd = [

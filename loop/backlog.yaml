@@ -1440,8 +1440,9 @@
   priority: medium
 - id: '087'
   title: 'Code health: fix formatting, unused imports, and long functions'
-  description: 'Automated code-health scan on 2026-04-01 found several issues. (1) FORMATTING —
-    4 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger), src/api/ext_usage.py
+  description: 'Re-confirmed by automated scan on 2026-04-03 (originally found 2026-04-01).
+    All issues from prior scan persist; one new finding added. (1) FORMATTING — 4 files
+    have yapf diffs: src/core/triggers.py (indentation in _fire_trigger), src/api/ext_usage.py
     (dict formatting and long boolean expression in parse_rate_limit_usage), src/api/message_utils.py
     (tuple unpacking line wrap in build_fast_session_view), src/api/chat.py (function call wrapping
     in send_message). Run `yapf -i` on these files. (2) UNUSED IMPORTS — src/core/autonamer.py:17
@@ -1449,14 +1450,18 @@
     uses it. Delete both import lines. (3) TODO COMMENTS — src/core/autonamer.py:105 and
     src/agents/backends/claude_code.py:32 both say "TODO: re-enable when Claude Code version supports
     --effort". These should be resolved or converted to a tracked issue once the --effort flag ships.
-    (4) LONG FUNCTIONS — 27 functions exceed 50 lines. Worst offenders: execute_command() 127 lines
-    (src/api/slash.py:137), run_improve_loop() 122 lines (src/core/improve_command.py:239),
-    run_message() 113 lines (src/agents/master_cc.py:350), run() 107 lines (src/agents/backends/base.py:156),
-    _run_cc() 104 lines (src/agents/master_cc.py:181). Consider extracting helper functions from
-    the top 5 worst offenders. (5) DUPLICATE NAME — list_threads appears at both src/api/sessions.py:412
-    and src/api/threads.py:28; verify they are intentionally separate endpoints or consolidate.
-    Items 1 and 2 are quick fixes; items 3-5 are refactoring tasks.'
+    (4) LONG FUNCTIONS — 28 functions exceed 50 lines (up from 27). New addition: run_and_finalize()
+    52 lines (src/api/chat.py:156). Worst offenders: execute_command() 127 lines (src/api/slash.py:125),
+    run_improve_loop() 122 lines (src/core/improve_command.py:239), run_message() 113 lines
+    (src/agents/master_cc.py:350), run() 107 lines (src/agents/backends/base.py:156), _run_cc()
+    104 lines (src/agents/master_cc.py:181). Consider extracting helper functions from the top 5
+    worst offenders. (5) DUPLICATE NAME — list_threads appears at both src/api/sessions.py and
+    src/api/threads.py; verify they are intentionally separate endpoints or consolidate.
+    (6) NEW: DEPRECATED DEPENDENCY — src/agents/gemini_provider.py imports google.generativeai
+    which is deprecated; migrate to google.genai per upstream recommendation.
+    Items 1 and 2 are quick fixes; items 3-6 are refactoring tasks.'
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
+  updated: '2026-04-03T12:00:00Z'
   priority: low

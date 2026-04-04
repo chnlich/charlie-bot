@@ -22,6 +22,12 @@ class OpenCodeBackend(AgentBackend):
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Write permissive project config so tool calls aren't auto-denied in non-interactive mode."""
+    if self._instructions_content:
+      agents_md = os.path.join(cwd, 'AGENTS.md')
+      with open(agents_md, 'w', encoding='utf-8') as f:
+        f.write(self._instructions_content)
+      log.debug('opencode_wrote_agents_md', path=agents_md)
+
     config_dir = os.path.join(cwd, ".opencode")
     config_path = os.path.join(config_dir, "opencode.json")
     legacy_config_path = os.path.join(config_dir, "config.json")
@@ -58,12 +64,6 @@ class OpenCodeBackend(AgentBackend):
     with open(config_path, "w") as f:
       json.dump(config, f, indent=2)
     log.debug("opencode_config_written", path=config_path, source=config_source)
-
-    if self._instructions_content:
-      agents_md = os.path.join(cwd, 'AGENTS.md')
-      with open(agents_md, 'w', encoding='utf-8') as f:
-        f.write(self._instructions_content)
-      log.debug('opencode_wrote_agents_md', path=agents_md)
 
   def _build_command(self, prompt: str) -> list[str]:
     cmd = [self._opencode_bin, "run", "--format", "json"]

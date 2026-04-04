@@ -42,6 +42,25 @@ def test_prepare_cwd_migrates_legacy_config_json(monkeypatch, tmp_path: Path) ->
   assert json.loads(legacy_config.read_text(encoding="utf-8")) == legacy_payload
 
 
+def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch, instructions_content="# Test Instructions\nDo things.")
+
+  backend._prepare_cwd(str(tmp_path))
+
+  agents_md = tmp_path / "AGENTS.md"
+  assert agents_md.exists()
+  assert agents_md.read_text(encoding="utf-8") == "# Test Instructions\nDo things."
+
+
+def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+
+  backend._prepare_cwd(str(tmp_path))
+
+  agents_md = tmp_path / "AGENTS.md"
+  assert not agents_md.exists()
+
+
 def test_translate_tool_error_emits_tool_result(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 

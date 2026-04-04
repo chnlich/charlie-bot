@@ -59,6 +59,12 @@ class OpenCodeBackend(AgentBackend):
       json.dump(config, f, indent=2)
     log.debug("opencode_config_written", path=config_path, source=config_source)
 
+    if self._instructions_content:
+      agents_md = os.path.join(cwd, 'AGENTS.md')
+      with open(agents_md, 'w', encoding='utf-8') as f:
+        f.write(self._instructions_content)
+      log.debug('opencode_wrote_agents_md', path=agents_md)
+
   def _build_command(self, prompt: str) -> list[str]:
     cmd = [self._opencode_bin, "run", "--format", "json"]
     if self._model:

@@ -1132,8 +1132,8 @@
   created: '2026-03-30T22:00:00Z'
   priority: medium
 - id: '074'
-  title: Simplify _wait_for_quota_recovery by merging duplicate fallback branches and
-    fixing stale event-type literals
+  title: Simplify _wait_for_quota_recovery by merging duplicate fallback branches
+    and fixing stale event-type literals
   description: 'PURPOSE — Reduce the 69-line _wait_for_quota_recovery function in
     improve_command.py by ~15 lines by eliminating two identical fallback branches,
     and fix 4 remaining raw event-type string literals left over from backlog item
@@ -1171,17 +1171,17 @@
     Replace the 9-line tail in list_sessions and search_sessions with a single call
     to await self._enrich_and_sort(sessions, include_running_status). For api/sessions.py
     call sites, expose a public enrich_running_status(meta) single-session variant
-    or let callers use the batch method. ~12 lines for the helper, each call site drops
-    from 9 lines to 1. Pure refactoring, no behavior change. Follows the pattern from
-    items 002 (_update_field) and 065 (_summarize_event_lines) which extracted shared
-    helpers for repeated inline logic in the same file.'
+    or let callers use the batch method. ~12 lines for the helper, each call site
+    drops from 9 lines to 1. Pure refactoring, no behavior change. Follows the pattern
+    from items 002 (_update_field) and 065 (_summarize_event_lines) which extracted
+    shared helpers for repeated inline logic in the same file.'
   status: pending
   created: '2026-03-31T14:00:00Z'
   priority: medium
 - id: '076'
   title: Refactor _check_takeoff_gate to use SessionManager instead of hardcoded path
     and raw file I/O
-  description: 'PURPOSE — Eliminate a hardcoded session data path and raw sync file
+  description: PURPOSE — Eliminate a hardcoded session data path and raw sync file
     I/O that bypasses SessionManager encapsulation. core/spawner.py _check_takeoff_gate
     (L418-449) constructs the chat_events.jsonl path inline (Path.home() / ".charliebot"
     / "sessions" / session_id / "data" / "chat_events.jsonl") instead of going through
@@ -1197,7 +1197,7 @@
     call site (L471-472) since load_chat_events_sync may do file I/O on cache miss.
     The function shrinks from 32 lines to ~15 lines and eliminates the only remaining
     inline session-path construction outside SessionManager. ~20 lines changed across
-    1 file.'
+    1 file.
   category: maintainability
   status: pending
   created: '2026-03-31T18:00:00Z'
@@ -1206,55 +1206,54 @@
   title: Optimize parse_ndjson_tail to single-pass using collections.deque
   description: 'PURPOSE — Halve the I/O for every page load and session switch that
     uses the fast-view path. parse_ndjson_tail in core/ndjson.py (L29-74) reads the
-    file twice: first a full forward scan to count total lines (for _ in f: total +=
-    1), then a backwards seek-from-end to collect the last N lines. For a session with
-    10,000 events this means reading ~10 MB twice on every build_session_view_data_fast
-    call (api/message_utils.py:67), which runs on every session switch and sidebar refresh.
-    The total line count is needed by the caller (message_utils.py:82) to compute
-    event_index_offset = total_count - len(tail_events) so that event indices in the
-    UI match real file line positions. HOW — Replace the two-pass algorithm with a
-    single forward pass using collections.deque(maxlen=limit). Read the file once,
-    counting total lines while appending parsed events to a bounded deque that automatically
-    discards old entries. Return (list(deque), total, total > limit). This is O(n)
-    single-pass instead of O(2n) two-pass, halving file I/O. The deque approach is
-    simpler than the current backwards-seek logic (which also has a subtle bug: the
-    forward total counts all lines including blank ones, but the backward scan only
-    collects non-blank lines, so total and len(tail_events) can disagree when blank
-    lines are present, causing event_index_offset to be slightly wrong). The fix
-    eliminates this inconsistency by counting only parseable lines in both total and
-    tail. ~15 lines for the new implementation replacing ~40 lines of the current
-    two-pass approach, net reduction of ~25 lines.'
+    file twice: first a full forward scan to count total lines (for _ in f: total
+    += 1), then a backwards seek-from-end to collect the last N lines. For a session
+    with 10,000 events this means reading ~10 MB twice on every build_session_view_data_fast
+    call (api/message_utils.py:67), which runs on every session switch and sidebar
+    refresh. The total line count is needed by the caller (message_utils.py:82) to
+    compute event_index_offset = total_count - len(tail_events) so that event indices
+    in the UI match real file line positions. HOW — Replace the two-pass algorithm
+    with a single forward pass using collections.deque(maxlen=limit). Read the file
+    once, counting total lines while appending parsed events to a bounded deque that
+    automatically discards old entries. Return (list(deque), total, total > limit).
+    This is O(n) single-pass instead of O(2n) two-pass, halving file I/O. The deque
+    approach is simpler than the current backwards-seek logic (which also has a subtle
+    bug: the forward total counts all lines including blank ones, but the backward
+    scan only collects non-blank lines, so total and len(tail_events) can disagree
+    when blank lines are present, causing event_index_offset to be slightly wrong).
+    The fix eliminates this inconsistency by counting only parseable lines in both
+    total and tail. ~15 lines for the new implementation replacing ~40 lines of the
+    current two-pass approach, net reduction of ~25 lines.'
   category: performance
   status: pending
   created: '2026-03-31T20:00:00Z'
   priority: medium
-- id: '078'
+- id: 078
   title: Replace defensive getattr() on pydantic ThreadMetadata with direct attribute
     access
   description: 'PURPOSE — Align spawner.py with the project''s fail-fast principle
     by removing unnecessary defensive getattr() calls on a pydantic model whose fields
     are guaranteed to exist. ThreadMetadata (core/models.py) is a Pydantic BaseModel
-    with all accessed fields declared as proper class attributes with defaults —
-    worktree_path (Optional[str] = None), repo_path (Optional[str] = None), branch_name
-    (Optional[str] = None), require_review (bool = True), and review_of (Optional[str]
-    = None). Pydantic guarantees these attributes exist on every instance, making
-    getattr(thread, "attr", default) equivalent to thread.attr but obscuring the
-    actual field types and defaults from the reader. HOW — In core/spawner.py, replace
-    3 defensive getattr() call sites with direct attribute access: (1) L358: change
-    getattr(thread, "worktree_path", None) and getattr(thread, "repo_path", None)
-    to thread.worktree_path and thread.repo_path; (2) L396: change all(getattr(thread,
-    attr, None) for attr in (...)) to all([thread.repo_path, thread.branch_name,
-    thread.worktree_path]); (3) L398: change getattr(thread, "require_review", False)
-    and not getattr(thread, "review_of", None) to thread.require_review and not
-    thread.review_of. 3 lines changed in 1 file. No behavior change since the getattr
-    defaults already match the pydantic field defaults. Eliminates false impression
+    with all accessed fields declared as proper class attributes with defaults — worktree_path
+    (Optional[str] = None), repo_path (Optional[str] = None), branch_name (Optional[str]
+    = None), require_review (bool = True), and review_of (Optional[str] = None). Pydantic
+    guarantees these attributes exist on every instance, making getattr(thread, "attr",
+    default) equivalent to thread.attr but obscuring the actual field types and defaults
+    from the reader. HOW — In core/spawner.py, replace 3 defensive getattr() call
+    sites with direct attribute access: (1) L358: change getattr(thread, "worktree_path",
+    None) and getattr(thread, "repo_path", None) to thread.worktree_path and thread.repo_path;
+    (2) L396: change all(getattr(thread, attr, None) for attr in (...)) to all([thread.repo_path,
+    thread.branch_name, thread.worktree_path]); (3) L398: change getattr(thread, "require_review",
+    False) and not getattr(thread, "review_of", None) to thread.require_review and
+    not thread.review_of. 3 lines changed in 1 file. No behavior change since the
+    getattr defaults already match the pydantic field defaults. Eliminates false impression
     that these attributes might be absent and makes the type checker aware of the
     actual field types.'
   category: maintainability
   status: pending
   created: '2026-03-31T22:00:00Z'
   priority: low
-- id: '079'
+- id: 079
   title: Consolidate double save_metadata calls in worker spawn path
   description: 'PURPOSE — Eliminate redundant disk writes during every worker spawn.
     Both _create_worktree_and_process (spawner.py L218 + L248) and _create_repoless_process
@@ -1275,76 +1274,76 @@
   status: pending
   created: '2026-03-31T23:00:00Z'
   priority: low
-- id: '080'
+- id: 080
   title: Migrate gemini_provider.py from deprecated google-generativeai to google-genai
     SDK
   description: 'PURPOSE — Eliminate the FutureWarning emitted on every import and
     ensure continued security and bug-fix updates. The google-generativeai package
-    (v0.8.6) has officially ended all support; the deprecation notice states "All support
-    for the google.generativeai package has ended. It will no longer be receiving updates
-    or bug fixes. Please switch to the google.genai package as soon as possible." The
-    warning fires on every server start and module import, adding noise to logs. More
-    critically, the package will not receive security patches, and future Python or
-    protobuf version bumps may break it without recourse. HOW — Replace import google.generativeai
-    as genai with from google import genai in src/agents/gemini_provider.py. Adapt
-    the 3 API call sites: (1) genai.configure(api_key=...) becomes client = genai.Client(api_key=...),
-    (2) genai.GenerativeModel(model) becomes client.models, (3) model.generate_content(prompt)
-    becomes client.models.generate_content(model=model_id, contents=prompt). Store
-    the client instance as self._client instead of calling genai.configure() globally
-    (which is not thread-safe). Update pyproject.toml or requirements to replace google-generativeai
-    with google-genai. The migration scope is small — only 1 file (47 lines) with
-    3 call sites, plus the dependency declaration. The new SDK has a different but
-    well-documented API surface documented at https://github.com/google-gemini/python-genai.'
+    (v0.8.6) has officially ended all support; the deprecation notice states "All
+    support for the google.generativeai package has ended. It will no longer be receiving
+    updates or bug fixes. Please switch to the google.genai package as soon as possible."
+    The warning fires on every server start and module import, adding noise to logs.
+    More critically, the package will not receive security patches, and future Python
+    or protobuf version bumps may break it without recourse. HOW — Replace import
+    google.generativeai as genai with from google import genai in src/agents/gemini_provider.py.
+    Adapt the 3 API call sites: (1) genai.configure(api_key=...) becomes client =
+    genai.Client(api_key=...), (2) genai.GenerativeModel(model) becomes client.models,
+    (3) model.generate_content(prompt) becomes client.models.generate_content(model=model_id,
+    contents=prompt). Store the client instance as self._client instead of calling
+    genai.configure() globally (which is not thread-safe). Update pyproject.toml or
+    requirements to replace google-generativeai with google-genai. The migration scope
+    is small — only 1 file (47 lines) with 3 call sites, plus the dependency declaration.
+    The new SDK has a different but well-documented API surface documented at https://github.com/google-gemini/python-genai.'
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-04-01T12:00:00Z'
   priority: high
-- id: '081'
+- id: 081
   title: Wrap blocking sync I/O in asyncio.to_thread in improve_command.py
-  description: 'PURPOSE — Prevent event-loop blocking during the improve loop, which
+  description: PURPOSE — Prevent event-loop blocking during the improve loop, which
     runs as a long-lived server-side async task. Two parse_ndjson_file() calls (L151
     in is_quota_failure, L322 in run_improve_loop) read potentially large NDJSON event
     logs synchronously on the event loop. Additionally, improve_dir.mkdir() (L265),
     report_path.exists() (L328), and report_path.write_text() (L329) perform sync
-    filesystem I/O inline. Every other call site in the codebase (threads.py:84,
-    review.py:99/116, spawner.py:741) already correctly wraps parse_ndjson_file in
-    asyncio.to_thread — improve_command.py is the only file that does not, making
-    this an inconsistency. The improve loop processes multiple iterations sequentially,
-    so blocking the event loop here stalls WebSocket broadcasts and UI updates for
-    all sessions during each iteration''s summary extraction. HOW — Wrap both
-    parse_ndjson_file calls with await asyncio.to_thread(parse_ndjson_file, events_path).
-    Wrap the mkdir, exists, and write_text calls with asyncio.to_thread. asyncio
-    is already imported. ~5 lines changed, matching the established pattern from items
-    034, 035, 043, 044, 046, and 057.'
+    filesystem I/O inline. Every other call site in the codebase (threads.py:84, review.py:99/116,
+    spawner.py:741) already correctly wraps parse_ndjson_file in asyncio.to_thread
+    — improve_command.py is the only file that does not, making this an inconsistency.
+    The improve loop processes multiple iterations sequentially, so blocking the event
+    loop here stalls WebSocket broadcasts and UI updates for all sessions during each
+    iteration's summary extraction. HOW — Wrap both parse_ndjson_file calls with await
+    asyncio.to_thread(parse_ndjson_file, events_path). Wrap the mkdir, exists, and
+    write_text calls with asyncio.to_thread. asyncio is already imported. ~5 lines
+    changed, matching the established pattern from items 034, 035, 043, 044, 046,
+    and 057.
   category: performance
   status: pending
   created: '2026-04-01T14:00:00Z'
   priority: medium
-- id: '082'
+- id: 082
   title: Add explicit asyncio.CancelledError handling to long-running orchestration
     functions
   description: 'PURPOSE — Prevent subprocess and worktree leaks when async tasks are
-    cancelled (browser close, server shutdown, /stop-improve). Since Python 3.8,
-    asyncio.CancelledError is a BaseException, not Exception — so the broad except
-    Exception clauses in spawn_worker (spawner.py:498), _run_cc (master_cc.py:253),
-    and run_improve_loop (improve_command.py:354) do not catch it. While the finally
-    blocks still execute, they do not explicitly terminate the in-flight subprocess
-    before cleanup runs, meaning the backend process may continue running as an orphan
-    after the task is cancelled. Only scheduler.py currently handles CancelledError
-    (L58, L80). HOW — Add except asyncio.CancelledError blocks in three functions:
-    (1) spawn_worker — call worker.terminate() before re-raising so the subprocess
-    is killed before _finalize_worker runs in finally; (2) _run_cc — call backend.terminate()
-    and remove from _active_procs before re-raising; (3) run_improve_loop — broadcast
-    an improve_cancelled event and re-raise. Each block logs a warning, ensures subprocess
-    termination, then re-raises to preserve cancellation semantics. ~5 lines per
-    function, 15 lines total across 3 files. No behavior change for normal execution.'
+    cancelled (browser close, server shutdown, /stop-improve). Since Python 3.8, asyncio.CancelledError
+    is a BaseException, not Exception — so the broad except Exception clauses in spawn_worker
+    (spawner.py:498), _run_cc (master_cc.py:253), and run_improve_loop (improve_command.py:354)
+    do not catch it. While the finally blocks still execute, they do not explicitly
+    terminate the in-flight subprocess before cleanup runs, meaning the backend process
+    may continue running as an orphan after the task is cancelled. Only scheduler.py
+    currently handles CancelledError (L58, L80). HOW — Add except asyncio.CancelledError
+    blocks in three functions: (1) spawn_worker — call worker.terminate() before re-raising
+    so the subprocess is killed before _finalize_worker runs in finally; (2) _run_cc
+    — call backend.terminate() and remove from _active_procs before re-raising; (3)
+    run_improve_loop — broadcast an improve_cancelled event and re-raise. Each block
+    logs a warning, ensures subprocess termination, then re-raises to preserve cancellation
+    semantics. ~5 lines per function, 15 lines total across 3 files. No behavior change
+    for normal execution.'
   category: error-handling
   status: pending
   created: '2026-04-01T16:00:00Z'
   priority: high
-- id: '083'
-  title: Extract shared worker-construction tail from _create_worktree_and_process and
-    _create_repoless_process
+- id: 083
+  title: Extract shared worker-construction tail from _create_worktree_and_process
+    and _create_repoless_process
   description: 'PURPOSE — Eliminate 20 duplicated lines of backend resolution, subagent
     instructions loading, and Worker instantiation repeated verbatim between _create_worktree_and_process
     (spawner.py L245-264) and _create_repoless_process (L291-308). Both functions
@@ -1364,7 +1363,7 @@
   status: pending
   created: '2026-04-01T18:00:00Z'
   priority: medium
-- id: '084'
+- id: 084
   title: Extract shared CLI post_internal_api helper to deduplicate request/error
     handling across 3 CLI scripts
   description: 'PURPOSE — Eliminate duplicated HTTP request and error-handling boilerplate
@@ -1390,41 +1389,42 @@
   status: pending
   created: '2026-04-01T20:00:00Z'
   priority: low
-- id: '085'
+- id: 085
   title: Reuse a shared httpx.AsyncClient instead of creating one per HTTP call
-  description: 'PURPOSE — Eliminate per-call TCP connection pool and TLS handshake overhead
-    from 3 httpx.AsyncClient instantiations across 2 files, and prevent potential resource
-    leaks on exception paths. Currently ext_usage.py creates and destroys an AsyncClient
-    on every usage poll (CcOpusProvider.fetch at L57) and every token refresh (_refresh_access_token
-    at L218), and notifications.py creates one on every Telegram notification (send_telegram
-    at L32). The usage poller runs every 10 minutes, so 2 connection pools are established
-    and torn down per cycle. Each AsyncClient() call negotiates a fresh TLS session
-    to api.anthropic.com, console.anthropic.com, or api.telegram.org — adding ~100-300ms
-    of latency per call that connection reuse would eliminate after the first request.
-    Additionally, if an exception occurs between client creation and the async-with
-    exit, the client may not be properly closed. HOW — Create a module-level shared
-    httpx.AsyncClient instance in a new src/core/http.py module with a get_http_client()
-    accessor that lazily creates the singleton and a close_http_client() coroutine for
-    shutdown cleanup. Register close_http_client in the FastAPI lifespan handler (server.py)
-    alongside the existing streaming_manager.shutdown(). Replace the 3 async-with httpx.AsyncClient()
-    blocks in ext_usage.py and notifications.py with client = get_http_client() (no
-    context manager needed since the lifecycle is managed at app level). Per-call timeout
+  description: PURPOSE — Eliminate per-call TCP connection pool and TLS handshake
+    overhead from 3 httpx.AsyncClient instantiations across 2 files, and prevent potential
+    resource leaks on exception paths. Currently ext_usage.py creates and destroys
+    an AsyncClient on every usage poll (CcOpusProvider.fetch at L57) and every token
+    refresh (_refresh_access_token at L218), and notifications.py creates one on every
+    Telegram notification (send_telegram at L32). The usage poller runs every 10 minutes,
+    so 2 connection pools are established and torn down per cycle. Each AsyncClient()
+    call negotiates a fresh TLS session to api.anthropic.com, console.anthropic.com,
+    or api.telegram.org — adding ~100-300ms of latency per call that connection reuse
+    would eliminate after the first request. Additionally, if an exception occurs
+    between client creation and the async-with exit, the client may not be properly
+    closed. HOW — Create a module-level shared httpx.AsyncClient instance in a new
+    src/core/http.py module with a get_http_client() accessor that lazily creates
+    the singleton and a close_http_client() coroutine for shutdown cleanup. Register
+    close_http_client in the FastAPI lifespan handler (server.py) alongside the existing
+    streaming_manager.shutdown(). Replace the 3 async-with httpx.AsyncClient() blocks
+    in ext_usage.py and notifications.py with client = get_http_client() (no context
+    manager needed since the lifecycle is managed at app level). Per-call timeout
     overrides can be passed via httpx request options. ~10 lines for the module, 3
     one-line changes at call sites, 1 line added to server.py lifespan. Connection
-    keepalive handles the rest automatically.'
+    keepalive handles the rest automatically.
   category: performance
   status: pending
   created: '2026-04-01T22:00:00Z'
   priority: medium
-- id: '086'
+- id: 086
   title: Enforce timezone-aware datetimes at the pydantic model level using AwareDatetime
   description: 'PURPOSE — Eliminate 3 scattered runtime timezone-normalization guards
     (sessions.py:206, sessions.py:244, improvement_loop.py:109) that check .tzinfo
     is None and patch naive datetimes to UTC after deserialization. These guards are
     easy to forget when adding new call sites and mask the real problem: the model
-    accepts naive datetimes on parse. A naive datetime reaching a comparison with an
-    aware one causes a TypeError crash — the guards exist only to prevent that. HOW
-    — Define a reusable UtcDatetime annotated type in core/models.py using Annotated[datetime,
+    accepts naive datetimes on parse. A naive datetime reaching a comparison with
+    an aware one causes a TypeError crash — the guards exist only to prevent that.
+    HOW — Define a reusable UtcDatetime annotated type in core/models.py using Annotated[datetime,
     BeforeValidator(ensure_utc)] where ensure_utc(v) calls v.replace(tzinfo=timezone.utc)
     if v.tzinfo is None, preserving backward compatibility with existing on-disk JSON
     that may contain naive ISO strings. Replace all 11 bare datetime annotations across
@@ -1438,29 +1438,29 @@
   status: pending
   created: '2026-04-01T23:00:00Z'
   priority: medium
-- id: '087'
+- id: 087
   title: 'Code health: fix formatting, unused imports, and long functions'
   description: 'Re-confirmed by automated scan on 2026-04-04 (10th consecutive scan,
     originally found 2026-04-01). All prior issues persist unchanged. (1) FORMATTING
     — 5 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
-    src/core/spawner.py (string concat alignment in _build_worker_prompt),
-    src/api/ext_usage.py (dict formatting and long boolean expression in parse_rate_limit_usage),
-    src/api/message_utils.py (tuple unpacking line wrap in build_fast_session_view),
-    src/api/chat.py (function call wrapping in send_message). Run `yapf -i` on these files.
-    (2) UNUSED IMPORTS — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT but never uses it;
-    src/api/pages.py:21 imports TriggerManager but never uses it. Delete both import lines.
-    (3) TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32 both
-    say "TODO: re-enable when Claude Code version supports --effort". Resolve or convert to a
-    tracked issue once the --effort flag ships. (4) LONG FUNCTIONS — 29 functions exceed 50 lines.
-    Worst offenders: run_improve_loop() 129 lines (src/core/improve_command.py:241),
-    execute_command() 127 lines (src/api/slash.py:125), run_message() 113 lines
-    (src/agents/master_cc.py:350), run() 107 lines (src/agents/backends/base.py:156), _run_cc()
-    104 lines (src/agents/master_cc.py:181). Consider extracting helper functions from the top 5
-    worst offenders. (5) DUPLICATE NAME — list_threads appears at both src/api/sessions.py and
-    src/api/threads.py; verify they are intentionally separate endpoints or consolidate.
-    (6) DEPRECATED DEPENDENCY — src/agents/gemini_provider.py imports google.generativeai
-    which is deprecated; migrate to google.genai per upstream recommendation.
-    Items 1 and 2 are quick fixes; items 3-6 are refactoring tasks.'
+    src/core/spawner.py (string concat alignment in _build_worker_prompt), src/api/ext_usage.py
+    (dict formatting and long boolean expression in parse_rate_limit_usage), src/api/message_utils.py
+    (tuple unpacking line wrap in build_fast_session_view), src/api/chat.py (function
+    call wrapping in send_message). Run `yapf -i` on these files. (2) UNUSED IMPORTS
+    — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT but never uses it; src/api/pages.py:21
+    imports TriggerManager but never uses it. Delete both import lines. (3) TODO COMMENTS
+    — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32 both say
+    "TODO: re-enable when Claude Code version supports --effort". Resolve or convert
+    to a tracked issue once the --effort flag ships. (4) LONG FUNCTIONS — 29 functions
+    exceed 50 lines. Worst offenders: run_improve_loop() 129 lines (src/core/improve_command.py:241),
+    execute_command() 127 lines (src/api/slash.py:125), run_message() 113 lines (src/agents/master_cc.py:350),
+    run() 107 lines (src/agents/backends/base.py:156), _run_cc() 104 lines (src/agents/master_cc.py:181).
+    Consider extracting helper functions from the top 5 worst offenders. (5) DUPLICATE
+    NAME — list_threads appears at both src/api/sessions.py and src/api/threads.py;
+    verify they are intentionally separate endpoints or consolidate. (6) DEPRECATED
+    DEPENDENCY — src/agents/gemini_provider.py imports google.generativeai which is
+    deprecated; migrate to google.genai per upstream recommendation. Items 1 and 2
+    are quick fixes; items 3-6 are refactoring tasks.'
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'

@@ -21,36 +21,43 @@ class OpenCodeBackend(AgentBackend):
     self._session_id_emitted = False
 
   def _prepare_cwd(self, cwd: str) -> None:
-    """Write permissive .opencode/config.json so tool calls aren't auto-denied in non-interactive mode."""
+    """Write permissive project config so tool calls aren't auto-denied in non-interactive mode."""
     config_dir = os.path.join(cwd, ".opencode")
-    config_path = os.path.join(config_dir, "config.json")
+    config_path = os.path.join(config_dir, "opencode.json")
+    legacy_config_path = os.path.join(config_dir, "config.json")
     if os.path.exists(config_path):
       return
     os.makedirs(config_dir, exist_ok=True)
-    allow_all = {"*": "allow"}
-    config = {
-        "agent":
-            {
-                "build":
-                    {
-                        "permission":
-                            {
-                                "external_directory": allow_all,
-                                "read": allow_all,
-                                "edit": allow_all,
-                                "bash": allow_all,
-                                "glob": allow_all,
-                                "grep": allow_all,
-                                "list": allow_all,
-                                "write": allow_all,
-                                "skill": allow_all,
-                            }
-                    }
-            }
-    }
+    if os.path.exists(legacy_config_path):
+      with open(legacy_config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+      config_source = "legacy_config_json"
+    else:
+      allow_all = {"*": "allow"}
+      config = {
+          "agent":
+              {
+                  "build":
+                      {
+                          "permission":
+                              {
+                                  "external_directory": allow_all,
+                                  "read": allow_all,
+                                  "edit": allow_all,
+                                  "bash": allow_all,
+                                  "glob": allow_all,
+                                  "grep": allow_all,
+                                  "list": allow_all,
+                                  "write": allow_all,
+                                  "skill": allow_all,
+                              }
+                      }
+              }
+      }
+      config_source = "generated"
     with open(config_path, "w") as f:
       json.dump(config, f, indent=2)
-    log.debug("opencode_config_written", path=config_path)
+    log.debug("opencode_config_written", path=config_path, source=config_source)
 
   def _build_command(self, prompt: str) -> list[str]:
     cmd = [self._opencode_bin, "run", "--format", "json"]
@@ -94,13 +101,14 @@ class OpenCodeBackend(AgentBackend):
         results.append(make_text_event(text))
       return results
 
-    if ev_type == "tool_use":
+    if ev_type in ("tool_use", "tool"):
       part = ev.get("part", {})
       call_id = part.get("callID", "")
       tool_name = part.get("tool", "")
       state = part.get("state", {})
       input_data = state.get("input", {})
       output = state.get("output", "")
+      error = state.get("error", "")
 
       # Emit tool_use event
       results.append(
@@ -121,6 +129,12 @@ class OpenCodeBackend(AgentBackend):
             "type": ET.TOOL_RESULT,
             "tool_use_id": call_id,
             "content": output,
+        })
+      elif error:
+        results.append({
+            "type": ET.TOOL_RESULT,
+            "tool_use_id": call_id,
+            "content": error,
         })
       return results
 

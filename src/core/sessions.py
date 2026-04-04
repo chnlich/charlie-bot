@@ -286,13 +286,10 @@ class SessionManager:
     if event_index is not None:
       lines = lines[:event_index + 1]
 
-    summary = _summarize_event_lines(lines)
-
     # Create the new session, inheriting the parent backend unless overridden.
     meta = SessionMetadata(
         name=f'Clone: {parent.name}',
         parent_session_id=parent_id,
-        rewind_summary=summary,
         backend=backend or parent.backend,
         group=parent.group,
     )

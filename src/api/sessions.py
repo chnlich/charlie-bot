@@ -307,6 +307,22 @@ async def fork_session(
   )
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
+
+  # Build bootstrap prompt so the clone reads its own events and orients itself
+  clone_events_path = session_mgr.get_chat_events_path(meta.id)
+  bootstrap_prompt = (
+      "This session was cloned from a previous conversation.\n\n"
+      f"Your events file: {clone_events_path}\n\n"
+      "Please:\n"
+      "1. Read the events file\n"
+      "2. Focus on the last 2-3 exchanges to understand the current context\n"
+      "3. Summarize the context briefly\n"
+      "4. Wait for the user to tell you what to do next")
+
+  from src.api.chat import run_and_finalize
+  from src.core.tasks import create_logged_task
+  create_logged_task(run_and_finalize(cfg, meta, bootstrap_prompt, session_mgr, skip_user_event=False))
+
   return meta
 
 

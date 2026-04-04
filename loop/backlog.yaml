@@ -1440,7 +1440,7 @@
   priority: medium
 - id: '087'
   title: 'Code health: fix formatting, unused imports, and long functions'
-  description: 'Re-confirmed by automated scan on 2026-04-03 (8th consecutive scan,
+  description: 'Re-confirmed by automated scan on 2026-04-03 (9th consecutive scan,
     originally found 2026-04-01). All prior issues persist unchanged. (1) FORMATTING
     — 5 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
     src/core/spawner.py (string concat alignment in _build_worker_prompt),
@@ -1464,5 +1464,5 @@
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-03T23:59:02Z'
+  updated: '2026-04-03T23:59:03Z'
   priority: low

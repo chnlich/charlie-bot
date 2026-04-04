@@ -197,9 +197,9 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   from src.agents.backends.registry import build_backend
   option = item.backend_option or cfg.backend_options[0]
 
-  # Write AGENTS.md into the session dir for Codex (reads its own instruction file).
+  # Write AGENTS.md into the session dir for Codex/OpenCode (both read their own instruction file).
   # Safe here because cwd is the charliebot session dir, not a repo worktree.
-  if option.type == "codex" and instructions_content and not session_meta.cc_session_id:
+  if option.type in ("codex", "opencode") and instructions_content and not session_meta.cc_session_id:
     agents_md = session_dir / "AGENTS.md"
     await asyncio.to_thread(agents_md.write_text, instructions_content, "utf-8")
     log.debug("codex_wrote_agents_md", path=str(agents_md))

@@ -360,6 +360,10 @@ async def run_improve_loop(
     await session_mgr.persist_and_broadcast(session_id, payload)
     await _trigger_master(session_id, json.dumps(payload, indent=2), cfg, session_mgr)
 
+  except asyncio.CancelledError:
+    log.warning("improve_loop_cancelled", session=session_id)
+    await session_mgr.persist_and_broadcast(session_id, {"type": ET.IMPROVE_CANCELLED, "goal": goal})
+    raise
   except Exception:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
     try:

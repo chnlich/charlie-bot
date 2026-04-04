@@ -1338,7 +1338,7 @@
     semantics. ~5 lines per function, 15 lines total across 3 files. No behavior change
     for normal execution.'
   category: error-handling
-  status: approved
+  status: done
   created: '2026-04-01T16:00:00Z'
   priority: high
 - id: 083

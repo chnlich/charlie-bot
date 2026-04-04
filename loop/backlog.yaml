@@ -1295,7 +1295,7 @@
     is small — only 1 file (47 lines) with 3 call sites, plus the dependency declaration.
     The new SDK has a different but well-documented API surface documented at https://github.com/google-gemini/python-genai.'
   category: maintainability
-  status: approved
+  status: done
   created: '2026-04-01T12:00:00Z'
   priority: high
 - id: 081

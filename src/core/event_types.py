@@ -36,6 +36,7 @@ CLONE_START = "clone_start"
 # -- Improve loop ------------------------------------------------------------
 IMPROVE_ITERATION_COMPLETED = "improve_iteration_completed"
 IMPROVE_COMPLETED = "improve_completed"
+IMPROVE_CANCELLED = "improve_cancelled"
 IMPROVE_FAILED = "improve_failed"
 
 # -- Sidebar / UI ------------------------------------------------------------

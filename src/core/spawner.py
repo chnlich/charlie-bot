@@ -499,6 +499,7 @@ async def spawn_worker(
     _check_takeoff_gate(session_id)
 
   thread = None
+  worker = None
   exit_code = -1
   quota_exhausted = False
   error_msg = ""
@@ -522,6 +523,11 @@ async def spawn_worker(
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, description, thread, thread_mgr, session_mgr)
 
+  except asyncio.CancelledError:
+    log.warning("spawn_worker_cancelled", session=session_id, thread_id=thread_id)
+    if worker:
+      await worker.terminate()
+    raise
   except Exception as e:
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
     error_msg = str(e)

@@ -1435,7 +1435,7 @@
     ~5 lines for the type definition, 11 annotation changes, 3 deleted blocks. Pure
     type-safety improvement, no behavior change for well-formed data.'
   category: correctness
-  status: pending
+  status: approved
   created: '2026-04-01T23:00:00Z'
   priority: medium
 - id: 087

@@ -100,7 +100,9 @@ async def perfetto_viewer(
 
   Supports single trace, multiple traces, and directory auto-discovery.
   """
-  trace_urls: list[str] = [f"/files{url}" if url.startswith("/") and not url.startswith("/files/") else url for url in trace]
+  trace_urls: list[str] = [
+      f"/files{url}" if url.startswith("/") and not url.startswith("/files/") else url for url in trace
+  ]
 
   if dir:
     dir_path = Path(dir)

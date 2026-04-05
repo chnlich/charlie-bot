@@ -355,8 +355,16 @@ async def run_improve_loop(
       if (state and state.status == "stopped") or not meta:
         break
 
-    # Broadcast completion and trigger master CC
-    payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
+    # Check if we exited because the user stopped the loop
+    state = load_improve_state(session_id, cfg)
+    stopped_by_user = state and state.status == 'stopped'
+
+    if stopped_by_user:
+      payload = _build_summary_payload(ET.IMPROVE_STOPPED, goal, previous_summaries)
+      payload['reason'] = 'Stopped by user'
+    else:
+      payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
+
     await session_mgr.persist_and_broadcast(session_id, payload)
     await _trigger_master(session_id, json.dumps(payload, indent=2), cfg, session_mgr)
 

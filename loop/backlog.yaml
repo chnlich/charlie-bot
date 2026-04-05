@@ -1439,30 +1439,64 @@
   created: '2026-04-01T23:00:00Z'
   priority: medium
 - id: 087
-  title: 'Code health: fix formatting, unused imports, and long functions'
-  description: 'Re-confirmed by automated scan on 2026-04-04 (10th consecutive scan,
+  title: 'Code health: fix formatting, unused imports, and dead code'
+  description: 'Re-confirmed by automated scan on 2026-04-05 (11th consecutive scan,
     originally found 2026-04-01). All prior issues persist unchanged. (1) FORMATTING
     — 5 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
     src/core/spawner.py (string concat alignment in _build_worker_prompt), src/api/ext_usage.py
     (dict formatting and long boolean expression in parse_rate_limit_usage), src/api/message_utils.py
     (tuple unpacking line wrap in build_fast_session_view), src/api/chat.py (function
     call wrapping in send_message). Run `yapf -i` on these files. (2) UNUSED IMPORTS
-    — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT but never uses it; src/api/pages.py:21
-    imports TriggerManager but never uses it. Delete both import lines. (3) TODO COMMENTS
-    — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32 both say
-    "TODO: re-enable when Claude Code version supports --effort". Resolve or convert
-    to a tracked issue once the --effort flag ships. (4) LONG FUNCTIONS — 29 functions
-    exceed 50 lines. Worst offenders: run_improve_loop() 129 lines (src/core/improve_command.py:241),
-    execute_command() 127 lines (src/api/slash.py:125), run_message() 113 lines (src/agents/master_cc.py:350),
-    run() 107 lines (src/agents/backends/base.py:156), _run_cc() 104 lines (src/agents/master_cc.py:181).
-    Consider extracting helper functions from the top 5 worst offenders. (5) DUPLICATE
-    NAME — list_threads appears at both src/api/sessions.py and src/api/threads.py;
-    verify they are intentionally separate endpoints or consolidate. (6) DEPRECATED
-    DEPENDENCY — src/agents/gemini_provider.py imports google.generativeai which is
-    deprecated; migrate to google.genai per upstream recommendation. Items 1 and 2
-    are quick fixes; items 3-6 are refactoring tasks.'
+    — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT but never uses it (hardcoded
+    timeout=30.0 on L118 instead); src/api/pages.py:21 imports TriggerManager but
+    never uses it. Delete both import lines. (3) DEAD CODE — src/core/sessions.py:44
+    _summarize_event_lines() has zero callers; appears to be a leftover from the item
+    065 refactoring where rewind_session was later removed. Delete the function. (4)
+    TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
+    both say "TODO: re-enable when Claude Code version supports --effort". Resolve
+    or convert to a tracked issue once the --effort flag ships. (5) LONG FUNCTIONS
+    — 29 functions exceed 50 lines. Worst offenders: run_improve_loop() 133 lines
+    (src/core/improve_command.py:241), execute_command() 127 lines (src/api/slash.py:125),
+    run_message() 113 lines (src/agents/master_cc.py:356), _run_cc() 110 lines (src/agents/master_cc.py:181),
+    run() 107 lines (src/agents/backends/base.py:156). (6) MISSING TYPE IMPORTS —
+    src/core/improve_command.py uses ThreadManager and SessionManager as string annotations
+    (L145, L168, L247, L248) without any import, not even under TYPE_CHECKING. Add
+    from __future__ import annotations or a TYPE_CHECKING guard. Items 1-3 are quick
+    fixes; items 4-6 are tracked by other backlog items or require upstream changes.'
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-04T23:59:03Z'
+  updated: '2026-04-05T05:16:31Z'
   priority: low
+- id: 088
+  title: Consolidate build_session_view_data and build_session_view_data_fast into
+    single function
+  description: 'PURPOSE — Eliminate 25 lines of duplicated session-view loading pipeline
+    between build_session_view_data() and build_session_view_data_fast() in api/message_utils.py,
+    reducing the risk of divergence when the load-events, events_to_messages, resolve_usage,
+    or mark_read steps change. Both functions (L109-127 and L140-171) follow the same
+    5-step pipeline: (1) launch parallel tasks for events, threads, and session metadata
+    via asyncio.gather, (2) validate session_meta is not None, (3) convert events to
+    messages via events_to_messages, (4) resolve usage via session_mgr.resolve_session_usage,
+    (5) mark_read with try/except. They differ only in the event-loading call (load_chat_events_sync
+    vs load_chat_events_tail) and the presence of total_event_count/has_more/event_index_offset
+    in the fast path. This means any change to the pipeline (e.g. adding a new parallel
+    task, changing error handling, adjusting mark_read behavior) must be applied to
+    both functions independently — a maintenance trap that has already produced a subtle
+    inconsistency: the fast path computes event_index_offset but the full path does
+    not, despite events_to_messages accepting the parameter in both cases. HOW — Replace
+    both functions and both dataclasses with a single async def build_session_view_data(session_id,
+    session_mgr, thread_mgr, *, tail_limit: int | None = None) -> SessionViewData.
+    When tail_limit is None, load all events via load_chat_events_sync (current full
+    behavior). When tail_limit is set, use load_chat_events_tail and include total_event_count
+    and has_more in the result. Unify SessionViewData and FastSessionViewData into
+    a single SessionViewData dataclass with optional total_event_count: int | None
+    = None and has_more: bool = False fields. Update the 2 callers: api/pages.py:166
+    calls build_session_view_data(session, ...) unchanged; api/sessions.py:252 calls
+    build_session_view_data(session_id, ..., tail_limit=200). Delete the FastSessionViewData
+    import from api/sessions.py. Net removal of ~25 lines, 2 dataclasses merged to
+    1, 2 functions merged to 1. Pure refactoring, no behavior change.'
+  category: duplication
+  status: pending
+  created: '2026-04-05T05:16:31Z'
+  priority: medium

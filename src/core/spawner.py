@@ -407,7 +407,12 @@ async def _finalize_worker(
     error: str = "",
 ) -> None:
   """Update thread status and notify completion."""
-  if quota_exhausted:
+  # Re-read from disk: the cancel endpoint may have already set CANCELLED.
+  current = await thread_mgr.get_thread(session_id, thread.id)
+  if current and current.status == ThreadStatus.CANCELLED:
+    # Cancel endpoint already set the status; don't overwrite.
+    log.info("worker_already_cancelled", thread_id=thread.id)
+  elif quota_exhausted:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED)
   elif error:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1)
@@ -698,13 +703,19 @@ async def _broadcast_completion(
 
   events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
 
-  status = "completed" if exit_code == 0 else "failed"
+  # Re-read to pick up cancel endpoint's status
+  current_thread = await thread_mgr.get_thread(session_id, thread.id)
+  cancelled = current_thread and current_thread.status == ThreadStatus.CANCELLED
+
+  status = 'cancelled' if cancelled else ('completed' if exit_code == 0 else 'failed')
   now = datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%m/%d %H:%M')
   chat_summary = f'Worker `{thread.id[:8]}` finished ({now}): {_short_desc(description)}'
   full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
 
   suffix = ""
-  if quota_exhausted:
+  if cancelled:
+    suffix = "\n\n*Cancelled by user.*"
+  elif quota_exhausted:
     suffix = "\n\n*Worker stopped: API quota exhausted.*"
   elif error:
     suffix = f"\n\n*Worker error: {error}*"

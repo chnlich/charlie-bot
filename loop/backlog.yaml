@@ -1440,7 +1440,7 @@
   priority: medium
 - id: 087
   title: 'Code health: fix formatting, unused imports, and dead code'
-  description: 'Re-confirmed by automated scan on 2026-04-05 (11th consecutive scan,
+  description: 'Re-confirmed by automated scan on 2026-04-05 (12th consecutive scan,
     originally found 2026-04-01). All prior issues persist unchanged. (1) FORMATTING
     — 5 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
     src/core/spawner.py (string concat alignment in _build_worker_prompt), src/api/ext_usage.py
@@ -1451,8 +1451,9 @@
     timeout=30.0 on L118 instead); src/api/pages.py:21 imports TriggerManager but
     never uses it. Delete both import lines. (3) DEAD CODE — src/core/sessions.py:44
     _summarize_event_lines() has zero callers; appears to be a leftover from the item
-    065 refactoring where rewind_session was later removed. Delete the function. (4)
-    TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
+    065 refactoring where rewind_session was later removed. Delete the function. Also
+    src/core/config.py:126 has an unused variable cls (100% confidence per vulture).
+    (4) TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
     both say "TODO: re-enable when Claude Code version supports --effort". Resolve
     or convert to a tracked issue once the --effort flag ships. (5) LONG FUNCTIONS
     — 29 functions exceed 50 lines. Worst offenders: run_improve_loop() 133 lines
@@ -1466,7 +1467,7 @@
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-05T05:16:31Z'
+  updated: '2026-04-05T14:00:00Z'
   priority: low
 - id: 088
   title: Consolidate build_session_view_data and build_session_view_data_fast into
@@ -1500,3 +1501,27 @@
   status: pending
   created: '2026-04-05T05:16:31Z'
   priority: medium
+- id: 089
+  title: Fix event-loss window in thread_websocket by subscribing before catchup
+  description: 'PURPOSE — Prevent live worker events from being silently dropped during
+    the thread WebSocket connection setup. server.py thread_websocket (L172-224) subscribes
+    to the StreamingManager AFTER sending catchup events (subscribe at L209, catchup
+    at L186-199). Any events broadcast by the worker between the catchup file read
+    and the subscribe call are lost — the client never receives them and has no way
+    to detect the gap. This is the exact bug that was already fixed in the session
+    WebSocket endpoint (L106-164), which deliberately subscribes BEFORE catchup (L128)
+    with an explanatory comment: "Subscribe BEFORE catchup so no events are lost between
+    catchup and subscribe." The thread WS handles live worker output where events
+    arrive at high frequency during active work, making the race window more likely
+    to trigger than in the session WS case. HOW — Move the streaming_manager.subscribe(thread_id,
+    websocket) call (L209) to immediately after websocket.accept() (after L181),
+    before the catchup file read. Move the corresponding unsubscribe into a finally
+    block wrapping the entire catchup + keepalive sequence. This matches the session
+    WS pattern exactly. The client already handles potential duplicates (events that
+    arrive via both catchup and live subscription) since send_text is idempotent for
+    display purposes. ~5 lines moved, no new code. Fixes a latent event-loss bug
+    for every thread WS connection.'
+  category: correctness
+  status: pending
+  created: '2026-04-05T14:00:00Z'
+  priority: high

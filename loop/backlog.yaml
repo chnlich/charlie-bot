@@ -1498,7 +1498,7 @@
     import from api/sessions.py. Net removal of ~25 lines, 2 dataclasses merged to
     1, 2 functions merged to 1. Pure refactoring, no behavior change.'
   category: duplication
-  status: pending
+  status: approved
   created: '2026-04-05T05:16:31Z'
   priority: medium
 - id: 089

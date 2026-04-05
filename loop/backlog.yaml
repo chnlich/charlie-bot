@@ -1225,7 +1225,7 @@
     total and tail. ~15 lines for the new implementation replacing ~40 lines of the
     current two-pass approach, net reduction of ~25 lines.'
   category: performance
-  status: pending
+  status: approved
   created: '2026-03-31T20:00:00Z'
   priority: medium
 - id: 078
@@ -1477,16 +1477,16 @@
     reducing the risk of divergence when the load-events, events_to_messages, resolve_usage,
     or mark_read steps change. Both functions (L109-127 and L140-171) follow the same
     5-step pipeline: (1) launch parallel tasks for events, threads, and session metadata
-    via asyncio.gather, (2) validate session_meta is not None, (3) convert events to
-    messages via events_to_messages, (4) resolve usage via session_mgr.resolve_session_usage,
+    via asyncio.gather, (2) validate session_meta is not None, (3) convert events
+    to messages via events_to_messages, (4) resolve usage via session_mgr.resolve_session_usage,
     (5) mark_read with try/except. They differ only in the event-loading call (load_chat_events_sync
     vs load_chat_events_tail) and the presence of total_event_count/has_more/event_index_offset
     in the fast path. This means any change to the pipeline (e.g. adding a new parallel
     task, changing error handling, adjusting mark_read behavior) must be applied to
-    both functions independently — a maintenance trap that has already produced a subtle
-    inconsistency: the fast path computes event_index_offset but the full path does
-    not, despite events_to_messages accepting the parameter in both cases. HOW — Replace
-    both functions and both dataclasses with a single async def build_session_view_data(session_id,
+    both functions independently — a maintenance trap that has already produced a
+    subtle inconsistency: the fast path computes event_index_offset but the full path
+    does not, despite events_to_messages accepting the parameter in both cases. HOW
+    — Replace both functions and both dataclasses with a single async def build_session_view_data(session_id,
     session_mgr, thread_mgr, *, tail_limit: int | None = None) -> SessionViewData.
     When tail_limit is None, load all events via load_chat_events_sync (current full
     behavior). When tail_limit is set, use load_chat_events_tail and include total_event_count
@@ -1514,13 +1514,13 @@
     catchup and subscribe." The thread WS handles live worker output where events
     arrive at high frequency during active work, making the race window more likely
     to trigger than in the session WS case. HOW — Move the streaming_manager.subscribe(thread_id,
-    websocket) call (L209) to immediately after websocket.accept() (after L181),
-    before the catchup file read. Move the corresponding unsubscribe into a finally
-    block wrapping the entire catchup + keepalive sequence. This matches the session
-    WS pattern exactly. The client already handles potential duplicates (events that
+    websocket) call (L209) to immediately after websocket.accept() (after L181), before
+    the catchup file read. Move the corresponding unsubscribe into a finally block
+    wrapping the entire catchup + keepalive sequence. This matches the session WS
+    pattern exactly. The client already handles potential duplicates (events that
     arrive via both catchup and live subscription) since send_text is idempotent for
-    display purposes. ~5 lines moved, no new code. Fixes a latent event-loss bug
-    for every thread WS connection.'
+    display purposes. ~5 lines moved, no new code. Fixes a latent event-loss bug for
+    every thread WS connection.'
   category: correctness
   status: pending
   created: '2026-04-05T14:00:00Z'

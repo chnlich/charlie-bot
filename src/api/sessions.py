@@ -196,7 +196,7 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
   sessions = await session_mgr.list_sessions()
   if not sessions:
     return {}
-  await session_mgr._populate_sidebar_state(
+  await session_mgr.populate_sidebar_state(
       sessions,
       include_running_status=True,
       include_pending_trigger_status=True,
@@ -244,7 +244,7 @@ async def get_session_view(
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  await session_mgr._populate_sidebar_state(
+  await session_mgr.populate_sidebar_state(
       [meta],
       include_running_status=True,
       include_pending_trigger_status=True,

@@ -1225,7 +1225,7 @@
     total and tail. ~15 lines for the new implementation replacing ~40 lines of the
     current two-pass approach, net reduction of ~25 lines.'
   category: performance
-  status: approved
+  status: done
   created: '2026-03-31T20:00:00Z'
   priority: medium
 - id: 078

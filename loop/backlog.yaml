@@ -1175,7 +1175,7 @@
     drops from 9 lines to 1. Pure refactoring, no behavior change. Follows the pattern
     from items 002 (_update_field) and 065 (_summarize_event_lines) which extracted
     shared helpers for repeated inline logic in the same file.'
-  status: approved
+  status: done
   created: '2026-03-31T14:00:00Z'
   priority: medium
 - id: '076'

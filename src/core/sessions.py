@@ -210,17 +210,11 @@ class SessionManager:
       if scheduled is not None and bool(meta.scheduled_task) != scheduled:
         continue
       sessions.append(meta)
-    await self._populate_sidebar_state(
+    return await self._enrich_and_sort(
         sessions,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
     )
-    # Normalise to offset-aware (UTC) so naive vs aware datetimes don't explode
-    for s in sessions:
-      if s.updated_at.tzinfo is None:
-        s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
-    sessions.sort(key=lambda s: s.updated_at, reverse=True)
-    return sessions
 
   async def search_sessions(
       self,
@@ -251,16 +245,11 @@ class SessionManager:
             results.append(meta)
         except OSError as e:
           log.debug('search_read_failed', session_id=meta.id, error=str(e))
-    await self._populate_sidebar_state(
+    return await self._enrich_and_sort(
         results,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
     )
-    for s in results:
-      if s.updated_at.tzinfo is None:
-        s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
-    results.sort(key=lambda s: s.updated_at, reverse=True)
-    return results
 
   async def fork_session(
       self,
@@ -901,6 +890,37 @@ class SessionManager:
       return pending_count, next_trigger_at
 
     return await asyncio.to_thread(_check)
+
+  async def _enrich_and_sort(
+      self,
+      sessions: list[SessionMetadata],
+      include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
+  ) -> list[SessionMetadata]:
+    """Populate sidebar state, normalize timezone-naive updated_at to UTC, and sort newest first."""
+    await self._populate_sidebar_state(
+        sessions,
+        include_running_status=include_running_status,
+        include_pending_trigger_status=include_pending_trigger_status,
+    )
+    for s in sessions:
+      if s.updated_at.tzinfo is None:
+        s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
+    sessions.sort(key=lambda s: s.updated_at, reverse=True)
+    return sessions
+
+  async def populate_sidebar_state(
+      self,
+      sessions: list[SessionMetadata],
+      include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
+  ) -> None:
+    """Public wrapper for _populate_sidebar_state."""
+    await self._populate_sidebar_state(
+        sessions,
+        include_running_status=include_running_status,
+        include_pending_trigger_status=include_pending_trigger_status,
+    )
 
   async def _populate_sidebar_state(
       self,

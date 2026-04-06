@@ -198,9 +198,12 @@ class SessionManager:
     if not self._cfg.sessions_dir.exists():
       return []
     dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
-    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs))
+    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs), return_exceptions=True)
     sessions: list[SessionMetadata] = []
-    for meta in all_meta:
+    for i, meta in enumerate(all_meta):
+      if isinstance(meta, BaseException):
+        log.warning('session_load_failed', session_id=dirs[i].name, error=str(meta))
+        continue
       if not meta:
         continue
       if status is not None and meta.status != status:

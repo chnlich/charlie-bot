@@ -89,7 +89,6 @@
         <button onclick="switchSidebarFilter('all')" id="filter-all" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300">All</button>
         <button onclick="switchSidebarFilter('starred')" id="filter-starred" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200">Starred</button>
         <button onclick="switchSidebarFilter('archived')" id="filter-archived" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200">Archived</button>
-        <button onclick="switchSidebarFilter('waiting')" id="filter-waiting" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200">Waiting</button>
         <button onclick="switchSidebarFilter('scheduled')" id="filter-scheduled" class="filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200">Scheduled</button>
         <button onclick="openCronAdder()" id="cron-add-btn" class="ml-auto px-2 py-0.5 text-sm rounded font-medium text-slate-400 hover:text-slate-200 hidden" title="New scheduled task">+</button>
       </div>
@@ -125,10 +124,6 @@
           <button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '{{ s.id }}', '{{ s.name|e }}')"
                   class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0{% if active_session and active_session.id == s.id %} !opacity-100{% endif %}" title="Rename">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-          </button>
-          <button onclick="event.preventDefault(); event.stopPropagation(); waitSession('{{ s.id }}')"
-                  class="opacity-0 group-hover:opacity-100 p-1 hover:text-amber-400 transition-opacity flex-shrink-0{% if active_session and active_session.id == s.id %} !opacity-100{% endif %}" title="Mark waiting">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
           </button>
           <button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('{{ s.id }}')"
                   class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0{% if active_session and active_session.id == s.id %} !opacity-100{% endif %}" title="Archive">

@@ -230,7 +230,7 @@ class SessionManager:
     all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs))
     results: list[SessionMetadata] = []
     for meta in all_meta:
-      if not meta or meta.status not in (SessionStatus.ACTIVE, SessionStatus.WAITING):
+      if not meta or meta.status != SessionStatus.ACTIVE:
         continue
       # Check session name first
       if query_lower in (meta.name or '').lower():
@@ -421,14 +421,6 @@ class SessionManager:
   async def unarchive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Restore an archived session back to active."""
     return await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
-
-  async def mark_waiting(self, session_id: str) -> Optional[SessionMetadata]:
-    """Mark a session as waiting for confirmation."""
-    return await self._update_field(session_id, "status", SessionStatus.WAITING, "session_mark_waiting")
-
-  async def unmark_waiting(self, session_id: str) -> Optional[SessionMetadata]:
-    """Restore a waiting session back to active."""
-    return await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unmark_waiting")
 
   async def star_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Star a session."""

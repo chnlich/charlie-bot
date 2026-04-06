@@ -1316,7 +1316,7 @@
     changed, matching the established pattern from items 034, 035, 043, 044, 046,
     and 057.
   category: performance
-  status: approved
+  status: done
   created: '2026-04-01T14:00:00Z'
   priority: medium
 - id: 082

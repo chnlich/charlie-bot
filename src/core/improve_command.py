@@ -150,7 +150,7 @@ async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: "ThreadM
   if not thread or thread.status != ThreadStatus.FAILED:
     return False
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  events = parse_ndjson_file(events_path)
+  events = await asyncio.to_thread(parse_ndjson_file, events_path)
   for ev in reversed(events):
     if ev.get('type') == 'rate_limit_event':
       rli = ev.get('rate_limit_info', {})
@@ -266,7 +266,7 @@ async def run_improve_loop(
 
   improve_id = branch_prefix.replace('/', '-') if branch_prefix else f'improve-{int(time.time())}'
   improve_dir = cfg.sessions_dir / session_id / 'improve' / improve_id
-  improve_dir.mkdir(parents=True, exist_ok=True)
+  await asyncio.to_thread(improve_dir.mkdir, parents=True, exist_ok=True)
   log.info(
       "improve_loop_backend_pinned",
       session=session_id,
@@ -328,14 +328,14 @@ async def run_improve_loop(
         if thread_meta and thread_meta.branch_name:
           prev_branch = thread_meta.branch_name
         events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
-        events = parse_ndjson_file(events_path)
+        events = await asyncio.to_thread(parse_ndjson_file, events_path)
         summary = _extract_iteration_summary(events, i, status)
         previous_summaries.append(summary)
 
         # Write fallback report if the worker didn't write one
         report_path = improve_dir / f'iter_{i:04d}.md'
-        if not report_path.exists():
-          report_path.write_text(summary)
+        if not await asyncio.to_thread(report_path.exists):
+          await asyncio.to_thread(report_path.write_text, summary)
 
         log.info("improve_iteration_completed", session=session_id, iteration=i, status=status)
 

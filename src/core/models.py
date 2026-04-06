@@ -3,9 +3,21 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
+
+
+def _ensure_utc(v: datetime | str) -> datetime:
+  """Coerce naive datetimes to UTC; pass aware datetimes through unchanged."""
+  if isinstance(v, str):
+    v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+  if isinstance(v, datetime) and v.tzinfo is None:
+    return v.replace(tzinfo=timezone.utc)
+  return v
+
+
+UtcDatetime = Annotated[datetime, BeforeValidator(_ensure_utc)]
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -48,9 +60,9 @@ class ThreadMetadata(BaseModel):
   session_id: str
   description: str
   status: ThreadStatus = ThreadStatus.IDLE
-  created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-  started_at: Optional[datetime] = None
-  completed_at: Optional[datetime] = None
+  created_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  started_at: Optional[UtcDatetime] = None
+  completed_at: Optional[UtcDatetime] = None
   pid: Optional[int] = None
   exit_code: Optional[int] = None
   cli_command: Optional[str] = None
@@ -74,11 +86,11 @@ class ThreadMetadata(BaseModel):
 class PendingTrigger(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   session_id: str
-  fire_at: datetime
+  fire_at: UtcDatetime
   message: str
-  created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  created_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   status: TriggerStatus = TriggerStatus.PENDING
-  fired_at: Optional[datetime] = None
+  fired_at: Optional[UtcDatetime] = None
 
 
 # ---------------------------------------------------------------------------
@@ -109,11 +121,11 @@ class SessionMetadata(BaseModel):
   pending_trigger_count: int = 0
   next_trigger_at: Optional[datetime] = None
   starred: bool = False
-  thinking_since: Optional[datetime] = None
-  created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-  updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  thinking_since: Optional[UtcDatetime] = None
+  created_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  updated_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   cc_session_id: Optional[str] = None
-  cc_session_started_at: Optional[datetime] = None
+  cc_session_started_at: Optional[UtcDatetime] = None
   backend: str = "claude-opus-4.6"  # must match an id in cfg.backend_options
   scheduled_task: Optional[str] = None  # task name; None = regular session
   last_scheduled_run: Optional[str] = None  # ISO datetime of last scheduler execution
@@ -153,7 +165,7 @@ class WorkerEvent(BaseModel):
   status: Optional[str] = None
   tool_name: Optional[str] = None
   input: Optional[dict] = None
-  timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  timestamp: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ---------------------------------------------------------------------------

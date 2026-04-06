@@ -18,7 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (urlQuery) {
     const searchInput = document.getElementById('sidebar-search');
     if (searchInput) { searchInput.value = urlQuery; handleSidebarSearch(urlQuery); }
-  } else if (['all', 'starred', 'archived', 'waiting', 'scheduled'].includes(urlFilter)) {
+  } else if (['all', 'starred', 'archived', 'scheduled'].includes(urlFilter)) {
     switchSidebarFilter(urlFilter);
   } else {
     switchSidebarFilter('all');

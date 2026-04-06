@@ -104,65 +104,52 @@ class SessionViewData:
   messages: list[dict]
   threads: list['ThreadMetadata']
   usage: dict | None
+  total_event_count: int | None = None
+  has_more: bool = False
 
 
 async def build_session_view_data(
     session_id: str,
     session_mgr: 'SessionManager',
     thread_mgr: 'ThreadManager',
+    *,
+    tail_limit: int | None = None,
 ) -> SessionViewData:
-  """Load events + threads in parallel, derive messages and usage, and mark read."""
-  events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  """Load events + threads in parallel, derive messages and usage, and mark read.
+
+  When tail_limit is None, loads all events. When set, loads only the last
+  tail_limit events (fast path for SPA session switching).
+  """
+  if tail_limit is not None:
+    events_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, tail_limit)
+  else:
+    events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
   threads_task = thread_mgr.list_threads(session_id)
   session_task = session_mgr.get_session(session_id)
-  raw_events, threads, session_meta = await asyncio.gather(events_task, threads_task, session_task)
+  events_result, threads, session_meta = await asyncio.gather(events_task, threads_task, session_task)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during view build")
-  messages = events_to_messages(raw_events)
-  usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
-  try:
-    await session_mgr.mark_read(session_id)
-  except Exception:
-    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
-  return SessionViewData(raw_events=raw_events, messages=messages, threads=threads, usage=usage)
 
-
-@dataclass
-class FastSessionViewData:
-  """Data from tail-loading: messages from the last N events + usage from cache."""
-  messages: list[dict]
-  threads: list['ThreadMetadata']
-  usage: dict | None
-  total_event_count: int
-  has_more: bool
-
-
-async def build_session_view_data_fast(
-    session_id: str,
-    session_mgr: 'SessionManager',
-    thread_mgr: 'ThreadManager',
-    limit: int = 200,
-) -> FastSessionViewData:
-  """Fast path: load only the tail events and resolve usage separately."""
-  tail_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, limit)
-  threads_task = thread_mgr.list_threads(session_id)
-  session_task = session_mgr.get_session(session_id)
-  (tail_events, total_count, has_more), threads, session_meta = await asyncio.gather(tail_task, threads_task, session_task)
-  if session_meta is None:
-    raise ValueError(f"session '{session_id}' metadata missing during fast view build")
-
-  # Offset so event_index values match real file line positions
-  offset = total_count - len(tail_events)
-  messages = events_to_messages(tail_events, event_index_offset=offset)
-
-  usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
+  if tail_limit is not None:
+    tail_events, total_count, has_more = events_result
+    offset = total_count - len(tail_events)
+    messages = events_to_messages(tail_events, event_index_offset=offset)
+    usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
+    raw_events = tail_events
+  else:
+    raw_events = events_result
+    total_count = None
+    has_more = False
+    messages = events_to_messages(raw_events)
+    usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
 
   try:
     await session_mgr.mark_read(session_id)
   except Exception:
     log.warning("mark_read_failed", session_id=session_id, exc_info=True)
 
-  return FastSessionViewData(
+  return SessionViewData(
+      raw_events=raw_events,
       messages=messages,
       threads=threads,
       usage=usage,

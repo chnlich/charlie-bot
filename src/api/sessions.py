@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from starlette.responses import Response
 
 from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager, require_session
-from src.api.message_utils import build_session_view_data_fast, events_to_messages
+from src.api.message_utils import build_session_view_data, events_to_messages
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
@@ -249,7 +249,7 @@ async def get_session_view(
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  view = await build_session_view_data_fast(session_id, session_mgr, thread_mgr)
+  view = await build_session_view_data(session_id, session_mgr, thread_mgr, tail_limit=200)
   trigger_mgr = get_trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")

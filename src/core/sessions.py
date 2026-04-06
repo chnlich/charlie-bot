@@ -897,15 +897,12 @@ class SessionManager:
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
   ) -> list[SessionMetadata]:
-    """Populate sidebar state, normalize timezone-naive updated_at to UTC, and sort newest first."""
+    """Populate sidebar state and sort newest first."""
     await self._populate_sidebar_state(
         sessions,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
     )
-    for s in sessions:
-      if s.updated_at.tzinfo is None:
-        s.updated_at = s.updated_at.replace(tzinfo=timezone.utc)
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 

@@ -561,6 +561,9 @@ class SessionManager:
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     """Persist event (injecting timestamp) then broadcast to the session WebSocket channel."""
     await self.save_chat_event(session_id, event)
+    # Inject event_index so the frontend can render clone/elone buttons in real-time.
+    if session_id in self._events_cache:
+      event['event_index'] = len(self._events_cache[session_id]) - 1
     await streaming_manager.broadcast(f"session:{session_id}", event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

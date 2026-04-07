@@ -4,6 +4,10 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const CHAT_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'chat.js'),
+  'utf8'
+);
 const SIDEBAR_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'sidebar.js'),
   'utf8'
@@ -151,7 +155,24 @@ function buildContext(overrides = {}) {
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: () => [],
       querySelector: () => null,
-      createElement: (tagName) => createElement({tagName: String(tagName).toUpperCase()}),
+      createElement: (tagName) => {
+        const el = createElement({tagName: String(tagName).toUpperCase()});
+        // Support escapeHtml pattern: set textContent, read innerHTML as escaped
+        let rawText = '';
+        Object.defineProperty(el, 'textContent', {
+          get() { return rawText; },
+          set(v) {
+            rawText = String(v);
+            el.innerHTML = String(v)
+              .replaceAll('&', '&amp;')
+              .replaceAll('<', '&lt;')
+              .replaceAll('>', '&gt;')
+              .replaceAll('"', '&quot;')
+              .replaceAll("'", '&#39;');
+          },
+        });
+        return el;
+      },
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},
@@ -178,7 +199,6 @@ function buildContext(overrides = {}) {
     escapeHtml: (v) => v,
     renderUserMessageBubble: (content, isVoice, timestamp, uploadedFiles) =>
       `<div data-content="${content || ''}" data-voice="${isVoice ? '1' : '0'}" data-ts="${timestamp || ''}" data-files="${(uploadedFiles || []).length}"></div>`,
-    renderSingleMessage: () => '',
     renderWorkersTab: () => {},
     switchTab: () => {},
     marked: {parse: (txt) => txt},
@@ -195,6 +215,7 @@ function buildContext(overrides = {}) {
   };
 
   vm.createContext(context);
+  vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
   return {context, fetchCalls, fetchRequests, intervals, clears, alerts, elements};
 }
@@ -250,7 +271,7 @@ test('ensureActiveSessionViewPolling only schedules while the active session is 
   assert.deepEqual(clears, [1]);
 });
 
-test('renderSingleMessage preserves clone_start banners for SPA rebuilds', () => {
+test('renderMessage preserves clone_start banners for SPA rebuilds', () => {
   const {context} = buildContext();
   context.escapeHtml = (value) => String(value)
     .replaceAll('&', '&amp;')
@@ -259,7 +280,7 @@ test('renderSingleMessage preserves clone_start banners for SPA rebuilds', () =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 
-  const html = context.renderSingleMessage({
+  const html = context.renderMessage({
     role: 'clone_start',
     content: 'Parent & Session',
     parent_session_id: 'parent/session?tab=chat',
@@ -270,16 +291,17 @@ test('renderSingleMessage preserves clone_start banners for SPA rebuilds', () =>
   assert.match(html, /Parent &amp; Session/);
 });
 
-test('renderSingleMessage passes uploaded_files through for user attachment bubbles', () => {
+test('renderMessage passes uploaded_files through for user attachment bubbles', () => {
   const {context} = buildContext();
 
-  const html = context.renderSingleMessage({
+  const html = context.renderMessage({
     role: 'user',
     content: '',
     uploaded_files: [{filename: 'report.pdf', path: '/tmp/report.pdf'}],
   }, 'session-a');
 
-  assert.match(html, /data-files="1"/);
+  assert.match(html, /message-attachment/);
+  assert.match(html, /report\.pdf/);
 });
 
 test('pollSessionStatus updates pending trigger indicators from the status endpoint', async () => {

@@ -116,6 +116,101 @@ function renderUserMessageBubble(content, isVoice, timestamp, uploadedFiles) {
     + '</div>';
 }
 
+function renderMessage(msg, sessionId) {
+  function timeDiv(colorClass) {
+    if (!msg.timestamp) return "";
+    var cls = colorClass || "text-slate-400/60";
+    return "<div class=\"text-[10px] " + cls + " mt-1\">" + formatBubbleTime(msg.timestamp) + "</div>";
+  }
+  function mdDiv(text) {
+    var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
+    return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + marked.parse(fixNestedFences(text || "")) + "</div>";
+  }
+
+  if (msg.role === "user") {
+    return "<div class=\"flex justify-end\">" + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
+  }
+  if (msg.role === "assistant") {
+    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
+      + mdDiv(msg.content) + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "system") {
+    var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
+    return "<div class=\"flex justify-center\"><div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
+      + escapeHtml(msg.content) + "</div></div>";
+  }
+  if (msg.role === "task_delegated") {
+    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
+      + "<div class=\"flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2\">"
+      + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"/></svg>"
+      + "Delegated</div>"
+      + "<div class=\"whitespace-pre-wrap\">" + escapeHtml(msg.content) + "</div>" + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "worker_summary") {
+    var escaped = escapeHtml(msg.full_content || "").replace(/"/g, "&quot;");
+    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 cursor-pointer\""
+      + " data-full=\"" + escaped + "\""
+      + " onclick=\"showTextModal(\x27Worker Result\x27, this.dataset.full)\">"
+      + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + "</div></div>";
+  }
+  if (msg.role === "plan") {
+    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"
+      + "<div class=\"flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2\">"
+      + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4\"/></svg>"
+      + "Plan</div>"
+      + mdDiv(msg.content) + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "clone_start") {
+    return "<div class=\"flex items-center gap-3 py-3 px-4\">"
+      + "<div class=\"flex-1 border-t border-purple-500/40\"></div>"
+      + "<div class=\"flex items-center gap-2 text-purple-400 text-xs\">"
+      + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
+      + "<span>Cloned from <a href=\"/?session=" + encodeURIComponent(msg.parent_session_id || "")
+      + "\" class=\"text-purple-300 hover:text-purple-200 underline\">"
+      + escapeHtml(msg.content || "") + "</a></span></div>"
+      + "<div class=\"flex-1 border-t border-purple-500/40\"></div></div>";
+  }
+  if (msg.role === "separator") {
+    var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
+    var buttons = "";
+    if (msg.event_index != null && sessionId) {
+      buttons = "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
+        + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
+        + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
+        + "</button>"
+        + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
+        + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
+        + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
+        + "</button>";
+    }
+    return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\">"
+      + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
+      + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">response complete" + timeStr + "</span>"
+      + buttons
+      + "<div class=\"flex-1 border-t border-slate-600/40\"></div></div>";
+  }
+  return "";
+}
+
+function _appendRenderedMessage(html, forceScroll) {
+  var container = document.getElementById("messages");
+  var wasAtBottom = shouldAutoScroll(container);
+  var wrapper = document.createElement("div");
+  wrapper.innerHTML = html;
+  var el = wrapper.firstElementChild || wrapper;
+  var streamEl = document.getElementById("streaming-msg");
+  container.insertBefore(el, streamEl);
+  if (forceScroll || wasAtBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    showScrollToBottom();
+  }
+}
+
+function appendMessageObject(msg, sessionId) {
+  _appendRenderedMessage(renderMessage(msg, sessionId || SESSION_ID), msg.role === "user");
+}
+
 async function sendMessage() {
   if (uploadsInFlight > 0) {
     showToast('Please wait for uploads to finish', true);
@@ -167,98 +262,32 @@ async function sendMessage() {
 }
 
 function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
-  const container = document.getElementById('messages');
-  const wasAtBottom = shouldAutoScroll(container);
-  const div = document.createElement('div');
-  const timeHtml = timestamp ? '<div class="text-[10px] text-slate-400/60 mt-1">' + formatBubbleTime(timestamp) + '</div>' : '';
-
-  if (role === 'user') {
-    div.className = 'flex justify-end';
-    div.innerHTML = renderUserMessageBubble(content, isVoice, timestamp, uploadedFiles);
-  } else if (role === 'assistant') {
-    div.className = 'flex justify-start';
-    div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">
-      <div class="prose-msg">${marked.parse(fixNestedFences(content))}</div>${timeHtml}</div>`;
-  } else if (role === 'plan') {
-    div.className = 'flex justify-start';
-    div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm">
-      <div class="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
-        Plan
-      </div>
-      <div class="prose-msg">${marked.parse(fixNestedFences(content))}</div>${timeHtml}</div>`;
-  } else if (role === 'task_delegated') {
-    div.className = 'flex justify-start';
-    div.innerHTML = `<div class="max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300">
-      <div class="flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
-        Delegated
-      </div>
-      <div class="whitespace-pre-wrap">${escapeHtml(content)}</div>${timeHtml}</div>`;
-  } else {
-    // System pill — show timestamp as hover tooltip
-    const titleAttr = timestamp ? ' title="' + formatBubbleTime(timestamp) + '"' : '';
-    div.className = 'flex justify-center';
-    div.innerHTML = `<div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"${titleAttr}>${escapeHtml(content)}</div>`;
-  }
-
-  // Insert before streaming-msg
-  const streamEl = document.getElementById('streaming-msg');
-  container.insertBefore(div, streamEl);
-  if (role === 'user' || wasAtBottom) {
-    container.scrollTop = container.scrollHeight;
-  } else {
-    showScrollToBottom();
-  }
+  var msg = {
+    role: role,
+    content: content || "",
+    is_voice: !!isVoice,
+    timestamp: timestamp || null,
+    uploaded_files: uploadedFiles || null,
+  };
+  _appendRenderedMessage(renderMessage(msg, SESSION_ID), role === "user");
 }
 
 function appendSeparator(seconds, eventIndex) {
-  const container = document.getElementById('messages');
-  const wasAtBottom = shouldAutoScroll(container);
-  const div = document.createElement('div');
-  div.className = 'flex items-center gap-3 py-2 px-4 separator-line group/sep';
-  const timeStr = seconds != null ? ' &middot; ' + seconds + 's' : '';
-  let buttons = '';
-  if (eventIndex != null) {
-    buttons = '<button onclick="forkSession(\'' + SESSION_ID + '\', ' + eventIndex + ')"'
-      + ' class="p-0.5 text-slate-500 hover:text-green-400" title="Clone to here">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>'
-      + '</button>'
-      + '<button onclick="eloneSession(\'' + SESSION_ID + '\', ' + eventIndex + ')"'
-      + ' class="p-0.5 text-slate-500 hover:text-yellow-400" title="Elon-e: retry with a fresh perspective">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>'
-      + '</button>';
-  }
-  div.innerHTML = '<div class="flex-1 border-t border-slate-600/40"></div>'
-    + '<span class="text-xs text-slate-500 whitespace-nowrap">response complete' + timeStr + '</span>'
-    + buttons
-    + '<div class="flex-1 border-t border-slate-600/40"></div>';
-  const streamEl = document.getElementById('streaming-msg');
-  container.insertBefore(div, streamEl);
-  if (wasAtBottom) {
-    container.scrollTop = container.scrollHeight;
-  } else {
-    showScrollToBottom();
-  }
+  var msg = {
+    role: "separator",
+    thinking_seconds: seconds,
+    event_index: eventIndex,
+  };
+  _appendRenderedMessage(renderMessage(msg, SESSION_ID));
 }
 
 function appendCloneBanner(parentName, parentSessionId) {
-  const container = document.getElementById("messages");
-  const wasAtBottom = shouldAutoScroll(container);
-  const div = document.createElement("div");
-  div.className = "flex items-center gap-3 py-3 px-4";
-  div.innerHTML = "<div class=\"flex-1 border-t border-purple-500/40\"></div>"
-    + "<div class=\"flex items-center gap-2 text-purple-400 text-xs\">"
-    + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">"
-    + "<path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
-    + "<span>Cloned from <a href=\"/?session=" + encodeURIComponent(parentSessionId)
-    + "\" class=\"text-purple-300 hover:text-purple-200 underline\">"
-    + escapeHtml(parentName) + "</a></span></div>"
-    + "<div class=\"flex-1 border-t border-purple-500/40\"></div>";
-  const streamEl = document.getElementById("streaming-msg");
-  container.insertBefore(div, streamEl);
-  if (wasAtBottom) container.scrollTop = container.scrollHeight;
-  else showScrollToBottom();
+  var msg = {
+    role: "clone_start",
+    content: parentName,
+    parent_session_id: parentSessionId,
+  };
+  _appendRenderedMessage(renderMessage(msg, SESSION_ID));
 }
 
 function escapeHtml(str) {

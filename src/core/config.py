@@ -162,7 +162,7 @@ class CharlieBotConfig(BaseModel):
   def server_base_url(self) -> str:
     """Return the local base URL for CLI-to-server internal API calls."""
     scheme = "https" if self.ssl_certfile and self.ssl_keyfile else "http"
-    return f"{scheme}://{self.server_host}:{self.server_port}"
+    return f"{scheme}://localhost:{self.server_port}"
 
   @property
   def sessions_dir(self) -> Path:

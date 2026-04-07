@@ -1525,3 +1525,29 @@
   status: pending
   created: '2026-04-05T14:00:00Z'
   priority: high
+- id: '090'
+  title: Parallelize content-scan file reads in search_sessions
+  description: 'PURPOSE — Reduce session search latency by reading chat event files
+    concurrently instead of sequentially. search_sessions (core/sessions.py L242-250)
+    checks non-name-matched sessions by reading their chat_events.jsonl files one
+    at a time in a sequential for-loop — each await asyncio.to_thread(events_path.read_text)
+    blocks until the previous completes. For N sessions that do not match by name,
+    this means N serial file reads, each waiting on the thread pool. With 50+ sessions,
+    search latency scales linearly with session count. The metadata reads on L233
+    were already parallelized with asyncio.gather (item 040), but the content-scan
+    reads that immediately follow were not, leaving the dominant I/O cost sequential.
+    HOW — Collect the (meta, events_path) pairs for sessions that did not match by
+    name into a list. Define an async helper _check_content(meta, path, query_lower)
+    that wraps the existing read_text + case-insensitive check in asyncio.to_thread
+    and returns Optional[SessionMetadata]. Use asyncio.gather to run all content checks
+    concurrently, then extend results with the non-None returns. Also wrap the bare
+    events_path.exists() call (L244, currently sync on the event loop) into the helper
+    so it runs off the event loop too. ~10 lines changed, replacing the sequential
+    for-loop with a gather call and a small async helper. Expected to cut search latency
+    from O(N) serial reads to O(1) parallel reads (bounded by thread pool size).
+    Follows the established pattern from item 040 which parallelized the metadata
+    reads in the same function.'
+  category: performance
+  status: pending
+  created: '2026-04-07T12:00:00Z'
+  priority: medium

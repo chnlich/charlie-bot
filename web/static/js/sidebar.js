@@ -197,22 +197,12 @@ function renderSessionView(data) {
   const streamEl = document.getElementById('streaming-msg');
   const streamHtml = streamEl ? streamEl.outerHTML : '';
 
-  const parts = messages.map(msg => renderSingleMessage(msg, session.id));
+  const parts = messages.map(msg => renderMessage(msg, session.id));
 
   const loadMoreHtml = sessionHasMore
     ? '<div id="load-more-sentinel" class="flex justify-center py-3 text-xs text-slate-500">Loading older messages&hellip;</div>'
     : '';
   container.innerHTML = loadMoreHtml + parts.join('') + streamHtml;
-
-  // Parse markdown
-  container.querySelectorAll('[data-md]').forEach(el => { el.dataset.raw = el.textContent; el.innerHTML = marked.parse(fixNestedFences(el.textContent)); });
-  // Render bubble timestamps
-  container.querySelectorAll('.bubble-time[data-ts]').forEach(el => { el.textContent = formatBubbleTime(el.dataset.ts); });
-  // Format system pill title attributes
-  container.querySelectorAll('.rounded-full[title]').forEach(el => {
-    const t = el.getAttribute('title');
-    if (t && t.includes('T')) el.title = formatBubbleTime(t);
-  });
 
   // Scroll to bottom
   container.scrollTop = container.scrollHeight;
@@ -281,14 +271,7 @@ async function loadOlderIfNeeded(container) {
 
     // Build and prepend message elements
     const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = data.messages.map(msg => renderSingleMessage(msg, SESSION_ID)).join('');
-    // Parse markdown + timestamps in the temp container
-    tempDiv.querySelectorAll('[data-md]').forEach(el => { el.dataset.raw = el.textContent; el.innerHTML = marked.parse(fixNestedFences(el.textContent)); });
-    tempDiv.querySelectorAll('.bubble-time[data-ts]').forEach(el => { el.textContent = formatBubbleTime(el.dataset.ts); });
-    tempDiv.querySelectorAll('.rounded-full[title]').forEach(el => {
-      const t = el.getAttribute('title');
-      if (t && t.includes('T')) el.title = formatBubbleTime(t);
-    });
+    tempDiv.innerHTML = data.messages.map(msg => renderMessage(msg, SESSION_ID)).join('');
 
     // Insert after sentinel (or at top)
     const insertRef = document.getElementById('load-more-sentinel');
@@ -304,76 +287,6 @@ async function loadOlderIfNeeded(container) {
   } finally {
     sessionLoadingMore = false;
   }
-}
-
-// Render a single message to HTML (extracted from renderSessionView for reuse)
-function renderSingleMessage(msg, sessionId) {
-  const tsDiv = msg.timestamp ? '<div class="bubble-time text-[10px] text-slate-400/60 mt-1" data-ts="' + msg.timestamp + '"></div>' : '';
-  if (msg.role === 'user') {
-    return '<div class="flex justify-end">' + renderUserMessageBubble(
-      msg.content,
-      msg.is_voice,
-      msg.timestamp,
-      msg.uploaded_files
-    ) + '</div>';
-  }
-  if (msg.role === 'assistant') {
-    return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">'
-      + '<div class="prose-msg" data-md>' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
-  }
-  if (msg.role === 'system') {
-    const titleAttr = msg.timestamp ? ' title="' + msg.timestamp + '"' : '';
-    return '<div class="flex justify-center"><div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate"' + titleAttr + '>'
-      + escapeHtml(msg.content) + '</div></div>';
-  }
-  if (msg.role === 'task_delegated') {
-    return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300">'
-      + '<div class="flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>'
-      + 'Delegated</div>'
-      + '<div class="whitespace-pre-wrap">' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
-  }
-  if (msg.role === 'worker_summary') {
-    const escaped = escapeHtml(msg.full_content || '').replace(/"/g, '&quot;');
-    const wsTsDiv = msg.timestamp ? '<div class="bubble-time text-[10px] text-emerald-400/50 mt-1" data-ts="' + msg.timestamp + '"></div>' : '';
-    return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 cursor-pointer"'
-      + ' data-full="' + escaped + '"'
-      + ' onclick="showTextModal(\'Worker Result\', this.dataset.full)">'
-      + '<div class="prose-msg" data-md>' + escapeHtml(msg.content) + '</div>' + wsTsDiv + '</div></div>';
-  }
-  if (msg.role === 'plan') {
-    return '<div class="flex justify-start"><div class="max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm">'
-      + '<div class="flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>'
-      + 'Plan</div>'
-      + '<div class="prose-msg" data-md>' + escapeHtml(msg.content) + '</div>' + tsDiv + '</div></div>';
-  }
-  if (msg.role === 'clone_start') {
-    return '<div class="flex items-center gap-3 py-3 px-4">'
-      + '<div class="flex-1 border-t border-purple-500/40"></div>'
-      + '<div class="flex items-center gap-2 text-purple-400 text-xs">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>'
-      + '<span>Cloned from <a href="/?session=' + encodeURIComponent(msg.parent_session_id || '')
-      + '" class="text-purple-300 hover:text-purple-200 underline">'
-      + escapeHtml(msg.content || '') + '</a></span></div>'
-      + '<div class="flex-1 border-t border-purple-500/40"></div></div>';
-  }
-  if (msg.role === 'separator') {
-    const timeStr = msg.thinking_seconds != null ? ' &middot; ' + msg.thinking_seconds + 's' : '';
-    return '<div class="flex items-center gap-3 py-2 px-4 separator-line group/sep">'
-      + '<div class="flex-1 border-t border-slate-600/40"></div>'
-      + '<span class="text-xs text-slate-500 whitespace-nowrap">response complete' + timeStr + '</span>'
-      + '<button onclick="forkSession(\'' + sessionId + '\', ' + msg.event_index + ')"'
-      + ' class="p-0.5 text-slate-500 hover:text-green-400" title="Clone to here">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>'
-      + '</button>'
-      + '<button onclick="eloneSession(\'' + sessionId + '\', ' + msg.event_index + ')"'
-      + ' class="p-0.5 text-slate-500 hover:text-yellow-400" title="Elon-e: retry with a fresh perspective">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>'
-      + '</button>'
-      + '<div class="flex-1 border-t border-slate-600/40"></div></div>';
-  }
-  return '';
 }
 
 function renderUsageFromData(usage) {

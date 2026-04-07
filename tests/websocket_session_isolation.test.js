@@ -70,6 +70,9 @@ function buildContext(sessionId) {
     appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
       messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles: uploadedFiles || []});
     },
+    appendMessageObject: (msg) => {
+      messages.push({role: msg.role, content: msg.content, isVoice: false, timestamp: msg.timestamp, uploadedFiles: []});
+    },
     setSessionSpinner: () => {},
     addWorkerCard: () => {},
     updateWorkerStatus: () => {},

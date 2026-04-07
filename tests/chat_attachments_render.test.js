@@ -67,7 +67,10 @@ class FakeElement {
 
 function loadChatScript() {
   const context = {
+    SESSION_ID: 'test-session',
     console: {error: () => {}},
+    marked: {parse: (txt) => txt},
+    fixNestedFences: (txt) => txt,
     document: {
       addEventListener() {},
       createElement() {

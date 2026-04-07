@@ -212,14 +212,26 @@ function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
   }
 }
 
-function appendSeparator(seconds) {
+function appendSeparator(seconds, eventIndex) {
   const container = document.getElementById('messages');
   const wasAtBottom = shouldAutoScroll(container);
   const div = document.createElement('div');
-  div.className = 'flex items-center gap-3 py-2 px-4 separator-line';
-  const timeStr = seconds != null ? ' · ' + seconds + 's' : '';
+  div.className = 'flex items-center gap-3 py-2 px-4 separator-line group/sep';
+  const timeStr = seconds != null ? ' &middot; ' + seconds + 's' : '';
+  let buttons = '';
+  if (eventIndex != null) {
+    buttons = '<button onclick="forkSession(\'' + SESSION_ID + '\', ' + eventIndex + ')"'
+      + ' class="p-0.5 text-slate-500 hover:text-green-400" title="Clone to here">'
+      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>'
+      + '</button>'
+      + '<button onclick="eloneSession(\'' + SESSION_ID + '\', ' + eventIndex + ')"'
+      + ' class="p-0.5 text-slate-500 hover:text-yellow-400" title="Elon-e: retry with a fresh perspective">'
+      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>'
+      + '</button>';
+  }
   div.innerHTML = '<div class="flex-1 border-t border-slate-600/40"></div>'
     + '<span class="text-xs text-slate-500 whitespace-nowrap">response complete' + timeStr + '</span>'
+    + buttons
     + '<div class="flex-1 border-t border-slate-600/40"></div>';
   const streamEl = document.getElementById('streaming-msg');
   container.insertBefore(div, streamEl);

@@ -185,7 +185,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
         ? ev.thinking_seconds
         : (thinkingStart ? Math.floor((Date.now() - thinkingStart) / 1000) : null);
       stopThinking();
-      if (catchupDone) appendSeparator(elapsed);
+      if (catchupDone) appendSeparator(elapsed, ev.event_index);
     }
   } else if (t === 'assistant_error') {
     if (catchupDone) hideStreaming();

@@ -1360,7 +1360,7 @@
     merges the double save_metadata within each function but does not address the
     cross-function duplication. Pure refactoring, no behavior change.'
   category: duplication
-  status: approved
+  status: done
   created: '2026-04-01T18:00:00Z'
   priority: medium
 - id: 084

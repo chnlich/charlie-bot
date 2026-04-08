@@ -7,10 +7,10 @@ from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
 import structlog
 from fastapi import APIRouter
 
+from src.core.http import get_http_client
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_POLL_INTERVAL, HTTP_OAUTH_TIMEOUT
 
@@ -54,24 +54,25 @@ class CcOpusProvider:
       if access_token is None:
         return None
 
-    async with httpx.AsyncClient(timeout=HTTP_OAUTH_TIMEOUT) as client:
-      resp = await client.get(
-          USAGE_URL,
-          headers={
-              "Authorization": f"Bearer {access_token}",
-              "anthropic-beta": ANTHROPIC_BETA,
-          },
-      )
+    client = get_http_client()
+    resp = await client.get(
+        USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "anthropic-beta": ANTHROPIC_BETA,
+        },
+        timeout=HTTP_OAUTH_TIMEOUT,
+    )
 
-      if resp.status_code == 429:
-        self._backoff_seconds = min((self._backoff_seconds or 30) * 2, 30 * 60)
-        log.warning("ext_usage_rate_limited", backoff_seconds=self._backoff_seconds)
-        return None
+    if resp.status_code == 429:
+      self._backoff_seconds = min((self._backoff_seconds or 30) * 2, 30 * 60)
+      log.warning("ext_usage_rate_limited", backoff_seconds=self._backoff_seconds)
+      return None
 
-      # Reset backoff on success
-      self._backoff_seconds = 0.0
-      resp.raise_for_status()
-      return _transform_response(resp.json())
+    # Reset backoff on success
+    self._backoff_seconds = 0.0
+    resp.raise_for_status()
+    return _transform_response(resp.json())
 
 
 class CodexProvider:
@@ -215,17 +216,18 @@ def _transform_codex_response(
 
 async def _refresh_access_token(refresh_token: str) -> str | None:
   """Refresh the OAuth access token and save new credentials."""
-  async with httpx.AsyncClient(timeout=HTTP_OAUTH_TIMEOUT) as client:
-    resp = await client.post(
-        TOKEN_REFRESH_URL,
-        json={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": CLIENT_ID,
-        },
-    )
-    resp.raise_for_status()
-    token_data = resp.json()
+  client = get_http_client()
+  resp = await client.post(
+      TOKEN_REFRESH_URL,
+      json={
+          "grant_type": "refresh_token",
+          "refresh_token": refresh_token,
+          "client_id": CLIENT_ID,
+      },
+      timeout=HTTP_OAUTH_TIMEOUT,
+  )
+  resp.raise_for_status()
+  token_data = resp.json()
 
   new_access = token_data["access_token"]
   new_refresh = token_data.get("refresh_token", refresh_token)

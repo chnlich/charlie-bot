@@ -1,9 +1,9 @@
 """Telegram notification support for CharlieBot."""
 
-import httpx
 import structlog
 
 from src.core.config import CharlieBotConfig
+from src.core.http import get_http_client
 from src.core.timeouts import NOTIFICATION_TIMEOUT
 
 log = structlog.get_logger()
@@ -29,8 +29,8 @@ async def send_telegram(message: str, cfg: CharlieBotConfig) -> None:
       "parse_mode": "Markdown",
   }
 
-  async with httpx.AsyncClient() as client:
-    resp = await client.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
+  client = get_http_client()
+  resp = await client.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
 
   if resp.status_code == 200:
     log.info("telegram_sent", chat_id=cfg.telegram_chat_id, length=len(truncated))

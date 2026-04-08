@@ -232,6 +232,7 @@ class SessionManager:
     dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
     all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs))
     results: list[SessionMetadata] = []
+    content_candidates: list[tuple[SessionMetadata, Path]] = []
     for meta in all_meta:
       if not meta or meta.status != SessionStatus.ACTIVE:
         continue
@@ -239,15 +240,25 @@ class SessionManager:
       if query_lower in (meta.name or '').lower():
         results.append(meta)
         continue
-      # Check chat events (offload sync I/O to thread pool)
-      events_path = self._chat_events_path(meta.id)
-      if events_path.exists():
+      # Collect non-name-matched sessions for parallel content scan
+      content_candidates.append((meta, self._chat_events_path(meta.id)))
+
+    async def _check_content(meta: SessionMetadata, path: Path) -> Optional[SessionMetadata]:
+      """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
+
+      def _read_and_check() -> bool:
+        if not path.exists():
+          return False
         try:
-          text = await asyncio.to_thread(events_path.read_text, encoding='utf-8')
-          if query_lower in text.lower():
-            results.append(meta)
+          return query_lower in path.read_text(encoding='utf-8').lower()
         except OSError as e:
           log.debug('search_read_failed', session_id=meta.id, error=str(e))
+          return False
+
+      return meta if await asyncio.to_thread(_read_and_check) else None
+
+    content_hits = await asyncio.gather(*(_check_content(m, p) for m, p in content_candidates))
+    results.extend(meta for meta in content_hits if meta is not None)
     return await self._enrich_and_sort(
         results,
         include_running_status=include_running_status,

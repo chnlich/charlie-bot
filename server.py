@@ -15,6 +15,7 @@ from src.api import backlog, chat, cron, ext_usage, files, git, internal, latex,
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, set_trigger_manager
 from src.core.config import get_config
+from src.core.http import close_http_client
 from src.core.init import init_charliebot_home
 from src.core.scheduler import Scheduler
 from src.core.streaming import streaming_manager
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI):
   yield
 
   await ext_usage.stop_poller()
+  await close_http_client()
   await scheduler.stop()
   await streaming_manager.close_all()
   log.info("charliebot_shutdown")

@@ -1271,7 +1271,7 @@
     are still persisted before the worker starts running. ~6 lines deleted across
     2 functions, no new code added.'
   category: performance
-  status: pending
+  status: approved
   created: '2026-03-31T23:00:00Z'
   priority: low
 - id: 080

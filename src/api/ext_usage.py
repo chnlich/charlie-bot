@@ -346,7 +346,12 @@ async def start_poller() -> None:
 async def stop_poller() -> None:
   """Cancel the background usage poller. Call from the app lifespan shutdown."""
   global _poller_task
-  if _poller_task is not None:
-    _poller_task.cancel()
+  task = _poller_task
+  if task is not None:
     _poller_task = None
+    task.cancel()
+    try:
+      await task
+    except asyncio.CancelledError:
+      pass
     log.info("ext_usage_poller_stopped")

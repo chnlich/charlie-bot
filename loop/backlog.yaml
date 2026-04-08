@@ -1413,7 +1413,7 @@
     one-line changes at call sites, 1 line added to server.py lifespan. Connection
     keepalive handles the rest automatically.
   category: performance
-  status: pending
+  status: approved
   created: '2026-04-01T22:00:00Z'
   priority: medium
 - id: 086
@@ -1525,9 +1525,9 @@
   status: pending
   created: '2026-04-05T14:00:00Z'
   priority: high
-- id: '090'
+- id: 090
   title: Parallelize content-scan file reads in search_sessions
-  description: 'PURPOSE — Reduce session search latency by reading chat event files
+  description: PURPOSE — Reduce session search latency by reading chat event files
     concurrently instead of sequentially. search_sessions (core/sessions.py L242-250)
     checks non-name-matched sessions by reading their chat_events.jsonl files one
     at a time in a sequential for-loop — each await asyncio.to_thread(events_path.read_text)
@@ -1544,9 +1544,9 @@
     events_path.exists() call (L244, currently sync on the event loop) into the helper
     so it runs off the event loop too. ~10 lines changed, replacing the sequential
     for-loop with a gather call and a small async helper. Expected to cut search latency
-    from O(N) serial reads to O(1) parallel reads (bounded by thread pool size).
-    Follows the established pattern from item 040 which parallelized the metadata
-    reads in the same function.'
+    from O(N) serial reads to O(1) parallel reads (bounded by thread pool size). Follows
+    the established pattern from item 040 which parallelized the metadata reads in
+    the same function.
   category: performance
   status: pending
   created: '2026-04-07T12:00:00Z'

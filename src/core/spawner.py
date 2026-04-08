@@ -249,7 +249,6 @@ async def _create_worktree_and_process(
     thread.worktree_path = str(wt_path)
     thread.base_branch = base_branch
     thread.context = context
-    await thread_mgr.save_metadata(thread)
 
     # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
@@ -316,7 +315,6 @@ async def _create_repoless_process(
   thread.worktree_path = str(thread_dir)
   thread.require_review = False
   thread.context = context
-  await thread_mgr.save_metadata(thread)
 
   backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
   thread.backend = backend_option.id

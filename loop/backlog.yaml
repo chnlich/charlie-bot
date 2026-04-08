@@ -1551,3 +1551,32 @@
   status: done
   created: '2026-04-07T12:00:00Z'
   priority: medium
+- id: 091
+  title: Extract Codex usage resolution from SessionManager into core/codex_usage.py
+  description: PURPOSE — Reduce sessions.py (1010 lines, largest core module) by ~130
+    lines and improve separation of concerns by moving all Codex-specific usage resolution
+    logic out of SessionManager into a dedicated module. SessionManager's primary responsibility
+    is session CRUD, metadata persistence, and event storage, but it has accumulated
+    8 Codex-specific functions that form a self-contained subsystem for resolving context-window
+    usage from native Codex rollout logs. These are module-level _extract_codex_rollout_usage_event
+    (L66), _extract_latest_codex_rollout_usage (L88, 42-line seek-from-end parser),
+    and 6 private methods on SessionManager — _is_codex_backend (L736), _extract_translated_session_id
+    (L744), _read_translated_session_id (L752), _resolve_codex_thread_id (L778), _find_codex_rollout_path
+    (L792), _load_codex_rollout_usage (L809) — plus 2 dedicated caches (_codex_rollout_path_cache,
+    _codex_rollout_usage_cache). This Codex-specific code was added incrementally as
+    the Codex backend matured and now represents a cohesive subsystem that is orthogonal
+    to core session management. HOW — Create src/core/codex_usage.py containing a CodexUsageResolver
+    class that encapsulates all 8 functions and the 2 caches. The class constructor takes
+    CharlieBotConfig (for get_backend_option) and a reference to SessionManager._events_cache
+    and _chat_events_path (or a protocol/callback for accessing cached events). Move
+    _extract_codex_rollout_usage_event and _extract_latest_codex_rollout_usage as module-level
+    functions in the new file. SessionManager.resolve_session_usage delegates the Codex
+    branch to codex_resolver.resolve(session_id, session_meta, events) which returns
+    the merged usage dict or None. SessionManager.__init__ creates the resolver instance.
+    ~130 lines moved out of sessions.py, ~5 lines of glue added. Pure extraction refactoring,
+    no logic changes. Also deletes dead _summarize_event_lines function (L44, zero callers)
+    during the move.
+  category: architecture
+  status: pending
+  created: '2026-04-08T12:00:00Z'
+  priority: medium

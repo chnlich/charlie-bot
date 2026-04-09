@@ -25,11 +25,11 @@ function startThreadPoll(threadId, sessionId) {
     }
     if (!isWorkerRunning(threadId)) {
       // Worker finished — do one final fetch then stop
-      try { await fetchAndRenderEvents(threadId, sessionId); } catch (_) {}
+      try { await fetchAndRenderEvents(threadId, sessionId); } catch (e) { console.warn('Poll fetch failed:', e); }
       stopThreadPoll(threadId);
       return;
     }
-    try { await fetchAndRenderEvents(threadId, sessionId); } catch (_) {}
+    try { await fetchAndRenderEvents(threadId, sessionId); } catch (e) { console.warn('Poll fetch failed:', e); }
   }, 5000);
   threadPollIntervals.set(threadId, intervalId);
 }

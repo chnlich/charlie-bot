@@ -591,7 +591,7 @@ function updateWorkerStatus(threadId, status) {
     // If detail is currently expanded, do a final fetch
     const detail = document.getElementById('thread-detail-' + threadId);
     if (detail && !detail.classList.contains('hidden')) {
-      fetchAndRenderEvents(threadId, SESSION_ID).catch(() => {});
+      fetchAndRenderEvents(threadId, SESSION_ID).catch(e => console.warn('Final event fetch failed:', e));
     }
   }
 }

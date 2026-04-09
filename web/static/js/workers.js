@@ -2,6 +2,52 @@
 // Thread detail / events
 // ---------------------------------------------------------------------------
 const loadedThreads = new Set();
+const threadPollIntervals = new Map();
+
+async function fetchAndRenderEvents(threadId, sessionId) {
+  const res = await fetch(`/api/threads/${sessionId}/threads/${threadId}/events`);
+  const events = await res.json();
+  renderThreadEvents(threadId, events);
+}
+
+function isWorkerRunning(threadId) {
+  const dot = document.getElementById('thread-dot-' + threadId);
+  return dot && dot.classList.contains('bg-blue-500');
+}
+
+function startThreadPoll(threadId, sessionId) {
+  stopThreadPoll(threadId);
+  const intervalId = setInterval(async () => {
+    const detail = document.getElementById('thread-detail-' + threadId);
+    if (!detail || detail.classList.contains('hidden')) {
+      stopThreadPoll(threadId);
+      return;
+    }
+    if (!isWorkerRunning(threadId)) {
+      // Worker finished — do one final fetch then stop
+      try { await fetchAndRenderEvents(threadId, sessionId); } catch (_) {}
+      stopThreadPoll(threadId);
+      return;
+    }
+    try { await fetchAndRenderEvents(threadId, sessionId); } catch (_) {}
+  }, 5000);
+  threadPollIntervals.set(threadId, intervalId);
+}
+
+function stopThreadPoll(threadId) {
+  const intervalId = threadPollIntervals.get(threadId);
+  if (intervalId != null) {
+    clearInterval(intervalId);
+    threadPollIntervals.delete(threadId);
+  }
+}
+
+function stopAllThreadPolls() {
+  for (const [threadId, intervalId] of threadPollIntervals) {
+    clearInterval(intervalId);
+  }
+  threadPollIntervals.clear();
+}
 
 async function toggleThreadDetail(threadId, sessionId) {
   const detail = document.getElementById('thread-detail-' + threadId);
@@ -11,21 +57,45 @@ async function toggleThreadDetail(threadId, sessionId) {
   detail.classList.toggle('hidden');
   chevron.style.transform = isHidden ? 'rotate(90deg)' : '';
 
-  if (isHidden && !loadedThreads.has(threadId)) {
-    loadedThreads.add(threadId);
-    try {
-      const res = await fetch(`/api/threads/${sessionId}/threads/${threadId}/events`);
-      const events = await res.json();
-      renderThreadEvents(threadId, events);
-    } catch (err) {
-      document.getElementById('thread-events-' + threadId).innerHTML =
-        '<p class="text-xs text-red-400">Failed to load events</p>';
+  if (isHidden) {
+    // Expanding — fetch if not already loaded (prevents double-fetch on rapid clicks)
+    if (!loadedThreads.has(threadId)) {
+      loadedThreads.add(threadId);
+      try {
+        await fetchAndRenderEvents(threadId, sessionId);
+      } catch (err) {
+        document.getElementById('thread-events-' + threadId).innerHTML =
+          '<p class="text-xs text-red-400">Failed to load events</p>';
+      }
     }
+    // Start auto-poll for running workers
+    if (isWorkerRunning(threadId)) {
+      startThreadPoll(threadId, sessionId);
+    }
+  } else {
+    // Collapsing — stop poll and clear cache so re-expand fetches fresh data
+    stopThreadPoll(threadId);
+    loadedThreads.delete(threadId);
   }
 }
 
 function renderThreadEvents(threadId, events) {
   const container = document.getElementById('thread-events-' + threadId);
+
+  // Inject refresh button toolbar above events
+  const refreshBtnId = 'refresh-btn-' + threadId;
+  let toolbar = container.parentElement.querySelector('.thread-events-toolbar');
+  if (!toolbar) {
+    toolbar = document.createElement('div');
+    toolbar.className = 'thread-events-toolbar flex justify-end px-3 pt-2';
+    toolbar.innerHTML = `<button id="${refreshBtnId}" onclick="refreshThreadEvents('${threadId}')"
+      class="p-1 rounded-full text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors" title="Refresh events">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0115.4-4.4M20 15a9 9 0 01-15.4 4.4"/>
+      </svg>
+    </button>`;
+    container.parentElement.insertBefore(toolbar, container);
+  }
 
   const SKIP_TYPES = new Set(['ping', 'catchup_complete', 'raw', 'system', 'rate_limit_event']);
   const filtered = events.filter(e => {
@@ -159,6 +229,14 @@ function renderThreadEvents(threadId, events) {
   });
 
   container.innerHTML = parts.join('');
+}
+
+async function refreshThreadEvents(threadId) {
+  try {
+    await fetchAndRenderEvents(threadId, SESSION_ID);
+  } catch (err) {
+    console.error('Refresh events failed:', err);
+  }
 }
 
 function showTextModal(title, text) {

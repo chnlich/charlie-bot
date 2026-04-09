@@ -156,6 +156,7 @@ async function switchSession(sessionId) {
 
   // Reset lazy-load state
   _backlogLoaded = false;
+  stopAllThreadPolls();
   loadedThreads.clear();
 }
 
@@ -582,6 +583,17 @@ function updateWorkerStatus(threadId, status) {
   text.textContent = status + suffix;
   const cancelBtn = document.getElementById('cancel-btn-' + threadId);
   if (cancelBtn) cancelBtn.style.display = status === 'running' ? '' : 'none';
+
+  // When worker finishes, stop auto-poll and invalidate cache
+  if (status !== 'running') {
+    stopThreadPoll(threadId);
+    loadedThreads.delete(threadId);
+    // If detail is currently expanded, do a final fetch
+    const detail = document.getElementById('thread-detail-' + threadId);
+    if (detail && !detail.classList.contains('hidden')) {
+      fetchAndRenderEvents(threadId, SESSION_ID).catch(() => {});
+    }
+  }
 }
 
 function addWorkerCard(threadId, description, createdAt, backend) {

@@ -1522,7 +1522,7 @@
     display purposes. ~5 lines moved, no new code. Fixes a latent event-loss bug for
     every thread WS connection.'
   category: correctness
-  status: approved
+  status: done
   created: '2026-04-05T14:00:00Z'
   priority: high
 - id: 090

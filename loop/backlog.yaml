@@ -1580,3 +1580,23 @@
   status: pending
   created: '2026-04-08T12:00:00Z'
   priority: medium
+- id: '092'
+  title: Fix stale detection in _handle_stale to use in_progress_at instead of created
+  description: PURPOSE — Prevent false stale-outs in the improvement loop. _handle_stale
+    (core/improvement_loop.py L90-124) compares datetime.now() against the item's
+    `created` field to decide whether an in_progress item has exceeded stale_timeout_hours
+    (default 1 hour). But `created` is the timestamp when the backlog item was first
+    generated, which can be weeks or months before the item is approved and set to
+    in_progress. Any item whose creation date is older than 1 hour will be immediately
+    marked as failed on the very next scheduler tick after a worker sets it to in_progress.
+    This renders the stale-detection safety net useless for all but brand-new items.
+    HOW — Add an `in_progress_at` field to backlog items. In _build_implement_prompt,
+    instruct the worker to set `in_progress_at` (ISO 8601) alongside setting status
+    to in_progress. In _handle_stale, read `in_progress_at` instead of `created` for
+    the elapsed-time comparison, falling back to `created` only if `in_progress_at`
+    is absent (backwards compatibility). ~10 lines changed across improvement_loop.py.
+    No schema migration needed since backlog items are free-form YAML dicts.
+  category: correctness
+  status: pending
+  created: '2026-04-08T12:00:00Z'
+  priority: high

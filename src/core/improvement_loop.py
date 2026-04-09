@@ -94,21 +94,22 @@ async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementL
   for item in items:
     if item.get('status') != 'in_progress':
       continue
-    created = item.get('created')
-    if not created:
+    # Prefer in_progress_at (when the item actually started), fall back to created.
+    timestamp = item.get('in_progress_at') or item.get('created')
+    if not timestamp:
       continue
-    if isinstance(created, str):
+    if isinstance(timestamp, str):
       try:
-        created_dt = datetime.fromisoformat(created)
+        started_dt = datetime.fromisoformat(timestamp)
       except ValueError:
         continue
-    elif isinstance(created, datetime):
-      created_dt = created
+    elif isinstance(timestamp, datetime):
+      started_dt = timestamp
     else:
       continue
-    if created_dt.tzinfo is None:
-      created_dt = created_dt.replace(tzinfo=timezone.utc)
-    elapsed_hours = (now - created_dt).total_seconds() / 3600
+    if started_dt.tzinfo is None:
+      started_dt = started_dt.replace(tzinfo=timezone.utc)
+    elapsed_hours = (now - started_dt).total_seconds() / 3600
     if elapsed_hours > cfg.stale_timeout_hours:
       item['status'] = 'failed'
       item['failed_reason'] = f'Timed out after {cfg.stale_timeout_hours} hour(s)'
@@ -139,6 +140,10 @@ def _build_implement_prompt(item: dict, cfg: ImprovementLoopConfig, backlog_path
   parts.append(
       f'Then update {backlog_path}: set item {item["id"]} status to done. '
       f'If implementation fails, set status to failed with failed_reason. Commit and push.')
+  parts.append(
+      f'IMPORTANT: Before starting work, update {backlog_path}: set item {item["id"]} status to '
+      f'in_progress and add field in_progress_at with the current UTC time in ISO 8601 format. '
+      f'Commit and push.')
   extra = _extra_rules_text(cfg.extra_rules)
   if extra:
     parts.append(extra)

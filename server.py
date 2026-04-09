@@ -182,45 +182,46 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   await websocket.accept()
   log.info("ws_connected", thread_id=thread_id)
 
-  # Send catch-up events from on-disk log
-  cfg = get_config()
-  # Find the events.jsonl for this thread (search across all sessions)
-  events_file = await asyncio.to_thread(_find_events_file, thread_id, cfg)
-  if events_file and events_file.exists():
-    try:
-      lines = await asyncio.to_thread(events_file.read_text, "utf-8")
-      for line in lines.splitlines():
-        line = line.strip()
-        if line:
-          try:
-            await websocket.send_text(line)
-          except Exception as e:
-            log.debug("ws_catchup_send_failed", thread_id=thread_id, error=str(e))
-            return
-    except Exception as e:
-      log.warning("ws_catchup_failed", thread_id=thread_id, error=str(e))
-
-  # Signal end of catch-up
-  try:
-    await websocket.send_json({"type": "catchup_complete"})
-  except Exception as e:
-    log.debug("ws_catchup_complete_failed", thread_id=thread_id, error=str(e))
-    return
-
-  # Subscribe for live events
+  # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.
   await streaming_manager.subscribe(thread_id, websocket)
   try:
-    while True:
-      # Keep connection alive; client may send pings
+    # Send catch-up events from on-disk log
+    cfg = get_config()
+    # Find the events.jsonl for this thread (search across all sessions)
+    events_file = await asyncio.to_thread(_find_events_file, thread_id, cfg)
+    if events_file and events_file.exists():
       try:
-        await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-      except asyncio.TimeoutError:
-        # Send keepalive ping
-        await websocket.send_json({"type": "ping"})
-  except WebSocketDisconnect:
-    pass
-  except Exception as e:
-    log.info("ws_closed", thread_id=thread_id, reason=str(e))
+        lines = await asyncio.to_thread(events_file.read_text, "utf-8")
+        for line in lines.splitlines():
+          line = line.strip()
+          if line:
+            try:
+              await websocket.send_text(line)
+            except Exception as e:
+              log.debug("ws_catchup_send_failed", thread_id=thread_id, error=str(e))
+              return
+      except Exception as e:
+        log.warning("ws_catchup_failed", thread_id=thread_id, error=str(e))
+
+    # Signal end of catch-up
+    try:
+      await websocket.send_json({"type": "catchup_complete"})
+    except Exception as e:
+      log.debug("ws_catchup_complete_failed", thread_id=thread_id, error=str(e))
+      return
+
+    try:
+      while True:
+        # Keep connection alive; client may send pings
+        try:
+          await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+        except asyncio.TimeoutError:
+          # Send keepalive ping
+          await websocket.send_json({"type": "ping"})
+    except WebSocketDisconnect:
+      pass
+    except Exception as e:
+      log.info("ws_closed", thread_id=thread_id, reason=str(e))
   finally:
     await streaming_manager.unsubscribe(thread_id, websocket)
     log.info("ws_disconnected", thread_id=thread_id)

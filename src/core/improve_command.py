@@ -450,7 +450,7 @@ async def run_improve_loop(
             'summary': summary[:200],
             'work_branch': work_branch,
         }
-        await _trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr)
+        asyncio.create_task(_trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr))
 
         break  # Move to next iteration
 

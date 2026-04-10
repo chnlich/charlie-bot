@@ -415,12 +415,17 @@ function updateSidebarHighlight(newSessionId) {
   }
 }
 
-function setSessionSpinner(sid, visible) {
+function setSessionIndicator(sid, state) {
   const spinner = document.getElementById('spinner-' + sid);
-  if (spinner) spinner.classList.toggle('hidden', !visible);
-  // While spinner is visible, suppress the unread dot; restore when hidden.
+  const worker = document.getElementById('worker-indicator-' + sid);
   const dot = document.getElementById('unread-' + sid);
-  if (dot) dot.classList.toggle('hidden', visible || !sessionUnread[sid]);
+  if (spinner) spinner.classList.toggle('hidden', state !== 'thinking');
+  if (worker) worker.classList.toggle('hidden', state !== 'worker_only');
+  if (dot) dot.classList.toggle('hidden', state !== 'idle' || !sessionUnread[sid]);
+}
+
+function setSessionSpinner(sid, visible) {
+  setSessionIndicator(sid, visible ? 'thinking' : 'idle');
 }
 
 function setSessionPendingTriggerIndicator(sid, status) {
@@ -435,9 +440,15 @@ function setSessionPendingTriggerIndicator(sid, status) {
 }
 
 function updateSpinner() {
-  var anyRunning = Array.from(document.querySelectorAll('[id^="thread-status-"]'))
-    .some(function(el) { return el.textContent === 'running'; });
-  setSessionSpinner(SESSION_ID, masterThinking || anyRunning);
+  var anyWorkerRunning = Array.from(document.querySelectorAll('[id^="thread-status-"]'))
+    .some(function(el) { return el.textContent.startsWith('running'); });
+  if (masterThinking) {
+    setSessionIndicator(SESSION_ID, 'thinking');
+  } else if (anyWorkerRunning) {
+    setSessionIndicator(SESSION_ID, 'worker_only');
+  } else {
+    setSessionIndicator(SESSION_ID, 'idle');
+  }
 }
 
 function stopActiveSessionViewPolling() {
@@ -500,9 +511,15 @@ function pollSessionStatus() {
       for (const [sid, st] of Object.entries(data)) {
         if (sid !== SESSION_ID) sessionUnread[sid] = st.has_unread;
         if (sid === SESSION_ID) {
-          setSessionSpinner(sid, masterThinking || st.has_running_tasks);
+          updateSpinner();
         } else {
-          setSessionSpinner(sid, st.has_running_tasks);
+          if (st.thinking_since) {
+            setSessionIndicator(sid, 'thinking');
+          } else if (st.has_running_tasks) {
+            setSessionIndicator(sid, 'worker_only');
+          } else {
+            setSessionIndicator(sid, 'idle');
+          }
         }
         setSessionPendingTriggerIndicator(sid, st);
         if (st.has_running_tasks) anyRunning = true;
@@ -740,7 +757,7 @@ function startThinking(opts) {
     document.getElementById('send-btn').disabled = true;
     document.getElementById('send-btn').classList.add('opacity-50');
   }
-  setSessionSpinner(SESSION_ID, true);
+  setSessionIndicator(SESSION_ID, 'thinking');
   ensureActiveSessionViewPolling();
 }
 

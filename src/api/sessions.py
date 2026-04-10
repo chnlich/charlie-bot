@@ -196,6 +196,7 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
     result[meta.id] = {
         "has_unread": bool(meta.has_unread),
         "has_running_tasks": meta.has_running_tasks,
+        "thinking_since": meta.thinking_since.isoformat() if meta.thinking_since else None,
         "has_pending_trigger": meta.has_pending_trigger,
         "pending_trigger_count": meta.pending_trigger_count,
         "next_trigger_at": meta.next_trigger_at.isoformat() if meta.next_trigger_at else None,

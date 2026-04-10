@@ -13,7 +13,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from src.api import backlog, chat, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
-from src.api.deps import get_session_manager, set_trigger_manager
+from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
 from src.core.config import get_config
 from src.core.http import close_http_client
 from src.core.init import init_charliebot_home
@@ -186,9 +186,9 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   await streaming_manager.subscribe(thread_id, websocket)
   try:
     # Send catch-up events from on-disk log
-    cfg = get_config()
     # Find the events.jsonl for this thread (search across all sessions)
-    events_file = await asyncio.to_thread(_find_events_file, thread_id, cfg)
+    thread_mgr = get_thread_manager()
+    events_file = await asyncio.to_thread(thread_mgr.resolve_events_file, thread_id)
     if events_file and events_file.exists():
       try:
         lines = await asyncio.to_thread(events_file.read_text, "utf-8")
@@ -225,19 +225,6 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   finally:
     await streaming_manager.unsubscribe(thread_id, websocket)
     log.info("ws_disconnected", thread_id=thread_id)
-
-
-def _find_events_file(thread_id: str, cfg) -> Path | None:
-  """Search for events.jsonl across all session thread directories."""
-  if not cfg.sessions_dir.exists():
-    return None
-  for session_dir in cfg.sessions_dir.iterdir():
-    if not session_dir.is_dir():
-      continue
-    candidate = session_dir / "threads" / thread_id / "data" / "events.jsonl"
-    if candidate.exists():
-      return candidate
-  return None
 
 
 # ---------------------------------------------------------------------------

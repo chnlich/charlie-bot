@@ -456,6 +456,11 @@ async def run_improve_loop(
     else:
       payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
 
+    # Persist final status to improve_state.json
+    state = load_improve_state(session_id, cfg) or ImproveState(goal=goal)
+    state.status = 'stopped' if stopped_by_user else 'completed'
+    save_improve_state(session_id, state, cfg)
+
     payload['work_branch'] = work_branch
     payload['base_branch'] = base_branch
 
@@ -481,6 +486,10 @@ async def run_improve_loop(
     raise
   except Exception:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
+    state = load_improve_state(session_id, cfg)
+    if state:
+      state.status = 'failed'
+      save_improve_state(session_id, state, cfg)
     try:
       failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
       await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)

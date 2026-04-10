@@ -725,6 +725,15 @@ async def _trigger_master(
         await session_mgr.save_metadata(fresh)
   except Exception as e:
     log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
+    try:
+      error_payload = {
+          'type': ET.ERROR,
+          'message': f'Failed to notify master agent: {e}',
+          'source': 'trigger_master',
+      }
+      await session_mgr.persist_and_broadcast(session_id, error_payload)
+    except Exception:
+      pass  # Last resort — nothing more we can do
 
 
 def _is_resume_not_found_error(error: Exception) -> bool:

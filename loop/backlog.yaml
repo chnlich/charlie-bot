@@ -1440,23 +1440,21 @@
   priority: medium
 - id: 087
   title: 'Code health: fix formatting, unused imports, and dead code'
-  description: 'Re-confirmed by automated scan on 2026-04-05 (12th consecutive scan,
+  description: 'Re-confirmed by automated scan on 2026-04-09 (13th consecutive scan,
     originally found 2026-04-01). All prior issues persist unchanged. (1) FORMATTING
-    — 5 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
+    — 4 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
     src/core/spawner.py (string concat alignment in _build_worker_prompt), src/api/ext_usage.py
-    (dict formatting and long boolean expression in parse_rate_limit_usage), src/api/message_utils.py
-    (tuple unpacking line wrap in build_fast_session_view), src/api/chat.py (function
-    call wrapping in send_message). Run `yapf -i` on these files. (2) UNUSED IMPORTS
-    — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT but never uses it (hardcoded
-    timeout=30.0 on L118 instead); src/api/pages.py:21 imports TriggerManager but
-    never uses it. Delete both import lines. (3) DEAD CODE — src/core/sessions.py:44
+    (dict formatting and long boolean expression in parse_rate_limit_usage), src/api/chat.py
+    (function call wrapping in send_message). Run `yapf -i` on these files. (2) UNUSED
+    IMPORTS — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT but never uses it
+    (hardcoded timeout=30.0 on L118 instead); src/api/pages.py:21 imports TriggerManager
+    but never uses it. Delete both import lines. (3) DEAD CODE — src/core/sessions.py:44
     _summarize_event_lines() has zero callers; appears to be a leftover from the item
-    065 refactoring where rewind_session was later removed. Delete the function. Also
-    src/core/config.py:126 has an unused variable cls (100% confidence per vulture).
-    (4) TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
+    065 refactoring where rewind_session was later removed. Delete the function. (4)
+    TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
     both say "TODO: re-enable when Claude Code version supports --effort". Resolve
     or convert to a tracked issue once the --effort flag ships. (5) LONG FUNCTIONS
-    — 29 functions exceed 50 lines. Worst offenders: run_improve_loop() 133 lines
+    — 29 functions exceed 50 lines. Worst offenders: run_improve_loop() 141 lines
     (src/core/improve_command.py:241), execute_command() 127 lines (src/api/slash.py:125),
     run_message() 113 lines (src/agents/master_cc.py:356), _run_cc() 110 lines (src/agents/master_cc.py:181),
     run() 107 lines (src/agents/backends/base.py:156). (6) MISSING TYPE IMPORTS —
@@ -1467,7 +1465,7 @@
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-05T14:00:00Z'
+  updated: '2026-04-09T12:00:00Z'
   priority: low
 - id: 088
   title: Consolidate build_session_view_data and build_session_view_data_fast into
@@ -1600,3 +1598,28 @@
   status: done
   created: '2026-04-08T12:00:00Z'
   priority: high
+- id: '093'
+  title: Extract master-agent triggering subsystem from spawner.py into core/master_trigger.py
+  description: 'PURPOSE — Reduce spawner.py (831 lines, 2nd-largest module) by ~120
+    lines, eliminate 3 cross-module deferred imports of private symbols, and partially
+    break the circular import between review.py and spawner.py. Three private functions
+    in spawner.py — _trigger_master (L626-671, 46 lines), _run_message_with_resume_recovery
+    (L562-623, 62 lines), and _is_resume_not_found_error (L673-681, 9 lines) — form
+    a cohesive "wake the master agent" subsystem that is conceptually distinct from
+    worker spawning. These functions are imported via deferred imports by 3 external
+    modules: review.py (L318), improve_command.py (L261), and triggers.py (L114) —
+    all using the anti-pattern of importing underscore-prefixed private symbols across
+    module boundaries. Internally, only _notify_completion calls _trigger_master. HOW
+    — Create src/core/master_trigger.py containing trigger_master (drop underscore),
+    run_message_with_resume_recovery, and is_resume_not_found_error. The module imports
+    run_message from master_cc.py and SessionManager from sessions.py — no new circular
+    deps. Update spawner.py _notify_completion to import from core.master_trigger.
+    Replace 3 deferred private imports in review.py, improve_command.py, and triggers.py
+    with direct top-level imports of the now-public symbols. ~120 lines moved out of
+    spawner.py, 4 import statements simplified. Pure move refactoring, no logic changes.
+    Follows the pattern from items 047 (core/git.py), 060 (core/process.py), and 071
+    (core/review.py) which carved out cohesive sub-modules from spawner.py.'
+  category: architecture
+  status: pending
+  created: '2026-04-09T12:00:00Z'
+  priority: medium

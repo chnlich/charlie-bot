@@ -14,6 +14,15 @@ from src.api.ext_usage import CcOpusProvider
 from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.git import (
+    git_create_worktree,
+    git_merge_ff_only,
+    git_pull_ff_only,
+    git_push_branch,
+    git_push_refspec,
+    git_worktree_prune,
+    git_worktree_remove,
+)
 from src.core.models import ThreadStatus
 from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
@@ -100,11 +109,12 @@ You are starting an iterative improvement loop.
 2. Confirm with the user: show the repo path, restate the final goal, and capture only the constraints or success criteria that must be preserved. Keep the prompt final-goal driven: the user should provide the destination and constraints, not a roadmap, per-iteration plan, or implementation recipe.
 3. Do NOT propose per-iteration methods, milestones, or a detailed plan. Workers are fully autonomous and choose their own approach for each iteration.
 4. If the user requests a specific backend, it must be a configured `backend_options.id` from `~/.charliebot/config.yaml`; include `--backend <id>` in the command only when explicitly requested.
-5. After approval, choose a descriptive `--branch-prefix` based on the goal (e.g. `improve/fix-precision`, `improve/optimize-step-time`). If the user mentions a Linear ticket, include it (e.g. `ALG-865/chaoli/20260326/fix-precision`). Then run:
+5. After approval, choose a descriptive `--work-branch` based on the goal (e.g. `improve/fix-precision`, `improve/optimize-step-time`). If the user mentions a Linear ticket, include it (e.g. `ALG-865/chaoli/20260326/fix-precision`). Then run:
    ```
-   python -m src.cli.improve --session {session_id} --repo <repo> --base-branch <base-branch> --iterations {max_iterations} --goal '<the goal above>' --branch-prefix '<your chosen prefix>'
+   python -m src.cli.improve --session {session_id} --repo <repo> --base-branch <base-branch> --iterations {max_iterations} --goal '<the goal above>' --work-branch '<your chosen branch>'
    ```
-   Each iteration creates `<prefix>/iter1`, `<prefix>/iter2`, etc., automatically chaining on the previous iteration's code.
+   All iterations commit to the single work branch in a shared worktree.
+   Add `--merge-back` if the user wants the work branch merged back into base_branch after all iterations complete.
 6. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
 
 The improve state file is at: {state_path}"""
@@ -234,6 +244,66 @@ async def _wait_for_quota_recovery(
 
 
 # ---------------------------------------------------------------------------
+# Merge-back helper
+# ---------------------------------------------------------------------------
+
+
+async def _merge_back_to_base(
+    repo_path: Path,
+    base_branch: str,
+    work_branch: str,
+    cfg: CharlieBotConfig,
+    session_id: str,
+) -> tuple[bool, str]:
+  """Merge work_branch into base_branch and push. Returns (success, error_message).
+
+  Primary: create an ephemeral worktree on base_branch, pull, merge --ff-only, push.
+  Fallback: if base_branch is already checked out, use refspec push.
+  """
+  tmp_path = Path(cfg.worktree_dir) / f"merge-{work_branch.replace('/', '-')}-{int(time.time())}"
+
+  try:
+    # Step 1: create ephemeral worktree on base_branch
+    try:
+      # Use a temp branch name for the worktree (we'll operate on base_branch directly)
+      tmp_branch = f"_merge-tmp-{int(time.time())}"
+      await git_create_worktree(repo_path, base_branch, tmp_branch, tmp_path)
+    except RuntimeError as e:
+      err_str = str(e)
+      if 'already checked out' in err_str or 'is already checked out' in err_str:
+        # Fallback: refspec push
+        log.info("merge_back_fallback_refspec", session=session_id, reason=err_str)
+        ok, push_err = await git_push_refspec(repo_path, work_branch, base_branch)
+        if ok:
+          return True, ""
+        return False, f"refspec push failed: {push_err}"
+      return False, f"worktree creation failed: {err_str}"
+
+    # Step 2: pull latest base_branch
+    ok, err = await git_pull_ff_only(tmp_path, base_branch)
+    if not ok:
+      log.warning("merge_back_pull_failed", session=session_id, error=err)
+      # Non-fatal: the worktree was just created from base_branch, it should be up to date
+
+    # Step 3: merge --ff-only work_branch
+    ok, err = await git_merge_ff_only(tmp_path, work_branch)
+    if not ok:
+      return False, f"merge --ff-only failed: {err}"
+
+    # Step 4: push base_branch
+    ok, err = await git_push_branch(tmp_path, base_branch)
+    if not ok:
+      return False, f"push failed: {err}"
+
+    return True, ""
+  finally:
+    # Step 5: clean up ephemeral worktree
+    if tmp_path.exists():
+      await git_worktree_remove(str(repo_path), tmp_path, session_id)
+      await git_worktree_prune(str(repo_path), session_id)
+
+
+# ---------------------------------------------------------------------------
 # Server-side improve loop
 # ---------------------------------------------------------------------------
 
@@ -247,24 +317,29 @@ async def run_improve_loop(
     session_mgr: "SessionManager",
     thread_mgr: "ThreadManager",
     base_branch: Optional[str] = None,
-    branch_prefix: Optional[str] = None,
+    branch_prefix: Optional[str] = None,  # deprecated, use work_branch
+    work_branch: Optional[str] = None,
+    merge_back: bool = False,
     resolved_backend: str = "",
     resolved_model: str = "",
 ) -> None:
   """Run the iterative improvement loop as a server-side async task.
 
-  For each iteration, creates a worker thread, awaits its completion,
-  extracts a summary, and broadcasts progress. When done (or stopped),
-  triggers the master CC with the combined summary.
+  All iterations commit to a single work_branch in a single shared worktree.
+  When done (or stopped), optionally merges work_branch back to base_branch,
+  then triggers the master CC with the combined summary.
   """
   from src.core.ndjson import parse_ndjson_file
   from src.core.spawner import _trigger_master, spawn_worker
 
   previous_summaries: list[str] = []
-  prev_branch: Optional[str] = base_branch
   meta = None  # session metadata; assigned each iteration but needed after the inner loop
 
-  improve_id = branch_prefix.replace('/', '-') if branch_prefix else f'improve-{int(time.time())}'
+  # Compat: work_branch = work_branch or branch_prefix or auto-generated
+  work_branch = work_branch or branch_prefix or f'improve/{int(time.time())}'
+  resolved_repo = Path(repo_path).resolve()
+
+  improve_id = work_branch.replace('/', '-')
   improve_dir = cfg.sessions_dir / session_id / 'improve' / improve_id
   await asyncio.to_thread(improve_dir.mkdir, parents=True, exist_ok=True)
   log.info(
@@ -272,7 +347,22 @@ async def run_improve_loop(
       session=session_id,
       backend=resolved_backend,
       model=resolved_model,
+      work_branch=work_branch,
+      merge_back=merge_back,
   )
+
+  # Create the single worktree for all iterations
+  wt_path = Path(cfg.worktree_dir) / work_branch.replace('/', '-')
+  Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
+  try:
+    await git_create_worktree(resolved_repo, base_branch, work_branch, wt_path)
+  except Exception as e:
+    log.error("improve_loop_worktree_failed", session=session_id, error=str(e))
+    failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
+    failure_payload['error'] = f"Failed to create worktree: {e}"
+    await session_mgr.persist_and_broadcast(session_id, failure_payload)
+    await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
+    return
 
   try:
     for i in range(1, iterations + 1):
@@ -295,7 +385,6 @@ async def run_improve_loop(
 
         # Create thread and spawn worker
         thread = await thread_mgr.create_thread(meta, description, require_review=False)
-        branch_name_override = f"{branch_prefix}/iter{i}" if branch_prefix else None
         await spawn_worker(
             session_id,
             description,
@@ -306,10 +395,14 @@ async def run_improve_loop(
             repo_path=repo_path,
             resolved_backend=resolved_backend,
             resolved_model=resolved_model,
-            base_branch=prev_branch,
-            branch_name_override=branch_name_override,
+            base_branch=base_branch,
+            branch_name_override=work_branch,
+            worktree_path_override=str(wt_path),
+            skip_cleanup=True,
+            skip_notify=True,
             improve_dir=str(improve_dir),
             iteration_number=i,
+            is_continuation=(i > 1),
         )
 
         # Check for quota failure
@@ -325,8 +418,6 @@ async def run_improve_loop(
         # Successful (or non-quota failure) — extract summary and proceed
         thread_meta = await thread_mgr.get_thread(session_id, thread.id)
         status = thread_meta.status.value if thread_meta else "unknown"
-        if thread_meta and thread_meta.branch_name:
-          prev_branch = thread_meta.branch_name
         events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
         events = await asyncio.to_thread(parse_ndjson_file, events_path)
         summary = _extract_iteration_summary(events, i, status)
@@ -365,6 +456,22 @@ async def run_improve_loop(
     else:
       payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
 
+    payload['work_branch'] = work_branch
+    payload['base_branch'] = base_branch
+
+    # Post-loop: merge back or push work branch
+    if merge_back and not stopped_by_user and previous_summaries:
+      success, error = await _merge_back_to_base(resolved_repo, base_branch, work_branch, cfg, session_id)
+      if success:
+        payload['merge_result'] = {'merged': True, 'base_branch': base_branch}
+      else:
+        payload['merge_result'] = {'merged': False, 'error': error}
+    else:
+      # Best-effort push work_branch to remote
+      ok, push_err = await git_push_branch(resolved_repo, work_branch)
+      if not ok:
+        log.warning("improve_loop_push_failed", session=session_id, error=push_err)
+
     await session_mgr.persist_and_broadcast(session_id, payload)
     await _trigger_master(session_id, json.dumps(payload, indent=2), cfg, session_mgr)
 
@@ -379,3 +486,8 @@ async def run_improve_loop(
       await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     except Exception:
       log.error("improve_loop_trigger_master_on_failure_failed", session=session_id, exc_info=True)
+  finally:
+    # Always clean up the shared worktree
+    if wt_path.exists():
+      await git_worktree_remove(str(resolved_repo), wt_path, session_id)
+      await git_worktree_prune(str(resolved_repo), session_id)

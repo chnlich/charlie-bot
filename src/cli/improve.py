@@ -33,7 +33,11 @@ def main() -> None:
   parser.add_argument("--base-branch", required=True, help="Base branch for iteration worktrees")
   parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
   parser.add_argument(
-      "--branch-prefix", default=None, help="Branch prefix for iteration branches (e.g. 'improve/perf')")
+      "--work-branch", "--branch-prefix", dest="work_branch", default=None,
+      help="Single branch all iterations commit to (e.g. 'improve/optimize-step-time')")
+  parser.add_argument(
+      "--merge-back", action="store_true", default=False,
+      help="Merge work_branch into base_branch after all iterations complete")
   args = parser.parse_args()
 
   cfg = get_config()
@@ -45,7 +49,8 @@ def main() -> None:
       "backend": args.backend,
       "iterations": args.iterations,
       "goal": args.goal,
-      "branch_prefix": args.branch_prefix,
+      "work_branch": args.work_branch,
+      "merge_back": args.merge_back,
   }
   if args.backend is not None:
     payload["backend"] = args.backend

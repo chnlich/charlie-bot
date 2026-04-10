@@ -116,6 +116,78 @@ async def git_worktree_prune(repo_path: str, thread_id: str) -> None:
     log.warning("worktree_prune_timeout", thread_id=thread_id)
 
 
+async def git_merge_ff_only(repo_path: Path, source_branch: str) -> tuple[bool, str]:
+  """Run git merge --ff-only. Returns (success, stderr)."""
+  proc = await asyncio.create_subprocess_exec(
+      "git", "merge", "--ff-only", source_branch,
+      cwd=str(repo_path),
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  try:
+    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
+  except asyncio.TimeoutError:
+    proc.kill()
+    return False, f"git merge --ff-only timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s"
+  if proc.returncode != 0:
+    return False, stderr.decode().strip()
+  return True, ""
+
+
+async def git_push_branch(repo_path: Path, branch: str) -> tuple[bool, str]:
+  """Run git push origin <branch>. Returns (success, stderr)."""
+  proc = await asyncio.create_subprocess_exec(
+      "git", "push", "origin", branch,
+      cwd=str(repo_path),
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  try:
+    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
+  except asyncio.TimeoutError:
+    proc.kill()
+    return False, f"git push timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s"
+  if proc.returncode != 0:
+    return False, stderr.decode().strip()
+  return True, ""
+
+
+async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: str) -> tuple[bool, str]:
+  """Run git push origin <local>:refs/heads/<remote>. Returns (success, stderr)."""
+  proc = await asyncio.create_subprocess_exec(
+      "git", "push", "origin", f"{local_branch}:refs/heads/{remote_branch}",
+      cwd=str(repo_path),
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  try:
+    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
+  except asyncio.TimeoutError:
+    proc.kill()
+    return False, f"git push refspec timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s"
+  if proc.returncode != 0:
+    return False, stderr.decode().strip()
+  return True, ""
+
+
+async def git_pull_ff_only(repo_path: Path, branch: str) -> tuple[bool, str]:
+  """Run git pull --ff-only origin <branch>. Returns (success, stderr)."""
+  proc = await asyncio.create_subprocess_exec(
+      "git", "pull", "--ff-only", "origin", branch,
+      cwd=str(repo_path),
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  try:
+    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
+  except asyncio.TimeoutError:
+    proc.kill()
+    return False, f"git pull --ff-only timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s"
+  if proc.returncode != 0:
+    return False, stderr.decode().strip()
+  return True, ""
+
+
 async def git_add_commit_push(
     repo_path: Path,
     files: list[str],

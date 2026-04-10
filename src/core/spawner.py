@@ -44,24 +44,41 @@ def _build_worker_prompt(
     session_meta: SessionMetadata,
     improve_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
+    is_continuation: bool = False,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   session_info = (f"## Session Info\n"
                   f"- Session: {session_meta.name}\n")
 
-  worktree_section = (
-      f"## Worktree Workflow\n"
-      f"A dedicated git worktree is already created for you.\n"
-      f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
-      f"- Worktree: `{wt_path}`\n"
-      f"- Repo: `{repo_path}`\n\n"
-      f"Follow these steps exactly:\n"
-      f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
-      f"2. Commit your changes with descriptive messages.\n"
-      f"   Use structured commit messages: first line is a short summary, then a blank line, "
-      f"then a \"Why:\" line explaining the business reason for the change.\n\n"
-      f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
-      f"## Task\n{description}")
+  if is_continuation:
+    worktree_section = (
+        f"## Worktree Workflow\n"
+        f"You are continuing work in an existing worktree from a previous iteration. "
+        f"Review previous iteration changes before starting.\n"
+        f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
+        f"- Worktree: `{wt_path}`\n"
+        f"- Repo: `{repo_path}`\n\n"
+        f"Follow these steps exactly:\n"
+        f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
+        f"2. Commit your changes with descriptive messages.\n"
+        f"   Use structured commit messages: first line is a short summary, then a blank line, "
+        f"then a \"Why:\" line explaining the business reason for the change.\n\n"
+        f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
+        f"## Task\n{description}")
+  else:
+    worktree_section = (
+        f"## Worktree Workflow\n"
+        f"A dedicated git worktree is already created for you.\n"
+        f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
+        f"- Worktree: `{wt_path}`\n"
+        f"- Repo: `{repo_path}`\n\n"
+        f"Follow these steps exactly:\n"
+        f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
+        f"2. Commit your changes with descriptive messages.\n"
+        f"   Use structured commit messages: first line is a short summary, then a blank line, "
+        f"then a \"Why:\" line explaining the business reason for the change.\n\n"
+        f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
+        f"## Task\n{description}")
 
   iteration_reports_section = ""
   if improve_dir and iteration_number is not None:
@@ -215,6 +232,9 @@ async def _create_worktree_and_process(
     branch_name_override: Optional[str] = None,
     improve_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
+    worktree_path_override: Optional[str] = None,
+    skip_cleanup: bool = False,
+    is_continuation: bool = False,
 ) -> Worker:
   """Create worktree, build prompt, resolve backend, and construct Worker."""
   worktree_path: Optional[Path] = None
@@ -230,6 +250,31 @@ async def _create_worktree_and_process(
       )
       raise RuntimeError("thread metadata missing worktree_path")
     worktree_path = Path(thread.worktree_path).resolve()
+  elif worktree_path_override:
+    # Reuse an existing worktree (e.g. improve loop iterations sharing a single worktree).
+    base_branch = base_branch or await git_current_branch(resolved_repo)
+    branch_name = branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
+    wt_path = Path(worktree_path_override)
+
+    thread.branch_name = branch_name
+    thread.repo_path = str(resolved_repo)
+    thread.worktree_path = str(wt_path)
+    thread.base_branch = base_branch
+    thread.skip_cleanup = skip_cleanup
+    thread.context = context
+
+    session_meta = await session_mgr.get_session(session_id)
+    worker_prompt = _build_worker_prompt(
+        description,
+        resolved_repo,
+        base_branch,
+        branch_name,
+        str(wt_path),
+        session_meta,
+        improve_dir=improve_dir,
+        iteration_number=iteration_number,
+        is_continuation=is_continuation)
+    worktree_path = wt_path.resolve()
   else:
     # Get current branch as the base for the worktree
     base_branch = base_branch or await git_current_branch(resolved_repo)
@@ -403,6 +448,7 @@ async def _finalize_worker(
     cfg: CharlieBotConfig,
     quota_exhausted: bool = False,
     error: str = "",
+    skip_notify: bool = False,
 ) -> None:
   """Update thread status and notify completion."""
   # Re-read from disk: the cancel endpoint may have already set CANCELLED.
@@ -423,22 +469,27 @@ async def _finalize_worker(
 
   # Clean up the thread's worktree/temp directory.
   # Skip cleanup if a reviewer will be spawned — it needs the worktree.
-  can_spawn_reviewer = all(getattr(thread, attr, None) for attr in ('repo_path', 'branch_name', 'worktree_path'))
-  skip_cleanup = (
-      exit_code == 0 and getattr(thread, 'require_review', False) and not getattr(thread, 'review_of', None) and
-      can_spawn_reviewer)
+  # Also skip if the thread was marked skip_cleanup (e.g. improve loop shared worktree).
+  if getattr(thread, 'skip_cleanup', False):
+    skip_cleanup = True
+  else:
+    can_spawn_reviewer = all(getattr(thread, attr, None) for attr in ('repo_path', 'branch_name', 'worktree_path'))
+    skip_cleanup = (
+        exit_code == 0 and getattr(thread, 'require_review', False) and not getattr(thread, 'review_of', None) and
+        can_spawn_reviewer)
   await _cleanup_worker_directory(thread, skip_cleanup)
 
-  await _notify_completion(
-      session_id,
-      description,
-      thread,
-      exit_code,
-      thread_mgr,
-      session_mgr,
-      cfg,
-      quota_exhausted=quota_exhausted,
-      error=error)
+  if not skip_notify:
+    await _notify_completion(
+        session_id,
+        description,
+        thread,
+        exit_code,
+        thread_mgr,
+        session_mgr,
+        cfg,
+        quota_exhausted=quota_exhausted,
+        error=error)
 
 
 class DelegationBlockedError(Exception):
@@ -496,6 +547,10 @@ async def spawn_worker(
     improve_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
     require_takeoff: bool = False,
+    worktree_path_override: Optional[str] = None,
+    skip_cleanup: bool = False,
+    skip_notify: bool = False,
+    is_continuation: bool = False,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   if require_takeoff:
@@ -521,7 +576,8 @@ async def spawn_worker(
       resolved_repo = Path(repo_path).resolve()
       worker = await _create_worktree_and_process(
           session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
-          resolved_backend, resolved_model, base_branch, branch_name_override, improve_dir, iteration_number)
+          resolved_backend, resolved_model, base_branch, branch_name_override, improve_dir, iteration_number,
+          worktree_path_override=worktree_path_override, skip_cleanup=skip_cleanup, is_continuation=is_continuation)
 
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, description, thread, thread_mgr, session_mgr)
@@ -546,7 +602,8 @@ async def spawn_worker(
             session_mgr,
             cfg,
             quota_exhausted=quota_exhausted,
-            error=error_msg)
+            error=error_msg,
+            skip_notify=skip_notify)
       except Exception as e:
         log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
         try:

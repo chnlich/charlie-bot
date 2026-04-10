@@ -74,6 +74,7 @@ class ThreadMetadata(BaseModel):
   backend: Optional[str] = None
   model: Optional[str] = None
   require_review: bool = True
+  skip_cleanup: bool = False
   tried_backends: list[str] = Field(default_factory=list)
 
 
@@ -246,7 +247,9 @@ class ImproveRequest(BaseModel):
   backend: Optional[str] = None
   iterations: int = 3
   goal: str
-  branch_prefix: Optional[str] = None
+  branch_prefix: Optional[str] = None  # deprecated, use work_branch
+  work_branch: Optional[str] = None
+  merge_back: bool = False
 
 
 class ScheduleTriggerRequest(BaseModel):

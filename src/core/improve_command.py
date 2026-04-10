@@ -290,8 +290,8 @@ async def _merge_back_to_base(
     if not ok:
       return False, f"merge --ff-only failed: {err}"
 
-    # Step 4: push base_branch
-    ok, err = await git_push_branch(tmp_path, base_branch)
+    # Step 4: push the merged result (on tmp_branch) to remote base_branch
+    ok, err = await git_push_refspec(tmp_path, "HEAD", base_branch)
     if not ok:
       return False, f"push failed: {err}"
 

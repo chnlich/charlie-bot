@@ -992,7 +992,8 @@
     if the dynamic index drifts. Replace _find_events_file in server.py with a call
     to the new method. ~20 lines for the index logic with fallback, 1-line change
     in server.py. No behavior change for callers.'
-  status: approved
+  status: in_progress
+  in_progress_at: '2026-04-10T14:35:04Z'
   created: '2026-03-29T12:00:00Z'
   priority: medium
 - id: '067'

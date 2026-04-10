@@ -117,7 +117,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   // Sidebar spinner update — handle before catchup guard
   if (t === 'running_changed') {
     if (ev.session_id !== SESSION_ID) {
-      setSessionSpinner(ev.session_id, ev.has_running_tasks);
+      setSessionIndicator(ev.session_id, ev.has_running_tasks ? 'thinking' : 'idle');
     } else if (ev.auto_trigger) {
       // Auto-triggered runs: show spinner/status but keep send button enabled
       if (ev.has_running_tasks) startThinking({keepSendEnabled: true});

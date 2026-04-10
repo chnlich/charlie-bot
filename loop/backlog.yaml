@@ -992,7 +992,7 @@
     if the dynamic index drifts. Replace _find_events_file in server.py with a call
     to the new method. ~20 lines for the index logic with fallback, 1-line change
     in server.py. No behavior change for callers.'
-  status: pending
+  status: approved
   created: '2026-03-29T12:00:00Z'
   priority: medium
 - id: '067'
@@ -1598,7 +1598,7 @@
   status: done
   created: '2026-04-08T12:00:00Z'
   priority: high
-- id: '093'
+- id: 093
   title: Extract master-agent triggering subsystem from spawner.py into core/master_trigger.py
   description: 'PURPOSE — Reduce spawner.py (831 lines, 2nd-largest module) by ~120
     lines, eliminate 3 cross-module deferred imports of private symbols, and partially
@@ -1609,16 +1609,16 @@
     worker spawning. These functions are imported via deferred imports by 3 external
     modules: review.py (L318), improve_command.py (L261), and triggers.py (L114) —
     all using the anti-pattern of importing underscore-prefixed private symbols across
-    module boundaries. Internally, only _notify_completion calls _trigger_master. HOW
-    — Create src/core/master_trigger.py containing trigger_master (drop underscore),
+    module boundaries. Internally, only _notify_completion calls _trigger_master.
+    HOW — Create src/core/master_trigger.py containing trigger_master (drop underscore),
     run_message_with_resume_recovery, and is_resume_not_found_error. The module imports
     run_message from master_cc.py and SessionManager from sessions.py — no new circular
     deps. Update spawner.py _notify_completion to import from core.master_trigger.
     Replace 3 deferred private imports in review.py, improve_command.py, and triggers.py
-    with direct top-level imports of the now-public symbols. ~120 lines moved out of
-    spawner.py, 4 import statements simplified. Pure move refactoring, no logic changes.
-    Follows the pattern from items 047 (core/git.py), 060 (core/process.py), and 071
-    (core/review.py) which carved out cohesive sub-modules from spawner.py.'
+    with direct top-level imports of the now-public symbols. ~120 lines moved out
+    of spawner.py, 4 import statements simplified. Pure move refactoring, no logic
+    changes. Follows the pattern from items 047 (core/git.py), 060 (core/process.py),
+    and 071 (core/review.py) which carved out cohesive sub-modules from spawner.py.'
   category: architecture
   status: pending
   created: '2026-04-09T12:00:00Z'

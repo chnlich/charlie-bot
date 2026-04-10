@@ -439,6 +439,19 @@ async def run_improve_loop(
                 "status": status,
                 "summary": summary[:200],
             })
+
+        # Trigger master after each iteration so it sees progress
+        iter_trigger_payload = {
+            'type': ET.IMPROVE_ITERATION_COMPLETED,
+            'goal': goal,
+            'iteration': i,
+            'total_iterations': iterations,
+            'status': status,
+            'summary': summary[:200],
+            'work_branch': work_branch,
+        }
+        await _trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr)
+
         break  # Move to next iteration
 
       # If we broke out of the while loop, check why
@@ -478,7 +491,6 @@ async def run_improve_loop(
         log.warning("improve_loop_push_failed", session=session_id, error=push_err)
 
     await session_mgr.persist_and_broadcast(session_id, payload)
-    await _trigger_master(session_id, json.dumps(payload, indent=2), cfg, session_mgr)
 
   except asyncio.CancelledError:
     log.warning("improve_loop_cancelled", session=session_id)
@@ -490,11 +502,6 @@ async def run_improve_loop(
     if state:
       state.status = 'failed'
       save_improve_state(session_id, state, cfg)
-    try:
-      failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
-      await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
-    except Exception:
-      log.error("improve_loop_trigger_master_on_failure_failed", session=session_id, exc_info=True)
   finally:
     # Always clean up the shared worktree
     if wt_path.exists():

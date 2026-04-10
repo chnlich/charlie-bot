@@ -1576,7 +1576,8 @@
     glue added. Pure extraction refactoring, no logic changes. Also deletes dead _summarize_event_lines
     function (L44, zero callers) during the move.
   category: architecture
-  status: approved
+  status: in_progress
+  in_progress_at: '2026-04-10T12:00:00Z'
   created: '2026-04-08T12:00:00Z'
   priority: medium
 - id: 092

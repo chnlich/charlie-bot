@@ -121,8 +121,9 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     } else if (ev.auto_trigger) {
       // Auto-triggered runs: show spinner/status but keep send button enabled
       if (ev.has_running_tasks) startThinking({keepSendEnabled: true});
-      else stopThinking();
+      else stopThinking({preserveSessionIndicator: true});
     }
+    refreshSessionStatusNow();
     return;
   }
 
@@ -184,7 +185,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
       const elapsed = ev.thinking_seconds != null
         ? ev.thinking_seconds
         : (thinkingStart ? Math.floor((Date.now() - thinkingStart) / 1000) : null);
-      stopThinking();
+      stopThinking({preserveSessionIndicator: true});
       if (catchupDone) appendSeparator(elapsed, ev.event_index);
     }
   } else if (t === 'assistant_error') {
@@ -229,7 +230,8 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
       full_content: ev.full_content || "",
       timestamp: ev.timestamp,
     });
-    updateSpinner();
+    if (ev.status === 'running') refreshSessionStatusNow({refreshWorkers: true});
+    else updateSpinner();
   } else if (t === 'handler_result') {
     const icon = ev.status === 'ok' ? '✓' : '✗';
     appendMessage('system', `${icon} ${ev.task}: ${ev.message || ''}`, false, ev.timestamp);

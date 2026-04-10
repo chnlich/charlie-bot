@@ -5,6 +5,12 @@
 // unread dot after the spinner hides.
 const sessionUnread = {};
 
+function getSessionIndicatorState(status) {
+  if (status.thinking_since) return 'thinking';
+  if (status.has_running_tasks) return 'worker_only';
+  return 'idle';
+}
+
 function pendingTriggerTitle(count) {
   const normalized = Number(count) || 0;
   if (normalized === 1) return '1 pending delayed trigger';
@@ -442,13 +448,10 @@ function setSessionPendingTriggerIndicator(sid, status) {
 function updateSpinner() {
   var anyWorkerRunning = Array.from(document.querySelectorAll('[id^="thread-status-"]'))
     .some(function(el) { return el.textContent.startsWith('running'); });
-  if (masterThinking) {
-    setSessionIndicator(SESSION_ID, 'thinking');
-  } else if (anyWorkerRunning) {
-    setSessionIndicator(SESSION_ID, 'worker_only');
-  } else {
-    setSessionIndicator(SESSION_ID, 'idle');
-  }
+  setSessionIndicator(SESSION_ID, getSessionIndicatorState({
+    thinking_since: masterThinking ? (THINKING_SINCE || true) : null,
+    has_running_tasks: anyWorkerRunning,
+  }));
 }
 
 function stopActiveSessionViewPolling() {
@@ -499,35 +502,47 @@ async function pollActiveSessionView() {
 let statusPollInterval = null;
 let statusPollInflight = false;
 let statusPollMs = 3000;
+let statusPollPromise = Promise.resolve(false);
+let statusPollQueued = false;
+
+function applySessionStatus(sid, status) {
+  sessionUnread[sid] = status.has_unread;
+  setSessionIndicator(sid, getSessionIndicatorState(status));
+  setSessionPendingTriggerIndicator(sid, status);
+}
+
+function refreshSessionStatusNow(opts) {
+  if (opts && opts.refreshWorkers) pollWorkers();
+  if (!statusPollInflight) return pollSessionStatus();
+
+  statusPollQueued = true;
+  return statusPollPromise.then(() => {
+    if (!statusPollQueued) return false;
+    statusPollQueued = false;
+    return pollSessionStatus();
+  });
+}
 
 function pollSessionStatus() {
-  if (statusPollInflight) return Promise.resolve(false);
+  if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
-  return fetch('/api/sessions/status')
+  statusPollPromise = fetch('/api/sessions/status')
     .then(r => r.ok ? r.json() : null)
     .then(data => {
       if (!data) return false;
       let anyRunning = false;
       for (const [sid, st] of Object.entries(data)) {
-        if (sid !== SESSION_ID) sessionUnread[sid] = st.has_unread;
-        if (sid === SESSION_ID) {
-          updateSpinner();
-        } else {
-          if (st.thinking_since) {
-            setSessionIndicator(sid, 'thinking');
-          } else if (st.has_running_tasks) {
-            setSessionIndicator(sid, 'worker_only');
-          } else {
-            setSessionIndicator(sid, 'idle');
-          }
-        }
-        setSessionPendingTriggerIndicator(sid, st);
+        applySessionStatus(sid, st);
         if (st.has_running_tasks) anyRunning = true;
       }
       return anyRunning;
     })
-    .catch(() => false)
+    .catch(err => {
+      console.error('pollSessionStatus failed:', err);
+      return false;
+    })
     .finally(() => { statusPollInflight = false; });
+  return statusPollPromise;
 }
 
 // Poll-based workers tab updates (replaces WS-driven addWorkerCard/updateWorkerStatus)
@@ -559,7 +574,7 @@ function pollWorkers() {
         }
       }
     })
-    .catch(() => {});  // Silently ignore poll failures
+    .catch(err => console.error('pollWorkers failed:', err));
 }
 
 function updateWorkersTabBadge() {
@@ -761,7 +776,7 @@ function startThinking(opts) {
   ensureActiveSessionViewPolling();
 }
 
-function stopThinking() {
+function stopThinking(opts) {
   masterThinking = false;
   document.getElementById('thinking').classList.add('hidden');
   if (thinkingInterval) { clearInterval(thinkingInterval); thinkingInterval = null; }
@@ -769,7 +784,7 @@ function stopThinking() {
   document.getElementById('send-btn').disabled = false;
   document.getElementById('send-btn').classList.remove('opacity-50');
   stopActiveSessionViewPolling();
-  if (!switching) updateSpinner();
+  if (!switching && !(opts && opts.preserveSessionIndicator)) updateSpinner();
 }
 
 function updateThinkingTime() {
@@ -1201,6 +1216,7 @@ async function setSessionGroup(sessionId, group) {
 // ---------------------------------------------------------------------------
 function renderScheduledSessionItem(s) {
   const isActive = SESSION_ID === s.id;
+  const indicatorState = getSessionIndicatorState(s);
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
   const starFill = s.starred ? 'currentColor' : 'none';
   const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
@@ -1230,9 +1246,9 @@ function renderScheduledSessionItem(s) {
      ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}">
-    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.thinking_since ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-    <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${s.has_running_tasks && !s.thinking_since ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
+    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+    <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
     ${renderPendingTriggerIndicator(s)}
     <svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>
     <span class="flex-1 min-w-0">
@@ -1424,6 +1440,7 @@ async function deleteGroup(groupName) {
 function renderSessionItem(s, filter) {
   const starSvg = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
   const isActive = SESSION_ID === s.id;
+  const indicatorState = getSessionIndicatorState(s);
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
   const starFill = s.starred ? 'currentColor' : 'none';
   const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
@@ -1480,9 +1497,9 @@ function renderSessionItem(s, filter) {
      ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}">
-    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${s.thinking_since ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-    <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${s.has_running_tasks && !s.thinking_since ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && !s.has_running_tasks ? '' : 'hidden'}"></span>
+    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+    <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
     ${renderPendingTriggerIndicator(s)}
     ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
     <span class="flex-1 min-w-0">

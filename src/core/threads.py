@@ -100,7 +100,7 @@ class ThreadManager:
       if candidate.exists():
         return candidate
       # Stale index entry — fall through to scan
-      del self._thread_session_index[thread_id]
+      self._thread_session_index.pop(thread_id, None)
 
     # Fallback: O(n) directory scan
     if not self._cfg.sessions_dir.exists():

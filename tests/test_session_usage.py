@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 from src.core.config import CharlieBotConfig
+from src.core.codex_usage import _extract_codex_rollout_usage_event
 from src.core.models import BackendOption, SessionMetadata
-from src.core.sessions import SessionManager, _extract_codex_rollout_usage_event
+from src.core.sessions import SessionManager
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -91,7 +92,7 @@ async def test_resolve_session_usage_reads_live_codex_thread_id_from_chat_events
       ],
   )
   codex_root = tmp_path / ".codex" / "sessions"
-  monkeypatch.setattr("src.core.sessions._CODEX_SESSIONS_DIR", codex_root)
+  monkeypatch.setattr("src.core.codex_usage._CODEX_SESSIONS_DIR", codex_root)
   _write_codex_rollout(
       codex_root,
       native_thread_id,
@@ -172,7 +173,7 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
       ],
   )
   codex_root = tmp_path / ".codex" / "sessions"
-  monkeypatch.setattr("src.core.sessions._CODEX_SESSIONS_DIR", codex_root)
+  monkeypatch.setattr("src.core.codex_usage._CODEX_SESSIONS_DIR", codex_root)
   _write_codex_rollout(
       codex_root,
       native_thread_id,

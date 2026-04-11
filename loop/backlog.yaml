@@ -1142,7 +1142,7 @@
   priority: medium
 - id: 087
   title: 'Code health: fix formatting, unused imports, and dead code'
-  description: 'Re-confirmed by automated scan on 2026-04-11 (15th consecutive scan, originally found 2026-04-01). Prior dead-code
+  description: 'Re-confirmed by automated scan on 2026-04-11 (16th consecutive scan, originally found 2026-04-01). Prior dead-code
     issue (_summarize_event_lines) has been resolved. Remaining issues: (1) FORMATTING — 7 files have yapf diffs: src/core/git.py
     (function-call arg wrapping in git_merge_ff_only, git_push_branch, git_push_refspec, git_pull_ff_only), src/core/triggers.py
     (indentation in _fire_trigger), src/core/spawner.py (string concat alignment in _build_worker_prompt and arg wrapping
@@ -1153,16 +1153,18 @@
     it. Delete both import lines. (3) TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
     both say "TODO: re-enable when Claude Code version supports --effort". Resolve or convert to a tracked issue once the
     --effort flag ships. (4) LONG FUNCTIONS — 34 functions exceed 50 lines. Worst offenders: run_improve_loop() 199 lines
-    (src/core/improve_command.py:311), execute_command() 127 lines (src/api/slash.py:125), run_message() 114 lines (src/agents/master_cc.py:360),
-    _run_cc() 110 lines (src/agents/master_cc.py:181), run() 107 lines (src/agents/backends/base.py:156), _create_worktree_and_process()
-    120 lines (src/core/spawner.py:219). (5) MISSING TYPE IMPORTS — src/core/improve_command.py uses ThreadManager and SessionManager
-    as string annotations (L155, L178, L317, L318) without any import, not even under TYPE_CHECKING. Add from __future__ import
-    annotations or a TYPE_CHECKING guard. Items 1-2 are quick fixes; items 3-5 are tracked by other backlog items or require
-    upstream changes.'
+    (src/core/improve_command.py:311), execute_command() 127 lines (src/api/slash.py:125), _create_worktree_and_process()
+    120 lines (src/core/spawner.py:219), run_message() 114 lines (src/agents/master_cc.py:360), _run_cc() 110 lines (src/agents/master_cc.py:181),
+    run() 107 lines (src/agents/backends/base.py:156). (5) MISSING TYPE IMPORTS — src/core/improve_command.py uses ThreadManager
+    and SessionManager as string annotations (L155, L178, L317, L318) without any import, not even under TYPE_CHECKING. Add
+    from __future__ import annotations or a TYPE_CHECKING guard. (6) BARE CREATE_TASK — src/core/improve_command.py:453 uses
+    asyncio.create_task(_trigger_master(...)) instead of create_logged_task, meaning exceptions from the per-iteration master
+    trigger are silently discarded. Items 1-2 are quick fixes; items 3-6 are tracked by other backlog items or require upstream
+    changes.'
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-11T12:00:00Z'
+  updated: '2026-04-11T14:00:00Z'
   priority: low
 - id: 088
   title: Consolidate build_session_view_data and build_session_view_data_fast into single function
@@ -1298,3 +1300,27 @@
   status: pending
   created: '2026-04-11T12:00:00Z'
   priority: low
+- id: 095
+  title: Extract iteration body from run_improve_loop into _run_single_iteration helper
+  description: 'PURPOSE — Reduce the longest function in the codebase (run_improve_loop, 199 lines) by ~70 lines by extracting
+    the self-contained iteration body into a dedicated helper, making the main loop a clean orchestrator and fixing a silent-failure
+    bug. The inner while-True retry loop (L367-455, ~88 lines) handles 7 distinct responsibilities inlined in one block: check
+    stop signal, build description, get session metadata, create thread and spawn worker, check quota failure with retry,
+    extract summary and write fallback report, broadcast progress and trigger master. This density makes the main loop hard
+    to follow — the actual iteration logic is buried inside nested for+while+if structures 4 levels deep. Additionally, L453
+    uses bare asyncio.create_task(_trigger_master(...)) instead of create_logged_task, meaning exceptions from the per-iteration
+    master trigger are silently discarded (the exact anti-pattern item 050 fixed elsewhere but this call site was added later
+    by the iteration-trigger feature). HOW — Extract async def _run_single_iteration(i, iterations, goal, session_id, repo_path,
+    work_branch, wt_path, improve_dir, cfg, session_mgr, thread_mgr, resolved_backend, resolved_model, previous_summaries)
+    -> Optional[str] that returns the iteration summary on success, None if stopped by user, and raises on unrecoverable error.
+    The helper encapsulates the stop-check, description building, thread creation, spawn_worker call, quota-failure retry
+    loop, summary extraction, report writing, progress broadcast, and master trigger. Replace bare asyncio.create_task with
+    create_logged_task inside the helper. The main run_improve_loop becomes a ~130-line orchestrator: setup worktree, for-loop
+    calling _run_single_iteration, post-loop merge/push, cleanup. The nesting depth drops from 4 to 2 in the main function.
+    ~88 lines extracted into the helper, ~20 lines of glue replace them in the main function. Pure refactoring plus the create_logged_task
+    bug fix. Follows the pattern from items 003, 021, 058, 061, 062, and 063 which split other long functions by extracting
+    phase helpers.'
+  category: maintainability
+  status: pending
+  created: '2026-04-11T14:00:00Z'
+  priority: medium

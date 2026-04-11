@@ -323,11 +323,15 @@ async def _session_consumer(session_id: str) -> None:
           item.session_meta.thinking_since = None
           if item.clear_thinking_since:
             await item.clear_thinking_since(session_id, cc_session_id)
+          # Check if workers are still running before declaring idle.
+          from src.core.sessions import SessionManager
+          workers_running = await SessionManager(item.cfg)._has_running_tasks(session_id)
           await streaming_manager.broadcast(
               "sidebar", {
                   "type": ET.RUNNING_CHANGED,
                   "session_id": session_id,
-                  "has_running_tasks": False,
+                  "has_running_tasks": workers_running,
+                  "thinking_since": None,
                   "auto_trigger": item.auto_trigger,
               })
 
@@ -424,6 +428,7 @@ async def run_message(
             'type': ET.RUNNING_CHANGED,
             'session_id': session_meta.id,
             'has_running_tasks': True,
+            'thinking_since': session_meta.thinking_since.isoformat(),
             'auto_trigger': auto_trigger,
         })
   else:

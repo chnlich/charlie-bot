@@ -1,10 +1,8 @@
 - id: '001'
   title: Extract shared session-view loader
-  description: 'api/pages.py:index (L76-95) and api/sessions.py:get_session_view (L115-142)
-    duplicate the same load-events → load-threads → events_to_messages → usage_from_events
-    → mark_read pipeline. Extract a shared helper (e.g. build_session_view_data())
-    in api/message_utils.py or a new api/helpers.py that both endpoints call. Reduces
-    ~30 duplicate lines to ~2 call sites.
+  description: 'api/pages.py:index (L76-95) and api/sessions.py:get_session_view (L115-142) duplicate the same load-events
+    → load-threads → events_to_messages → usage_from_events → mark_read pipeline. Extract a shared helper (e.g. build_session_view_data())
+    in api/message_utils.py or a new api/helpers.py that both endpoints call. Reduces ~30 duplicate lines to ~2 call sites.
 
     '
   category: duplication
@@ -13,10 +11,9 @@
   priority: medium
 - id: '002'
   title: Collapse 6 session-toggle methods into generic helper
-  description: 'core/sessions.py has archive/unarchive/star/unstar/mark_waiting/unmark_waiting
-    (L227-292) all following identical get→mutate→save→log pattern. Introduce _update_field(session_id,
-    field, value, log_event) and reduce each to a one-liner. Saves ~50 lines, lowers
-    maintenance surface.
+  description: 'core/sessions.py has archive/unarchive/star/unstar/mark_waiting/unmark_waiting (L227-292) all following identical
+    get→mutate→save→log pattern. Introduce _update_field(session_id, field, value, log_event) and reduce each to a one-liner.
+    Saves ~50 lines, lowers maintenance surface.
 
     '
   category: duplication
@@ -25,11 +22,9 @@
   priority: low
 - id: '003'
   title: Split run_message into smaller functions
-  description: 'agents/master_cc.py:run_message is 180 lines — by far the longest
-    function. Extract logical phases: _build_prompt() for voice prefix, _handle_event()
-    for the event loop body (compact_boundary detection), _finalize_session() for
-    the finally block (thinking state, error broadcast, tex check). Each becomes a
-    testable unit.
+  description: 'agents/master_cc.py:run_message is 180 lines — by far the longest function. Extract logical phases: _build_prompt()
+    for voice prefix, _handle_event() for the event loop body (compact_boundary detection), _finalize_session() for the finally
+    block (thinking state, error broadcast, tex check). Each becomes a testable unit.
 
     '
   category: architecture
@@ -38,10 +33,9 @@
   priority: high
 - id: '004'
   title: 'Already resolved: ClaudeCodeBackend import no longer exists in master_cc.py'
-  description: 'Double-checked as requested: master_cc.py does NOT import ClaudeCodeBackend
-    at all. The file imports AgentBackend from base (L10) and uses build_backend from
-    registry (L152). The original issue was already resolved. This item can be closed
-    with no code changes needed.
+  description: 'Double-checked as requested: master_cc.py does NOT import ClaudeCodeBackend at all. The file imports AgentBackend
+    from base (L10) and uses build_backend from registry (L152). The original issue was already resolved. This item can be
+    closed with no code changes needed.
 
     '
   category: imports
@@ -50,9 +44,8 @@
   priority: low
 - id: '005'
   title: Fix yapf formatting violations in spawner.py and message_utils.py
-  description: 'yapf --diff found formatting issues in core/spawner.py (3 hunks: long
-    dict literal on L80, multi-arg log.error on L228, long _build_worker_event call
-    on L315) and api/message_utils.py (1 hunk: dict append indentation on L66). Run
+  description: 'yapf --diff found formatting issues in core/spawner.py (3 hunks: long dict literal on L80, multi-arg log.error
+    on L228, long _build_worker_event call on L315) and api/message_utils.py (1 hunk: dict append indentation on L66). Run
     yapf -i on both files.
 
     '
@@ -60,16 +53,14 @@
   status: done
   created: '2026-02-27T12:00:00Z'
   priority: low
-  done_reason: 'Already resolved: both files pass yapf --diff with no violations.
-    The original formatting issues were fixed by prior refactoring (items 016 and
-    021 which restructured both files). Verified with yapf -i (no changes) and yapf
-    --diff (clean).'
+  done_reason: 'Already resolved: both files pass yapf --diff with no violations. The original formatting issues were fixed
+    by prior refactoring (items 016 and 021 which restructured both files). Verified with yapf -i (no changes) and yapf --diff
+    (clean).'
 - id: '006'
   title: Cache scheduler session lookup per tick
-  description: 'core/scheduler.py _tick() calls _get_or_create_session and _get_last_run
-    per enabled task, each doing a full list_sessions() directory scan. With N tasks,
-    that''s 2N scans per 60s tick. Cache the session list once at the start of _tick()
-    and pass it to _maybe_run/_get_last_run. Reduces I/O from O(N) to O(1) per tick.
+  description: 'core/scheduler.py _tick() calls _get_or_create_session and _get_last_run per enabled task, each doing a full
+    list_sessions() directory scan. With N tasks, that''s 2N scans per 60s tick. Cache the session list once at the start
+    of _tick() and pass it to _maybe_run/_get_last_run. Reduces I/O from O(N) to O(1) per tick.
 
     '
   category: performance
@@ -78,9 +69,8 @@
   priority: medium
 - id: '007'
   title: Log silently swallowed exception in _fetch
-  description: 'api/sessions.py:99 (_fetch in all_sessions_usage) catches except Exception
-    and returns (sid, None) without logging. Per project rules, caught exceptions
-    must always be logged. Add log.debug or log.warning to the catch block.
+  description: 'api/sessions.py:99 (_fetch in all_sessions_usage) catches except Exception and returns (sid, None) without
+    logging. Per project rules, caught exceptions must always be logged. Add log.debug or log.warning to the catch block.
 
     '
   category: error-handling
@@ -89,26 +79,22 @@
   priority: high
 - id: 008
   title: Make _update_usage_cache async
-  description: 'core/sessions.py:422 _update_usage_cache() does synchronous read_text/write_text
-    file I/O but is called from async save_chat_event() on every persisted event.
-    On slow disks this blocks the event loop. Either wrap the file ops in asyncio.to_thread()
-    or keep the cache dict in-memory and flush periodically.
+  description: 'core/sessions.py:422 _update_usage_cache() does synchronous read_text/write_text file I/O but is called from
+    async save_chat_event() on every persisted event. On slow disks this blocks the event loop. Either wrap the file ops in
+    asyncio.to_thread() or keep the cache dict in-memory and flush periodically.
 
     '
   category: performance
   status: done
   created: '2026-02-28T12:00:00Z'
   priority: medium
-  done_reason: 'Already resolved: _update_usage_cache() no longer exists. save_chat_event()
-    now uses async append_ndjson (aiofiles) for persistence and an in-memory _events_cache
-    dict for reads — no sync file I/O blocks the event loop.'
+  done_reason: 'Already resolved: _update_usage_cache() no longer exists. save_chat_event() now uses async append_ndjson (aiofiles)
+    for persistence and an in-memory _events_cache dict for reads — no sync file I/O blocks the event loop.'
 - id: 009
   title: Remove redundant field_validators in config.py
-  description: 'core/config.py has both a model_validator (migrate_and_expand, L98-101)
-    and separate field_validators (expand_workspace_dirs L120, expand_worktree_dir
-    L125) that both call os.path.expanduser on workspace_dirs and worktree_dir. The
-    model_validator runs first and already handles expansion. Delete the two field_validators
-    (6 lines) to avoid double-expansion.
+  description: 'core/config.py has both a model_validator (migrate_and_expand, L98-101) and separate field_validators (expand_workspace_dirs
+    L120, expand_worktree_dir L125) that both call os.path.expanduser on workspace_dirs and worktree_dir. The model_validator
+    runs first and already handles expansion. Delete the two field_validators (6 lines) to avoid double-expansion.
 
     '
   category: maintainability
@@ -117,52 +103,45 @@
   priority: low
 - id: '010'
   title: Unify slash command dispatch between chat.py and slash.py
-  description: api/chat.py L72-117 and api/slash.py L60-139 both implement slash command
-    lookup and dispatch (load commands → dict → lookup → handle prompt/shell scope).
-    Extract a shared dispatch_slash_command() helper in core/slash_commands.py that
-    both endpoints call. Removes ~40 duplicate lines and ensures bug fixes apply in
-    both paths.
+  description: api/chat.py L72-117 and api/slash.py L60-139 both implement slash command lookup and dispatch (load commands
+    → dict → lookup → handle prompt/shell scope). Extract a shared dispatch_slash_command() helper in core/slash_commands.py
+    that both endpoints call. Removes ~40 duplicate lines and ensures bug fixes apply in both paths.
   category: duplication
   status: done
   created: '2026-03-01T12:00:00Z'
   priority: high
 - id: '011'
   title: Clean up worker.py imports and move WORKER_COMMAND to spawner.py
-  description: agents/worker.py:13 imports get_config but never uses it (cfg is passed
-    via constructor) — delete. agents/worker.py:11 imports BASE_COMMAND as WORKER_COMMAND
-    which spawner.py re-imports; spawner.py should import BASE_COMMAND directly from
-    agents/backends/claude_code instead of going through worker.py. Then remove the
-    WORKER_COMMAND alias from worker.py.
+  description: agents/worker.py:13 imports get_config but never uses it (cfg is passed via constructor) — delete. agents/worker.py:11
+    imports BASE_COMMAND as WORKER_COMMAND which spawner.py re-imports; spawner.py should import BASE_COMMAND directly from
+    agents/backends/claude_code instead of going through worker.py. Then remove the WORKER_COMMAND alias from worker.py.
   category: imports
   status: done
   created: '2026-03-01T12:00:00Z'
   priority: low
 - id: '012'
   title: Remove dead subscriber_count method from StreamingManager
-  description: core/streaming.py:57-58 defines subscriber_count() on StreamingManager
-    but it is never called anywhere in the codebase. Delete the 2-line method.
+  description: core/streaming.py:57-58 defines subscriber_count() on StreamingManager but it is never called anywhere in the
+    codebase. Delete the 2-line method.
   category: dead-code
   status: done
   created: '2026-03-01T12:00:00Z'
   priority: low
 - id: '013'
   title: Log swallowed exceptions in _update_usage_cache
-  description: core/sessions.py:429-430 catches (json.JSONDecodeError, OSError) with
-    pass when reading the usage cache file. Also L364-365 in get_session_usage catches
-    OSError with pass. Both silently swallow exceptions, violating the project rule.
-    Add log.debug to each catch block.
+  description: core/sessions.py:429-430 catches (json.JSONDecodeError, OSError) with pass when reading the usage cache file.
+    Also L364-365 in get_session_usage catches OSError with pass. Both silently swallow exceptions, violating the project
+    rule. Add log.debug to each catch block.
   category: error-handling
   status: done
   created: '2026-03-01T12:00:00Z'
   priority: medium
-  done_reason: 'Added log.debug to two swallowed exception blocks in sessions.py:
-    rewind_parse_skip (L151) and thread_meta_read_failed (L416). The original _update_usage_cache
-    and get_session_usage methods no longer exist after prior refactoring.'
+  done_reason: 'Added log.debug to two swallowed exception blocks in sessions.py: rewind_parse_skip (L151) and thread_meta_read_failed
+    (L416). The original _update_usage_cache and get_session_usage methods no longer exist after prior refactoring.'
 - id: '014'
   title: Stop calling private _save_metadata from spawner.py
-  description: core/spawner.py calls thread_mgr._save_metadata(thread) directly on
-    L133, L154, L174 — accessing a private method across module boundaries. ThreadManager
-    should expose a public save_metadata() method (like SessionManager.save_metadata
+  description: core/spawner.py calls thread_mgr._save_metadata(thread) directly on L133, L154, L174 — accessing a private
+    method across module boundaries. ThreadManager should expose a public save_metadata() method (like SessionManager.save_metadata
     at sessions.py:294) and spawner.py should use it.
   category: maintainability
   status: done
@@ -170,63 +149,53 @@
   priority: medium
 - id: '015'
   title: Pull terminate() and _DEFAULT_BUFFER_LIMIT into AgentBackend base class
-  description: Eliminate identical code duplicated across both backends. ClaudeCodeBackend
-    (claude_code.py:116-129) and CodexBackend (codex.py:259-272) have identical terminate()
-    implementations (13 lines each). Both also define _DEFAULT_BUFFER_LIMIT = 1GB.
-    Move terminate() as a concrete method on AgentBackend in base.py, add a _proc
-    attribute to the base, and define DEFAULT_BUFFER_LIMIT there. Removes ~25 lines
-    of duplication and ensures consistency for future backends.
+  description: Eliminate identical code duplicated across both backends. ClaudeCodeBackend (claude_code.py:116-129) and CodexBackend
+    (codex.py:259-272) have identical terminate() implementations (13 lines each). Both also define _DEFAULT_BUFFER_LIMIT
+    = 1GB. Move terminate() as a concrete method on AgentBackend in base.py, add a _proc attribute to the base, and define
+    DEFAULT_BUFFER_LIMIT there. Removes ~25 lines of duplication and ensures consistency for future backends.
   category: duplication
   status: done
   created: '2026-03-02T12:00:00Z'
   priority: medium
-  done_reason: 'Already resolved: terminate() is already a concrete method on AgentBackend
-    in base.py (L138-154), DEFAULT_BUFFER_LIMIT is defined at base.py:15, and _proc
-    is initialized in __init__ (L53). Neither ClaudeCodeBackend nor CodexBackend have
+  done_reason: 'Already resolved: terminate() is already a concrete method on AgentBackend in base.py (L138-154), DEFAULT_BUFFER_LIMIT
+    is defined at base.py:15, and _proc is initialized in __init__ (L53). Neither ClaudeCodeBackend nor CodexBackend have
     duplicate implementations.'
 - id: '016'
   title: Extract assistant-buffer flush helper in events_to_messages
-  description: Reduce repetition and prevent bugs in the message parser. api/message_utils.py:events_to_messages
-    (99 lines) repeats the same 3-line "flush assistant_buf" block ~10 times (before
-    each event type branch). Extract a local _flush() closure that appends the buffer
-    and resets it. Cuts ~25 lines and makes adding new event types less error-prone.
+  description: Reduce repetition and prevent bugs in the message parser. api/message_utils.py:events_to_messages (99 lines)
+    repeats the same 3-line "flush assistant_buf" block ~10 times (before each event type branch). Extract a local _flush()
+    closure that appends the buffer and resets it. Cuts ~25 lines and makes adding new event types less error-prone.
   category: maintainability
   status: done
   created: '2026-03-02T12:00:00Z'
   priority: medium
 - id: '017'
   title: Extract compact_boundary handling into shared helper
-  description: Deduplicate near-identical event handling between master and worker.
-    master_cc.py:190-201 and worker.py:153-165 both detect compact_boundary system
-    events, create a context_compacted event, log it, and broadcast it. They differ
-    only in persistence (master calls save_chat_event, worker does explicit log_file.write+flush)
-    and log context keys. Extract a handle_compact_boundary(event, channel_or_id,
-    broadcast_fn, persist_fn, log_context) helper in core/streaming.py or a new core/events.py.
-    Both call sites become one-liners.
+  description: Deduplicate near-identical event handling between master and worker. master_cc.py:190-201 and worker.py:153-165
+    both detect compact_boundary system events, create a context_compacted event, log it, and broadcast it. They differ only
+    in persistence (master calls save_chat_event, worker does explicit log_file.write+flush) and log context keys. Extract
+    a handle_compact_boundary(event, channel_or_id, broadcast_fn, persist_fn, log_context) helper in core/streaming.py or
+    a new core/events.py. Both call sites become one-liners.
   category: duplication
   status: done
   created: '2026-03-02T12:00:00Z'
   priority: medium
 - id: 018
   title: Remove stale debug logging and unused import in api/sessions.py and api/chat.py
-  description: Clean up leftover debugging artifacts. api/sessions.py:42-48 has a
-    verbose log.info("create_session_request_dump") that dumps full request data —
-    this was temporary debugging for a backend selection issue and should be removed
-    or downgraded to log.debug. api/chat.py:11 imports BaseModel from pydantic but
-    never uses it — delete the import.
+  description: Clean up leftover debugging artifacts. api/sessions.py:42-48 has a verbose log.info("create_session_request_dump")
+    that dumps full request data — this was temporary debugging for a backend selection issue and should be removed or downgraded
+    to log.debug. api/chat.py:11 imports BaseModel from pydantic but never uses it — delete the import.
   category: maintainability
   status: done
   created: '2026-03-02T12:00:00Z'
   priority: low
 - id: 019
   title: Add default_backend_id property using model_preference config
-  description: Eliminate 4 copies of the fallback expression across the codebase.
-    The expression `cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"`
-    is duplicated in api/sessions.py (L61, L67, L178) and api/pages.py (L95). Add
-    a `@property default_backend_id` to CharlieBotConfig in core/config.py that consults
-    the existing `model_preference` list first — return the first entry that matches
-    a valid backend_option, falling back to backend_options[0].id or the hardcoded
-    default. Replace all 4 call sites with `cfg.default_backend_id`.
+  description: Eliminate 4 copies of the fallback expression across the codebase. The expression `cfg.backend_options[0].id
+    if cfg.backend_options else "claude-opus-4.6"` is duplicated in api/sessions.py (L61, L67, L178) and api/pages.py (L95).
+    Add a `@property default_backend_id` to CharlieBotConfig in core/config.py that consults the existing `model_preference`
+    list first — return the first entry that matches a valid backend_option, falling back to backend_options[0].id or the
+    hardcoded default. Replace all 4 call sites with `cfg.default_backend_id`.
   category: duplication
   status: rejected
   created: '2026-03-03T12:00:00Z'
@@ -235,43 +204,36 @@
   rejected_reason: this is not the case any more, now we have preference list
 - id: '020'
   title: Deduplicate cc_session_id persistence into SessionManager
-  description: Prevent divergent persistence logic for cc_session_id. api/chat.py:170-174
-    inlines the same "read-fresh → set cc_session_id → save" logic that spawner.py:429
-    already has as `_persist_cc_session_id`. Move the helper to SessionManager as
-    a public method `persist_cc_session_id(session_id, cc_session_id)` and have both
-    chat.py and spawner.py call it.
+  description: Prevent divergent persistence logic for cc_session_id. api/chat.py:170-174 inlines the same "read-fresh → set
+    cc_session_id → save" logic that spawner.py:429 already has as `_persist_cc_session_id`. Move the helper to SessionManager
+    as a public method `persist_cc_session_id(session_id, cc_session_id)` and have both chat.py and spawner.py call it.
   category: duplication
   status: done
   created: '2026-03-03T12:00:00Z'
   priority: medium
 - id: '021'
   title: Split spawn_worker into smaller phase functions
-  description: Improve readability of the second-longest function in the codebase.
-    core/spawner.py:spawn_worker (L220-365, ~145 lines) handles worktree creation,
-    process spawning, event streaming, and finalization in one function. Note that
-    _build_worker_prompt() is already extracted (L25). Extract the remaining phases
-    into _create_worktree_and_process(), _stream_worker_events(), and _finalize_worker().
-    Similar approach to backlog 003 for run_message.
+  description: Improve readability of the second-longest function in the codebase. core/spawner.py:spawn_worker (L220-365,
+    ~145 lines) handles worktree creation, process spawning, event streaming, and finalization in one function. Note that
+    _build_worker_prompt() is already extracted (L25). Extract the remaining phases into _create_worktree_and_process(), _stream_worker_events(),
+    and _finalize_worker(). Similar approach to backlog 003 for run_message.
   category: architecture
   status: done
   created: '2026-03-03T12:00:00Z'
   priority: high
 - id: '022'
   title: Fix yapf violations in codex.py, pages.py, and sessions.py
-  description: Bring remaining files into yapf compliance. Backlog 005 covers spawner.py
-    and message_utils.py only. yapf --diff also flags agents/backends/codex.py (~10
-    hunks, mostly list/dict formatting), api/pages.py (1 hunk, generator expression
-    wrapping), and api/sessions.py (1 hunk, log.info indentation). Run `yapf -i` on
-    all three files.
+  description: Bring remaining files into yapf compliance. Backlog 005 covers spawner.py and message_utils.py only. yapf --diff
+    also flags agents/backends/codex.py (~10 hunks, mostly list/dict formatting), api/pages.py (1 hunk, generator expression
+    wrapping), and api/sessions.py (1 hunk, log.info indentation). Run `yapf -i` on all three files.
   category: formatting
   status: done
   created: '2026-03-03T12:00:00Z'
   priority: low
 - id: '023'
   title: Remove dead get_thread_dir and unused Optional import in codex.py
-  description: Clean up two dead symbols found in the health check. core/threads.py:91
-    defines get_thread_dir() which wraps _thread_dir but has zero callers anywhere
-    in the codebase — delete it. agents/backends/codex.py:6 imports Optional from
+  description: Clean up two dead symbols found in the health check. core/threads.py:91 defines get_thread_dir() which wraps
+    _thread_dir but has zero callers anywhere in the codebase — delete it. agents/backends/codex.py:6 imports Optional from
     typing but never uses it — delete the import.
   category: dead-code
   status: done
@@ -279,34 +241,28 @@
   priority: low
 - id: '024'
   title: Wrap iterdir() in asyncio.to_thread() in sessions.py
-  description: Fix sync I/O blocking the event loop on page loads. sessions.py:list_sessions
-    (L78) and search_sessions (L105) call Path.iterdir() synchronously inside async
-    functions. Wrap both in asyncio.to_thread() or convert to anyio.Path.iterdir().
-    These run on every page load and session search, so blocking here directly impacts
-    UI responsiveness.
+  description: Fix sync I/O blocking the event loop on page loads. sessions.py:list_sessions (L78) and search_sessions (L105)
+    call Path.iterdir() synchronously inside async functions. Wrap both in asyncio.to_thread() or convert to anyio.Path.iterdir().
+    These run on every page load and session search, so blocking here directly impacts UI responsiveness.
   category: performance
   status: done
   created: '2026-03-03T14:00:00Z'
   priority: medium
-  done_reason: 'Already resolved: both list_sessions (L74) and search_sessions (L100)
-    already wrap Path.iterdir() in asyncio.to_thread(lambda: [d for d in ...iterdir()
-    if d.is_dir()]). No code changes needed.'
+  done_reason: 'Already resolved: both list_sessions (L74) and search_sessions (L100) already wrap Path.iterdir() in asyncio.to_thread(lambda:
+    [d for d in ...iterdir() if d.is_dir()]). No code changes needed.'
 - id: '025'
   title: Add get_backend_option(id) method to CharlieBotConfig
-  description: Centralize backend option lookup scattered across 4 call sites. The
-    pattern next((opt for opt in cfg.backend_options if opt.id == X), None) appears
-    in chat.py:151, spawner.py:165/179/197. Add a get_backend_option(self, backend_id)
-    -> BackendOption | None method to CharlieBotConfig in core/config.py and replace
-    all inline lookups. Complements backlog item 019 (default_backend_id).
+  description: Centralize backend option lookup scattered across 4 call sites. The pattern next((opt for opt in cfg.backend_options
+    if opt.id == X), None) appears in chat.py:151, spawner.py:165/179/197. Add a get_backend_option(self, backend_id) -> BackendOption
+    | None method to CharlieBotConfig in core/config.py and replace all inline lookups. Complements backlog item 019 (default_backend_id).
   category: duplication
   status: done
   created: '2026-03-03T14:00:00Z'
   priority: medium
 - id: '026'
   title: Remove dead AgentBackend.pid property
-  description: Clean up dead code on the backend base class. agents/backends/base.py:51
-    defines a pid property that is never accessed anywhere in the codebase. All PID
-    access goes through self._proc.pid directly or via the on_spawn callback parameter.
+  description: Clean up dead code on the backend base class. agents/backends/base.py:51 defines a pid property that is never
+    accessed anywhere in the codebase. All PID access goes through self._proc.pid directly or via the on_spawn callback parameter.
     Delete the 3-line property definition.
   category: dead-code
   status: done
@@ -314,148 +270,121 @@
   priority: low
 - id: '027'
   title: Split _notify_completion in spawner.py into phases
-  description: Improve readability of spawner.py's third-longest function. core/spawner.py:_notify_completion
-    (L530-612, 83 lines) handles three distinct responsibilities in one function —
-    broadcasting completion events, spawning review worker, and triggering master
-    agent. Extract _broadcast_completion() for event building and websocket broadcast,
-    and _maybe_spawn_reviewer() for the review worker decision and spawn. The _trigger_master
-    call already exists as a separate function. Similar approach to backlog items
-    003 and 021.
+  description: Improve readability of spawner.py's third-longest function. core/spawner.py:_notify_completion (L530-612, 83
+    lines) handles three distinct responsibilities in one function — broadcasting completion events, spawning review worker,
+    and triggering master agent. Extract _broadcast_completion() for event building and websocket broadcast, and _maybe_spawn_reviewer()
+    for the review worker decision and spawn. The _trigger_master call already exists as a separate function. Similar approach
+    to backlog items 003 and 021.
   category: architecture
   status: done
   created: '2026-03-03T14:00:00Z'
   priority: medium
 - id: 028
   title: Split _translate_item_event in codex.py into handler methods
-  description: Reduce complexity of 101-line event translation function. agents/backends/codex.py:_translate_item_event
-    (L127-227) uses 8 independent if-blocks to handle different Codex event types
-    (agent_message, reasoning, command_execution, file_change, mcp_tool_call, web_search,
-    todo_list, error). Note these are independent ifs (not elif) so multiple handlers
-    can fire per event. Extract each block into a _handle_<type>() method. The main
-    function becomes a loop calling each handler, preserving multi-fire semantics.
+  description: Reduce complexity of 101-line event translation function. agents/backends/codex.py:_translate_item_event (L127-227)
+    uses 8 independent if-blocks to handle different Codex event types (agent_message, reasoning, command_execution, file_change,
+    mcp_tool_call, web_search, todo_list, error). Note these are independent ifs (not elif) so multiple handlers can fire
+    per event. Extract each block into a _handle_<type>() method. The main function becomes a loop calling each handler, preserving
+    multi-fire semantics.
   category: architecture
   status: done
   created: '2026-03-03T14:00:00Z'
   priority: low
 - id: 029
   title: Refactor events_to_messages repetitive branches into dispatch table
-  description: Reduce the longest function in the codebase (events_to_messages, 146
-    lines) by replacing 7 near-identical if-elif branches with a data-driven dispatch
-    table. 7 of 9 event types (master_done, assistant_error, error, task_delegated,
-    worker_summary, handler_result, context_compacted) follow the same pattern — _flush()
-    then messages.append({role, content, event_index, timestamp}) with only role and
-    content-extraction differing. Define a SIMPLE_HANDLERS dict mapping event type
-    to (role, content_fn) and replace the 7 branches with a ~10-line loop. Keep only
-    the special user and assistant branches inline. Cuts ~60 lines of repetitive code
-    and makes adding new event types a one-line dict entry.
+  description: Reduce the longest function in the codebase (events_to_messages, 146 lines) by replacing 7 near-identical if-elif
+    branches with a data-driven dispatch table. 7 of 9 event types (master_done, assistant_error, error, task_delegated, worker_summary,
+    handler_result, context_compacted) follow the same pattern — _flush() then messages.append({role, content, event_index,
+    timestamp}) with only role and content-extraction differing. Define a SIMPLE_HANDLERS dict mapping event type to (role,
+    content_fn) and replace the 7 branches with a ~10-line loop. Keep only the special user and assistant branches inline.
+    Cuts ~60 lines of repetitive code and makes adding new event types a one-line dict entry.
   category: maintainability
   status: done
   created: '2026-03-09T12:00:00Z'
   priority: medium
 - id: '030'
   title: Fix unchecked returncodes in api/backlog.py _git_commit_push
-  description: Prevent silent git failures in backlog status updates. api/backlog.py:_git_commit_push
-    (L184-219) spawns three sequential git subprocesses (add, commit, push) using
-    asyncio.create_subprocess_exec with DEVNULL but never checks returncode after
-    each .wait(). If git add fails, git commit still runs; if commit fails, push still
-    runs — all silently. This is inconsistent with improvement_loop.py:_git_commit_push
-    (L123-131) which correctly uses subprocess.run(check=True, capture_output=True).
-    Refactor to use asyncio.to_thread wrapping sequential subprocess.run(check=True,
-    capture_output=True) calls, matching the established pattern. Short-circuits on
-    first failure and logs captured stderr for diagnostics.
+  description: Prevent silent git failures in backlog status updates. api/backlog.py:_git_commit_push (L184-219) spawns three
+    sequential git subprocesses (add, commit, push) using asyncio.create_subprocess_exec with DEVNULL but never checks returncode
+    after each .wait(). If git add fails, git commit still runs; if commit fails, push still runs — all silently. This is
+    inconsistent with improvement_loop.py:_git_commit_push (L123-131) which correctly uses subprocess.run(check=True, capture_output=True).
+    Refactor to use asyncio.to_thread wrapping sequential subprocess.run(check=True, capture_output=True) calls, matching
+    the established pattern. Short-circuits on first failure and logs captured stderr for diagnostics.
   category: error-handling
   status: done
   created: '2026-03-09T12:00:00Z'
   priority: high
 - id: '031'
   title: Unify default-session-name detection used by chat and autonamer
-  description: 'Avoid divergent regex semantics across api/chat.py and core/autonamer.py.
-    chat.py currently gates auto-naming with ^Session \d+$, while autonamer.py uses
-    ^(Session \d+$|\d+: ) which also matches already-renamed titles like "7: My Topic".
-    That means removing the chat.py guard would trigger repeated renames on later
-    turns. Extract a shared helper (for example is_default_session_name(name)) and
-    define explicit behavior: match only true defaults ("Session N"), plus legacy
-    empty placeholders ("N: " with no title) if still required. Use the helper in
-    both call sites.'
+  description: 'Avoid divergent regex semantics across api/chat.py and core/autonamer.py. chat.py currently gates auto-naming
+    with ^Session \d+$, while autonamer.py uses ^(Session \d+$|\d+: ) which also matches already-renamed titles like "7: My
+    Topic". That means removing the chat.py guard would trigger repeated renames on later turns. Extract a shared helper (for
+    example is_default_session_name(name)) and define explicit behavior: match only true defaults ("Session N"), plus legacy
+    empty placeholders ("N: " with no title) if still required. Use the helper in both call sites.'
   category: maintainability
   status: done
   created: '2026-03-10T12:00:00Z'
   priority: medium
 - id: '032'
   title: Log malformed JSON fallback in codex.py _handle_tool_call
-  description: 'agents/backends/codex.py:237 catches json.JSONDecodeError when parsing
-    tool call arguments and silently falls back to {"raw": arguments} with no logging.
-    This masks malformed Codex responses. Add a log.warning with the raw arguments
-    string so malformed responses are diagnosable. Do not change the fallback behavior
-    itself — only add the log call.'
+  description: 'agents/backends/codex.py:237 catches json.JSONDecodeError when parsing tool call arguments and silently falls
+    back to {"raw": arguments} with no logging. This masks malformed Codex responses. Add a log.warning with the raw arguments
+    string so malformed responses are diagnosable. Do not change the fallback behavior itself — only add the log call.'
   category: error-handling
   status: done
   created: '2026-03-10T12:00:00Z'
   priority: medium
 - id: '033'
   title: Surface page-load errors to user in api/pages.py index route
-  description: api/pages.py:57-61 catches Exception on list_sessions and silently
-    sets sessions=[]. The page renders as if there are zero sessions, with no indication
-    that an error occurred. Same pattern for threads (L65). Per project rules (fail
-    loudly), propagate the exception or pass an error flag to the template so the
-    frontend can display a warning banner. The log.exception call is already there
-    but the user never sees the error.
+  description: api/pages.py:57-61 catches Exception on list_sessions and silently sets sessions=[]. The page renders as if
+    there are zero sessions, with no indication that an error occurred. Same pattern for threads (L65). Per project rules
+    (fail loudly), propagate the exception or pass an error flag to the template so the frontend can display a warning banner.
+    The log.exception call is already there but the user never sees the error.
   category: error-handling
   status: done
   created: '2026-03-10T12:00:00Z'
   priority: medium
 - id: '034'
   title: Wrap blocking _read_subagent_instructions in asyncio.to_thread in spawner.py
-  description: Prevent event-loop blocking during worker spawning. core/spawner.py:315
-    calls _read_subagent_instructions(cfg) synchronously inside async _create_worktree_and_process(),
-    performing Path.exists() and Path.read_text() directly on the event loop. The
-    analogous call in master_cc.py:187 (_build_instructions_content) is already correctly
-    wrapped with asyncio.to_thread(). Wrap the spawner.py call with await asyncio.to_thread()
-    to match the established pattern. One-line fix.
+  description: Prevent event-loop blocking during worker spawning. core/spawner.py:315 calls _read_subagent_instructions(cfg)
+    synchronously inside async _create_worktree_and_process(), performing Path.exists() and Path.read_text() directly on the
+    event loop. The analogous call in master_cc.py:187 (_build_instructions_content) is already correctly wrapped with asyncio.to_thread().
+    Wrap the spawner.py call with await asyncio.to_thread() to match the established pattern. One-line fix.
   category: performance
   status: done
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: '035'
   title: Wrap blocking parse_ndjson_file call in _read_events_summary with asyncio.to_thread
-  description: Prevent event-loop blocking when summarizing worker events for completion
-    notifications. core/spawner.py:817 calls parse_ndjson_file(events_path) synchronously
-    inside async _read_events_summary(), which reads and parses potentially large
-    NDJSON event logs directly on the event loop. This function is called twice during
-    worker completion (L684 for notify, L770 for review). The analogous call in api/threads.py:64
-    already correctly uses await asyncio.to_thread(parse_ndjson_file, events_path).
-    Wrap the spawner.py call with await asyncio.to_thread() to match the established
-    pattern. One-line fix.
+  description: Prevent event-loop blocking when summarizing worker events for completion notifications. core/spawner.py:817
+    calls parse_ndjson_file(events_path) synchronously inside async _read_events_summary(), which reads and parses potentially
+    large NDJSON event logs directly on the event loop. This function is called twice during worker completion (L684 for notify,
+    L770 for review). The analogous call in api/threads.py:64 already correctly uses await asyncio.to_thread(parse_ndjson_file,
+    events_path). Wrap the spawner.py call with await asyncio.to_thread() to match the established pattern. One-line fix.
   category: performance
   status: done
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: '036'
   title: Extract shared task-execution preamble in scheduler.py
-  description: Prevent divergent session-bookkeeping logic across scheduled task types.
-    _execute_handler_task (L157), _execute_prompt_task (L196), and _execute_loop_task
-    (L246) all repeat the same 8-line preamble — reload config, create SessionManager,
-    _get_or_create_session, ZoneInfo, datetime.now, then set last_scheduled_run, last_scheduled_cron,
-    updated_at, and save_metadata. Extract a helper like _prepare_task_execution(task_cfg)
-    that returns (cfg, SessionManager, SessionMetadata) with all bookkeeping fields
-    already persisted. Each execute method calls it as its first line, reducing ~24
-    duplicated lines to 3 call sites. Adding a new task type would require only calling
-    the helper instead of copying the preamble.
+  description: Prevent divergent session-bookkeeping logic across scheduled task types. _execute_handler_task (L157), _execute_prompt_task
+    (L196), and _execute_loop_task (L246) all repeat the same 8-line preamble — reload config, create SessionManager, _get_or_create_session,
+    ZoneInfo, datetime.now, then set last_scheduled_run, last_scheduled_cron, updated_at, and save_metadata. Extract a helper
+    like _prepare_task_execution(task_cfg) that returns (cfg, SessionManager, SessionMetadata) with all bookkeeping fields
+    already persisted. Each execute method calls it as its first line, reducing ~24 duplicated lines to 3 call sites. Adding
+    a new task type would require only calling the helper instead of copying the preamble.
   category: maintainability
   status: done
   created: '2026-03-11T12:00:00Z'
   priority: medium
 - id: '037'
   title: Extract shared spawn-and-broadcast tail in scheduler.py
-  description: Eliminate duplicated worker-spawning logic between two scheduled task
-    types. _execute_prompt_task (L213-243) and _execute_loop_task (L278-310) repeat
-    the same 25-line tail — resolve backend/model, asyncio.create_task(spawn_worker(...)),
-    build task_delegated event dict, broadcast_and_persist, log, and return. The only
-    differences are the description string and the log event name. Extract a helper
-    like _spawn_scheduled_worker(session, task_cfg, description, event_description,
-    cfg, session_mgr, thread_mgr) that encapsulates thread creation, backend resolution,
-    spawn_worker fire-and-forget, task_delegated broadcast, and the return dict. Each
-    caller becomes a 1-2 line call. Complements backlog item 036 (preamble extraction)
+  description: Eliminate duplicated worker-spawning logic between two scheduled task types. _execute_prompt_task (L213-243)
+    and _execute_loop_task (L278-310) repeat the same 25-line tail — resolve backend/model, asyncio.create_task(spawn_worker(...)),
+    build task_delegated event dict, broadcast_and_persist, log, and return. The only differences are the description string
+    and the log event name. Extract a helper like _spawn_scheduled_worker(session, task_cfg, description, event_description,
+    cfg, session_mgr, thread_mgr) that encapsulates thread creation, backend resolution, spawn_worker fire-and-forget, task_delegated
+    broadcast, and the return dict. Each caller becomes a 1-2 line call. Complements backlog item 036 (preamble extraction)
     — together they reduce each execute method to its unique logic only.
   category: duplication
   status: done
@@ -463,311 +392,246 @@
   priority: medium
 - id: 038
   title: Extract shared _resolve_binary and _effective_prompt into backend base module
-  description: Eliminate tripled utility code across CLI backend subclasses. gemini_cli.py:13,
-    opencode.py:15, and codex.py:17 each define a near-identical _resolve_*_binary()
-    function (shutil.which then fallback path then FileNotFoundError). Similarly,
-    all three repeat the same 3-line instructions-prepend block in _build_command().
-    Add a module-level _resolve_binary(name, fallback_dir) utility in agents/backends/base.py
-    and a _effective_prompt(self, prompt) method on AgentBackend. Each CLI backend
-    calls _resolve_binary() in __init__ and self._effective_prompt(prompt) in _build_command().
-    ClaudeCodeBackend is unaffected (uses _prepare_cwd for instructions). Removes
-    ~25 lines of triplication and ensures consistent error messages and prompt formatting
-    across current and future CLI backends.
+  description: Eliminate tripled utility code across CLI backend subclasses. gemini_cli.py:13, opencode.py:15, and codex.py:17
+    each define a near-identical _resolve_*_binary() function (shutil.which then fallback path then FileNotFoundError). Similarly,
+    all three repeat the same 3-line instructions-prepend block in _build_command(). Add a module-level _resolve_binary(name,
+    fallback_dir) utility in agents/backends/base.py and a _effective_prompt(self, prompt) method on AgentBackend. Each CLI
+    backend calls _resolve_binary() in __init__ and self._effective_prompt(prompt) in _build_command(). ClaudeCodeBackend
+    is unaffected (uses _prepare_cwd for instructions). Removes ~25 lines of triplication and ensures consistent error messages
+    and prompt formatting across current and future CLI backends.
   category: duplication
   status: done
   created: '2026-03-11T12:00:00Z'
   priority: low
 - id: 039
   title: Use os.killpg in cancel_thread and catch PermissionError
-  description: Prevent orphan child processes on worker cancellation. api/threads.py:122-125
-    cancel_thread sends SIGTERM via os.kill(pid, SIGTERM), which only signals the
-    group leader process. Since worker subprocesses are started with start_new_session=True
-    (base.py:110), each has its own process group whose children are missed by os.kill.
-    Additionally, only ProcessLookupError is caught, not PermissionError, inconsistent
-    with the established pattern in base.py:terminate() (L184) which catches both.
-    Fix by using os.killpg(os.getpgid(pid), SIGTERM) to signal the entire process
-    group, matching base.py's pattern, and catch (ProcessLookupError, PermissionError).
-    Wrap os.getpgid in the same try-except since the process may already be gone.
+  description: Prevent orphan child processes on worker cancellation. api/threads.py:122-125 cancel_thread sends SIGTERM via
+    os.kill(pid, SIGTERM), which only signals the group leader process. Since worker subprocesses are started with start_new_session=True
+    (base.py:110), each has its own process group whose children are missed by os.kill. Additionally, only ProcessLookupError
+    is caught, not PermissionError, inconsistent with the established pattern in base.py:terminate() (L184) which catches
+    both. Fix by using os.killpg(os.getpgid(pid), SIGTERM) to signal the entire process group, matching base.py's pattern,
+    and catch (ProcessLookupError, PermissionError). Wrap os.getpgid in the same try-except since the process may already
+    be gone.
   category: error-handling
   status: done
   created: '2026-03-12T12:00:00Z'
   priority: medium
 - id: '040'
   title: Parallelize metadata reads in list_sessions and search_sessions
-  description: Reduce page-load latency by reading session metadata concurrently instead
-    of sequentially. sessions.py list_sessions() (L64-92) and search_sessions() (L94-124)
-    call get_session() in a sequential for loop — N sessions means N serial file reads
-    on every page load and sidebar refresh. Gather all get_session() calls with asyncio.gather()
-    to issue them concurrently. The _has_running_tasks() check per session (also async,
-    wrapping sync I/O) can similarly be batched. Apply the same gather pattern in
-    both methods. Expected change is ~10 lines per method, replacing the for-loop
-    with a gather call and post-filtering.
+  description: Reduce page-load latency by reading session metadata concurrently instead of sequentially. sessions.py list_sessions()
+    (L64-92) and search_sessions() (L94-124) call get_session() in a sequential for loop — N sessions means N serial file
+    reads on every page load and sidebar refresh. Gather all get_session() calls with asyncio.gather() to issue them concurrently.
+    The _has_running_tasks() check per session (also async, wrapping sync I/O) can similarly be batched. Apply the same gather
+    pattern in both methods. Expected change is ~10 lines per method, replacing the for-loop with a gather call and post-filtering.
   category: performance
   status: done
   created: '2026-03-13T12:00:00Z'
   priority: medium
 - id: '041'
-  title: Split _spawn_review_worker into validation, backend selection, and spawn
-    phases
-  description: Improve readability of the longest function in the codebase (118 lines).
-    core/spawner.py _spawn_review_worker (L548-665) handles three distinct responsibilities
-    in one function — validating thread prerequisites (repo_path, branch_name, worktree_path),
-    selecting a reviewer backend via model_preference with retry/fallback logic, and
-    creating the review thread with metadata and firing off spawn_worker. Extract
-    _validate_review_prerequisites(original_thread, session_id) returning (repo_path,
-    branch_name, wt_path) or raising, and _select_reviewer_backend(cfg, worker_backend,
-    tried_backends) returning (resolved_backend, resolved_model, updated_tried_backends).
-    The main function becomes a short orchestrator calling both helpers then spawning.
-    Follows the established pattern of items 003, 021, and 027 which successfully
-    split other long functions in spawner.py and master_cc.py.
+  title: Split _spawn_review_worker into validation, backend selection, and spawn phases
+  description: Improve readability of the longest function in the codebase (118 lines). core/spawner.py _spawn_review_worker
+    (L548-665) handles three distinct responsibilities in one function — validating thread prerequisites (repo_path, branch_name,
+    worktree_path), selecting a reviewer backend via model_preference with retry/fallback logic, and creating the review thread
+    with metadata and firing off spawn_worker. Extract _validate_review_prerequisites(original_thread, session_id) returning
+    (repo_path, branch_name, wt_path) or raising, and _select_reviewer_backend(cfg, worker_backend, tried_backends) returning
+    (resolved_backend, resolved_model, updated_tried_backends). The main function becomes a short orchestrator calling both
+    helpers then spawning. Follows the established pattern of items 003, 021, and 027 which successfully split other long
+    functions in spawner.py and master_cc.py.
   category: architecture
   status: done
   created: '2026-03-13T12:00:00Z'
   priority: medium
 - id: '042'
   title: Add event factory helpers to AgentBackend base module
-  description: Centralize CC-compatible event dict construction that is currently
-    duplicated across all three CLI backends' translate_event methods. codex.py, gemini_cli.py,
-    and opencode.py each independently build identical dict structures for assistant-text
-    events ({type, message.content[{type, text}]}), error events ({type, message,
-    content}), result events ({type, result, usage{...}, total_cost_usd}), and tool_use/tool_result
-    events — 15+ near-identical dict literals total. Schema changes (e.g. adding a
-    field to result events) require updating all three files. Add module-level factory
-    functions in agents/backends/base.py — make_text_event(text), make_error_event(msg),
-    make_result_event(input_tokens, output_tokens, cache_read, cache_creation, cost),
-    make_tool_use_event(name, input_data), make_tool_result_event(tool_name, content).
-    Each is 2-5 lines; call sites become one-liners. Complements item 038 (command-building
-    helpers) by addressing the event-translation side.
+  description: Centralize CC-compatible event dict construction that is currently duplicated across all three CLI backends'
+    translate_event methods. codex.py, gemini_cli.py, and opencode.py each independently build identical dict structures for
+    assistant-text events ({type, message.content[{type, text}]}), error events ({type, message, content}), result events
+    ({type, result, usage{...}, total_cost_usd}), and tool_use/tool_result events — 15+ near-identical dict literals total.
+    Schema changes (e.g. adding a field to result events) require updating all three files. Add module-level factory functions
+    in agents/backends/base.py — make_text_event(text), make_error_event(msg), make_result_event(input_tokens, output_tokens,
+    cache_read, cache_creation, cost), make_tool_use_event(name, input_data), make_tool_result_event(tool_name, content).
+    Each is 2-5 lines; call sites become one-liners. Complements item 038 (command-building helpers) by addressing the event-translation
+    side.
   category: duplication
   status: done
   created: '2026-03-13T12:00:00Z'
   priority: low
 - id: '043'
   title: Wrap blocking _prepare_cwd hook in asyncio.to_thread in AgentBackend.run()
-  description: Prevent event-loop blocking during worker subprocess setup by wrapping
-    the sync _prepare_cwd() hook call at the template-method level. agents/backends/base.py:98
-    calls self._prepare_cwd(cwd) synchronously inside the async run() generator. Both
-    concrete overrides perform blocking file I/O — ClaudeCodeBackend._prepare_cwd
-    (claude_code.py:35-41) writes CLAUDE.md via Path.write_text(), and OpenCodeBackend._prepare_cwd
-    (opencode.py:43-73) calls os.makedirs(), os.path.exists(), and open()+json.dump()
-    to create a config directory and file. These block the event loop on every worker
-    spawn. Change base.py:98 from self._prepare_cwd(cwd) to await asyncio.to_thread(self._prepare_cwd,
-    cwd). One-line fix in the template method that automatically protects all current
-    and future backend implementations. Follows the pattern established by items 034
-    and 035 which wrapped similar sync I/O calls in spawner.py. asyncio is already
-    imported in base.py.
+  description: Prevent event-loop blocking during worker subprocess setup by wrapping the sync _prepare_cwd() hook call at
+    the template-method level. agents/backends/base.py:98 calls self._prepare_cwd(cwd) synchronously inside the async run()
+    generator. Both concrete overrides perform blocking file I/O — ClaudeCodeBackend._prepare_cwd (claude_code.py:35-41) writes
+    CLAUDE.md via Path.write_text(), and OpenCodeBackend._prepare_cwd (opencode.py:43-73) calls os.makedirs(), os.path.exists(),
+    and open()+json.dump() to create a config directory and file. These block the event loop on every worker spawn. Change
+    base.py:98 from self._prepare_cwd(cwd) to await asyncio.to_thread(self._prepare_cwd, cwd). One-line fix in the template
+    method that automatically protects all current and future backend implementations. Follows the pattern established by
+    items 034 and 035 which wrapped similar sync I/O calls in spawner.py. asyncio is already imported in base.py.
   category: performance
   status: done
   created: '2026-03-13T12:00:00Z'
   priority: medium
 - id: '044'
   title: Wrap blocking discover_repos call in asyncio.to_thread in spawner.py
-  description: Prevent event-loop blocking during worker spawn when no explicit repo_path
-    is provided. core/spawner.py:433 calls cfg.discover_repos() synchronously inside
-    async spawn_worker(). discover_repos() (config.py:184-194) performs Path.iterdir(),
-    child.is_dir(), and (child / ".git").exists() for every directory in workspace_dirs
-    — all blocking filesystem I/O directly on the event loop. The identical call in
-    api/sessions.py:79 is already correctly wrapped with await asyncio.to_thread(cfg.discover_repos).
-    Change spawner.py:433 from repos = cfg.discover_repos() to repos = await asyncio.to_thread(cfg.discover_repos).
-    One-line fix. asyncio is already imported in spawner.py. Follows the established
-    pattern of items 034, 035, and 043 which wrapped similar sync I/O calls.
+  description: Prevent event-loop blocking during worker spawn when no explicit repo_path is provided. core/spawner.py:433
+    calls cfg.discover_repos() synchronously inside async spawn_worker(). discover_repos() (config.py:184-194) performs Path.iterdir(),
+    child.is_dir(), and (child / ".git").exists() for every directory in workspace_dirs — all blocking filesystem I/O directly
+    on the event loop. The identical call in api/sessions.py:79 is already correctly wrapped with await asyncio.to_thread(cfg.discover_repos).
+    Change spawner.py:433 from repos = cfg.discover_repos() to repos = await asyncio.to_thread(cfg.discover_repos). One-line
+    fix. asyncio is already imported in spawner.py. Follows the established pattern of items 034, 035, and 043 which wrapped
+    similar sync I/O calls.
   category: performance
   status: done
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: '045'
   title: Extract shared content-block text parser for CC assistant events
-  description: Eliminate duplicated assistant-event content-block iteration across
-    5 consumer files. api/chat.py:202, core/sessions.py:157, api/message_utils.py:165,
-    api/threads.py:71-100, and core/spawner.py:838-846 each independently navigate
-    event['message']['content'][] to extract text from blocks using nearly identical
-    isinstance/dict-get boilerplate. A CC event schema change (e.g. adding a new block
-    type) requires updating all 5 locations. Add extract_text_from_message(msg) helper
-    in api/message_utils.py (or core/ndjson.py) that joins text from content blocks.
-    Replace 5 inline iterations with one-liner calls. Reduces nesting depth in get_thread_events
-    (6 to ~4) and _extract_event_content (5 to ~3). Complements item 042 which addresses
-    the construction side in backends.
+  description: Eliminate duplicated assistant-event content-block iteration across 5 consumer files. api/chat.py:202, core/sessions.py:157,
+    api/message_utils.py:165, api/threads.py:71-100, and core/spawner.py:838-846 each independently navigate event['message']['content'][]
+    to extract text from blocks using nearly identical isinstance/dict-get boilerplate. A CC event schema change (e.g. adding
+    a new block type) requires updating all 5 locations. Add extract_text_from_message(msg) helper in api/message_utils.py
+    (or core/ndjson.py) that joins text from content blocks. Replace 5 inline iterations with one-liner calls. Reduces nesting
+    depth in get_thread_events (6 to ~4) and _extract_event_content (5 to ~3). Complements item 042 which addresses the construction
+    side in backends.
   category: duplication
   status: done
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: '046'
   title: Wrap sync iterdir and parallelise get_thread calls in ThreadManager.list_threads
-  description: Prevent event-loop blocking and reduce worker-panel load latency. core/threads.py
-    list_threads (L54-66) calls threads_dir.exists(), iterdir(), and is_dir() synchronously
-    on the event loop, then calls get_thread() sequentially in a for loop — the exact
-    same anti-pattern already fixed for SessionManager in items 024 (asyncio.to_thread
-    for iterdir) and 040 (asyncio.gather for metadata reads). On sessions with many
-    workers this blocks the event loop for each syscall and serialises N file reads
-    that could run concurrently. Wrap the directory scan in asyncio.to_thread (matching
-    sessions.py L74) and replace the sequential get_thread loop with asyncio.gather
-    (matching the approach from item 040). Expected change is ~5 lines plus adding
-    the asyncio import to threads.py.
+  description: Prevent event-loop blocking and reduce worker-panel load latency. core/threads.py list_threads (L54-66) calls
+    threads_dir.exists(), iterdir(), and is_dir() synchronously on the event loop, then calls get_thread() sequentially in
+    a for loop — the exact same anti-pattern already fixed for SessionManager in items 024 (asyncio.to_thread for iterdir)
+    and 040 (asyncio.gather for metadata reads). On sessions with many workers this blocks the event loop for each syscall
+    and serialises N file reads that could run concurrently. Wrap the directory scan in asyncio.to_thread (matching sessions.py
+    L74) and replace the sequential get_thread loop with asyncio.gather (matching the approach from item 040). Expected change
+    is ~5 lines plus adding the asyncio import to threads.py.
   category: performance
   status: done
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: '047'
   title: Extract shared git_add_commit_push helper and add subprocess timeouts
-  description: Consolidate duplicated git-commit-and-push logic and add missing subprocess
-    timeouts. api/backlog.py:185-203 and core/improvement_loop.py:123-131 each define
-    their own _git_commit_push() with near-identical subprocess.run(['git', 'add']),
-    subprocess.run(['git', 'commit']), subprocess.run(['git', 'push']) sequences wrapped
-    in asyncio.to_thread. The improvement_loop.py version lacks error handling entirely
-    (CalledProcessError propagates uncaught), and neither version sets a subprocess
-    timeout — a hung git push (e.g. unresponsive remote) blocks the thread pool worker
-    indefinitely. Extract a shared async helper like git_add_commit_push(repo_path,
-    files, message, timeout=60) in a new core/git.py module that wraps each subprocess.run
-    call with timeout= and catches CalledProcessError consistently. Both callers become
-    one-liner calls. Removes ~25 duplicated lines across 2 files and fixes a latent
-    reliability issue.
+  description: Consolidate duplicated git-commit-and-push logic and add missing subprocess timeouts. api/backlog.py:185-203
+    and core/improvement_loop.py:123-131 each define their own _git_commit_push() with near-identical subprocess.run(['git',
+    'add']), subprocess.run(['git', 'commit']), subprocess.run(['git', 'push']) sequences wrapped in asyncio.to_thread. The
+    improvement_loop.py version lacks error handling entirely (CalledProcessError propagates uncaught), and neither version
+    sets a subprocess timeout — a hung git push (e.g. unresponsive remote) blocks the thread pool worker indefinitely. Extract
+    a shared async helper like git_add_commit_push(repo_path, files, message, timeout=60) in a new core/git.py module that
+    wraps each subprocess.run call with timeout= and catches CalledProcessError consistently. Both callers become one-liner
+    calls. Removes ~25 duplicated lines across 2 files and fixes a latent reliability issue.
   category: duplication
   status: done
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: 048
   title: Unify save-then-broadcast into SessionManager.persist_and_broadcast
-  description: Eliminate ~12 duplicate save_chat_event+broadcast pairs and fix an
-    ordering bug. The two-step pattern await save_chat_event(sid, event) then await
-    streaming_manager.broadcast(channel, event) is repeated 7 times in api/chat.py
-    and 5 times in agents/master_cc.py. spawner.py already has a standalone broadcast_and_persist()
-    helper but it broadcasts BEFORE persisting, so WebSocket clients receive events
-    without the timestamp that save_chat_event injects — the opposite of master_cc.py
-    which deliberately persists first to inject the timestamp then broadcasts with
-    the timestamp included. Add a persist_and_broadcast(session_id, event) method
-    to SessionManager that calls save_chat_event (injects timestamp) then streaming_manager.broadcast
-    in the correct order. Replace all 12 inline pairs in chat.py and master_cc.py
-    with single calls. Delete the standalone broadcast_and_persist from spawner.py
-    and replace its call sites with session_mgr.persist_and_broadcast. For master_cc.py,
-    change the save_chat_event callback to a persist_and_broadcast callback so the
-    manual broadcast calls can be removed. Fixes the timestamp-ordering bug, removes
-    ~12 duplicate line pairs, and ensures a single source of truth for the persist-then-broadcast
-    contract.
+  description: Eliminate ~12 duplicate save_chat_event+broadcast pairs and fix an ordering bug. The two-step pattern await
+    save_chat_event(sid, event) then await streaming_manager.broadcast(channel, event) is repeated 7 times in api/chat.py
+    and 5 times in agents/master_cc.py. spawner.py already has a standalone broadcast_and_persist() helper but it broadcasts
+    BEFORE persisting, so WebSocket clients receive events without the timestamp that save_chat_event injects — the opposite
+    of master_cc.py which deliberately persists first to inject the timestamp then broadcasts with the timestamp included.
+    Add a persist_and_broadcast(session_id, event) method to SessionManager that calls save_chat_event (injects timestamp)
+    then streaming_manager.broadcast in the correct order. Replace all 12 inline pairs in chat.py and master_cc.py with single
+    calls. Delete the standalone broadcast_and_persist from spawner.py and replace its call sites with session_mgr.persist_and_broadcast.
+    For master_cc.py, change the save_chat_event callback to a persist_and_broadcast callback so the manual broadcast calls
+    can be removed. Fixes the timestamp-ordering bug, removes ~12 duplicate line pairs, and ensures a single source of truth
+    for the persist-then-broadcast contract.
   category: duplication
   status: done
   created: '2026-03-14T12:00:00Z'
   priority: medium
 - id: 049
   title: Add path-traversal protection to tar.extractall in backup restore
-  description: Prevent archive path-traversal attacks and fix forward-compatibility
-    with Python 3.12+. core/backup.py:140 calls tar.extractall(path=target) without
-    validating archive member paths or using the filter parameter introduced in Python
-    3.12. A crafted .tar.gz could write files outside the target directory via absolute
-    paths or ".." components (CVE-2007-4559). Python 3.12 emits a DeprecationWarning
-    for filterless extractall; Python 3.14 will make it an error. Add a _safe_extractall
-    helper that iterates tar.getmembers(), rejects any member whose resolved path
-    escapes the target directory, then extracts only validated members. On Python
-    3.12+, pass filter='data' as the idiomatic fix. ~10 lines added, no behavioral
-    change for legitimate archives.
+  description: Prevent archive path-traversal attacks and fix forward-compatibility with Python 3.12+. core/backup.py:140
+    calls tar.extractall(path=target) without validating archive member paths or using the filter parameter introduced in
+    Python 3.12. A crafted .tar.gz could write files outside the target directory via absolute paths or ".." components (CVE-2007-4559).
+    Python 3.12 emits a DeprecationWarning for filterless extractall; Python 3.14 will make it an error. Add a _safe_extractall
+    helper that iterates tar.getmembers(), rejects any member whose resolved path escapes the target directory, then extracts
+    only validated members. On Python 3.12+, pass filter='data' as the idiomatic fix. ~10 lines added, no behavioral change
+    for legitimate archives.
   category: security
   status: done
   created: '2026-03-14T12:00:00Z'
   priority: high
 - id: '050'
   title: Add exception-logging callback to fire-and-forget asyncio.create_task calls
-  description: Prevent silent failures in background tasks by ensuring exceptions
-    are always logged. 10 call sites across 6 files (api/chat.py, api/voice.py, api/backlog.py,
-    api/slash.py, api/internal.py, core/spawner.py) use asyncio.create_task() without
-    attaching a done callback — if the coroutine raises, the exception is silently
-    discarded (Python only emits a brief "Task exception was never retrieved" warning
-    at GC time, easily lost in log noise). Add a module-level create_logged_task(coro,
-    *, name=None) helper in core/tasks.py that wraps asyncio.create_task() and attaches
-    a done callback logging any exception via structlog. Replace all 10 bare create_task
-    call sites with create_logged_task. ~15 lines for the helper, 1-line change per
-    call site. No behavioral change — tasks still fire-and-forget, but failures now
-    produce actionable log entries with full tracebacks instead of being silently
-    swallowed.
+  description: Prevent silent failures in background tasks by ensuring exceptions are always logged. 10 call sites across
+    6 files (api/chat.py, api/voice.py, api/backlog.py, api/slash.py, api/internal.py, core/spawner.py) use asyncio.create_task()
+    without attaching a done callback — if the coroutine raises, the exception is silently discarded (Python only emits a
+    brief "Task exception was never retrieved" warning at GC time, easily lost in log noise). Add a module-level create_logged_task(coro,
+    *, name=None) helper in core/tasks.py that wraps asyncio.create_task() and attaches a done callback logging any exception
+    via structlog. Replace all 10 bare create_task call sites with create_logged_task. ~15 lines for the helper, 1-line change
+    per call site. No behavioral change — tasks still fire-and-forget, but failures now produce actionable log entries with
+    full tracebacks instead of being silently swallowed.
   category: error-handling
   status: done
   created: '2026-03-15T12:00:00Z'
   priority: high
 - id: '051'
   title: Kill orphan subprocesses on asyncio.wait_for timeout in autonamer and latex
-  description: Prevent orphan subprocesses that leak CPU and memory when asyncio.wait_for
-    times out. core/autonamer.py:54 and core/latex.py:135 both use asyncio.wait_for(proc.communicate(),
-    timeout=...) but neither kills the subprocess when TimeoutError fires — the cancelled
-    communicate() leaves the child process running indefinitely. The claude CLI (autonamer,
-    30s timeout) is a heavyweight process; pdflatex (latex, 60s timeout) can also
-    linger. Repeated timeouts accumulate orphans until the host runs out of resources.
-    core/slash_commands.py:81-86 already handles this correctly by calling proc.kill()
-    inside the TimeoutError handler. Apply the same pattern to both files — catch
-    asyncio.TimeoutError explicitly, call proc.kill(), then proceed with the existing
-    error-handling logic. ~5 lines per file, matching the established slash_commands.py
-    pattern.
+  description: Prevent orphan subprocesses that leak CPU and memory when asyncio.wait_for times out. core/autonamer.py:54
+    and core/latex.py:135 both use asyncio.wait_for(proc.communicate(), timeout=...) but neither kills the subprocess when
+    TimeoutError fires — the cancelled communicate() leaves the child process running indefinitely. The claude CLI (autonamer,
+    30s timeout) is a heavyweight process; pdflatex (latex, 60s timeout) can also linger. Repeated timeouts accumulate orphans
+    until the host runs out of resources. core/slash_commands.py:81-86 already handles this correctly by calling proc.kill()
+    inside the TimeoutError handler. Apply the same pattern to both files — catch asyncio.TimeoutError explicitly, call proc.kill(),
+    then proceed with the existing error-handling logic. ~5 lines per file, matching the established slash_commands.py pattern.
   status: done
   created: '2026-03-15T12:00:00Z'
   priority: high
 - id: '052'
-  title: Adopt require_session dependency and add require_thread analog to eliminate
-    inline 404 checks
-  description: Eliminate 10 repeated inline "get-then-404" checks by using FastAPI
-    dependency injection consistently. deps.py already defines require_session (L29-37)
-    and 6 endpoints use it, but 8 other session endpoints in sessions.py (L160, L186,
-    L199, L218, L226, L238, L278, L286), pages.py (L42), and internal.py (L27) still
-    inline the same 3-line get_session + if-not-meta + raise-404 pattern. Similarly,
-    threads.py has 2 inline "Thread not found" checks (L50, L117) with no dependency
-    analog. For the 4 endpoints that call get_session directly (get_session_view,
-    update_backend, pages index, internal delegate), replace with Depends(require_session)
-    and use the returned meta. For the 6 mutation endpoints (rewind, archive, star,
-    unstar, rename, mark_read), add Depends(require_session) as a pre-validation dependency
-    — the double read is negligible for a single-user app — and remove the inline
-    None check. Add a require_thread(session_id, thread_id) dependency in deps.py
-    following the same pattern, and adopt it in threads.py get_thread_events and cancel_thread.
-    Net removal of ~30 lines of boilerplate across 4 files, consistent use of the
-    dependency-injection pattern already established in the codebase.
+  title: Adopt require_session dependency and add require_thread analog to eliminate inline 404 checks
+  description: Eliminate 10 repeated inline "get-then-404" checks by using FastAPI dependency injection consistently. deps.py
+    already defines require_session (L29-37) and 6 endpoints use it, but 8 other session endpoints in sessions.py (L160, L186,
+    L199, L218, L226, L238, L278, L286), pages.py (L42), and internal.py (L27) still inline the same 3-line get_session +
+    if-not-meta + raise-404 pattern. Similarly, threads.py has 2 inline "Thread not found" checks (L50, L117) with no dependency
+    analog. For the 4 endpoints that call get_session directly (get_session_view, update_backend, pages index, internal delegate),
+    replace with Depends(require_session) and use the returned meta. For the 6 mutation endpoints (rewind, archive, star,
+    unstar, rename, mark_read), add Depends(require_session) as a pre-validation dependency — the double read is negligible
+    for a single-user app — and remove the inline None check. Add a require_thread(session_id, thread_id) dependency in deps.py
+    following the same pattern, and adopt it in threads.py get_thread_events and cancel_thread. Net removal of ~30 lines of
+    boilerplate across 4 files, consistent use of the dependency-injection pattern already established in the codebase.
   category: duplication
   status: done
   created: '2026-03-15T12:00:00Z'
   priority: medium
 - id: '053'
-  title: Add timeouts to bare asyncio subprocess communicate() calls in spawner.py
-    and latex.py
-  description: Prevent indefinite event-loop blocking from hung git subprocesses.
-    5 asyncio.create_subprocess_exec call sites use proc.communicate() without any
-    timeout — spawner.py _git_current_branch (L115), _git_create_worktree (L139),
-    worktree remove in _finalize_worker (L407), and latex.py get_git_info (L101, L116).
-    A hung git process (network issue, lock contention, corrupted repo) blocks the
-    event loop forever, freezing the entire app. The fix is established in the codebase
-    — autonamer.py:58 and slash_commands.py:83 already wrap communicate() with asyncio.wait_for(proc.communicate(),
-    timeout=30.0) and kill the process on TimeoutError. Apply the same pattern to
-    all 5 call sites with a 30s timeout for fast operations (rev-parse, worktree remove/prune)
-    and 60s for worktree creation. ~3 lines per call site (wrap in wait_for, add except
-    TimeoutError with proc.kill()).
+  title: Add timeouts to bare asyncio subprocess communicate() calls in spawner.py and latex.py
+  description: Prevent indefinite event-loop blocking from hung git subprocesses. 5 asyncio.create_subprocess_exec call sites
+    use proc.communicate() without any timeout — spawner.py _git_current_branch (L115), _git_create_worktree (L139), worktree
+    remove in _finalize_worker (L407), and latex.py get_git_info (L101, L116). A hung git process (network issue, lock contention,
+    corrupted repo) blocks the event loop forever, freezing the entire app. The fix is established in the codebase — autonamer.py:58
+    and slash_commands.py:83 already wrap communicate() with asyncio.wait_for(proc.communicate(), timeout=30.0) and kill the
+    process on TimeoutError. Apply the same pattern to all 5 call sites with a 30s timeout for fast operations (rev-parse,
+    worktree remove/prune) and 60s for worktree creation. ~3 lines per call site (wrap in wait_for, add except TimeoutError
+    with proc.kill()).
   category: error-handling
   status: done
   created: '2026-03-17T12:00:00Z'
   priority: high
 - id: '054'
   title: Simplify backend __init__ by removing redundant kwargs-popping boilerplate
-  description: 'PURPOSE — Remove ~24 lines of unnecessary kwargs-popping code duplicated
-    across all four AgentBackend subclasses, making constructor signatures explicit
-    and reducing boilerplate for future backends. HOW — ClaudeCodeBackend, CodexBackend,
-    GeminiCliBackend, and OpenCodeBackend each manually pop model, instructions_content,
-    resume_session_id, and extra_flags from **kwargs only to pass them unchanged to
-    super().__init__(), which already declares them as keyword-only parameters with
-    defaults. Replace each __init__ with an explicit keyword-only signature that only
-    overrides the model default, e.g. def __init__(self, *, model="gpt-5.3-codex",
-    **kwargs): super().__init__(model=model, **kwargs). KimiBackend already uses this
-    cleaner pattern (kimi.py:16). Each constructor drops from ~10 lines to ~2 lines.
-    The registry (build_backend) passes all args as keyword args, so no call-site
-    changes needed.'
+  description: 'PURPOSE — Remove ~24 lines of unnecessary kwargs-popping code duplicated across all four AgentBackend subclasses,
+    making constructor signatures explicit and reducing boilerplate for future backends. HOW — ClaudeCodeBackend, CodexBackend,
+    GeminiCliBackend, and OpenCodeBackend each manually pop model, instructions_content, resume_session_id, and extra_flags
+    from **kwargs only to pass them unchanged to super().__init__(), which already declares them as keyword-only parameters
+    with defaults. Replace each __init__ with an explicit keyword-only signature that only overrides the model default, e.g.
+    def __init__(self, *, model="gpt-5.3-codex", **kwargs): super().__init__(model=model, **kwargs). KimiBackend already uses
+    this cleaner pattern (kimi.py:16). Each constructor drops from ~10 lines to ~2 lines. The registry (build_backend) passes
+    all args as keyword args, so no call-site changes needed.'
   category: duplication
   status: done
   created: '2026-03-18T12:00:00Z'
   priority: low
 - id: '055'
   title: Sanitize uploaded filename to prevent path traversal in chat upload endpoint
-  description: 'PURPOSE — Prevent a crafted filename from writing files outside the
-    uploads directory, closing a path-traversal vulnerability (CWE-22) in the file
-    upload endpoint. HOW — api/chat.py:36 uses the raw user-provided filename directly:
-    dest = uploads_dir / (file.filename or "upload"). A filename containing "../"
-    components (e.g. "../../other_session/data/metadata.json") resolves outside the
-    intended uploads directory, allowing arbitrary file overwrites within process
-    permissions. Fix by extracting only the base name: safe_name = Path(file.filename
-    or "upload").name; dest = uploads_dir / safe_name. Path.name strips all directory
-    components including ".." traversals. One-line fix, same class of vulnerability
-    as the already-completed item 049 (tar extraction path traversal in backup.py).
-    pathlib is already imported in the file via indirect usage.'
+  description: 'PURPOSE — Prevent a crafted filename from writing files outside the uploads directory, closing a path-traversal
+    vulnerability (CWE-22) in the file upload endpoint. HOW — api/chat.py:36 uses the raw user-provided filename directly:
+    dest = uploads_dir / (file.filename or "upload"). A filename containing "../" components (e.g. "../../other_session/data/metadata.json")
+    resolves outside the intended uploads directory, allowing arbitrary file overwrites within process permissions. Fix by
+    extracting only the base name: safe_name = Path(file.filename or "upload").name; dest = uploads_dir / safe_name. Path.name
+    strips all directory components including ".." traversals. One-line fix, same class of vulnerability as the already-completed
+    item 049 (tar extraction path traversal in backup.py). pathlib is already imported in the file via indirect usage.'
   category: security
   status: rejected
   created: '2026-03-18T12:00:00Z'
@@ -776,35 +640,28 @@
   rejected_reason: user is only myself so it should be generally OK
 - id: '056'
   title: Await and add timeout to fire-and-forget git worktree prune in spawner.py
-  description: 'PURPOSE — Prevent a hung git worktree prune from blocking the event
-    loop indefinitely during worker finalization. The prune subprocess is the only
-    remaining unguarded subprocess call after item 053 added timeouts to all other
-    bare communicate() calls. HOW — spawner.py:426-433 fires git worktree prune via
-    asyncio.create_subprocess_exec but never awaits communicate() and has no timeout.
-    The subprocess result is silently discarded, stdout/stderr pipes fill up and can
-    cause the child to block on write, and if git hangs (lock contention, corrupted
-    refs) the zombie process leaks a PID. Apply the same wait_for + kill pattern used
-    3 lines above for worktree remove (L415-420): wrap proc.communicate() with asyncio.wait_for(timeout=30.0),
-    catch TimeoutError to proc.kill() and log a warning. ~5 lines changed, no behavioral
-    change for normal operation. Directly follows from the gap left by item 053.'
+  description: 'PURPOSE — Prevent a hung git worktree prune from blocking the event loop indefinitely during worker finalization.
+    The prune subprocess is the only remaining unguarded subprocess call after item 053 added timeouts to all other bare communicate()
+    calls. HOW — spawner.py:426-433 fires git worktree prune via asyncio.create_subprocess_exec but never awaits communicate()
+    and has no timeout. The subprocess result is silently discarded, stdout/stderr pipes fill up and can cause the child to
+    block on write, and if git hangs (lock contention, corrupted refs) the zombie process leaks a PID. Apply the same wait_for
+    + kill pattern used 3 lines above for worktree remove (L415-420): wrap proc.communicate() with asyncio.wait_for(timeout=30.0),
+    catch TimeoutError to proc.kill() and log a warning. ~5 lines changed, no behavioral change for normal operation. Directly
+    follows from the gap left by item 053.'
   category: error-handling
   status: done
   created: '2026-03-18T12:00:00Z'
   priority: high
 - id: '057'
   title: Wrap blocking sync I/O in asyncio.to_thread in api/files.py serve_file
-  description: 'PURPOSE — Prevent event-loop blocking during filesystem browsing on
-    the public /files/ route, which can stall all concurrent requests when listing
-    large directories. HOW — api/files.py:serve_file (L89-106) is an async def endpoint
-    that calls Path.resolve(), .exists(), and .is_dir() synchronously on the event
-    loop (L91-96). The helper _dir_listing_html (L25-85) then calls dir_path.iterdir(),
-    child.stat(), and child.is_dir() — all blocking syscalls — directly on the event
-    loop. This is the exact anti-pattern already fixed in 6 prior items: 024 (sessions
-    iterdir), 034 (subagent instructions read), 035 (parse_ndjson_file), 043 (_prepare_cwd),
-    044 (discover_repos), 046 (threads iterdir). Fix by wrapping the _dir_listing_html()
-    call and the path existence/type checks in asyncio.to_thread(). The function is
-    pure sync code with no async dependencies, making it a clean to_thread candidate.
-    ~5 lines changed, asyncio is already imported in api/files.py via FastAPI transitive
+  description: 'PURPOSE — Prevent event-loop blocking during filesystem browsing on the public /files/ route, which can stall
+    all concurrent requests when listing large directories. HOW — api/files.py:serve_file (L89-106) is an async def endpoint
+    that calls Path.resolve(), .exists(), and .is_dir() synchronously on the event loop (L91-96). The helper _dir_listing_html
+    (L25-85) then calls dir_path.iterdir(), child.stat(), and child.is_dir() — all blocking syscalls — directly on the event
+    loop. This is the exact anti-pattern already fixed in 6 prior items: 024 (sessions iterdir), 034 (subagent instructions
+    read), 035 (parse_ndjson_file), 043 (_prepare_cwd), 044 (discover_repos), 046 (threads iterdir). Fix by wrapping the _dir_listing_html()
+    call and the path existence/type checks in asyncio.to_thread(). The function is pure sync code with no async dependencies,
+    making it a clean to_thread candidate. ~5 lines changed, asyncio is already imported in api/files.py via FastAPI transitive
     deps but may need an explicit import.'
   category: performance
   status: done
@@ -812,185 +669,142 @@
   priority: medium
 - id: 058
   title: Extract worker directory cleanup into _cleanup_worker_directory helper
-  description: 'PURPOSE — Reduce the 85-line _finalize_worker() in core/spawner.py
-    by extracting the 50-line self-contained directory cleanup block (L446-496) into
-    a focused _cleanup_worker_directory() helper. The cleanup handles two distinct
-    cases — git worktree removal with prune for repo-based workers, and shutil.rmtree
-    for repoless temp directories — each with its own error handling and logging.
-    Inlining this logic obscures the simple three-phase structure of finalization
-    (update status, clean up directory, notify completion). HOW — Create async def
-    _cleanup_worker_directory(thread, skip_cleanup: bool) -> None containing the existing
-    cleanup branches. Call from _finalize_worker in place of the inline block. Pure
-    refactoring, no behavior change. Brings _finalize_worker under the 50-line target
-    at ~35 lines.'
+  description: 'PURPOSE — Reduce the 85-line _finalize_worker() in core/spawner.py by extracting the 50-line self-contained
+    directory cleanup block (L446-496) into a focused _cleanup_worker_directory() helper. The cleanup handles two distinct
+    cases — git worktree removal with prune for repo-based workers, and shutil.rmtree for repoless temp directories — each
+    with its own error handling and logging. Inlining this logic obscures the simple three-phase structure of finalization
+    (update status, clean up directory, notify completion). HOW — Create async def _cleanup_worker_directory(thread, skip_cleanup:
+    bool) -> None containing the existing cleanup branches. Call from _finalize_worker in place of the inline block. Pure
+    refactoring, no behavior change. Brings _finalize_worker under the 50-line target at ~35 lines.'
   category: maintainability
   status: done
   created: '2026-03-19T12:00:00Z'
   priority: medium
 - id: 059
   title: Extract shared YAML load/save helpers to eliminate repeated boilerplate
-  description: 'PURPOSE — Eliminate 8 duplicated yaml.safe_load(path.read_text())
-    call sites and 4 duplicated yaml.dump/safe_dump call sites across 4 files, fixing
-    inconsistent encoding and serialization options. Currently api/backlog.py (5 sites),
-    core/improvement_loop.py (1), api/cron.py (1), and core/config.py (1) each inline
-    the same load pattern with varying defaults ([] vs {} vs {scheduled_tasks: []})
-    and inconsistent encoding (some pass encoding="utf-8", some do not). The save
-    side similarly varies between yaml.dump and yaml.safe_dump, with inconsistent
-    default_flow_style and sort_keys options. HOW — Add load_yaml(path, default=None)
-    and save_yaml(path, data, sort_keys=False) helpers in a new core/yaml_utils.py
-    module. load_yaml handles encoding="utf-8", safe_load, and default fallback. save_yaml
-    uses safe_dump with allow_unicode=True and consistent formatting. Replace all
-    12 inline call sites with one-liner calls. ~15 lines for the module, 1-line change
-    per call site. Ensures consistent encoding and serialization behavior across all
-    YAML consumers.'
+  description: 'PURPOSE — Eliminate 8 duplicated yaml.safe_load(path.read_text()) call sites and 4 duplicated yaml.dump/safe_dump
+    call sites across 4 files, fixing inconsistent encoding and serialization options. Currently api/backlog.py (5 sites),
+    core/improvement_loop.py (1), api/cron.py (1), and core/config.py (1) each inline the same load pattern with varying defaults
+    ([] vs {} vs {scheduled_tasks: []}) and inconsistent encoding (some pass encoding="utf-8", some do not). The save side
+    similarly varies between yaml.dump and yaml.safe_dump, with inconsistent default_flow_style and sort_keys options. HOW
+    — Add load_yaml(path, default=None) and save_yaml(path, data, sort_keys=False) helpers in a new core/yaml_utils.py module.
+    load_yaml handles encoding="utf-8", safe_load, and default fallback. save_yaml uses safe_dump with allow_unicode=True
+    and consistent formatting. Replace all 12 inline call sites with one-liner calls. ~15 lines for the module, 1-line change
+    per call site. Ensures consistent encoding and serialization behavior across all YAML consumers.'
   category: duplication
   status: done
   created: '2026-03-19T12:00:00Z'
   priority: low
 - id: '060'
   title: Extract shared kill_process_group helper to deduplicate 8 call sites
-  description: 'PURPOSE — Eliminate 8 repetitions of the same try/except-guarded os.killpg(os.getpgid(pid),
-    signal) pattern scattered across 5 files, reducing boilerplate and ensuring consistent
-    error handling for process termination. Currently agents/backends/base.py (4 sites),
-    core/latex.py (1), core/autonamer.py (1), core/slash_commands.py (1), and api/threads.py
-    (1) each inline the identical pattern: try: os.killpg(os.getpgid(proc.pid), signal.SIG*)
-    / except (ProcessLookupError, PermissionError): pass — with minor variations in
-    whether a log.debug call follows the except. HOW — Add a kill_process_group(pid,
-    sig=signal.SIGTERM) helper in a shared location (e.g. core/process.py or extend
-    core/tasks.py). The helper wraps os.killpg(os.getpgid(pid), sig) in the standard
-    try/except guard with optional structlog debug on ProcessLookupError. Replace
-    all 8 inline blocks with one-liner calls. ~8 lines for the helper, 8 call sites
-    reduced from 3-5 lines each to 1 line. Also enables the SIGTERM-wait-SIGKILL escalation
-    pattern in AgentBackend.run() and terminate() to be expressed more clearly.'
+  description: 'PURPOSE — Eliminate 8 repetitions of the same try/except-guarded os.killpg(os.getpgid(pid), signal) pattern
+    scattered across 5 files, reducing boilerplate and ensuring consistent error handling for process termination. Currently
+    agents/backends/base.py (4 sites), core/latex.py (1), core/autonamer.py (1), core/slash_commands.py (1), and api/threads.py
+    (1) each inline the identical pattern: try: os.killpg(os.getpgid(proc.pid), signal.SIG*) / except (ProcessLookupError,
+    PermissionError): pass — with minor variations in whether a log.debug call follows the except. HOW — Add a kill_process_group(pid,
+    sig=signal.SIGTERM) helper in a shared location (e.g. core/process.py or extend core/tasks.py). The helper wraps os.killpg(os.getpgid(pid),
+    sig) in the standard try/except guard with optional structlog debug on ProcessLookupError. Replace all 8 inline blocks
+    with one-liner calls. ~8 lines for the helper, 8 call sites reduced from 3-5 lines each to 1 line. Also enables the SIGTERM-wait-SIGKILL
+    escalation pattern in AgentBackend.run() and terminate() to be expressed more clearly.'
   status: done
   created: '2026-03-19T12:00:00Z'
   priority: low
 - id: '061'
   title: Extract cleanup phase from AgentBackend.run() and deduplicate shutdown escalation
-  description: 'PURPOSE — Improve readability of the 115-line async-generator template
-    method that underpins every agent subprocess execution, and deduplicate the SIGTERM-wait-SIGKILL
-    shutdown escalation repeated between run() and terminate(). AgentBackend.run()
-    in agents/backends/base.py is the second-longest function in the codebase (after
-    master_cc.py:run_message at 134 lines) and mixes subprocess setup, NDJSON read
-    loop with post-result timeout and tool-call tracking, and process cleanup with
-    escalation — all in one method. The cleanup escalation (L258-267) duplicates the
-    same pattern in terminate() (L275-281): call kill_process_group with SIGTERM,
-    asyncio.wait_for on proc.wait(), then escalate to SIGKILL on timeout. HOW — Extract
-    async def _graceful_shutdown(timeout) for the shared SIGTERM-wait-SIGKILL pattern.
-    Extract async def _drain_and_cleanup() containing the stderr-drain (L254-257)
-    and process-wait block that calls _graceful_shutdown(). terminate() becomes a
-    3-line method. run() ends with a single await self._drain_and_cleanup() call instead
-    of 18 inline lines. Reduces run() from 115 to ~97 lines and eliminates the duplicated
-    escalation pattern. Pure refactoring, no behavior change. Natural follow-up to
-    item 060 which extracted kill_process_group and noted this opportunity. Follows
-    the pattern from items 003, 021, 041, and 058 which split other long functions.'
+  description: 'PURPOSE — Improve readability of the 115-line async-generator template method that underpins every agent subprocess
+    execution, and deduplicate the SIGTERM-wait-SIGKILL shutdown escalation repeated between run() and terminate(). AgentBackend.run()
+    in agents/backends/base.py is the second-longest function in the codebase (after master_cc.py:run_message at 134 lines)
+    and mixes subprocess setup, NDJSON read loop with post-result timeout and tool-call tracking, and process cleanup with
+    escalation — all in one method. The cleanup escalation (L258-267) duplicates the same pattern in terminate() (L275-281):
+    call kill_process_group with SIGTERM, asyncio.wait_for on proc.wait(), then escalate to SIGKILL on timeout. HOW — Extract
+    async def _graceful_shutdown(timeout) for the shared SIGTERM-wait-SIGKILL pattern. Extract async def _drain_and_cleanup()
+    containing the stderr-drain (L254-257) and process-wait block that calls _graceful_shutdown(). terminate() becomes a 3-line
+    method. run() ends with a single await self._drain_and_cleanup() call instead of 18 inline lines. Reduces run() from 115
+    to ~97 lines and eliminates the duplicated escalation pattern. Pure refactoring, no behavior change. Natural follow-up
+    to item 060 which extracted kill_process_group and noted this opportunity. Follows the pattern from items 003, 021, 041,
+    and 058 which split other long functions.'
   category: maintainability
   status: done
   created: '2026-03-21T12:00:00Z'
   priority: medium
 - id: '062'
   title: Split run_improve_loop into phases and adopt extract_text_from_message
-  description: 'PURPOSE — Reduce the 2nd-longest function in the codebase (run_improve_loop,
-    128 lines) to ~50 lines by extracting three clear phases, and adopt the established
-    extract_text_from_message helper (backlog item 045) instead of duplicating CC
-    event content-block iteration inline. Lines 170-189 manually navigate event[message][content][]
-    blocks to extract summary text — the exact pattern extract_text_from_message (api/message_utils.py:17)
-    already handles, and which 5 other files already use. Additionally, the completion
-    and failure JSON payloads (lines 204-210, 213-220, 227-233) share identical structure
-    (goal, iterations_completed, summaries) with only the type field differing. HOW
-    — Extract _extract_iteration_summary(events, iteration, status) -> str that checks
-    for result events first, then falls back to extract_text_from_message for assistant
-    events, with a default placeholder. Extract _build_summary_payload(type, goal,
-    summaries) -> dict for the shared JSON structure used by completion broadcast,
-    master trigger, and failure notification. The main function becomes a short orchestrator:
-    loop calling helpers, then broadcast + trigger. Follows the pattern from items
-    003, 021, 027, 041, 058, and 061 which split other long functions.'
+  description: 'PURPOSE — Reduce the 2nd-longest function in the codebase (run_improve_loop, 128 lines) to ~50 lines by extracting
+    three clear phases, and adopt the established extract_text_from_message helper (backlog item 045) instead of duplicating
+    CC event content-block iteration inline. Lines 170-189 manually navigate event[message][content][] blocks to extract summary
+    text — the exact pattern extract_text_from_message (api/message_utils.py:17) already handles, and which 5 other files
+    already use. Additionally, the completion and failure JSON payloads (lines 204-210, 213-220, 227-233) share identical
+    structure (goal, iterations_completed, summaries) with only the type field differing. HOW — Extract _extract_iteration_summary(events,
+    iteration, status) -> str that checks for result events first, then falls back to extract_text_from_message for assistant
+    events, with a default placeholder. Extract _build_summary_payload(type, goal, summaries) -> dict for the shared JSON
+    structure used by completion broadcast, master trigger, and failure notification. The main function becomes a short orchestrator:
+    loop calling helpers, then broadcast + trigger. Follows the pattern from items 003, 021, 027, 041, 058, and 061 which
+    split other long functions.'
   category: maintainability
   status: done
   created: '2026-03-23T12:00:00Z'
   priority: medium
 - id: '063'
   title: Extract resume-recovery retry logic from _trigger_master into helper
-  description: 'PURPOSE — Eliminate duplicated run_message call block in _trigger_master
-    (spawner.py:591, 91 lines) and make the resume-recovery retry pattern testable
-    in isolation. Lines 627-636 and 656-665 contain two nearly identical 9-line run_message()
-    invocations sharing 8 identical keyword arguments — only the first positional
-    (session_meta vs retry_session_meta with cc_session_id cleared) differs. The surrounding
-    try/except with _is_resume_not_found_error check, logging, and model_copy adds
-    another 15 lines of interleaved retry orchestration. HOW — Extract async def _run_message_with_resume_recovery(cfg,
-    session_meta, summary, session_mgr) -> Optional[str] that encapsulates the full
-    pattern: (1) call run_message with session_meta, (2) on resume-not-found error,
-    log, clear cc_session_id via model_copy, retry, (3) log recovery success, (4)
-    return new_cc_session_id. _trigger_master becomes a ~55-line function: load session,
-    check weekly expiry, wrap scheduled summary, call _run_message_with_resume_recovery,
-    persist cc_session_id. Pure refactoring, no behavior change. Follows the pattern
-    from items 003, 021, 027, 041, 058, 061, and 062 which split other long functions
-    in spawner.py.'
+  description: 'PURPOSE — Eliminate duplicated run_message call block in _trigger_master (spawner.py:591, 91 lines) and make
+    the resume-recovery retry pattern testable in isolation. Lines 627-636 and 656-665 contain two nearly identical 9-line
+    run_message() invocations sharing 8 identical keyword arguments — only the first positional (session_meta vs retry_session_meta
+    with cc_session_id cleared) differs. The surrounding try/except with _is_resume_not_found_error check, logging, and model_copy
+    adds another 15 lines of interleaved retry orchestration. HOW — Extract async def _run_message_with_resume_recovery(cfg,
+    session_meta, summary, session_mgr) -> Optional[str] that encapsulates the full pattern: (1) call run_message with session_meta,
+    (2) on resume-not-found error, log, clear cc_session_id via model_copy, retry, (3) log recovery success, (4) return new_cc_session_id.
+    _trigger_master becomes a ~55-line function: load session, check weekly expiry, wrap scheduled summary, call _run_message_with_resume_recovery,
+    persist cc_session_id. Pure refactoring, no behavior change. Follows the pattern from items 003, 021, 027, 041, 058, 061,
+    and 062 which split other long functions in spawner.py.'
   category: maintainability
   status: done
   created: '2026-03-25T12:00:00Z'
   priority: medium
 - id: '064'
   title: Centralize event type strings into constants module
-  description: PURPOSE — Eliminate ~34 raw event-type string literals scattered across
-    10+ files, reducing typo risk and making event schema changes a single-point edit.
-    Currently, strings like "assistant", "error", "user", "result", "master_done",
-    "task_delegated", "worker_summary", "handler_result", "context_compacted", and
-    "thinking" are hardcoded at both construction sites (chat.py, master_cc.py, worker.py,
-    spawner.py, scheduler.py, streaming.py, internal.py, and the base.py factory helpers
-    from item 042) and consumer sites (message_utils.py SIMPLE_HANDLERS dispatch table
-    from item 029, improve_command.py, chat.py, base.py tool-call tracking). A misspelled
-    type string silently produces a broken event that passes through the system undetected.
-    HOW — Add a module-level constants class in a new src/core/event_types.py with
-    one attribute per event type (e.g. ASSISTANT = "assistant", ERROR = "error").
-    Replace all ~34 inline string literals with constant references. ~15 lines for
-    the module, 1-line change per call site. The base.py factory helpers (make_text_event,
-    make_error_event, etc.) and the message_utils.py SIMPLE_HANDLERS dict become the
-    primary consumers, propagating type safety to all code that already uses those
-    abstractions. Complements items 029 (dispatch table) and 042 (event factories)
-    which centralized event handling and construction but left the type strings as
-    raw literals.
+  description: PURPOSE — Eliminate ~34 raw event-type string literals scattered across 10+ files, reducing typo risk and making
+    event schema changes a single-point edit. Currently, strings like "assistant", "error", "user", "result", "master_done",
+    "task_delegated", "worker_summary", "handler_result", "context_compacted", and "thinking" are hardcoded at both construction
+    sites (chat.py, master_cc.py, worker.py, spawner.py, scheduler.py, streaming.py, internal.py, and the base.py factory
+    helpers from item 042) and consumer sites (message_utils.py SIMPLE_HANDLERS dispatch table from item 029, improve_command.py,
+    chat.py, base.py tool-call tracking). A misspelled type string silently produces a broken event that passes through the
+    system undetected. HOW — Add a module-level constants class in a new src/core/event_types.py with one attribute per event
+    type (e.g. ASSISTANT = "assistant", ERROR = "error"). Replace all ~34 inline string literals with constant references.
+    ~15 lines for the module, 1-line change per call site. The base.py factory helpers (make_text_event, make_error_event,
+    etc.) and the message_utils.py SIMPLE_HANDLERS dict become the primary consumers, propagating type safety to all code
+    that already uses those abstractions. Complements items 029 (dispatch table) and 042 (event factories) which centralized
+    event handling and construction but left the type strings as raw literals.
   status: done
   created: '2026-03-25T12:00:00Z'
   priority: medium
 - id: '065'
   title: Extract shared _summarize_event_lines helper to deduplicate rewind and fork
-  description: 'PURPOSE — Eliminate 17 identical lines of event-parsing and summary-building
-    code duplicated between rewind_session (L172-189) and fork_session (L218-235)
-    in core/sessions.py, ensuring bug fixes and format changes apply in both paths.
-    Both functions repeat the exact same block: iterate JSON lines, parse each with
-    json.loads, skip parse errors with log.debug, extract user content and assistant
-    text via extract_text_from_message, join with double newlines, and truncate to
-    4000 characters. The only difference is the log event name (rewind_parse_skip
-    vs fork_parse_skip). HOW — Extract a module-level helper _summarize_event_lines(lines:
-    list[str]) -> str in core/sessions.py that encapsulates the parse-extract-join-truncate
-    pipeline. Both rewind_session and fork_session call it as summary = _summarize_event_lines(kept_lines
-    or lines). ~17 lines for the helper, each call site drops from 17 lines to 1.
-    The log.debug event name can use a generic "summary_parse_skip". Pure refactoring,
-    no behavior change. Follows the pattern from items 016, 045, and 059 which extracted
-    shared helpers for repeated inline logic.'
+  description: 'PURPOSE — Eliminate 17 identical lines of event-parsing and summary-building code duplicated between rewind_session
+    (L172-189) and fork_session (L218-235) in core/sessions.py, ensuring bug fixes and format changes apply in both paths.
+    Both functions repeat the exact same block: iterate JSON lines, parse each with json.loads, skip parse errors with log.debug,
+    extract user content and assistant text via extract_text_from_message, join with double newlines, and truncate to 4000
+    characters. The only difference is the log event name (rewind_parse_skip vs fork_parse_skip). HOW — Extract a module-level
+    helper _summarize_event_lines(lines: list[str]) -> str in core/sessions.py that encapsulates the parse-extract-join-truncate
+    pipeline. Both rewind_session and fork_session call it as summary = _summarize_event_lines(kept_lines or lines). ~17 lines
+    for the helper, each call site drops from 17 lines to 1. The log.debug event name can use a generic "summary_parse_skip".
+    Pure refactoring, no behavior change. Follows the pattern from items 016, 045, and 059 which extracted shared helpers
+    for repeated inline logic.'
   status: done
   created: '2026-03-26T12:00:00Z'
   priority: medium
 - id: '066'
-  title: Add thread-to-session reverse index in ThreadManager with directory-scan
-    fallback
-  description: 'PURPOSE — Eliminate the O(n) session-directory scan in server.py _find_events_file
-    (L218-228) that runs on every thread WebSocket connection. Connecting to /ws/threads/{thread_id}
-    triggers a linear scan of all session directories calling Path.exists() to locate
-    the thread''s events.jsonl file. As sessions accumulate this adds per-connection
-    latency proportional to session count. ThreadManager.create_thread already knows
-    both IDs but there is no reverse lookup by thread_id alone. HOW — Add a dict _thread_session_index:
-    dict[str, str] mapping thread_id to session_id in core/threads.py, populated automatically
-    during create_thread and lazily during get_thread and list_threads calls. Expose
-    a resolve_events_file(thread_id) method that checks the index first and always
-    falls back to the directory scan on cache miss. IMPORTANT — The directory-scan
-    fallback must remain as the authoritative resolution path; the in-memory index
-    is purely an optimization cache. If the index returns a stale or incorrect mapping,
-    resolve_events_file must detect the miss (e.g. file not found) and transparently
-    fall back to the scan, then repair the index entry. This ensures correctness even
-    if the dynamic index drifts. Replace _find_events_file in server.py with a call
-    to the new method. ~20 lines for the index logic with fallback, 1-line change
+  title: Add thread-to-session reverse index in ThreadManager with directory-scan fallback
+  description: 'PURPOSE — Eliminate the O(n) session-directory scan in server.py _find_events_file (L218-228) that runs on
+    every thread WebSocket connection. Connecting to /ws/threads/{thread_id} triggers a linear scan of all session directories
+    calling Path.exists() to locate the thread''s events.jsonl file. As sessions accumulate this adds per-connection latency
+    proportional to session count. ThreadManager.create_thread already knows both IDs but there is no reverse lookup by thread_id
+    alone. HOW — Add a dict _thread_session_index: dict[str, str] mapping thread_id to session_id in core/threads.py, populated
+    automatically during create_thread and lazily during get_thread and list_threads calls. Expose a resolve_events_file(thread_id)
+    method that checks the index first and always falls back to the directory scan on cache miss. IMPORTANT — The directory-scan
+    fallback must remain as the authoritative resolution path; the in-memory index is purely an optimization cache. If the
+    index returns a stale or incorrect mapping, resolve_events_file must detect the miss (e.g. file not found) and transparently
+    fall back to the scan, then repair the index entry. This ensures correctness even if the dynamic index drifts. Replace
+    _find_events_file in server.py with a call to the new method. ~20 lines for the index logic with fallback, 1-line change
     in server.py. No behavior change for callers.'
   status: done
   in_progress_at: '2026-04-10T14:35:04Z'
@@ -998,583 +812,437 @@
   priority: medium
 - id: '067'
   title: Extract built-in /improve and /run handlers from execute_command
-  description: PURPOSE — Reduce the 4th-longest function in the codebase (execute_command,
-    api/slash.py, 104 lines) by extracting the two largest built-in command handlers
-    into dedicated async functions. The /improve handler (L108-133, 26 lines) performs
-    argument parsing, validation, ImproveState creation, prompt building, and task
-    firing. The /run handler (L144-167, 24 lines) validates the task name against
-    scheduled tasks, looks up the scheduler from app state, invokes run_task_now,
-    and formats the result. Both are self-contained blocks with clear inputs and outputs
-    separated by early returns. HOW — Extract async _handle_improve(args, session_id,
-    meta, cfg, session_mgr) and async _handle_run(args, request) as module-level functions
-    returning the response dict or JSONResponse. The /help (3 lines) and /stop-improve
-    (6 lines) handlers are small enough to stay inline. execute_command becomes a
-    ~48-line dispatcher. Pure refactoring, no behavior change. Follows the pattern
+  description: PURPOSE — Reduce the 4th-longest function in the codebase (execute_command, api/slash.py, 104 lines) by extracting
+    the two largest built-in command handlers into dedicated async functions. The /improve handler (L108-133, 26 lines) performs
+    argument parsing, validation, ImproveState creation, prompt building, and task firing. The /run handler (L144-167, 24
+    lines) validates the task name against scheduled tasks, looks up the scheduler from app state, invokes run_task_now, and
+    formats the result. Both are self-contained blocks with clear inputs and outputs separated by early returns. HOW — Extract
+    async _handle_improve(args, session_id, meta, cfg, session_mgr) and async _handle_run(args, request) as module-level functions
+    returning the response dict or JSONResponse. The /help (3 lines) and /stop-improve (6 lines) handlers are small enough
+    to stay inline. execute_command becomes a ~48-line dispatcher. Pure refactoring, no behavior change. Follows the pattern
     from items 003, 021, 027, 041, 058, 061, 062, and 063 which split other long functions.
   status: pending
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: 068
   title: Centralize hardcoded timeout values into named constants module
-  description: 'PURPOSE — 17+ timeout literals (10, 30, 60 seconds) are scattered
-    across 9 files (spawner.py, latex.py, autonamer.py, notifications.py, ext_usage.py,
-    git.py, pages.py, delegate.py, improve.py) with no documentation of why each value
-    was chosen. Adjusting a timeout policy (e.g. increasing subprocess timeouts during
-    debugging) requires hunting through multiple files. HOW — Create src/core/timeouts.py
-    with named constants grouped by domain: SUBPROCESS_GIT_TIMEOUT (10s), HTTP_CLIENT_TIMEOUT
-    (30s), LATEX_COMPILE_TIMEOUT (60s), NOTIFICATION_TIMEOUT (10s), AUTONAMER_TIMEOUT
-    (30s), etc. Replace all bare numeric timeout= arguments with the corresponding
-    constant. Each constant gets a one-line comment explaining the rationale. Leave
-    backend-internal timeouts (_POST_RESULT_TIMEOUT, _CLEANUP_TIMEOUT in base.py)
-    as-is since they are already named constants. Pure mechanical replacement, no
-    behavior change.'
+  description: 'PURPOSE — 17+ timeout literals (10, 30, 60 seconds) are scattered across 9 files (spawner.py, latex.py, autonamer.py,
+    notifications.py, ext_usage.py, git.py, pages.py, delegate.py, improve.py) with no documentation of why each value was
+    chosen. Adjusting a timeout policy (e.g. increasing subprocess timeouts during debugging) requires hunting through multiple
+    files. HOW — Create src/core/timeouts.py with named constants grouped by domain: SUBPROCESS_GIT_TIMEOUT (10s), HTTP_CLIENT_TIMEOUT
+    (30s), LATEX_COMPILE_TIMEOUT (60s), NOTIFICATION_TIMEOUT (10s), AUTONAMER_TIMEOUT (30s), etc. Replace all bare numeric
+    timeout= arguments with the corresponding constant. Each constant gets a one-line comment explaining the rationale. Leave
+    backend-internal timeouts (_POST_RESULT_TIMEOUT, _CLEANUP_TIMEOUT in base.py) as-is since they are already named constants.
+    Pure mechanical replacement, no behavior change.'
   status: done
   created: '2026-03-30T12:00:00Z'
   priority: low
 - id: 069
-  title: Extract timing instrumentation from run_message into _RunTimingTracker helper
-    class
-  description: 'PURPOSE — Reduce the longest function in the codebase (run_message,
-    207 lines) by ~45 lines by extracting the timing/instrumentation concern that
-    is interleaved throughout the function into a self-contained helper class. Currently
-    58 lines of monotonic timing code are spread across 5 locations in run_message:
-    4 timing variable declarations (L253-260), a 4-line _on_spawn callback (L263-266),
-    17 lines of first-event timing with slow-start warning (L284-300), 16 lines of
-    first-assistant-text timing with content-block iteration (L302-317), and 17 lines
-    of finish-extras construction with slow-total warning (L332-348). This timing
-    logic is completely orthogonal to the core event-processing flow but obscures
-    it. HOW — Create a _RunTimingTracker class in master_cc.py with __init__(session_id,
-    backend_type, model), on_spawn(pid), on_event(event), and build_finish_extras()
-    methods. The event loop body drops from 37 lines to 2 lines: tracker.on_event(event)
-    then _handle_event(). The _on_spawn callback becomes tracker.on_spawn. The finally
-    block replaces 17 lines of timing dict construction with finish_extras = tracker.build_finish_extras().
-    ~30 lines for the class, net reduction of ~25 lines in run_message, bringing it
-    to ~180 lines. Pure refactoring, no behavior change. Follows the pattern from
-    items 003, 061, and 062 which split other long functions by extracting orthogonal
-    concerns.'
+  title: Extract timing instrumentation from run_message into _RunTimingTracker helper class
+  description: 'PURPOSE — Reduce the longest function in the codebase (run_message, 207 lines) by ~45 lines by extracting
+    the timing/instrumentation concern that is interleaved throughout the function into a self-contained helper class. Currently
+    58 lines of monotonic timing code are spread across 5 locations in run_message: 4 timing variable declarations (L253-260),
+    a 4-line _on_spawn callback (L263-266), 17 lines of first-event timing with slow-start warning (L284-300), 16 lines of
+    first-assistant-text timing with content-block iteration (L302-317), and 17 lines of finish-extras construction with slow-total
+    warning (L332-348). This timing logic is completely orthogonal to the core event-processing flow but obscures it. HOW
+    — Create a _RunTimingTracker class in master_cc.py with __init__(session_id, backend_type, model), on_spawn(pid), on_event(event),
+    and build_finish_extras() methods. The event loop body drops from 37 lines to 2 lines: tracker.on_event(event) then _handle_event().
+    The _on_spawn callback becomes tracker.on_spawn. The finally block replaces 17 lines of timing dict construction with
+    finish_extras = tracker.build_finish_extras(). ~30 lines for the class, net reduction of ~25 lines in run_message, bringing
+    it to ~180 lines. Pure refactoring, no behavior change. Follows the pattern from items 003, 061, and 062 which split other
+    long functions by extracting orthogonal concerns.'
   status: done
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: '070'
   title: Use kill_process_group instead of os.kill in orphan recovery
-  description: PURPOSE — Fix orphan recovery leaving child processes behind. _recover_orphaned_threads
-    in core/init.py:123 uses os.kill(pid, 15) to terminate orphaned workers, but worker
-    subprocesses are started with start_new_session=True (base.py), giving each its
-    own process group. os.kill only signals the group leader, leaving child processes
-    (e.g. git, node) running as new orphans — the recovery function creates the very
-    problem it solves. Also uses magic number 15 instead of signal.SIGTERM. HOW —
-    Replace os.kill(pid, 15) with kill_process_group(pid, signal.SIGTERM) from src.core.process,
-    matching all other kill sites in the codebase (items 039 and 060 established this
-    pattern). Update the except clause to catch (ProcessLookupError, PermissionError)
-    instead of (OSError, ProcessLookupError) for consistency. Add imports for signal
-    and kill_process_group. 3-line change total.
+  description: PURPOSE — Fix orphan recovery leaving child processes behind. _recover_orphaned_threads in core/init.py:123
+    uses os.kill(pid, 15) to terminate orphaned workers, but worker subprocesses are started with start_new_session=True (base.py),
+    giving each its own process group. os.kill only signals the group leader, leaving child processes (e.g. git, node) running
+    as new orphans — the recovery function creates the very problem it solves. Also uses magic number 15 instead of signal.SIGTERM.
+    HOW — Replace os.kill(pid, 15) with kill_process_group(pid, signal.SIGTERM) from src.core.process, matching all other
+    kill sites in the codebase (items 039 and 060 established this pattern). Update the except clause to catch (ProcessLookupError,
+    PermissionError) instead of (OSError, ProcessLookupError) for consistency. Add imports for signal and kill_process_group.
+    3-line change total.
   status: done
   created: '2026-03-30T12:00:00Z'
   priority: high
 - id: '071'
   title: Extract review pipeline from spawner.py into core/review.py
-  description: 'PURPOSE — Reduce the largest module in the codebase (spawner.py, 1216
-    lines, 30 functions) by ~26% by extracting the self-contained review pipeline
-    into a dedicated module. Six private functions totalling ~322 lines form a cohesive
-    unit with a clear entry point (_maybe_spawn_reviewer, called from _finalize_worker):
-    _build_review_prompt (58 lines, L95), _extract_review_context (52 lines, L155),
-    _validate_review_prerequisites (31 lines, L856), _select_reviewer_backend (42
-    lines, L888), _spawn_review_worker (73 lines, L932), and _maybe_spawn_reviewer
-    (66 lines, L1056). These functions only interact with spawner.py through well-defined
-    interfaces (ThreadMetadata, SessionManager, ThreadManager, CharlieBotConfig, and
-    two shared helpers: resolve_backend_option and _require_thread_backend_model).
-    HOW — Create src/core/review.py containing the 6 functions, importing shared types
-    and the two helpers from spawner.py. In spawner.py, replace the 6 function definitions
-    with a single import of maybe_spawn_reviewer from core.review (dropping the underscore
-    since it becomes a module-level public API). Update _finalize_worker to call review.maybe_spawn_reviewer.
-    Pure move refactoring, no logic changes. Reduces spawner.py from 1216 to ~894
-    lines, making both files easier to navigate. Follows the pattern from items 047
-    (extracted core/git.py) and 060 (extracted core/process.py) which carved out cohesive
-    sub-modules from large files.'
+  description: 'PURPOSE — Reduce the largest module in the codebase (spawner.py, 1216 lines, 30 functions) by ~26% by extracting
+    the self-contained review pipeline into a dedicated module. Six private functions totalling ~322 lines form a cohesive
+    unit with a clear entry point (_maybe_spawn_reviewer, called from _finalize_worker): _build_review_prompt (58 lines, L95),
+    _extract_review_context (52 lines, L155), _validate_review_prerequisites (31 lines, L856), _select_reviewer_backend (42
+    lines, L888), _spawn_review_worker (73 lines, L932), and _maybe_spawn_reviewer (66 lines, L1056). These functions only
+    interact with spawner.py through well-defined interfaces (ThreadMetadata, SessionManager, ThreadManager, CharlieBotConfig,
+    and two shared helpers: resolve_backend_option and _require_thread_backend_model). HOW — Create src/core/review.py containing
+    the 6 functions, importing shared types and the two helpers from spawner.py. In spawner.py, replace the 6 function definitions
+    with a single import of maybe_spawn_reviewer from core.review (dropping the underscore since it becomes a module-level
+    public API). Update _finalize_worker to call review.maybe_spawn_reviewer. Pure move refactoring, no logic changes. Reduces
+    spawner.py from 1216 to ~894 lines, making both files easier to navigate. Follows the pattern from items 047 (extracted
+    core/git.py) and 060 (extracted core/process.py) which carved out cohesive sub-modules from large files.'
   status: done
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: '072'
   title: Consolidate git subprocess helpers from spawner.py into core/git.py
-  description: 'PURPOSE — core/git.py (created by item 047) contains only git_add_commit_push,
-    yet spawner.py still has three private git subprocess helpers that follow the
-    same create-subprocess, wait-with-timeout, handle-error pattern: _git_current_branch
-    (L209-231, 23 lines), _git_create_worktree (L234-266, 33 lines), and inline worktree
-    remove + prune in _cleanup_worker_directory (L548-581, ~34 lines). Consolidating
-    these ~90 lines into core/git.py makes it a proper git operations module, reduces
-    spawner.py (1216 lines, largest file), and makes the operations reusable. HOW
-    — Move _git_current_branch and _git_create_worktree to core/git.py as git_current_branch
-    and git_create_worktree (drop underscore for public API). Extract the worktree-remove
-    and worktree-prune subprocess blocks from _cleanup_worker_directory into git_worktree_remove
-    and git_worktree_prune in core/git.py. Update spawner.py to import from core.git.
-    Pure move refactoring, no logic changes. Completes the consolidation started by
-    item 047.'
+  description: 'PURPOSE — core/git.py (created by item 047) contains only git_add_commit_push, yet spawner.py still has three
+    private git subprocess helpers that follow the same create-subprocess, wait-with-timeout, handle-error pattern: _git_current_branch
+    (L209-231, 23 lines), _git_create_worktree (L234-266, 33 lines), and inline worktree remove + prune in _cleanup_worker_directory
+    (L548-581, ~34 lines). Consolidating these ~90 lines into core/git.py makes it a proper git operations module, reduces
+    spawner.py (1216 lines, largest file), and makes the operations reusable. HOW — Move _git_current_branch and _git_create_worktree
+    to core/git.py as git_current_branch and git_create_worktree (drop underscore for public API). Extract the worktree-remove
+    and worktree-prune subprocess blocks from _cleanup_worker_directory into git_worktree_remove and git_worktree_prune in
+    core/git.py. Update spawner.py to import from core.git. Pure move refactoring, no logic changes. Completes the consolidation
+    started by item 047.'
   status: done
   created: '2026-03-30T20:00:00Z'
   priority: low
 - id: '073'
   title: Wrap sync file I/O in asyncio.to_thread in ext_usage.py credentials helpers
-  description: 'PURPOSE — Prevent event-loop blocking during usage polling and token
-    refresh in api/ext_usage.py. Two credentials helpers perform sync file I/O directly
-    on the event loop: _read_credentials() (L118-138) calls CREDENTIALS_PATH.exists()
-    and .read_text() synchronously and is invoked from async CcOpusProvider.fetch()
-    at L42 without asyncio.to_thread; _refresh_access_token() (L202-229) is an async
-    function that calls .read_text() (L221) and .write_text() (L226) synchronously
-    inline. These block the event loop on every 10-minute poll cycle and on every
-    token refresh. Notably, the adjacent CodexProvider.fetch() (L81-83) already correctly
-    wraps its sync I/O in run_in_executor, making this an inconsistency within the
-    same file. HOW — Wrap the _read_credentials() call at L42 with await asyncio.to_thread(_read_credentials).
-    In _refresh_access_token(), extract the read-modify-write block (L221-226) into
-    a local _update_creds() closure and call it via await asyncio.to_thread(_update_creds).
-    asyncio is already imported. ~5 lines changed total. Follows the established pattern
-    from items 024, 034, 035, 043, 044, 046, and 057 which wrapped identical sync
-    I/O anti-patterns in other async functions.'
+  description: 'PURPOSE — Prevent event-loop blocking during usage polling and token refresh in api/ext_usage.py. Two credentials
+    helpers perform sync file I/O directly on the event loop: _read_credentials() (L118-138) calls CREDENTIALS_PATH.exists()
+    and .read_text() synchronously and is invoked from async CcOpusProvider.fetch() at L42 without asyncio.to_thread; _refresh_access_token()
+    (L202-229) is an async function that calls .read_text() (L221) and .write_text() (L226) synchronously inline. These block
+    the event loop on every 10-minute poll cycle and on every token refresh. Notably, the adjacent CodexProvider.fetch() (L81-83)
+    already correctly wraps its sync I/O in run_in_executor, making this an inconsistency within the same file. HOW — Wrap
+    the _read_credentials() call at L42 with await asyncio.to_thread(_read_credentials). In _refresh_access_token(), extract
+    the read-modify-write block (L221-226) into a local _update_creds() closure and call it via await asyncio.to_thread(_update_creds).
+    asyncio is already imported. ~5 lines changed total. Follows the established pattern from items 024, 034, 035, 043, 044,
+    046, and 057 which wrapped identical sync I/O anti-patterns in other async functions.'
   status: done
   created: '2026-03-30T22:00:00Z'
   priority: medium
 - id: '074'
-  title: Simplify _wait_for_quota_recovery by merging duplicate fallback branches
-    and fixing stale event-type literals
-  description: 'PURPOSE — Reduce the 69-line _wait_for_quota_recovery function in
-    improve_command.py by ~15 lines by eliminating two identical fallback branches,
-    and fix 4 remaining raw event-type string literals left over from backlog item
-    064 (centralize event type strings). HOW — (1) In improve_command.py _wait_for_quota_recovery
-    (L211-231), the "high utilization but no resets_at" branch and the "usage API
-    unavailable" branch are identical: same message, same persist_and_broadcast call,
-    same asyncio.sleep. Merge them by removing the else clause and falling through
-    from the if-usage-is-not-None block when quota is still high, so both cases share
-    one broadcast+sleep block at the end of the while loop body. (2) Fix 4 raw event-type
-    strings that should use ET constants: api/chat.py:144 uses "assistant_error" instead
-    of ET.ASSISTANT_ERROR, core/sessions.py:500 uses "result" instead of ET.RESULT,
-    core/spawner.py:433 uses "user" instead of ET.USER, agents/backends/codex.py:279
-    uses "error" instead of ET.ERROR. Each is a one-line fix, adding an import of
-    event_types as ET where not already present. Also remove the unused AUTONAMER_TIMEOUT
-    import from core/autonamer.py:17 (the hardcoded timeout=30.0 on line 118 should
+  title: Simplify _wait_for_quota_recovery by merging duplicate fallback branches and fixing stale event-type literals
+  description: 'PURPOSE — Reduce the 69-line _wait_for_quota_recovery function in improve_command.py by ~15 lines by eliminating
+    two identical fallback branches, and fix 4 remaining raw event-type string literals left over from backlog item 064 (centralize
+    event type strings). HOW — (1) In improve_command.py _wait_for_quota_recovery (L211-231), the "high utilization but no
+    resets_at" branch and the "usage API unavailable" branch are identical: same message, same persist_and_broadcast call,
+    same asyncio.sleep. Merge them by removing the else clause and falling through from the if-usage-is-not-None block when
+    quota is still high, so both cases share one broadcast+sleep block at the end of the while loop body. (2) Fix 4 raw event-type
+    strings that should use ET constants: api/chat.py:144 uses "assistant_error" instead of ET.ASSISTANT_ERROR, core/sessions.py:500
+    uses "result" instead of ET.RESULT, core/spawner.py:433 uses "user" instead of ET.USER, agents/backends/codex.py:279 uses
+    "error" instead of ET.ERROR. Each is a one-line fix, adding an import of event_types as ET where not already present.
+    Also remove the unused AUTONAMER_TIMEOUT import from core/autonamer.py:17 (the hardcoded timeout=30.0 on line 118 should
     use the constant instead). Total: ~20 lines changed across 5 files.'
   status: pending
   created: '2026-03-31T12:00:00Z'
   priority: low
 - id: '075'
-  title: Extract shared _enrich_and_sort helper to deduplicate list_sessions and search_sessions
-    tail
-  description: 'PURPOSE — Eliminate 18 duplicated lines of running-status enrichment,
-    timezone normalization, and sorting repeated verbatim between list_sessions (L129-137)
-    and search_sessions (L168-175) in core/sessions.py. The same bool(meta.thinking_since)
-    or running expression also appears in api/sessions.py:159 (all_sessions_status)
-    and :187 (get_session_view) — 4 call sites total for what is conceptually a single
-    "enrich session metadata for display" operation. A bug fix to the running-status
-    logic (e.g. adding a new signal beyond thinking_since) would need to be applied
-    in all 4 places independently. HOW — Add a private method _enrich_and_sort(self,
-    sessions: list[SessionMetadata], include_running_status: bool) -> list[SessionMetadata]
-    to SessionManager that encapsulates: (1) optionally batch-check _has_running_tasks
-    via asyncio.gather and set has_running_tasks = bool(meta.thinking_since) or running,
-    (2) normalize timezone-naive updated_at to UTC, (3) sort by updated_at descending.
-    Replace the 9-line tail in list_sessions and search_sessions with a single call
-    to await self._enrich_and_sort(sessions, include_running_status). For api/sessions.py
-    call sites, expose a public enrich_running_status(meta) single-session variant
-    or let callers use the batch method. ~12 lines for the helper, each call site
-    drops from 9 lines to 1. Pure refactoring, no behavior change. Follows the pattern
-    from items 002 (_update_field) and 065 (_summarize_event_lines) which extracted
+  title: Extract shared _enrich_and_sort helper to deduplicate list_sessions and search_sessions tail
+  description: 'PURPOSE — Eliminate 18 duplicated lines of running-status enrichment, timezone normalization, and sorting
+    repeated verbatim between list_sessions (L129-137) and search_sessions (L168-175) in core/sessions.py. The same bool(meta.thinking_since)
+    or running expression also appears in api/sessions.py:159 (all_sessions_status) and :187 (get_session_view) — 4 call sites
+    total for what is conceptually a single "enrich session metadata for display" operation. A bug fix to the running-status
+    logic (e.g. adding a new signal beyond thinking_since) would need to be applied in all 4 places independently. HOW — Add
+    a private method _enrich_and_sort(self, sessions: list[SessionMetadata], include_running_status: bool) -> list[SessionMetadata]
+    to SessionManager that encapsulates: (1) optionally batch-check _has_running_tasks via asyncio.gather and set has_running_tasks
+    = bool(meta.thinking_since) or running, (2) normalize timezone-naive updated_at to UTC, (3) sort by updated_at descending.
+    Replace the 9-line tail in list_sessions and search_sessions with a single call to await self._enrich_and_sort(sessions,
+    include_running_status). For api/sessions.py call sites, expose a public enrich_running_status(meta) single-session variant
+    or let callers use the batch method. ~12 lines for the helper, each call site drops from 9 lines to 1. Pure refactoring,
+    no behavior change. Follows the pattern from items 002 (_update_field) and 065 (_summarize_event_lines) which extracted
     shared helpers for repeated inline logic in the same file.'
   status: done
   created: '2026-03-31T14:00:00Z'
   priority: medium
 - id: '076'
-  title: Refactor _check_takeoff_gate to use SessionManager instead of hardcoded path
-    and raw file I/O
-  description: PURPOSE — Eliminate a hardcoded session data path and raw sync file
-    I/O that bypasses SessionManager encapsulation. core/spawner.py _check_takeoff_gate
-    (L418-449) constructs the chat_events.jsonl path inline (Path.home() / ".charliebot"
-    / "sessions" / session_id / "data" / "chat_events.jsonl") instead of going through
-    SessionManager._chat_events_path(). It then calls events_path.read_text() and
-    manually parses every JSON line in reverse to find the last user message. This
-    duplicates path construction logic, bypasses the in-memory _events_cache that
-    SessionManager maintains for active sessions, and performs unnecessary full-file
-    reads for sessions that are already loaded. HOW — Change _check_takeoff_gate to
-    accept a SessionManager parameter. Use session_mgr.load_chat_events_sync(session_id)
-    which returns cached events when available or populates the cache on first read.
-    Iterate the returned list in reverse for the last user event, replacing the manual
-    JSON parsing loop. Also wrap the call in asyncio.to_thread at the spawn_worker
-    call site (L471-472) since load_chat_events_sync may do file I/O on cache miss.
-    The function shrinks from 32 lines to ~15 lines and eliminates the only remaining
-    inline session-path construction outside SessionManager. ~20 lines changed across
-    1 file.
+  title: Refactor _check_takeoff_gate to use SessionManager instead of hardcoded path and raw file I/O
+  description: PURPOSE — Eliminate a hardcoded session data path and raw sync file I/O that bypasses SessionManager encapsulation.
+    core/spawner.py _check_takeoff_gate (L418-449) constructs the chat_events.jsonl path inline (Path.home() / ".charliebot"
+    / "sessions" / session_id / "data" / "chat_events.jsonl") instead of going through SessionManager._chat_events_path().
+    It then calls events_path.read_text() and manually parses every JSON line in reverse to find the last user message. This
+    duplicates path construction logic, bypasses the in-memory _events_cache that SessionManager maintains for active sessions,
+    and performs unnecessary full-file reads for sessions that are already loaded. HOW — Change _check_takeoff_gate to accept
+    a SessionManager parameter. Use session_mgr.load_chat_events_sync(session_id) which returns cached events when available
+    or populates the cache on first read. Iterate the returned list in reverse for the last user event, replacing the manual
+    JSON parsing loop. Also wrap the call in asyncio.to_thread at the spawn_worker call site (L471-472) since load_chat_events_sync
+    may do file I/O on cache miss. The function shrinks from 32 lines to ~15 lines and eliminates the only remaining inline
+    session-path construction outside SessionManager. ~20 lines changed across 1 file.
   category: maintainability
   status: pending
   created: '2026-03-31T18:00:00Z'
   priority: medium
 - id: '077'
   title: Optimize parse_ndjson_tail to single-pass using collections.deque
-  description: 'PURPOSE — Halve the I/O for every page load and session switch that
-    uses the fast-view path. parse_ndjson_tail in core/ndjson.py (L29-74) reads the
-    file twice: first a full forward scan to count total lines (for _ in f: total
-    += 1), then a backwards seek-from-end to collect the last N lines. For a session
-    with 10,000 events this means reading ~10 MB twice on every build_session_view_data_fast
-    call (api/message_utils.py:67), which runs on every session switch and sidebar
-    refresh. The total line count is needed by the caller (message_utils.py:82) to
-    compute event_index_offset = total_count - len(tail_events) so that event indices
-    in the UI match real file line positions. HOW — Replace the two-pass algorithm
-    with a single forward pass using collections.deque(maxlen=limit). Read the file
-    once, counting total lines while appending parsed events to a bounded deque that
-    automatically discards old entries. Return (list(deque), total, total > limit).
-    This is O(n) single-pass instead of O(2n) two-pass, halving file I/O. The deque
-    approach is simpler than the current backwards-seek logic (which also has a subtle
-    bug: the forward total counts all lines including blank ones, but the backward
-    scan only collects non-blank lines, so total and len(tail_events) can disagree
-    when blank lines are present, causing event_index_offset to be slightly wrong).
-    The fix eliminates this inconsistency by counting only parseable lines in both
-    total and tail. ~15 lines for the new implementation replacing ~40 lines of the
-    current two-pass approach, net reduction of ~25 lines.'
+  description: 'PURPOSE — Halve the I/O for every page load and session switch that uses the fast-view path. parse_ndjson_tail
+    in core/ndjson.py (L29-74) reads the file twice: first a full forward scan to count total lines (for _ in f: total +=
+    1), then a backwards seek-from-end to collect the last N lines. For a session with 10,000 events this means reading ~10
+    MB twice on every build_session_view_data_fast call (api/message_utils.py:67), which runs on every session switch and
+    sidebar refresh. The total line count is needed by the caller (message_utils.py:82) to compute event_index_offset = total_count
+    - len(tail_events) so that event indices in the UI match real file line positions. HOW — Replace the two-pass algorithm
+    with a single forward pass using collections.deque(maxlen=limit). Read the file once, counting total lines while appending
+    parsed events to a bounded deque that automatically discards old entries. Return (list(deque), total, total > limit).
+    This is O(n) single-pass instead of O(2n) two-pass, halving file I/O. The deque approach is simpler than the current backwards-seek
+    logic (which also has a subtle bug: the forward total counts all lines including blank ones, but the backward scan only
+    collects non-blank lines, so total and len(tail_events) can disagree when blank lines are present, causing event_index_offset
+    to be slightly wrong). The fix eliminates this inconsistency by counting only parseable lines in both total and tail.
+    ~15 lines for the new implementation replacing ~40 lines of the current two-pass approach, net reduction of ~25 lines.'
   category: performance
   status: done
   created: '2026-03-31T20:00:00Z'
   priority: medium
 - id: 078
-  title: Replace defensive getattr() on pydantic ThreadMetadata with direct attribute
-    access
-  description: 'PURPOSE — Align spawner.py with the project''s fail-fast principle
-    by removing unnecessary defensive getattr() calls on a pydantic model whose fields
-    are guaranteed to exist. ThreadMetadata (core/models.py) is a Pydantic BaseModel
-    with all accessed fields declared as proper class attributes with defaults — worktree_path
-    (Optional[str] = None), repo_path (Optional[str] = None), branch_name (Optional[str]
-    = None), require_review (bool = True), and review_of (Optional[str] = None). Pydantic
-    guarantees these attributes exist on every instance, making getattr(thread, "attr",
-    default) equivalent to thread.attr but obscuring the actual field types and defaults
-    from the reader. HOW — In core/spawner.py, replace 3 defensive getattr() call
-    sites with direct attribute access: (1) L358: change getattr(thread, "worktree_path",
-    None) and getattr(thread, "repo_path", None) to thread.worktree_path and thread.repo_path;
-    (2) L396: change all(getattr(thread, attr, None) for attr in (...)) to all([thread.repo_path,
-    thread.branch_name, thread.worktree_path]); (3) L398: change getattr(thread, "require_review",
-    False) and not getattr(thread, "review_of", None) to thread.require_review and
-    not thread.review_of. 3 lines changed in 1 file. No behavior change since the
-    getattr defaults already match the pydantic field defaults. Eliminates false impression
-    that these attributes might be absent and makes the type checker aware of the
-    actual field types.'
+  title: Replace defensive getattr() on pydantic ThreadMetadata with direct attribute access
+  description: 'PURPOSE — Align spawner.py with the project''s fail-fast principle by removing unnecessary defensive getattr()
+    calls on a pydantic model whose fields are guaranteed to exist. ThreadMetadata (core/models.py) is a Pydantic BaseModel
+    with all accessed fields declared as proper class attributes with defaults — worktree_path (Optional[str] = None), repo_path
+    (Optional[str] = None), branch_name (Optional[str] = None), require_review (bool = True), and review_of (Optional[str]
+    = None). Pydantic guarantees these attributes exist on every instance, making getattr(thread, "attr", default) equivalent
+    to thread.attr but obscuring the actual field types and defaults from the reader. HOW — In core/spawner.py, replace 3
+    defensive getattr() call sites with direct attribute access: (1) L358: change getattr(thread, "worktree_path", None) and
+    getattr(thread, "repo_path", None) to thread.worktree_path and thread.repo_path; (2) L396: change all(getattr(thread,
+    attr, None) for attr in (...)) to all([thread.repo_path, thread.branch_name, thread.worktree_path]); (3) L398: change
+    getattr(thread, "require_review", False) and not getattr(thread, "review_of", None) to thread.require_review and not thread.review_of.
+    3 lines changed in 1 file. No behavior change since the getattr defaults already match the pydantic field defaults. Eliminates
+    false impression that these attributes might be absent and makes the type checker aware of the actual field types.'
   category: maintainability
   status: pending
   created: '2026-03-31T22:00:00Z'
   priority: low
 - id: 079
   title: Consolidate double save_metadata calls in worker spawn path
-  description: 'PURPOSE — Eliminate redundant disk writes during every worker spawn.
-    Both _create_worktree_and_process (spawner.py L218 + L248) and _create_repoless_process
-    (L289 + L294) call thread_mgr.save_metadata(thread) twice in quick succession:
-    once after setting worktree/context fields, then again 5-10 lines later after
-    resolving backend/model. The backend resolution (resolve_backend_option) is a
-    pure in-memory dict lookup that cannot fail, so the intermediate save provides
-    no crash-recovery benefit. Combined with the third save in _stream_worker_events
-    (L326 for status/started_at) and the fourth via on_spawned callback (worker.py
-    L72 for PID), each worker spawn performs 4 sequential metadata writes to disk.
-    HOW — In both _create_worktree_and_process and _create_repoless_process, move
-    the backend_option resolution and thread.backend/thread.model assignment above
-    the single save_metadata call, then delete the second save_metadata call. This
-    reduces the spawn path from 4 saves to 3 with zero behavioral change — all fields
-    are still persisted before the worker starts running. ~6 lines deleted across
-    2 functions, no new code added.'
+  description: 'PURPOSE — Eliminate redundant disk writes during every worker spawn. Both _create_worktree_and_process (spawner.py
+    L218 + L248) and _create_repoless_process (L289 + L294) call thread_mgr.save_metadata(thread) twice in quick succession:
+    once after setting worktree/context fields, then again 5-10 lines later after resolving backend/model. The backend resolution
+    (resolve_backend_option) is a pure in-memory dict lookup that cannot fail, so the intermediate save provides no crash-recovery
+    benefit. Combined with the third save in _stream_worker_events (L326 for status/started_at) and the fourth via on_spawned
+    callback (worker.py L72 for PID), each worker spawn performs 4 sequential metadata writes to disk. HOW — In both _create_worktree_and_process
+    and _create_repoless_process, move the backend_option resolution and thread.backend/thread.model assignment above the
+    single save_metadata call, then delete the second save_metadata call. This reduces the spawn path from 4 saves to 3 with
+    zero behavioral change — all fields are still persisted before the worker starts running. ~6 lines deleted across 2 functions,
+    no new code added.'
   category: performance
   status: done
   created: '2026-03-31T23:00:00Z'
   priority: low
 - id: 080
-  title: Migrate gemini_provider.py from deprecated google-generativeai to google-genai
-    SDK
-  description: 'PURPOSE — Eliminate the FutureWarning emitted on every import and
-    ensure continued security and bug-fix updates. The google-generativeai package
-    (v0.8.6) has officially ended all support; the deprecation notice states "All
-    support for the google.generativeai package has ended. It will no longer be receiving
-    updates or bug fixes. Please switch to the google.genai package as soon as possible."
-    The warning fires on every server start and module import, adding noise to logs.
-    More critically, the package will not receive security patches, and future Python
-    or protobuf version bumps may break it without recourse. HOW — Replace import
-    google.generativeai as genai with from google import genai in src/agents/gemini_provider.py.
-    Adapt the 3 API call sites: (1) genai.configure(api_key=...) becomes client =
-    genai.Client(api_key=...), (2) genai.GenerativeModel(model) becomes client.models,
-    (3) model.generate_content(prompt) becomes client.models.generate_content(model=model_id,
-    contents=prompt). Store the client instance as self._client instead of calling
-    genai.configure() globally (which is not thread-safe). Update pyproject.toml or
-    requirements to replace google-generativeai with google-genai. The migration scope
-    is small — only 1 file (47 lines) with 3 call sites, plus the dependency declaration.
-    The new SDK has a different but well-documented API surface documented at https://github.com/google-gemini/python-genai.'
+  title: Migrate gemini_provider.py from deprecated google-generativeai to google-genai SDK
+  description: 'PURPOSE — Eliminate the FutureWarning emitted on every import and ensure continued security and bug-fix updates.
+    The google-generativeai package (v0.8.6) has officially ended all support; the deprecation notice states "All support
+    for the google.generativeai package has ended. It will no longer be receiving updates or bug fixes. Please switch to the
+    google.genai package as soon as possible." The warning fires on every server start and module import, adding noise to
+    logs. More critically, the package will not receive security patches, and future Python or protobuf version bumps may
+    break it without recourse. HOW — Replace import google.generativeai as genai with from google import genai in src/agents/gemini_provider.py.
+    Adapt the 3 API call sites: (1) genai.configure(api_key=...) becomes client = genai.Client(api_key=...), (2) genai.GenerativeModel(model)
+    becomes client.models, (3) model.generate_content(prompt) becomes client.models.generate_content(model=model_id, contents=prompt).
+    Store the client instance as self._client instead of calling genai.configure() globally (which is not thread-safe). Update
+    pyproject.toml or requirements to replace google-generativeai with google-genai. The migration scope is small — only 1
+    file (47 lines) with 3 call sites, plus the dependency declaration. The new SDK has a different but well-documented API
+    surface documented at https://github.com/google-gemini/python-genai.'
   category: maintainability
   status: done
   created: '2026-04-01T12:00:00Z'
   priority: high
 - id: 081
   title: Wrap blocking sync I/O in asyncio.to_thread in improve_command.py
-  description: PURPOSE — Prevent event-loop blocking during the improve loop, which
-    runs as a long-lived server-side async task. Two parse_ndjson_file() calls (L151
-    in is_quota_failure, L322 in run_improve_loop) read potentially large NDJSON event
-    logs synchronously on the event loop. Additionally, improve_dir.mkdir() (L265),
-    report_path.exists() (L328), and report_path.write_text() (L329) perform sync
-    filesystem I/O inline. Every other call site in the codebase (threads.py:84, review.py:99/116,
-    spawner.py:741) already correctly wraps parse_ndjson_file in asyncio.to_thread
-    — improve_command.py is the only file that does not, making this an inconsistency.
-    The improve loop processes multiple iterations sequentially, so blocking the event
-    loop here stalls WebSocket broadcasts and UI updates for all sessions during each
-    iteration's summary extraction. HOW — Wrap both parse_ndjson_file calls with await
-    asyncio.to_thread(parse_ndjson_file, events_path). Wrap the mkdir, exists, and
-    write_text calls with asyncio.to_thread. asyncio is already imported. ~5 lines
-    changed, matching the established pattern from items 034, 035, 043, 044, 046,
-    and 057.
+  description: PURPOSE — Prevent event-loop blocking during the improve loop, which runs as a long-lived server-side async
+    task. Two parse_ndjson_file() calls (L151 in is_quota_failure, L322 in run_improve_loop) read potentially large NDJSON
+    event logs synchronously on the event loop. Additionally, improve_dir.mkdir() (L265), report_path.exists() (L328), and
+    report_path.write_text() (L329) perform sync filesystem I/O inline. Every other call site in the codebase (threads.py:84,
+    review.py:99/116, spawner.py:741) already correctly wraps parse_ndjson_file in asyncio.to_thread — improve_command.py
+    is the only file that does not, making this an inconsistency. The improve loop processes multiple iterations sequentially,
+    so blocking the event loop here stalls WebSocket broadcasts and UI updates for all sessions during each iteration's summary
+    extraction. HOW — Wrap both parse_ndjson_file calls with await asyncio.to_thread(parse_ndjson_file, events_path). Wrap
+    the mkdir, exists, and write_text calls with asyncio.to_thread. asyncio is already imported. ~5 lines changed, matching
+    the established pattern from items 034, 035, 043, 044, 046, and 057.
   category: performance
   status: done
   created: '2026-04-01T14:00:00Z'
   priority: medium
 - id: 082
-  title: Add explicit asyncio.CancelledError handling to long-running orchestration
-    functions
-  description: 'PURPOSE — Prevent subprocess and worktree leaks when async tasks are
-    cancelled (browser close, server shutdown, /stop-improve). Since Python 3.8, asyncio.CancelledError
-    is a BaseException, not Exception — so the broad except Exception clauses in spawn_worker
-    (spawner.py:498), _run_cc (master_cc.py:253), and run_improve_loop (improve_command.py:354)
-    do not catch it. While the finally blocks still execute, they do not explicitly
-    terminate the in-flight subprocess before cleanup runs, meaning the backend process
-    may continue running as an orphan after the task is cancelled. Only scheduler.py
-    currently handles CancelledError (L58, L80). HOW — Add except asyncio.CancelledError
-    blocks in three functions: (1) spawn_worker — call worker.terminate() before re-raising
-    so the subprocess is killed before _finalize_worker runs in finally; (2) _run_cc
-    — call backend.terminate() and remove from _active_procs before re-raising; (3)
-    run_improve_loop — broadcast an improve_cancelled event and re-raise. Each block
-    logs a warning, ensures subprocess termination, then re-raises to preserve cancellation
-    semantics. ~5 lines per function, 15 lines total across 3 files. No behavior change
-    for normal execution.'
+  title: Add explicit asyncio.CancelledError handling to long-running orchestration functions
+  description: 'PURPOSE — Prevent subprocess and worktree leaks when async tasks are cancelled (browser close, server shutdown,
+    /stop-improve). Since Python 3.8, asyncio.CancelledError is a BaseException, not Exception — so the broad except Exception
+    clauses in spawn_worker (spawner.py:498), _run_cc (master_cc.py:253), and run_improve_loop (improve_command.py:354) do
+    not catch it. While the finally blocks still execute, they do not explicitly terminate the in-flight subprocess before
+    cleanup runs, meaning the backend process may continue running as an orphan after the task is cancelled. Only scheduler.py
+    currently handles CancelledError (L58, L80). HOW — Add except asyncio.CancelledError blocks in three functions: (1) spawn_worker
+    — call worker.terminate() before re-raising so the subprocess is killed before _finalize_worker runs in finally; (2) _run_cc
+    — call backend.terminate() and remove from _active_procs before re-raising; (3) run_improve_loop — broadcast an improve_cancelled
+    event and re-raise. Each block logs a warning, ensures subprocess termination, then re-raises to preserve cancellation
+    semantics. ~5 lines per function, 15 lines total across 3 files. No behavior change for normal execution.'
   category: error-handling
   status: done
   created: '2026-04-01T16:00:00Z'
   priority: high
 - id: 083
-  title: Extract shared worker-construction tail from _create_worktree_and_process
-    and _create_repoless_process
-  description: 'PURPOSE — Eliminate 20 duplicated lines of backend resolution, subagent
-    instructions loading, and Worker instantiation repeated verbatim between _create_worktree_and_process
-    (spawner.py L245-264) and _create_repoless_process (L291-308). Both functions
-    share an identical 4-step tail after their divergent setup logic: (1) resolve_backend_option
-    + update thread.backend/model + save_metadata, (2) asyncio.to_thread(_read_subagent_instructions),
-    (3) thread_mgr.get_events_log_path, (4) Worker(...) construction with 7 identical
-    keyword arguments differing only in the cwd parameter (worktree_path vs thread_dir).
-    A change to Worker construction (e.g. adding a new kwarg) requires updating both
-    sites independently. HOW — Extract an async helper _resolve_and_build_worker(thread,
-    cwd, worker_prompt, session_id, cfg, thread_mgr, resolved_backend, resolved_model)
-    that encapsulates steps 1-4 and returns a Worker. Both _create_worktree_and_process
-    and _create_repoless_process call it as their final statement, passing only their
-    divergent cwd value. Each function drops by ~10 lines. Complements item 079 which
-    merges the double save_metadata within each function but does not address the
-    cross-function duplication. Pure refactoring, no behavior change.'
+  title: Extract shared worker-construction tail from _create_worktree_and_process and _create_repoless_process
+  description: 'PURPOSE — Eliminate 20 duplicated lines of backend resolution, subagent instructions loading, and Worker instantiation
+    repeated verbatim between _create_worktree_and_process (spawner.py L245-264) and _create_repoless_process (L291-308).
+    Both functions share an identical 4-step tail after their divergent setup logic: (1) resolve_backend_option + update thread.backend/model
+    + save_metadata, (2) asyncio.to_thread(_read_subagent_instructions), (3) thread_mgr.get_events_log_path, (4) Worker(...)
+    construction with 7 identical keyword arguments differing only in the cwd parameter (worktree_path vs thread_dir). A change
+    to Worker construction (e.g. adding a new kwarg) requires updating both sites independently. HOW — Extract an async helper
+    _resolve_and_build_worker(thread, cwd, worker_prompt, session_id, cfg, thread_mgr, resolved_backend, resolved_model) that
+    encapsulates steps 1-4 and returns a Worker. Both _create_worktree_and_process and _create_repoless_process call it as
+    their final statement, passing only their divergent cwd value. Each function drops by ~10 lines. Complements item 079
+    which merges the double save_metadata within each function but does not address the cross-function duplication. Pure refactoring,
+    no behavior change.'
   category: duplication
   status: done
   created: '2026-04-01T18:00:00Z'
   priority: medium
 - id: 084
-  title: Extract shared CLI post_internal_api helper to deduplicate request/error
-    handling across 3 CLI scripts
-  description: 'PURPOSE — Eliminate duplicated HTTP request and error-handling boilerplate
-    across all three CLI scripts and fix an inconsistency where improve.py silently
-    discards server error details. delegate.py (L43-57), schedule_trigger.py (L36-54),
-    and improve.py (L49-57) each inline the same pattern: requests.post to an internal
-    API endpoint, raise_for_status, json-dump the response, and handle RequestException
-    with sys.exit(1). delegate.py and schedule_trigger.py correctly extract the server
-    error detail via e.response.json()["detail"] (8 identical lines each), but improve.py
-    (L55-56) only prints str(e) — losing the structured error detail that the /api/internal/improve
-    endpoint returns on 4xx/5xx responses. This means improve failures show a generic
-    "422 Client Error" instead of the actual validation message. HOW — Add a post_internal_api(endpoint,
-    payload) -> dict helper in a new src/cli/common.py module (or extend src/cli/__init__.py)
-    that encapsulates: (1) get_config() for server_base_url, (2) requests.post with
-    HTTP_INTERNAL_API_TIMEOUT and verify=False, (3) raise_for_status, (4) return resp.json().
-    Wrap the call in a try/except requests.RequestException that extracts e.response.json()["detail"]
-    when available, prints the JSON error to stderr, and calls sys.exit(1). Each CLI
-    script''s main() becomes: build payload dict, call post_internal_api, print result.
-    ~15 lines for the helper, each CLI script drops by ~8 lines. Fixes the improve.py
-    error-detail gap and ensures all future CLI scripts get consistent error handling
-    for free.'
+  title: Extract shared CLI post_internal_api helper to deduplicate request/error handling across 3 CLI scripts
+  description: 'PURPOSE — Eliminate duplicated HTTP request and error-handling boilerplate across all three CLI scripts and
+    fix an inconsistency where improve.py silently discards server error details. delegate.py (L43-57), schedule_trigger.py
+    (L36-54), and improve.py (L49-57) each inline the same pattern: requests.post to an internal API endpoint, raise_for_status,
+    json-dump the response, and handle RequestException with sys.exit(1). delegate.py and schedule_trigger.py correctly extract
+    the server error detail via e.response.json()["detail"] (8 identical lines each), but improve.py (L55-56) only prints
+    str(e) — losing the structured error detail that the /api/internal/improve endpoint returns on 4xx/5xx responses. This
+    means improve failures show a generic "422 Client Error" instead of the actual validation message. HOW — Add a post_internal_api(endpoint,
+    payload) -> dict helper in a new src/cli/common.py module (or extend src/cli/__init__.py) that encapsulates: (1) get_config()
+    for server_base_url, (2) requests.post with HTTP_INTERNAL_API_TIMEOUT and verify=False, (3) raise_for_status, (4) return
+    resp.json(). Wrap the call in a try/except requests.RequestException that extracts e.response.json()["detail"] when available,
+    prints the JSON error to stderr, and calls sys.exit(1). Each CLI script''s main() becomes: build payload dict, call post_internal_api,
+    print result. ~15 lines for the helper, each CLI script drops by ~8 lines. Fixes the improve.py error-detail gap and ensures
+    all future CLI scripts get consistent error handling for free.'
   category: duplication
   status: pending
   created: '2026-04-01T20:00:00Z'
   priority: low
 - id: 085
   title: Reuse a shared httpx.AsyncClient instead of creating one per HTTP call
-  description: PURPOSE — Eliminate per-call TCP connection pool and TLS handshake
-    overhead from 3 httpx.AsyncClient instantiations across 2 files, and prevent potential
-    resource leaks on exception paths. Currently ext_usage.py creates and destroys
-    an AsyncClient on every usage poll (CcOpusProvider.fetch at L57) and every token
-    refresh (_refresh_access_token at L218), and notifications.py creates one on every
-    Telegram notification (send_telegram at L32). The usage poller runs every 10 minutes,
-    so 2 connection pools are established and torn down per cycle. Each AsyncClient()
-    call negotiates a fresh TLS session to api.anthropic.com, console.anthropic.com,
-    or api.telegram.org — adding ~100-300ms of latency per call that connection reuse
-    would eliminate after the first request. Additionally, if an exception occurs
-    between client creation and the async-with exit, the client may not be properly
-    closed. HOW — Create a module-level shared httpx.AsyncClient instance in a new
-    src/core/http.py module with a get_http_client() accessor that lazily creates
-    the singleton and a close_http_client() coroutine for shutdown cleanup. Register
-    close_http_client in the FastAPI lifespan handler (server.py) alongside the existing
-    streaming_manager.shutdown(). Replace the 3 async-with httpx.AsyncClient() blocks
-    in ext_usage.py and notifications.py with client = get_http_client() (no context
-    manager needed since the lifecycle is managed at app level). Per-call timeout
-    overrides can be passed via httpx request options. ~10 lines for the module, 3
-    one-line changes at call sites, 1 line added to server.py lifespan. Connection
-    keepalive handles the rest automatically.
+  description: PURPOSE — Eliminate per-call TCP connection pool and TLS handshake overhead from 3 httpx.AsyncClient instantiations
+    across 2 files, and prevent potential resource leaks on exception paths. Currently ext_usage.py creates and destroys an
+    AsyncClient on every usage poll (CcOpusProvider.fetch at L57) and every token refresh (_refresh_access_token at L218),
+    and notifications.py creates one on every Telegram notification (send_telegram at L32). The usage poller runs every 10
+    minutes, so 2 connection pools are established and torn down per cycle. Each AsyncClient() call negotiates a fresh TLS
+    session to api.anthropic.com, console.anthropic.com, or api.telegram.org — adding ~100-300ms of latency per call that
+    connection reuse would eliminate after the first request. Additionally, if an exception occurs between client creation
+    and the async-with exit, the client may not be properly closed. HOW — Create a module-level shared httpx.AsyncClient instance
+    in a new src/core/http.py module with a get_http_client() accessor that lazily creates the singleton and a close_http_client()
+    coroutine for shutdown cleanup. Register close_http_client in the FastAPI lifespan handler (server.py) alongside the existing
+    streaming_manager.shutdown(). Replace the 3 async-with httpx.AsyncClient() blocks in ext_usage.py and notifications.py
+    with client = get_http_client() (no context manager needed since the lifecycle is managed at app level). Per-call timeout
+    overrides can be passed via httpx request options. ~10 lines for the module, 3 one-line changes at call sites, 1 line
+    added to server.py lifespan. Connection keepalive handles the rest automatically.
   category: performance
   status: done
   created: '2026-04-01T22:00:00Z'
   priority: medium
 - id: 086
   title: Enforce timezone-aware datetimes at the pydantic model level using AwareDatetime
-  description: 'PURPOSE — Eliminate 3 scattered runtime timezone-normalization guards
-    (sessions.py:206, sessions.py:244, improvement_loop.py:109) that check .tzinfo
-    is None and patch naive datetimes to UTC after deserialization. These guards are
-    easy to forget when adding new call sites and mask the real problem: the model
-    accepts naive datetimes on parse. A naive datetime reaching a comparison with
-    an aware one causes a TypeError crash — the guards exist only to prevent that.
-    HOW — Define a reusable UtcDatetime annotated type in core/models.py using Annotated[datetime,
-    BeforeValidator(ensure_utc)] where ensure_utc(v) calls v.replace(tzinfo=timezone.utc)
-    if v.tzinfo is None, preserving backward compatibility with existing on-disk JSON
-    that may contain naive ISO strings. Replace all 11 bare datetime annotations across
-    SessionMetadata (created_at, updated_at, thinking_since, cc_session_started_at),
-    ThreadMetadata (created_at, started_at, completed_at), PendingTrigger (fire_at,
-    created_at, fired_at), and WorkerEvent (timestamp) with UtcDatetime (or Optional[UtcDatetime]).
-    Delete the 3 runtime normalization blocks in sessions.py and improvement_loop.py.
-    ~5 lines for the type definition, 11 annotation changes, 3 deleted blocks. Pure
-    type-safety improvement, no behavior change for well-formed data.'
+  description: 'PURPOSE — Eliminate 3 scattered runtime timezone-normalization guards (sessions.py:206, sessions.py:244, improvement_loop.py:109)
+    that check .tzinfo is None and patch naive datetimes to UTC after deserialization. These guards are easy to forget when
+    adding new call sites and mask the real problem: the model accepts naive datetimes on parse. A naive datetime reaching
+    a comparison with an aware one causes a TypeError crash — the guards exist only to prevent that. HOW — Define a reusable
+    UtcDatetime annotated type in core/models.py using Annotated[datetime, BeforeValidator(ensure_utc)] where ensure_utc(v)
+    calls v.replace(tzinfo=timezone.utc) if v.tzinfo is None, preserving backward compatibility with existing on-disk JSON
+    that may contain naive ISO strings. Replace all 11 bare datetime annotations across SessionMetadata (created_at, updated_at,
+    thinking_since, cc_session_started_at), ThreadMetadata (created_at, started_at, completed_at), PendingTrigger (fire_at,
+    created_at, fired_at), and WorkerEvent (timestamp) with UtcDatetime (or Optional[UtcDatetime]). Delete the 3 runtime normalization
+    blocks in sessions.py and improvement_loop.py. ~5 lines for the type definition, 11 annotation changes, 3 deleted blocks.
+    Pure type-safety improvement, no behavior change for well-formed data.'
   category: correctness
   status: done
   created: '2026-04-01T23:00:00Z'
   priority: medium
 - id: 087
   title: 'Code health: fix formatting, unused imports, and dead code'
-  description: 'Re-confirmed by automated scan on 2026-04-09 (13th consecutive scan,
-    originally found 2026-04-01). All prior issues persist unchanged. (1) FORMATTING
-    — 4 files have yapf diffs: src/core/triggers.py (indentation in _fire_trigger),
-    src/core/spawner.py (string concat alignment in _build_worker_prompt), src/api/ext_usage.py
-    (dict formatting and long boolean expression in parse_rate_limit_usage), src/api/chat.py
-    (function call wrapping in send_message). Run `yapf -i` on these files. (2) UNUSED
-    IMPORTS — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT but never uses it
-    (hardcoded timeout=30.0 on L118 instead); src/api/pages.py:21 imports TriggerManager
-    but never uses it. Delete both import lines. (3) DEAD CODE — src/core/sessions.py:44
-    _summarize_event_lines() has zero callers; appears to be a leftover from the item
-    065 refactoring where rewind_session was later removed. Delete the function. (4)
-    TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
-    both say "TODO: re-enable when Claude Code version supports --effort". Resolve
-    or convert to a tracked issue once the --effort flag ships. (5) LONG FUNCTIONS
-    — 29 functions exceed 50 lines. Worst offenders: run_improve_loop() 141 lines
-    (src/core/improve_command.py:241), execute_command() 127 lines (src/api/slash.py:125),
-    run_message() 113 lines (src/agents/master_cc.py:356), _run_cc() 110 lines (src/agents/master_cc.py:181),
-    run() 107 lines (src/agents/backends/base.py:156). (6) MISSING TYPE IMPORTS —
-    src/core/improve_command.py uses ThreadManager and SessionManager as string annotations
-    (L145, L168, L247, L248) without any import, not even under TYPE_CHECKING. Add
-    from __future__ import annotations or a TYPE_CHECKING guard. Items 1-3 are quick
-    fixes; items 4-6 are tracked by other backlog items or require upstream changes.'
+  description: 'Re-confirmed by automated scan on 2026-04-11 (15th consecutive scan, originally found 2026-04-01). Prior dead-code
+    issue (_summarize_event_lines) has been resolved. Remaining issues: (1) FORMATTING — 7 files have yapf diffs: src/core/git.py
+    (function-call arg wrapping in git_merge_ff_only, git_push_branch, git_push_refspec, git_pull_ff_only), src/core/triggers.py
+    (indentation in _fire_trigger), src/core/spawner.py (string concat alignment in _build_worker_prompt and arg wrapping
+    in spawn_worker), src/api/ext_usage.py (dict formatting and long boolean expression in parse_rate_limit_usage), src/api/chat.py
+    (function call wrapping in send_message), src/cli/improve.py (argparse call wrapping), src/api/internal.py (long detail
+    string in start_improve_loop). Run `yapf -i` on these files. (2) UNUSED IMPORTS — src/core/autonamer.py:17 imports AUTONAMER_TIMEOUT
+    but never uses it (hardcoded timeout=30.0 on L118 instead); src/api/pages.py:21 imports TriggerManager but never uses
+    it. Delete both import lines. (3) TODO COMMENTS — src/core/autonamer.py:105 and src/agents/backends/claude_code.py:32
+    both say "TODO: re-enable when Claude Code version supports --effort". Resolve or convert to a tracked issue once the
+    --effort flag ships. (4) LONG FUNCTIONS — 34 functions exceed 50 lines. Worst offenders: run_improve_loop() 199 lines
+    (src/core/improve_command.py:311), execute_command() 127 lines (src/api/slash.py:125), run_message() 114 lines (src/agents/master_cc.py:360),
+    _run_cc() 110 lines (src/agents/master_cc.py:181), run() 107 lines (src/agents/backends/base.py:156), _create_worktree_and_process()
+    120 lines (src/core/spawner.py:219). (5) MISSING TYPE IMPORTS — src/core/improve_command.py uses ThreadManager and SessionManager
+    as string annotations (L155, L178, L317, L318) without any import, not even under TYPE_CHECKING. Add from __future__ import
+    annotations or a TYPE_CHECKING guard. Items 1-2 are quick fixes; items 3-5 are tracked by other backlog items or require
+    upstream changes.'
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-09T12:00:00Z'
+  updated: '2026-04-11T12:00:00Z'
   priority: low
 - id: 088
-  title: Consolidate build_session_view_data and build_session_view_data_fast into
-    single function
-  description: 'PURPOSE — Eliminate 25 lines of duplicated session-view loading pipeline
-    between build_session_view_data() and build_session_view_data_fast() in api/message_utils.py,
-    reducing the risk of divergence when the load-events, events_to_messages, resolve_usage,
-    or mark_read steps change. Both functions (L109-127 and L140-171) follow the same
-    5-step pipeline: (1) launch parallel tasks for events, threads, and session metadata
-    via asyncio.gather, (2) validate session_meta is not None, (3) convert events
-    to messages via events_to_messages, (4) resolve usage via session_mgr.resolve_session_usage,
-    (5) mark_read with try/except. They differ only in the event-loading call (load_chat_events_sync
-    vs load_chat_events_tail) and the presence of total_event_count/has_more/event_index_offset
-    in the fast path. This means any change to the pipeline (e.g. adding a new parallel
-    task, changing error handling, adjusting mark_read behavior) must be applied to
-    both functions independently — a maintenance trap that has already produced a
-    subtle inconsistency: the fast path computes event_index_offset but the full path
-    does not, despite events_to_messages accepting the parameter in both cases. HOW
-    — Replace both functions and both dataclasses with a single async def build_session_view_data(session_id,
-    session_mgr, thread_mgr, *, tail_limit: int | None = None) -> SessionViewData.
-    When tail_limit is None, load all events via load_chat_events_sync (current full
-    behavior). When tail_limit is set, use load_chat_events_tail and include total_event_count
-    and has_more in the result. Unify SessionViewData and FastSessionViewData into
-    a single SessionViewData dataclass with optional total_event_count: int | None
-    = None and has_more: bool = False fields. Update the 2 callers: api/pages.py:166
-    calls build_session_view_data(session, ...) unchanged; api/sessions.py:252 calls
-    build_session_view_data(session_id, ..., tail_limit=200). Delete the FastSessionViewData
-    import from api/sessions.py. Net removal of ~25 lines, 2 dataclasses merged to
-    1, 2 functions merged to 1. Pure refactoring, no behavior change.'
+  title: Consolidate build_session_view_data and build_session_view_data_fast into single function
+  description: 'PURPOSE — Eliminate 25 lines of duplicated session-view loading pipeline between build_session_view_data()
+    and build_session_view_data_fast() in api/message_utils.py, reducing the risk of divergence when the load-events, events_to_messages,
+    resolve_usage, or mark_read steps change. Both functions (L109-127 and L140-171) follow the same 5-step pipeline: (1)
+    launch parallel tasks for events, threads, and session metadata via asyncio.gather, (2) validate session_meta is not None,
+    (3) convert events to messages via events_to_messages, (4) resolve usage via session_mgr.resolve_session_usage, (5) mark_read
+    with try/except. They differ only in the event-loading call (load_chat_events_sync vs load_chat_events_tail) and the presence
+    of total_event_count/has_more/event_index_offset in the fast path. This means any change to the pipeline (e.g. adding
+    a new parallel task, changing error handling, adjusting mark_read behavior) must be applied to both functions independently
+    — a maintenance trap that has already produced a subtle inconsistency: the fast path computes event_index_offset but the
+    full path does not, despite events_to_messages accepting the parameter in both cases. HOW — Replace both functions and
+    both dataclasses with a single async def build_session_view_data(session_id, session_mgr, thread_mgr, *, tail_limit: int
+    | None = None) -> SessionViewData. When tail_limit is None, load all events via load_chat_events_sync (current full behavior).
+    When tail_limit is set, use load_chat_events_tail and include total_event_count and has_more in the result. Unify SessionViewData
+    and FastSessionViewData into a single SessionViewData dataclass with optional total_event_count: int | None = None and
+    has_more: bool = False fields. Update the 2 callers: api/pages.py:166 calls build_session_view_data(session, ...) unchanged;
+    api/sessions.py:252 calls build_session_view_data(session_id, ..., tail_limit=200). Delete the FastSessionViewData import
+    from api/sessions.py. Net removal of ~25 lines, 2 dataclasses merged to 1, 2 functions merged to 1. Pure refactoring,
+    no behavior change.'
   category: duplication
   status: done
   created: '2026-04-05T05:16:31Z'
   priority: medium
 - id: 089
   title: Fix event-loss window in thread_websocket by subscribing before catchup
-  description: 'PURPOSE — Prevent live worker events from being silently dropped during
-    the thread WebSocket connection setup. server.py thread_websocket (L172-224) subscribes
-    to the StreamingManager AFTER sending catchup events (subscribe at L209, catchup
-    at L186-199). Any events broadcast by the worker between the catchup file read
-    and the subscribe call are lost — the client never receives them and has no way
-    to detect the gap. This is the exact bug that was already fixed in the session
-    WebSocket endpoint (L106-164), which deliberately subscribes BEFORE catchup (L128)
-    with an explanatory comment: "Subscribe BEFORE catchup so no events are lost between
-    catchup and subscribe." The thread WS handles live worker output where events
-    arrive at high frequency during active work, making the race window more likely
-    to trigger than in the session WS case. HOW — Move the streaming_manager.subscribe(thread_id,
-    websocket) call (L209) to immediately after websocket.accept() (after L181), before
-    the catchup file read. Move the corresponding unsubscribe into a finally block
-    wrapping the entire catchup + keepalive sequence. This matches the session WS
-    pattern exactly. The client already handles potential duplicates (events that
-    arrive via both catchup and live subscription) since send_text is idempotent for
-    display purposes. ~5 lines moved, no new code. Fixes a latent event-loss bug for
-    every thread WS connection.'
+  description: 'PURPOSE — Prevent live worker events from being silently dropped during the thread WebSocket connection setup.
+    server.py thread_websocket (L172-224) subscribes to the StreamingManager AFTER sending catchup events (subscribe at L209,
+    catchup at L186-199). Any events broadcast by the worker between the catchup file read and the subscribe call are lost
+    — the client never receives them and has no way to detect the gap. This is the exact bug that was already fixed in the
+    session WebSocket endpoint (L106-164), which deliberately subscribes BEFORE catchup (L128) with an explanatory comment:
+    "Subscribe BEFORE catchup so no events are lost between catchup and subscribe." The thread WS handles live worker output
+    where events arrive at high frequency during active work, making the race window more likely to trigger than in the session
+    WS case. HOW — Move the streaming_manager.subscribe(thread_id, websocket) call (L209) to immediately after websocket.accept()
+    (after L181), before the catchup file read. Move the corresponding unsubscribe into a finally block wrapping the entire
+    catchup + keepalive sequence. This matches the session WS pattern exactly. The client already handles potential duplicates
+    (events that arrive via both catchup and live subscription) since send_text is idempotent for display purposes. ~5 lines
+    moved, no new code. Fixes a latent event-loss bug for every thread WS connection.'
   category: correctness
   status: done
   created: '2026-04-05T14:00:00Z'
   priority: high
 - id: 090
   title: Parallelize content-scan file reads in search_sessions
-  description: PURPOSE — Reduce session search latency by reading chat event files
-    concurrently instead of sequentially. search_sessions (core/sessions.py L242-250)
-    checks non-name-matched sessions by reading their chat_events.jsonl files one
-    at a time in a sequential for-loop — each await asyncio.to_thread(events_path.read_text)
-    blocks until the previous completes. For N sessions that do not match by name,
-    this means N serial file reads, each waiting on the thread pool. With 50+ sessions,
-    search latency scales linearly with session count. The metadata reads on L233
-    were already parallelized with asyncio.gather (item 040), but the content-scan
-    reads that immediately follow were not, leaving the dominant I/O cost sequential.
-    HOW — Collect the (meta, events_path) pairs for sessions that did not match by
-    name into a list. Define an async helper _check_content(meta, path, query_lower)
-    that wraps the existing read_text + case-insensitive check in asyncio.to_thread
-    and returns Optional[SessionMetadata]. Use asyncio.gather to run all content checks
-    concurrently, then extend results with the non-None returns. Also wrap the bare
-    events_path.exists() call (L244, currently sync on the event loop) into the helper
-    so it runs off the event loop too. ~10 lines changed, replacing the sequential
-    for-loop with a gather call and a small async helper. Expected to cut search latency
-    from O(N) serial reads to O(1) parallel reads (bounded by thread pool size). Follows
-    the established pattern from item 040 which parallelized the metadata reads in
-    the same function.
+  description: PURPOSE — Reduce session search latency by reading chat event files concurrently instead of sequentially. search_sessions
+    (core/sessions.py L242-250) checks non-name-matched sessions by reading their chat_events.jsonl files one at a time in
+    a sequential for-loop — each await asyncio.to_thread(events_path.read_text) blocks until the previous completes. For N
+    sessions that do not match by name, this means N serial file reads, each waiting on the thread pool. With 50+ sessions,
+    search latency scales linearly with session count. The metadata reads on L233 were already parallelized with asyncio.gather
+    (item 040), but the content-scan reads that immediately follow were not, leaving the dominant I/O cost sequential. HOW
+    — Collect the (meta, events_path) pairs for sessions that did not match by name into a list. Define an async helper _check_content(meta,
+    path, query_lower) that wraps the existing read_text + case-insensitive check in asyncio.to_thread and returns Optional[SessionMetadata].
+    Use asyncio.gather to run all content checks concurrently, then extend results with the non-None returns. Also wrap the
+    bare events_path.exists() call (L244, currently sync on the event loop) into the helper so it runs off the event loop
+    too. ~10 lines changed, replacing the sequential for-loop with a gather call and a small async helper. Expected to cut
+    search latency from O(N) serial reads to O(1) parallel reads (bounded by thread pool size). Follows the established pattern
+    from item 040 which parallelized the metadata reads in the same function.
   category: performance
   status: done
   created: '2026-04-07T12:00:00Z'
   priority: medium
 - id: 091
   title: Extract Codex usage resolution from SessionManager into core/codex_usage.py
-  description: PURPOSE — Reduce sessions.py (1010 lines, largest core module) by ~130
-    lines and improve separation of concerns by moving all Codex-specific usage resolution
-    logic out of SessionManager into a dedicated module. SessionManager's primary
-    responsibility is session CRUD, metadata persistence, and event storage, but it
-    has accumulated 8 Codex-specific functions that form a self-contained subsystem
-    for resolving context-window usage from native Codex rollout logs. These are module-level
-    _extract_codex_rollout_usage_event (L66), _extract_latest_codex_rollout_usage
-    (L88, 42-line seek-from-end parser), and 6 private methods on SessionManager —
-    _is_codex_backend (L736), _extract_translated_session_id (L744), _read_translated_session_id
-    (L752), _resolve_codex_thread_id (L778), _find_codex_rollout_path (L792), _load_codex_rollout_usage
-    (L809) — plus 2 dedicated caches (_codex_rollout_path_cache, _codex_rollout_usage_cache).
-    This Codex-specific code was added incrementally as the Codex backend matured
-    and now represents a cohesive subsystem that is orthogonal to core session management.
-    HOW — Create src/core/codex_usage.py containing a CodexUsageResolver class that
-    encapsulates all 8 functions and the 2 caches. The class constructor takes CharlieBotConfig
-    (for get_backend_option) and a reference to SessionManager._events_cache and _chat_events_path
-    (or a protocol/callback for accessing cached events). Move _extract_codex_rollout_usage_event
-    and _extract_latest_codex_rollout_usage as module-level functions in the new file.
-    SessionManager.resolve_session_usage delegates the Codex branch to codex_resolver.resolve(session_id,
-    session_meta, events) which returns the merged usage dict or None. SessionManager.__init__
-    creates the resolver instance. ~130 lines moved out of sessions.py, ~5 lines of
-    glue added. Pure extraction refactoring, no logic changes. Also deletes dead _summarize_event_lines
-    function (L44, zero callers) during the move.
+  description: PURPOSE — Reduce sessions.py (1010 lines, largest core module) by ~130 lines and improve separation of concerns
+    by moving all Codex-specific usage resolution logic out of SessionManager into a dedicated module. SessionManager's primary
+    responsibility is session CRUD, metadata persistence, and event storage, but it has accumulated 8 Codex-specific functions
+    that form a self-contained subsystem for resolving context-window usage from native Codex rollout logs. These are module-level
+    _extract_codex_rollout_usage_event (L66), _extract_latest_codex_rollout_usage (L88, 42-line seek-from-end parser), and
+    6 private methods on SessionManager — _is_codex_backend (L736), _extract_translated_session_id (L744), _read_translated_session_id
+    (L752), _resolve_codex_thread_id (L778), _find_codex_rollout_path (L792), _load_codex_rollout_usage (L809) — plus 2 dedicated
+    caches (_codex_rollout_path_cache, _codex_rollout_usage_cache). This Codex-specific code was added incrementally as the
+    Codex backend matured and now represents a cohesive subsystem that is orthogonal to core session management. HOW — Create
+    src/core/codex_usage.py containing a CodexUsageResolver class that encapsulates all 8 functions and the 2 caches. The
+    class constructor takes CharlieBotConfig (for get_backend_option) and a reference to SessionManager._events_cache and
+    _chat_events_path (or a protocol/callback for accessing cached events). Move _extract_codex_rollout_usage_event and _extract_latest_codex_rollout_usage
+    as module-level functions in the new file. SessionManager.resolve_session_usage delegates the Codex branch to codex_resolver.resolve(session_id,
+    session_meta, events) which returns the merged usage dict or None. SessionManager.__init__ creates the resolver instance.
+    ~130 lines moved out of sessions.py, ~5 lines of glue added. Pure extraction refactoring, no logic changes. Also deletes
+    dead _summarize_event_lines function (L44, zero callers) during the move.
   category: architecture
   status: done
   in_progress_at: '2026-04-10T12:00:00Z'
@@ -1582,46 +1250,51 @@
   priority: medium
 - id: 092
   title: Fix stale detection in _handle_stale to use in_progress_at instead of created
-  description: PURPOSE — Prevent false stale-outs in the improvement loop. _handle_stale
-    (core/improvement_loop.py L90-124) compares datetime.now() against the item's
-    `created` field to decide whether an in_progress item has exceeded stale_timeout_hours
-    (default 1 hour). But `created` is the timestamp when the backlog item was first
-    generated, which can be weeks or months before the item is approved and set to
-    in_progress. Any item whose creation date is older than 1 hour will be immediately
-    marked as failed on the very next scheduler tick after a worker sets it to in_progress.
-    This renders the stale-detection safety net useless for all but brand-new items.
-    HOW — Add an `in_progress_at` field to backlog items. In _build_implement_prompt,
-    instruct the worker to set `in_progress_at` (ISO 8601) alongside setting status
-    to in_progress. In _handle_stale, read `in_progress_at` instead of `created` for
-    the elapsed-time comparison, falling back to `created` only if `in_progress_at`
-    is absent (backwards compatibility). ~10 lines changed across improvement_loop.py.
-    No schema migration needed since backlog items are free-form YAML dicts.
+  description: PURPOSE — Prevent false stale-outs in the improvement loop. _handle_stale (core/improvement_loop.py L90-124)
+    compares datetime.now() against the item's `created` field to decide whether an in_progress item has exceeded stale_timeout_hours
+    (default 1 hour). But `created` is the timestamp when the backlog item was first generated, which can be weeks or months
+    before the item is approved and set to in_progress. Any item whose creation date is older than 1 hour will be immediately
+    marked as failed on the very next scheduler tick after a worker sets it to in_progress. This renders the stale-detection
+    safety net useless for all but brand-new items. HOW — Add an `in_progress_at` field to backlog items. In _build_implement_prompt,
+    instruct the worker to set `in_progress_at` (ISO 8601) alongside setting status to in_progress. In _handle_stale, read
+    `in_progress_at` instead of `created` for the elapsed-time comparison, falling back to `created` only if `in_progress_at`
+    is absent (backwards compatibility). ~10 lines changed across improvement_loop.py. No schema migration needed since backlog
+    items are free-form YAML dicts.
   category: correctness
   status: done
   created: '2026-04-08T12:00:00Z'
   priority: high
 - id: 093
   title: Extract master-agent triggering subsystem from spawner.py into core/master_trigger.py
-  description: 'PURPOSE — Reduce spawner.py (831 lines, 2nd-largest module) by ~120
-    lines, eliminate 3 cross-module deferred imports of private symbols, and partially
-    break the circular import between review.py and spawner.py. Three private functions
-    in spawner.py — _trigger_master (L626-671, 46 lines), _run_message_with_resume_recovery
-    (L562-623, 62 lines), and _is_resume_not_found_error (L673-681, 9 lines) — form
-    a cohesive "wake the master agent" subsystem that is conceptually distinct from
-    worker spawning. These functions are imported via deferred imports by 3 external
-    modules: review.py (L318), improve_command.py (L261), and triggers.py (L114) —
-    all using the anti-pattern of importing underscore-prefixed private symbols across
-    module boundaries. Internally, only _notify_completion calls _trigger_master.
-    HOW — Create src/core/master_trigger.py containing trigger_master (drop underscore),
-    run_message_with_resume_recovery, and is_resume_not_found_error. The module imports
-    run_message from master_cc.py and SessionManager from sessions.py — no new circular
-    deps. Update spawner.py _notify_completion to import from core.master_trigger.
-    Replace 3 deferred private imports in review.py, improve_command.py, and triggers.py
-    with direct top-level imports of the now-public symbols. ~120 lines moved out
-    of spawner.py, 4 import statements simplified. Pure move refactoring, no logic
-    changes. Follows the pattern from items 047 (core/git.py), 060 (core/process.py),
-    and 071 (core/review.py) which carved out cohesive sub-modules from spawner.py.'
+  description: 'PURPOSE — Reduce spawner.py (831 lines, 2nd-largest module) by ~120 lines, eliminate 3 cross-module deferred
+    imports of private symbols, and partially break the circular import between review.py and spawner.py. Three private functions
+    in spawner.py — _trigger_master (L626-671, 46 lines), _run_message_with_resume_recovery (L562-623, 62 lines), and _is_resume_not_found_error
+    (L673-681, 9 lines) — form a cohesive "wake the master agent" subsystem that is conceptually distinct from worker spawning.
+    These functions are imported via deferred imports by 3 external modules: review.py (L318), improve_command.py (L261),
+    and triggers.py (L114) — all using the anti-pattern of importing underscore-prefixed private symbols across module boundaries.
+    Internally, only _notify_completion calls _trigger_master. HOW — Create src/core/master_trigger.py containing trigger_master
+    (drop underscore), run_message_with_resume_recovery, and is_resume_not_found_error. The module imports run_message from
+    master_cc.py and SessionManager from sessions.py — no new circular deps. Update spawner.py _notify_completion to import
+    from core.master_trigger. Replace 3 deferred private imports in review.py, improve_command.py, and triggers.py with direct
+    top-level imports of the now-public symbols. ~120 lines moved out of spawner.py, 4 import statements simplified. Pure
+    move refactoring, no logic changes. Follows the pattern from items 047 (core/git.py), 060 (core/process.py), and 071 (core/review.py)
+    which carved out cohesive sub-modules from spawner.py.'
   category: architecture
   status: pending
   created: '2026-04-09T12:00:00Z'
   priority: medium
+- id: 094
+  title: Extract _run_git_cmd helper to deduplicate git.py subprocess boilerplate
+  description: 'PURPOSE — Eliminate ~40 lines of identical subprocess boilerplate across 4 functions in core/git.py, making
+    the module easier to maintain and extend. git_merge_ff_only (L119-134), git_push_branch (L137-152), git_push_refspec (L155-170),
+    and git_pull_ff_only (L173-188) all repeat the exact same 15-line pattern: create_subprocess_exec → wait_for with timeout
+    → kill on TimeoutError and return (False, msg) → check returncode and return (False, stderr) → return (True, ''''). The
+    only differences are the git arguments and the timeout error message string. HOW — Add a private async helper _run_git_cmd(repo_path:
+    Path, *args: str, timeout: int, timeout_label: str) -> tuple[bool, str] that encapsulates the shared pattern. Rewrite
+    the 4 functions as thin one-liners calling the helper. git_current_branch, git_create_worktree, git_worktree_remove, and
+    git_worktree_prune have different return types or error handling, so they stay as-is. Net reduction: ~40 lines. Pure refactoring,
+    no behavior changes.'
+  category: architecture
+  status: pending
+  created: '2026-04-11T12:00:00Z'
+  priority: low

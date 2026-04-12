@@ -13,6 +13,7 @@ from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.git import git_current_branch
+from src.core.master_trigger import trigger_master
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
@@ -315,7 +316,7 @@ async def maybe_spawn_reviewer(
     cfg: CharlieBotConfig,
 ) -> None:
   """Handle review spawning logic and trigger master when appropriate."""
-  from src.core.spawner import _read_events_summary, _trigger_master
+  from src.core.spawner import _read_events_summary
 
   # Re-read thread metadata to get review_of field
   thread_meta = await thread_mgr.get_thread(session_id, thread.id)
@@ -323,7 +324,7 @@ async def maybe_spawn_reviewer(
   if exit_code == 0 and not thread_meta.review_of:
     if not thread_meta.require_review:
       # No review needed — trigger master directly
-      await _trigger_master(session_id, full_summary, cfg, session_mgr)
+      await trigger_master(session_id, full_summary, cfg, session_mgr)
       return
     # Successful worker needing review -> spawn reviewer
     await spawn_review_worker(session_id, thread_meta, cfg, session_mgr, thread_mgr)
@@ -367,8 +368,8 @@ async def maybe_spawn_reviewer(
     # Review done (success or retries exhausted) -> combine summaries, trigger master.
     original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
-    await _trigger_master(session_id, combined, cfg, session_mgr)
+    await trigger_master(session_id, combined, cfg, session_mgr)
     return
 
   # Failed/cancelled worker -> trigger master immediately
-  await _trigger_master(session_id, full_summary, cfg, session_mgr)
+  await trigger_master(session_id, full_summary, cfg, session_mgr)

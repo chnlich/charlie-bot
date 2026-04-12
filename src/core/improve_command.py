@@ -23,6 +23,7 @@ from src.core.git import (
     git_worktree_prune,
     git_worktree_remove,
 )
+from src.core.master_trigger import trigger_master
 from src.core.models import ThreadStatus
 from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
@@ -330,7 +331,7 @@ async def run_improve_loop(
   then triggers the master CC with the combined summary.
   """
   from src.core.ndjson import parse_ndjson_file
-  from src.core.spawner import _trigger_master, spawn_worker
+  from src.core.spawner import spawn_worker
 
   previous_summaries: list[str] = []
   meta = None  # session metadata; assigned each iteration but needed after the inner loop
@@ -361,7 +362,7 @@ async def run_improve_loop(
     failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
     failure_payload['error'] = f"Failed to create worktree: {e}"
     await session_mgr.persist_and_broadcast(session_id, failure_payload)
-    await _trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
+    await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     return
 
   try:
@@ -450,7 +451,7 @@ async def run_improve_loop(
             'summary': summary[:200],
             'work_branch': work_branch,
         }
-        asyncio.create_task(_trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr))
+        asyncio.create_task(trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr))
 
         break  # Move to next iteration
 

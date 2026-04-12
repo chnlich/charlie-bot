@@ -24,7 +24,7 @@ from src.core.git import (
     git_worktree_remove,
 )
 from src.core.master_trigger import trigger_master
-from src.core.models import ThreadStatus
+from src.core.models import SpawnRequest, ThreadStatus
 from src.core.tasks import create_logged_task
 from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
@@ -361,17 +361,19 @@ async def _run_single_iteration(
         cfg,
         session_mgr,
         thread_mgr,
-        repo_path=repo_path,
-        resolved_backend=resolved_backend,
-        resolved_model=resolved_model,
-        base_branch=base_branch,
-        branch_name_override=work_branch,
-        worktree_path_override=str(wt_path),
-        skip_cleanup=True,
-        skip_notify=True,
-        improve_dir=str(improve_dir),
-        iteration_number=i,
-        is_continuation=(i > 1),
+        request=SpawnRequest(
+            repo_path=repo_path,
+            resolved_backend=resolved_backend,
+            resolved_model=resolved_model,
+            base_branch=base_branch,
+            branch_name_override=work_branch,
+            worktree_path_override=str(wt_path),
+            skip_cleanup=True,
+            skip_notify=True,
+            improve_dir=str(improve_dir),
+            iteration_number=i,
+            is_continuation=(i > 1),
+        ),
     )
 
     # Check for quota failure

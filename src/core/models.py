@@ -1,6 +1,7 @@
 """All Pydantic models for CharlieBot."""
 
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Literal, Optional
@@ -257,3 +258,27 @@ class ScheduleTriggerRequest(BaseModel):
   session_id: str
   delay_seconds: int
   message: str
+
+
+# ---------------------------------------------------------------------------
+# Spawn Request (internal DTO for spawn_worker)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SpawnRequest:
+  """Worker configuration parameters that travel as a unit through spawn_worker."""
+  repo_path: Optional[str] = None
+  context: Optional[str] = None
+  prompt_override: Optional[str] = None
+  resolved_backend: str = ""
+  resolved_model: str = ""
+  base_branch: Optional[str] = None
+  branch_name_override: Optional[str] = None
+  improve_dir: Optional[str] = None
+  iteration_number: Optional[int] = None
+  require_takeoff: bool = False
+  worktree_path_override: Optional[str] = None
+  skip_cleanup: bool = False
+  skip_notify: bool = False
+  is_continuation: bool = False

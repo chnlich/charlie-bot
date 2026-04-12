@@ -14,7 +14,7 @@ from src.core import event_types as ET
 from src.core.backup import BACKUP_DIR, apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.improvement_loop import determine_action
-from src.core.models import CreateSessionRequest, SessionMetadata
+from src.core.models import CreateSessionRequest, SessionMetadata, SpawnRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
@@ -274,9 +274,11 @@ class Scheduler:
             cfg=cfg,
             session_mgr=session_mgr,
             thread_mgr=thread_mgr,
-            repo_path=task_cfg.repo,
-            resolved_backend=resolved_backend,
-            resolved_model=resolved_model,
+            request=SpawnRequest(
+                repo_path=task_cfg.repo,
+                resolved_backend=resolved_backend,
+                resolved_model=resolved_model,
+            ),
         ),
         name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
     )

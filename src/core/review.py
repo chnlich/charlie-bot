@@ -8,7 +8,7 @@ import structlog
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, ThreadMetadata
+from src.core.models import BackendOption, SpawnRequest, ThreadMetadata
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -297,10 +297,12 @@ async def spawn_review_worker(
           cfg,
           session_mgr,
           thread_mgr,
-          repo_path=str(repo_path),
-          prompt_override=review_prompt,
-          resolved_backend=resolved_backend,
-          resolved_model=resolved_model,
+          request=SpawnRequest(
+              repo_path=str(repo_path),
+              prompt_override=review_prompt,
+              resolved_backend=resolved_backend,
+              resolved_model=resolved_model,
+          ),
       ))
   return True
 

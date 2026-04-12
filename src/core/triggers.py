@@ -9,6 +9,7 @@ import structlog
 
 from src.api.message_utils import build_user_event
 from src.core.config import CharlieBotConfig
+from src.core.master_trigger import trigger_master
 from src.core.models import PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
@@ -111,12 +112,11 @@ class TriggerManager:
     )
 
     # Wake the master CC
-    from src.core.spawner import _trigger_master
-    await _trigger_master(
-      fresh.session_id,
-      trigger_message,
-      self._cfg,
-      self._session_mgr,
+    await trigger_master(
+        fresh.session_id,
+        trigger_message,
+        self._cfg,
+        self._session_mgr,
     )
 
     fresh.status = TriggerStatus.FIRED

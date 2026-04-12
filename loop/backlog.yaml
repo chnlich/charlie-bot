@@ -1678,7 +1678,7 @@
     bug fix. Follows the pattern from items 003, 021, 058, 061, 062, and 063 which
     split other long functions by extracting phase helpers.'
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-04-11T14:00:00Z'
   priority: medium
 - id: 096

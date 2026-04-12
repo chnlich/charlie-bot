@@ -16,11 +16,11 @@ Read and search Gmail messages using the Gmail API with a user refresh token. Re
 
 - Credentials location: `~/.charliebot/config.yaml`
 - Keys:
-  - `gmail_client_id`
-  - `gmail_client_secret`
-  - `gmail_refresh_token`
+  - `google_client_id`
+  - `google_client_secret`
+  - `google_refresh_token`
 - Auth model: OAuth2 user token flow using a long-lived refresh token
-- Store only `gmail_refresh_token` in config. Access tokens are minted at runtime and discarded after use.
+- Store only `google_refresh_token` in config. Access tokens are minted at runtime and discarded after use.
 
 ## API Reference
 
@@ -33,17 +33,17 @@ All Gmail API requests use:
 ### Refresh an Access Token
 
 ```bash
-read GMAIL_CLIENT_ID GMAIL_CLIENT_SECRET GMAIL_REFRESH_TOKEN < <(python3 -c "
+read GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REFRESH_TOKEN < <(python3 -c "
 import yaml
 c = yaml.safe_load(open('$HOME/.charliebot/config.yaml'))
-print(c['gmail_client_id'], c['gmail_client_secret'], c['gmail_refresh_token'])
+print(c['google_client_id'], c['google_client_secret'], c['google_refresh_token'])
 ")
 
 ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "client_id=$GMAIL_CLIENT_ID" \
-  --data-urlencode "client_secret=$GMAIL_CLIENT_SECRET" \
-  --data-urlencode "refresh_token=$GMAIL_REFRESH_TOKEN" \
+  --data-urlencode "client_id=$GOOGLE_CLIENT_ID" \
+  --data-urlencode "client_secret=$GOOGLE_CLIENT_SECRET" \
+  --data-urlencode "refresh_token=$GOOGLE_REFRESH_TOKEN" \
   --data-urlencode "grant_type=refresh_token" | jq -r '.access_token')
 ```
 
@@ -88,6 +88,41 @@ Returns all messages in the thread.
 curl -s "https://gmail.googleapis.com/gmail/v1/users/me/labels" \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
+
+## Bootstrap / Re-Authorization
+
+All Google integrations (Gmail, Docs, Sheets, Drive, Calendar) share a single OAuth client and refresh token stored under the unified `google_*` config keys.
+
+One-time setup to obtain a refresh token for the desktop-app OAuth flow:
+
+1. In Google Cloud Console, enable the APIs you need (Gmail, Docs, Sheets, Drive, Calendar).
+2. Create an OAuth client of type **Desktop app**.
+3. Open the consent URL with all scopes and offline access. Use `redirect_uri=http://localhost` (not `http://127.0.0.1:PORT`):
+
+```text
+response_type=code
+client_id=CLIENT_ID
+redirect_uri=http://localhost
+scope=https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar
+access_type=offline
+prompt=consent
+```
+
+4. Authorize once, capture the `code` from the redirect, and exchange it for tokens:
+
+```bash
+curl -s -X POST https://oauth2.googleapis.com/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "client_id=CLIENT_ID" \
+  --data-urlencode "client_secret=CLIENT_SECRET" \
+  --data-urlencode "code=AUTH_CODE" \
+  --data-urlencode "grant_type=authorization_code" \
+  --data-urlencode "redirect_uri=http://localhost"
+```
+
+5. Save the returned `refresh_token` to `google_refresh_token` in `~/.charliebot/config.yaml`.
+
+**Note:** If the GCP project is in Testing mode, the refresh token expires in ~7 days. Publish the OAuth consent screen to Production for non-expiring tokens.
 
 ## Workflow
 

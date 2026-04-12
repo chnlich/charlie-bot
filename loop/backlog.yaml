@@ -1707,7 +1707,7 @@
     item 021 (which splits spawn_worker body into phases) by simplifying the interface
     those phases share.'
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-04-12T14:00:00Z'
   priority: medium
 - id: 097

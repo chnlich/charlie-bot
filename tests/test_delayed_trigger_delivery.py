@@ -29,7 +29,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
 
   with (
       patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
-      patch("src.core.spawner._trigger_master", new=AsyncMock()) as mock_trigger_master,
+      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_trigger_master,
   ):
     await trigger_mgr._wait_and_fire(trigger)
 

@@ -411,7 +411,7 @@ async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.Monkey
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
 
   monkeypatch.setattr(review, "spawn_review_worker", fake_spawn_review)
-  monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
+  monkeypatch.setattr(review, "trigger_master", fake_trigger)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await review.maybe_spawn_reviewer(
@@ -449,7 +449,7 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
 
   monkeypatch.setattr(review, "spawn_review_worker", fake_spawn_review)
-  monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
+  monkeypatch.setattr(review, "trigger_master", fake_trigger)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await review.maybe_spawn_reviewer(
@@ -487,7 +487,7 @@ async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.Monk
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
 
   monkeypatch.setattr(review, "spawn_review_worker", fake_spawn_review)
-  monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
+  monkeypatch.setattr(review, "trigger_master", fake_trigger)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await review.maybe_spawn_reviewer(
@@ -535,7 +535,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
 
   monkeypatch.setattr(review, "spawn_review_worker", fake_spawn_review)
-  monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
+  monkeypatch.setattr(review, "trigger_master", fake_trigger)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await review.maybe_spawn_reviewer(
@@ -582,7 +582,7 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
 
   monkeypatch.setattr(review, "spawn_review_worker", fake_spawn_review)
-  monkeypatch.setattr(spawner, "_trigger_master", fake_trigger)
+  monkeypatch.setattr(review, "trigger_master", fake_trigger)
   monkeypatch.setattr(spawner, "_read_events_summary", _fake_read_events_summary)
 
   await review.maybe_spawn_reviewer(

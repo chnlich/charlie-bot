@@ -10,9 +10,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config import CharlieBotConfig
+from src.core.master_trigger import trigger_master
 from src.core.models import BackendOption
 from src.core.models import SessionMetadata
-from src.core.spawner import _trigger_master
 
 
 def _build_cfg() -> CharlieBotConfig:
@@ -82,10 +82,10 @@ async def test_stale_resume_id_retries_once_without_resume_and_persists_new_id(m
     return "fresh-id"
 
   mock_log = Mock()
-  monkeypatch.setattr("src.core.spawner.run_message", fake_run_message)
-  monkeypatch.setattr("src.core.spawner.log", mock_log)
+  monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
+  monkeypatch.setattr("src.core.master_trigger.log", mock_log)
 
-  await _trigger_master(session_id, "worker summary", cfg, session_mgr)
+  await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
   assert call_resume_ids == ["stale-id", None]
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3", "codex-o3"]
@@ -118,10 +118,10 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
     raise RuntimeError("backend crashed unexpectedly")
 
   mock_log = Mock()
-  monkeypatch.setattr("src.core.spawner.run_message", fake_run_message)
-  monkeypatch.setattr("src.core.spawner.log", mock_log)
+  monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
+  monkeypatch.setattr("src.core.master_trigger.log", mock_log)
 
-  await _trigger_master(session_id, "worker summary", cfg, session_mgr)
+  await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
   assert call_count == 1
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3"]
@@ -149,10 +149,10 @@ async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -
     return "valid-id"
 
   mock_log = Mock()
-  monkeypatch.setattr("src.core.spawner.run_message", fake_run_message)
-  monkeypatch.setattr("src.core.spawner.log", mock_log)
+  monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
+  monkeypatch.setattr("src.core.master_trigger.log", mock_log)
 
-  await _trigger_master(session_id, "worker summary", cfg, session_mgr)
+  await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
   assert call_resume_ids == ["valid-id"]
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3"]

@@ -1627,7 +1627,7 @@
     changes. Follows the pattern from items 047 (core/git.py), 060 (core/process.py),
     and 071 (core/review.py) which carved out cohesive sub-modules from spawner.py.'
   category: architecture
-  status: pending
+  status: approved
   created: '2026-04-09T12:00:00Z'
   priority: medium
 - id: 094

@@ -28,8 +28,9 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
   session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
   thread_mgr = AsyncMock()
 
-  def fake_check_takeoff_gate(session_id: str) -> None:
+  def fake_check_takeoff_gate(session_id: str, mgr: Any) -> None:
     assert session_id == req.session_id
+    assert mgr is session_mgr
     raise DelegationBlockedError("blocked")
 
   monkeypatch.setattr(internal, "_check_takeoff_gate", fake_check_takeoff_gate)
@@ -57,8 +58,9 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
 
   captured: dict[str, Any] = {}
 
-  def fake_check_takeoff_gate(session_id: str) -> None:
+  def fake_check_takeoff_gate(session_id: str, mgr: Any) -> None:
     assert session_id == req.session_id
+    assert mgr is session_mgr
 
   async def fake_resolve_requested_subagent_backend_model(
       session_id: str,
@@ -134,8 +136,9 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
   session_mgr.get_session.return_value = SessionMetadata(id=req.session_id, name="Test")
   thread_mgr = AsyncMock()
 
-  def fake_check_takeoff_gate(session_id: str) -> None:
+  def fake_check_takeoff_gate(session_id: str, mgr: Any) -> None:
     assert session_id == req.session_id
+    assert mgr is session_mgr
 
   async def fake_resolve_requested_subagent_backend_model(*args: Any, **kwargs: Any) -> tuple[str, str]:
     raise ValueError("requested backend 'codex-o3' is not in backend_options")

@@ -1142,7 +1142,7 @@
   priority: medium
 - id: 087
   title: 'Code health: fix formatting, unused imports, and dead code'
-  description: 'Re-confirmed by automated scan on 2026-04-12 (17th consecutive scan, originally found 2026-04-01). Prior dead-code
+  description: 'Re-confirmed by automated scan on 2026-04-12 (18th consecutive scan, originally found 2026-04-01). Prior dead-code
     issue (_summarize_event_lines) has been resolved. Remaining issues: (1) FORMATTING — 7 files have yapf diffs: src/core/git.py
     (function-call arg wrapping in git_merge_ff_only, git_push_branch, git_push_refspec, git_pull_ff_only), src/core/triggers.py
     (indentation in _fire_trigger), src/core/spawner.py (string concat alignment in _build_worker_prompt and arg wrapping
@@ -1345,3 +1345,21 @@
   status: pending
   created: '2026-04-12T14:00:00Z'
   priority: medium
+- id: 097
+  title: Extract shared WebSocket keepalive loop and auth-accept into helpers in server.py
+  description: 'PURPOSE — Eliminate 20 duplicated lines between session_websocket (server.py L108-166) and thread_websocket
+    (L174-227) that share identical auth-check, keepalive, and disconnect-handling code. Both endpoints repeat the same
+    3-step open sequence (check _check_ws_auth, accept, log) and the same 10-line keepalive tail (while True: wait_for(receive_text,
+    timeout=30) → send ping on TimeoutError → catch WebSocketDisconnect → catch Exception and log). Any change to the
+    keepalive interval (currently hardcoded 30.0 in both places), the ping payload format, or disconnect logging must
+    be applied to both endpoints independently. HOW — (1) Extract an async context manager _ws_connection(websocket,
+    channels: list[str], log_label: str) that encapsulates: auth check (return early on failure), accept, subscribe to
+    all channels BEFORE yielding, yield the websocket, and unsubscribe + log in the finally block. (2) Extract an async
+    def _ws_keepalive(websocket, log_label: str, **log_context) that encapsulates the while-True receive-or-ping loop
+    with WebSocketDisconnect and Exception handling. Each endpoint reduces to: async with _ws_connection(...) as ws:
+    send_catchup_events(); await _ws_keepalive(ws, ...). The session endpoint''s cursor negotiation (L117-127) stays
+    inline since it is unique to that endpoint. ~25 lines for the two helpers, each endpoint drops by ~10 lines.
+    Pure refactoring, no behavior change. The keepalive timeout (30.0) moves to a single constant.'
+  status: pending
+  created: '2026-04-12T18:00:00Z'
+  priority: low

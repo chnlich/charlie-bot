@@ -1469,7 +1469,7 @@
     trigger are silently discarded. Items 1-2 are quick fixes; items 3-6 are tracked
     by other backlog items or require upstream changes.'
   category: code-health
-  status: pending
+  status: approved
   created: '2026-04-01T23:30:00Z'
   updated: '2026-04-12T14:00:00Z'
   priority: low

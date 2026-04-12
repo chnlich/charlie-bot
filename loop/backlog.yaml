@@ -1142,7 +1142,7 @@
   priority: medium
 - id: 087
   title: 'Code health: fix formatting, unused imports, and dead code'
-  description: 'Re-confirmed by automated scan on 2026-04-11 (16th consecutive scan, originally found 2026-04-01). Prior dead-code
+  description: 'Re-confirmed by automated scan on 2026-04-12 (17th consecutive scan, originally found 2026-04-01). Prior dead-code
     issue (_summarize_event_lines) has been resolved. Remaining issues: (1) FORMATTING — 7 files have yapf diffs: src/core/git.py
     (function-call arg wrapping in git_merge_ff_only, git_push_branch, git_push_refspec, git_pull_ff_only), src/core/triggers.py
     (indentation in _fire_trigger), src/core/spawner.py (string concat alignment in _build_worker_prompt and arg wrapping
@@ -1164,7 +1164,7 @@
   category: code-health
   status: pending
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-11T14:00:00Z'
+  updated: '2026-04-12T14:00:00Z'
   priority: low
 - id: 088
   title: Consolidate build_session_view_data and build_session_view_data_fast into single function
@@ -1323,4 +1323,25 @@
   category: maintainability
   status: pending
   created: '2026-04-11T14:00:00Z'
+  priority: medium
+- id: 096
+  title: Introduce SpawnRequest dataclass to reduce spawn_worker parameter count from 20 to 7
+  description: 'PURPOSE — Improve readability and maintainability of the worker spawning interface. spawn_worker() (core/spawner.py:533)
+    has 20 parameters, and its internal helper _create_worktree_and_process() has 18. All 4 callers (api/internal.py:58, core/scheduler.py:270,
+    core/review.py:292, core/improve_command.py:388) pass 10-16 keyword arguments in long, hard-to-read blocks. This makes
+    the call sites fragile — adding a new option requires updating the function signature, all callers, and all internal forwarding
+    sites. The 14 optional parameters (repo_path through is_continuation) naturally form a "worker configuration" that travels
+    as a unit. HOW — Add a @dataclass SpawnRequest to core/models.py (or core/spawner.py) with fields: repo_path (Optional[str]),
+    context (Optional[str]), prompt_override (Optional[str]), resolved_backend (str), resolved_model (str), base_branch (Optional[str]),
+    branch_name_override (Optional[str]), improve_dir (Optional[str]), iteration_number (Optional[int]), require_takeoff (bool),
+    worktree_path_override (Optional[str]), skip_cleanup (bool), skip_notify (bool), is_continuation (bool) — all with their
+    current defaults. Simplify spawn_worker signature to (session_id, description, thread_id, cfg, session_mgr, thread_mgr,
+    request: SpawnRequest). Each caller constructs a SpawnRequest with only the fields it needs, making the intent clearer.
+    Internally, _create_worktree_and_process and _create_repoless_process receive the SpawnRequest instead of 12+ individual
+    kwargs. ~20 lines added for the dataclass, ~40 lines of parameter lists simplified across 6 functions and 4 call sites.
+    Pure refactoring, no behavior change. Complements item 021 (which splits spawn_worker body into phases) by simplifying
+    the interface those phases share.'
+  category: maintainability
+  status: pending
+  created: '2026-04-12T14:00:00Z'
   priority: medium

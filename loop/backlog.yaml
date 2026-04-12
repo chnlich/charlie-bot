@@ -1200,7 +1200,8 @@
     inline session-path construction outside SessionManager. ~20 lines changed across
     1 file.
   category: maintainability
-  status: approved
+  status: in_progress
+  in_progress_at: '2026-04-12T00:00:00Z'
   created: '2026-03-31T18:00:00Z'
   priority: medium
 - id: '077'

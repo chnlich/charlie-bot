@@ -14,7 +14,7 @@ from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
-from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
+from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
 from src.core.git import git_current_branch, git_create_worktree, git_worktree_prune, git_worktree_remove
 from src.core.sessions import SessionManager
@@ -222,23 +222,13 @@ async def _create_worktree_and_process(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     resolved_repo: Path,
-    context: Optional[str],
-    prompt_override: Optional[str],
-    resolved_backend: str,
-    resolved_model: str,
-    base_branch: Optional[str] = None,
-    branch_name_override: Optional[str] = None,
-    improve_dir: Optional[str] = None,
-    iteration_number: Optional[int] = None,
-    worktree_path_override: Optional[str] = None,
-    skip_cleanup: bool = False,
-    is_continuation: bool = False,
+    req: SpawnRequest,
 ) -> Worker:
   """Create worktree, build prompt, resolve backend, and construct Worker."""
   worktree_path: Optional[Path] = None
 
-  if prompt_override:
-    worker_prompt = prompt_override
+  if req.prompt_override:
+    worker_prompt = req.prompt_override
     if not thread.worktree_path:
       log.error(
           "spawn_worker_missing_worktree_path",
@@ -248,18 +238,18 @@ async def _create_worktree_and_process(
       )
       raise RuntimeError("thread metadata missing worktree_path")
     worktree_path = Path(thread.worktree_path).resolve()
-  elif worktree_path_override:
+  elif req.worktree_path_override:
     # Reuse an existing worktree (e.g. improve loop iterations sharing a single worktree).
-    base_branch = base_branch or await git_current_branch(resolved_repo)
-    branch_name = branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
-    wt_path = Path(worktree_path_override)
+    base_branch = req.base_branch or await git_current_branch(resolved_repo)
+    branch_name = req.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
+    wt_path = Path(req.worktree_path_override)
 
     thread.branch_name = branch_name
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
     thread.base_branch = base_branch
-    thread.skip_cleanup = skip_cleanup
-    thread.context = context
+    thread.skip_cleanup = req.skip_cleanup
+    thread.context = req.context
 
     session_meta = await session_mgr.get_session(session_id)
     worker_prompt = _build_worker_prompt(
@@ -269,17 +259,17 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
-        improve_dir=improve_dir,
-        iteration_number=iteration_number,
-        is_continuation=is_continuation)
+        improve_dir=req.improve_dir,
+        iteration_number=req.iteration_number,
+        is_continuation=req.is_continuation)
     worktree_path = wt_path.resolve()
   else:
     # Get current branch as the base for the worktree
-    base_branch = base_branch or await git_current_branch(resolved_repo)
+    base_branch = req.base_branch or await git_current_branch(resolved_repo)
 
     # Compute branch name and worktree path
     ts = int(time.time())
-    branch_name = branch_name_override or f"charliebot/task-{ts}-{thread.id[:8]}"
+    branch_name = req.branch_name_override or f"charliebot/task-{ts}-{thread.id[:8]}"
     wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
 
     # Ensure worktree parent dir exists and create worktree before launch.
@@ -291,7 +281,7 @@ async def _create_worktree_and_process(
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
     thread.base_branch = base_branch
-    thread.context = context
+    thread.context = req.context
 
     # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
@@ -302,8 +292,8 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
-        improve_dir=improve_dir,
-        iteration_number=iteration_number)
+        improve_dir=req.improve_dir,
+        iteration_number=req.iteration_number)
     worktree_path = wt_path.resolve()
 
   if worktree_path is None:
@@ -318,7 +308,7 @@ async def _create_worktree_and_process(
     )
     raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
-  backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
+  backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
   thread.backend = backend_option.id
   thread.model = backend_option.model
   await thread_mgr.save_metadata(thread)
@@ -343,13 +333,10 @@ async def _create_repoless_process(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-    context: Optional[str],
-    prompt_override: Optional[str],
-    resolved_backend: str,
-    resolved_model: str,
+    req: SpawnRequest,
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
-  worker_prompt = prompt_override or description
+  worker_prompt = req.prompt_override or description
   thread_dir = cfg.sessions_dir / session_id / 'threads' / thread.id
 
   # Repo-less tasks cannot produce branch/worktree review artifacts.
@@ -357,9 +344,9 @@ async def _create_repoless_process(
   thread.repo_path = None
   thread.worktree_path = str(thread_dir)
   thread.require_review = False
-  thread.context = context
+  thread.context = req.context
 
-  backend_option = resolve_backend_option(cfg, resolved_backend, resolved_model)
+  backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
   thread.backend = backend_option.id
   thread.model = backend_option.model
   await thread_mgr.save_metadata(thread)
@@ -527,23 +514,11 @@ async def spawn_worker(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-    repo_path: Optional[str] = None,
-    context: Optional[str] = None,
-    prompt_override: Optional[str] = None,
-    resolved_backend: str = "",
-    resolved_model: str = "",
-    base_branch: Optional[str] = None,
-    branch_name_override: Optional[str] = None,
-    improve_dir: Optional[str] = None,
-    iteration_number: Optional[int] = None,
-    require_takeoff: bool = False,
-    worktree_path_override: Optional[str] = None,
-    skip_cleanup: bool = False,
-    skip_notify: bool = False,
-    is_continuation: bool = False,
+    request: Optional[SpawnRequest] = None,
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
-  if require_takeoff:
+  req = request or SpawnRequest()
+  if req.require_takeoff:
     await asyncio.to_thread(_check_takeoff_gate, session_id, session_mgr)
 
   thread = None
@@ -557,17 +532,13 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    if repo_path is None:
+    if req.repo_path is None:
       # Repo-less worker: run prompt directly without worktree
-      worker = await _create_repoless_process(
-          session_id, thread, description, cfg, session_mgr, thread_mgr, context, prompt_override, resolved_backend,
-          resolved_model)
+      worker = await _create_repoless_process(session_id, thread, description, cfg, session_mgr, thread_mgr, req)
     else:
-      resolved_repo = Path(repo_path).resolve()
+      resolved_repo = Path(req.repo_path).resolve()
       worker = await _create_worktree_and_process(
-          session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, context, prompt_override,
-          resolved_backend, resolved_model, base_branch, branch_name_override, improve_dir, iteration_number,
-          worktree_path_override=worktree_path_override, skip_cleanup=skip_cleanup, is_continuation=is_continuation)
+          session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, req)
 
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, description, thread, thread_mgr, session_mgr)
@@ -593,7 +564,7 @@ async def spawn_worker(
             cfg,
             quota_exhausted=quota_exhausted,
             error=error_msg,
-            skip_notify=skip_notify)
+            skip_notify=req.skip_notify)
       except Exception as e:
         log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
         try:

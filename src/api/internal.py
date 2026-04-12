@@ -9,7 +9,7 @@ from src.api.deps import get_session_manager, get_thread_manager, get_trigger_ma
 from src.core import event_types as ET
 from src.core.config import get_config
 from src.core.improve_command import ImproveState, load_improve_state, run_improve_loop, save_improve_state
-from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest
+from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest, SpawnRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import (
     DelegationBlockedError,
@@ -63,12 +63,14 @@ async def delegate_task(
           cfg,
           session_mgr,
           thread_mgr,
-          repo_path=req.repo_path,
-          base_branch=req.base_branch,
-          context=req.context,
-          resolved_backend=resolved_backend,
-          resolved_model=resolved_model,
-          require_takeoff=True,
+          request=SpawnRequest(
+              repo_path=req.repo_path,
+              base_branch=req.base_branch,
+              context=req.context,
+              resolved_backend=resolved_backend,
+              resolved_model=resolved_model,
+              require_takeoff=True,
+          ),
       ))
 
   # Save and broadcast task_delegated event so cursor stays in sync on reconnect

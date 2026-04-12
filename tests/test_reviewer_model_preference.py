@@ -6,7 +6,7 @@ from typing import Any, Optional
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, ThreadMetadata
+from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata
 from src.core import review, spawner
 
 
@@ -84,10 +84,7 @@ async def _fake_spawn_worker(
     cfg: CharlieBotConfig,
     session_mgr: Any,
     thread_mgr: Any,
-    repo_path: Optional[str] = None,
-    prompt_override: Optional[str] = None,
-    resolved_backend: str = "",
-    resolved_model: str = "",
+    request: Optional[SpawnRequest] = None,
 ) -> None:
   return None
 
@@ -149,8 +146,8 @@ async def test_empty_preference_uses_worker_backend(monkeypatch: pytest.MonkeyPa
   await review.spawn_review_worker(
       "session-id", _make_original_thread(), cfg, FakeSessionManager(), FakeThreadManager())
 
-  assert captured["resolved_backend"] == "codex-o3"
-  assert captured["resolved_model"] == "o3"
+  assert captured["request"].resolved_backend == "codex-o3"
+  assert captured["request"].resolved_model == "o3"
 
 
 @pytest.mark.asyncio
@@ -167,8 +164,8 @@ async def test_preference_selects_different_backend(monkeypatch: pytest.MonkeyPa
       "session-id", _make_original_thread(backend="codex-o3", model="o3"),
       cfg, FakeSessionManager(), FakeThreadManager())
 
-  assert captured["resolved_backend"] == "kimi-k2.5"
-  assert captured["resolved_model"] == "kimi-k2.5"
+  assert captured["request"].resolved_backend == "kimi-k2.5"
+  assert captured["request"].resolved_model == "kimi-k2.5"
 
 
 @pytest.mark.asyncio
@@ -185,8 +182,8 @@ async def test_preference_skips_same_backend(monkeypatch: pytest.MonkeyPatch) ->
       "session-id", _make_original_thread(backend="codex-o3", model="o3"),
       cfg, FakeSessionManager(), FakeThreadManager())
 
-  assert captured["resolved_backend"] == "claude-opus-4.6"
-  assert captured["resolved_model"] == "claude-opus-4-6"
+  assert captured["request"].resolved_backend == "claude-opus-4.6"
+  assert captured["request"].resolved_model == "claude-opus-4-6"
 
 
 @pytest.mark.asyncio
@@ -202,8 +199,8 @@ async def test_preference_skips_invalid_falls_back(monkeypatch: pytest.MonkeyPat
   await review.spawn_review_worker(
       "session-id", _make_original_thread(), cfg, FakeSessionManager(), FakeThreadManager())
 
-  assert captured["resolved_backend"] == "codex-o3"
-  assert captured["resolved_model"] == "o3"
+  assert captured["request"].resolved_backend == "codex-o3"
+  assert captured["request"].resolved_model == "o3"
 
 
 @pytest.mark.asyncio
@@ -220,8 +217,8 @@ async def test_preference_all_same_as_worker_falls_back(monkeypatch: pytest.Monk
       "session-id", _make_original_thread(backend="codex-o3", model="o3"),
       cfg, FakeSessionManager(), FakeThreadManager())
 
-  assert captured["resolved_backend"] == "codex-o3"
-  assert captured["resolved_model"] == "o3"
+  assert captured["request"].resolved_backend == "codex-o3"
+  assert captured["request"].resolved_model == "o3"
 
 
 @pytest.mark.asyncio
@@ -238,8 +235,8 @@ async def test_preference_skips_invalid_then_selects_valid(monkeypatch: pytest.M
       "session-id", _make_original_thread(backend="codex-o3", model="o3"),
       cfg, FakeSessionManager(), FakeThreadManager())
 
-  assert captured["resolved_backend"] == "kimi-k2.5"
-  assert captured["resolved_model"] == "kimi-k2.5"
+  assert captured["request"].resolved_backend == "kimi-k2.5"
+  assert captured["request"].resolved_model == "kimi-k2.5"
 
 
 # --- Retry flow tests for review.spawn_review_worker with tried_backends ---
@@ -262,8 +259,8 @@ async def test_retry_skips_tried_backend(monkeypatch: pytest.MonkeyPatch) -> Non
   )
 
   assert result is True
-  assert captured["resolved_backend"] == "claude-opus-4.6"
-  assert captured["resolved_model"] == "claude-opus-4-6"
+  assert captured["request"].resolved_backend == "claude-opus-4.6"
+  assert captured["request"].resolved_model == "claude-opus-4-6"
 
 
 @pytest.mark.asyncio
@@ -283,8 +280,8 @@ async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytes
   )
 
   assert result is True
-  assert captured["resolved_backend"] == "codex-o3"
-  assert captured["resolved_model"] == "o3"
+  assert captured["request"].resolved_backend == "codex-o3"
+  assert captured["request"].resolved_model == "o3"
 
 
 @pytest.mark.asyncio

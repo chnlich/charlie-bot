@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api import internal
-from src.core.models import DelegateRequest, SessionMetadata, ThreadMetadata
+from src.core.models import DelegateRequest, SessionMetadata, SpawnRequest, ThreadMetadata
 from src.core.spawner import DelegationBlockedError
 
 
@@ -80,25 +80,8 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
       cfg: Any,
       mgr: Any,
       t_mgr: Any,
-      repo_path: Optional[str] = None,
-      context: Optional[str] = None,
-      prompt_override: Optional[str] = None,
-      resolved_backend: str = "",
-      resolved_model: str = "",
-      base_branch: Optional[str] = None,
-      branch_name_override: Optional[str] = None,
-      improve_dir: Optional[str] = None,
-      iteration_number: Optional[int] = None,
-      require_takeoff: bool = False,
+      request: Optional[SpawnRequest] = None,
   ) -> None:
-    captured["session_id"] = session_id
-    captured["description"] = description
-    captured["thread_id"] = thread_id
-    captured["repo_path"] = repo_path
-    captured["base_branch"] = base_branch
-    captured["resolved_backend"] = resolved_backend
-    captured["resolved_model"] = resolved_model
-    captured["require_takeoff"] = require_takeoff
     assert mgr is session_mgr
     assert t_mgr is thread_mgr
 
@@ -121,11 +104,14 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
   assert captured["session_id"] == req.session_id
   assert captured["description"] == req.description
   assert captured["thread_id"] == "thread-id"
-  assert captured["repo_path"] == req.repo_path
-  assert captured["base_branch"] == req.base_branch
-  assert captured["resolved_backend"] == "codex-o3"
-  assert captured["resolved_model"] == "o3"
-  assert captured["require_takeoff"] is True
+  assert captured["request"] == SpawnRequest(
+      repo_path=req.repo_path,
+      base_branch=req.base_branch,
+      context=req.context,
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+      require_takeoff=True,
+  )
   session_mgr.persist_and_broadcast.assert_awaited_once()
 
 

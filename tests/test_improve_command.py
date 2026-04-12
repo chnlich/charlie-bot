@@ -14,6 +14,7 @@ from src.core.improve_command import (
     save_improve_state,
     stop_improve_loop,
 )
+from src.core.models import SpawnRequest
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +252,9 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
       return tmp_path / "events.jsonl"
 
   async def fake_spawn_worker(*args, **kwargs) -> None:
-    spawn_calls.append((kwargs["resolved_backend"], kwargs["resolved_model"]))
+    request = kwargs["request"]
+    assert isinstance(request, SpawnRequest)
+    spawn_calls.append((request.resolved_backend, request.resolved_model))
     thread_id = kwargs["thread_id"] if "thread_id" in kwargs else None
     if thread_id is None:
       thread_id = args[2]

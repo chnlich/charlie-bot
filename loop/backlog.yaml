@@ -1680,7 +1680,8 @@
     bug fix. Follows the pattern from items 003, 021, 058, 061, 062, and 063 which
     split other long functions by extracting phase helpers.'
   category: maintainability
-  status: approved
+  status: in_progress
+  in_progress_at: '2026-04-12T12:00:00Z'
   created: '2026-04-11T14:00:00Z'
   priority: medium
 - id: 096

@@ -1,5 +1,7 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
+import asyncio
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -36,9 +38,8 @@ async def delegate_task(
     raise HTTPException(status_code=404, detail="Session not found")
 
   # Takeoff gate: block delegation unless the user explicitly approved.
-  # This must run synchronously here so the API can return HTTP 403.
   try:
-    _check_takeoff_gate(req.session_id)
+    await asyncio.to_thread(_check_takeoff_gate, req.session_id, session_mgr)
   except DelegationBlockedError as e:
     raise HTTPException(status_code=403, detail=str(e))
 
@@ -101,7 +102,7 @@ async def start_improve_loop(
     raise HTTPException(status_code=404, detail="Session not found")
 
   try:
-    _check_takeoff_gate(req.session_id)
+    await asyncio.to_thread(_check_takeoff_gate, req.session_id, session_mgr)
   except DelegationBlockedError as e:
     raise HTTPException(status_code=403, detail=str(e))
 

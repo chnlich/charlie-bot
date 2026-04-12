@@ -1,7 +1,6 @@
 """Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
 import asyncio
-import json
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -496,38 +495,30 @@ class DelegationBlockedError(Exception):
   """Raised when the takeoff gate rejects a delegation attempt."""
 
 
-def _check_takeoff_gate(session_id: str) -> None:
+def _check_takeoff_gate(session_id: str, session_mgr: SessionManager) -> None:
   """Verify the last real user message contains 'take off'. Raises DelegationBlockedError if not."""
-  events_path = Path.home() / ".charliebot" / "sessions" / session_id / "data" / "chat_events.jsonl"
-  if not events_path.exists():
+  events = session_mgr.load_chat_events_sync(session_id)
+  if not events:
     raise DelegationBlockedError(
-        'Delegation blocked: no chat_events.jsonl found for session. '
+        'Delegation blocked: no chat events found for session. '
         'Show the plan and wait for the user to say "take off" before delegating.')
 
   # Scan backwards for the last user event with real text (not a tool_result)
-  last_user_text: Optional[str] = None
-  for line in reversed(events_path.read_text(encoding="utf-8").splitlines()):
-    line = line.strip()
-    if not line:
-      continue
-    event = json.loads(line)
+  for event in reversed(events):
     if event.get("type") != "user":
       continue
     content = event.get("content")
     # Real user text is a string; tool_results come as list-of-dict with type=tool_result
     if isinstance(content, str):
-      last_user_text = content
-      break
+      if "take off" not in content.lower():
+        raise DelegationBlockedError(
+            'Delegation blocked: the last user message does not contain "take off". '
+            'Show the plan and wait for the user to say "take off" before delegating.')
+      return
 
-  if last_user_text is None:
-    raise DelegationBlockedError(
-        'Delegation blocked: no user message found in chat history. '
-        'Show the plan and wait for the user to say "take off" before delegating.')
-
-  if "take off" not in last_user_text.lower():
-    raise DelegationBlockedError(
-        'Delegation blocked: the last user message does not contain "take off". '
-        'Show the plan and wait for the user to say "take off" before delegating.')
+  raise DelegationBlockedError(
+      'Delegation blocked: no user message found in chat history. '
+      'Show the plan and wait for the user to say "take off" before delegating.')
 
 
 async def spawn_worker(
@@ -554,7 +545,7 @@ async def spawn_worker(
 ) -> None:
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   if require_takeoff:
-    _check_takeoff_gate(session_id)
+    await asyncio.to_thread(_check_takeoff_gate, session_id, session_mgr)
 
   thread = None
   worker = None

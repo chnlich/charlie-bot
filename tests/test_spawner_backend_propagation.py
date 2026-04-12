@@ -4,7 +4,7 @@ from typing import Any, Optional
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, ThreadMetadata, ThreadStatus
+from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata, ThreadStatus
 from src.core import review, spawner
 
 
@@ -193,10 +193,12 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
       cfg=cfg,
       session_mgr=FakeSessionManager(),
       thread_mgr=FakeThreadManager(),
-      repo_path=str(repo_path),
-      base_branch="main",
-      resolved_backend="codex-o3",
-      resolved_model="o3-pro",
+      request=SpawnRequest(
+          repo_path=str(repo_path),
+          base_branch="main",
+          resolved_backend="codex-o3",
+          resolved_model="o3-pro",
+      ),
   )
   monkeypatch.undo()
 
@@ -310,10 +312,7 @@ async def test_spawn_review_worker_propagates_backend_model(
       cfg: CharlieBotConfig,
       session_mgr: Any,
       thread_mgr: Any,
-      repo_path: Optional[str] = None,
-      prompt_override: Optional[str] = None,
-      resolved_backend: str = "",
-      resolved_model: str = "",
+      request: Optional[SpawnRequest] = None,
   ) -> None:
     return None
 
@@ -350,8 +349,10 @@ async def test_spawn_review_worker_propagates_backend_model(
       FakeThreadManager(),
   )
 
-  assert captured.get("resolved_backend") == "codex-o3"
-  assert captured.get("resolved_model") == "o3-pro"
+  assert captured["request"].repo_path == "/tmp/repo"
+  assert captured["request"].prompt_override is not None
+  assert captured["request"].resolved_backend == "codex-o3"
+  assert captured["request"].resolved_model == "o3-pro"
   assert saved_review_thread["meta"].worktree_path == "/tmp/worktrees/charliebot-task-1"
 
 
@@ -507,9 +508,10 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       cfg=cfg,
       session_mgr=FakeSessionManager(),
       thread_mgr=FakeThreadManager(),
-      repo_path=None,
-      resolved_backend="codex-o3",
-      resolved_model="o3-pro",
+      request=SpawnRequest(
+          resolved_backend="codex-o3",
+          resolved_model="o3-pro",
+      ),
   )
   monkeypatch.undo()
 

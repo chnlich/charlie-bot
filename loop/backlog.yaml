@@ -1470,9 +1470,10 @@
     trigger are silently discarded. Items 1-2 are quick fixes; items 3-6 are tracked
     by other backlog items or require upstream changes.'
   category: code-health
-  status: approved
+  status: in_progress
+  in_progress_at: '2026-04-12T21:00:00Z'
   created: '2026-04-01T23:30:00Z'
-  updated: '2026-04-12T14:00:00Z'
+  updated: '2026-04-12T21:00:00Z'
   priority: low
 - id: 088
   title: Consolidate build_session_view_data and build_session_view_data_fast into

@@ -246,18 +246,27 @@ async function loadOlderIfNeeded(container) {
 
   sessionLoadingMore = true;
   const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionEarliestEventIndex + '&limit=200';
+  const abortCtrl = new AbortController();
+  const timeout = setTimeout(() => abortCtrl.abort(), 10000);
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, {signal: abortCtrl.signal});
+    clearTimeout(timeout);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
 
     sessionHasMore = !!data.has_more;
 
     // Track earliest event index from new messages
+    const prevEarliest = sessionEarliestEventIndex;
     for (const m of data.messages) {
       if (m.event_index != null && m.event_index < sessionEarliestEventIndex) {
         sessionEarliestEventIndex = m.event_index;
       }
+    }
+
+    // If server says has_more but we made no progress, stop to avoid infinite loop
+    if (sessionHasMore && sessionEarliestEventIndex === prevEarliest) {
+      sessionHasMore = false;
     }
 
     // Build HTML for prepended messages
@@ -290,7 +299,11 @@ async function loadOlderIfNeeded(container) {
     // Preserve scroll position
     container.scrollTop = container.scrollHeight - prevHeight;
   } catch (err) {
+    clearTimeout(timeout);
     console.error('loadOlderMessages failed:', err);
+    sessionHasMore = false;
+    const sentinel = document.getElementById('load-more-sentinel');
+    if (sentinel) sentinel.remove();
   } finally {
     sessionLoadingMore = false;
   }

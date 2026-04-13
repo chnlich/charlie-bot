@@ -1741,3 +1741,22 @@
   status: pending
   created: '2026-04-12T18:00:00Z'
   priority: low
+- id: 098
+  title: Bundle run_message session callbacks into a SessionCallbacks dataclass
+  description: 'PURPOSE — Eliminate the repeated 4-line callback bundle (persist_and_broadcast,
+    update_thinking_state, mark_unread, clear_thinking_since) that every run_message
+    call site must manually unpack from SessionManager. Currently 3 call sites (chat.py
+    L173-176, master_trigger.py L35-38 and L66-69) each repeat the identical 4-line
+    expansion session_mgr.persist_and_broadcast / session_mgr.update_thinking_state
+    / mark_unread=session_mgr.mark_unread / clear_thinking_since=session_mgr.clear_thinking_since.
+    Adding a new callback (e.g. for analytics or audit logging) requires updating
+    all 3 sites plus the run_message signature in lockstep. HOW — (1) Add a frozen
+    dataclass SessionCallbacks in core/models.py with the 4 callback fields. (2) Add
+    a SessionManager.callbacks() method that returns a pre-built SessionCallbacks instance.
+    (3) Change run_message to accept a single callbacks: SessionCallbacks parameter
+    instead of 4 separate callback kwargs. Each call site collapses from 4 lines to
+    1: callbacks=session_mgr.callbacks(). ~15 lines added for the dataclass and factory
+    method, each call site shrinks by 3 lines. Pure refactoring, no behavior change.'
+  status: pending
+  created: '2026-04-12T22:00:00Z'
+  priority: low

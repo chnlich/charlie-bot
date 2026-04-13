@@ -611,6 +611,8 @@ function updateWorkersTabBadge() {
 // ---------------------------------------------------------------------------
 // Workers tab live updates
 // ---------------------------------------------------------------------------
+const finalFetchDone = new Set();
+
 const STATUS_DOT_COLORS = {
   running: 'bg-blue-500', completed: 'bg-green-500',
   failed: 'bg-red-500', cancelled: 'bg-slate-500', idle: 'bg-slate-500',
@@ -629,9 +631,16 @@ function updateWorkerStatus(threadId, status) {
   const cancelBtn = document.getElementById('cancel-btn-' + threadId);
   if (cancelBtn) cancelBtn.style.display = status === 'running' ? '' : 'none';
 
-  // When worker finishes, stop auto-poll and invalidate cache
-  if (status !== 'running') {
-    stopThreadPoll(threadId);
+  // If worker transitions back to running, allow a future final fetch
+  if (status === 'running') {
+    finalFetchDone.delete(threadId);
+    return;
+  }
+
+  // When worker finishes, stop auto-poll and do one final fetch
+  stopThreadPoll(threadId);
+  if (!finalFetchDone.has(threadId)) {
+    finalFetchDone.add(threadId);
     loadedThreads.delete(threadId);
     // If detail is currently expanded, do a final fetch
     const detail = document.getElementById('thread-detail-' + threadId);

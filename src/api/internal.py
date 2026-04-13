@@ -119,7 +119,8 @@ async def start_improve_loop(
   if existing and existing.status == "running":
     raise HTTPException(
         status_code=409,
-        detail="An improve loop is already running for this session. Use /stop-improve first, or confirm you want to replace it.",
+        detail=
+        "An improve loop is already running for this session. Use /stop-improve first, or confirm you want to replace it.",
     )
 
   state = ImproveState(goal=req.goal, max_iterations=req.iterations, status='running')

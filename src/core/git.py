@@ -119,7 +119,10 @@ async def git_worktree_prune(repo_path: str, thread_id: str) -> None:
 async def git_merge_ff_only(repo_path: Path, source_branch: str) -> tuple[bool, str]:
   """Run git merge --ff-only. Returns (success, stderr)."""
   proc = await asyncio.create_subprocess_exec(
-      "git", "merge", "--ff-only", source_branch,
+      "git",
+      "merge",
+      "--ff-only",
+      source_branch,
       cwd=str(repo_path),
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
@@ -137,7 +140,10 @@ async def git_merge_ff_only(repo_path: Path, source_branch: str) -> tuple[bool, 
 async def git_push_branch(repo_path: Path, branch: str) -> tuple[bool, str]:
   """Run git push origin <branch>. Returns (success, stderr)."""
   proc = await asyncio.create_subprocess_exec(
-      "git", "push", "origin", branch,
+      "git",
+      "push",
+      "origin",
+      branch,
       cwd=str(repo_path),
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
@@ -155,7 +161,10 @@ async def git_push_branch(repo_path: Path, branch: str) -> tuple[bool, str]:
 async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: str) -> tuple[bool, str]:
   """Run git push origin <local>:refs/heads/<remote>. Returns (success, stderr)."""
   proc = await asyncio.create_subprocess_exec(
-      "git", "push", "origin", f"{local_branch}:refs/heads/{remote_branch}",
+      "git",
+      "push",
+      "origin",
+      f"{local_branch}:refs/heads/{remote_branch}",
       cwd=str(repo_path),
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
@@ -173,7 +182,11 @@ async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: st
 async def git_pull_ff_only(repo_path: Path, branch: str) -> tuple[bool, str]:
   """Run git pull --ff-only origin <branch>. Returns (success, stderr)."""
   proc = await asyncio.create_subprocess_exec(
-      "git", "pull", "--ff-only", "origin", branch,
+      "git",
+      "pull",
+      "--ff-only",
+      "origin",
+      branch,
       cwd=str(repo_path),
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,

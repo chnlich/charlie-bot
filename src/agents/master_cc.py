@@ -115,19 +115,33 @@ class _WorkItem:
 
 
 def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
-  """Build master agent instructions by concatenating prompt + memory files."""
-  prompt_file = cfg.claude_md_file
-  if not prompt_file.exists():
-    log.warning("master_prompt_file_missing", path=str(prompt_file))
+  """Build master agent instructions by concatenating base prompt + per-host override + memory files."""
+  parts: list[str] = []
+
+  # 1. Git-shared base prompt (prompts/master.md in the repo)
+  base_prompt_file = cfg.charlie_bot_repo / "prompts" / "master.md"
+  if base_prompt_file.exists():
+    base_text = base_prompt_file.read_text(encoding="utf-8")
+    base_text = base_text.replace("{{session_id}}", session_meta.id)
+    parts.append(base_text)
+
+  # 2. Per-host override (~/.charliebot/MASTER_AGENT_PROMPT.md)
+  host_prompt_file = cfg.claude_md_file
+  if host_prompt_file.exists():
+    host_text = host_prompt_file.read_text(encoding="utf-8")
+    host_text = host_text.replace("YOUR_SESSION_UUID", session_meta.id)
+    parts.append(host_text)
+
+  if not parts:
+    log.warning("master_prompt_files_missing", base=str(base_prompt_file), host=str(host_prompt_file))
     return None
 
-  prompt_text = prompt_file.read_text(encoding="utf-8")
-  prompt_text = prompt_text.replace("YOUR_SESSION_UUID", session_meta.id)
-  parts = [prompt_text]
+  # 3. Memory files
   for mf in [cfg.memory_file, cfg.memory_host_file]:
     if mf.exists():
       parts.append(mf.read_text(encoding="utf-8"))
 
+  # 4. Rewind summary
   if session_meta.rewind_summary:
     parts.append(
         f"""# Session Rewind Context

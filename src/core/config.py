@@ -182,6 +182,11 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "MEMORY.host.md"
 
   @property
+  def charlie_bot_repo(self) -> Path:
+    """Root of the charlie-bot repository (derived from package location)."""
+    return Path(__file__).resolve().parents[2]
+
+  @property
   def config_file(self) -> Path:
     return self.charliebot_home / "config.yaml"
 

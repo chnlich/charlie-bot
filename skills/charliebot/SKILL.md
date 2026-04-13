@@ -1,139 +1,15 @@
 ---
 name: charliebot
-description: CharlieBot architecture, conventions, and feature reference. Use when modifying or discussing charlie-bot, its frontend, workers, sessions, scheduler, or backup system.
+description: CharlieBot repo structure, architecture, and development conventions. Use when modifying charlie-bot code.
 version: 1.0.0
 ---
+
+> For CharlieBot capabilities (delegation, /improve, triggers, etc.), see prompts/master.md — that content is auto-loaded into every master agent session.
 
 # CharlieBot
 
 You are CharlieBot. This skill describes your own features so you can use them correctly.
 Source code: `~/workspace/charlie-bot/src/core/`
-
----
-
-## /improve — Iterative Improvement Loop
-
-**Source:** `src/core/improve_command.py`
-
-**Usage:** `/improve [max_iterations] <goal>` — default 5 iterations.
-**Stop:** `/stop-improve`
-
-**How it works:**
-1. System spawns a worker with the goal prompt
-2. Worker makes changes in an isolated worktree → auto-review → merge
-3. System spawns next worker with the goal + summaries of all previous iterations
-4. Repeats until max_iterations or `/stop-improve`
-5. Master agent receives final summary of all iterations
-
-**Key mental model:**
-- Workers are **fully autonomous** — they read code, make changes, run tests/training, verify results, all by themselves
-- The user is **on the loop** (reviewing), not **in the loop** (executing)
-- The goal prompt should specify **what to achieve** and **constraints**, NOT specific methods or directions — let workers explore creatively
-- Workers inherit the session's repo path and subagent backend
-- Optional backend selection for `/improve` and delegation must use a configured `backend_options.id` from `~/.charliebot/config.yaml`
-
-**Master agent's role when user asks for /improve:**
-1. Help the user formulate a concise goal string
-2. Execute `/improve N goal` — that's it
-3. Do NOT manually orchestrate delegation — the improve loop handles everything
-
----
-
-## Delegation — One-Shot Task Spawning
-
-**Source:** `src/core/spawner.py`
-
-**Usage:**
-```bash
-python -m src.cli.delegate \
-  --session SESSION_UUID \
-  --repo /path/to/repo \
-  --description "task description" \
-  --context "optional context"
-```
-
-**How it works:**
-1. Creates a worker thread in an isolated git worktree
-2. Worker runs with the description as prompt
-3. On success → auto-review agent checks and merges
-4. Master receives combined worker+reviewer summary
-
-**Backend selection:**
-- `~/.charliebot/config.yaml` `backend_options` is the source of truth for worker/reviewer backend ids and default models
-- Internal `--backend` selections for delegation and `/improve` must point to one of those configured ids
-- Code defaults in `src/core/config.py` are bootstrap fallbacks only; do not treat them as the authoritative backend catalog
-
-**When to use delegation vs /improve:**
-- **Delegation**: one-shot tasks with clear specifications (implement X, fix Y)
-- **`/improve`**: iterative optimization toward a goal (improve performance, reduce errors)
-
----
-
-## Slash Commands
-
-**Source:** `src/core/slash_commands.py`
-**Config:** `~/.charliebot/slash_commands.yaml` (hot-reloaded, no restart needed)
-
-**Built-in commands:**
-- `/help` — list all commands
-- `/improve [N] <goal>` — iterative improvement loop
-- `/stop-improve` — stop active improve loop
-- `/run <task-name>` — manually trigger a scheduled task
-
-**Custom commands** (defined in YAML):
-- `scope: shell` — run a shell command, return stdout
-- `scope: prompt` — inject a prompt into master agent
-
----
-
-## Backlog & Improvement Loop (Scheduled)
-
-**Source:** `src/core/improvement_loop.py`
-**Config:** `~/.charliebot/config.d/cron.yaml`
-
-A deterministic state machine for ongoing projects:
-1. **Revision** — address reviewer feedback on existing items
-2. **Implement** — pick highest-priority approved item
-3. **Generate** — create new ideas if under cap
-4. **Scan** — health scan if nothing else to do
-
-Backlog items live in `loop/backlog.yaml` in the target repo.
-Status flow: `pending` → `approved` → `in_progress` → `done`/`failed`
-
----
-
-## Scheduled Tasks (Cron)
-
-**Source:** `src/core/scheduler.py`
-**Config:** `~/.charliebot/config.d/cron.yaml`
-
-Task types: `prompt` (one-shot), `handler` (built-in), `loop` (backlog-driven).
-Manage via `/run <name>` or the API.
-
----
-
-## Delayed Triggers (`schedule_trigger`)
-
-**Source:** `src/cli/schedule_trigger.py`, `src/core/triggers.py`
-
-**Usage:**
-```bash
-python -m src.cli.schedule_trigger \
-  --session SESSION_ID \
-  --delay SECONDS \
-  --message "Check PID 12345"
-```
-
-Schedules a one-shot delayed wake-up. After `delay` seconds, the master agent receives `[Scheduled trigger fired] <message>`.
-
-**Use case:** monitoring long-running background processes (training, builds). Set up a bash watcher:
-```bash
-wait "$PID"; status=$?; python -m src.cli.schedule_trigger \
-  --session "$SESSION_ID" --delay 1 --message "Training exited (status $status)"
-```
-Master gets auto-triggered on process exit instead of requiring manual check-in.
-
-**Persistence:** triggers save to `sessions/{id}/triggers/*.json` and auto-recover on server restart via `TriggerManager.recover_pending()`.
 
 ---
 
@@ -220,12 +96,6 @@ A self-hosted VS Code instance running as a web service for browsing code in the
 ## Backup
 
 Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered retention. Manual backup trigger must be independent and must not affect the auto-backup schedule.
-
----
-
-## Voice Input
-
-For voice-transcribed messages fed to CC, prepend: "The following message is from voice transcription and might not be accurate. Please ask first for any words that are unclear or might be wrong." Voice output (Gemini transcription) must be simplified Chinese or English only — never traditional Chinese.
 
 ---
 

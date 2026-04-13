@@ -114,8 +114,9 @@ def _build_worker_prompt(
       "- You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.\n"
       "- Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.\n")
 
-  return (f"{session_info}\n{_CODING_PRINCIPLES}\n{skills_section}\n{role_section}\n"
-          f"{worktree_section}{iteration_reports_section}")
+  return (
+      f"{session_info}\n{_CODING_PRINCIPLES}\n{skills_section}\n{role_section}\n"
+      f"{worktree_section}{iteration_reports_section}")
 
 
 def _short_desc(description: str, limit: int = 120) -> str:

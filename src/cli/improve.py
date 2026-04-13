@@ -33,10 +33,15 @@ def main() -> None:
   parser.add_argument("--base-branch", required=True, help="Base branch for iteration worktrees")
   parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
   parser.add_argument(
-      "--work-branch", "--branch-prefix", dest="work_branch", default=None,
+      "--work-branch",
+      "--branch-prefix",
+      dest="work_branch",
+      default=None,
       help="Single branch all iterations commit to (e.g. 'improve/optimize-step-time')")
   parser.add_argument(
-      "--merge-back", action="store_true", default=False,
+      "--merge-back",
+      action="store_true",
+      default=False,
       help="Merge work_branch into base_branch after all iterations complete")
   args = parser.parse_args()
 

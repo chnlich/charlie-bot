@@ -182,16 +182,14 @@ def _transform_codex_response(
   usage = {
       "five_hour":
           {
-              "utilization":
-                  (primary or {}).get("used_percent", 0.0),
+              "utilization": (primary or {}).get("used_percent", 0.0),
               "resets_at":
                   datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
                   if isinstance(primary, dict) and "resets_at" in primary else "",
           },
       "seven_day":
           {
-              "utilization":
-                  (secondary or {}).get("used_percent", 0.0),
+              "utilization": (secondary or {}).get("used_percent", 0.0),
               "resets_at":
                   datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
                   if isinstance(secondary, dict) and "resets_at" in secondary else "",
@@ -200,16 +198,8 @@ def _transform_codex_response(
       "provider": "codex",
       "token_count_observed_at": event.get("timestamp", ""),
   }
-  if (
-      "primary" in rate_limits and
-      "secondary" in rate_limits and
-      primary is None and
-      secondary is None and
-      (
-          (isinstance(credits, dict) and credits.get("unlimited") is True) or
-          rate_limits.get("plan_type") == "business"
-      )
-  ):
+  if ("primary" in rate_limits and "secondary" in rate_limits and primary is None and secondary is None and
+      ((isinstance(credits, dict) and credits.get("unlimited") is True) or rate_limits.get("plan_type") == "business")):
     usage["rate_limits_state"] = "business-unlimited"
   return usage
 

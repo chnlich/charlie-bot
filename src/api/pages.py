@@ -18,7 +18,6 @@ from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
-from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 

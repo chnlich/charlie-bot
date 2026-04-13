@@ -76,6 +76,7 @@ async function toggleThreadDetail(threadId, sessionId) {
     // Collapsing — stop poll and clear cache so re-expand fetches fresh data
     stopThreadPoll(threadId);
     loadedThreads.delete(threadId);
+    finalFetchDone.delete(threadId);
   }
 }
 

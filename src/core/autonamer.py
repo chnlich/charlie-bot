@@ -14,7 +14,6 @@ from src.core.models import SessionMetadata
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
-from src.core.timeouts import AUTONAMER_TIMEOUT
 
 log = structlog.get_logger()
 

@@ -9,6 +9,7 @@ from src.core import improve_command
 from src.core.improve_command import (
     ImproveLoopAlreadyRunningError,
     ImproveState,
+    clear_active_loop_lock,
     find_running_loop,
     load_loop_state,
     next_loop_id,
@@ -153,6 +154,37 @@ def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_pat
 
   with pytest.raises(ImproveLoopAlreadyRunningError, match=f"Loop {first.loop_id} is already running"):
     reserve_loop_state("reserved-session", "optimize", 2, "improve/other", "/tmp/repo", cfg)
+
+
+def test_second_loop_starts_after_first_completes(tmp_path: Path):
+  """After loop 1 finishes and the lock is cleared, loop 2 reserves successfully."""
+  cfg = _make_cfg(tmp_path)
+  session_id = "sequential-session"
+
+  # Loop 1 reserves
+  first = reserve_loop_state(session_id, "goal-1", 3, "improve/first", "/tmp/repo", cfg)
+  assert first.loop_id == 1
+
+  # Concurrent attempt blocked
+  with pytest.raises(ImproveLoopAlreadyRunningError):
+    reserve_loop_state(session_id, "goal-2", 3, "improve/second", "/tmp/repo", cfg)
+
+  # Simulate loop 1 completing: mark completed + clear lock
+  first.status = "completed"
+  first.iterations_completed = 3
+  save_loop_state(session_id, first, cfg)
+  clear_active_loop_lock(session_id, cfg)
+
+  # Loop 2 now succeeds
+  second = reserve_loop_state(session_id, "goal-2", 5, "improve/second", "/tmp/repo", cfg)
+  assert second.loop_id == 2
+  assert second.status == "running"
+
+  # Both loops coexist on disk
+  assert load_loop_state(session_id, 1, cfg).status == "completed"
+  assert load_loop_state(session_id, 2, cfg).status == "running"
+  assert (cfg.sessions_dir / session_id / "loops" / "1" / "state.json").exists()
+  assert (cfg.sessions_dir / session_id / "loops" / "2" / "state.json").exists()
 
 
 def test_find_running_loop_returns_first_running_loop(tmp_path: Path):

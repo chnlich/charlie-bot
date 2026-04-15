@@ -123,7 +123,9 @@ async def test_improve_endpoint_creates_background_task():
        patch(
            "src.api.internal.resolve_requested_subagent_backend_model",
            side_effect=fake_resolve_requested_subagent_backend_model), \
-       patch("src.api.internal.find_running_loop", return_value=None), \
+       patch(
+           "src.api.internal.reserve_loop_state",
+           return_value=MagicMock(loop_id=11)), \
        patch("src.api.internal.create_logged_task", side_effect=fake_create_logged_task) as mock_create_task:
     mock_cfg.return_value = MagicMock()
     result = await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
@@ -133,6 +135,7 @@ async def test_improve_endpoint_creates_background_task():
   assert result["iterations"] == 3
   assert captured["resolved_backend"] == "codex-o3"
   assert captured["resolved_model"] == "o3"
+  assert captured["loop_id"] == 11
   mock_create_task.assert_called_once()
 
 
@@ -190,6 +193,7 @@ async def test_improve_endpoint_returns_409_for_running_loop():
   from fastapi import HTTPException
 
   from src.api.internal import start_improve_loop
+  from src.core.improve_command import ImproveLoopAlreadyRunningError
   from src.core.models import ImproveRequest
 
   req = ImproveRequest(
@@ -208,7 +212,9 @@ async def test_improve_endpoint_returns_409_for_running_loop():
   with patch("src.api.internal.get_config", return_value=MagicMock()), \
        patch("src.api.internal._check_takeoff_gate", return_value=None), \
        patch("src.api.internal.resolve_requested_subagent_backend_model", return_value=("codex-o3", "o3")), \
-       patch("src.api.internal.find_running_loop", return_value=MagicMock(loop_id=7)):
+       patch(
+           "src.api.internal.reserve_loop_state",
+           side_effect=ImproveLoopAlreadyRunningError(7)):
     with pytest.raises(HTTPException) as exc_info:
       await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 

@@ -9,7 +9,6 @@ from src.core import improve_command
 from src.core.improve_command import (
     ImproveLoopAlreadyRunningError,
     ImproveState,
-    build_improve_master_prompt,
     find_running_loop,
     load_loop_state,
     next_loop_id,
@@ -154,16 +153,6 @@ def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_pat
 
   with pytest.raises(ImproveLoopAlreadyRunningError, match=f"Loop {first.loop_id} is already running"):
     reserve_loop_state("reserved-session", "optimize", 2, "improve/other", "/tmp/repo", cfg)
-
-
-def test_build_improve_master_prompt_points_to_per_loop_state(tmp_path: Path):
-  """The prompt documents the new per-loop state layout."""
-  cfg = _make_cfg(tmp_path)
-  prompt = build_improve_master_prompt("prompt-session", "optimize performance", 5, cfg)
-
-  assert "optimize performance" in prompt
-  assert "python -m src.cli.improve" in prompt
-  assert str(cfg.sessions_dir / "prompt-session" / "loops" / "<loop_id>" / "state.json") in prompt
 
 
 def test_find_running_loop_returns_first_running_loop(tmp_path: Path):

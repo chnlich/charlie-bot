@@ -155,11 +155,6 @@ function getSlashSidebarFormValues() {
 }
 
 function assembleSlashArgs(cmdName, values) {
-  if (cmdName === 'improve') {
-    const maxIter = (values.max_iterations || '').trim();
-    const goal = (values.goal || '').trim();
-    return maxIter + ' ' + goal;
-  }
   if (cmdName === 'run') {
     return (values.task_name || '').trim();
   }

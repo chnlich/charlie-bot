@@ -176,42 +176,6 @@ async def stop_improve_loop(session_id: str, cfg: CharlieBotConfig) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Master prompt building
-# ---------------------------------------------------------------------------
-
-
-def build_improve_master_prompt(
-    session_id: str,
-    goal: str,
-    max_iterations: int,
-    cfg: CharlieBotConfig,
-) -> str:
-  """Build a prompt for master CC to orchestrate the improve loop."""
-  loops_dir = cfg.sessions_dir / session_id / "loops"
-  return f"""## Iterative Improvement Loop
-
-You are starting an iterative improvement loop.
-
-**Goal:** {goal}
-**Max iterations:** {max_iterations}
-
-### Instructions
-1. Determine the target repository and base branch from the session context.
-2. Confirm with the user: show the repo path, restate the final goal, and capture only the constraints or success criteria that must be preserved. Keep the prompt final-goal driven: the user should provide the destination and constraints, not a roadmap, per-iteration plan, or implementation recipe.
-3. Do NOT propose per-iteration methods, milestones, or a detailed plan. Workers are fully autonomous and choose their own approach for each iteration.
-4. If the user requests a specific backend, it must be a configured `backend_options.id` from `~/.charliebot/config.yaml`; include `--backend <id>` in the command only when explicitly requested.
-5. After approval, choose a descriptive `--work-branch` based on the goal (e.g. `improve/fix-precision`, `improve/optimize-step-time`). If the user mentions a Linear ticket, include it (e.g. `ALG-865/chaoli/20260326/fix-precision`). Then run:
-   ```
-   python -m src.cli.improve --session {session_id} --repo <repo> --base-branch <base-branch> --iterations {max_iterations} --goal '<the goal above>' --work-branch '<your chosen branch>'
-   ```
-   All iterations commit to the single work branch in a shared worktree.
-   Add `--merge-back` if the user wants the work branch merged back into base_branch after all iterations complete.
-6. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
-
-Per-loop state will be created under: {loops_dir}/<loop_id>/state.json"""
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

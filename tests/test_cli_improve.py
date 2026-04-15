@@ -123,6 +123,7 @@ async def test_improve_endpoint_creates_background_task():
        patch(
            "src.api.internal.resolve_requested_subagent_backend_model",
            side_effect=fake_resolve_requested_subagent_backend_model), \
+       patch("src.api.internal.find_running_loop", return_value=None), \
        patch("src.api.internal.create_logged_task", side_effect=fake_create_logged_task) as mock_create_task:
     mock_cfg.return_value = MagicMock()
     result = await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
@@ -181,3 +182,35 @@ async def test_improve_endpoint_returns_400_for_invalid_backend():
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'missing' is not in backend_options"
+
+
+@pytest.mark.asyncio
+async def test_improve_endpoint_returns_409_for_running_loop():
+  """POST /api/internal/improve returns 409 when another loop is already running."""
+  from fastapi import HTTPException
+
+  from src.api.internal import start_improve_loop
+  from src.core.models import ImproveRequest
+
+  req = ImproveRequest(
+      session_id="s1",
+      repo_path="/tmp/repo",
+      base_branch="main",
+      backend="codex-o3",
+      iterations=3,
+      goal="optimize",
+  )
+
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = MagicMock()
+  thread_mgr = AsyncMock()
+
+  with patch("src.api.internal.get_config", return_value=MagicMock()), \
+       patch("src.api.internal._check_takeoff_gate", return_value=None), \
+       patch("src.api.internal.resolve_requested_subagent_backend_model", return_value=("codex-o3", "o3")), \
+       patch("src.api.internal.find_running_loop", return_value=MagicMock(loop_id=7)):
+    with pytest.raises(HTTPException) as exc_info:
+      await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+
+  assert exc_info.value.status_code == 409
+  assert exc_info.value.detail == "Loop 7 is already running for this session. Use /stop-improve first."

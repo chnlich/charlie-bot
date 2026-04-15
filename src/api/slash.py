@@ -54,34 +54,6 @@ _RUN_ENTRY = {
         ],
 }
 
-_IMPROVE_ENTRY = {
-    'name':
-        'improve',
-    'scope':
-        'builtin',
-    'description':
-        'Run iterative improvement loop',
-    'args':
-        '<max_iterations> <goal>',
-    'params':
-        [
-            {
-                'name': 'max_iterations',
-                'label': 'Max iterations',
-                'type': 'number',
-                'required': True,
-                'placeholder': 'Number of iterations'
-            },
-            {
-                'name': 'goal',
-                'label': 'Goal',
-                'type': 'text',
-                'required': True,
-                'placeholder': 'What to improve...'
-            },
-        ],
-}
-
 _STOP_IMPROVE_ENTRY = {
     'name': 'stop-improve',
     'scope': 'builtin',
@@ -104,7 +76,6 @@ async def _build_command_list() -> list[dict]:
   ]
   result.append(_HELP_ENTRY)
   result.append(_RUN_ENTRY)
-  result.append(_IMPROVE_ENTRY)
   result.append(_STOP_IMPROVE_ENTRY)
   return result
 
@@ -141,42 +112,6 @@ async def execute_command(
   if name == 'help':
     await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     return {'type': ET.HELP, 'commands': await _build_command_list()}
-
-  # Built-in /improve
-  if name == 'improve':
-    if not args_text:
-      return {'error': 'Usage: /improve <max_iterations> <goal>'}
-    parts = args_text.split(None, 1)
-    if not parts[0].isdigit():
-      return {'error': 'Usage: /improve <max_iterations> <goal>'}
-    max_iterations = int(parts[0])
-    goal = parts[1].strip() if len(parts) > 1 else ''
-    if not goal:
-      return {'error': 'Usage: /improve <max_iterations> <goal>'}
-    from src.core.improve_command import ImproveState, build_improve_master_prompt, save_improve_state
-
-    state = ImproveState(goal=goal, max_iterations=max_iterations, status='running')
-    save_improve_state(session_id, state, cfg)
-
-    prompt = build_improve_master_prompt(session_id, goal, max_iterations, cfg)
-    await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
-    create_logged_task(
-        run_and_finalize(
-            cfg,
-            meta,
-            build_agent_input_content(prompt, uploaded_files),
-            session_mgr,
-            skip_user_event=True,
-            display_content=display_text,
-            uploaded_files=uploaded_files))
-    return JSONResponse(
-        status_code=202,
-        content={
-            'type': ET.IMPROVE_STARTED,
-            'goal': goal,
-            'max_iterations': max_iterations,
-        },
-    )
 
   # Built-in /stop-improve
   if name == 'stop-improve':

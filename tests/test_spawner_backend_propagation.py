@@ -41,7 +41,7 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
       branch_name="improve/test/iter2",
       wt_path="/tmp/worktrees/improve-test-iter2",
       session_meta=SessionMetadata(id="session-id", name="Improve Session"),
-      improve_dir="/tmp/improve",
+      loop_dir="/tmp/loops/2",
       iteration_number=2,
   )
 
@@ -229,6 +229,10 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
   captures: dict[str, Any] = {}
 
   class FakeThreadManager:
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
+      del session_id, thread_id
+      return thread
+
     async def update_status(
         self,
         session_id: str,

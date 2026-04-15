@@ -275,7 +275,7 @@ class SpawnRequest:
   resolved_model: str = ""
   base_branch: Optional[str] = None
   branch_name_override: Optional[str] = None
-  improve_dir: Optional[str] = None
+  loop_dir: Optional[str] = None
   iteration_number: Optional[int] = None
   require_takeoff: bool = False
   worktree_path_override: Optional[str] = None

@@ -104,8 +104,6 @@ async function executeSlashCommand(name, args, options = {}) {
       appendMessage('assistant', '```\n' + out + '\n```');
     } else if (data.type === 'prompt_dispatched') {
       startThinking();
-    } else if (data.type === 'improve_started') {
-      startThinking();
     } else if (data.type === 'improve_stopped') {
       appendMessage('system', data.message || 'Improve loop will stop after current iteration');
     } else if (data.type === 'task_triggered') {

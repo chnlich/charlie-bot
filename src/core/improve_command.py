@@ -38,9 +38,18 @@ _QUOTA_POLL_INTERVAL = IMPROVE_QUOTA_POLL_INTERVAL
 
 
 class ImproveState(BaseModel):
+  loop_id: int
   goal: str
   max_iterations: int = 5
-  status: str = "running"  # running, stopped, completed
+  status: str = "running"  # running | stopped | completed | failed
+  work_branch: str
+  base_branch: Optional[str] = None
+  repo_path: str
+  merge_back: bool = False
+  backend: Optional[str] = None
+  model: Optional[str] = None
+  created_at: str
+  iterations_completed: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -48,27 +57,70 @@ class ImproveState(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _state_path(session_id: str, cfg: CharlieBotConfig) -> Path:
-  return cfg.sessions_dir / session_id / "improve_state.json"
+def _loops_dir(session_id: str, cfg: CharlieBotConfig) -> Path:
+  return cfg.sessions_dir / session_id / "loops"
 
 
-def load_improve_state(session_id: str, cfg: CharlieBotConfig) -> Optional[ImproveState]:
-  """Read the improve state file, returning None if missing or corrupted."""
-  path = _state_path(session_id, cfg)
+def _loop_state_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Path:
+  return _loops_dir(session_id, cfg) / str(loop_id) / "state.json"
+
+
+def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Optional[ImproveState]:
+  """Read the loop state file, returning None if it is missing."""
+  path = _loop_state_path(session_id, loop_id, cfg)
   if not path.exists():
     return None
-  try:
-    return ImproveState.model_validate_json(path.read_text())
-  except Exception:
-    log.warning("improve_state_corrupted", session=session_id, path=str(path), exc_info=True)
-    return None
+  return ImproveState.model_validate_json(path.read_text())
 
 
-def save_improve_state(session_id: str, state: ImproveState, cfg: CharlieBotConfig) -> None:
-  """Write the improve state file."""
-  path = _state_path(session_id, cfg)
+def save_loop_state(session_id: str, state: ImproveState, cfg: CharlieBotConfig) -> None:
+  """Write the loop state file."""
+  path = _loop_state_path(session_id, state.loop_id, cfg)
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(state.model_dump_json(indent=2))
+
+
+def next_loop_id(session_id: str, cfg: CharlieBotConfig) -> int:
+  """Return the next sequential loop id for a session."""
+  loops_dir = _loops_dir(session_id, cfg)
+  if not loops_dir.exists():
+    return 1
+
+  max_loop_id = 0
+  for child in loops_dir.iterdir():
+    if not child.is_dir():
+      continue
+    try:
+      loop_id = int(child.name)
+    except ValueError:
+      continue
+    max_loop_id = max(max_loop_id, loop_id)
+  return max_loop_id + 1 if max_loop_id else 1
+
+
+def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> Optional[ImproveState]:
+  """Return the running loop for a session, if any."""
+  loops_dir = _loops_dir(session_id, cfg)
+  if not loops_dir.exists():
+    return None
+
+  state_paths: list[tuple[int, Path]] = []
+  for child in loops_dir.iterdir():
+    if not child.is_dir():
+      continue
+    try:
+      loop_id = int(child.name)
+    except ValueError:
+      continue
+    state_path = child / "state.json"
+    if state_path.exists():
+      state_paths.append((loop_id, state_path))
+
+  for loop_id, _ in sorted(state_paths, key=lambda item: item[0]):
+    state = load_loop_state(session_id, loop_id, cfg)
+    if state is not None and state.status == "running":
+      return state
+  return None
 
 
 # ---------------------------------------------------------------------------
@@ -78,48 +130,12 @@ def save_improve_state(session_id: str, state: ImproveState, cfg: CharlieBotConf
 
 async def stop_improve_loop(session_id: str, cfg: CharlieBotConfig) -> bool:
   """Set improve loop status to stopped. Returns True if there was an active loop."""
-  state = load_improve_state(session_id, cfg)
-  if state is None or state.status != "running":
+  state = find_running_loop(session_id, cfg)
+  if state is None:
     return False
   state.status = "stopped"
-  save_improve_state(session_id, state, cfg)
+  save_loop_state(session_id, state, cfg)
   return True
-
-
-# ---------------------------------------------------------------------------
-# Master prompt building
-# ---------------------------------------------------------------------------
-
-
-def build_improve_master_prompt(
-    session_id: str,
-    goal: str,
-    max_iterations: int,
-    cfg: CharlieBotConfig,
-) -> str:
-  """Build a prompt for master CC to orchestrate the improve loop."""
-  state_path = cfg.sessions_dir / session_id / "improve_state.json"
-  return f"""## Iterative Improvement Loop
-
-You are starting an iterative improvement loop.
-
-**Goal:** {goal}
-**Max iterations:** {max_iterations}
-
-### Instructions
-1. Determine the target repository and base branch from the session context.
-2. Confirm with the user: show the repo path, restate the final goal, and capture only the constraints or success criteria that must be preserved. Keep the prompt final-goal driven: the user should provide the destination and constraints, not a roadmap, per-iteration plan, or implementation recipe.
-3. Do NOT propose per-iteration methods, milestones, or a detailed plan. Workers are fully autonomous and choose their own approach for each iteration.
-4. If the user requests a specific backend, it must be a configured `backend_options.id` from `~/.charliebot/config.yaml`; include `--backend <id>` in the command only when explicitly requested.
-5. After approval, choose a descriptive `--work-branch` based on the goal (e.g. `improve/fix-precision`, `improve/optimize-step-time`). If the user mentions a Linear ticket, include it (e.g. `ALG-865/chaoli/20260326/fix-precision`). Then run:
-   ```
-   python -m src.cli.improve --session {session_id} --repo <repo> --base-branch <base-branch> --iterations {max_iterations} --goal '<the goal above>' --work-branch '<your chosen branch>'
-   ```
-   All iterations commit to the single work branch in a shared worktree.
-   Add `--merge-back` if the user wants the work branch merged back into base_branch after all iterations complete.
-6. The CLI returns immediately after launching the server-side loop. You will receive a summary message when all iterations complete. Do NOT wait or poll — just let the user know the loop has started.
-
-The improve state file is at: {state_path}"""
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +192,7 @@ async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: "ThreadM
 
 async def _wait_for_quota_recovery(
     session_id: str,
+    loop_id: int,
     cfg: CharlieBotConfig,
     session_mgr: "SessionManager",
 ) -> bool:
@@ -184,8 +201,10 @@ async def _wait_for_quota_recovery(
 
   while True:
     # Check stop signal
-    state = load_improve_state(session_id, cfg)
-    if state and state.status == "stopped":
+    state = load_loop_state(session_id, loop_id, cfg)
+    if state is None:
+      raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    if state.status == "stopped":
       return False
 
     usage = None
@@ -315,10 +334,11 @@ async def _run_single_iteration(
     iterations: int,
     goal: str,
     session_id: str,
+    loop_id: int,
     repo_path: str,
     work_branch: str,
     wt_path: Path,
-    improve_dir: Path,
+    loop_dir: Path,
     cfg: CharlieBotConfig,
     session_mgr: "SessionManager",
     thread_mgr: "ThreadManager",
@@ -337,8 +357,10 @@ async def _run_single_iteration(
 
   while True:  # Retry loop for quota failures
     # Check if stopped
-    state = load_improve_state(session_id, cfg)
-    if state and state.status == "stopped":
+    state = load_loop_state(session_id, loop_id, cfg)
+    if state is None:
+      raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    if state.status == "stopped":
       log.info("improve_loop_stopped", session=session_id, iteration=i)
       return None
 
@@ -370,7 +392,7 @@ async def _run_single_iteration(
             worktree_path_override=str(wt_path),
             skip_cleanup=True,
             skip_notify=True,
-            improve_dir=str(improve_dir),
+            loop_dir=str(loop_dir),
             iteration_number=i,
             is_continuation=(i > 1),
         ),
@@ -379,7 +401,7 @@ async def _run_single_iteration(
     # Check for quota failure
     if await is_quota_failure(session_id, thread.id, thread_mgr):
       log.warning("improve_iteration_quota_failure", session=session_id, iteration=i)
-      recovered = await _wait_for_quota_recovery(session_id, cfg, session_mgr)
+      recovered = await _wait_for_quota_recovery(session_id, loop_id, cfg, session_mgr)
       if not recovered:
         log.info("improve_loop_stopped_during_quota_wait", session=session_id, iteration=i)
         return None
@@ -395,7 +417,7 @@ async def _run_single_iteration(
     previous_summaries.append(summary)
 
     # Write fallback report if the worker didn't write one
-    report_path = improve_dir / f'iter_{i:04d}.md'
+    report_path = loop_dir / f'iter_{i:04d}.md'
     if not await asyncio.to_thread(report_path.exists):
       await asyncio.to_thread(report_path.write_text, summary)
 
@@ -456,17 +478,33 @@ async def run_improve_loop(
   then triggers the master CC with the combined summary.
   """
   previous_summaries: list[str] = []
+  loop_id = next_loop_id(session_id, cfg)
 
   # Compat: work_branch = work_branch or branch_prefix or auto-generated
   work_branch = work_branch or branch_prefix or f'improve/{int(time.time())}'
   resolved_repo = Path(repo_path).resolve()
+  loop_dir = cfg.sessions_dir / session_id / 'loops' / str(loop_id)
+  await asyncio.to_thread(loop_dir.mkdir, parents=True, exist_ok=True)
+  state = ImproveState(
+      loop_id=loop_id,
+      goal=goal,
+      max_iterations=iterations,
+      status="running",
+      work_branch=work_branch,
+      base_branch=base_branch,
+      repo_path=str(resolved_repo),
+      merge_back=merge_back,
+      backend=resolved_backend or None,
+      model=resolved_model or None,
+      created_at=datetime.now(timezone.utc).isoformat(),
+      iterations_completed=0,
+  )
+  save_loop_state(session_id, state, cfg)
 
-  improve_id = work_branch.replace('/', '-')
-  improve_dir = cfg.sessions_dir / session_id / 'improve' / improve_id
-  await asyncio.to_thread(improve_dir.mkdir, parents=True, exist_ok=True)
   log.info(
       "improve_loop_backend_pinned",
       session=session_id,
+      loop_id=loop_id,
       backend=resolved_backend,
       model=resolved_model,
       work_branch=work_branch,
@@ -479,6 +517,8 @@ async def run_improve_loop(
   try:
     await git_create_worktree(resolved_repo, base_branch, work_branch, wt_path)
   except Exception as e:
+    state.status = 'failed'
+    save_loop_state(session_id, state, cfg)
     log.error("improve_loop_worktree_failed", session=session_id, error=str(e))
     failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
     failure_payload['error'] = f"Failed to create worktree: {e}"
@@ -489,14 +529,36 @@ async def run_improve_loop(
   try:
     for i in range(1, iterations + 1):
       summary = await _run_single_iteration(
-          i, iterations, goal, session_id, repo_path, work_branch, wt_path, improve_dir, cfg, session_mgr, thread_mgr,
-          resolved_backend, resolved_model, previous_summaries, base_branch)
+          i,
+          iterations,
+          goal,
+          session_id,
+          loop_id,
+          repo_path,
+          work_branch,
+          wt_path,
+          loop_dir,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          resolved_backend,
+          resolved_model,
+          previous_summaries,
+          base_branch,
+      )
       if summary is None:
         break  # Stopped by user or session missing
+      state = load_loop_state(session_id, loop_id, cfg)
+      if state is None:
+        raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+      state.iterations_completed += 1
+      save_loop_state(session_id, state, cfg)
 
     # Check if we exited because the user stopped the loop
-    state = load_improve_state(session_id, cfg)
-    stopped_by_user = state and state.status == 'stopped'
+    state = load_loop_state(session_id, loop_id, cfg)
+    if state is None:
+      raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    stopped_by_user = state.status == 'stopped'
 
     if stopped_by_user:
       payload = _build_summary_payload(ET.IMPROVE_STOPPED, goal, previous_summaries)
@@ -504,10 +566,8 @@ async def run_improve_loop(
     else:
       payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
 
-    # Persist final status to improve_state.json
-    state = load_improve_state(session_id, cfg) or ImproveState(goal=goal)
     state.status = 'stopped' if stopped_by_user else 'completed'
-    save_improve_state(session_id, state, cfg)
+    save_loop_state(session_id, state, cfg)
 
     payload['work_branch'] = work_branch
     payload['base_branch'] = base_branch
@@ -533,10 +593,10 @@ async def run_improve_loop(
     raise
   except Exception:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
-    state = load_improve_state(session_id, cfg)
+    state = load_loop_state(session_id, loop_id, cfg)
     if state:
       state.status = 'failed'
-      save_improve_state(session_id, state, cfg)
+      save_loop_state(session_id, state, cfg)
   finally:
     # Always clean up the shared worktree
     if wt_path.exists():

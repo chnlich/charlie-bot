@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
 from src.core import event_types as ET
 from src.core.config import get_config
-from src.core.improve_command import ImproveState, load_improve_state, run_improve_loop, save_improve_state
+from src.core.improve_command import find_running_loop, run_improve_loop
 from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest, SpawnRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import (
@@ -115,16 +115,12 @@ async def start_improve_loop(
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
-  existing = load_improve_state(req.session_id, cfg)
-  if existing and existing.status == "running":
+  running = find_running_loop(req.session_id, cfg)
+  if running:
     raise HTTPException(
         status_code=409,
-        detail=
-        "An improve loop is already running for this session. Use /stop-improve first, or confirm you want to replace it.",
+        detail=f"Loop {running.loop_id} is already running for this session. Use /stop-improve first.",
     )
-
-  state = ImproveState(goal=req.goal, max_iterations=req.iterations, status='running')
-  save_improve_state(req.session_id, state, cfg)
 
   create_logged_task(
       run_improve_loop(

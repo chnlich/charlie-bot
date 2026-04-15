@@ -40,7 +40,7 @@ def _build_worker_prompt(
     branch_name: str,
     wt_path: str,
     session_meta: SessionMetadata,
-    improve_dir: Optional[str] = None,
+    loop_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
     is_continuation: bool = False,
 ) -> str:
@@ -79,13 +79,13 @@ def _build_worker_prompt(
         f"## Task\n{description}")
 
   iteration_reports_section = ""
-  if improve_dir and iteration_number is not None:
+  if loop_dir and iteration_number is not None:
     iteration_reports_section = (
         f"\n\n## Iteration Reports\n"
-        f"Previous iteration reports are in: {improve_dir}/\n"
+        f"Previous iteration reports are in: {loop_dir}/\n"
         f"Review any existing iter_*.md files there before starting work. Treat them as advisory evidence and hints only.\n"
         f"Previous iteration reports may inform your judgment, but they must not dictate your plan for this iteration.\n\n"
-        f"When you finish, write your report to: {improve_dir}/iter_{iteration_number:04d}.md\n"
+        f"When you finish, write your report to: {loop_dir}/iter_{iteration_number:04d}.md\n"
         f"Use this format:\n"
         f"```\n"
         f"## Iter {iteration_number} — {{completed|failed}}\n"
@@ -260,7 +260,7 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
-        improve_dir=req.improve_dir,
+        loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,
         is_continuation=req.is_continuation)
     worktree_path = wt_path.resolve()
@@ -293,7 +293,7 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
-        improve_dir=req.improve_dir,
+        loop_dir=req.loop_dir,
         iteration_number=req.iteration_number)
     worktree_path = wt_path.resolve()
 

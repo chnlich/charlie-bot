@@ -1,234 +1,186 @@
-"""Tests for the /improve slash command orchestrator."""
+"""Tests for the iterative improve loop orchestrator."""
 
-import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.core import improve_command
-from src.core.improve_command import (
-    ImproveState,
-    build_improve_master_prompt,
-    load_improve_state,
-    save_improve_state,
-    stop_improve_loop,
-)
+from src.core.improve_command import ImproveState, find_running_loop, load_loop_state, next_loop_id, save_loop_state, stop_improve_loop
 from src.core.models import SpawnRequest
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_cfg(tmp_path: Path):
-  """Create a minimal config-like object with sessions_dir."""
+  """Create a minimal config-like object with session and worktree directories."""
   cfg = MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  cfg.worktree_dir = str(tmp_path / "worktrees")
   return cfg
 
 
-# ---------------------------------------------------------------------------
-# Argument parsing (max_iterations extraction)
-# ---------------------------------------------------------------------------
+def _make_state(loop_id: int, **overrides: object) -> ImproveState:
+  payload = {
+      "loop_id": loop_id,
+      "goal": "optimize performance",
+      "max_iterations": 3,
+      "status": "running",
+      "work_branch": "improve/test",
+      "base_branch": "main",
+      "repo_path": "/tmp/repo",
+      "merge_back": False,
+      "backend": "codex-o3",
+      "model": "o3",
+      "created_at": "2026-04-15T00:00:00+00:00",
+      "iterations_completed": 0,
+  }
+  payload.update(overrides)
+  return ImproveState(**payload)
 
 
-def test_parse_args_with_max_iterations():
-  """First token as digit is parsed as max_iterations."""
-  args_text = "3 refactor the auth module"
-  parts = args_text.split(None, 1)
-  max_iterations = 5
-  goal = args_text
-  if parts[0].isdigit():
-    max_iterations = int(parts[0])
-    goal = parts[1] if len(parts) > 1 else ''
-  assert max_iterations == 3
-  assert goal == "refactor the auth module"
-
-
-def test_parse_args_without_max_iterations():
-  """No leading digit means default max_iterations=5."""
-  args_text = "optimize the codebase for performance"
-  parts = args_text.split(None, 1)
-  max_iterations = 5
-  goal = args_text
-  if parts[0].isdigit():
-    max_iterations = int(parts[0])
-    goal = parts[1] if len(parts) > 1 else ''
-  assert max_iterations == 5
-  assert goal == "optimize the codebase for performance"
-
-
-def test_parse_args_only_number():
-  """Only a number with no goal text."""
-  args_text = "5"
-  parts = args_text.split(None, 1)
-  max_iterations = 5
-  goal = args_text
-  if parts[0].isdigit():
-    max_iterations = int(parts[0])
-    goal = parts[1] if len(parts) > 1 else ''
-  assert max_iterations == 5
-  assert goal == ''
-
-
-# ---------------------------------------------------------------------------
-# State file creation and loading
-# ---------------------------------------------------------------------------
-
-
-def test_save_and_load_state(tmp_path: Path):
-  """State round-trips through save/load."""
+def test_save_and_load_loop_state(tmp_path: Path):
+  """State round-trips through per-loop storage."""
   cfg = _make_cfg(tmp_path)
   session_id = "test-session"
-  (cfg.sessions_dir / session_id).mkdir(parents=True, exist_ok=True)
 
-  state = ImproveState(goal="optimize performance", max_iterations=3, status="running")
-  save_improve_state(session_id, state, cfg)
+  state = _make_state(1)
+  save_loop_state(session_id, state, cfg)
 
-  loaded = load_improve_state(session_id, cfg)
+  loaded = load_loop_state(session_id, 1, cfg)
   assert loaded is not None
-  assert loaded.goal == "optimize performance"
-  assert loaded.max_iterations == 3
-  assert loaded.status == "running"
+  assert loaded.model_dump() == state.model_dump()
+  assert (cfg.sessions_dir / session_id / "loops" / "1" / "state.json").exists()
 
 
-def test_load_missing_state(tmp_path: Path):
+def test_load_missing_loop_state(tmp_path: Path):
   """Missing state file returns None."""
   cfg = _make_cfg(tmp_path)
-  assert load_improve_state("nonexistent", cfg) is None
+  assert load_loop_state("nonexistent", 1, cfg) is None
 
 
-def test_load_corrupted_state(tmp_path: Path):
-  """Corrupted state file returns None."""
+def test_load_corrupted_loop_state_raises(tmp_path: Path):
+  """Corrupted state files fail fast."""
   cfg = _make_cfg(tmp_path)
   session_id = "corrupt-session"
-  state_dir = cfg.sessions_dir / session_id
-  state_dir.mkdir(parents=True, exist_ok=True)
-  (state_dir / "improve_state.json").write_text("not valid json{{{")
+  state_path = cfg.sessions_dir / session_id / "loops" / "1" / "state.json"
+  state_path.parent.mkdir(parents=True, exist_ok=True)
+  state_path.write_text("not valid json{{{")
 
-  assert load_improve_state(session_id, cfg) is None
+  with pytest.raises(ValueError):
+    load_loop_state(session_id, 1, cfg)
 
 
-def test_simplified_state_serialization(tmp_path: Path):
-  """Simplified ImproveState serializes only goal, max_iterations, status."""
+def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
+  """ImproveState persists the expanded per-loop fields."""
   cfg = _make_cfg(tmp_path)
-  session_id = "simple-session"
-  (cfg.sessions_dir / session_id).mkdir(parents=True, exist_ok=True)
+  session_id = "serialization-session"
+  state = _make_state(7, iterations_completed=2, merge_back=True)
+  save_loop_state(session_id, state, cfg)
 
-  state = ImproveState(goal="refactor auth", max_iterations=3, status="running")
-  save_improve_state(session_id, state, cfg)
-
-  loaded = load_improve_state(session_id, cfg)
+  loaded = load_loop_state(session_id, 7, cfg)
   assert loaded is not None
-  assert loaded.goal == "refactor auth"
-  assert loaded.max_iterations == 3
-  assert loaded.status == "running"
-  # Verify no extra fields like current_iteration or iterations
-  dumped = loaded.model_dump()
-  assert set(dumped.keys()) == {"goal", "max_iterations", "status"}
+  assert set(loaded.model_dump().keys()) == {
+      "loop_id",
+      "goal",
+      "max_iterations",
+      "status",
+      "work_branch",
+      "base_branch",
+      "repo_path",
+      "merge_back",
+      "backend",
+      "model",
+      "created_at",
+      "iterations_completed",
+  }
 
 
-# ---------------------------------------------------------------------------
-# Master prompt building
-# ---------------------------------------------------------------------------
-
-
-def test_build_improve_master_prompt_contains_goal(tmp_path: Path):
-  """Master prompt contains the goal and session_id."""
+def test_next_loop_id_returns_1_when_loops_dir_missing(tmp_path: Path):
+  """Sessions with no loops directory start at loop 1."""
   cfg = _make_cfg(tmp_path)
-  session_id = "test-session-123"
-  prompt = build_improve_master_prompt(session_id, "optimize performance", 5, cfg)
-
-  assert "optimize performance" in prompt
-  assert session_id in prompt
-  assert "5" in prompt
-  assert "python -m src.cli.improve" in prompt
-  assert "~/.charliebot/config.yaml" in prompt
-  assert "--backend <id>" in prompt
-  assert "the user should provide the destination and constraints, not a roadmap" in prompt
-  assert "Workers are fully autonomous and choose their own approach" in prompt
+  assert next_loop_id("new-session", cfg) == 1
 
 
-def test_build_improve_master_prompt_contains_state_path(tmp_path: Path):
-  """Master prompt includes the state file path."""
+def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path):
+  """next_loop_id ignores non-numeric entries and increments the max loop id."""
   cfg = _make_cfg(tmp_path)
-  session_id = "test-session-456"
-  prompt = build_improve_master_prompt(session_id, "fix bugs", 3, cfg)
+  loops_dir = cfg.sessions_dir / "test-session" / "loops"
+  (loops_dir / "1").mkdir(parents=True, exist_ok=True)
+  (loops_dir / "3").mkdir(parents=True, exist_ok=True)
+  (loops_dir / "alpha").mkdir(parents=True, exist_ok=True)
+  (loops_dir / "note.txt").write_text("ignore me")
 
-  expected_path = str(cfg.sessions_dir / session_id / "improve_state.json")
-  assert expected_path in prompt
+  assert next_loop_id("test-session", cfg) == 4
 
 
-# ---------------------------------------------------------------------------
-# Stop signal
-# ---------------------------------------------------------------------------
+def test_find_running_loop_returns_first_running_loop(tmp_path: Path):
+  """The earliest running loop is returned when multiple loops exist."""
+  cfg = _make_cfg(tmp_path)
+  session_id = "running-session"
+  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
+  save_loop_state(session_id, _make_state(2, status="running"), cfg)
+  save_loop_state(session_id, _make_state(5, status="running"), cfg)
+
+  running = find_running_loop(session_id, cfg)
+  assert running is not None
+  assert running.loop_id == 2
+
+
+def test_find_running_loop_returns_none_when_absent(tmp_path: Path):
+  """find_running_loop handles sessions with no active loop."""
+  cfg = _make_cfg(tmp_path)
+  session_id = "idle-session"
+  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
+
+  assert find_running_loop(session_id, cfg) is None
+  assert find_running_loop("missing-session", cfg) is None
 
 
 @pytest.mark.asyncio
-async def test_stop_active_loop(tmp_path: Path):
-  """Stopping an active loop returns True and sets status."""
+async def test_stop_active_loop_updates_running_loop_state(tmp_path: Path):
+  """Stopping an active loop marks only the running loop as stopped."""
   cfg = _make_cfg(tmp_path)
   session_id = "stop-session"
-  (cfg.sessions_dir / session_id).mkdir(parents=True, exist_ok=True)
-
-  state = ImproveState(goal="test", max_iterations=5, status="running")
-  save_improve_state(session_id, state, cfg)
+  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
+  save_loop_state(session_id, _make_state(2, status="running"), cfg)
 
   result = await stop_improve_loop(session_id, cfg)
   assert result is True
 
-  loaded = load_improve_state(session_id, cfg)
-  assert loaded.status == "stopped"
+  stopped = load_loop_state(session_id, 2, cfg)
+  assert stopped is not None
+  assert stopped.status == "stopped"
+  assert find_running_loop(session_id, cfg) is None
 
 
 @pytest.mark.asyncio
-async def test_stop_no_active_loop(tmp_path: Path):
-  """Stopping when no active loop returns False."""
+async def test_stop_no_active_loop_returns_false(tmp_path: Path):
+  """Stopping when no active loop exists returns False."""
   cfg = _make_cfg(tmp_path)
-  result = await stop_improve_loop("nonexistent", cfg)
-  assert result is False
+  assert await stop_improve_loop("nonexistent", cfg) is False
 
 
 @pytest.mark.asyncio
-async def test_stop_already_completed(tmp_path: Path):
-  """Stopping an already-completed loop returns False."""
+async def test_stop_completed_loop_returns_false(tmp_path: Path):
+  """Completed loops are not treated as active."""
   cfg = _make_cfg(tmp_path)
   session_id = "done-session"
-  (cfg.sessions_dir / session_id).mkdir(parents=True, exist_ok=True)
+  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
 
-  state = ImproveState(goal="test", max_iterations=5, status="completed")
-  save_improve_state(session_id, state, cfg)
-
-  result = await stop_improve_loop(session_id, cfg)
-  assert result is False
+  assert await stop_improve_loop(session_id, cfg) is False
 
 
 @pytest.mark.asyncio
 async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _make_cfg(tmp_path)
   session_id = "pinned-session"
-  improve_dir = cfg.sessions_dir / session_id / "improve"
-  improve_dir.mkdir(parents=True, exist_ok=True)
   thread_store: dict[str, object] = {}
-  spawn_calls: list[tuple[str, str]] = []
+  spawn_requests: list[SpawnRequest] = []
   persisted_events: list[dict] = []
 
-  monkeypatch.setattr(
-      improve_command,
-      "load_improve_state",
-      lambda session, _cfg: ImproveState(goal="optimize", max_iterations=2, status="running"))
-
   class FakeSessionManager:
-    def __init__(self) -> None:
-      self._calls = 0
-
     async def get_session(self, session: str):
-      self._calls += 1
-      backend = "claude-opus-4.6" if self._calls == 1 else "codex-o3"
-      return MagicMock(id=session, name="Pinned", backend=backend)
+      return MagicMock(id=session, name="Pinned", backend="claude-opus-4.6")
 
     async def persist_and_broadcast(self, session: str, event: dict) -> None:
       del session
@@ -236,6 +188,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
 
   class FakeThreadManager:
     async def create_thread(self, meta, description: str, require_review: bool = False):
+      del meta, require_review
       thread_id = f"thread-{len(thread_store) + 1}"
       thread = MagicMock(id=thread_id, description=description, branch_name=None, status=None)
       thread_store[thread_id] = thread
@@ -254,11 +207,9 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   async def fake_spawn_worker(*args, **kwargs) -> None:
     request = kwargs["request"]
     assert isinstance(request, SpawnRequest)
-    spawn_calls.append((request.resolved_backend, request.resolved_model))
-    thread_id = kwargs["thread_id"] if "thread_id" in kwargs else None
-    if thread_id is None:
-      thread_id = args[2]
-    thread_store[thread_id].branch_name = f"branch-{len(spawn_calls)}"
+    spawn_requests.append(request)
+    thread_id = kwargs["thread_id"] if "thread_id" in kwargs else args[2]
+    thread_store[thread_id].branch_name = f"branch-{len(spawn_requests)}"
 
   async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
     del session, summary, _cfg, _session_mgr
@@ -301,5 +252,19 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
       resolved_model="o3",
   )
 
-  assert spawn_calls == [("codex-o3", "o3"), ("codex-o3", "o3")]
+  assert [(req.resolved_backend, req.resolved_model) for req in spawn_requests] == [("codex-o3", "o3"), ("codex-o3", "o3")]
+  assert [req.loop_dir for req in spawn_requests] == [
+      str(cfg.sessions_dir / session_id / "loops" / "1"),
+      str(cfg.sessions_dir / session_id / "loops" / "1"),
+  ]
+
+  state = load_loop_state(session_id, 1, cfg)
+  assert state is not None
+  assert state.status == "completed"
+  assert state.iterations_completed == 2
+  assert state.work_branch == "improve/test"
+  assert state.backend == "codex-o3"
+  assert state.model == "o3"
+  assert (cfg.sessions_dir / session_id / "loops" / "1" / "iter_0001.md").exists()
+  assert (cfg.sessions_dir / session_id / "loops" / "1" / "iter_0002.md").exists()
   assert any(event.get("type") == "improve_completed" for event in persisted_events)

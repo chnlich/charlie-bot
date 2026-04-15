@@ -1,6 +1,7 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
 import asyncio
+import time
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
 from src.core import event_types as ET
 from src.core.config import get_config
-from src.core.improve_command import find_running_loop, run_improve_loop
+from src.core.improve_command import ImproveLoopAlreadyRunningError, reserve_loop_state, run_improve_loop
 from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest, SpawnRequest
 from src.core.sessions import SessionManager
 from src.core.spawner import (
@@ -115,12 +116,22 @@ async def start_improve_loop(
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
-  running = find_running_loop(req.session_id, cfg)
-  if running:
-    raise HTTPException(
-        status_code=409,
-        detail=f"Loop {running.loop_id} is already running for this session. Use /stop-improve first.",
+  work_branch = req.work_branch or req.branch_prefix or f"improve/{int(time.time())}"
+  try:
+    state = reserve_loop_state(
+        req.session_id,
+        req.goal,
+        req.iterations,
+        work_branch,
+        req.repo_path,
+        cfg,
+        base_branch=req.base_branch,
+        merge_back=req.merge_back,
+        resolved_backend=resolved_backend,
+        resolved_model=resolved_model,
     )
+  except ImproveLoopAlreadyRunningError as e:
+    raise HTTPException(status_code=409, detail=str(e)) from e
 
   create_logged_task(
       run_improve_loop(
@@ -132,10 +143,11 @@ async def start_improve_loop(
           session_mgr=session_mgr,
           thread_mgr=thread_mgr,
           base_branch=req.base_branch,
-          work_branch=req.work_branch or req.branch_prefix,
+          work_branch=work_branch,
           merge_back=req.merge_back,
           resolved_backend=resolved_backend,
           resolved_model=resolved_model,
+          loop_id=state.loop_id,
       ),
       name=f"improve-loop-{req.session_id}",
   )

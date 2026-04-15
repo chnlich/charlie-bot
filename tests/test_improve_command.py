@@ -6,7 +6,17 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core import improve_command
-from src.core.improve_command import ImproveState, find_running_loop, load_loop_state, next_loop_id, save_loop_state, stop_improve_loop
+from src.core.improve_command import (
+    ImproveLoopAlreadyRunningError,
+    ImproveState,
+    build_improve_master_prompt,
+    find_running_loop,
+    load_loop_state,
+    next_loop_id,
+    reserve_loop_state,
+    save_loop_state,
+    stop_improve_loop,
+)
 from src.core.models import SpawnRequest
 
 
@@ -111,6 +121,49 @@ def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path):
   (loops_dir / "note.txt").write_text("ignore me")
 
   assert next_loop_id("test-session", cfg) == 4
+
+
+def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_path: Path):
+  """Loop reservation happens before background execution begins."""
+  cfg = _make_cfg(tmp_path)
+  state = reserve_loop_state(
+      "reserved-session",
+      "optimize",
+      4,
+      "improve/test",
+      "/tmp/repo",
+      cfg,
+      base_branch="main",
+      merge_back=True,
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  loaded = load_loop_state("reserved-session", state.loop_id, cfg)
+  assert loaded is not None
+  assert loaded.model_dump() == state.model_dump()
+  assert (
+      cfg.sessions_dir / "reserved-session" / "loops" / "active.lock"
+  ).read_text().strip() == str(state.loop_id)
+
+
+def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_path: Path):
+  """Concurrent loop starts fail before they can schedule background work."""
+  cfg = _make_cfg(tmp_path)
+  first = reserve_loop_state("reserved-session", "optimize", 2, "improve/test", "/tmp/repo", cfg)
+
+  with pytest.raises(ImproveLoopAlreadyRunningError, match=f"Loop {first.loop_id} is already running"):
+    reserve_loop_state("reserved-session", "optimize", 2, "improve/other", "/tmp/repo", cfg)
+
+
+def test_build_improve_master_prompt_points_to_per_loop_state(tmp_path: Path):
+  """The prompt documents the new per-loop state layout."""
+  cfg = _make_cfg(tmp_path)
+  prompt = build_improve_master_prompt("prompt-session", "optimize performance", 5, cfg)
+
+  assert "optimize performance" in prompt
+  assert "python -m src.cli.improve" in prompt
+  assert str(cfg.sessions_dir / "prompt-session" / "loops" / "<loop_id>" / "state.json") in prompt
 
 
 def test_find_running_loop_returns_first_running_loop(tmp_path: Path):
@@ -267,4 +320,5 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   assert state.model == "o3"
   assert (cfg.sessions_dir / session_id / "loops" / "1" / "iter_0001.md").exists()
   assert (cfg.sessions_dir / session_id / "loops" / "1" / "iter_0002.md").exists()
+  assert not (cfg.sessions_dir / session_id / "loops" / "active.lock").exists()
   assert any(event.get("type") == "improve_completed" for event in persisted_events)

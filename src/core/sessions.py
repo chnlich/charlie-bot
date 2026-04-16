@@ -202,7 +202,7 @@ class SessionManager:
 
     # Create the new session, inheriting the parent backend unless overridden.
     meta = SessionMetadata(
-        name=f'Clone: {parent.name}',
+        name=f'C{parent.name}',
         parent_session_id=parent_id,
         backend=backend or parent.backend,
         group=parent.group,
@@ -248,7 +248,7 @@ class SessionManager:
 
     # Create new session with empty history
     meta = SessionMetadata(
-        name=f'Elon-e: {parent.name}',
+        name=f'E{parent.name}',
         parent_session_id=parent_id,
         backend=backend or parent.backend,
         group=parent.group,

@@ -34,7 +34,7 @@ router = APIRouter()
 
 
 def _default_backend_id(cfg: CharlieBotConfig) -> str:
-  return cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6"
+  return cfg.backend_options[0].id if cfg.backend_options else "claude"
 
 
 def _resolve_requested_backend(
@@ -243,7 +243,7 @@ async def get_session_view(
   view = await build_session_view_data(session_id, session_mgr, thread_mgr, tail_limit=200)
   trigger_mgr = get_trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
-  active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude-opus-4.6")
+  active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
   return {
       "session": meta.model_dump(mode="json"),
       "messages": view.messages,

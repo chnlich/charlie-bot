@@ -1797,3 +1797,48 @@
   status: pending
   created: '2026-04-16T17:11:31Z'
   priority: medium
+- id: '100'
+  title: Extract shared _extract_usage_from_result helper to unify usage_from_events and
+    _update_usage_cache in sessions.py
+  description: 'PURPOSE — Fix a latent correctness drift and eliminate ~15 lines of
+    duplicated token-extraction logic between SessionManager.usage_from_events (core/sessions.py:556-607,
+    static, full-scan path) and SessionManager._update_usage_cache (core/sessions.py:613-631,
+    incremental path called from save_chat_event on every result event). Both functions
+    independently compute the same three quantities from a ''result'' event dict —
+    context_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens,
+    plus model name and contextWindow (default 200_000) read from the first modelUsage
+    entry — but with subtly divergent semantics that can desync the cache: (1) usage_from_events
+    tracks a separate last_usage_result and only uses it for context_tokens if some
+    result event had nonzero context tokens, falling back to last_result otherwise
+    — this correctly handles trailing compact_boundary / zero-token result events
+    that would otherwise overwrite a valid context count with 0; (2) _update_usage_cache
+    does the opposite — if the incoming event has zero context tokens it silently
+    keeps the old context_tokens but also skips updating model and context_limit,
+    so a session that later emits a zero-context result keeps stale model metadata.
+    The result: the incremental and full-scan paths can produce different dicts for
+    the same event stream, and the cache only gets reconciled when load_chat_events_sync
+    runs a full rescan (core/sessions.py:498). Because both call sites feed the same
+    _usage_cache and both end up in resolve_session_usage / the session-view JSON
+    payload, this inconsistency is directly user-visible on the chat header. Not covered
+    by existing backlog items 012 (make _update_usage_cache async), 017 (log swallowed
+    exceptions), or 086/099 (datetime helpers). HOW — (1) Add a module-level helper
+    _extract_usage_from_result(event: dict) -> tuple[int, int, str] in core/sessions.py
+    that returns (context_tokens, context_limit, model) from a single result event,
+    computing context_tokens = sum of the three input_tokens variants and pulling
+    context_limit/model from the first modelUsage entry with defaults (200_000, "").
+    (2) Rewrite usage_from_events to: iterate once accumulating total_cost; pick usage_source
+    = the latest result whose extracted context_tokens > 0, falling back to the very
+    last result; then call the helper once on usage_source to build the return dict.
+    (3) Rewrite _update_usage_cache to: call the helper on the new event; only overwrite
+    cached context_tokens/context_limit/model if the extracted context_tokens > 0
+    (preserving the existing guard against zero-context results clobbering state);
+    always accumulate total_cost. (4) Add one unit-style assertion or inline test
+    in a scratch script verifying that feeding the same [event_a, event_b, zero_event]
+    stream incrementally through _update_usage_cache yields an identical cache dict
+    to calling usage_from_events on the full list. Net change: ~30 lines removed,
+    ~15 lines added, one latent cache-drift bug fixed, single source of truth for
+    the CC result-event schema shape.'
+  category: correctness
+  status: pending
+  created: '2026-04-16T19:11:19Z'
+  priority: medium

@@ -71,7 +71,7 @@ python -m src.cli.delegate \
 ```
 
 - `--session`: Your current session UUID.
-- `--repo`: The git repo the worker should operate on (e.g. `~/workspace/your_project`).
+- `--repo`: The git repo the worker should operate on (e.g. `/path/to/target/repo`).
 - `--description`: A clear, specific description of what the worker should implement. Include file paths, function names, acceptance criteria — the more detail, the better.
 - `--context` (optional): Higher-level business context that helps reviewers understand why.
 

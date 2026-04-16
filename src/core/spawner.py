@@ -179,16 +179,44 @@ def _resolve_configured_backend_model(
   return option.id, option.model
 
 
+def _resolve_session_backend_with_fallback(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    session_id: str,
+) -> tuple[str, str]:
+  """Resolve backend+model from a session's default, falling back on stale metadata.
+
+  When session_meta.backend is absent or no longer present in cfg.backend_options (e.g. after a
+  config.yaml rename), log a warning and silently use cfg.backend_options[0]. Raises only when
+  cfg.backend_options is empty or the selected option has no default model.
+  """
+  option = cfg.get_backend_option(session_meta.backend) if session_meta.backend else None
+  if option is None:
+    if not cfg.backend_options:
+      raise ValueError("session backend resolution requires a configured backend_options entry")
+    fallback = cfg.backend_options[0]
+    log.warning(
+        "session_backend_fallback",
+        stored=session_meta.backend,
+        fallback=fallback.id,
+        session_id=session_id,
+    )
+    option = fallback
+  if not option.model:
+    raise ValueError(f"session backend '{option.id}' has no default model")
+  return option.id, option.model
+
+
 async def resolve_session_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
 ) -> tuple[str, str]:
-  """Resolve backend+model from the session default, with strict validation."""
+  """Resolve backend+model from the session default, with graceful fallback on stale metadata."""
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' not found")
-  return _resolve_configured_backend_model(cfg, session_meta.backend, source="session")
+  return _resolve_session_backend_with_fallback(cfg, session_meta, session_id)
 
 
 async def resolve_requested_subagent_backend_model(
@@ -197,13 +225,17 @@ async def resolve_requested_subagent_backend_model(
     session_mgr: SessionManager,
     requested_backend: Optional[str] = None,
 ) -> tuple[str, str]:
-  """Resolve backend+model from an explicit configured backend or the session default."""
+  """Resolve backend+model from an explicit configured backend or the session default.
+
+  Explicit `requested_backend` stays strict (typo in user input must fail). Session-default
+  resolution falls back gracefully when the stored backend id is stale.
+  """
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' not found")
   if requested_backend is not None:
     return _resolve_configured_backend_model(cfg, requested_backend, source="requested")
-  return _resolve_configured_backend_model(cfg, session_meta.backend, source="session")
+  return _resolve_session_backend_with_fallback(cfg, session_meta, session_id)
 
 
 def _require_thread_backend_model(thread: ThreadMetadata) -> tuple[str, str]:

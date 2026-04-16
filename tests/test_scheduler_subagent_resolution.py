@@ -1,11 +1,16 @@
+"""Tests for session/requested subagent backend resolution in src.core.spawner."""
+
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
 
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig
+from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
-from src.core.scheduler import Scheduler
+from src.core.spawner import (
+    resolve_requested_subagent_backend_model,
+    resolve_session_subagent_backend_model,
+)
 
 
 def _build_cfg(options: list[BackendOption]) -> CharlieBotConfig:
@@ -15,98 +20,88 @@ def _build_cfg(options: list[BackendOption]) -> CharlieBotConfig:
   )
 
 
-def test_subagent_schema_rejects_extra_fallback_fields() -> None:
-  with pytest.raises(ValidationError):
-    ScheduledTaskConfig(
-        name="daily",
-        cron="0 * * * *",
-        prompt="run checks",
-        subagent={"backend": "codex-o3", "model": "o3", "fallback_model": "o4-mini"},
-    )
+def _mock_session_mgr(session: SessionMetadata) -> AsyncMock:
+  mgr = AsyncMock()
+  mgr.get_session.return_value = session
+  return mgr
 
 
-def test_subagent_schema_rejects_blank_values() -> None:
-  with pytest.raises(ValidationError):
-    ScheduledTaskConfig(
-        name="daily",
-        cron="0 * * * *",
-        prompt="run checks",
-        subagent={"backend": "codex-o3", "model": "   "},
-    )
-
-
-def test_scheduler_resolution_prefers_job_override() -> None:
+@pytest.mark.asyncio
+async def test_session_default_returns_configured_backend() -> None:
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
+  ])
+  session = SessionMetadata(name="s", backend="claude-opus-4.7")
+  mgr = _mock_session_mgr(session)
+
+  backend, model = await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+
+  assert backend == "claude-opus-4.7"
+  assert model == "claude-opus-4-7"
+
+
+@pytest.mark.asyncio
+async def test_session_default_falls_back_for_stale_backend(caplog: pytest.LogCaptureFixture) -> None:
+  """Stale session metadata (old backend id) should fall back to cfg.backend_options[0] with a warning."""
+  cfg = _build_cfg([
+      BackendOption(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
       BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
   ])
-  scheduler = Scheduler(cfg)
-  session = SessionMetadata(name="Scheduled: daily", backend="claude-opus-4.6")
-  task = ScheduledTaskConfig(
-      name="daily",
-      cron="0 * * * *",
-      prompt="run checks",
-      subagent={"backend": "codex-o3", "model": "o3-pro"},
-  )
+  # Stored id no longer exists (e.g. renamed from claude-opus-4.6 to claude-opus-4.7).
+  session = SessionMetadata(name="s", backend="claude-opus-4.6")
+  mgr = _mock_session_mgr(session)
 
-  backend, model, source = scheduler._resolve_subagent_backend_model(task, session, cfg)
+  backend, model = await resolve_session_subagent_backend_model(session.id, cfg, mgr)
 
-  assert backend == "codex-o3"
-  assert model == "o3-pro"
-  assert source == "task_override"
+  assert backend == "claude-opus-4.7"
+  assert model == "claude-opus-4-7"
 
 
-def test_scheduler_resolution_raises_for_unknown_override_backend() -> None:
+@pytest.mark.asyncio
+async def test_session_default_raises_when_no_backend_options() -> None:
+  cfg = _build_cfg([])
+  session = SessionMetadata(name="s", backend="claude-opus-4.6")
+  mgr = _mock_session_mgr(session)
+
+  with pytest.raises(ValueError, match="configured backend_options entry"):
+    await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+
+
+@pytest.mark.asyncio
+async def test_requested_backend_raises_for_unknown_typo() -> None:
+  """Explicit --backend typos must still fail fast."""
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
   ])
-  scheduler = Scheduler(cfg)
-  session = SessionMetadata(name="Scheduled: daily", backend="claude-opus-4.6")
-  task = ScheduledTaskConfig(
-      name="daily",
-      cron="0 * * * *",
-      prompt="run checks",
-      subagent={"backend": "missing-backend", "model": "o3"},
-  )
+  session = SessionMetadata(name="s", backend="claude-opus-4.7")
+  mgr = _mock_session_mgr(session)
 
   with pytest.raises(ValueError, match="is not in backend_options"):
-    scheduler._resolve_subagent_backend_model(task, session, cfg)
+    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend="missing-backend")
 
 
-def test_scheduler_resolution_falls_back_to_session_default() -> None:
+@pytest.mark.asyncio
+async def test_requested_backend_none_uses_session_default_with_fallback() -> None:
+  """When no --backend is passed, stale session backend still falls back gracefully."""
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
   ])
-  scheduler = Scheduler(cfg)
-  session = SessionMetadata(name="Scheduled: daily", backend="claude-opus-4.6")
-  task = ScheduledTaskConfig(name="daily", cron="0 * * * *", prompt="run checks")
+  session = SessionMetadata(name="s", backend="claude-opus-4.6")
+  mgr = _mock_session_mgr(session)
 
-  backend, model, source = scheduler._resolve_subagent_backend_model(task, session, cfg)
+  backend, model = await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
 
-  assert backend == "claude-opus-4.6"
-  assert model == "claude-opus-4-6"
-  assert source == "session_default"
+  assert backend == "claude-opus-4.7"
+  assert model == "claude-opus-4-7"
 
 
-def test_scheduler_resolution_raises_for_unknown_backend() -> None:
+@pytest.mark.asyncio
+async def test_session_default_raises_when_fallback_has_no_model() -> None:
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model=None),
   ])
-  scheduler = Scheduler(cfg)
-  session = SessionMetadata(name="Scheduled: daily", backend="missing-backend")
-  task = ScheduledTaskConfig(name="daily", cron="0 * * * *", prompt="run checks")
-
-  with pytest.raises(ValueError, match="is not in backend_options"):
-    scheduler._resolve_subagent_backend_model(task, session, cfg)
-
-
-def test_scheduler_resolution_raises_for_missing_default_model() -> None:
-  cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model=None),
-  ])
-  scheduler = Scheduler(cfg)
-  session = SessionMetadata(name="Scheduled: daily", backend="claude-opus-4.6")
-  task = ScheduledTaskConfig(name="daily", cron="0 * * * *", prompt="run checks")
+  session = SessionMetadata(name="s", backend="claude-opus-4.7")
+  mgr = _mock_session_mgr(session)
 
   with pytest.raises(ValueError, match="has no default model"):
-    scheduler._resolve_subagent_backend_model(task, session, cfg)
+    await resolve_session_subagent_backend_model(session.id, cfg, mgr)

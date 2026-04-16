@@ -41,4 +41,6 @@ Whenever you need to present a file to the user (logs, traces, checkpoints, imag
 1. Always verify the file/directory exists before sharing the link (use `ls` or `Glob`)
 2. Resolve base URL from HOST MEMORY — never hardcode hostnames or ports
 3. Present the link in markdown format: `[descriptive text](url)`
-4. For Perfetto traces (`.json` files from training), remind the user to open them at https://ui.perfetto.dev
+4. **If the file is a Perfetto/Chrome trace** (`.json` trace from training/profiling, or a directory of rank traces), ALWAYS also include a Perfetto viewer link alongside the file link. Read the `perfetto` skill for how to construct the viewer URL.
+
+   Trace indicators: filename matches `trace_rank*.json` / `*trace*.json`, lives under a `trace/` or `profile/` dir, or the user called it a "trace"/"profile"/"perf capture".

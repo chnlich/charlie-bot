@@ -1760,3 +1760,40 @@
   status: pending
   created: '2026-04-12T22:00:00Z'
   priority: low
+- id: '099'
+  title: Promote _ensure_utc to a public parse_utc_datetime helper and use it at every
+    raw-ISO parse site
+  description: 'PURPOSE — Fix two latent naive-datetime bugs and eliminate four duplicated
+    fromisoformat parse-then-normalize blocks that item 086 could not cover because
+    they do not go through pydantic. Item 086 introduced a private _ensure_utc BeforeValidator
+    in core/models.py (L12-18) that parses an ISO string via datetime.fromisoformat(v.replace("Z",
+    "+00:00")) and then coerces naive results to UTC. This exact logic is now duplicated
+    (partially and inconsistently) at four raw-dict call sites that read ISO strings
+    from YAML/JSON files outside the pydantic layer: (1) core/sessions.py:698-703
+    parses a pending-trigger fire_at and manually applies both the Z-replacement and
+    the tzinfo guard; (2) core/improvement_loop.py:103-111 parses a backlog item''s
+    in_progress_at timestamp and applies the tzinfo guard but NOT the Z-replacement,
+    so "2026-04-12T21:00:00Z" would raise ValueError on Python < 3.11 and silently
+    differ on newer versions; (3) core/improve_command.py:312 parses a quota resets_at
+    string with neither the Z-replacement nor the tzinfo normalization, so if the
+    upstream API ever returns a naive or Z-suffixed timestamp the next line "resets_at
+    - now" crashes with TypeError since now is aware; (4) core/scheduler.py:134 parses
+    session.last_scheduled_run without tzinfo normalization, but the surrounding code
+    compares it against aware datetimes via croniter, so a naive value there would
+    also crash. Two of these four sites are actual latent bugs, not just style duplication.
+    HOW — (1) Rename _ensure_utc to ensure_utc (remove underscore) and add a thin
+    parse_utc_datetime(v: str) -> datetime wrapper in core/models.py that asserts
+    isinstance(v, str) and delegates to ensure_utc, so the type signature is clear
+    at string call sites. (2) Replace the four call sites: sessions.py:698-703 collapses
+    to fire_at = parse_utc_datetime(fire_at_raw); improvement_loop.py:103-111 collapses
+    to started_dt = parse_utc_datetime(timestamp) (keeping the elif isinstance(timestamp,
+    datetime) branch for the rare pre-parsed case); improve_command.py:312 becomes
+    resets_at = parse_utc_datetime(resets_at_str); scheduler.py:134 becomes last_run_at
+    = parse_utc_datetime(session.last_scheduled_run). (3) Keep the BeforeValidator
+    binding so existing pydantic models are unaffected. Net change: ~8 lines removed
+    from 4 files, 2 public helper lines added, 2 latent crashes fixed. Pure code-health
+    consolidation backed by an existing battle-tested helper.'
+  category: correctness
+  status: pending
+  created: '2026-04-16T17:11:31Z'
+  priority: medium

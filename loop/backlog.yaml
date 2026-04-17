@@ -1802,7 +1802,7 @@
     from 4 files, 2 public helper lines added, 2 latent crashes fixed. Pure code-health
     consolidation backed by an existing battle-tested helper.'
   category: correctness
-  status: in_progress
+  status: done
   created: '2026-04-16T17:11:31Z'
   priority: medium
   in_progress_at: '2026-04-17T09:10:08Z'

@@ -24,7 +24,7 @@ from src.core.git import (
     git_worktree_remove,
 )
 from src.core.master_trigger import trigger_master
-from src.core.models import SpawnRequest, ThreadStatus
+from src.core.models import SpawnRequest, ThreadStatus, parse_utc_datetime
 from src.core.tasks import create_logged_task
 from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
@@ -309,7 +309,7 @@ async def _wait_for_quota_recovery(
       resets_at_str = five_hour.get("resets_at", "")
       if resets_at_str:
         try:
-          resets_at = datetime.fromisoformat(resets_at_str)
+          resets_at = parse_utc_datetime(resets_at_str)
           now = datetime.now(timezone.utc)
           wait_seconds = (resets_at - now).total_seconds() + 60  # 60s buffer
           if wait_seconds > 0:

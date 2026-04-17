@@ -4,7 +4,11 @@ Feeds the same [event_a, event_b, zero_event] stream through both paths and
 asserts the resulting cache dicts are identical.
 """
 
-from unittest.mock import MagicMock
+from pathlib import Path
+import sys
+
+# Allow `python scripts/scratch_usage_equivalence.py` from the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.sessions import SessionManager
 

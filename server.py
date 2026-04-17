@@ -23,6 +23,9 @@ from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 
+# Interval between WebSocket keepalive pings (seconds).
+_WS_KEEPALIVE_TIMEOUT = 30.0
+
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:
   """Validate access-key auth for WebSocket connections.
@@ -38,6 +41,43 @@ async def _check_ws_auth(websocket: WebSocket) -> bool:
     return True
   await websocket.close(code=4401)
   return False
+
+
+@asynccontextmanager
+async def _ws_connection(websocket: WebSocket, channels: list[str], log_label: str, **log_context):
+  """Handle auth, accept, subscribe, and cleanup for a WebSocket endpoint.
+
+  Yields the websocket if the connection was authorized and accepted, otherwise
+  yields None. Subscribes to every channel before yielding and unsubscribes +
+  logs disconnection in the finally block.
+  """
+  if not await _check_ws_auth(websocket):
+    yield None
+    return
+  await websocket.accept()
+  log.info(f"{log_label}_connected", **log_context)
+  for channel in channels:
+    await streaming_manager.subscribe(channel, websocket)
+  try:
+    yield websocket
+  finally:
+    for channel in channels:
+      await streaming_manager.unsubscribe(channel, websocket)
+    log.info(f"{log_label}_disconnected", **log_context)
+
+
+async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> None:
+  """Hold a WebSocket open with periodic pings until the client disconnects."""
+  try:
+    while True:
+      try:
+        await asyncio.wait_for(websocket.receive_text(), timeout=_WS_KEEPALIVE_TIMEOUT)
+      except asyncio.TimeoutError:
+        await websocket.send_json({"type": "ping"})
+  except WebSocketDisconnect:
+    pass
+  except Exception as e:
+    log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
 @asynccontextmanager
@@ -108,10 +148,11 @@ app.include_router(files.router, prefix="/files", tags=["files"])
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str):
   """Push session-level events (master CC output, worker summaries) to the browser."""
+  # Auth + accept happen inline here because cursor negotiation (unique to this
+  # endpoint) must read a message from the accepted socket before subscribing.
   if not await _check_ws_auth(websocket):
     return
   await websocket.accept()
-  channel = f"session:{session_id}"
   log.info("session_ws_connected", session_id=session_id)
 
   cursor = 0
@@ -127,6 +168,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
 
   # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.
+  channel = f"session:{session_id}"
   await streaming_manager.subscribe(channel, websocket)
   await streaming_manager.subscribe("sidebar", websocket)
   try:
@@ -150,16 +192,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     except Exception as e:
       log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
 
-    try:
-      while True:
-        try:
-          await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-        except asyncio.TimeoutError:
-          await websocket.send_json({"type": "ping"})
-    except WebSocketDisconnect:
-      pass
-    except Exception as e:
-      log.info("session_ws_closed", session_id=session_id, reason=str(e))
+    await _ws_keepalive(websocket, "session_ws", session_id=session_id)
   finally:
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe("sidebar", websocket)
@@ -177,14 +210,9 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
   Stream live Worker events to the browser.
   On connect, sends all historical events first (catch-up), then live events.
   """
-  if not await _check_ws_auth(websocket):
-    return
-  await websocket.accept()
-  log.info("ws_connected", thread_id=thread_id)
-
-  # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.
-  await streaming_manager.subscribe(thread_id, websocket)
-  try:
+  async with _ws_connection(websocket, [thread_id], "ws", thread_id=thread_id) as ws:
+    if ws is None:
+      return
     # Send catch-up events from on-disk log
     # Find the events.jsonl for this thread (search across all sessions)
     thread_mgr = get_thread_manager()
@@ -196,7 +224,7 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
           line = line.strip()
           if line:
             try:
-              await websocket.send_text(line)
+              await ws.send_text(line)
             except Exception as e:
               log.debug("ws_catchup_send_failed", thread_id=thread_id, error=str(e))
               return
@@ -205,26 +233,12 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
 
     # Signal end of catch-up
     try:
-      await websocket.send_json({"type": "catchup_complete"})
+      await ws.send_json({"type": "catchup_complete"})
     except Exception as e:
       log.debug("ws_catchup_complete_failed", thread_id=thread_id, error=str(e))
       return
 
-    try:
-      while True:
-        # Keep connection alive; client may send pings
-        try:
-          await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-        except asyncio.TimeoutError:
-          # Send keepalive ping
-          await websocket.send_json({"type": "ping"})
-    except WebSocketDisconnect:
-      pass
-    except Exception as e:
-      log.info("ws_closed", thread_id=thread_id, reason=str(e))
-  finally:
-    await streaming_manager.unsubscribe(thread_id, websocket)
-    log.info("ws_disconnected", thread_id=thread_id)
+    await _ws_keepalive(ws, "ws", thread_id=thread_id)
 
 
 # ---------------------------------------------------------------------------

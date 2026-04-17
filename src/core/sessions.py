@@ -624,7 +624,7 @@ class SessionManager:
     total_cost = 0.0
 
     for ev in events:
-      if ev.get("type") != "result":
+      if ev.get("type") != ET.RESULT:
         continue
       last_result = ev
       total_cost += ev.get("total_cost_usd", 0.0)

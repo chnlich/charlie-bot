@@ -284,7 +284,7 @@ class CodexBackend(AgentBackend):
 
   def _handle_error(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})
-    if item.get("type") != "error":
+    if item.get("type") != ET.ERROR:
       return []
     msg = item.get("message") or f"Codex item error with no message. Full event: {json.dumps(ev, default=str)}"
     return [make_error_event(msg)]

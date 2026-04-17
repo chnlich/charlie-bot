@@ -140,7 +140,7 @@ async def cancel_master_agent(
   if not found:
     await session_mgr.persist_and_broadcast(
         session_id, {
-            "type": "assistant_error",
+            "type": ET.ASSISTANT_ERROR,
             "content": "No active master agent to cancel.",
         })
     raise HTTPException(status_code=404, detail="No active master agent")

@@ -524,7 +524,7 @@ def _check_takeoff_gate(session_id: str, session_mgr: SessionManager) -> None:
 
   # Scan backwards for the last user event with real text (not a tool_result)
   for event in reversed(events):
-    if event.get("type") != "user":
+    if event.get("type") != ET.USER:
       continue
     content = event.get("content")
     # Real user text is a string; tool_results come as list-of-dict with type=tool_result

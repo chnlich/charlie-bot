@@ -1749,8 +1749,9 @@
     it is unique to that endpoint. ~25 lines for the two helpers, each endpoint drops
     by ~10 lines. Pure refactoring, no behavior change. The keepalive timeout (30.0)
     moves to a single constant.'
-  status: in_progress
+  status: done
   in_progress_at: '2026-04-17T21:09:42Z'
+  done_at: '2026-04-17T21:13:34Z'
   created: '2026-04-12T18:00:00Z'
   priority: low
 - id: 098

@@ -27,6 +27,29 @@ log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 5.0  # seconds
 _UNSET = object()
+_DEFAULT_CONTEXT_LIMIT = 200_000
+
+
+def _extract_usage_from_result(event: dict) -> tuple[int, int, str]:
+  """Extract (context_tokens, context_limit, model) from a single 'result' event.
+
+  context_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens.
+  context_limit and model come from the first modelUsage entry (defaults:
+  200_000 and "").
+  """
+  usage = event.get("usage", {})
+  context_tokens = (
+      usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
+      usage.get("cache_read_input_tokens", 0))
+  context_limit = _DEFAULT_CONTEXT_LIMIT
+  model = ""
+  for model_name, info in event.get("modelUsage", {}).items():
+    model = model_name
+    context_limit = info.get("contextWindow", _DEFAULT_CONTEXT_LIMIT)
+    break
+  return context_tokens, context_limit, model
+
+
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
     "has_pending_trigger",
@@ -605,27 +628,13 @@ class SessionManager:
         continue
       last_result = ev
       total_cost += ev.get("total_cost_usd", 0.0)
-      u = ev.get("usage", {})
-      if u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0) > 0:
+      if _extract_usage_from_result(ev)[0] > 0:
         last_usage_result = ev
 
     if last_result is None:
       return None
 
-    usage_source = last_usage_result or last_result
-    usage = usage_source.get("usage", {})
-    context_tokens = (
-        usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
-        usage.get("cache_read_input_tokens", 0))
-
-    model_usage = usage_source.get("modelUsage", {})
-    context_limit = 200_000
-    model = ""
-    for model_name, info in model_usage.items():
-      model = model_name
-      context_limit = info.get("contextWindow", 200_000)
-      break
-
+    context_tokens, context_limit, model = _extract_usage_from_result(last_usage_result or last_result)
     return {
         "context_tokens": context_tokens,
         "context_limit": context_limit,
@@ -641,20 +650,16 @@ class SessionManager:
     """Incrementally update the usage cache from a single 'result' event."""
     cached = self._usage_cache.get(session_id) or {
         "context_tokens": 0,
-        "context_limit": 200_000,
+        "context_limit": _DEFAULT_CONTEXT_LIMIT,
         "total_cost_usd": 0.0,
         "model": "",
     }
     cached["total_cost_usd"] = round(cached["total_cost_usd"] + result_event.get("total_cost_usd", 0.0), 4)
-    u = result_event.get("usage", {})
-    ctx = u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+    ctx, context_limit, model = _extract_usage_from_result(result_event)
     if ctx > 0:
       cached["context_tokens"] = ctx
-      model_usage = result_event.get("modelUsage", {})
-      for model_name, info in model_usage.items():
-        cached["model"] = model_name
-        cached["context_limit"] = info.get("contextWindow", 200_000)
-        break
+      cached["context_limit"] = context_limit
+      cached["model"] = model
     self._usage_cache[session_id] = cached
 
   # ---------------------------------------------------------------------------

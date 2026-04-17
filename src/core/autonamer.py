@@ -14,6 +14,7 @@ from src.core.models import SessionMetadata
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
+from src.core.timeouts import AUTONAMER_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -114,7 +115,7 @@ async def _generate_name_via_claude_cli(prompt: str, system_prompt: str) -> str:
       start_new_session=True,
   )
   try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=30.0)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=AUTONAMER_TIMEOUT)
   except asyncio.TimeoutError:
     kill_process_group(proc.pid, signal.SIGKILL)
     raise

@@ -1752,15 +1752,16 @@
     Adding a new callback (e.g. for analytics or audit logging) requires updating
     all 3 sites plus the run_message signature in lockstep. HOW — (1) Add a frozen
     dataclass SessionCallbacks in core/models.py with the 4 callback fields. (2) Add
-    a SessionManager.callbacks() method that returns a pre-built SessionCallbacks instance.
-    (3) Change run_message to accept a single callbacks: SessionCallbacks parameter
-    instead of 4 separate callback kwargs. Each call site collapses from 4 lines to
-    1: callbacks=session_mgr.callbacks(). ~15 lines added for the dataclass and factory
-    method, each call site shrinks by 3 lines. Pure refactoring, no behavior change.'
+    a SessionManager.callbacks() method that returns a pre-built SessionCallbacks
+    instance. (3) Change run_message to accept a single callbacks: SessionCallbacks
+    parameter instead of 4 separate callback kwargs. Each call site collapses from
+    4 lines to 1: callbacks=session_mgr.callbacks(). ~15 lines added for the dataclass
+    and factory method, each call site shrinks by 3 lines. Pure refactoring, no behavior
+    change.'
   status: pending
   created: '2026-04-12T22:00:00Z'
   priority: low
-- id: '099'
+- id: 099
   title: Promote _ensure_utc to a public parse_utc_datetime helper and use it at every
     raw-ISO parse site
   description: 'PURPOSE — Fix two latent naive-datetime bugs and eliminate four duplicated
@@ -1794,12 +1795,12 @@
     from 4 files, 2 public helper lines added, 2 latent crashes fixed. Pure code-health
     consolidation backed by an existing battle-tested helper.'
   category: correctness
-  status: pending
+  status: approved
   created: '2026-04-16T17:11:31Z'
   priority: medium
 - id: '100'
-  title: Extract shared _extract_usage_from_result helper to unify usage_from_events and
-    _update_usage_cache in sessions.py
+  title: Extract shared _extract_usage_from_result helper to unify usage_from_events
+    and _update_usage_cache in sessions.py
   description: 'PURPOSE — Fix a latent correctness drift and eliminate ~15 lines of
     duplicated token-extraction logic between SessionManager.usage_from_events (core/sessions.py:556-607,
     static, full-scan path) and SessionManager._update_usage_cache (core/sessions.py:613-631,
@@ -1843,8 +1844,8 @@
   created: '2026-04-16T19:11:19Z'
   priority: medium
 - id: '101'
-  title: Deduplicate worktree_section f-string in spawner._build_worker_prompt by extracting
-    a single template with a variable intro line
+  title: Deduplicate worktree_section f-string in spawner._build_worker_prompt by
+    extracting a single template with a variable intro line
   description: 'PURPOSE — Eliminate a glaring copy-paste block in core/spawner.py:_build_worker_prompt
     (L36-119) where the continuation branch (L52-65, 14 lines) and non-continuation
     branch (L67-79, 13 lines) of the if/else for is_continuation are byte-identical

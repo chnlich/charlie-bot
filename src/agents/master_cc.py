@@ -333,21 +333,49 @@ async def _session_consumer(session_id: str) -> None:
         done_event.update({k: v for k, v in finish_extras.items()})
         await item.persist_and_broadcast(session_id, done_event)
 
+        # Re-check the queue after the broadcast await: a new run_message may
+        # have enqueued a work item while we were yielding. That caller sees
+        # the consumer as "already running" and skips setting thinking_since,
+        # so clearing it here would persist a stale "not thinking" state while
+        # the next item is about to run.
+        if not still_thinking and not queue.empty():
+          still_thinking = True
+
         if not still_thinking:
           item.session_meta.thinking_since = None
           if item.clear_thinking_since:
             await item.clear_thinking_since(session_id, cc_session_id)
-          # Check if workers are still running before declaring idle.
-          from src.core.sessions import SessionManager
-          workers_running = await SessionManager(item.cfg)._has_running_tasks(session_id)
-          await streaming_manager.broadcast(
-              "sidebar", {
-                  "type": ET.RUNNING_CHANGED,
-                  "session_id": session_id,
-                  "has_running_tasks": workers_running,
-                  "thinking_since": None,
-                  "auto_trigger": item.auto_trigger,
-              })
+
+          # The clear above contains async disk I/O, during which a new
+          # run_message may have enqueued an item (it skips setting
+          # thinking_since because the consumer task is still running).
+          # Restore thinking_since so the next iteration doesn't run with a
+          # stale None on disk.
+          if not queue.empty():
+            restored = datetime.now(timezone.utc)
+            item.session_meta.thinking_since = restored
+            if item.update_thinking_state:
+              await item.update_thinking_state(session_id, restored, None)
+            await streaming_manager.broadcast(
+                "sidebar", {
+                    "type": ET.RUNNING_CHANGED,
+                    "session_id": session_id,
+                    "has_running_tasks": True,
+                    "thinking_since": restored.isoformat(),
+                    "auto_trigger": item.auto_trigger,
+                })
+          else:
+            # Check if workers are still running before declaring idle.
+            from src.core.sessions import SessionManager
+            workers_running = await SessionManager(item.cfg)._has_running_tasks(session_id)
+            await streaming_manager.broadcast(
+                "sidebar", {
+                    "type": ET.RUNNING_CHANGED,
+                    "session_id": session_id,
+                    "has_running_tasks": workers_running,
+                    "thinking_since": None,
+                    "auto_trigger": item.auto_trigger,
+                })
 
         # Resolve the caller's future
         if not item.future.done():

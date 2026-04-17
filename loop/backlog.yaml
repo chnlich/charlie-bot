@@ -1011,8 +1011,15 @@
     (6 lines) handlers are small enough to stay inline. execute_command becomes a
     ~48-line dispatcher. Pure refactoring, no behavior change. Follows the pattern
     from items 003, 021, 027, 041, 058, 061, 062, and 063 which split other long functions.
-  status: in_progress
+  status: failed
   in_progress_at: '2026-04-17T05:10:07Z'
+  failed_reason: 'Task premise is stale: the /improve slash handler described in the
+    task (L108-133) no longer exists in src/api/slash.py — it was removed in commit
+    9db634d ("fix: remove /improve slash command and build_improve_master_prompt").
+    The current execute_command function only contains /help, /stop-improve, and /run
+    built-in handlers and is ~80 lines, not 104. Additionally, worker policy forbids
+    augmenting code after reading files flagged by malware-review reminders. Re-scope
+    the task to either extract only /run, or close as obsolete.'
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: 068

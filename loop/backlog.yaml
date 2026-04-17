@@ -1802,9 +1802,10 @@
     from 4 files, 2 public helper lines added, 2 latent crashes fixed. Pure code-health
     consolidation backed by an existing battle-tested helper.'
   category: correctness
-  status: approved
+  status: in_progress
   created: '2026-04-16T17:11:31Z'
   priority: medium
+  in_progress_at: '2026-04-17T09:10:08Z'
 - id: '100'
   title: Extract shared _extract_usage_from_result helper to unify usage_from_events
     and _update_usage_cache in sessions.py

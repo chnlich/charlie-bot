@@ -16,12 +16,8 @@ Master CC will be notified via _trigger_master when the loop completes.
 
 import argparse
 import json
-import sys
 
-import requests
-
-from src.core.config import get_config
-from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
+from src.cli.common import post_internal_api
 
 
 def main() -> None:
@@ -45,8 +41,6 @@ def main() -> None:
       help="Merge work_branch into base_branch after all iterations complete")
   args = parser.parse_args()
 
-  cfg = get_config()
-
   payload = {
       "session_id": args.session,
       "repo_path": args.repo,
@@ -60,21 +54,8 @@ def main() -> None:
   if args.backend is not None:
     payload["backend"] = args.backend
 
-  try:
-    resp = requests.post(
-        f"{cfg.server_base_url}/api/internal/improve", json=payload, timeout=HTTP_INTERNAL_API_TIMEOUT, verify=False)
-    resp.raise_for_status()
-    result = resp.json()
-    print(json.dumps(result, indent=2))
-  except requests.RequestException as e:
-    msg = str(e)
-    if e.response is not None:
-      try:
-        msg = e.response.json()["detail"]
-      except (ValueError, KeyError):
-        pass
-    print(json.dumps({"error": msg}), file=sys.stderr)
-    sys.exit(1)
+  result = post_internal_api("/api/internal/improve", payload)
+  print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

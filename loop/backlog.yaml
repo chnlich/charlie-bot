@@ -1880,6 +1880,6 @@
     017 (compact_boundary helper shared between master and worker), and 094 (subprocess
     boilerplate helper in git.py).'
   category: duplication
-  status: pending
+  status: approved
   created: '2026-04-17T01:10:50Z'
   priority: low

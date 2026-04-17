@@ -1158,9 +1158,10 @@
     event_types as ET where not already present. Also remove the unused AUTONAMER_TIMEOUT
     import from core/autonamer.py:17 (the hardcoded timeout=30.0 on line 118 should
     use the constant instead). Total: ~20 lines changed across 5 files.'
-  status: approved
+  status: in_progress
   created: '2026-03-31T12:00:00Z'
   priority: low
+  in_progress_at: '2026-04-17T13:09:46Z'
 - id: '075'
   title: Extract shared _enrich_and_sort helper to deduplicate list_sessions and search_sessions
     tail

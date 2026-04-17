@@ -18,6 +18,101 @@ from src.core.tasks import create_logged_task
 log = structlog.get_logger()
 
 
+_SYS_pidfd_open = {"x86_64": 434, "aarch64": 434}
+
+
+def _detect_pidfd():
+  """Return (pidfd_open_callable, waitid_pidfd_callable) or (None, None).
+
+  pidfd_open_callable(pid, flags=0) -> int, raises ProcessLookupError on ESRCH.
+  waitid_pidfd_callable(fd, options) -> object with .si_pid/.si_status/.si_code
+    (or None on WNOHANG no-event), raises ChildProcessError on ECHILD.
+  """
+  if hasattr(os, "pidfd_open") and hasattr(os, "P_PIDFD"):
+    def _stdlib_pidfd_open(pid, flags=0):
+      return os.pidfd_open(pid, flags)
+
+    def _stdlib_waitid_pidfd(fd, options):
+      return os.waitid(os.P_PIDFD, fd, options)
+
+    return _stdlib_pidfd_open, _stdlib_waitid_pidfd
+
+  import platform
+  import ctypes
+  import ctypes.util
+
+  if platform.system() != "Linux":
+    return None, None
+  machine = platform.machine()
+  if machine not in _SYS_pidfd_open:
+    return None, None
+  libc_path = ctypes.util.find_library("c")
+  if libc_path is None:
+    return None, None
+  try:
+    libc = ctypes.CDLL(libc_path, use_errno=True)
+  except OSError:
+    return None, None
+  syscall_no = _SYS_pidfd_open[machine]
+
+  # Probe: ensure kernel actually implements pidfd_open
+  ctypes.set_errno(0)
+  probe_fd = libc.syscall(syscall_no, os.getpid(), 0)
+  if probe_fd < 0:
+    return None, None
+  os.close(probe_fd)
+
+  def _ctypes_pidfd_open(pid, flags=0):
+    ctypes.set_errno(0)
+    fd = libc.syscall(syscall_no, pid, flags)
+    if fd < 0:
+      errno = ctypes.get_errno()
+      if errno == 3:
+        raise ProcessLookupError(errno, "no such process", pid)
+      raise OSError(errno, os.strerror(errno))
+    return fd
+
+  class _Siginfo(ctypes.Structure):
+    _fields_ = [
+        ("si_signo", ctypes.c_int),
+        ("si_errno", ctypes.c_int),
+        ("si_code", ctypes.c_int),
+        ("si_pid", ctypes.c_int),
+        ("si_uid", ctypes.c_uint),
+        ("si_status", ctypes.c_int),
+        ("_pad", ctypes.c_byte * 100),
+    ]
+
+  class _WaitidResult:
+    def __init__(self, si):
+      self.si_pid = si.si_pid
+      self.si_uid = si.si_uid
+      self.si_signo = si.si_signo
+      self.si_status = si.si_status
+      self.si_code = si.si_code
+
+  P_PIDFD_CONST = 3
+
+  def _ctypes_waitid_pidfd(fd, options):
+    si = _Siginfo()
+    ctypes.set_errno(0)
+    rc = libc.waitid(P_PIDFD_CONST, fd, ctypes.byref(si), options)
+    if rc < 0:
+      errno = ctypes.get_errno()
+      if errno == 10:
+        raise ChildProcessError(errno, os.strerror(errno))
+      raise OSError(errno, os.strerror(errno))
+    if si.si_pid == 0:
+      return None
+    return _WaitidResult(si)
+
+  return _ctypes_pidfd_open, _ctypes_waitid_pidfd
+
+
+_pidfd_open, _waitid_pidfd = _detect_pidfd()
+_PIDFD_SUPPORTED = _pidfd_open is not None
+
+
 class TriggerManager:
   """Manages delayed one-shot triggers that wake the master CC."""
 
@@ -34,8 +129,8 @@ class TriggerManager:
       watch_pids: list[int] | None = None,
   ) -> PendingTrigger:
     """Create a pending trigger, persist to disk, and start the sleep task."""
-    if watch_pids is not None and not hasattr(os, "pidfd_open"):
-      raise RuntimeError("pidfd_open requires Linux 5.3+ and Python 3.9+")
+    if watch_pids is not None and not _PIDFD_SUPPORTED:
+      raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
     fire_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
     trigger = PendingTrigger(
         session_id=session_id,
@@ -170,7 +265,7 @@ class TriggerManager:
     missing: list[int] = []
     for pid in trigger.watch_pids or []:
       try:
-        fd = os.pidfd_open(pid)
+        fd = _pidfd_open(pid)
       except ProcessLookupError:
         missing.append(pid)
         continue
@@ -196,7 +291,7 @@ class TriggerManager:
         pass
       status: int | None = None
       try:
-        info = os.waitid(os.P_PIDFD, fd, os.WEXITED | os.WNOHANG)
+        info = _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)
         if info is not None:
           status = info.si_status
       except (ChildProcessError, OSError):

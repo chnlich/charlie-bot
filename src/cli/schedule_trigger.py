@@ -20,7 +20,6 @@ given, --delay is the max-wait upper bound.
 
 import argparse
 import json
-import os
 import sys
 
 import requests
@@ -48,13 +47,6 @@ def main() -> None:
       help="Optional PIDs to watch. Trigger fires when ALL listed PIDs exit OR --delay elapses, whichever first.",
   )
   args = parser.parse_args()
-
-  if args.watch_pid is not None and not hasattr(os, "pidfd_open"):
-    print(
-        json.dumps({"error": "pidfd_open requires Linux 5.3+ and Python 3.9+"}),
-        file=sys.stderr,
-    )
-    sys.exit(1)
 
   cfg = get_config()
 

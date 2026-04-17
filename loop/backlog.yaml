@@ -1659,7 +1659,8 @@
     handling, so they stay as-is. Net reduction: ~40 lines. Pure refactoring, no behavior
     changes.'
   category: architecture
-  status: approved
+  status: in_progress
+  in_progress_at: '2026-04-17T19:10:16Z'
   created: '2026-04-11T12:00:00Z'
   priority: low
 - id: 095

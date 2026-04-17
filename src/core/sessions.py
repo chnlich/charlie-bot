@@ -17,6 +17,7 @@ from src.core.models import (
     CreateSessionRequest,
     SessionMetadata,
     SessionStatus,
+    parse_utc_datetime,
 )
 from src.core.codex_usage import CodexUsageResolver
 from src.core.ndjson import append_ndjson, parse_ndjson_file, parse_ndjson_range, parse_ndjson_tail
@@ -730,12 +731,10 @@ class SessionManager:
         if not fire_at_raw:
           continue
         try:
-          fire_at = datetime.fromisoformat(fire_at_raw.replace("Z", "+00:00"))
+          fire_at = parse_utc_datetime(fire_at_raw)
         except ValueError as e:
           log.debug("trigger_fire_at_parse_failed", trigger_path=str(trigger_path), error=str(e))
           continue
-        if fire_at.tzinfo is None:
-          fire_at = fire_at.replace(tzinfo=timezone.utc)
         if next_trigger_at is None or fire_at < next_trigger_at:
           next_trigger_at = fire_at
 

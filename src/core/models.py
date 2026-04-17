@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, BeforeValidator, Field
 
 
-def _ensure_utc(v: datetime | str) -> datetime:
+def ensure_utc(v: datetime | str) -> datetime:
   """Coerce naive datetimes to UTC; pass aware datetimes through unchanged."""
   if isinstance(v, str):
     v = datetime.fromisoformat(v.replace("Z", "+00:00"))
@@ -18,7 +18,12 @@ def _ensure_utc(v: datetime | str) -> datetime:
   return v
 
 
-UtcDatetime = Annotated[datetime, BeforeValidator(_ensure_utc)]
+def parse_utc_datetime(v: str) -> datetime:
+  """Parse an ISO 8601 string and normalize naive datetimes to UTC."""
+  return ensure_utc(v)
+
+
+UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 
 # ---------------------------------------------------------------------------
 # Type aliases

@@ -14,7 +14,7 @@ from src.core import event_types as ET
 from src.core.backup import BACKUP_DIR, apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.improvement_loop import determine_action
-from src.core.models import CreateSessionRequest, SessionMetadata, SpawnRequest
+from src.core.models import CreateSessionRequest, SessionMetadata, SpawnRequest, parse_utc_datetime
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
@@ -131,7 +131,7 @@ class Scheduler:
 
     if session.last_scheduled_run:
       try:
-        last_run_at = datetime.fromisoformat(session.last_scheduled_run)
+        last_run_at = parse_utc_datetime(session.last_scheduled_run)
       except ValueError as e:
         log.warning("scheduler_bad_last_run", task=task_cfg.name, value=session.last_scheduled_run, error=str(e))
         last_run_at = now - timedelta(seconds=_TICK_INTERVAL)

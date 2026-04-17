@@ -9,6 +9,7 @@ import structlog
 
 from src.core.config import ImprovementLoopConfig
 from src.core.git import git_add_commit_push
+from src.core.models import parse_utc_datetime
 from src.core.yaml_utils import load_yaml, save_yaml
 
 log = structlog.get_logger()
@@ -100,7 +101,7 @@ async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementL
       continue
     if isinstance(timestamp, str):
       try:
-        started_dt = datetime.fromisoformat(timestamp)
+        started_dt = parse_utc_datetime(timestamp)
       except ValueError:
         continue
     elif isinstance(timestamp, datetime):

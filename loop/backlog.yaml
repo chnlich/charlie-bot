@@ -1011,7 +1011,7 @@
     (6 lines) handlers are small enough to stay inline. execute_command becomes a
     ~48-line dispatcher. Pure refactoring, no behavior change. Follows the pattern
     from items 003, 021, 027, 041, 058, 061, 062, and 063 which split other long functions.
-  status: pending
+  status: approved
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: 068

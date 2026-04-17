@@ -1771,9 +1771,10 @@
     4 lines to 1: callbacks=session_mgr.callbacks(). ~15 lines added for the dataclass
     and factory method, each call site shrinks by 3 lines. Pure refactoring, no behavior
     change.'
-  status: approved
+  status: in_progress
   created: '2026-04-12T22:00:00Z'
   priority: low
+  in_progress_at: '2026-04-17T23:09:33Z'
 - id: 099
   title: Promote _ensure_utc to a public parse_utc_datetime helper and use it at every
     raw-ISO parse site

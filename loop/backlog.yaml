@@ -1397,7 +1397,7 @@
     error-detail gap and ensures all future CLI scripts get consistent error handling
     for free.'
   category: duplication
-  status: in_progress
+  status: done
   created: '2026-04-01T20:00:00Z'
   priority: low
   in_progress_at: '2026-04-17T17:09:55Z'

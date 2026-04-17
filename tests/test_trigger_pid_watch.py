@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import ctypes
-import ctypes.util
 import os
 import subprocess
 import sys
@@ -20,103 +18,12 @@ from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager, _format_suffix
 
 
-# ------------------------------------------------------------------
-# pidfd_open shim fixture
-# ------------------------------------------------------------------
-# Some Python builds (e.g. conda-forge) omit os.pidfd_open even when the
-# kernel supports it. For these tests we install a syscall-based shim so
-# the event-driven trigger code can be exercised uniformly.
-
-_SYS_pidfd_open = {
-    "x86_64": 434,
-    "aarch64": 434,
-}
-
-
-def _have_pidfd_syscall() -> bool:
-  import platform as _p
-  if _p.system() != "Linux":
-    return False
-  machine = _p.machine()
-  if machine not in _SYS_pidfd_open:
-    return False
-  try:
-    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-  except OSError:
-    return False
-  fd = libc.syscall(_SYS_pidfd_open[machine], os.getpid(), 0)
-  if fd < 0:
-    return False
-  os.close(fd)
-  return True
-
-
 @pytest.fixture
-def pidfd_open_available(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Ensure os.pidfd_open / os.P_PIDFD / os.waitid(P_PIDFD,...) work; shim via syscalls if missing."""
-  import platform as _p
-  machine = _p.machine()
-  if machine not in _SYS_pidfd_open:
-    pytest.skip(f"pidfd syscall numbers not known for arch {machine}")
-  libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-
-  if not hasattr(os, "pidfd_open"):
-    if not _have_pidfd_syscall():
-      pytest.skip("pidfd_open syscall unavailable on this kernel")
-
-    def _pidfd_open(pid: int, flags: int = 0) -> int:
-      ctypes.set_errno(0)
-      fd = libc.syscall(_SYS_pidfd_open[machine], pid, flags)
-      if fd < 0:
-        errno = ctypes.get_errno()
-        if errno == 3:  # ESRCH
-          raise ProcessLookupError(errno, "no such process", pid)
-        raise OSError(errno, os.strerror(errno))
-      return fd
-
-    monkeypatch.setattr(os, "pidfd_open", _pidfd_open, raising=False)
-
-  if not hasattr(os, "P_PIDFD"):
-    monkeypatch.setattr(os, "P_PIDFD", 3, raising=False)
-
-  # If os.waitid doesn't support P_PIDFD, shim it using waitid(2) via libc.
-  class _Siginfo(ctypes.Structure):
-    _fields_ = [
-        ("si_signo", ctypes.c_int),
-        ("si_errno", ctypes.c_int),
-        ("si_code", ctypes.c_int),
-        ("si_pid", ctypes.c_int),
-        ("si_uid", ctypes.c_uint),
-        ("si_status", ctypes.c_int),
-        ("_pad", ctypes.c_byte * 100),
-    ]
-
-  class _WaitidResult:
-    def __init__(self, si: _Siginfo) -> None:
-      self.si_pid = si.si_pid
-      self.si_uid = si.si_uid
-      self.si_signo = si.si_signo
-      self.si_status = si.si_status
-      self.si_code = si.si_code
-
-  orig_waitid = os.waitid
-
-  def _waitid(idtype: int, id_: int, options: int):
-    if idtype == 3:  # P_PIDFD
-      si = _Siginfo()
-      ctypes.set_errno(0)
-      rc = libc.waitid(idtype, id_, ctypes.byref(si), options)
-      if rc < 0:
-        errno = ctypes.get_errno()
-        if errno == 10:  # ECHILD
-          raise ChildProcessError(errno, os.strerror(errno))
-        raise OSError(errno, os.strerror(errno))
-      if si.si_pid == 0:
-        return None
-      return _WaitidResult(si)
-    return orig_waitid(idtype, id_, options)
-
-  monkeypatch.setattr(os, "waitid", _waitid, raising=False)
+def pidfd_open_available() -> None:
+  """Skip when the production pidfd helpers are not supported on this host."""
+  from src.core.triggers import _PIDFD_SUPPORTED
+  if not _PIDFD_SUPPORTED:
+    pytest.skip("pidfd not supported on this host (not even via syscall)")
 
 
 def _find_unused_pid() -> int:
@@ -287,6 +194,30 @@ async def test_time_only_path_unchanged(tmp_path: Path) -> None:
   msg = mock_master.await_args.args[1]
   assert msg == "[Scheduled trigger fired] hello"
   assert stored.watch_pids is None
+
+
+@pytest.mark.asyncio
+async def test_pidfd_fallback_works_on_host(tmp_path: Path) -> None:
+  from src.core.triggers import _PIDFD_SUPPORTED
+  if not _PIDFD_SUPPORTED:
+    pytest.skip("pidfd not supported on this host (not even via syscall)")
+  proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
+  try:
+    cfg, session_mgr, trigger_mgr, session_id = await _make_mgr(tmp_path)
+    with patch("src.core.triggers.trigger_master", new=AsyncMock()):
+      trigger = await trigger_mgr.create_trigger(
+          session_id, delay_seconds=10, message="live", watch_pids=[proc.pid],
+      )
+      fresh = None
+      for _ in range(50):
+        await asyncio.sleep(0.1)
+        fresh = await trigger_mgr._load_trigger(session_id, trigger.id)
+        if fresh.status == TriggerStatus.FIRED:
+          break
+      assert fresh is not None and fresh.status == TriggerStatus.FIRED
+      assert fresh.fire_reason == "pid_exit"
+  finally:
+    proc.wait()
 
 
 def test_format_suffix_pid_gone() -> None:

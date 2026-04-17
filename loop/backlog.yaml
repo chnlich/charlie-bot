@@ -1260,9 +1260,10 @@
     that these attributes might be absent and makes the type checker aware of the
     actual field types.'
   category: maintainability
-  status: approved
+  status: in_progress
   created: '2026-03-31T22:00:00Z'
   priority: low
+  in_progress_at: '2026-04-17T15:10:01Z'
 - id: 079
   title: Consolidate double save_metadata calls in worker spawn path
   description: 'PURPOSE — Eliminate redundant disk writes during every worker spawn.

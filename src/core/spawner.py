@@ -488,7 +488,7 @@ async def _finalize_worker(
   # Clean up the thread's worktree/temp directory.
   # Skip cleanup if a reviewer will be spawned — it needs the worktree.
   # Also skip if the thread was marked skip_cleanup (e.g. improve loop shared worktree).
-  if getattr(thread, 'skip_cleanup', False):
+  if thread.skip_cleanup:
     skip_cleanup = True
   else:
     can_spawn_reviewer = all([thread.repo_path, thread.branch_name, thread.worktree_path])

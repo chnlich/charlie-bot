@@ -1252,7 +1252,7 @@
     that these attributes might be absent and makes the type checker aware of the
     actual field types.'
   category: maintainability
-  status: pending
+  status: approved
   created: '2026-03-31T22:00:00Z'
   priority: low
 - id: 079

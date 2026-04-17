@@ -1771,7 +1771,7 @@
     4 lines to 1: callbacks=session_mgr.callbacks(). ~15 lines added for the dataclass
     and factory method, each call site shrinks by 3 lines. Pure refactoring, no behavior
     change.'
-  status: in_progress
+  status: done
   created: '2026-04-12T22:00:00Z'
   priority: low
   in_progress_at: '2026-04-17T23:09:33Z'

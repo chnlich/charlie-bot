@@ -108,11 +108,24 @@ python -m src.cli.schedule_trigger \
   --message "Check PID 12345"
 ```
 
-**PID watcher** (auto-trigger on process exit instead of manual check-in):
+**PID watcher** (auto-trigger on process exit, event-driven via `pidfd_open`):
 ```bash
-wait "$PID"; status=$?; python -m src.cli.schedule_trigger \
-  --session "{{session_id}}" --delay 1 --message "Training exited (status $status)"
+python -m src.cli.schedule_trigger \
+  --session {{session_id}} \
+  --delay SECONDS \
+  --watch-pid PID [PID ...] \
+  --message "Training finished"
 ```
+
+With `--watch-pid`, `--delay` is the **max-wait upper bound**: the trigger fires
+when **ALL** watched PIDs have exited **OR** when `--delay` elapses — whichever
+happens first. No polling; uses `os.pidfd_open` + `asyncio.loop.add_reader`.
+
+The fired message is prefixed with the reason:
+- `[Scheduled trigger fired | pid_exit] <msg> (exited: pid=status, ...)`
+- `[Scheduled trigger fired | timeout]  <msg> (exited: ...; still alive: ...)`
+- `[Scheduled trigger fired | pid_gone] <msg> (pid_gone: pid, ...)` — fires
+  immediately if any watched PID didn't exist at schedule time.
 
 ---
 

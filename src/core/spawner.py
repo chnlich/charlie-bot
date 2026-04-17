@@ -443,7 +443,7 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) 
     return
 
   # Git worktree removal for repo-based workers.
-  if getattr(thread, 'worktree_path', None) and getattr(thread, 'repo_path', None):
+  if thread.worktree_path and thread.repo_path:
     wt = Path(thread.worktree_path)
     if wt.exists():
       try:
@@ -491,10 +491,8 @@ async def _finalize_worker(
   if getattr(thread, 'skip_cleanup', False):
     skip_cleanup = True
   else:
-    can_spawn_reviewer = all(getattr(thread, attr, None) for attr in ('repo_path', 'branch_name', 'worktree_path'))
-    skip_cleanup = (
-        exit_code == 0 and getattr(thread, 'require_review', False) and not getattr(thread, 'review_of', None) and
-        can_spawn_reviewer)
+    can_spawn_reviewer = all([thread.repo_path, thread.branch_name, thread.worktree_path])
+    skip_cleanup = (exit_code == 0 and thread.require_review and not thread.review_of and can_spawn_reviewer)
   await _cleanup_worker_directory(thread, skip_cleanup)
 
   if not skip_notify:

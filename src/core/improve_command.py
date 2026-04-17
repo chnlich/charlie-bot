@@ -326,28 +326,19 @@ async def _wait_for_quota_recovery(
             continue
         except (ValueError, TypeError):
           log.warning("quota_recovery_parse_resets_at_failed", resets_at=resets_at_str)
-
-      # High utilization but no parseable resets_at — fall through to polling
-      msg = "Quota exhausted, retrying in 10 minutes..."
-      await session_mgr.persist_and_broadcast(
-          session_id, {
-              "type": ET.IMPROVE_ITERATION_COMPLETED,
-              "status": "quota_waiting",
-              "summary": msg
-          })
       log.info("quota_polling_fallback", session=session_id)
-      await asyncio.sleep(_QUOTA_POLL_INTERVAL)
     else:
-      # Usage API unavailable — poll fallback
-      msg = "Quota exhausted, retrying in 10 minutes..."
-      await session_mgr.persist_and_broadcast(
-          session_id, {
-              "type": ET.IMPROVE_ITERATION_COMPLETED,
-              "status": "quota_waiting",
-              "summary": msg
-          })
       log.info("quota_polling_no_usage_data", session=session_id)
-      await asyncio.sleep(_QUOTA_POLL_INTERVAL)
+
+    # Fallback: either usage API unavailable, or high utilization with no usable resets_at.
+    msg = "Quota exhausted, retrying in 10 minutes..."
+    await session_mgr.persist_and_broadcast(
+        session_id, {
+            "type": ET.IMPROVE_ITERATION_COMPLETED,
+            "status": "quota_waiting",
+            "summary": msg
+        })
+    await asyncio.sleep(_QUOTA_POLL_INTERVAL)
 
 
 # ---------------------------------------------------------------------------

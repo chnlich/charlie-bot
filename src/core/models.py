@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Awaitable, Callable, Literal, Optional
 
 from pydantic import BaseModel, BeforeValidator, Field
 
@@ -266,6 +266,20 @@ class ScheduleTriggerRequest(BaseModel):
   delay_seconds: int
   message: str
   watch_pids: Optional[list[int]] = None
+
+
+# ---------------------------------------------------------------------------
+# Session Callbacks (internal DTO bundling SessionManager hooks for run_message)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SessionCallbacks:
+  """Bundle of SessionManager hooks passed to run_message as a single unit."""
+  persist_and_broadcast: Callable[[str, dict], Awaitable[None]]
+  update_thinking_state: Callable[..., Awaitable[None]]
+  mark_unread: Callable[[str], Awaitable[None]]
+  clear_thinking_since: Callable[..., Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------

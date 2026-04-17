@@ -15,6 +15,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
+    SessionCallbacks,
     SessionMetadata,
     SessionStatus,
     parse_utc_datetime,
@@ -537,6 +538,15 @@ class SessionManager:
     if session_id in self._events_cache:
       event['event_index'] = len(self._events_cache[session_id]) - 1
     await streaming_manager.broadcast(f"session:{session_id}", event)
+
+  def callbacks(self) -> SessionCallbacks:
+    """Return a bundle of session-related callbacks for run_message()."""
+    return SessionCallbacks(
+        persist_and_broadcast=self.persist_and_broadcast,
+        update_thinking_state=self.update_thinking_state,
+        mark_unread=self.mark_unread,
+        clear_thinking_since=self.clear_thinking_since,
+    )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up. Uses in-memory cache after first read."""

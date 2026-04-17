@@ -92,6 +92,8 @@ class PendingTrigger(BaseModel):
   created_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
   status: TriggerStatus = TriggerStatus.PENDING
   fired_at: Optional[UtcDatetime] = None
+  watch_pids: Optional[list[int]] = None
+  fire_reason: Optional[str] = None  # one of 'timeout', 'pid_exit', 'pid_gone', populated when fired
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +260,7 @@ class ScheduleTriggerRequest(BaseModel):
   session_id: str
   delay_seconds: int
   message: str
+  watch_pids: Optional[list[int]] = None
 
 
 # ---------------------------------------------------------------------------

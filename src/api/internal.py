@@ -168,8 +168,24 @@ async def schedule_trigger(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  trigger = await trigger_mgr.create_trigger(req.session_id, req.delay_seconds, req.message)
-  log.info("trigger_scheduled", session=req.session_id, trigger_id=trigger.id)
+  if req.watch_pids is not None:
+    if len(req.watch_pids) == 0:
+      raise HTTPException(status_code=400, detail="watch_pids must be non-empty when provided")
+    if not all(isinstance(p, int) and p > 0 for p in req.watch_pids):
+      raise HTTPException(status_code=400, detail="watch_pids must contain only positive integers")
+
+  trigger = await trigger_mgr.create_trigger(
+      req.session_id,
+      req.delay_seconds,
+      req.message,
+      watch_pids=req.watch_pids,
+  )
+  log.info(
+      "trigger_scheduled",
+      session=req.session_id,
+      trigger_id=trigger.id,
+      watch_pids=req.watch_pids,
+  )
 
   return {"trigger_id": trigger.id, "fire_at": trigger.fire_at.isoformat()}
 

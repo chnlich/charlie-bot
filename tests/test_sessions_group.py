@@ -1,5 +1,6 @@
 """Regression tests for session group change broadcasts and group inheritance."""
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -160,6 +161,45 @@ async def test_update_thinking_state_preserves_newer_group_from_disk(tmp_path: P
   assert updated.group == "Research"
   assert updated.thinking_since == thinking_since
   assert updated.updated_at == updated_at
+
+
+@pytest.mark.asyncio
+async def test_mark_unread_and_clear_thinking_since_do_not_clobber(tmp_path: Path) -> None:
+  """Regression: concurrent mark_unread vs clear_thinking_since must both persist.
+
+  Without per-session RMW locking, these two coroutines interleave at their
+  internal await points and the second save clobbers the first mutator's field.
+  """
+  mgr = _make_session_mgr(tmp_path)
+  meta = SessionMetadata(
+      name="Session 1",
+      thinking_since=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+      has_unread=False,
+  )
+  await mgr._save_metadata(meta)
+
+  # Force interleaving by injecting a yield point inside _save_metadata. The
+  # per-session lock must serialize the two RMW sequences so both mutations
+  # end up on disk.
+  real_save = mgr._save_metadata
+
+  async def yielding_save(m: SessionMetadata) -> None:
+    await asyncio.sleep(0)
+    await real_save(m)
+
+  with patch.object(mgr, "_save_metadata", side_effect=yielding_save):
+    with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+      await asyncio.gather(
+          mgr.mark_unread(meta.id),
+          mgr.clear_thinking_since(meta.id),
+      )
+
+  # Bypass the metadata cache to check what's actually on disk.
+  mgr._invalidate_cache(meta.id)
+  final = await mgr.get_session(meta.id)
+  assert final is not None
+  assert final.has_unread is True
+  assert final.thinking_since is None
 
 
 @pytest.mark.asyncio

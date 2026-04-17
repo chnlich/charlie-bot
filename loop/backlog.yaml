@@ -1260,7 +1260,7 @@
     that these attributes might be absent and makes the type checker aware of the
     actual field types.'
   category: maintainability
-  status: in_progress
+  status: done
   created: '2026-03-31T22:00:00Z'
   priority: low
   in_progress_at: '2026-04-17T15:10:01Z'

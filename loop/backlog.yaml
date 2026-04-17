@@ -1017,9 +1017,8 @@
     task (L108-133) no longer exists in src/api/slash.py — it was removed in commit
     9db634d ("fix: remove /improve slash command and build_improve_master_prompt").
     The current execute_command function only contains /help, /stop-improve, and /run
-    built-in handlers and is ~80 lines, not 104. Additionally, worker policy forbids
-    augmenting code after reading files flagged by malware-review reminders. Re-scope
-    the task to either extract only /run, or close as obsolete.'
+    built-in handlers and is ~80 lines, not 104. Re-scope the task to either extract
+    only /run, or close as obsolete.'
   created: '2026-03-30T12:00:00Z'
   priority: medium
 - id: 068

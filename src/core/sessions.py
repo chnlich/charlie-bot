@@ -54,6 +54,11 @@ class SessionManager:
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp).
     # TTL-based to avoid repeated disk reads within the same poll cycle.
     self._metadata_cache: dict[str, tuple[SessionMetadata, float]] = {}
+    # Per-session asyncio.Lock guarding metadata read-modify-write operations.
+    # Prevents clobber races between concurrent mutators (e.g. mark_unread vs
+    # clear_thinking_since), which both load meta, mutate disjoint fields, and
+    # save back — without a lock the second save overwrites the first's change.
+    self._metadata_locks: dict[str, asyncio.Lock] = {}
     # Codex-specific usage resolution delegated to a dedicated module.
     self._codex_resolver = CodexUsageResolver(cfg, self._events_cache, self._chat_events_path)
 
@@ -263,11 +268,15 @@ class SessionManager:
 
     await self._save_metadata(meta)
 
-    # Auto-archive and thumbs-down the parent
-    parent.status = SessionStatus.ARCHIVED
-    parent.rating = 'thumbs_down'
-    parent.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(parent)
+    # Auto-archive and thumbs-down the parent (re-read under lock so concurrent
+    # mutations to the parent aren't clobbered).
+    async with self._lock_for(parent_id):
+      fresh_parent = await self.get_session(parent_id)
+      if fresh_parent:
+        fresh_parent.status = SessionStatus.ARCHIVED
+        fresh_parent.rating = 'thumbs_down'
+        fresh_parent.updated_at = datetime.now(timezone.utc)
+        await self._save_metadata(fresh_parent)
     self._events_cache.pop(parent_id, None)
     self._usage_cache.pop(parent_id, None)
 
@@ -286,22 +295,24 @@ class SessionManager:
 
   async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:
     """Rename a session and return the updated metadata."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    meta.name = new_name
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
+    async with self._lock_for(session_id):
+      meta = await self.get_session(session_id)
+      if not meta:
+        return None
+      meta.name = new_name
+      meta.updated_at = datetime.now(timezone.utc)
+      await self._save_metadata(meta)
     log.info("session_renamed", session_id=session_id, new_name=new_name)
     return meta
 
   async def mark_read(self, session_id: str) -> Optional[SessionMetadata]:
     """Clear the unread flag for a session."""
-    meta = await self.get_session(session_id)
-    if not meta or not meta.has_unread:
-      return meta
-    meta.has_unread = False
-    await self._save_metadata(meta)
+    async with self._lock_for(session_id):
+      meta = await self.get_session(session_id)
+      if not meta or not meta.has_unread:
+        return meta
+      meta.has_unread = False
+      await self._save_metadata(meta)
     await streaming_manager.broadcast(
         "sidebar", {
             "type": ET.UNREAD_CHANGED,
@@ -312,11 +323,12 @@ class SessionManager:
 
   async def mark_unread(self, session_id: str) -> None:
     """Set the unread flag for a session (called when master/workers produce output)."""
-    meta = await self.get_session(session_id)
-    if not meta or meta.has_unread:
-      return
-    meta.has_unread = True
-    await self._save_metadata(meta)
+    async with self._lock_for(session_id):
+      meta = await self.get_session(session_id)
+      if not meta or meta.has_unread:
+        return
+      meta.has_unread = True
+      await self._save_metadata(meta)
     await streaming_manager.broadcast(
         "sidebar", {
             "type": ET.UNREAD_CHANGED,
@@ -340,6 +352,7 @@ class SessionManager:
     self._events_cache.pop(session_id, None)
     self._usage_cache.pop(session_id, None)
     self._invalidate_cache(session_id)
+    self._metadata_locks.pop(session_id, None)
     log.info("session_deleted_permanently", session_id=session_id)
     return True
 
@@ -372,11 +385,16 @@ class SessionManager:
     all_sessions = await self.list_sessions()
     count = 0
     for meta in all_sessions:
-      if meta.group == old_name:
-        meta.group = new_name
-        meta.updated_at = datetime.now(timezone.utc)
-        await self._save_metadata(meta)
-        count += 1
+      if meta.group != old_name:
+        continue
+      async with self._lock_for(meta.id):
+        fresh = await self.get_session(meta.id)
+        if not fresh or fresh.group != old_name:
+          continue
+        fresh.group = new_name
+        fresh.updated_at = datetime.now(timezone.utc)
+        await self._save_metadata(fresh)
+      count += 1
     if count:
       log.info("group_renamed", old_name=old_name, new_name=new_name, count=count)
     return count
@@ -386,11 +404,16 @@ class SessionManager:
     all_sessions = await self.list_sessions()
     count = 0
     for meta in all_sessions:
-      if meta.group == group:
-        meta.group = None
-        meta.updated_at = datetime.now(timezone.utc)
-        await self._save_metadata(meta)
-        count += 1
+      if meta.group != group:
+        continue
+      async with self._lock_for(meta.id):
+        fresh = await self.get_session(meta.id)
+        if not fresh or fresh.group != group:
+          continue
+        fresh.group = None
+        fresh.updated_at = datetime.now(timezone.utc)
+        await self._save_metadata(fresh)
+      count += 1
     if count:
       log.info("group_deleted", group=group, count=count)
     return count
@@ -401,10 +424,11 @@ class SessionManager:
 
   async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> None:
     """Persist a cc_session_id without clobbering unrelated metadata fields."""
-    fresh = await self.get_session(session_id)
-    if fresh:
-      fresh.cc_session_id = cc_session_id
-      await self._save_metadata(fresh)
+    async with self._lock_for(session_id):
+      fresh = await self.get_session(session_id)
+      if fresh:
+        fresh.cc_session_id = cc_session_id
+        await self._save_metadata(fresh)
 
   async def update_thinking_state(
       self,
@@ -417,26 +441,28 @@ class SessionManager:
     Re-reads fresh metadata from disk before writing, so concurrent changes
     to fields like 'group' are preserved.
     """
-    self._invalidate_cache(session_id)
-    fresh = await self.get_session(session_id)
-    if fresh:
-      if thinking_since is not _UNSET:
-        fresh.thinking_since = thinking_since
-      if updated_at is not None:
-        fresh.updated_at = updated_at
-      await self._save_metadata(fresh)
+    async with self._lock_for(session_id):
+      self._invalidate_cache(session_id)
+      fresh = await self.get_session(session_id)
+      if fresh:
+        if thinking_since is not _UNSET:
+          fresh.thinking_since = thinking_since
+        if updated_at is not None:
+          fresh.updated_at = updated_at
+        await self._save_metadata(fresh)
 
   async def clear_thinking_since(self, session_id: str, cc_session_id: Optional[str] = None) -> None:
     """Clear thinking_since without clobbering unrelated metadata fields (e.g. has_unread).
 
     If cc_session_id is provided, also persist it (avoids race with persist_cc_session_id).
     """
-    fresh = await self.get_session(session_id)
-    if fresh:
-      fresh.thinking_since = None
-      if cc_session_id and fresh.cc_session_id != cc_session_id:
-        fresh.cc_session_id = cc_session_id
-      await self._save_metadata(fresh)
+    async with self._lock_for(session_id):
+      fresh = await self.get_session(session_id)
+      if fresh:
+        fresh.thinking_since = None
+        if cc_session_id and fresh.cc_session_id != cc_session_id:
+          fresh.cc_session_id = cc_session_id
+        await self._save_metadata(fresh)
 
   def list_active_session_ids(self) -> list[SessionMetadata]:
     """Return metadata for active sessions by reading metadata.json files.
@@ -638,14 +664,23 @@ class SessionManager:
     """Remove a session from the metadata cache."""
     self._metadata_cache.pop(session_id, None)
 
+  def _lock_for(self, session_id: str) -> asyncio.Lock:
+    """Return (creating on first use) the per-session metadata RMW lock."""
+    lock = self._metadata_locks.get(session_id)
+    if lock is None:
+      lock = asyncio.Lock()
+      self._metadata_locks[session_id] = lock
+    return lock
+
   async def _update_field(self, session_id: str, field: str, value: Any, log_event: str) -> Optional[SessionMetadata]:
     """Get a session, set one field, save, and log. Returns None if session not found."""
-    meta = await self.get_session(session_id)
-    if not meta:
-      return None
-    setattr(meta, field, value)
-    meta.updated_at = datetime.now(timezone.utc)
-    await self._save_metadata(meta)
+    async with self._lock_for(session_id):
+      meta = await self.get_session(session_id)
+      if not meta:
+        return None
+      setattr(meta, field, value)
+      meta.updated_at = datetime.now(timezone.utc)
+      await self._save_metadata(meta)
     log.info(log_event, session_id=session_id)
     return meta
 

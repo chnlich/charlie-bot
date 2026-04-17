@@ -1842,3 +1842,43 @@
   status: pending
   created: '2026-04-16T19:11:19Z'
   priority: medium
+- id: '101'
+  title: Deduplicate worktree_section f-string in spawner._build_worker_prompt by extracting
+    a single template with a variable intro line
+  description: 'PURPOSE — Eliminate a glaring copy-paste block in core/spawner.py:_build_worker_prompt
+    (L36-119) where the continuation branch (L52-65, 14 lines) and non-continuation
+    branch (L67-79, 13 lines) of the if/else for is_continuation are byte-identical
+    from the third line onward. The two branches only differ in the first 1-2 lines
+    of the "## Worktree Workflow" header: the continuation branch says "You are continuing
+    work in an existing worktree from a previous iteration. Review previous iteration
+    changes before starting." while the non-continuation branch says "A dedicated
+    git worktree is already created for you." Everything after that — the branch/worktree/repo
+    bullet list, the "Follow these steps exactly:" block with the `cd` instruction,
+    the structured commit message paragraph, the "STOP here. Do NOT rebase, merge,
+    or remove the worktree." line, and the "## Task" appendage — is 100% duplicated
+    across the two branches. This means any future edit to the worker workflow contract
+    (for example, changing the commit-message guidance, adding a "do not push" note,
+    or renaming the "## Task" section) must be applied to both branches in lockstep
+    or the two worker types will silently diverge. It is exactly the kind of dual-branch
+    prompt template that caused bugs in the master/worker compact_boundary handling
+    (fixed by item 017) and in the session-toggle methods (fixed by item 002). Not
+    covered by existing items 021/061/062 which split the surrounding spawn_worker
+    function into phases but left the internal string duplication intact, nor by item
+    087 which only reported yapf formatting issues in this function. HOW — (1) Pull
+    out a local `intro_line` variable that switches on is_continuation: "You are continuing
+    work in an existing worktree from a previous iteration. Review previous iteration
+    changes before starting." when True, "A dedicated git worktree is already created
+    for you." when False. (2) Collapse the two 13-14 line f-string branches into a
+    single f-string that interpolates {intro_line} after the "## Worktree Workflow\n"
+    header. (3) Keep the existing coding style (2-space indent, 120-col limit) and
+    parenthesized string concatenation. Net result: ~13 lines removed, one `intro_line
+    = ...` assignment added, one f-string retained. Pure refactoring, no behavior
+    change — the rendered prompt for both branches is identical to the current output
+    because the duplicated lines are byte-for-byte equal. Follows the exact pattern
+    established by items 002 (6 session-toggle methods collapsed into _update_field),
+    017 (compact_boundary helper shared between master and worker), and 094 (subprocess
+    boilerplate helper in git.py).'
+  category: duplication
+  status: pending
+  created: '2026-04-17T01:10:50Z'
+  priority: low

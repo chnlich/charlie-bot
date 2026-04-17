@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
 from src.core.models import BackendOption
+from src.core.models import SessionCallbacks
 from src.core.models import SessionMetadata
 
 
@@ -60,6 +61,14 @@ class FakeSessionManager:
 
   async def mark_unread(self, session_id: str) -> None:
     return None
+
+  def callbacks(self) -> SessionCallbacks:
+    return SessionCallbacks(
+        persist_and_broadcast=self.persist_and_broadcast,
+        update_thinking_state=self.update_thinking_state,
+        mark_unread=self.mark_unread,
+        clear_thinking_since=self.clear_thinking_since,
+    )
 
 
 @pytest.mark.asyncio

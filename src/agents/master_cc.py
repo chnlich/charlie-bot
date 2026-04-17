@@ -13,7 +13,7 @@ from src.agents.backends.base import AgentBackend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
-from src.core.models import BackendOption, SessionMetadata
+from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
 from src.core.streaming import handle_compact_boundary, streaming_manager
 
 log = structlog.get_logger()
@@ -102,10 +102,7 @@ class _WorkItem:
   cfg: CharlieBotConfig
   session_meta: SessionMetadata
   user_content: str
-  persist_and_broadcast: object  # async callable
-  update_thinking_state: object  # async callable or None
-  mark_unread: object  # async callable or None
-  clear_thinking_since: object  # async callable or None
+  callbacks: SessionCallbacks
   is_voice: bool
   auto_trigger: bool
   backend_option: Optional[BackendOption]
@@ -256,7 +253,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 
     async for event in backend.run(prompt, cwd, env):
       tracker.on_event(event)
-      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.persist_and_broadcast)
+      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
 
     exit_code = backend.exit_code
     if backend.stderr_text:
@@ -280,16 +277,15 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 
     if error_msg:
       err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
-      await item.persist_and_broadcast(session_meta.id, err_event)
+      await item.callbacks.persist_and_broadcast(session_meta.id, err_event)
 
-    if item.mark_unread:
-      await item.mark_unread(session_meta.id)
+    await item.callbacks.mark_unread(session_meta.id)
 
     if item.should_check_tex:
       proposal = await asyncio.to_thread(check_tex_changed)
       if proposal:
         tex_event = {'type': ET.TEX_EDIT_PROPOSED}
-        await item.persist_and_broadcast(session_meta.id, tex_event)
+        await item.callbacks.persist_and_broadcast(session_meta.id, tex_event)
         log.info('tex_edit_proposed', session=session_meta.id)
       else:
         clear_snapshot()
@@ -331,7 +327,7 @@ async def _session_consumer(session_id: str) -> None:
         if thinking_seconds is not None:
           done_event["thinking_seconds"] = thinking_seconds
         done_event.update({k: v for k, v in finish_extras.items()})
-        await item.persist_and_broadcast(session_id, done_event)
+        await item.callbacks.persist_and_broadcast(session_id, done_event)
 
         # Re-check the queue after the broadcast await: a new run_message may
         # have enqueued a work item while we were yielding. That caller sees
@@ -343,8 +339,7 @@ async def _session_consumer(session_id: str) -> None:
 
         if not still_thinking:
           item.session_meta.thinking_since = None
-          if item.clear_thinking_since:
-            await item.clear_thinking_since(session_id, cc_session_id)
+          await item.callbacks.clear_thinking_since(session_id, cc_session_id)
 
           # The clear above contains async disk I/O, during which a new
           # run_message may have enqueued an item (it skips setting
@@ -354,8 +349,7 @@ async def _session_consumer(session_id: str) -> None:
           if not queue.empty():
             restored = datetime.now(timezone.utc)
             item.session_meta.thinking_since = restored
-            if item.update_thinking_state:
-              await item.update_thinking_state(session_id, restored, None)
+            await item.callbacks.update_thinking_state(session_id, restored, None)
             await streaming_manager.broadcast(
                 "sidebar", {
                     "type": ET.RUNNING_CHANGED,
@@ -403,10 +397,7 @@ async def run_message(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
     user_content: str,
-    persist_and_broadcast,
-    update_thinking_state=None,
-    mark_unread=None,
-    clear_thinking_since=None,
+    callbacks: SessionCallbacks,
     skip_user_event: bool = False,
     is_voice: bool = False,
     auto_trigger: bool = False,
@@ -421,13 +412,8 @@ async def run_message(
     cfg: App configuration.
     session_meta: The session to run in.
     user_content: The user's message text.
-    persist_and_broadcast: Coroutine to persist each event (injecting timestamp)
-      then broadcast to the session WebSocket channel.
-    update_thinking_state: Coroutine to persist thinking_since and updated_at
-      by re-reading fresh metadata from disk, avoiding clobbering other fields.
-    mark_unread: Coroutine to mark the session unread for other viewers.
-    clear_thinking_since: Coroutine to clear thinking_since by re-reading fresh
-      metadata from disk, avoiding clobbering has_unread. Also saves cc_session_id.
+    callbacks: Bundle of session hooks (persist_and_broadcast,
+      update_thinking_state, mark_unread, clear_thinking_since).
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
     display_content: User-visible content persisted to the chat log. Defaults
@@ -455,7 +441,7 @@ async def run_message(
     }
     if uploaded_files:
       user_event["uploaded_files"] = uploaded_files
-    await persist_and_broadcast(session_meta.id, user_event)
+    await callbacks.persist_and_broadcast(session_meta.id, user_event)
     session_meta.updated_at = datetime.now(timezone.utc)
 
   # If no consumer is running for this session, set thinking state now.
@@ -463,8 +449,7 @@ async def run_message(
   consumer_already_running = (session_meta.id in _session_consumers and not _session_consumers[session_meta.id].done())
   if not consumer_already_running:
     session_meta.thinking_since = datetime.now(timezone.utc)
-    if update_thinking_state:
-      await update_thinking_state(session_meta.id, session_meta.thinking_since, session_meta.updated_at)
+    await callbacks.update_thinking_state(session_meta.id, session_meta.thinking_since, session_meta.updated_at)
     await streaming_manager.broadcast(
         'sidebar', {
             'type': ET.RUNNING_CHANGED,
@@ -476,8 +461,7 @@ async def run_message(
   else:
     # Still save metadata even when consumer is already running
     # (e.g. updated_at changed above).
-    if update_thinking_state:
-      await update_thinking_state(session_meta.id, updated_at=session_meta.updated_at)
+    await callbacks.update_thinking_state(session_meta.id, updated_at=session_meta.updated_at)
 
   # Create a future for the caller to await.
   loop = asyncio.get_running_loop()
@@ -487,10 +471,7 @@ async def run_message(
       cfg=cfg,
       session_meta=session_meta,
       user_content=user_content,
-      persist_and_broadcast=persist_and_broadcast,
-      update_thinking_state=update_thinking_state,
-      mark_unread=mark_unread,
-      clear_thinking_since=clear_thinking_since,
+      callbacks=callbacks,
       is_voice=is_voice,
       auto_trigger=auto_trigger,
       backend_option=backend_option,

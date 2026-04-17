@@ -1848,9 +1848,10 @@
     ~15 lines added, one latent cache-drift bug fixed, single source of truth for
     the CC result-event schema shape.'
   category: correctness
-  status: approved
+  status: in_progress
   created: '2026-04-16T19:11:19Z'
   priority: medium
+  in_progress_at: '2026-04-17T11:10:34Z'
 - id: '101'
   title: Deduplicate worktree_section f-string in spawner._build_worker_prompt by
     extracting a single template with a variable intro line

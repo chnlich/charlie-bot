@@ -6,7 +6,7 @@ The config and session data are at ~/.charliebot
 
 ## Headless Mode
 
-You are running in headless mode. Once you yield, nothing wakes you except `schedule_trigger` — no shell, no parent loop, no timeout. Schedule before you yield, or you won't come back.
+You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger` firings, (3) delegation merge/failure summaries, (4) improve-loop completion summaries. **Delegations and improve loops auto-wake on completion — do NOT schedule_trigger to poll them.** Only use `schedule_trigger` for things with no built-in completion signal (e.g. waiting on a detached training PID, or a scheduled future check-in).
 
 ---
 

@@ -2005,3 +2005,42 @@
   status: pending
   created: '2026-04-18T07:11:17Z'
   priority: low
+- id: '104'
+  title: Wrap blocking sync I/O in improve_command loop-state helpers with asyncio.to_thread
+  description: 'PURPOSE — Prevent event-loop blocking when the improve loop reads
+    and writes its on-disk state. The state helpers load_loop_state (src/core/improve_command.py:83),
+    save_loop_state (L91), clear_active_loop_lock (L98), next_loop_id (L105), _reserve_loop_dir
+    (L123), and find_running_loop (L138) all perform synchronous filesystem I/O
+    (path.exists, path.read_text, path.write_text, path.mkdir, path.unlink, path.iterdir)
+    directly on the event loop. These helpers are called from async orchestration
+    paths — including run_improve_loop (L578, L607, L637, L641, L644, L656, L682,
+    L685), _run_single_iteration (L437), _wait_for_quota_recovery (L290) which
+    polls inside a while-loop, stop_improve_loop (L170), and three API endpoints
+    in src/api/internal.py that list and reserve loops per request. The polling
+    in _wait_for_quota_recovery calls load_loop_state every ~10s during quota
+    waits, each time doing a sync file read on the event loop. Every iteration
+    boundary issues a load_loop_state/save_loop_state pair of blocking reads and
+    writes. Net effect: the event loop stalls briefly on disk I/O during improve
+    loops, degrading WebSocket broadcast latency and sidebar responsiveness for
+    all concurrent sessions. Item 081 ("Wrap blocking sync I/O in asyncio.to_thread
+    in improve_command.py") was narrowly scoped to the two parse_ndjson_file calls
+    plus three inline fs calls inside run_improve_loop, and explicitly did NOT
+    cover the shared state helpers — verified by rereading the 081 description
+    and by grepping the file for remaining sync fs calls (15 sites still blocking).
+    Item 103 (extract require_loop_state) is orthogonal — it only deduplicates
+    the None-check boilerplate around load_loop_state, not the blocking I/O
+    itself. HOW — (1) Convert load_loop_state, save_loop_state, clear_active_loop_lock,
+    next_loop_id, _reserve_loop_dir, and find_running_loop to async functions,
+    awaiting asyncio.to_thread around the path.exists / read_text / write_text
+    / mkdir / unlink / iterdir calls. (2) Update all callers in improve_command.py
+    (~10 sites) and src/api/internal.py (3 sites) and src/core/slash_commands.py
+    if used, to await the new async helpers. (3) If any caller is itself synchronous,
+    introduce a small sync shim or make that caller async — prefer the latter
+    since every caller already lives in an async context. ~20-30 lines changed,
+    matching the established pattern from items 034, 035, 043, 044, 046, 057,
+    073, and 081. Asyncio is already imported in both files. No behavior changes
+    — only concurrency characteristics improve.'
+  category: performance
+  status: pending
+  created: '2026-04-18T08:00:00Z'
+  priority: medium

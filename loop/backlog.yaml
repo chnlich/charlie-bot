@@ -1900,3 +1900,57 @@
   created: '2026-04-17T01:10:50Z'
   priority: low
   in_progress_at: '2026-04-18T01:10:24Z'
+- id: '102'
+  title: Extract shared _iter_session_dirs helper to deduplicate asyncio.to_thread(lambda
+    ... iterdir ... is_dir ...) pattern in SessionManager
+  description: 'PURPOSE — Collapse a byte-identical 2-line directory-scan preamble
+    that is copy-pasted across three SessionManager entry points in core/sessions.py:
+    list_sessions (L139-142), search_sessions (L171-174), and the existing-directory
+    fast path used internally, each doing the same `if not self._cfg.sessions_dir.exists():
+    return []` guard followed by `dirs = await asyncio.to_thread(lambda: [d for d
+    in self._cfg.sessions_dir.iterdir() if d.is_dir()])` followed by `all_meta = await
+    asyncio.gather(*(self.get_session(d.name) for d in dirs) ...)`. This three-step
+    preamble is the standard boilerplate every async SessionManager listing function
+    must perform to discover sessions on disk without blocking the event loop, yet
+    the current code forces every new lister (e.g. a future "stats" endpoint, a batch
+    archiver, or an export feature) to remember to wrap iterdir in asyncio.to_thread
+    AND the is_dir filter AND the existence guard AND the subsequent asyncio.gather
+    over get_session in exactly the same way. Item 029 ("Wrap iterdir() in asyncio.to_thread")
+    was closed as "already resolved" once both existing call sites wrapped the sync
+    I/O correctly, but it did not deduplicate the pattern — it just ensured no regression.
+    Item 035 ("Parallelize metadata reads in list_sessions and search_sessions") similarly
+    fixed the gather pattern in both places without extracting the shared shape. The
+    risk is the same as with items 002 (6 session-toggle methods before _update_field)
+    and 094 (subprocess boilerplate in git.py before _run_git): any future lister
+    will either omit the existence guard (crashing on fresh installs before sessions_dir
+    is created), forget the asyncio.to_thread wrap (blocking the event loop during
+    page loads), or drop the is_dir filter (crashing on stray files in sessions_dir).
+    All three failure modes have happened historically in the charlie-bot codebase
+    and are exactly what the DRY extraction prevents. HOW — (1) Add a private helper
+    method `async def _iter_session_metas(self) -> list[SessionMetadata]:` on SessionManager
+    (core/sessions.py, placed near the other private helpers around L683-690) that
+    performs the full three-step preamble: return [] if self._cfg.sessions_dir does
+    not exist, run the iterdir+is_dir list comprehension under asyncio.to_thread,
+    then run asyncio.gather over self.get_session(d.name) for all dirs with return_exceptions=True,
+    filtering out BaseException results with a log.warning("session_load_failed",
+    session_id=..., error=...) matching the current list_sessions error handling
+    on L144-147. Return the resulting list[SessionMetadata]. (2) Rewrite list_sessions
+    (L130-161) to call `all_meta = await self._iter_session_metas()` on the first
+    line and then apply its status/starred/scheduled filters in a single list comprehension,
+    replacing the 11-line loop (L143-156) with a 3-4 line filter + the existing _enrich_and_sort
+    tail. (3) Rewrite search_sessions (L163-207) to call the same helper to get all_meta,
+    preserving the ACTIVE-only filter and the name-vs-content branching logic that
+    follows. (4) Confirm the three external behaviors are unchanged: list_sessions
+    still filters only ACTIVE/starred/scheduled on the fast path, search_sessions
+    still restricts to ACTIVE sessions, and both still call _enrich_and_sort with
+    the same include_running_status / include_pending_trigger_status flags. Net change:
+    ~8 lines removed from each of the two public methods (~16 lines total), ~12 lines
+    added for the helper, one new private method, zero behavior change. Follows the
+    exact pattern of items 002 (toggle methods), 094 (git subprocess helper), and
+    100 (result-event extraction helper). Not covered by item 029 (which only wrapped
+    iterdir in asyncio.to_thread) or item 035 (which only parallelized the gather)
+    — both fixed the mechanics but left the duplicated shape intact.'
+  category: duplication
+  status: pending
+  created: '2026-04-18T03:12:18Z'
+  priority: low

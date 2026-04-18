@@ -2082,3 +2082,44 @@
   status: pending
   created: '2026-04-18T11:11:37Z'
   priority: low
+- id: '106'
+  title: Introduce utc_now helper and delete the stale dataclasses.field import in
+    core/models.py
+  description: 'PURPOSE — Eliminate the last remaining UTC-datetime duplication in
+    the pydantic layer and clear a pyflakes-flagged dead import, so every "current
+    timestamp" decision in the codebase funnels through one obvious function alongside
+    the already-centralized ensure_utc / parse_utc_datetime helpers added by items
+    086 and 099. Today src/core/models.py repeats `default_factory=lambda: datetime.now(timezone.utc)`
+    verbatim 5 times (L68 ThreadMetadata.created_at, L97 PendingTrigger.created_at,
+    L133 SessionMetadata.created_at, L134 SessionMetadata.updated_at, L176 WorkerEvent.timestamp).
+    In addition, `datetime.now(timezone.utc)` is open-coded 11 more times across core/sessions.py
+    (L253, L303, L328, L420, L439, L525, L698), core/threads.py (L86), core/improve_command.py
+    (L243, L313), and core/init.py (L127). Each site carries a small risk of drifting
+    to a naive `datetime.utcnow()` (deprecated in 3.12) or `datetime.now()` during
+    a careless edit, and there is no single chokepoint to monkey-patch in tests that
+    want a frozen clock. Separately, `from dataclasses import dataclass, field` at
+    src/core/models.py:4 imports `field` which is never referenced anywhere in the
+    module — pyflakes flags it and it is the only real unused-import finding in the
+    whole src/ tree on the latest scan. No existing backlog item covers either issue:
+    086 only enforces tz-awareness at the type level via Annotated + BeforeValidator,
+    099 only unifies raw-string parsing via parse_utc_datetime, and neither touches
+    the "produce a fresh UTC now" side of the equation or the dataclasses import.
+    HOW — (1) In src/core/models.py, add a tiny public helper `def utc_now() -> datetime:
+    return datetime.now(timezone.utc)` immediately after ensure_utc/parse_utc_datetime
+    so all three UTC helpers live together. (2) Replace the 5 `default_factory=lambda:
+    datetime.now(timezone.utc)` sites in models.py with `default_factory=utc_now`
+    (drops the lambda and aligns with the pydantic convention where default_factory
+    takes a zero-arg callable directly). (3) Remove the unused `field` name from the
+    dataclasses import on L4, leaving `from dataclasses import dataclass`. (4) Optionally
+    (separate commit, not required for the item to be "done") sweep the 11 open-coded
+    `datetime.now(timezone.utc)` sites in sessions.py / threads.py / improve_command.py
+    / init.py to import and use `utc_now`; this is pure search-and-replace with zero
+    behavior change and eliminates the last fragmented now() pattern. Net result:
+    ~6 new lines (helper + refreshed import), 16 simpler call sites, 1 pyflakes warning
+    gone, and a single testable seam for any future frozen-clock test harness. No
+    runtime behavior change — `utc_now()` is definitionally equivalent to the inline
+    expression it replaces.'
+  category: refactoring
+  status: pending
+  created: '2026-04-18T19:12:53Z'
+  priority: low

@@ -49,34 +49,25 @@ def _build_worker_prompt(
                   f"- Session: {session_meta.name}\n")
 
   if is_continuation:
-    worktree_section = (
-        f"## Worktree Workflow\n"
-        f"You are continuing work in an existing worktree from a previous iteration. "
-        f"Review previous iteration changes before starting.\n"
-        f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
-        f"- Worktree: `{wt_path}`\n"
-        f"- Repo: `{repo_path}`\n\n"
-        f"Follow these steps exactly:\n"
-        f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
-        f"2. Commit your changes with descriptive messages.\n"
-        f"   Use structured commit messages: first line is a short summary, then a blank line, "
-        f"then a \"Why:\" line explaining the business reason for the change.\n\n"
-        f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
-        f"## Task\n{description}")
+    intro_line = (
+        "You are continuing work in an existing worktree from a previous iteration. "
+        "Review previous iteration changes before starting.")
   else:
-    worktree_section = (
-        f"## Worktree Workflow\n"
-        f"A dedicated git worktree is already created for you.\n"
-        f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
-        f"- Worktree: `{wt_path}`\n"
-        f"- Repo: `{repo_path}`\n\n"
-        f"Follow these steps exactly:\n"
-        f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
-        f"2. Commit your changes with descriptive messages.\n"
-        f"   Use structured commit messages: first line is a short summary, then a blank line, "
-        f"then a \"Why:\" line explaining the business reason for the change.\n\n"
-        f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
-        f"## Task\n{description}")
+    intro_line = "A dedicated git worktree is already created for you."
+
+  worktree_section = (
+      f"## Worktree Workflow\n"
+      f"{intro_line}\n"
+      f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
+      f"- Worktree: `{wt_path}`\n"
+      f"- Repo: `{repo_path}`\n\n"
+      f"Follow these steps exactly:\n"
+      f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
+      f"2. Commit your changes with descriptive messages.\n"
+      f"   Use structured commit messages: first line is a short summary, then a blank line, "
+      f"then a \"Why:\" line explaining the business reason for the change.\n\n"
+      f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
+      f"## Task\n{description}")
 
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:

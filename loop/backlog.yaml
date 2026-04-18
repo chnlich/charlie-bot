@@ -2044,3 +2044,41 @@
   status: pending
   created: '2026-04-18T08:00:00Z'
   priority: medium
+- id: '105'
+  title: Extract session-title sanitization from maybe_auto_name into pure helper
+  description: 'PURPOSE — Shrink the 96-line maybe_auto_name orchestrator in
+    src/core/autonamer.py and make the LLM-output sanitization logic testable
+    and reusable without spinning up a SessionManager, streaming_manager, or
+    any network provider. Today the sanitization pipeline (strip quotes, strip
+    markdown, strip preamble, length/word-count gating, session-number prefix)
+    is inlined across L186-205 of autonamer.maybe_auto_name, tangled with
+    rename_session side effects, broadcast side effects, group fuzzy-matching,
+    and Exception-swallowing logging. This prevents reuse in any other place
+    that ever needs to clean up an LLM title (e.g. slash-command /name, worker
+    auto-naming, import from Linear/Feishu titles) and forces tests to mock
+    four collaborators just to exercise string-cleanup rules. The sanitization
+    rules are also subtle — 60-char cap, _MAX_TITLE_WORDS cap, _MARKDOWN_CHARS_RE,
+    _PREAMBLE_RE, _SESSION_NUMBER_RE prefixing — and an untested pure pipeline
+    is where bugs quietly accumulate. No existing backlog item covers this:
+    031 unifies the DEFAULT_SESSION_NAME regex between chat.py and autonamer.py;
+    051 concerns subprocess timeout cleanup in autonamer and latex; 055 sanitizes
+    uploaded filenames; 068 centralizes timeout constants and removes the unused
+    AUTONAMER_TIMEOUT import. None of them touch the title-sanitization block.
+    HOW — (1) Add a pure synchronous helper `_sanitize_session_title(raw: str,
+    session_name: str) -> str | None` to src/core/autonamer.py that encapsulates
+    lines 186-205: quote-strip, _MARKDOWN_CHARS_RE.sub, _PREAMBLE_RE.sub, the
+    60-char / _MAX_TITLE_WORDS length gate, and _SESSION_NUMBER_RE prefixing.
+    Returns the final name or None when the sanitized output should be discarded.
+    (2) Also fold the raw first-line fallback loop (L177-184) into the helper
+    so maybe_auto_name only passes `raw` and `session_meta.name` in. (3) Rewrite
+    maybe_auto_name to call the helper: `name = _sanitize_session_title(raw,
+    session_meta.name); if name is None: return`. This drops maybe_auto_name
+    from ~96 to ~55 lines, puts it below the 50-line soft target after a trivial
+    follow-up, and opens the door to direct unit testing of the regex gauntlet
+    without async plumbing. ~40 lines moved, 0 behavior changes — the helper
+    preserves the exact current order of operations and the same None-returning
+    conditions that currently `return` out of maybe_auto_name.'
+  category: refactoring
+  status: pending
+  created: '2026-04-18T11:11:37Z'
+  priority: low

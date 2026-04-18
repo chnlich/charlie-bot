@@ -330,17 +330,15 @@ function renderUsageFromData(usage) {
   if (cost) cost.textContent = '$' + (usage.total_cost_usd || 0).toFixed(2);
 }
 
-const PT_TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
-  hour: '2-digit',
-  hour12: false,
-  minute: '2-digit',
-  timeZone: 'America/Los_Angeles',
-});
-
 function formatTriggerTimeLabel(status, fireAt) {
   if (status === 'cancelled') return 'cancelled';
   const prefix = status === 'fired' ? 'fired at ' : 'fires at ';
-  return prefix + PT_TIME_FORMAT.format(new Date(fireAt)) + ' PT';
+  const d = new Date(fireAt);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return prefix + mm + '/' + dd + ' ' + hh + ':' + mi;
 }
 
 function renderWorkersTab(threads, sessionId, triggers) {

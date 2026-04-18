@@ -1954,3 +1954,54 @@
   status: pending
   created: '2026-04-18T03:12:18Z'
   priority: low
+- id: '103'
+  title: Extract require_loop_state helper to deduplicate load_loop_state + None-check
+    + RuntimeError pattern repeated 5 times in improve_command.py
+  description: 'PURPOSE — Collapse a byte-identical 3-line "load or raise" boilerplate
+    that is copy-pasted five times across core/improve_command.py inside _wait_for_quota_recovery
+    (L290-292), _run_single_iteration (L437-439), and run_improve_loop (L578-580,
+    L637-639, L645-646). Every call site performs the exact same sequence: `state
+    = load_loop_state(session_id, loop_id, cfg)` followed by `if state is None:` followed
+    by `raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")`
+    with the same f-string message verbatim in all five locations. The current load_loop_state
+    helper (L83-88) deliberately returns Optional[ImproveState] so the initial reservation
+    path in run_improve_loop (L563-576) can distinguish "brand new loop, reserve state"
+    from "resumed loop, must exist" — that is a legitimate use of the None return
+    value. But the four resumed-loop call sites and the mid-iteration refresh sites
+    all require the state to be present (the loop has already started, the state
+    file must exist) and they all handle the impossible-missing case identically
+    with the same RuntimeError. This is exactly the pattern that caused bugs in items
+    002 (6 session-toggle methods before _update_field), 094 (git subprocess boilerplate
+    before _run_git), and 100 (result-event extraction helper): any future caller
+    will either (a) forget the None-check and crash later on attribute access with
+    a less informative AttributeError, (b) raise a different error message making
+    grep-based debugging harder, or (c) swallow the None and silently skip state
+    persistence corrupting the loop lifecycle. The five-times duplication also inflates
+    run_improve_loop (currently 155 lines, the longest function in the codebase per
+    ast scan) and _run_single_iteration (119 lines, second longest) — both already
+    flagged as oversize by the >50-line heuristic — with pure boilerplate that has
+    nothing to do with the orchestration logic those functions exist to express.
+    HOW — (1) Add a public helper `def require_loop_state(session_id: str, loop_id:
+    int, cfg: CharlieBotConfig) -> ImproveState:` in core/improve_command.py, placed
+    immediately after load_loop_state at L88, that calls load_loop_state and raises
+    RuntimeError(f"missing loop state for session {session_id} loop {loop_id}") with
+    the identical error message when the result is None, otherwise returns the ImproveState.
+    Type annotation is the non-Optional ImproveState. (2) Replace the five three-line
+    call sites at L290-292, L437-439, L578-580, L637-639, L645-646 with a single
+    `state = require_loop_state(session_id, loop_id, cfg)`. Net result: ~10 lines
+    removed (5 sites × 2 boilerplate lines each), ~6 lines added for the helper,
+    one new public function. (3) Leave the reservation path at L563-576 untouched
+    — it correctly uses the Optional load_loop_state because the None-vs-exists distinction
+    drives the reserve-vs-load branch. (4) Keep the existing coding style (2-space
+    indent, 120-col limit, Google docstring for public API). Pure refactoring, no
+    behavior change — the raised RuntimeError message is byte-identical to the current
+    five copies, and callers that used to catch RuntimeError still catch the same
+    type. Not covered by items 061/062/091/092 which split improve_command.py into
+    phase helpers and extracted the iteration body, nor by item 083 ("Replace defensive
+    getattr() on pydantic ThreadMetadata with direct attribute") which targeted a
+    different file. Follows the exact pattern established by items 002, 094, and
+    100.'
+  category: duplication
+  status: pending
+  created: '2026-04-18T07:11:17Z'
+  priority: low

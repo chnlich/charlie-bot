@@ -2005,6 +2005,7 @@
   priority: low
 - id: '104'
   title: Wrap blocking sync I/O in improve_command loop-state helpers with asyncio.to_thread
+  in_progress_at: '2026-04-19T21:09:28Z'
   description: 'PURPOSE — Prevent event-loop blocking when the improve loop reads
     and writes its on-disk state. The state helpers load_loop_state (src/core/improve_command.py:83),
     save_loop_state (L91), clear_active_loop_lock (L98), next_loop_id (L105), _reserve_loop_dir
@@ -2037,7 +2038,7 @@
     Asyncio is already imported in both files. No behavior changes — only concurrency
     characteristics improve.'
   category: performance
-  status: approved
+  status: in_progress
   created: '2026-04-18T08:00:00Z'
   priority: medium
 - id: '105'

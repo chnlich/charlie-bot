@@ -2372,3 +2372,87 @@
   status: pending
   created: '2026-04-19T15:10:54Z'
   priority: low
+- id: '112'
+  title: Extract shared _write_instructions_file helper in backends/base.py to deduplicate
+    CLAUDE.md/AGENTS.md write-to-cwd pattern across three concrete backends
+  description: 'PURPOSE — Collapse the three verbatim copies of the "if
+    self._instructions_content: write it to <cwd>/<filename> as UTF-8 and
+    log.debug" block that live in ClaudeCodeBackend._prepare_cwd,
+    CodexBackend._prepare_cwd, and OpenCodeBackend._prepare_cwd into a single
+    shared protected method on AgentBackend, so the three backends stop drifting
+    and future fixes (atomic-write via os.replace, skip-if-identical guard to
+    avoid spurious file-touch events, parents=True mkdir, structured-logging of
+    content bytes, or enforcing a consistent filename-casing policy) can be
+    applied in exactly one place. The duplication is textbook: claude_code.py
+    L42-48 does `if not self._instructions_content: return; claude_md = Path(cwd)
+    / "CLAUDE.md"; claude_md.write_text(self._instructions_content,
+    encoding="utf-8"); log.debug("claude_code_wrote_claude_md",
+    path=str(claude_md))`; codex.py L31-37 does the identical pattern with
+    AGENTS.md and event name `codex_wrote_agents_md`; opencode.py L23-29 does the
+    same with AGENTS.md and event name `opencode_wrote_agents_md`, but uses the
+    legacy `open(... "w", encoding="utf-8") as f: f.write(...)` idiom instead of
+    Path.write_text, plus os.path.join instead of the / operator, creating a
+    third, textually distinct but semantically identical code path. The only
+    differences across the three are (a) the target filename (CLAUDE.md vs
+    AGENTS.md) and (b) the structlog event name embedded in log.debug. This was
+    flagged by the 2026-04-19 code-health scan — grep
+    `write_text.*instructions_content` plus grep `f.write(self._instructions_content)`
+    shows exactly three sites, all in _prepare_cwd overrides, all inside the same
+    src/agents/backends/ directory. No existing backlog item addresses this
+    extraction: 043 wrapped the hook call in asyncio.to_thread (orthogonal
+    concern — I/O offload, not dedup), 038 covered _resolve_binary and
+    _effective_prompt extraction, 054 removed redundant __init__ kwargs-popping,
+    110 added _prepend_path for PATH-env dedup, and 111 added _decode_ndjson_line
+    — none touch the _prepare_cwd instructions-file write. This is a high-impact,
+    low-effort refactor: ~15 lines net reduction, a single new 7-line base-class
+    helper, zero behavior change, and it establishes one canonical
+    write-instructions-file primitive so any future backend (e.g. a Cursor or
+    Aider backend that expects its own .cursorrules/.aider.md) gets the
+    skip-if-empty + UTF-8 + structured-log behavior for free. In addition, it
+    incidentally normalizes OpenCodeBackend._prepare_cwd to stop mixing os.path
+    / open-with-context-manager idioms with the rest of the codebase''s Path /
+    write_text convention, cleaning up a minor consistency wart on the same code
+    path. HOW — (1) In src/agents/backends/base.py, add a protected helper on
+    AgentBackend near the existing no-op `_prepare_cwd` default (around L133):
+    `def _write_instructions_file(self, cwd: str, filename: str, log_event:
+    str) -> None:` that (a) returns early if `self._instructions_content` is
+    falsy, (b) computes `path = Path(cwd) / filename`, (c) calls
+    `path.write_text(self._instructions_content, encoding="utf-8")`, (d) calls
+    `log.debug(log_event, path=str(path))`. Signature keeps `log_event` as a
+    parameter so each backend preserves its own structured-log identity (breaking
+    that would lose grep-ability in logs); `filename` stays a parameter so
+    different tools can keep their different conventions (CLAUDE.md vs AGENTS.md
+    vs a future .cursorrules). The helper is a regular method (not static)
+    because it reads self._instructions_content. Uses the module-level `log =
+    structlog.get_logger()` already present in base.py — no new imports. (2) In
+    src/agents/backends/claude_code.py replace the L42-48 body with a single
+    call: `self._write_instructions_file(cwd, "CLAUDE.md",
+    "claude_code_wrote_claude_md")` (7 lines → 2 lines including the docstring;
+    the docstring `"""Write CLAUDE.md into the cwd so Claude Code auto-detects
+    it."""` stays as-is). (3) In src/agents/backends/codex.py replace the L31-37
+    body with `self._write_instructions_file(cwd, "AGENTS.md",
+    "codex_wrote_agents_md")` (7 lines → 2 lines, docstring stays). (4) In
+    src/agents/backends/opencode.py replace ONLY the first block of _prepare_cwd
+    (L25-29 — the AGENTS.md write) with `self._write_instructions_file(cwd,
+    "AGENTS.md", "opencode_wrote_agents_md")` (5 lines → 1 line). Leave the
+    opencode.json config-writing logic (L31-66) completely untouched — that is
+    opencode-specific behavior outside the scope of this refactor. (5) Verify
+    with `python -m py_compile src/agents/backends/base.py
+    src/agents/backends/claude_code.py src/agents/backends/codex.py
+    src/agents/backends/opencode.py` and `python -c "from src.agents.backends
+    import claude_code, codex, opencode"`. (6) Confirm `yapf --diff
+    src/agents/backends/` shows no new violations. Net result: three
+    `_prepare_cwd` overrides each shrink by ~5 lines (~15 LOC total removed),
+    base.py gains a 7-line helper (6 lines body + 1 line signature), the
+    write-instructions-file policy (UTF-8 encoding, skip-if-empty, structured
+    debug log with `path` key) lives in exactly one place, all three backends
+    now use the same Path-based idiom, and future backends that need to drop a
+    per-project instructions file get it in one line. No new dependencies, no
+    public API change, no behavior change (same log event names, same debug
+    level, same filenames, same encoding, same skip semantics), no
+    circular-import risk (helper is on the already-imported AgentBackend class
+    and uses only stdlib Path + existing structlog logger).'
+  category: refactoring
+  status: pending
+  created: '2026-04-19T17:12:45Z'
+  priority: low

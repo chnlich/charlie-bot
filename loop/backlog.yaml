@@ -1933,8 +1933,8 @@
     not exist, run the iterdir+is_dir list comprehension under asyncio.to_thread,
     then run asyncio.gather over self.get_session(d.name) for all dirs with return_exceptions=True,
     filtering out BaseException results with a log.warning("session_load_failed",
-    session_id=..., error=...) matching the current list_sessions error handling
-    on L144-147. Return the resulting list[SessionMetadata]. (2) Rewrite list_sessions
+    session_id=..., error=...) matching the current list_sessions error handling on
+    L144-147. Return the resulting list[SessionMetadata]. (2) Rewrite list_sessions
     (L130-161) to call `all_meta = await self._iter_session_metas()` on the first
     line and then apply its status/starred/scheduled filters in a single list comprehension,
     replacing the 11-line loop (L143-156) with a 3-4 line filter + the existing _enrich_and_sort
@@ -1951,7 +1951,7 @@
     iterdir in asyncio.to_thread) or item 035 (which only parallelized the gather)
     — both fixed the mechanics but left the duplicated shape intact.'
   category: duplication
-  status: pending
+  status: approved
   created: '2026-04-18T03:12:18Z'
   priority: low
 - id: '103'
@@ -1968,29 +1968,28 @@
     path in run_improve_loop (L563-576) can distinguish "brand new loop, reserve state"
     from "resumed loop, must exist" — that is a legitimate use of the None return
     value. But the four resumed-loop call sites and the mid-iteration refresh sites
-    all require the state to be present (the loop has already started, the state
-    file must exist) and they all handle the impossible-missing case identically
-    with the same RuntimeError. This is exactly the pattern that caused bugs in items
-    002 (6 session-toggle methods before _update_field), 094 (git subprocess boilerplate
+    all require the state to be present (the loop has already started, the state file
+    must exist) and they all handle the impossible-missing case identically with the
+    same RuntimeError. This is exactly the pattern that caused bugs in items 002 (6
+    session-toggle methods before _update_field), 094 (git subprocess boilerplate
     before _run_git), and 100 (result-event extraction helper): any future caller
     will either (a) forget the None-check and crash later on attribute access with
     a less informative AttributeError, (b) raise a different error message making
-    grep-based debugging harder, or (c) swallow the None and silently skip state
-    persistence corrupting the loop lifecycle. The five-times duplication also inflates
-    run_improve_loop (currently 155 lines, the longest function in the codebase per
-    ast scan) and _run_single_iteration (119 lines, second longest) — both already
-    flagged as oversize by the >50-line heuristic — with pure boilerplate that has
-    nothing to do with the orchestration logic those functions exist to express.
-    HOW — (1) Add a public helper `def require_loop_state(session_id: str, loop_id:
-    int, cfg: CharlieBotConfig) -> ImproveState:` in core/improve_command.py, placed
-    immediately after load_loop_state at L88, that calls load_loop_state and raises
-    RuntimeError(f"missing loop state for session {session_id} loop {loop_id}") with
-    the identical error message when the result is None, otherwise returns the ImproveState.
-    Type annotation is the non-Optional ImproveState. (2) Replace the five three-line
-    call sites at L290-292, L437-439, L578-580, L637-639, L645-646 with a single
-    `state = require_loop_state(session_id, loop_id, cfg)`. Net result: ~10 lines
-    removed (5 sites × 2 boilerplate lines each), ~6 lines added for the helper,
-    one new public function. (3) Leave the reservation path at L563-576 untouched
+    grep-based debugging harder, or (c) swallow the None and silently skip state persistence
+    corrupting the loop lifecycle. The five-times duplication also inflates run_improve_loop
+    (currently 155 lines, the longest function in the codebase per ast scan) and _run_single_iteration
+    (119 lines, second longest) — both already flagged as oversize by the >50-line
+    heuristic — with pure boilerplate that has nothing to do with the orchestration
+    logic those functions exist to express. HOW — (1) Add a public helper `def require_loop_state(session_id:
+    str, loop_id: int, cfg: CharlieBotConfig) -> ImproveState:` in core/improve_command.py,
+    placed immediately after load_loop_state at L88, that calls load_loop_state and
+    raises RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    with the identical error message when the result is None, otherwise returns the
+    ImproveState. Type annotation is the non-Optional ImproveState. (2) Replace the
+    five three-line call sites at L290-292, L437-439, L578-580, L637-639, L645-646
+    with a single `state = require_loop_state(session_id, loop_id, cfg)`. Net result:
+    ~10 lines removed (5 sites × 2 boilerplate lines each), ~6 lines added for the
+    helper, one new public function. (3) Leave the reservation path at L563-576 untouched
     — it correctly uses the Optional load_loop_state because the None-vs-exists distinction
     drives the reserve-vs-load branch. (4) Keep the existing coding style (2-space
     indent, 120-col limit, Google docstring for public API). Pure refactoring, no
@@ -1999,8 +1998,7 @@
     type. Not covered by items 061/062/091/092 which split improve_command.py into
     phase helpers and extracted the iteration body, nor by item 083 ("Replace defensive
     getattr() on pydantic ThreadMetadata with direct attribute") which targeted a
-    different file. Follows the exact pattern established by items 002, 094, and
-    100.'
+    different file. Follows the exact pattern established by items 002, 094, and 100.'
   category: duplication
   status: pending
   created: '2026-04-18T07:11:17Z'
@@ -2010,73 +2008,68 @@
   description: 'PURPOSE — Prevent event-loop blocking when the improve loop reads
     and writes its on-disk state. The state helpers load_loop_state (src/core/improve_command.py:83),
     save_loop_state (L91), clear_active_loop_lock (L98), next_loop_id (L105), _reserve_loop_dir
-    (L123), and find_running_loop (L138) all perform synchronous filesystem I/O
-    (path.exists, path.read_text, path.write_text, path.mkdir, path.unlink, path.iterdir)
-    directly on the event loop. These helpers are called from async orchestration
-    paths — including run_improve_loop (L578, L607, L637, L641, L644, L656, L682,
-    L685), _run_single_iteration (L437), _wait_for_quota_recovery (L290) which
-    polls inside a while-loop, stop_improve_loop (L170), and three API endpoints
-    in src/api/internal.py that list and reserve loops per request. The polling
-    in _wait_for_quota_recovery calls load_loop_state every ~10s during quota
-    waits, each time doing a sync file read on the event loop. Every iteration
-    boundary issues a load_loop_state/save_loop_state pair of blocking reads and
-    writes. Net effect: the event loop stalls briefly on disk I/O during improve
-    loops, degrading WebSocket broadcast latency and sidebar responsiveness for
-    all concurrent sessions. Item 081 ("Wrap blocking sync I/O in asyncio.to_thread
-    in improve_command.py") was narrowly scoped to the two parse_ndjson_file calls
-    plus three inline fs calls inside run_improve_loop, and explicitly did NOT
-    cover the shared state helpers — verified by rereading the 081 description
-    and by grepping the file for remaining sync fs calls (15 sites still blocking).
-    Item 103 (extract require_loop_state) is orthogonal — it only deduplicates
-    the None-check boilerplate around load_loop_state, not the blocking I/O
-    itself. HOW — (1) Convert load_loop_state, save_loop_state, clear_active_loop_lock,
-    next_loop_id, _reserve_loop_dir, and find_running_loop to async functions,
-    awaiting asyncio.to_thread around the path.exists / read_text / write_text
-    / mkdir / unlink / iterdir calls. (2) Update all callers in improve_command.py
-    (~10 sites) and src/api/internal.py (3 sites) and src/core/slash_commands.py
+    (L123), and find_running_loop (L138) all perform synchronous filesystem I/O (path.exists,
+    path.read_text, path.write_text, path.mkdir, path.unlink, path.iterdir) directly
+    on the event loop. These helpers are called from async orchestration paths — including
+    run_improve_loop (L578, L607, L637, L641, L644, L656, L682, L685), _run_single_iteration
+    (L437), _wait_for_quota_recovery (L290) which polls inside a while-loop, stop_improve_loop
+    (L170), and three API endpoints in src/api/internal.py that list and reserve loops
+    per request. The polling in _wait_for_quota_recovery calls load_loop_state every
+    ~10s during quota waits, each time doing a sync file read on the event loop. Every
+    iteration boundary issues a load_loop_state/save_loop_state pair of blocking reads
+    and writes. Net effect: the event loop stalls briefly on disk I/O during improve
+    loops, degrading WebSocket broadcast latency and sidebar responsiveness for all
+    concurrent sessions. Item 081 ("Wrap blocking sync I/O in asyncio.to_thread in
+    improve_command.py") was narrowly scoped to the two parse_ndjson_file calls plus
+    three inline fs calls inside run_improve_loop, and explicitly did NOT cover the
+    shared state helpers — verified by rereading the 081 description and by grepping
+    the file for remaining sync fs calls (15 sites still blocking). Item 103 (extract
+    require_loop_state) is orthogonal — it only deduplicates the None-check boilerplate
+    around load_loop_state, not the blocking I/O itself. HOW — (1) Convert load_loop_state,
+    save_loop_state, clear_active_loop_lock, next_loop_id, _reserve_loop_dir, and
+    find_running_loop to async functions, awaiting asyncio.to_thread around the path.exists
+    / read_text / write_text / mkdir / unlink / iterdir calls. (2) Update all callers
+    in improve_command.py (~10 sites) and src/api/internal.py (3 sites) and src/core/slash_commands.py
     if used, to await the new async helpers. (3) If any caller is itself synchronous,
-    introduce a small sync shim or make that caller async — prefer the latter
-    since every caller already lives in an async context. ~20-30 lines changed,
-    matching the established pattern from items 034, 035, 043, 044, 046, 057,
-    073, and 081. Asyncio is already imported in both files. No behavior changes
-    — only concurrency characteristics improve.'
+    introduce a small sync shim or make that caller async — prefer the latter since
+    every caller already lives in an async context. ~20-30 lines changed, matching
+    the established pattern from items 034, 035, 043, 044, 046, 057, 073, and 081.
+    Asyncio is already imported in both files. No behavior changes — only concurrency
+    characteristics improve.'
   category: performance
   status: pending
   created: '2026-04-18T08:00:00Z'
   priority: medium
 - id: '105'
   title: Extract session-title sanitization from maybe_auto_name into pure helper
-  description: 'PURPOSE — Shrink the 96-line maybe_auto_name orchestrator in
-    src/core/autonamer.py and make the LLM-output sanitization logic testable
-    and reusable without spinning up a SessionManager, streaming_manager, or
-    any network provider. Today the sanitization pipeline (strip quotes, strip
-    markdown, strip preamble, length/word-count gating, session-number prefix)
-    is inlined across L186-205 of autonamer.maybe_auto_name, tangled with
-    rename_session side effects, broadcast side effects, group fuzzy-matching,
-    and Exception-swallowing logging. This prevents reuse in any other place
-    that ever needs to clean up an LLM title (e.g. slash-command /name, worker
-    auto-naming, import from Linear/Feishu titles) and forces tests to mock
-    four collaborators just to exercise string-cleanup rules. The sanitization
-    rules are also subtle — 60-char cap, _MAX_TITLE_WORDS cap, _MARKDOWN_CHARS_RE,
-    _PREAMBLE_RE, _SESSION_NUMBER_RE prefixing — and an untested pure pipeline
-    is where bugs quietly accumulate. No existing backlog item covers this:
-    031 unifies the DEFAULT_SESSION_NAME regex between chat.py and autonamer.py;
-    051 concerns subprocess timeout cleanup in autonamer and latex; 055 sanitizes
-    uploaded filenames; 068 centralizes timeout constants and removes the unused
-    AUTONAMER_TIMEOUT import. None of them touch the title-sanitization block.
-    HOW — (1) Add a pure synchronous helper `_sanitize_session_title(raw: str,
-    session_name: str) -> str | None` to src/core/autonamer.py that encapsulates
-    lines 186-205: quote-strip, _MARKDOWN_CHARS_RE.sub, _PREAMBLE_RE.sub, the
-    60-char / _MAX_TITLE_WORDS length gate, and _SESSION_NUMBER_RE prefixing.
-    Returns the final name or None when the sanitized output should be discarded.
-    (2) Also fold the raw first-line fallback loop (L177-184) into the helper
-    so maybe_auto_name only passes `raw` and `session_meta.name` in. (3) Rewrite
-    maybe_auto_name to call the helper: `name = _sanitize_session_title(raw,
-    session_meta.name); if name is None: return`. This drops maybe_auto_name
-    from ~96 to ~55 lines, puts it below the 50-line soft target after a trivial
-    follow-up, and opens the door to direct unit testing of the regex gauntlet
-    without async plumbing. ~40 lines moved, 0 behavior changes — the helper
-    preserves the exact current order of operations and the same None-returning
+  description: 'PURPOSE — Shrink the 96-line maybe_auto_name orchestrator in src/core/autonamer.py
+    and make the LLM-output sanitization logic testable and reusable without spinning
+    up a SessionManager, streaming_manager, or any network provider. Today the sanitization
+    pipeline (strip quotes, strip markdown, strip preamble, length/word-count gating,
+    session-number prefix) is inlined across L186-205 of autonamer.maybe_auto_name,
+    tangled with rename_session side effects, broadcast side effects, group fuzzy-matching,
+    and Exception-swallowing logging. This prevents reuse in any other place that
+    ever needs to clean up an LLM title (e.g. slash-command /name, worker auto-naming,
+    import from Linear/Feishu titles) and forces tests to mock four collaborators
+    just to exercise string-cleanup rules. The sanitization rules are also subtle
+    — 60-char cap, _MAX_TITLE_WORDS cap, _MARKDOWN_CHARS_RE, _PREAMBLE_RE, _SESSION_NUMBER_RE
+    prefixing — and an untested pure pipeline is where bugs quietly accumulate. No
+    existing backlog item covers this: 031 unifies the DEFAULT_SESSION_NAME regex
+    between chat.py and autonamer.py; 051 concerns subprocess timeout cleanup in autonamer
+    and latex; 055 sanitizes uploaded filenames; 068 centralizes timeout constants
+    and removes the unused AUTONAMER_TIMEOUT import. None of them touch the title-sanitization
+    block. HOW — (1) Add a pure synchronous helper `_sanitize_session_title(raw: str,
+    session_name: str) -> str | None` to src/core/autonamer.py that encapsulates lines
+    186-205: quote-strip, _MARKDOWN_CHARS_RE.sub, _PREAMBLE_RE.sub, the 60-char /
+    _MAX_TITLE_WORDS length gate, and _SESSION_NUMBER_RE prefixing. Returns the final
+    name or None when the sanitized output should be discarded. (2) Also fold the
+    raw first-line fallback loop (L177-184) into the helper so maybe_auto_name only
+    passes `raw` and `session_meta.name` in. (3) Rewrite maybe_auto_name to call the
+    helper: `name = _sanitize_session_title(raw, session_meta.name); if name is None:
+    return`. This drops maybe_auto_name from ~96 to ~55 lines, puts it below the 50-line
+    soft target after a trivial follow-up, and opens the door to direct unit testing
+    of the regex gauntlet without async plumbing. ~40 lines moved, 0 behavior changes
+    — the helper preserves the exact current order of operations and the same None-returning
     conditions that currently `return` out of maybe_auto_name.'
   category: refactoring
   status: pending
@@ -2129,34 +2122,33 @@
   description: 'PURPOSE — Eliminate the copy-pasted "glob *.json, read each file,
     validate as PendingTrigger, log on error" block that appears twice in src/core/triggers.py
     (TriggerManager.list_triggers at L152-166 and TriggerManager.recover_pending at
-    L180-200), so future changes to the on-disk trigger format — file extension,
-    encoding, validation, or error logging — are made in exactly one place instead
-    of drifting between two near-identical loops. The two blocks currently differ
-    only in their log-event name (trigger_load_failed vs trigger_recovery_load_failed),
-    which is a cosmetic distinction that obscures the real duplication and makes
-    it easy for one site to evolve (e.g. add a .json.tmp exclusion, switch to aiofiles,
-    add schema migration) without the other. Both blocks already use asyncio.to_thread(lambda
+    L180-200), so future changes to the on-disk trigger format — file extension, encoding,
+    validation, or error logging — are made in exactly one place instead of drifting
+    between two near-identical loops. The two blocks currently differ only in their
+    log-event name (trigger_load_failed vs trigger_recovery_load_failed), which is
+    a cosmetic distinction that obscures the real duplication and makes it easy for
+    one site to evolve (e.g. add a .json.tmp exclusion, switch to aiofiles, add schema
+    migration) without the other. Both blocks already use asyncio.to_thread(lambda
     ...: list(td.glob("*.json"))) and `await asyncio.to_thread(f.read_text, "utf-8")`
     followed by PendingTrigger.model_validate_json(raw); extracting the shared logic
     is a pure behavior-preserving refactor with zero API surface change. No existing
-    backlog item covers this file — items 102 and 046 tackle iterdir patterns in
-    sessions.py / threads.py but stop short of triggers.py, and items 059 (shared
-    YAML helpers) and 094 (_run_git_cmd) are about different shared-helper patterns.
-    HOW — (1) Add a private async method `_load_triggers_from_dir(self, triggers_dir:
-    Path, log_event: str) -> list[PendingTrigger]` on TriggerManager that: globs
-    *.json via asyncio.to_thread, reads each file via asyncio.to_thread(f.read_text,
-    "utf-8"), calls PendingTrigger.model_validate_json, and logs with the given
-    log_event name on parse/IO failure. Return the list of successfully loaded
-    triggers (unsorted — sort is caller-specific). (2) Rewrite list_triggers to
-    call `triggers = await self._load_triggers_from_dir(triggers_dir, "trigger_load_failed")`,
-    then sort and return. (3) Rewrite recover_pending''s inner loop to call
-    `triggers = await self._load_triggers_from_dir(triggers_dir, "trigger_recovery_load_failed")`,
-    then iterate the already-loaded list and call `self._start_task(trigger)` for
-    each PENDING one. Net result: ~10 duplicated lines collapse into a single 8-line
-    helper, two log-event strings become explicit parameters at the two call sites,
-    and any future change to the trigger on-disk format (aiofiles migration, .json.tmp
-    filtering, schema versioning) is made exactly once. No runtime behavior change
-    and no new dependencies.'
+    backlog item covers this file — items 102 and 046 tackle iterdir patterns in sessions.py
+    / threads.py but stop short of triggers.py, and items 059 (shared YAML helpers)
+    and 094 (_run_git_cmd) are about different shared-helper patterns. HOW — (1) Add
+    a private async method `_load_triggers_from_dir(self, triggers_dir: Path, log_event:
+    str) -> list[PendingTrigger]` on TriggerManager that: globs *.json via asyncio.to_thread,
+    reads each file via asyncio.to_thread(f.read_text, "utf-8"), calls PendingTrigger.model_validate_json,
+    and logs with the given log_event name on parse/IO failure. Return the list of
+    successfully loaded triggers (unsorted — sort is caller-specific). (2) Rewrite
+    list_triggers to call `triggers = await self._load_triggers_from_dir(triggers_dir,
+    "trigger_load_failed")`, then sort and return. (3) Rewrite recover_pending''s
+    inner loop to call `triggers = await self._load_triggers_from_dir(triggers_dir,
+    "trigger_recovery_load_failed")`, then iterate the already-loaded list and call
+    `self._start_task(trigger)` for each PENDING one. Net result: ~10 duplicated lines
+    collapse into a single 8-line helper, two log-event strings become explicit parameters
+    at the two call sites, and any future change to the trigger on-disk format (aiofiles
+    migration, .json.tmp filtering, schema versioning) is made exactly once. No runtime
+    behavior change and no new dependencies.'
   category: refactoring
   status: pending
   created: '2026-04-19T01:11:31Z'
@@ -2164,37 +2156,34 @@
 - id: '108'
   title: Add TYPE_CHECKING imports for ThreadManager and SessionManager forward refs
     in core/improve_command.py
-  description: 'PURPOSE — Silence the only five real pyflakes warnings left in
-    the entire src/ tree and restore static-type-checker / IDE navigation for
-    the improve-loop orchestrator. `python -m pyflakes src/` currently reports
-    five "undefined name" errors, all in src/core/improve_command.py — L259
-    (is_quota_failure: thread_mgr: "ThreadManager"), L283 (_wait_for_quota_recovery:
-    session_mgr: "SessionManager"), L420 and L421 (_run_single_iteration:
-    session_mgr / thread_mgr), and L542 and L543 (run_improve_loop: session_mgr
-    / thread_mgr). All five are string-quoted forward references but the module
-    never imports either name — not at module scope, not under `if TYPE_CHECKING:`.
-    Consequence: mypy / pyright / PyCharm / VS Code cannot resolve the types
-    (go-to-definition and autocomplete silently fail on the most heavily-used
-    parameter in the file), and the pyflakes noise masks any genuinely new
-    undefined-name issue a future change might introduce. The existing items
-    that touch this file — 081 (async I/O), 103 (require_loop_state helper),
-    104 (wrap improve loop-state helpers in asyncio.to_thread), 106 (utc_now
-    helper) — are all runtime-behavior changes and explicitly do not address
-    the type-annotation hygiene problem. HOW — (1) Add `from typing import
-    Optional, TYPE_CHECKING` to src/core/improve_command.py (already imports
-    Optional from typing at L8; just append TYPE_CHECKING). (2) Add a
-    TYPE_CHECKING-guarded import block near the other imports: `if TYPE_CHECKING:
-    from src.core.sessions import SessionManager; from src.core.threads import
-    ThreadManager`. (3) Leave the five existing quoted annotations unchanged
-    (the quotes are still required because the imports are conditional), or
-    optionally drop the quotes if `from __future__ import annotations` is added
-    — but the minimal change is just the TYPE_CHECKING block. Net result:
-    ~4 lines added, 0 lines removed, 0 runtime behavior change, 5 pyflakes
-    warnings gone, and every type checker and IDE in the toolchain gains full
-    navigation on the improve-loop module. Confirmed no circular-import risk:
-    both src.core.sessions and src.core.threads are imported unconditionally
-    elsewhere (e.g. src.core.review imports both at module scope at L13-L14),
-    so a TYPE_CHECKING-only import from improve_command adds zero runtime edges.'
+  description: 'PURPOSE — Silence the only five real pyflakes warnings left in the
+    entire src/ tree and restore static-type-checker / IDE navigation for the improve-loop
+    orchestrator. `python -m pyflakes src/` currently reports five "undefined name"
+    errors, all in src/core/improve_command.py — L259 (is_quota_failure: thread_mgr:
+    "ThreadManager"), L283 (_wait_for_quota_recovery: session_mgr: "SessionManager"),
+    L420 and L421 (_run_single_iteration: session_mgr / thread_mgr), and L542 and
+    L543 (run_improve_loop: session_mgr / thread_mgr). All five are string-quoted
+    forward references but the module never imports either name — not at module scope,
+    not under `if TYPE_CHECKING:`. Consequence: mypy / pyright / PyCharm / VS Code
+    cannot resolve the types (go-to-definition and autocomplete silently fail on the
+    most heavily-used parameter in the file), and the pyflakes noise masks any genuinely
+    new undefined-name issue a future change might introduce. The existing items that
+    touch this file — 081 (async I/O), 103 (require_loop_state helper), 104 (wrap
+    improve loop-state helpers in asyncio.to_thread), 106 (utc_now helper) — are all
+    runtime-behavior changes and explicitly do not address the type-annotation hygiene
+    problem. HOW — (1) Add `from typing import Optional, TYPE_CHECKING` to src/core/improve_command.py
+    (already imports Optional from typing at L8; just append TYPE_CHECKING). (2) Add
+    a TYPE_CHECKING-guarded import block near the other imports: `if TYPE_CHECKING:
+    from src.core.sessions import SessionManager; from src.core.threads import ThreadManager`.
+    (3) Leave the five existing quoted annotations unchanged (the quotes are still
+    required because the imports are conditional), or optionally drop the quotes if
+    `from __future__ import annotations` is added — but the minimal change is just
+    the TYPE_CHECKING block. Net result: ~4 lines added, 0 lines removed, 0 runtime
+    behavior change, 5 pyflakes warnings gone, and every type checker and IDE in the
+    toolchain gains full navigation on the improve-loop module. Confirmed no circular-import
+    risk: both src.core.sessions and src.core.threads are imported unconditionally
+    elsewhere (e.g. src.core.review imports both at module scope at L13-L14), so a
+    TYPE_CHECKING-only import from improve_command adds zero runtime edges.'
   category: refactoring
   status: pending
   created: '2026-04-19T03:11:11Z'
@@ -2203,61 +2192,54 @@
   title: Extract _detect_pidfd and ctypes pidfd fallback from triggers.py into dedicated
     src/core/pidfd.py module
   description: 'PURPOSE — Pull 90 lines of low-level Linux syscall plumbing out of
-    src/core/triggers.py (which is primarily about the business logic of delayed
-    session-wake triggers) and into a single-purpose src/core/pidfd.py module, so
-    the trigger manager file stops mixing two unrelated concerns: (1) high-level
-    trigger persistence / asyncio scheduling, and (2) a portable kernel-syscall
-    shim with ctypes fallback. Currently src/core/triggers.py:24-113 contains
-    `_detect_pidfd()` (85 lines, the single longest function in the file and the
-    11th-longest in the whole src/ tree per the 2026-04-19 code-health scan),
-    the x86_64/aarch64 syscall-number table `_SYS_pidfd_open`, nested helper
-    factories `_stdlib_pidfd_open` / `_stdlib_waitid_pidfd` / `_ctypes_pidfd_open`
-    / `_ctypes_waitid_pidfd`, a nested `_Siginfo` ctypes.Structure with seven
-    fields, and a nested `_WaitidResult` wrapper class. None of this is specific
-    to triggers — it is a generic "open a pidfd, waitid() on it" facility that
-    only happens to be consumed by `_wait_with_pidfd` in the same file. The
-    embedded ctypes code forces anyone reading triggers.py to context-switch
-    between asyncio / pydantic persistence logic and raw libc.syscall plumbing,
-    and it prevents the pidfd helper from being reused (or independently unit
-    tested) elsewhere should another subsystem ever need to watch child PIDs.
-    No existing backlog item touches this: 087 covered yapf-only concerns in
-    triggers.py, 107 covers the trigger-loading loop duplication, and neither
-    addresses the syscall-shim extraction. The 2026-04-19 yapf --diff also
-    reports 3 formatting hunks in triggers.py (blank line above `_SYS_pidfd_open`
-    at L20, missing blank lines before nested `def _stdlib_pidfd_open` at L32
-    and nested `class _WaitidResult` at L86) — all three live inside the code
-    that would move out, so this refactor naturally resolves them as a side
-    effect. HOW — (1) Create src/core/pidfd.py exporting exactly three public
-    names: `pidfd_open(pid, flags=0) -> int` (calls the resolved backend,
-    raises ProcessLookupError / OSError), `waitid_pidfd(fd, options)` (same
-    semantics, raises ChildProcessError / OSError, returns a result object
-    or None on WNOHANG), and `PIDFD_SUPPORTED: bool`. Internally keep the
-    current architecture: a private `_detect()` that returns (pidfd_open_fn,
-    waitid_pidfd_fn) by preferring `os.pidfd_open` + `os.P_PIDFD` stdlib
-    (Python 3.12+ on Linux 5.3+), falling back to the ctypes libc.syscall
-    path on architectures in `_SYS_pidfd_open`, and returning (None, None)
-    otherwise. Move `_Siginfo` and `_WaitidResult` to module scope as
-    private `_Siginfo` and `_WaitidResult` (they can stop being nested now
-    that there is no closure requirement). Module-level
-    `_pidfd_open_fn, _waitid_pidfd_fn = _detect()` runs once at import and
-    `PIDFD_SUPPORTED = _pidfd_open_fn is not None` is set accordingly. (2)
-    Replace the top of src/core/triggers.py (L21-L113, 93 lines) with a
-    single `from src.core.pidfd import pidfd_open, waitid_pidfd, PIDFD_SUPPORTED`
-    import. (3) Update the 3 call sites inside triggers.py: L132
-    `not _PIDFD_SUPPORTED` → `not PIDFD_SUPPORTED`, L268 `fd = _pidfd_open(pid)`
-    → `fd = pidfd_open(pid)`, L294 `info = _waitid_pidfd(fd, ...)` →
-    `info = waitid_pidfd(fd, ...)`. (4) Run `yapf -i src/core/pidfd.py
-    src/core/triggers.py` to pick up the already-present formatting fixes
-    automatically. (5) Confirm `python -m py_compile src/core/pidfd.py
-    src/core/triggers.py` and `python -c "from src.core import triggers"`
-    both succeed. Net result: triggers.py drops from 370 to ~277 lines and
-    becomes a pure trigger-management module; pidfd.py is a focused ~95-line
-    syscall-shim module with a 3-name public API that is independently
-    testable and reusable; `_detect_pidfd` no longer appears in the "functions
-    over 50 lines" list; the 3 outstanding yapf violations in triggers.py
-    disappear; and zero runtime behavior changes because all moved code is
-    byte-for-byte identical. No new dependencies, no circular-import risk
-    (pidfd.py only imports os / platform / ctypes from the stdlib).'
+    src/core/triggers.py (which is primarily about the business logic of delayed session-wake
+    triggers) and into a single-purpose src/core/pidfd.py module, so the trigger manager
+    file stops mixing two unrelated concerns: (1) high-level trigger persistence /
+    asyncio scheduling, and (2) a portable kernel-syscall shim with ctypes fallback.
+    Currently src/core/triggers.py:24-113 contains `_detect_pidfd()` (85 lines, the
+    single longest function in the file and the 11th-longest in the whole src/ tree
+    per the 2026-04-19 code-health scan), the x86_64/aarch64 syscall-number table
+    `_SYS_pidfd_open`, nested helper factories `_stdlib_pidfd_open` / `_stdlib_waitid_pidfd`
+    / `_ctypes_pidfd_open` / `_ctypes_waitid_pidfd`, a nested `_Siginfo` ctypes.Structure
+    with seven fields, and a nested `_WaitidResult` wrapper class. None of this is
+    specific to triggers — it is a generic "open a pidfd, waitid() on it" facility
+    that only happens to be consumed by `_wait_with_pidfd` in the same file. The embedded
+    ctypes code forces anyone reading triggers.py to context-switch between asyncio
+    / pydantic persistence logic and raw libc.syscall plumbing, and it prevents the
+    pidfd helper from being reused (or independently unit tested) elsewhere should
+    another subsystem ever need to watch child PIDs. No existing backlog item touches
+    this: 087 covered yapf-only concerns in triggers.py, 107 covers the trigger-loading
+    loop duplication, and neither addresses the syscall-shim extraction. The 2026-04-19
+    yapf --diff also reports 3 formatting hunks in triggers.py (blank line above `_SYS_pidfd_open`
+    at L20, missing blank lines before nested `def _stdlib_pidfd_open` at L32 and
+    nested `class _WaitidResult` at L86) — all three live inside the code that would
+    move out, so this refactor naturally resolves them as a side effect. HOW — (1)
+    Create src/core/pidfd.py exporting exactly three public names: `pidfd_open(pid,
+    flags=0) -> int` (calls the resolved backend, raises ProcessLookupError / OSError),
+    `waitid_pidfd(fd, options)` (same semantics, raises ChildProcessError / OSError,
+    returns a result object or None on WNOHANG), and `PIDFD_SUPPORTED: bool`. Internally
+    keep the current architecture: a private `_detect()` that returns (pidfd_open_fn,
+    waitid_pidfd_fn) by preferring `os.pidfd_open` + `os.P_PIDFD` stdlib (Python 3.12+
+    on Linux 5.3+), falling back to the ctypes libc.syscall path on architectures
+    in `_SYS_pidfd_open`, and returning (None, None) otherwise. Move `_Siginfo` and
+    `_WaitidResult` to module scope as private `_Siginfo` and `_WaitidResult` (they
+    can stop being nested now that there is no closure requirement). Module-level
+    `_pidfd_open_fn, _waitid_pidfd_fn = _detect()` runs once at import and `PIDFD_SUPPORTED
+    = _pidfd_open_fn is not None` is set accordingly. (2) Replace the top of src/core/triggers.py
+    (L21-L113, 93 lines) with a single `from src.core.pidfd import pidfd_open, waitid_pidfd,
+    PIDFD_SUPPORTED` import. (3) Update the 3 call sites inside triggers.py: L132
+    `not _PIDFD_SUPPORTED` → `not PIDFD_SUPPORTED`, L268 `fd = _pidfd_open(pid)` →
+    `fd = pidfd_open(pid)`, L294 `info = _waitid_pidfd(fd, ...)` → `info = waitid_pidfd(fd,
+    ...)`. (4) Run `yapf -i src/core/pidfd.py src/core/triggers.py` to pick up the
+    already-present formatting fixes automatically. (5) Confirm `python -m py_compile
+    src/core/pidfd.py src/core/triggers.py` and `python -c "from src.core import triggers"`
+    both succeed. Net result: triggers.py drops from 370 to ~277 lines and becomes
+    a pure trigger-management module; pidfd.py is a focused ~95-line syscall-shim
+    module with a 3-name public API that is independently testable and reusable; `_detect_pidfd`
+    no longer appears in the "functions over 50 lines" list; the 3 outstanding yapf
+    violations in triggers.py disappear; and zero runtime behavior changes because
+    all moved code is byte-for-byte identical. No new dependencies, no circular-import
+    risk (pidfd.py only imports os / platform / ctypes from the stdlib).'
   category: architecture
   status: pending
   created: '2026-04-19T05:11:56Z'
@@ -2265,46 +2247,43 @@
 - id: '110'
   title: Extract shared _prepend_path helper in backends/base.py to deduplicate PATH-prepending
     logic in codex.py and opencode.py
-  description: 'PURPOSE — Pull the identical 5-line "prepend a directory to $PATH if
-    not already present" block out of two different backend `_prepare_env` overrides
-    (src/agents/backends/codex.py:75-81 and src/agents/backends/opencode.py:80-86) and
-    into a single reusable helper on AgentBackend in src/agents/backends/base.py.
+  description: 'PURPOSE — Pull the identical 5-line "prepend a directory to $PATH
+    if not already present" block out of two different backend `_prepare_env` overrides
+    (src/agents/backends/codex.py:75-81 and src/agents/backends/opencode.py:80-86)
+    and into a single reusable helper on AgentBackend in src/agents/backends/base.py.
     Today both call sites copy the same pattern verbatim — build a fresh env dict,
-    compute a home-relative bin directory (`~/.local/bin` for codex,
-    `~/.opencode/bin` for opencode), read the current PATH with `.get("PATH", "")`,
-    split it on ":" to check membership, and conditionally prepend — differing only
-    in the directory they inject. This is textbook shotgun duplication: any future
-    fix (Windows path separator handling, normalizing symlinks, logging when a PATH
-    entry is added, honoring an explicit override) has to be applied twice and kept
-    in sync. The duplication was flagged by the 2026-04-19 code-health scan
-    (`grep "current_path.split"` returns exactly two hits in src/, both backends);
-    no existing backlog item addresses it (038 covered `_resolve_binary` and
-    `_effective_prompt` extraction, 042 added event factory helpers, 054 removed
-    redundant __init__ kwargs-popping, but none touch `_prepare_env`). This is a
-    high-impact, low-effort refactor: ~10 lines net reduction, a single new 6-line
-    helper, zero behavior change, and it sets the pattern for any future backend
-    (e.g. if a Cursor or Aider backend needs `~/.cursor/bin` on PATH) to reuse
-    instead of copy-paste. HOW — (1) In src/agents/backends/base.py, add a
-    protected helper on AgentBackend near the existing `_prepare_env` default
-    (around L136): `@staticmethod` `def _prepend_path(env: dict, directory: str)
-    -> dict:` that returns a new dict with `PATH` set to `f"{directory}:{current}"`
-    if `directory` is not already in the colon-split of the current PATH, otherwise
-    returns a shallow copy unchanged. Signature: `_prepend_path(env: dict,
-    directory: str) -> dict`. Always returns a new dict (never mutates the input)
-    to preserve the existing callers contract. (2) In src/agents/backends/codex.py
-    replace the L75-81 body with `return self._prepend_path(env,
-    str(Path.home() / ".local" / "bin"))`. (3) In
-    src/agents/backends/opencode.py replace the L80-86 body with `return
-    self._prepend_path(env, str(Path.home() / ".opencode" / "bin"))`. (4) Verify
-    with `python -m py_compile src/agents/backends/base.py
-    src/agents/backends/codex.py src/agents/backends/opencode.py` and
-    `python -c "from src.agents.backends import codex, opencode"`. (5) Confirm
-    `yapf --diff src/agents/backends/` shows no new violations. Net result: both
-    `_prepare_env` overrides shrink from 7 lines to 2 lines each (10 LOC total
-    removed), base.py gains a 6-line helper, the colon-split PATH-membership
-    test lives in exactly one place, and any future backend that needs the same
-    behavior gets it for free. No new dependencies, no external API change, no
-    circular-import risk (base.py does not import Path; codex/opencode already do).'
+    compute a home-relative bin directory (`~/.local/bin` for codex, `~/.opencode/bin`
+    for opencode), read the current PATH with `.get("PATH", "")`, split it on ":"
+    to check membership, and conditionally prepend — differing only in the directory
+    they inject. This is textbook shotgun duplication: any future fix (Windows path
+    separator handling, normalizing symlinks, logging when a PATH entry is added,
+    honoring an explicit override) has to be applied twice and kept in sync. The duplication
+    was flagged by the 2026-04-19 code-health scan (`grep "current_path.split"` returns
+    exactly two hits in src/, both backends); no existing backlog item addresses it
+    (038 covered `_resolve_binary` and `_effective_prompt` extraction, 042 added event
+    factory helpers, 054 removed redundant __init__ kwargs-popping, but none touch
+    `_prepare_env`). This is a high-impact, low-effort refactor: ~10 lines net reduction,
+    a single new 6-line helper, zero behavior change, and it sets the pattern for
+    any future backend (e.g. if a Cursor or Aider backend needs `~/.cursor/bin` on
+    PATH) to reuse instead of copy-paste. HOW — (1) In src/agents/backends/base.py,
+    add a protected helper on AgentBackend near the existing `_prepare_env` default
+    (around L136): `@staticmethod` `def _prepend_path(env: dict, directory: str) ->
+    dict:` that returns a new dict with `PATH` set to `f"{directory}:{current}"` if
+    `directory` is not already in the colon-split of the current PATH, otherwise returns
+    a shallow copy unchanged. Signature: `_prepend_path(env: dict, directory: str)
+    -> dict`. Always returns a new dict (never mutates the input) to preserve the
+    existing callers contract. (2) In src/agents/backends/codex.py replace the L75-81
+    body with `return self._prepend_path(env, str(Path.home() / ".local" / "bin"))`.
+    (3) In src/agents/backends/opencode.py replace the L80-86 body with `return self._prepend_path(env,
+    str(Path.home() / ".opencode" / "bin"))`. (4) Verify with `python -m py_compile
+    src/agents/backends/base.py src/agents/backends/codex.py src/agents/backends/opencode.py`
+    and `python -c "from src.agents.backends import codex, opencode"`. (5) Confirm
+    `yapf --diff src/agents/backends/` shows no new violations. Net result: both `_prepare_env`
+    overrides shrink from 7 lines to 2 lines each (10 LOC total removed), base.py
+    gains a 6-line helper, the colon-split PATH-membership test lives in exactly one
+    place, and any future backend that needs the same behavior gets it for free. No
+    new dependencies, no external API change, no circular-import risk (base.py does
+    not import Path; codex/opencode already do).'
   category: refactoring
   status: pending
   created: '2026-04-19T11:10:51Z'
@@ -2314,60 +2293,54 @@
     strip-skip-blank-json.loads-except-debug-log pattern across three parsers
   description: 'PURPOSE — Collapse the three verbatim copies of the "strip the line,
     skip if blank, json.loads it, and log+swallow JSONDecodeError at debug level"
-    block inside src/core/ndjson.py into a single shared helper, so the NDJSON
-    file/tail/range parsers stop drifting and future fixes (structured error
-    context, optional raise-on-malformed mode, bytes-vs-str handling, counter
-    metric for malformed-line rate) can be applied in exactly one place. The
-    duplication is textbook: parse_ndjson_file (L17-26) loops over text lines
-    doing `line = line.strip(); if not line: continue; try: events.append(
-    json.loads(line)) except json.JSONDecodeError as e: log.debug(
-    "ndjson_parse_skip", error=str(e))`; parse_ndjson_tail (L67-72) does the
-    identical try/except on already-split bytes with label `ndjson_tail_parse_skip`;
-    parse_ndjson_range (L91-97) does the identical strip-skip-try/except on text
-    lines with label `ndjson_range_parse_skip`. The only differences are (a) the
-    structlog event name embedded in log.debug, (b) whether the caller already
-    pre-stripped the input (tail path) or not (file/range paths), and (c) bytes
-    vs str input (tail passes raw bytes from a reverse-chunk read, the other two
-    pass already-decoded text). This was flagged by the 2026-04-19 code-health
-    scan (grep shows exactly three `json.JSONDecodeError` sites in ndjson.py, and
-    three `log.debug("ndjson_...` sites with the _parse_skip suffix, all in the
-    same 90-line file). No existing backlog item touches this: 035 ("wrap
-    blocking parse_ndjson_file call in _read_events_summary") covered the sync
-    I/O offload, a later item optimized parse_ndjson_tail to a single-pass deque,
-    and 104 wrapped sync loop-state helpers — none deduplicated the line-decode
-    body itself. This is the highest-value low-effort win left in ndjson.py: ~15
-    lines net reduction, a single new 8-line helper, zero behavior change, and
-    it establishes one canonical "decode an NDJSON line, skip-and-log malformed"
-    primitive that any future NDJSON consumer (event log replay tools, diagnostic
-    dumpers, worker log parsers) can reuse. HOW — (1) Add a private module-level
-    helper to src/core/ndjson.py right after the `log = structlog.get_logger()`
-    line: `def _decode_ndjson_line(raw: str | bytes, label: str, out:
-    list[dict]) -> None:` that (a) if `raw` is bytes, decodes via
-    `raw.decode("utf-8", errors="replace")` (matching json.loads default
-    behavior on bytes), (b) calls `.strip()` on the result, (c) returns early
-    if the stripped value is empty, (d) does `try: out.append(json.loads(s))
-    except json.JSONDecodeError as e: log.debug(label, error=str(e))`. Signature
-    accepts both str and bytes to cover all three call sites without forcing
-    callers to pre-decode; label is the structlog event name string. Helper
-    mutates `out` in place for zero-allocation integration with the existing
-    loops. (2) Replace L18-25 in parse_ndjson_file with `for line in f:
-    _decode_ndjson_line(line, "ndjson_parse_skip", events)` (5 lines → 2 lines).
-    (3) Replace L67-72 in parse_ndjson_tail with `for raw in tail_lines:
-    _decode_ndjson_line(raw, "ndjson_tail_parse_skip", events)` (5 lines → 2
-    lines), removing the now-redundant stdlib import path since the helper owns
-    the except clause. (4) Replace L91-97 in parse_ndjson_range with the existing
-    pre-helper skip-if-out-of-range logic kept intact but the inner strip/try
-    block collapsed to `_decode_ndjson_line(line, "ndjson_range_parse_skip",
-    events)` (5 lines → 1 line). (5) Verify with `python -m py_compile
-    src/core/ndjson.py` and `python -c "from src.core.ndjson import
-    parse_ndjson_file, parse_ndjson_tail, parse_ndjson_range, append_ndjson"`.
-    (6) Confirm `yapf --diff src/core/ndjson.py` shows no new violations. Net
-    result: ndjson.py drops from 106 to ~91 lines, the three public parsers
-    become single-purpose iteration orchestrators, and the malformed-line
-    handling policy lives in exactly one 8-line helper. No new dependencies,
-    no public API change, no behavior change (same log event names, same
-    debug level, same skip semantics), no circular-import risk (helper is
-    private to the module).'
+    block inside src/core/ndjson.py into a single shared helper, so the NDJSON file/tail/range
+    parsers stop drifting and future fixes (structured error context, optional raise-on-malformed
+    mode, bytes-vs-str handling, counter metric for malformed-line rate) can be applied
+    in exactly one place. The duplication is textbook: parse_ndjson_file (L17-26)
+    loops over text lines doing `line = line.strip(); if not line: continue; try:
+    events.append( json.loads(line)) except json.JSONDecodeError as e: log.debug(
+    "ndjson_parse_skip", error=str(e))`; parse_ndjson_tail (L67-72) does the identical
+    try/except on already-split bytes with label `ndjson_tail_parse_skip`; parse_ndjson_range
+    (L91-97) does the identical strip-skip-try/except on text lines with label `ndjson_range_parse_skip`.
+    The only differences are (a) the structlog event name embedded in log.debug, (b)
+    whether the caller already pre-stripped the input (tail path) or not (file/range
+    paths), and (c) bytes vs str input (tail passes raw bytes from a reverse-chunk
+    read, the other two pass already-decoded text). This was flagged by the 2026-04-19
+    code-health scan (grep shows exactly three `json.JSONDecodeError` sites in ndjson.py,
+    and three `log.debug("ndjson_...` sites with the _parse_skip suffix, all in the
+    same 90-line file). No existing backlog item touches this: 035 ("wrap blocking
+    parse_ndjson_file call in _read_events_summary") covered the sync I/O offload,
+    a later item optimized parse_ndjson_tail to a single-pass deque, and 104 wrapped
+    sync loop-state helpers — none deduplicated the line-decode body itself. This
+    is the highest-value low-effort win left in ndjson.py: ~15 lines net reduction,
+    a single new 8-line helper, zero behavior change, and it establishes one canonical
+    "decode an NDJSON line, skip-and-log malformed" primitive that any future NDJSON
+    consumer (event log replay tools, diagnostic dumpers, worker log parsers) can
+    reuse. HOW — (1) Add a private module-level helper to src/core/ndjson.py right
+    after the `log = structlog.get_logger()` line: `def _decode_ndjson_line(raw: str
+    | bytes, label: str, out: list[dict]) -> None:` that (a) if `raw` is bytes, decodes
+    via `raw.decode("utf-8", errors="replace")` (matching json.loads default behavior
+    on bytes), (b) calls `.strip()` on the result, (c) returns early if the stripped
+    value is empty, (d) does `try: out.append(json.loads(s)) except json.JSONDecodeError
+    as e: log.debug(label, error=str(e))`. Signature accepts both str and bytes to
+    cover all three call sites without forcing callers to pre-decode; label is the
+    structlog event name string. Helper mutates `out` in place for zero-allocation
+    integration with the existing loops. (2) Replace L18-25 in parse_ndjson_file with
+    `for line in f: _decode_ndjson_line(line, "ndjson_parse_skip", events)` (5 lines
+    → 2 lines). (3) Replace L67-72 in parse_ndjson_tail with `for raw in tail_lines:
+    _decode_ndjson_line(raw, "ndjson_tail_parse_skip", events)` (5 lines → 2 lines),
+    removing the now-redundant stdlib import path since the helper owns the except
+    clause. (4) Replace L91-97 in parse_ndjson_range with the existing pre-helper
+    skip-if-out-of-range logic kept intact but the inner strip/try block collapsed
+    to `_decode_ndjson_line(line, "ndjson_range_parse_skip", events)` (5 lines → 1
+    line). (5) Verify with `python -m py_compile src/core/ndjson.py` and `python -c
+    "from src.core.ndjson import parse_ndjson_file, parse_ndjson_tail, parse_ndjson_range,
+    append_ndjson"`. (6) Confirm `yapf --diff src/core/ndjson.py` shows no new violations.
+    Net result: ndjson.py drops from 106 to ~91 lines, the three public parsers become
+    single-purpose iteration orchestrators, and the malformed-line handling policy
+    lives in exactly one 8-line helper. No new dependencies, no public API change,
+    no behavior change (same log event names, same debug level, same skip semantics),
+    no circular-import risk (helper is private to the module).'
   category: refactoring
   status: pending
   created: '2026-04-19T15:10:54Z'
@@ -2375,83 +2348,71 @@
 - id: '112'
   title: Extract shared _write_instructions_file helper in backends/base.py to deduplicate
     CLAUDE.md/AGENTS.md write-to-cwd pattern across three concrete backends
-  description: 'PURPOSE — Collapse the three verbatim copies of the "if
-    self._instructions_content: write it to <cwd>/<filename> as UTF-8 and
-    log.debug" block that live in ClaudeCodeBackend._prepare_cwd,
-    CodexBackend._prepare_cwd, and OpenCodeBackend._prepare_cwd into a single
-    shared protected method on AgentBackend, so the three backends stop drifting
-    and future fixes (atomic-write via os.replace, skip-if-identical guard to
-    avoid spurious file-touch events, parents=True mkdir, structured-logging of
-    content bytes, or enforcing a consistent filename-casing policy) can be
-    applied in exactly one place. The duplication is textbook: claude_code.py
-    L42-48 does `if not self._instructions_content: return; claude_md = Path(cwd)
-    / "CLAUDE.md"; claude_md.write_text(self._instructions_content,
-    encoding="utf-8"); log.debug("claude_code_wrote_claude_md",
-    path=str(claude_md))`; codex.py L31-37 does the identical pattern with
-    AGENTS.md and event name `codex_wrote_agents_md`; opencode.py L23-29 does the
-    same with AGENTS.md and event name `opencode_wrote_agents_md`, but uses the
-    legacy `open(... "w", encoding="utf-8") as f: f.write(...)` idiom instead of
-    Path.write_text, plus os.path.join instead of the / operator, creating a
-    third, textually distinct but semantically identical code path. The only
-    differences across the three are (a) the target filename (CLAUDE.md vs
-    AGENTS.md) and (b) the structlog event name embedded in log.debug. This was
-    flagged by the 2026-04-19 code-health scan — grep
-    `write_text.*instructions_content` plus grep `f.write(self._instructions_content)`
+  description: 'PURPOSE — Collapse the three verbatim copies of the "if self._instructions_content:
+    write it to <cwd>/<filename> as UTF-8 and log.debug" block that live in ClaudeCodeBackend._prepare_cwd,
+    CodexBackend._prepare_cwd, and OpenCodeBackend._prepare_cwd into a single shared
+    protected method on AgentBackend, so the three backends stop drifting and future
+    fixes (atomic-write via os.replace, skip-if-identical guard to avoid spurious
+    file-touch events, parents=True mkdir, structured-logging of content bytes, or
+    enforcing a consistent filename-casing policy) can be applied in exactly one place.
+    The duplication is textbook: claude_code.py L42-48 does `if not self._instructions_content:
+    return; claude_md = Path(cwd) / "CLAUDE.md"; claude_md.write_text(self._instructions_content,
+    encoding="utf-8"); log.debug("claude_code_wrote_claude_md", path=str(claude_md))`;
+    codex.py L31-37 does the identical pattern with AGENTS.md and event name `codex_wrote_agents_md`;
+    opencode.py L23-29 does the same with AGENTS.md and event name `opencode_wrote_agents_md`,
+    but uses the legacy `open(... "w", encoding="utf-8") as f: f.write(...)` idiom
+    instead of Path.write_text, plus os.path.join instead of the / operator, creating
+    a third, textually distinct but semantically identical code path. The only differences
+    across the three are (a) the target filename (CLAUDE.md vs AGENTS.md) and (b)
+    the structlog event name embedded in log.debug. This was flagged by the 2026-04-19
+    code-health scan — grep `write_text.*instructions_content` plus grep `f.write(self._instructions_content)`
     shows exactly three sites, all in _prepare_cwd overrides, all inside the same
-    src/agents/backends/ directory. No existing backlog item addresses this
-    extraction: 043 wrapped the hook call in asyncio.to_thread (orthogonal
-    concern — I/O offload, not dedup), 038 covered _resolve_binary and
-    _effective_prompt extraction, 054 removed redundant __init__ kwargs-popping,
-    110 added _prepend_path for PATH-env dedup, and 111 added _decode_ndjson_line
-    — none touch the _prepare_cwd instructions-file write. This is a high-impact,
-    low-effort refactor: ~15 lines net reduction, a single new 7-line base-class
-    helper, zero behavior change, and it establishes one canonical
-    write-instructions-file primitive so any future backend (e.g. a Cursor or
-    Aider backend that expects its own .cursorrules/.aider.md) gets the
-    skip-if-empty + UTF-8 + structured-log behavior for free. In addition, it
-    incidentally normalizes OpenCodeBackend._prepare_cwd to stop mixing os.path
-    / open-with-context-manager idioms with the rest of the codebase''s Path /
-    write_text convention, cleaning up a minor consistency wart on the same code
-    path. HOW — (1) In src/agents/backends/base.py, add a protected helper on
-    AgentBackend near the existing no-op `_prepare_cwd` default (around L133):
-    `def _write_instructions_file(self, cwd: str, filename: str, log_event:
-    str) -> None:` that (a) returns early if `self._instructions_content` is
-    falsy, (b) computes `path = Path(cwd) / filename`, (c) calls
-    `path.write_text(self._instructions_content, encoding="utf-8")`, (d) calls
-    `log.debug(log_event, path=str(path))`. Signature keeps `log_event` as a
-    parameter so each backend preserves its own structured-log identity (breaking
-    that would lose grep-ability in logs); `filename` stays a parameter so
-    different tools can keep their different conventions (CLAUDE.md vs AGENTS.md
-    vs a future .cursorrules). The helper is a regular method (not static)
-    because it reads self._instructions_content. Uses the module-level `log =
-    structlog.get_logger()` already present in base.py — no new imports. (2) In
-    src/agents/backends/claude_code.py replace the L42-48 body with a single
-    call: `self._write_instructions_file(cwd, "CLAUDE.md",
-    "claude_code_wrote_claude_md")` (7 lines → 2 lines including the docstring;
-    the docstring `"""Write CLAUDE.md into the cwd so Claude Code auto-detects
-    it."""` stays as-is). (3) In src/agents/backends/codex.py replace the L31-37
-    body with `self._write_instructions_file(cwd, "AGENTS.md",
-    "codex_wrote_agents_md")` (7 lines → 2 lines, docstring stays). (4) In
-    src/agents/backends/opencode.py replace ONLY the first block of _prepare_cwd
-    (L25-29 — the AGENTS.md write) with `self._write_instructions_file(cwd,
-    "AGENTS.md", "opencode_wrote_agents_md")` (5 lines → 1 line). Leave the
-    opencode.json config-writing logic (L31-66) completely untouched — that is
-    opencode-specific behavior outside the scope of this refactor. (5) Verify
-    with `python -m py_compile src/agents/backends/base.py
-    src/agents/backends/claude_code.py src/agents/backends/codex.py
-    src/agents/backends/opencode.py` and `python -c "from src.agents.backends
-    import claude_code, codex, opencode"`. (6) Confirm `yapf --diff
-    src/agents/backends/` shows no new violations. Net result: three
-    `_prepare_cwd` overrides each shrink by ~5 lines (~15 LOC total removed),
-    base.py gains a 7-line helper (6 lines body + 1 line signature), the
-    write-instructions-file policy (UTF-8 encoding, skip-if-empty, structured
-    debug log with `path` key) lives in exactly one place, all three backends
-    now use the same Path-based idiom, and future backends that need to drop a
-    per-project instructions file get it in one line. No new dependencies, no
-    public API change, no behavior change (same log event names, same debug
-    level, same filenames, same encoding, same skip semantics), no
-    circular-import risk (helper is on the already-imported AgentBackend class
-    and uses only stdlib Path + existing structlog logger).'
+    src/agents/backends/ directory. No existing backlog item addresses this extraction:
+    043 wrapped the hook call in asyncio.to_thread (orthogonal concern — I/O offload,
+    not dedup), 038 covered _resolve_binary and _effective_prompt extraction, 054
+    removed redundant __init__ kwargs-popping, 110 added _prepend_path for PATH-env
+    dedup, and 111 added _decode_ndjson_line — none touch the _prepare_cwd instructions-file
+    write. This is a high-impact, low-effort refactor: ~15 lines net reduction, a
+    single new 7-line base-class helper, zero behavior change, and it establishes
+    one canonical write-instructions-file primitive so any future backend (e.g. a
+    Cursor or Aider backend that expects its own .cursorrules/.aider.md) gets the
+    skip-if-empty + UTF-8 + structured-log behavior for free. In addition, it incidentally
+    normalizes OpenCodeBackend._prepare_cwd to stop mixing os.path / open-with-context-manager
+    idioms with the rest of the codebase''s Path / write_text convention, cleaning
+    up a minor consistency wart on the same code path. HOW — (1) In src/agents/backends/base.py,
+    add a protected helper on AgentBackend near the existing no-op `_prepare_cwd`
+    default (around L133): `def _write_instructions_file(self, cwd: str, filename:
+    str, log_event: str) -> None:` that (a) returns early if `self._instructions_content`
+    is falsy, (b) computes `path = Path(cwd) / filename`, (c) calls `path.write_text(self._instructions_content,
+    encoding="utf-8")`, (d) calls `log.debug(log_event, path=str(path))`. Signature
+    keeps `log_event` as a parameter so each backend preserves its own structured-log
+    identity (breaking that would lose grep-ability in logs); `filename` stays a parameter
+    so different tools can keep their different conventions (CLAUDE.md vs AGENTS.md
+    vs a future .cursorrules). The helper is a regular method (not static) because
+    it reads self._instructions_content. Uses the module-level `log = structlog.get_logger()`
+    already present in base.py — no new imports. (2) In src/agents/backends/claude_code.py
+    replace the L42-48 body with a single call: `self._write_instructions_file(cwd,
+    "CLAUDE.md", "claude_code_wrote_claude_md")` (7 lines → 2 lines including the
+    docstring; the docstring `"""Write CLAUDE.md into the cwd so Claude Code auto-detects
+    it."""` stays as-is). (3) In src/agents/backends/codex.py replace the L31-37 body
+    with `self._write_instructions_file(cwd, "AGENTS.md", "codex_wrote_agents_md")`
+    (7 lines → 2 lines, docstring stays). (4) In src/agents/backends/opencode.py replace
+    ONLY the first block of _prepare_cwd (L25-29 — the AGENTS.md write) with `self._write_instructions_file(cwd,
+    "AGENTS.md", "opencode_wrote_agents_md")` (5 lines → 1 line). Leave the opencode.json
+    config-writing logic (L31-66) completely untouched — that is opencode-specific
+    behavior outside the scope of this refactor. (5) Verify with `python -m py_compile
+    src/agents/backends/base.py src/agents/backends/claude_code.py src/agents/backends/codex.py
+    src/agents/backends/opencode.py` and `python -c "from src.agents.backends import
+    claude_code, codex, opencode"`. (6) Confirm `yapf --diff src/agents/backends/`
+    shows no new violations. Net result: three `_prepare_cwd` overrides each shrink
+    by ~5 lines (~15 LOC total removed), base.py gains a 7-line helper (6 lines body
+    + 1 line signature), the write-instructions-file policy (UTF-8 encoding, skip-if-empty,
+    structured debug log with `path` key) lives in exactly one place, all three backends
+    now use the same Path-based idiom, and future backends that need to drop a per-project
+    instructions file get it in one line. No new dependencies, no public API change,
+    no behavior change (same log event names, same debug level, same filenames, same
+    encoding, same skip semantics), no circular-import risk (helper is on the already-imported
+    AgentBackend class and uses only stdlib Path + existing structlog logger).'
   category: refactoring
   status: pending
   created: '2026-04-19T17:12:45Z'

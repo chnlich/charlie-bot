@@ -2309,3 +2309,66 @@
   status: pending
   created: '2026-04-19T11:10:51Z'
   priority: low
+- id: '111'
+  title: Extract shared _decode_ndjson_line helper in core/ndjson.py to deduplicate
+    strip-skip-blank-json.loads-except-debug-log pattern across three parsers
+  description: 'PURPOSE — Collapse the three verbatim copies of the "strip the line,
+    skip if blank, json.loads it, and log+swallow JSONDecodeError at debug level"
+    block inside src/core/ndjson.py into a single shared helper, so the NDJSON
+    file/tail/range parsers stop drifting and future fixes (structured error
+    context, optional raise-on-malformed mode, bytes-vs-str handling, counter
+    metric for malformed-line rate) can be applied in exactly one place. The
+    duplication is textbook: parse_ndjson_file (L17-26) loops over text lines
+    doing `line = line.strip(); if not line: continue; try: events.append(
+    json.loads(line)) except json.JSONDecodeError as e: log.debug(
+    "ndjson_parse_skip", error=str(e))`; parse_ndjson_tail (L67-72) does the
+    identical try/except on already-split bytes with label `ndjson_tail_parse_skip`;
+    parse_ndjson_range (L91-97) does the identical strip-skip-try/except on text
+    lines with label `ndjson_range_parse_skip`. The only differences are (a) the
+    structlog event name embedded in log.debug, (b) whether the caller already
+    pre-stripped the input (tail path) or not (file/range paths), and (c) bytes
+    vs str input (tail passes raw bytes from a reverse-chunk read, the other two
+    pass already-decoded text). This was flagged by the 2026-04-19 code-health
+    scan (grep shows exactly three `json.JSONDecodeError` sites in ndjson.py, and
+    three `log.debug("ndjson_...` sites with the _parse_skip suffix, all in the
+    same 90-line file). No existing backlog item touches this: 035 ("wrap
+    blocking parse_ndjson_file call in _read_events_summary") covered the sync
+    I/O offload, a later item optimized parse_ndjson_tail to a single-pass deque,
+    and 104 wrapped sync loop-state helpers — none deduplicated the line-decode
+    body itself. This is the highest-value low-effort win left in ndjson.py: ~15
+    lines net reduction, a single new 8-line helper, zero behavior change, and
+    it establishes one canonical "decode an NDJSON line, skip-and-log malformed"
+    primitive that any future NDJSON consumer (event log replay tools, diagnostic
+    dumpers, worker log parsers) can reuse. HOW — (1) Add a private module-level
+    helper to src/core/ndjson.py right after the `log = structlog.get_logger()`
+    line: `def _decode_ndjson_line(raw: str | bytes, label: str, out:
+    list[dict]) -> None:` that (a) if `raw` is bytes, decodes via
+    `raw.decode("utf-8", errors="replace")` (matching json.loads default
+    behavior on bytes), (b) calls `.strip()` on the result, (c) returns early
+    if the stripped value is empty, (d) does `try: out.append(json.loads(s))
+    except json.JSONDecodeError as e: log.debug(label, error=str(e))`. Signature
+    accepts both str and bytes to cover all three call sites without forcing
+    callers to pre-decode; label is the structlog event name string. Helper
+    mutates `out` in place for zero-allocation integration with the existing
+    loops. (2) Replace L18-25 in parse_ndjson_file with `for line in f:
+    _decode_ndjson_line(line, "ndjson_parse_skip", events)` (5 lines → 2 lines).
+    (3) Replace L67-72 in parse_ndjson_tail with `for raw in tail_lines:
+    _decode_ndjson_line(raw, "ndjson_tail_parse_skip", events)` (5 lines → 2
+    lines), removing the now-redundant stdlib import path since the helper owns
+    the except clause. (4) Replace L91-97 in parse_ndjson_range with the existing
+    pre-helper skip-if-out-of-range logic kept intact but the inner strip/try
+    block collapsed to `_decode_ndjson_line(line, "ndjson_range_parse_skip",
+    events)` (5 lines → 1 line). (5) Verify with `python -m py_compile
+    src/core/ndjson.py` and `python -c "from src.core.ndjson import
+    parse_ndjson_file, parse_ndjson_tail, parse_ndjson_range, append_ndjson"`.
+    (6) Confirm `yapf --diff src/core/ndjson.py` shows no new violations. Net
+    result: ndjson.py drops from 106 to ~91 lines, the three public parsers
+    become single-purpose iteration orchestrators, and the malformed-line
+    handling policy lives in exactly one 8-line helper. No new dependencies,
+    no public API change, no behavior change (same log event names, same
+    debug level, same skip semantics), no circular-import risk (helper is
+    private to the module).'
+  category: refactoring
+  status: pending
+  created: '2026-04-19T15:10:54Z'
+  priority: low

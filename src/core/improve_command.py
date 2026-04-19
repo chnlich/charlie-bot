@@ -80,31 +80,7 @@ def _loop_state_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Pa
   return _loops_dir(session_id, cfg) / str(loop_id) / "state.json"
 
 
-def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Optional[ImproveState]:
-  """Read the loop state file, returning None if it is missing."""
-  path = _loop_state_path(session_id, loop_id, cfg)
-  if not path.exists():
-    return None
-  return ImproveState.model_validate_json(path.read_text())
-
-
-def save_loop_state(session_id: str, state: ImproveState, cfg: CharlieBotConfig) -> None:
-  """Write the loop state file."""
-  path = _loop_state_path(session_id, state.loop_id, cfg)
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(state.model_dump_json(indent=2))
-
-
-def clear_active_loop_lock(session_id: str, cfg: CharlieBotConfig) -> None:
-  """Remove the session's active loop lock file, if present."""
-  active_path = _active_loop_path(session_id, cfg)
-  if active_path.exists():
-    active_path.unlink()
-
-
-def next_loop_id(session_id: str, cfg: CharlieBotConfig) -> int:
-  """Return the next sequential loop id for a session."""
-  loops_dir = _loops_dir(session_id, cfg)
+def _next_loop_id_sync(loops_dir: Path) -> int:
   if not loops_dir.exists():
     return 1
 
@@ -120,28 +96,11 @@ def next_loop_id(session_id: str, cfg: CharlieBotConfig) -> int:
   return max_loop_id + 1 if max_loop_id else 1
 
 
-def _reserve_loop_dir(session_id: str, cfg: CharlieBotConfig) -> tuple[int, Path]:
-  """Create a unique per-loop directory for this session."""
-  loops_dir = _loops_dir(session_id, cfg)
-  loops_dir.mkdir(parents=True, exist_ok=True)
-
-  while True:
-    loop_id = next_loop_id(session_id, cfg)
-    loop_dir = loops_dir / str(loop_id)
-    try:
-      loop_dir.mkdir()
-    except FileExistsError:
-      continue
-    return loop_id, loop_dir
-
-
-def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> Optional[ImproveState]:
-  """Return the running loop for a session, if any."""
-  loops_dir = _loops_dir(session_id, cfg)
+def _find_state_loop_ids_sync(loops_dir: Path) -> list[int]:
   if not loops_dir.exists():
-    return None
+    return []
 
-  state_paths: list[tuple[int, Path]] = []
+  state_loop_ids: list[int] = []
   for child in loops_dir.iterdir():
     if not child.is_dir():
       continue
@@ -149,12 +108,65 @@ def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> Optional[Improv
       loop_id = int(child.name)
     except ValueError:
       continue
-    state_path = child / "state.json"
-    if state_path.exists():
-      state_paths.append((loop_id, state_path))
+    if (child / "state.json").exists():
+      state_loop_ids.append(loop_id)
+  return state_loop_ids
 
-  for loop_id, _ in sorted(state_paths, key=lambda item: item[0]):
-    state = load_loop_state(session_id, loop_id, cfg)
+
+def _create_empty_file_exclusive(path: Path) -> None:
+  with path.open("x"):
+    pass
+
+
+async def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Optional[ImproveState]:
+  """Read the loop state file, returning None if it is missing."""
+  path = _loop_state_path(session_id, loop_id, cfg)
+  if not await asyncio.to_thread(path.exists):
+    return None
+  return ImproveState.model_validate_json(await asyncio.to_thread(path.read_text))
+
+
+async def save_loop_state(session_id: str, state: ImproveState, cfg: CharlieBotConfig) -> None:
+  """Write the loop state file."""
+  path = _loop_state_path(session_id, state.loop_id, cfg)
+  await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+  await asyncio.to_thread(path.write_text, state.model_dump_json(indent=2))
+
+
+async def clear_active_loop_lock(session_id: str, cfg: CharlieBotConfig) -> None:
+  """Remove the session's active loop lock file, if present."""
+  active_path = _active_loop_path(session_id, cfg)
+  if await asyncio.to_thread(active_path.exists):
+    await asyncio.to_thread(active_path.unlink)
+
+
+async def next_loop_id(session_id: str, cfg: CharlieBotConfig) -> int:
+  """Return the next sequential loop id for a session."""
+  loops_dir = _loops_dir(session_id, cfg)
+  return await asyncio.to_thread(_next_loop_id_sync, loops_dir)
+
+
+async def _reserve_loop_dir(session_id: str, cfg: CharlieBotConfig) -> tuple[int, Path]:
+  """Create a unique per-loop directory for this session."""
+  loops_dir = _loops_dir(session_id, cfg)
+  await asyncio.to_thread(loops_dir.mkdir, parents=True, exist_ok=True)
+
+  while True:
+    loop_id = await next_loop_id(session_id, cfg)
+    loop_dir = loops_dir / str(loop_id)
+    try:
+      await asyncio.to_thread(loop_dir.mkdir)
+    except FileExistsError:
+      continue
+    return loop_id, loop_dir
+
+
+async def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> Optional[ImproveState]:
+  """Return the running loop for a session, if any."""
+  loops_dir = _loops_dir(session_id, cfg)
+  state_loop_ids = await asyncio.to_thread(_find_state_loop_ids_sync, loops_dir)
+  for loop_id in sorted(state_loop_ids):
+    state = await load_loop_state(session_id, loop_id, cfg)
     if state is not None and state.status == "running":
       return state
   return None
@@ -167,11 +179,11 @@ def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> Optional[Improv
 
 async def stop_improve_loop(session_id: str, cfg: CharlieBotConfig) -> bool:
   """Set improve loop status to stopped. Returns True if there was an active loop."""
-  state = find_running_loop(session_id, cfg)
+  state = await find_running_loop(session_id, cfg)
   if state is None:
     return False
   state.status = "stopped"
-  save_loop_state(session_id, state, cfg)
+  await save_loop_state(session_id, state, cfg)
   return True
 
 
@@ -202,7 +214,7 @@ def _build_summary_payload(payload_type: str, goal: str, summaries: list[str]) -
   }
 
 
-def reserve_loop_state(
+async def reserve_loop_state(
     session_id: str,
     goal: str,
     iterations: int,
@@ -217,18 +229,17 @@ def reserve_loop_state(
 ) -> ImproveState:
   """Reserve a unique loop id and persist running state before background work begins."""
   loops_dir = _loops_dir(session_id, cfg)
-  loops_dir.mkdir(parents=True, exist_ok=True)
+  await asyncio.to_thread(loops_dir.mkdir, parents=True, exist_ok=True)
   active_path = _active_loop_path(session_id, cfg)
 
   try:
-    with active_path.open("x"):
-      pass
+    await asyncio.to_thread(_create_empty_file_exclusive, active_path)
   except FileExistsError as exc:
-    running = find_running_loop(session_id, cfg)
+    running = await find_running_loop(session_id, cfg)
     raise ImproveLoopAlreadyRunningError(running.loop_id if running else None) from exc
 
   try:
-    loop_id, _ = _reserve_loop_dir(session_id, cfg)
+    loop_id, _ = await _reserve_loop_dir(session_id, cfg)
     state = ImproveState(
         loop_id=loop_id,
         goal=goal,
@@ -243,11 +254,11 @@ def reserve_loop_state(
         created_at=datetime.now(timezone.utc).isoformat(),
         iterations_completed=0,
     )
-    save_loop_state(session_id, state, cfg)
-    active_path.write_text(f"{loop_id}\n")
+    await save_loop_state(session_id, state, cfg)
+    await asyncio.to_thread(active_path.write_text, f"{loop_id}\n")
     return state
   except Exception:
-    clear_active_loop_lock(session_id, cfg)
+    await clear_active_loop_lock(session_id, cfg)
     raise
 
 
@@ -287,7 +298,7 @@ async def _wait_for_quota_recovery(
 
   while True:
     # Check stop signal
-    state = load_loop_state(session_id, loop_id, cfg)
+    state = await load_loop_state(session_id, loop_id, cfg)
     if state is None:
       raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
     if state.status == "stopped":
@@ -434,7 +445,7 @@ async def _run_single_iteration(
 
   while True:  # Retry loop for quota failures
     # Check if stopped
-    state = load_loop_state(session_id, loop_id, cfg)
+    state = await load_loop_state(session_id, loop_id, cfg)
     if state is None:
       raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
     if state.status == "stopped":
@@ -561,7 +572,7 @@ async def run_improve_loop(
   work_branch = work_branch or branch_prefix or f'improve/{int(time.time())}'
   resolved_repo = Path(repo_path).resolve()
   if loop_id is None:
-    state = reserve_loop_state(
+    state = await reserve_loop_state(
         session_id,
         goal,
         iterations,
@@ -575,7 +586,7 @@ async def run_improve_loop(
     )
     loop_id = state.loop_id
   else:
-    state = load_loop_state(session_id, loop_id, cfg)
+    state = await load_loop_state(session_id, loop_id, cfg)
     if state is None:
       raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
     resolved_repo = Path(state.repo_path)
@@ -604,7 +615,7 @@ async def run_improve_loop(
     await git_create_worktree(resolved_repo, base_branch, work_branch, wt_path)
   except Exception as e:
     state.status = 'failed'
-    save_loop_state(session_id, state, cfg)
+    await save_loop_state(session_id, state, cfg)
     log.error("improve_loop_worktree_failed", session=session_id, error=str(e))
     failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
     failure_payload['error'] = f"Failed to create worktree: {e}"
@@ -634,14 +645,14 @@ async def run_improve_loop(
       )
       if summary is None:
         break  # Stopped by user or session missing
-      state = load_loop_state(session_id, loop_id, cfg)
+      state = await load_loop_state(session_id, loop_id, cfg)
       if state is None:
         raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
       state.iterations_completed += 1
-      save_loop_state(session_id, state, cfg)
+      await save_loop_state(session_id, state, cfg)
 
     # Check if we exited because the user stopped the loop
-    state = load_loop_state(session_id, loop_id, cfg)
+    state = await load_loop_state(session_id, loop_id, cfg)
     if state is None:
       raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
     stopped_by_user = state.status == 'stopped'
@@ -653,7 +664,7 @@ async def run_improve_loop(
       payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
 
     state.status = 'stopped' if stopped_by_user else 'completed'
-    save_loop_state(session_id, state, cfg)
+    await save_loop_state(session_id, state, cfg)
 
     payload['work_branch'] = work_branch
     payload['base_branch'] = base_branch
@@ -679,12 +690,12 @@ async def run_improve_loop(
     raise
   except Exception:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
-    state = load_loop_state(session_id, loop_id, cfg)
+    state = await load_loop_state(session_id, loop_id, cfg)
     if state:
       state.status = 'failed'
-      save_loop_state(session_id, state, cfg)
+      await save_loop_state(session_id, state, cfg)
   finally:
-    clear_active_loop_lock(session_id, cfg)
+    await clear_active_loop_lock(session_id, cfg)
     # Always clean up the shared worktree
     if wt_path.exists():
       await git_worktree_remove(str(resolved_repo), wt_path, session_id)

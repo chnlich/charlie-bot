@@ -118,7 +118,7 @@ async def start_improve_loop(
 
   work_branch = req.work_branch or req.branch_prefix or f"improve/{int(time.time())}"
   try:
-    state = reserve_loop_state(
+    state = await reserve_loop_state(
         req.session_id,
         req.goal,
         req.iterations,

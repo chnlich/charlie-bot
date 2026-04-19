@@ -1951,9 +1951,10 @@
     iterdir in asyncio.to_thread) or item 035 (which only parallelized the gather)
     — both fixed the mechanics but left the duplicated shape intact.'
   category: duplication
-  status: approved
+  status: in_progress
   created: '2026-04-18T03:12:18Z'
   priority: low
+  in_progress_at: '2026-04-19T23:10:00Z'
 - id: '103'
   title: Extract require_loop_state helper to deduplicate load_loop_state + None-check
     + RuntimeError pattern repeated 5 times in improve_command.py

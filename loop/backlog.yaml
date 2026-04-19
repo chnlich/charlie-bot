@@ -2199,3 +2199,66 @@
   status: pending
   created: '2026-04-19T03:11:11Z'
   priority: low
+- id: '109'
+  title: Extract _detect_pidfd and ctypes pidfd fallback from triggers.py into dedicated
+    src/core/pidfd.py module
+  description: 'PURPOSE — Pull 90 lines of low-level Linux syscall plumbing out of
+    src/core/triggers.py (which is primarily about the business logic of delayed
+    session-wake triggers) and into a single-purpose src/core/pidfd.py module, so
+    the trigger manager file stops mixing two unrelated concerns: (1) high-level
+    trigger persistence / asyncio scheduling, and (2) a portable kernel-syscall
+    shim with ctypes fallback. Currently src/core/triggers.py:24-113 contains
+    `_detect_pidfd()` (85 lines, the single longest function in the file and the
+    11th-longest in the whole src/ tree per the 2026-04-19 code-health scan),
+    the x86_64/aarch64 syscall-number table `_SYS_pidfd_open`, nested helper
+    factories `_stdlib_pidfd_open` / `_stdlib_waitid_pidfd` / `_ctypes_pidfd_open`
+    / `_ctypes_waitid_pidfd`, a nested `_Siginfo` ctypes.Structure with seven
+    fields, and a nested `_WaitidResult` wrapper class. None of this is specific
+    to triggers — it is a generic "open a pidfd, waitid() on it" facility that
+    only happens to be consumed by `_wait_with_pidfd` in the same file. The
+    embedded ctypes code forces anyone reading triggers.py to context-switch
+    between asyncio / pydantic persistence logic and raw libc.syscall plumbing,
+    and it prevents the pidfd helper from being reused (or independently unit
+    tested) elsewhere should another subsystem ever need to watch child PIDs.
+    No existing backlog item touches this: 087 covered yapf-only concerns in
+    triggers.py, 107 covers the trigger-loading loop duplication, and neither
+    addresses the syscall-shim extraction. The 2026-04-19 yapf --diff also
+    reports 3 formatting hunks in triggers.py (blank line above `_SYS_pidfd_open`
+    at L20, missing blank lines before nested `def _stdlib_pidfd_open` at L32
+    and nested `class _WaitidResult` at L86) — all three live inside the code
+    that would move out, so this refactor naturally resolves them as a side
+    effect. HOW — (1) Create src/core/pidfd.py exporting exactly three public
+    names: `pidfd_open(pid, flags=0) -> int` (calls the resolved backend,
+    raises ProcessLookupError / OSError), `waitid_pidfd(fd, options)` (same
+    semantics, raises ChildProcessError / OSError, returns a result object
+    or None on WNOHANG), and `PIDFD_SUPPORTED: bool`. Internally keep the
+    current architecture: a private `_detect()` that returns (pidfd_open_fn,
+    waitid_pidfd_fn) by preferring `os.pidfd_open` + `os.P_PIDFD` stdlib
+    (Python 3.12+ on Linux 5.3+), falling back to the ctypes libc.syscall
+    path on architectures in `_SYS_pidfd_open`, and returning (None, None)
+    otherwise. Move `_Siginfo` and `_WaitidResult` to module scope as
+    private `_Siginfo` and `_WaitidResult` (they can stop being nested now
+    that there is no closure requirement). Module-level
+    `_pidfd_open_fn, _waitid_pidfd_fn = _detect()` runs once at import and
+    `PIDFD_SUPPORTED = _pidfd_open_fn is not None` is set accordingly. (2)
+    Replace the top of src/core/triggers.py (L21-L113, 93 lines) with a
+    single `from src.core.pidfd import pidfd_open, waitid_pidfd, PIDFD_SUPPORTED`
+    import. (3) Update the 3 call sites inside triggers.py: L132
+    `not _PIDFD_SUPPORTED` → `not PIDFD_SUPPORTED`, L268 `fd = _pidfd_open(pid)`
+    → `fd = pidfd_open(pid)`, L294 `info = _waitid_pidfd(fd, ...)` →
+    `info = waitid_pidfd(fd, ...)`. (4) Run `yapf -i src/core/pidfd.py
+    src/core/triggers.py` to pick up the already-present formatting fixes
+    automatically. (5) Confirm `python -m py_compile src/core/pidfd.py
+    src/core/triggers.py` and `python -c "from src.core import triggers"`
+    both succeed. Net result: triggers.py drops from 370 to ~277 lines and
+    becomes a pure trigger-management module; pidfd.py is a focused ~95-line
+    syscall-shim module with a 3-name public API that is independently
+    testable and reusable; `_detect_pidfd` no longer appears in the "functions
+    over 50 lines" list; the 3 outstanding yapf violations in triggers.py
+    disappear; and zero runtime behavior changes because all moved code is
+    byte-for-byte identical. No new dependencies, no circular-import risk
+    (pidfd.py only imports os / platform / ctypes from the stdlib).'
+  category: architecture
+  status: pending
+  created: '2026-04-19T05:11:56Z'
+  priority: low

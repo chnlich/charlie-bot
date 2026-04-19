@@ -136,24 +136,11 @@ class SessionManager:
       include_pending_trigger_status: bool = False,
   ) -> list[SessionMetadata]:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
-    if not self._cfg.sessions_dir.exists():
-      return []
-    dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
-    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs), return_exceptions=True)
-    sessions: list[SessionMetadata] = []
-    for i, meta in enumerate(all_meta):
-      if isinstance(meta, BaseException):
-        log.warning('session_load_failed', session_id=dirs[i].name, error=str(meta))
-        continue
-      if not meta:
-        continue
-      if status is not None and meta.status != status:
-        continue
-      if starred is not None and meta.starred != starred:
-        continue
-      if scheduled is not None and bool(meta.scheduled_task) != scheduled:
-        continue
-      sessions.append(meta)
+    all_meta = await self._iter_session_metas()
+    sessions = [
+        meta for meta in all_meta if (status is None or meta.status == status) and
+        (starred is None or meta.starred == starred) and (scheduled is None or bool(meta.scheduled_task) == scheduled)
+    ]
     return await self._enrich_and_sort(
         sessions,
         include_running_status=include_running_status,
@@ -168,14 +155,11 @@ class SessionManager:
   ) -> list[SessionMetadata]:
     """Search active sessions by name and chat event content (case-insensitive)."""
     query_lower = query.lower()
-    if not self._cfg.sessions_dir.exists():
-      return []
-    dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
-    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs))
+    all_meta = await self._iter_session_metas()
     results: list[SessionMetadata] = []
     content_candidates: list[tuple[SessionMetadata, Path]] = []
     for meta in all_meta:
-      if not meta or meta.status != SessionStatus.ACTIVE:
+      if meta.status != SessionStatus.ACTIVE:
         continue
       # Check session name first
       if query_lower in (meta.name or '').lower():
@@ -679,6 +663,28 @@ class SessionManager:
   def _invalidate_cache(self, session_id: str) -> None:
     """Remove a session from the metadata cache."""
     self._metadata_cache.pop(session_id, None)
+
+  async def _iter_session_metas(self) -> list[SessionMetadata]:
+    """Load all session metadata from disk concurrently.
+
+    Performs the standard three-step preamble shared by every listing entry point:
+    (1) return [] if sessions_dir does not exist, (2) list session directories under
+    asyncio.to_thread to avoid blocking the event loop, (3) concurrently load each
+    session's metadata via asyncio.gather, logging and dropping any that fail to load.
+    """
+    if not self._cfg.sessions_dir.exists():
+      return []
+    dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
+    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs), return_exceptions=True)
+    result: list[SessionMetadata] = []
+    for i, meta in enumerate(all_meta):
+      if isinstance(meta, BaseException):
+        log.warning('session_load_failed', session_id=dirs[i].name, error=str(meta))
+        continue
+      if not meta:
+        continue
+      result.append(meta)
+    return result
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
     """Return (creating on first use) the per-session metadata RMW lock."""

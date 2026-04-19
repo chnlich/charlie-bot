@@ -2161,3 +2161,41 @@
   status: pending
   created: '2026-04-19T01:11:31Z'
   priority: low
+- id: '108'
+  title: Add TYPE_CHECKING imports for ThreadManager and SessionManager forward refs
+    in core/improve_command.py
+  description: 'PURPOSE — Silence the only five real pyflakes warnings left in
+    the entire src/ tree and restore static-type-checker / IDE navigation for
+    the improve-loop orchestrator. `python -m pyflakes src/` currently reports
+    five "undefined name" errors, all in src/core/improve_command.py — L259
+    (is_quota_failure: thread_mgr: "ThreadManager"), L283 (_wait_for_quota_recovery:
+    session_mgr: "SessionManager"), L420 and L421 (_run_single_iteration:
+    session_mgr / thread_mgr), and L542 and L543 (run_improve_loop: session_mgr
+    / thread_mgr). All five are string-quoted forward references but the module
+    never imports either name — not at module scope, not under `if TYPE_CHECKING:`.
+    Consequence: mypy / pyright / PyCharm / VS Code cannot resolve the types
+    (go-to-definition and autocomplete silently fail on the most heavily-used
+    parameter in the file), and the pyflakes noise masks any genuinely new
+    undefined-name issue a future change might introduce. The existing items
+    that touch this file — 081 (async I/O), 103 (require_loop_state helper),
+    104 (wrap improve loop-state helpers in asyncio.to_thread), 106 (utc_now
+    helper) — are all runtime-behavior changes and explicitly do not address
+    the type-annotation hygiene problem. HOW — (1) Add `from typing import
+    Optional, TYPE_CHECKING` to src/core/improve_command.py (already imports
+    Optional from typing at L8; just append TYPE_CHECKING). (2) Add a
+    TYPE_CHECKING-guarded import block near the other imports: `if TYPE_CHECKING:
+    from src.core.sessions import SessionManager; from src.core.threads import
+    ThreadManager`. (3) Leave the five existing quoted annotations unchanged
+    (the quotes are still required because the imports are conditional), or
+    optionally drop the quotes if `from __future__ import annotations` is added
+    — but the minimal change is just the TYPE_CHECKING block. Net result:
+    ~4 lines added, 0 lines removed, 0 runtime behavior change, 5 pyflakes
+    warnings gone, and every type checker and IDE in the toolchain gains full
+    navigation on the improve-loop module. Confirmed no circular-import risk:
+    both src.core.sessions and src.core.threads are imported unconditionally
+    elsewhere (e.g. src.core.review imports both at module scope at L13-L14),
+    so a TYPE_CHECKING-only import from improve_command adds zero runtime edges.'
+  category: refactoring
+  status: pending
+  created: '2026-04-19T03:11:11Z'
+  priority: low

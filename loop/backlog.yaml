@@ -2123,3 +2123,41 @@
   status: pending
   created: '2026-04-18T19:12:53Z'
   priority: low
+- id: '107'
+  title: Extract shared _load_triggers_from_dir helper to deduplicate list_triggers
+    and recover_pending in core/triggers.py
+  description: 'PURPOSE — Eliminate the copy-pasted "glob *.json, read each file,
+    validate as PendingTrigger, log on error" block that appears twice in src/core/triggers.py
+    (TriggerManager.list_triggers at L152-166 and TriggerManager.recover_pending at
+    L180-200), so future changes to the on-disk trigger format — file extension,
+    encoding, validation, or error logging — are made in exactly one place instead
+    of drifting between two near-identical loops. The two blocks currently differ
+    only in their log-event name (trigger_load_failed vs trigger_recovery_load_failed),
+    which is a cosmetic distinction that obscures the real duplication and makes
+    it easy for one site to evolve (e.g. add a .json.tmp exclusion, switch to aiofiles,
+    add schema migration) without the other. Both blocks already use asyncio.to_thread(lambda
+    ...: list(td.glob("*.json"))) and `await asyncio.to_thread(f.read_text, "utf-8")`
+    followed by PendingTrigger.model_validate_json(raw); extracting the shared logic
+    is a pure behavior-preserving refactor with zero API surface change. No existing
+    backlog item covers this file — items 102 and 046 tackle iterdir patterns in
+    sessions.py / threads.py but stop short of triggers.py, and items 059 (shared
+    YAML helpers) and 094 (_run_git_cmd) are about different shared-helper patterns.
+    HOW — (1) Add a private async method `_load_triggers_from_dir(self, triggers_dir:
+    Path, log_event: str) -> list[PendingTrigger]` on TriggerManager that: globs
+    *.json via asyncio.to_thread, reads each file via asyncio.to_thread(f.read_text,
+    "utf-8"), calls PendingTrigger.model_validate_json, and logs with the given
+    log_event name on parse/IO failure. Return the list of successfully loaded
+    triggers (unsorted — sort is caller-specific). (2) Rewrite list_triggers to
+    call `triggers = await self._load_triggers_from_dir(triggers_dir, "trigger_load_failed")`,
+    then sort and return. (3) Rewrite recover_pending''s inner loop to call
+    `triggers = await self._load_triggers_from_dir(triggers_dir, "trigger_recovery_load_failed")`,
+    then iterate the already-loaded list and call `self._start_task(trigger)` for
+    each PENDING one. Net result: ~10 duplicated lines collapse into a single 8-line
+    helper, two log-event strings become explicit parameters at the two call sites,
+    and any future change to the trigger on-disk format (aiofiles migration, .json.tmp
+    filtering, schema versioning) is made exactly once. No runtime behavior change
+    and no new dependencies.'
+  category: refactoring
+  status: pending
+  created: '2026-04-19T01:11:31Z'
+  priority: low

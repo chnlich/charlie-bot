@@ -2262,3 +2262,50 @@
   status: pending
   created: '2026-04-19T05:11:56Z'
   priority: low
+- id: '110'
+  title: Extract shared _prepend_path helper in backends/base.py to deduplicate PATH-prepending
+    logic in codex.py and opencode.py
+  description: 'PURPOSE — Pull the identical 5-line "prepend a directory to $PATH if
+    not already present" block out of two different backend `_prepare_env` overrides
+    (src/agents/backends/codex.py:75-81 and src/agents/backends/opencode.py:80-86) and
+    into a single reusable helper on AgentBackend in src/agents/backends/base.py.
+    Today both call sites copy the same pattern verbatim — build a fresh env dict,
+    compute a home-relative bin directory (`~/.local/bin` for codex,
+    `~/.opencode/bin` for opencode), read the current PATH with `.get("PATH", "")`,
+    split it on ":" to check membership, and conditionally prepend — differing only
+    in the directory they inject. This is textbook shotgun duplication: any future
+    fix (Windows path separator handling, normalizing symlinks, logging when a PATH
+    entry is added, honoring an explicit override) has to be applied twice and kept
+    in sync. The duplication was flagged by the 2026-04-19 code-health scan
+    (`grep "current_path.split"` returns exactly two hits in src/, both backends);
+    no existing backlog item addresses it (038 covered `_resolve_binary` and
+    `_effective_prompt` extraction, 042 added event factory helpers, 054 removed
+    redundant __init__ kwargs-popping, but none touch `_prepare_env`). This is a
+    high-impact, low-effort refactor: ~10 lines net reduction, a single new 6-line
+    helper, zero behavior change, and it sets the pattern for any future backend
+    (e.g. if a Cursor or Aider backend needs `~/.cursor/bin` on PATH) to reuse
+    instead of copy-paste. HOW — (1) In src/agents/backends/base.py, add a
+    protected helper on AgentBackend near the existing `_prepare_env` default
+    (around L136): `@staticmethod` `def _prepend_path(env: dict, directory: str)
+    -> dict:` that returns a new dict with `PATH` set to `f"{directory}:{current}"`
+    if `directory` is not already in the colon-split of the current PATH, otherwise
+    returns a shallow copy unchanged. Signature: `_prepend_path(env: dict,
+    directory: str) -> dict`. Always returns a new dict (never mutates the input)
+    to preserve the existing callers contract. (2) In src/agents/backends/codex.py
+    replace the L75-81 body with `return self._prepend_path(env,
+    str(Path.home() / ".local" / "bin"))`. (3) In
+    src/agents/backends/opencode.py replace the L80-86 body with `return
+    self._prepend_path(env, str(Path.home() / ".opencode" / "bin"))`. (4) Verify
+    with `python -m py_compile src/agents/backends/base.py
+    src/agents/backends/codex.py src/agents/backends/opencode.py` and
+    `python -c "from src.agents.backends import codex, opencode"`. (5) Confirm
+    `yapf --diff src/agents/backends/` shows no new violations. Net result: both
+    `_prepare_env` overrides shrink from 7 lines to 2 lines each (10 LOC total
+    removed), base.py gains a 6-line helper, the colon-split PATH-membership
+    test lives in exactly one place, and any future backend that needs the same
+    behavior gets it for free. No new dependencies, no external API change, no
+    circular-import risk (base.py does not import Path; codex/opencode already do).'
+  category: refactoring
+  status: pending
+  created: '2026-04-19T11:10:51Z'
+  priority: low

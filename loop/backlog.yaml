@@ -2037,7 +2037,7 @@
     Asyncio is already imported in both files. No behavior changes — only concurrency
     characteristics improve.'
   category: performance
-  status: pending
+  status: approved
   created: '2026-04-18T08:00:00Z'
   priority: medium
 - id: '105'

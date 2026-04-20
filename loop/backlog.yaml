@@ -2492,3 +2492,87 @@
   status: pending
   created: '2026-04-20T05:11:17Z'
   priority: low
+- id: '114'
+  title: Extract shared _load_json_meta / _save_json_meta helpers in core/init.py to
+    deduplicate the startup-recovery metadata read-modify-write pattern between _recover_orphaned_threads
+    and _clear_stale_thinking
+  description: 'PURPOSE — Collapse the two verbatim copies of the "try: json.loads(meta_path.read_text(encoding=\"utf-8\"))
+    except (json.JSONDecodeError, OSError) as e: log.warning(<event>, path=str(meta_path),
+    error=str(e)); continue" block AND the identical "meta_path.write_text(json.dumps(meta,
+    indent=2), encoding=\"utf-8\")" read-modify-write suffix that live in _recover_orphaned_threads
+    (src/core/init.py L110-117 + L128) and _clear_stale_thinking (src/core/init.py
+    L146-153 + L157) into a pair of shared private helpers, so the two startup-recovery
+    passes stop drifting and future fixes (atomic write via os.replace to avoid half-written
+    metadata if the server is killed mid-write, consistent JSON formatting knobs like
+    sort_keys / ensure_ascii, a common structured-log schema for malformed-metadata
+    incidents, bumping indentation, or adding a content-hash to detect corruption)
+    can be applied in exactly one place. The duplication is textbook: both functions
+    start with the same `if not cfg.sessions_dir.exists(): return` early-exit guard
+    (L102-103 vs L142-143), both iterate `cfg.sessions_dir.iterdir()` directly (L105
+    vs L145) and drill down to a `metadata.json` child (the thread path also adds
+    one `threads/` subdir layer, which is the only structural difference), both skip
+    missing files via `if not meta_path.exists(): continue`, both run the identical
+    5-line "load JSON or log.warning with path+error and continue" block differing
+    only in the structlog event name (`thread_meta_unreadable` vs `session_meta_unreadable`),
+    and both finalize with the identical write-back line `meta_path.write_text(json.dumps(meta,
+    indent=2), encoding=\"utf-8\")`. This was flagged by the 2026-04-20 code-health
+    scan: `grep -rn "json.loads.*meta_path.read_text" src/` returns exactly two hits,
+    both in init.py; `grep -rn "meta_path.write_text(json.dumps" src/` returns exactly
+    two hits, both in init.py; pyflakes/yapf pass on the file but the textual duplication
+    is pure. No existing backlog item addresses this: 106 added `utc_now()` for a
+    completely orthogonal concern (centralizing `datetime.now(timezone.utc)`), 098
+    covered the recovery-kills-orphan-pid-signaling bug in a different part of the
+    same function, 111 deduplicated the NDJSON line-decode block inside core/ndjson.py,
+    and 112 deduplicated the CLAUDE.md/AGENTS.md write in backends/base.py — none
+    touch the startup-recovery metadata I/O in init.py. This is a high-impact, low-effort
+    refactor: ~8 lines net reduction, two new 5-line helpers, zero behavior change,
+    and it establishes a single canonical "load-or-log-and-skip" + "write-indented-utf8-json"
+    pair so any future startup-recovery pass (e.g. a hypothetical `_migrate_session_schema`,
+    `_gc_orphaned_worker_logs`, or `_repair_truncated_event_log`) gets identical error-handling
+    and on-disk formatting for free. It also incidentally makes the `_recover_orphaned_threads`
+    and `_clear_stale_thinking` bodies read as linear narratives of their actually-distinct
+    business logic (kill pid + flip status+exit_code+completed_at for thread recovery;
+    null-out thinking_since for session cleanup) without the I/O prelude and I/O suffix
+    visually obscuring the difference. HOW — (1) In src/core/init.py, add two private
+    module-level helpers immediately after the existing `_seed_if_missing` helper
+    (around L93): (a) `def _load_json_meta(meta_path: Path, log_event: str) -> dict
+    | None:` that returns `None` if the file is missing (replacing the outer `if not
+    meta_path.exists(): continue` guard), otherwise `try: return json.loads(meta_path.read_text(encoding=\"utf-8\"))
+    except (json.JSONDecodeError, OSError) as e: log.warning(log_event, path=str(meta_path),
+    error=str(e)); return None`. Signature takes log_event as a parameter so each
+    caller preserves its distinct structured-log identity (`thread_meta_unreadable`
+    vs `session_meta_unreadable`) — breaking that would lose grep-ability in production
+    logs. Returning `None` for both the missing-file and decode-error cases collapses
+    three lines of caller boilerplate (the exists-check, the try block, and the continue)
+    into a single `meta = _load_json_meta(...); if meta is None: continue`. (b) `def
+    _save_json_meta(meta_path: Path, meta: dict) -> None:` that simply does `meta_path.write_text(json.dumps(meta,
+    indent=2), encoding=\"utf-8\")` — trivial today but creates the single chokepoint
+    for future upgrades (atomic rename via write-to-tempfile-then-os.replace, or bumping
+    `indent` / adding `sort_keys=True` without touching every call site). (2) Replace
+    _recover_orphaned_threads L110-117 with `meta_path = thread_dir / \"metadata.json\";
+    meta = _load_json_meta(meta_path, \"thread_meta_unreadable\"); if meta is None:
+    continue` (8 lines → 3 lines). (3) Replace _recover_orphaned_threads L128 with
+    `_save_json_meta(meta_path, meta)` (1 line → 1 line, but now routed through the
+    helper). (4) Replace _clear_stale_thinking L146-153 with `meta_path = session_dir
+    / \"metadata.json\"; meta = _load_json_meta(meta_path, \"session_meta_unreadable\");
+    if meta is None: continue` (8 lines → 3 lines). (5) Replace _clear_stale_thinking
+    L157 with `_save_json_meta(meta_path, meta)` (1 line → 1 line, routed through
+    the helper). (6) Verify with `python -m py_compile src/core/init.py` and `python
+    -c \"from src.core.init import init_charliebot_home\"`. (7) Confirm `yapf --diff
+    src/core/init.py` shows no new violations. (8) Optionally smoke-test by starting
+    the server against a sessions_dir containing one session with thinking_since set
+    to a fake ISO timestamp and one thread with status=\"running\" — both should be
+    cleaned up on startup identically to the pre-refactor behavior. Net result: init.py
+    drops from 163 to ~155 lines, the two recovery passes shrink by ~5 lines each
+    while gaining readability, the \"load metadata or skip with warning\" and \"write
+    metadata back as indented UTF-8 JSON\" policies each live in exactly one place,
+    and any future startup-recovery function added to the same module gets both primitives
+    in one line. No new dependencies, no public API change, no behavior change (same
+    log event names, same log level, same encoding, same skip semantics for both missing-file
+    and decode-error cases, same JSON indentation, same UTF-8 encoding, same read-modify-write
+    ordering), no circular-import risk (helpers are private module-level functions
+    using only the already-imported json, Path, and structlog logger).'
+  category: refactoring
+  status: pending
+  created: '2026-04-20T11:10:57Z'
+  priority: low

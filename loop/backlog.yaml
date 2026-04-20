@@ -2576,3 +2576,119 @@
   status: pending
   created: '2026-04-20T11:10:57Z'
   priority: low
+- id: '115'
+  title: Promote the json-meta load helper from core/init.py into a shared core/json_utils.py
+    module and dedupe the two sessions.py metadata-load + JSONDecodeError-or-OSError-swallow
+    blocks in SessionManager._has_running_tasks and SessionManager._get_pending_trigger_state
+  description: 'PURPOSE — Once the private `_load_json_meta(meta_path, log_event)
+    -> dict | None` helper lands inside core/init.py via backlog item 114, it will
+    still leave two verbatim copies of the exact same "try: json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError[, ValueError]) as e: log.debug(<event>,
+    <path>=..., error=str(e)); continue" pattern sitting in src/core/sessions.py —
+    one in SessionManager._has_running_tasks._check (src/core/sessions.py L720-726,
+    iterating threads/*/metadata.json to detect running threads) and one in SessionManager._get_pending_trigger_state._check
+    (src/core/sessions.py L742-746, iterating triggers/*.json to count pending delayed
+    triggers and find the earliest fire_at). The init.py pair was already recognized
+    as textbook duplication (114); the sessions.py pair is the same pattern in a different
+    module and was explicitly scoped out of 114 to keep that refactor surgical. The
+    two sessions.py sites would benefit from the identical chokepoint — they already
+    use the same three-field structlog schema (event, path-like key, error=str(e)),
+    the same decode-or-skip semantics, and the same UTF-8 read. This cross-module
+    promotion is the high-impact follow-on: it moves the helper out of a private module
+    scope and into a reusable core/json_utils.py (mirroring the existing core/yaml_utils.py
+    pattern — same one-purpose utility module shape, same UTF-8-first stance, same
+    "return None on missing / malformed" contract), then retrofits both sessions.py
+    call sites AND the two init.py call sites to use the promoted helper, collapsing
+    four hand-rolled decode-or-skip blocks into one canonical primitive. Future fixes
+    — e.g. bumping the skipped-exception set to also swallow UnicodeDecodeError, adding
+    a content-hash corruption check, switching to ijson for large-trigger-dir streaming,
+    or emitting a Prometheus counter on every malformed-metadata incident — then land
+    in exactly one place instead of four. The 2026-04-20 code-health scan confirmed
+    the duplication: `grep -rn "json.loads.*read_text(encoding=\"utf-8\")" src/` returns
+    exactly four hits, two in init.py and two in sessions.py, with byte-for-byte identical
+    surrounding except-and-continue boilerplate modulo the log-event name and the
+    tuple of swallowed exception classes (init.py catches json.JSONDecodeError+OSError;
+    sessions.py:720 catches the same pair; sessions.py:742 catches json.JSONDecodeError+OSError+ValueError
+    — the ValueError there is dead-code insurance against a non-dict top-level JSON
+    value, which the helper will preserve by accepting a caller-specified exception
+    tuple). No existing backlog item covers the sessions.py sites: 114 is scoped to
+    init.py; 106 is orthogonal (utc_now); 102 covered _iter_session_metas for list/search
+    paths and did not touch the _check nested closures inside _has_running_tasks or
+    _get_pending_trigger_state; none of 108-113 touch sessions.py metadata reads.
+    This is a high-impact, low-effort refactor: ~10 lines net reduction across init.py
+    + sessions.py, a single new ~7-line helper lifted into a new ~15-line core/json_utils.py
+    module, zero behavior change, and it establishes the missing JSON counterpart
+    to the existing core/yaml_utils.py — closing a small but real consistency gap
+    where YAML has a canonical load helper but JSON does not. HOW — (1) Create a new
+    file src/core/json_utils.py mirroring src/core/yaml_utils.py in size and style:
+    module docstring `"""Shared JSON load helpers for consistent encoding and error
+    handling."""`, imports `json`, `from pathlib import Path`, `from typing import
+    Any`, `import structlog`, then `log = structlog.get_logger()` at module level
+    and a single public function `def load_json_meta(path: Path, log_event: str, *,
+    catch: tuple[type[BaseException], ...] = (json.JSONDecodeError, OSError)) -> dict
+    | None:` whose body is exactly `if not path.exists(): return None; try: return
+    json.loads(path.read_text(encoding="utf-8")) except catch as e: log.debug(log_event,
+    path=str(path), error=str(e)); return None`. The `catch` keyword-only argument
+    defaults to the (JSONDecodeError, OSError) pair used by 3 of the 4 sites and lets
+    the fourth site (sessions.py:742) pass `catch=(json.JSONDecodeError, OSError,
+    ValueError)` without introducing a second helper — this preserves the existing
+    ValueError-swallow behavior exactly. Use `log.debug` (not `log.warning`) because
+    sessions.py uses debug today; the init.py sites currently use log.warning — those
+    will be migrated to log.debug in step 3 as a minor consistency improvement, or
+    alternatively the helper can take a `level: str = "debug"` parameter if preserving
+    init.py''s warning level is required (decide during implementation based on whether
+    anyone actually greps for thread_meta_unreadable/session_meta_unreadable in production
+    logs; if yes, add the level parameter; if no, standardize on debug). (2) Reopen
+    backlog 114 if not yet merged and align it to emit this helper directly rather
+    than a private _load_json_meta — but do not block on 114: if 114 lands first with
+    the private helper, this item can still move the helper out and delete the init.py-local
+    version in the same commit. (3) In src/core/sessions.py _has_running_tasks._check
+    (L720-726), replace the 7-line `try: meta = json.loads(...); if meta.get("status")
+    == "running": return True; except (json.JSONDecodeError, OSError) as e: log.debug(...);
+    continue` block with `meta = load_json_meta(meta_path, "thread_meta_read_failed");
+    if meta is None: continue; if meta.get("status") == "running": return True` (7
+    lines → 3 lines). Rename the structlog event from `thread_meta_read_failed` only
+    if migrating to a consistent naming scheme — otherwise keep it verbatim to preserve
+    log grep-ability. Note: the existing code logs `thread_dir=thread_dir.name` rather
+    than the full path; the helper will log `path=str(meta_path)` instead, which is
+    a minor structured-log field rename (`thread_dir` -> `path`) that''s worth calling
+    out in the commit message but is not a behavior change — the underlying information
+    is strictly richer. (4) In src/core/sessions.py _get_pending_trigger_state._check
+    (L742-746), replace the 5-line `try: trigger = json.loads(...) except (json.JSONDecodeError,
+    OSError, ValueError) as e: log.debug(...); continue` block with `trigger = load_json_meta(trigger_path,
+    "trigger_meta_read_failed", catch=(json.JSONDecodeError, OSError, ValueError));
+    if trigger is None: continue` (5 lines → 2 lines). Same `trigger_path` -> `path`
+    structured-log field rename applies. (5) In src/core/init.py, migrate both _recover_orphaned_threads
+    (L110-117) and _clear_stale_thinking (L146-153) to call `load_json_meta(meta_path,
+    <event>)` from the new core/json_utils.py instead of the private _load_json_meta
+    — deleting the private helper if 114 has already added it. This collapses the
+    init.py call sites to the same two-line `meta = load_json_meta(...); if meta is
+    None: continue` idiom that sessions.py now uses, and removes the last private
+    copy of the pattern. (6) Verify with `python -m py_compile src/core/json_utils.py
+    src/core/sessions.py src/core/init.py` and `python -c "from src.core.json_utils
+    import load_json_meta; from src.core.sessions import SessionManager; from src.core.init
+    import init_charliebot_home"`. (7) Confirm `yapf --diff src/core/json_utils.py
+    src/core/sessions.py src/core/init.py` shows no new violations. (8) Smoke-test
+    end-to-end: start the server against a sessions_dir containing (a) a session with
+    a malformed metadata.json (should emit session_meta_unreadable at startup via
+    init.py recovery), (b) a session with a threads/*/metadata.json with status=running
+    (should be detected by _has_running_tasks and surface in the sidebar), (c) a session
+    with a triggers/*.json with status=pending and a fire_at timestamp (should surface
+    in the trigger count + next_trigger_at). All three paths should behave identically
+    to pre-refactor. Net result: core/ gains a new 15-line json_utils.py module that
+    mirrors yaml_utils.py in shape and style, the four metadata-load sites (2 in init.py
+    + 2 in sessions.py) collapse from ~26 total boilerplate lines to ~8 two-line call
+    sites, the "load JSON from disk or log-and-skip on malformed/missing" policy lives
+    in exactly one place across the core package, and any future JSON-on-disk read
+    (e.g. a hypothetical _migrate_session_schema, _gc_orphaned_worker_logs, or a new
+    review-artifact reader) inherits the UTF-8 + swallow-and-log + return-None contract
+    for free. No new dependencies, no public API change beyond the new core/json_utils
+    module, no behavior change (same exception classes caught, same debug-level logging,
+    same UTF-8 encoding, same return-None-on-missing-or-malformed contract, same structured-log
+    event names; the only structured-log field rename is thread_dir/trigger_path ->
+    path, which is strictly more informative), no circular-import risk (core/json_utils.py
+    has zero intra-package imports).'
+  category: refactoring
+  status: pending
+  created: '2026-04-20T15:16:21Z'
+  priority: low

@@ -2422,3 +2422,73 @@
   status: pending
   created: '2026-04-19T17:12:45Z'
   priority: low
+- id: '113'
+  title: Extract shared _create_child_session helper in SessionManager to deduplicate
+    metadata/subdir scaffolding between fork_session and elone_session
+  description: 'PURPOSE — Collapse the two verbatim copies of the "build a SessionMetadata
+    derived from a parent, create its on-disk session directory, and mkdir the standard
+    data/threads subdirs" block that live in SessionManager.fork_session (src/core/sessions.py
+    L218-226) and SessionManager.elone_session (src/core/sessions.py L264-272) into
+    a single private helper, so the two child-session entry points stop drifting and
+    future fixes (adding a new standard subdir like `workers/`, switching to a factory
+    that populates `created_by`, emitting a structured `session_created` telemetry
+    event on every spawn, or gating mkdir behind a config-controlled layout version)
+    can be applied in exactly one place. The duplication is textbook: fork_session
+    does `meta = SessionMetadata(name=f''C{parent.name}'', parent_session_id=parent_id,
+    backend=backend or parent.backend, group=parent.group); session_dir = self._session_dir(meta.id);
+    for subdir in [''data'', ''threads'']: (session_dir / subdir).mkdir(parents=True,
+    exist_ok=True)`; elone_session does the identical 9-line block with the only
+    difference being the name prefix (`f''E{parent.name}''` instead of `f''C{parent.name}''`).
+    Both call sites then proceed to diverge — fork_session copies parent events and
+    appends a CLONE_START banner, elone_session writes an empty chat_events.jsonl
+    and archives+thumbs-downs the parent — but the scaffolding half is byte-for-byte
+    identical. This was flagged by the 2026-04-19 code-health scan (grep `for subdir
+    in \[''data'', ''threads''\]` returns exactly two hits in src/, both in sessions.py;
+    grep `SessionMetadata\(\s*name=f''` followed by parent_id/backend/group returns
+    the same two hits). No existing backlog item addresses it: 065 covered the `_summarize_event_lines`
+    extraction on the rewind/fork divergence path (orthogonal — event summary, not
+    session scaffolding), 102 covered the `_iter_session_metas` helper for list/search
+    paths, 109 covered extracting pidfd, 110/111/112 covered backend-layer dedup —
+    none touch SessionManager child-session creation. This is a high-impact, low-effort
+    refactor: ~14 lines net reduction, a single new 10-line helper, zero behavior
+    change, and it establishes one canonical child-session scaffolding primitive so
+    any future spawn variant (e.g. a hypothetical `branch_session`, `clone_for_review`,
+    or `elone_session_without_archive`) gets the identical directory layout for free
+    instead of copy-pasting the mkdir loop. HOW — (1) In src/core/sessions.py, add
+    a private async helper on SessionManager immediately above fork_session (near
+    L192): `async def _create_child_session(self, parent: SessionMetadata, name_prefix:
+    str, backend: str | None) -> SessionMetadata:` that (a) builds `meta = SessionMetadata(name=f"{name_prefix}{parent.name}",
+    parent_session_id=parent.id, backend=backend or parent.backend, group=parent.group)`,
+    (b) computes `session_dir = self._session_dir(meta.id)`, (c) runs the `for subdir
+    in [''data'', ''threads'']: (session_dir / subdir).mkdir(parents=True, exist_ok=True)`
+    loop, (d) returns `meta`. Do NOT call `self._save_metadata(meta)` inside the helper
+    — the two call sites persist metadata at different points relative to their downstream
+    side-effects (fork persists after copying events, elone persists before the parent-archive
+    step) and conflating the two save timings would change semantics. Keep the helper
+    synchronous-style w.r.t. I/O (just mkdir, no await needed for the metadata build
+    itself), but mark it `async def` anyway so the scaffolding can grow (e.g. an `asyncio.to_thread`
+    wrapper around the mkdir loop in a future pass) without forcing every caller to
+    change. The mkdir calls themselves are fine synchronously — they already are today.
+    (2) Replace fork_session L218-226 with `meta = await self._create_child_session(parent,
+    ''C'', backend)` (9 lines → 1 line). (3) Replace elone_session L264-272 with `meta
+    = await self._create_child_session(parent, ''E'', backend)` (9 lines → 1 line).
+    (4) Verify with `python -m py_compile src/core/sessions.py` and `python -c "from
+    src.core.sessions import SessionManager"`. (5) Confirm `yapf --diff src/core/sessions.py`
+    shows no new violations. (6) Exercise both paths manually via the existing /fork
+    and /elone flows on a test session to confirm the created subdirs, metadata fields,
+    and downstream archive/clone-event semantics are byte-for-byte identical. Net
+    result: fork_session drops from 58 to ~50 lines (pushing it below the 50-line
+    threshold tracked by the code-health scanner), elone_session drops from 48 to
+    ~40 lines, sessions.py gains a 10-line helper, the ''data'' + ''threads'' subdir
+    layout policy lives in exactly one place, and the two call sites become linear
+    narratives of their actually-distinct downstream work (event-copy + CLONE_START
+    banner for fork; empty-file + archive-parent for elone) without the scaffolding
+    prelude visually obscuring the difference. No new dependencies, no public API
+    change, no behavior change (same name prefixes, same parent_session_id linkage,
+    same backend inheritance, same group inheritance, same subdir layout, same mkdir
+    parents=True + exist_ok=True semantics), no circular-import risk (helper is private
+    to the class and uses only existing imports).'
+  category: refactoring
+  status: pending
+  created: '2026-04-20T05:11:17Z'
+  priority: low

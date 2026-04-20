@@ -22,7 +22,6 @@ log = structlog.get_logger()
 def build_review_prompt(
     branch_name: str,
     wt_path: str,
-    repo_path: Path,
     base_branch: str,
     session_id: str,
     original_thread_id: str,
@@ -59,8 +58,7 @@ def build_review_prompt(
       f"IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "
       f"Only fix clear bugs, correctness issues, or scope violations. "
       f"Do not refactor, restyle, or improve code that is functionally correct.\n\n"
-      f"The work is on branch `{branch_name}` in worktree `{wt_path}`.\n\n"
-      f"IMPORTANT: NEVER run git push from the worktree. All pushes must happen from `{repo_path}` after merging.\n\n"
+      f"The work is on branch `{branch_name}` in worktree `{wt_path}`. All git operations below run from the worktree.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Review the changes: `git diff {base_branch}...{branch_name}`\n"
       f"3. Verify the changes address the user's actual intent (from context research above).\n"
@@ -74,10 +72,10 @@ def build_review_prompt(
       f"7. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
       f"8. If you find issues, fix them and commit with descriptive messages.\n"
       f"9. Stash untracked/modified files: `git stash --include-untracked`\n"
-      f"10. Rebase onto base branch: `git rebase {base_branch}`\n"
-      f"11. Merge: `cd {repo_path} && git merge --ff-only {branch_name}`\n"
-      f"12. Push to remote: `cd {repo_path} && git pull --ff-only && git push origin {base_branch}`\n"
-      f"13. Verify: `git log --oneline -1 {base_branch}` and `git log --oneline -1 origin/{base_branch}` must show the same commit."
+      f"10. Fetch the latest base branch: `git fetch origin {base_branch}`\n"
+      f"11. Rebase onto the remote base: `git rebase origin/{base_branch}`\n"
+      f"12. Push to remote base branch from the worktree: `git push origin HEAD:{base_branch}`\n"
+      f"13. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` must show the same commit."
   )
 
 
@@ -268,7 +266,6 @@ async def spawn_review_worker(
   review_prompt = build_review_prompt(
       branch_name,
       wt_path,
-      repo_path,
       base_branch,
       session_id=session_id,
       original_thread_id=original_thread.id,

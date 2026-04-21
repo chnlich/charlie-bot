@@ -2692,3 +2692,88 @@
   status: pending
   created: '2026-04-20T15:16:21Z'
   priority: low
+- id: '116'
+  title: Collapse SessionManager.mark_read and mark_unread into a single _set_unread_flag
+    helper to deduplicate the lock + guard + save + sidebar-broadcast pipeline
+  description: 'PURPOSE — Fold the two verbatim copies of the "acquire per-session
+    lock, load metadata, early-return if has_unread already matches the target state,
+    flip the bool, save metadata, broadcast an UNREAD_CHANGED event on the sidebar
+    channel" pipeline that live in SessionManager.mark_read (src/core/sessions.py
+    L317-331) and SessionManager.mark_unread (src/core/sessions.py L333-346) into
+    a single private helper, so the two unread-flag mutators stop drifting and future
+    fixes (emitting a per-session UNREAD_CHANGED broadcast in addition to the sidebar
+    one, bumping updated_at whenever has_unread flips, adding a structured log.info
+    on each transition for audit, debouncing rapid-fire mark_unread calls during a
+    streaming worker burst, or wiring an observability counter) can be applied in
+    exactly one place. The duplication is textbook: both methods open with `async
+    with self._lock_for(session_id):`, both call `meta = await self.get_session(session_id)`,
+    both early-exit when the flag is already in the target state (`if not meta or
+    not meta.has_unread: return meta` for mark_read; `if not meta or meta.has_unread:
+    return` for mark_unread — the only structural difference is the guard polarity
+    and the return type), both assign `meta.has_unread = <target>`, both call `await
+    self._save_metadata(meta)` inside the lock, and both close with the identical
+    `await streaming_manager.broadcast("sidebar", {"type": ET.UNREAD_CHANGED, "session_id":
+    session_id, "has_unread": <target>})` call outside the lock. The only true behavioral
+    differences are: (a) mark_read returns the updated SessionMetadata while mark_unread
+    returns None (used by api/sessions.py mark_read endpoint to surface the post-mutation
+    state); (b) the target boolean. Every other line is byte-for-byte identical. This
+    was flagged by the 2026-04-21 code-health scan: `grep -n "has_unread" src/core/sessions.py`
+    returns exactly 4 hits (L321, L323, L329, L337, L339, L345 — the entirety of both
+    methods), and the full 14-line block difference is a single boolean flip. No existing
+    backlog item covers this: 002 collapsed archive/unarchive/star/unstar/mark_waiting/unmark_waiting
+    via _update_field but explicitly left mark_read/mark_unread alone because their
+    additional sidebar-broadcast step does not fit the generic _update_field shape
+    (which only emits a log event, not a sidebar broadcast with a per-field payload
+    key). 001 extracted a session-view loader on a different axis. Nothing else in
+    the backlog touches these two methods. This is a high-impact, low-effort refactor:
+    ~8 lines net reduction, a single new ~10-line helper, zero behavior change, and
+    it establishes one canonical unread-flag-toggle primitive so any future fix to
+    the sidebar-broadcast payload, the locking strategy, or the persistence ordering
+    lands in exactly one place instead of two. HOW — (1) In src/core/sessions.py,
+    add a private async helper on SessionManager immediately above mark_read (near
+    L317): `async def _set_unread_flag(self, session_id: str, target: bool) -> Optional[SessionMetadata]:`
+    whose body is (a) `async with self._lock_for(session_id):`, (b) `meta = await
+    self.get_session(session_id)`, (c) `if not meta or meta.has_unread == target:
+    return meta` (this collapses both polarities into one comparison — for mark_read
+    target=False so the guard fires when has_unread is already False, matching the
+    current `not meta.has_unread` semantics; for mark_unread target=True so it fires
+    when has_unread is already True, matching the current `meta.has_unread` semantics),
+    (d) `meta.has_unread = target`, (e) `await self._save_metadata(meta)`. Then OUTSIDE
+    the `async with` block: `await streaming_manager.broadcast("sidebar", {"type":
+    ET.UNREAD_CHANGED, "session_id": session_id, "has_unread": target})`. Finally
+    `return meta`. Keep the broadcast outside the lock to preserve the existing lock-release-before-broadcast
+    ordering — both current methods do this today, and holding the lock across an
+    await on streaming_manager.broadcast could serialize per-session mutations behind
+    slow WebSocket consumers. (2) Replace mark_read L317-331 with `async def mark_read(self,
+    session_id: str) -> Optional[SessionMetadata]: """Clear the unread flag for a
+    session.""" return await self._set_unread_flag(session_id, False)` (15 lines →
+    3 lines). (3) Replace mark_unread L333-346 with `async def mark_unread(self, session_id:
+    str) -> None: """Set the unread flag for a session (called when master/workers
+    produce output).""" await self._set_unread_flag(session_id, True)` (14 lines →
+    3 lines). Keep mark_unread''s return-None contract by simply not returning the
+    helper''s result — the existing callers (e.g. master_cc.py L531 passes self.mark_unread
+    as a bound-method callback) do not inspect the return value, confirmed by `grep
+    -rn "mark_unread" src/` showing the callback wiring and the save_chat_event invocation
+    point both ignore the return. (4) Verify with `python -m py_compile src/core/sessions.py`
+    and `python -c "from src.core.sessions import SessionManager"`. (5) Confirm `yapf
+    --diff src/core/sessions.py` shows no new violations. (6) Optionally smoke-test
+    end-to-end: trigger mark_unread via a worker output burst (expect sidebar UNREAD_CHANGED
+    with has_unread=true), open the session in the UI (expect a mark_read call via
+    the /sessions/{id}/mark-read endpoint and a sidebar UNREAD_CHANGED with has_unread=false);
+    the idempotent guard should also be verified by calling mark_read twice back-to-back
+    on an already-read session (expect exactly one broadcast total, not two — matching
+    today''s behavior where the early-return short-circuits the second call). Net
+    result: sessions.py drops from 873 to ~865 lines (two 14/15-line methods collapse
+    to two 3-line forwards plus one 10-line helper), the unread-flag-toggle policy
+    lives in exactly one place, and the two public entry points read as linear one-line
+    narratives that make their only real distinction (the target boolean) obvious.
+    No new dependencies, no public API change (mark_read still returns Optional[SessionMetadata],
+    mark_unread still returns None, both keep their signatures and docstrings), no
+    behavior change (same lock ordering, same guard semantics, same broadcast channel
+    and payload, same save-before-broadcast sequencing), no circular-import risk (helper
+    is private to the class and uses only existing imports and the already-imported
+    streaming_manager + ET.UNREAD_CHANGED).'
+  category: refactoring
+  status: pending
+  created: '2026-04-21T07:11:59Z'
+  priority: low

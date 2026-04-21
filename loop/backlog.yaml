@@ -2777,3 +2777,82 @@
   status: pending
   created: '2026-04-21T07:11:59Z'
   priority: low
+- id: '117'
+  title: Extract shared _broadcast_running_changed helper in master_cc.py to deduplicate
+    the three identical sidebar RUNNING_CHANGED payload-construction sites
+  description: 'PURPOSE — Fold the three verbatim copies of the "build a sidebar RUNNING_CHANGED
+    broadcast dict with keys type, session_id, has_running_tasks, thinking_since,
+    auto_trigger, then await streaming_manager.broadcast(''sidebar'', <dict>)" pattern
+    that live in src/agents/master_cc.py at L353-360 (restore-thinking branch in _session_consumer
+    when queue is non-empty after clear), L365-372 (idle-declared branch in _session_consumer
+    after checking workers_running via SessionManager._has_running_tasks), and L453-460
+    (run_message initial thinking_since set when no consumer is already running) into
+    a single private module-level helper, so the three RUNNING_CHANGED emission sites
+    stop drifting and future fixes (adding a per-session channel mirror in addition
+    to the sidebar one, bumping a metrics counter, emitting a structured log.info
+    on each transition for audit, coalescing rapid-fire flips during a streaming burst,
+    or wiring an observability counter) can be applied in exactly one place. The duplication
+    is textbook: all three sites build a dict with the identical five keys in the
+    same order, all three pass ''sidebar'' as the channel, all three call streaming_manager.broadcast,
+    and the only true per-site variation is (a) the has_running_tasks bool (True at
+    L357 and L457, workers_running at L369), (b) the thinking_since field (restored.isoformat()
+    at L358, None at L370, session_meta.thinking_since.isoformat() at L458), and (c)
+    the auto_trigger source (item.auto_trigger in both _session_consumer branches,
+    function-parameter auto_trigger in run_message). Every other token is byte-for-byte
+    identical — including the quote style mismatch between the two consumer-branch
+    sites (double-quoted keys) and the run_message site (single-quoted keys), which
+    the helper naturally unifies. This was flagged by the 2026-04-21 code-health scan:
+    `grep -n "RUNNING_CHANGED" src/agents/master_cc.py` returns exactly 3 hits (L355,
+    L367, L455), and all three live inside ~11-line broadcast blocks with the same
+    shape. No existing backlog item covers this: a backlog search for RUNNING_CHANGED,
+    broadcast_running, and running_changed returns zero hits across all 116 items.
+    002 and 116 collapsed SessionManager toggle methods on a different axis (session-metadata
+    field-update pipeline), not thinking-state sidebar broadcasts. 048 (persist_and_broadcast)
+    targets the save-then-broadcast fusion in SessionManager, not the master-agent
+    thinking/running lifecycle emitter in agents/master_cc.py. Nothing else touches
+    the three RUNNING_CHANGED sites. This is a high-impact, low-effort refactor: ~18
+    lines net reduction, a single new ~8-line helper, zero behavior change, and it
+    establishes one canonical running-state emitter so any future enrichment of the
+    RUNNING_CHANGED event (new fields, a mirrored session-channel broadcast, a metrics
+    hook) lands in exactly one place instead of three.  HOW — (1) In src/agents/master_cc.py,
+    add a private module-level async helper immediately above _session_consumer (near
+    L300): `async def _broadcast_running_changed(session_id: str, has_running_tasks:
+    bool, thinking_since: Optional[datetime], auto_trigger: bool) -> None:` whose
+    body is a single call: `await streaming_manager.broadcast(''sidebar'', {''type'':
+    ET.RUNNING_CHANGED, ''session_id'': session_id, ''has_running_tasks'': has_running_tasks,
+    ''thinking_since'': thinking_since.isoformat() if thinking_since else None, ''auto_trigger'':
+    auto_trigger})`. Pass thinking_since as an Optional[datetime] (not a pre-formatted
+    string) so the helper owns the isoformat-or-None policy — this unifies the three
+    sites (L358 passes restored.isoformat(), L370 passes None literal, L458 passes
+    session_meta.thinking_since.isoformat()) behind a single `datetime | None -> str
+    | None` contract. (2) Replace L353-360 (restore-thinking branch) with `await _broadcast_running_changed(session_id,
+    True, restored, item.auto_trigger)` (8 lines → 1 line). (3) Replace L365-372 (idle-declared
+    branch) with `await _broadcast_running_changed(session_id, workers_running, None,
+    item.auto_trigger)` (8 lines → 1 line). (4) Replace L453-460 (run_message initial
+    thinking set) with `await _broadcast_running_changed(session_meta.id, True, session_meta.thinking_since,
+    auto_trigger)` (8 lines → 1 line). (5) Verify with `python -m py_compile src/agents/master_cc.py`
+    and `python -c "from src.agents.master_cc import run_message, _broadcast_running_changed"`.
+    (6) Confirm `yapf --diff src/agents/master_cc.py` shows no new violations. (7)
+    Smoke-test end-to-end: send a user message to a session that has no active consumer
+    (expect sidebar RUNNING_CHANGED with has_running_tasks=true, thinking_since=<iso>,
+    auto_trigger=false via the run_message path); send a second message while the
+    first is still in-flight so the queue has a pending item at clear-thinking time
+    (expect the restore-thinking branch to emit has_running_tasks=true with a fresh
+    thinking_since iso); let a session drain fully with no pending items and no running
+    workers (expect the idle-declared branch to emit has_running_tasks=false, thinking_since=null).
+    All three payloads must match today''s wire format byte-for-byte so the frontend
+    sidebar handler (web/static/js/app.js RUNNING_CHANGED listener) keeps working
+    unchanged. Net result: master_cc.py drops ~18 lines (three 8-line broadcast blocks
+    collapse to three 1-line helper calls plus one 8-line helper), the RUNNING_CHANGED
+    payload schema lives in exactly one place, the quote-style inconsistency between
+    the consumer-branch sites (double quotes) and the run_message site (single quotes)
+    is erased, and the three emission points read as linear one-line narratives that
+    make their only real distinction (the has_running_tasks bool + thinking_since
+    datetime) obvious. No new dependencies, no public API change (helper is module-private),
+    no behavior change (same channel, same event type, same payload keys and order,
+    same isoformat-on-non-None contract), no circular-import risk (helper uses only
+    already-imported streaming_manager + ET + datetime).'
+  category: refactoring
+  status: pending
+  created: '2026-04-21T13:13:22Z'
+  priority: low

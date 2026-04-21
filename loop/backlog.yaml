@@ -2856,3 +2856,119 @@
   status: pending
   created: '2026-04-21T13:13:22Z'
   priority: low
+- id: '118'
+  title: Extract shared _emit_master_done helper to deduplicate the four MASTER_DONE
+    done-event construction + persist_and_broadcast sites across api/chat.py and agents/master_cc.py
+  description: 'PURPOSE — Fold the four verbatim copies of the "build a done_event
+    dict `{type: ET.MASTER_DONE, exit_code: <int>, still_thinking: <bool>}` and then
+    `await session_mgr.persist_and_broadcast(session_id, done_event)`" pattern that
+    live in src/api/chat.py at L108-109 (slash-command error branch: exit_code=1,
+    still_thinking=False), L119-120 (slash-command shell_result branch: exit_code=0,
+    still_thinking=False), and L196-198 (run_and_finalize top-level except block:
+    exit_code=1, still_thinking=False preceded by an ASSISTANT_ERROR broadcast), plus
+    src/agents/master_cc.py at L326-330 (_session_consumer finish block: exit_code=<real>,
+    still_thinking=<derived from queue.empty()>, with optional thinking_seconds and
+    finish_extras merged in) into a single private async helper, so the four MASTER_DONE
+    emission sites stop drifting and future fixes (adding a standard thinking_seconds
+    field on every done event regardless of still_thinking, bumping a metrics counter
+    per master_done exit-code histogram, emitting a structured log.info on each transition
+    for audit, enriching the payload with a monotonic sequence number for idempotent
+    client replay, attaching a backend_id field to distinguish claude_code/codex/opencode
+    completions, or wiring a Prometheus counter) can be applied in exactly one place.
+    The duplication is textbook: all four sites build a dict with the same three required
+    keys in the same order (type, exit_code, still_thinking), all four pass the result
+    to session_mgr.persist_and_broadcast (or the equivalent callback binding via item.callbacks.persist_and_broadcast
+    in master_cc.py), and the only true per-site variations are (a) the exit_code
+    int (0 for successful shell_result, 1 for slash-error + run_and_finalize exception,
+    and the real subprocess exit code in master_cc.py), (b) the still_thinking bool
+    (False at all three chat.py sites, queue-derived in master_cc.py), and (c) two
+    master_cc.py-only optional enrichments: the thinking_seconds integer (computed
+    from datetime.now - item.session_meta.thinking_since when not still_thinking)
+    and the finish_extras merge (backend-specific finish fields like usage, result
+    preview, or compact_boundary markers set earlier in _session_consumer). Every
+    other token is byte-for-byte identical across the four sites. This was flagged
+    by the 2026-04-21 code-health scan: an AST scan for dict literals with the key
+    set ("exit_code", "still_thinking", "type") returned exactly 4 hits across src/
+    — 3 in api/chat.py and 1 in agents/master_cc.py — and `grep -n "MASTER_DONE"
+    src/` returns exactly 4 payload-construction sites matching this shape plus 1
+    reference in api/message_utils.py (the L184 consumer side that renders the event,
+    unrelated) plus 1 import-site constant in core/event_types.py (L19). No existing
+    backlog item covers this: a backlog search for MASTER_DONE, still_thinking, _emit_master_done,
+    and _broadcast_master_done returns zero hits across all 117 prior items. 048 (persist_and_broadcast
+    fusion) targets the save-then-broadcast combination inside SessionManager, not
+    the MASTER_DONE payload construction on the caller side. 117 (_broadcast_running_changed)
+    handles the three RUNNING_CHANGED sidebar broadcasts in master_cc.py, which is
+    a different event type on a different channel with a different payload schema.
+    003 split run_message into smaller functions but did not touch the consumer-side
+    done-event construction. Nothing else in the backlog touches these four sites.
+    This is a high-impact, low-effort refactor: ~10 lines net reduction (each of the
+    three chat.py sites collapses from 2 lines to 1 line, saving 3 lines; master_cc.py
+    retains its enrichment logic but routes through the helper, saving ~3 lines via
+    the consolidated dict-merge pattern; plus one new ~8-line helper), zero behavior
+    change, and it establishes one canonical master-done emitter so any future enrichment
+    of the MASTER_DONE event schema (new required fields, a mirrored sidebar broadcast
+    for exit-code-based alerting, a metrics hook) lands in exactly one place instead
+    of four. HOW — (1) In src/agents/master_cc.py, add a private module-level async
+    helper immediately above run_message (near L395): `async def _emit_master_done(callbacks,
+    session_id: str, exit_code: int, still_thinking: bool, *, thinking_seconds: int
+    | None = None, extras: dict | None = None) -> None:` whose body builds the base
+    dict `event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking":
+    still_thinking}`, conditionally adds `thinking_seconds` only when non-None (preserving
+    the current master_cc.py behavior where thinking_seconds is omitted on still-thinking
+    transitions), merges `extras` via `event.update(extras)` when non-None (replacing
+    the current `done_event.update({k: v for k, v in finish_extras.items()})` idiom
+    with the functionally identical but cleaner `event.update(finish_extras)`), and
+    finally awaits `callbacks.persist_and_broadcast(session_id, event)`. Take `callbacks`
+    as the first parameter (not `session_mgr`) so the helper works for both master_cc.py''s
+    `item.callbacks.persist_and_broadcast` binding and chat.py''s `session_mgr.persist_and_broadcast`
+    — these are the same protocol method, just bound to different object trees, and
+    duck-typing on `.persist_and_broadcast(session_id, event)` is sufficient. Alternative:
+    keep the helper in master_cc.py accepting the callbacks interface, and add a thin
+    one-line wrapper in api/chat.py that adapts `session_mgr` to the callbacks shape
+    — decide during implementation based on whether chat.py already imports from master_cc.py
+    (it does: `from src.agents.master_cc import run_message` at the top of chat.py,
+    so importing `_emit_master_done` from the same module introduces no new dependency
+    edge). (2) Replace src/api/chat.py L108-109 (slash error branch) with `await _emit_master_done(session_mgr,
+    session_id, 1, False)` (2 lines → 1 line). (3) Replace src/api/chat.py L119-120
+    (slash shell_result branch) with `await _emit_master_done(session_mgr, session_id,
+    0, False)` (2 lines → 1 line). (4) Replace src/api/chat.py L196-198 (run_and_finalize
+    exception branch) with `await session_mgr.persist_and_broadcast(meta.id, error_event);
+    await _emit_master_done(session_mgr, meta.id, 1, False)` — keep the error_event
+    broadcast on its own line since it is a different event type (ASSISTANT_ERROR,
+    not MASTER_DONE) and the helper is scoped to just MASTER_DONE (3 lines → 2 lines).
+    (5) Replace src/agents/master_cc.py L326-330 with `await _emit_master_done(item.callbacks,
+    session_id, exit_code, still_thinking, thinking_seconds=thinking_seconds, extras=finish_extras)`
+    (5 lines → 1 line). (6) Verify with `python -m py_compile src/agents/master_cc.py
+    src/api/chat.py` and `python -c "from src.agents.master_cc import _emit_master_done,
+    run_message; from src.api.chat import router"`. (7) Confirm `yapf --diff src/agents/master_cc.py
+    src/api/chat.py` shows no new violations. (8) Smoke-test end-to-end: (a) send
+    a slash command that maps to an unknown or error path (expect a MASTER_DONE with
+    exit_code=1, still_thinking=False via the chat.py error branch); (b) send a /shell
+    slash command that succeeds (expect MASTER_DONE with exit_code=0, still_thinking=False
+    via the shell_result branch); (c) send a regular message and let the real master_cc
+    subprocess complete (expect MASTER_DONE with the real exit_code, correct still_thinking
+    derived from queue state, and thinking_seconds populated when the session idles
+    out — preserving today''s enrichment semantics); (d) simulate a master_cc exception
+    by temporarily breaking the claude_code binary path (expect the run_and_finalize
+    last-resort MASTER_DONE with exit_code=1, still_thinking=False, preceded by an
+    ASSISTANT_ERROR). All four payloads must match today''s wire format byte-for-byte
+    so the frontend message-rendering code in web/static/js (ET.MASTER_DONE handler)
+    and api/message_utils.py events_to_messages (L184 consumer) continue to work unchanged.
+    Net result: chat.py drops ~3 lines (three 2-line sites collapse to three 1-line
+    sites plus no change to the L197 error_event prelude), master_cc.py drops ~4 lines
+    (one 5-line block collapses to one 1-line helper call), the two files together
+    gain one 8-line module-level helper, the MASTER_DONE payload schema lives in exactly
+    one place, and the four emission points read as linear one-line narratives that
+    make their only real distinction (exit_code + still_thinking + optional thinking_seconds
+    + optional finish_extras) obvious. No new dependencies, no public API change (helper
+    is module-private to master_cc.py and referenced by chat.py via an intra-package
+    import that already exists for run_message), no behavior change (same event type,
+    same payload keys and order, same optional-field omission semantics for thinking_seconds,
+    same extras-merge semantics for finish_extras, same persist_and_broadcast call
+    shape on the same callbacks/session_mgr objects), no circular-import risk (chat.py
+    already imports run_message from master_cc; adding _emit_master_done to the same
+    import does not create a new edge).'
+  category: refactoring
+  status: pending
+  created: '2026-04-21T15:11:28Z'
+  priority: low

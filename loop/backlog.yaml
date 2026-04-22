@@ -3030,7 +3030,7 @@
     runtime behavior change in path 2b (the argument was already never reaching the
     CLI). Small but measurable code-hygiene improvement either way.'
   category: cleanup
-  status: in_progress
+  status: done
   created: '2026-04-22T15:14:27Z'
   priority: low
   in_progress_at: '2026-04-22T23:09:36Z'

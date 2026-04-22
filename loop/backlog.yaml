@@ -2989,7 +2989,7 @@
     --in-place src/core/triggers.py` to fix the one cosmetic blank-line formatting
     delta yapf currently reports, which is the only yapf diff in all of src/.
   category: cleanup
-  status: pending
+  status: approved
   created: '2026-04-22T05:11:46Z'
   priority: low
 - id: '120'

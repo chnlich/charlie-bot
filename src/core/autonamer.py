@@ -102,9 +102,6 @@ async def _generate_name_via_claude_cli(prompt: str, system_prompt: str) -> str:
       "--no-session-persistence",
       "--model",
       "haiku",
-      # TODO: re-enable when Claude Code version supports --effort
-      # "--effort",
-      # "low",
       "--system-prompt",
       system_prompt,
       "--disallowed-tools",

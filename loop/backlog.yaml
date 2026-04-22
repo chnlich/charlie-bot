@@ -2989,9 +2989,10 @@
     --in-place src/core/triggers.py` to fix the one cosmetic blank-line formatting
     delta yapf currently reports, which is the only yapf diff in all of src/.
   category: cleanup
-  status: approved
+  status: in_progress
   created: '2026-04-22T05:11:46Z'
   priority: low
+  in_progress_at: '2026-04-22T21:09:38Z'
 - id: '120'
   title: Resolve or remove stale `--effort` TODO comments in autonamer.py and claude_code.py
   description: 'WHAT — Two TODO comments in the src/ tree both reference the same

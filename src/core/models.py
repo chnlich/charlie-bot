@@ -1,7 +1,7 @@
 """All Pydantic models for CharlieBot."""
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Awaitable, Callable, Literal, Optional

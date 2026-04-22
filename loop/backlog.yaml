@@ -2437,8 +2437,8 @@
     does `meta = SessionMetadata(name=f''C{parent.name}'', parent_session_id=parent_id,
     backend=backend or parent.backend, group=parent.group); session_dir = self._session_dir(meta.id);
     for subdir in [''data'', ''threads'']: (session_dir / subdir).mkdir(parents=True,
-    exist_ok=True)`; elone_session does the identical 9-line block with the only
-    difference being the name prefix (`f''E{parent.name}''` instead of `f''C{parent.name}''`).
+    exist_ok=True)`; elone_session does the identical 9-line block with the only difference
+    being the name prefix (`f''E{parent.name}''` instead of `f''C{parent.name}''`).
     Both call sites then proceed to diverge — fork_session copies parent events and
     appends a CLONE_START banner, elone_session writes an empty chat_events.jsonl
     and archives+thumbs-downs the parent — but the scaffolding half is byte-for-byte
@@ -2493,9 +2493,9 @@
   created: '2026-04-20T05:11:17Z'
   priority: low
 - id: '114'
-  title: Extract shared _load_json_meta / _save_json_meta helpers in core/init.py to
-    deduplicate the startup-recovery metadata read-modify-write pattern between _recover_orphaned_threads
-    and _clear_stale_thinking
+  title: Extract shared _load_json_meta / _save_json_meta helpers in core/init.py
+    to deduplicate the startup-recovery metadata read-modify-write pattern between
+    _recover_orphaned_threads and _clear_stale_thinking
   description: 'PURPOSE — Collapse the two verbatim copies of the "try: json.loads(meta_path.read_text(encoding=\"utf-8\"))
     except (json.JSONDecodeError, OSError) as e: log.warning(<event>, path=str(meta_path),
     error=str(e)); continue" block AND the identical "meta_path.write_text(json.dumps(meta,
@@ -2889,11 +2889,11 @@
     other token is byte-for-byte identical across the four sites. This was flagged
     by the 2026-04-21 code-health scan: an AST scan for dict literals with the key
     set ("exit_code", "still_thinking", "type") returned exactly 4 hits across src/
-    — 3 in api/chat.py and 1 in agents/master_cc.py — and `grep -n "MASTER_DONE"
-    src/` returns exactly 4 payload-construction sites matching this shape plus 1
-    reference in api/message_utils.py (the L184 consumer side that renders the event,
-    unrelated) plus 1 import-site constant in core/event_types.py (L19). No existing
-    backlog item covers this: a backlog search for MASTER_DONE, still_thinking, _emit_master_done,
+    — 3 in api/chat.py and 1 in agents/master_cc.py — and `grep -n "MASTER_DONE" src/`
+    returns exactly 4 payload-construction sites matching this shape plus 1 reference
+    in api/message_utils.py (the L184 consumer side that renders the event, unrelated)
+    plus 1 import-site constant in core/event_types.py (L19). No existing backlog
+    item covers this: a backlog search for MASTER_DONE, still_thinking, _emit_master_done,
     and _broadcast_master_done returns zero hits across all 117 prior items. 048 (persist_and_broadcast
     fusion) targets the save-then-broadcast combination inside SessionManager, not
     the MASTER_DONE payload construction on the caller side. 117 (_broadcast_running_changed)
@@ -2974,10 +2974,10 @@
   priority: low
 - id: '119'
   title: Remove unused `field` import from core/models.py
-  description: 'WHAT — src/core/models.py:4 imports `field` from dataclasses (`from
+  description: WHAT — src/core/models.py:4 imports `field` from dataclasses (`from
     dataclasses import dataclass, field`) but `field` is never referenced in the module
     (verified via pyflakes and grep — only `dataclass` is used as a decorator). WHY
-    — Dead import adds noise, breaks the project''s "no unused imports" hygiene, and
+    — Dead import adds noise, breaks the project's "no unused imports" hygiene, and
     is the only pyflakes-flagged real issue in src/ (the other 6 pyflakes warnings
     in core/improve_command.py are false positives — `ThreadManager` and `SessionManager`
     are used as forward-string annotations like `"ThreadManager"` to avoid circular
@@ -2987,7 +2987,7 @@
     src/` should report only the 6 known false-positive forward-reference warnings.
     Optional follow-up (separate item if desired) — also re-run `yapf --recursive
     --in-place src/core/triggers.py` to fix the one cosmetic blank-line formatting
-    delta yapf currently reports, which is the only yapf diff in all of src/.'
+    delta yapf currently reports, which is the only yapf diff in all of src/.
   category: cleanup
   status: pending
   created: '2026-04-22T05:11:46Z'
@@ -2997,35 +2997,36 @@
   description: 'WHAT — Two TODO comments in the src/ tree both reference the same
     upstream blocker: src/core/autonamer.py:105 and src/agents/backends/claude_code.py:38
     both say "TODO: re-enable when Claude Code version supports --effort". In autonamer.py
-    the TODO sits between the "--model haiku" flag and the commented-out lines `# "--effort",
-    # "low",` inside `_generate_name_via_claude_cli` (L95-L116). In claude_code.py
-    it sits above the commented-out `# if self._effort: self._cmd += ["--effort", self._effort]`
-    block inside `ClaudeCodeBackend.__init__` (L30-L40); the `effort` kwarg is still
-    accepted and stored on `self._effort` but never passed to the CLI. These are the
-    only two TODO/FIXME/HACK/XXX comments in src/ per the 2026-04-22 automated scan.
-    WHY — Stale TODOs accumulate noise, hide whether the blocker has been resolved
-    upstream, and leave the `effort` keyword argument on ClaudeCodeBackend as a zero-op
-    footgun (callers may think they are passing effort when it is silently dropped).
-    Either Claude Code CLI now supports `--effort` (in which case uncomment the lines
-    and delete the TODOs), or it still does not (in which case drop the dead code
-    and the `effort` parameter plumbing entirely and delete the TODOs). Existing backlog
-    coverage — done item 087 mentioned these TODOs in its description but did not
-    resolve them and is closed; no pending item tracks them, so they will keep resurfacing
-    in every code-health scan until explicitly addressed. HOW — (1) Check the installed
-    Claude Code CLI version: `claude --help 2>&1 | grep -- --effort`. (2a) If `--effort`
-    is supported: in claude_code.py uncomment L39-L40 (`if self._effort: self._cmd
-    += ["--effort", self._effort]`) and delete L38; in autonamer.py uncomment L106-L107
-    (`"--effort", "low",`) and delete L105. (2b) If `--effort` is still not supported:
-    in claude_code.py delete L38-L40 and remove the `effort=None` parameter from `__init__`
-    plus the `self._effort = effort` assignment on L32 (grep for `effort=` across src/agents/backends/registry.py
-    and src/agents/master_cc.py to confirm no caller still passes it; update those
-    call sites if needed); in autonamer.py delete L105-L107. (3) Run `grep -rn "TODO\|FIXME\|HACK\|XXX"
-    src/ --include="*.py"` to confirm zero matches. (4) Run `yapf --diff --recursive
-    src/` and `python -m pyflakes src/` to confirm no new formatting or unused-import
-    regressions. Net result: 0 TODO comments in src/, and either the `--effort` flag
-    actually ships to the CLI or the dead `effort` plumbing is removed from ClaudeCodeBackend.
-    Zero runtime behavior change in path 2b (the argument was already never reaching
-    the CLI). Small but measurable code-hygiene improvement either way.'
+    the TODO sits between the "--model haiku" flag and the commented-out lines `#
+    "--effort", # "low",` inside `_generate_name_via_claude_cli` (L95-L116). In claude_code.py
+    it sits above the commented-out `# if self._effort: self._cmd += ["--effort",
+    self._effort]` block inside `ClaudeCodeBackend.__init__` (L30-L40); the `effort`
+    kwarg is still accepted and stored on `self._effort` but never passed to the CLI.
+    These are the only two TODO/FIXME/HACK/XXX comments in src/ per the 2026-04-22
+    automated scan. WHY — Stale TODOs accumulate noise, hide whether the blocker has
+    been resolved upstream, and leave the `effort` keyword argument on ClaudeCodeBackend
+    as a zero-op footgun (callers may think they are passing effort when it is silently
+    dropped). Either Claude Code CLI now supports `--effort` (in which case uncomment
+    the lines and delete the TODOs), or it still does not (in which case drop the
+    dead code and the `effort` parameter plumbing entirely and delete the TODOs).
+    Existing backlog coverage — done item 087 mentioned these TODOs in its description
+    but did not resolve them and is closed; no pending item tracks them, so they will
+    keep resurfacing in every code-health scan until explicitly addressed. HOW — (1)
+    Check the installed Claude Code CLI version: `claude --help 2>&1 | grep -- --effort`.
+    (2a) If `--effort` is supported: in claude_code.py uncomment L39-L40 (`if self._effort:
+    self._cmd += ["--effort", self._effort]`) and delete L38; in autonamer.py uncomment
+    L106-L107 (`"--effort", "low",`) and delete L105. (2b) If `--effort` is still
+    not supported: in claude_code.py delete L38-L40 and remove the `effort=None` parameter
+    from `__init__` plus the `self._effort = effort` assignment on L32 (grep for `effort=`
+    across src/agents/backends/registry.py and src/agents/master_cc.py to confirm
+    no caller still passes it; update those call sites if needed); in autonamer.py
+    delete L105-L107. (3) Run `grep -rn "TODO\|FIXME\|HACK\|XXX" src/ --include="*.py"`
+    to confirm zero matches. (4) Run `yapf --diff --recursive src/` and `python -m
+    pyflakes src/` to confirm no new formatting or unused-import regressions. Net
+    result: 0 TODO comments in src/, and either the `--effort` flag actually ships
+    to the CLI or the dead `effort` plumbing is removed from ClaudeCodeBackend. Zero
+    runtime behavior change in path 2b (the argument was already never reaching the
+    CLI). Small but measurable code-hygiene improvement either way.'
   category: cleanup
   status: pending
   created: '2026-04-22T15:14:27Z'
@@ -3035,8 +3036,8 @@
   description: 'PURPOSE — Restore the repo to a clean `yapf --diff --recursive src/`
     state so code-health scans are quiet and future diffs are not polluted by drive-by
     formatting. WHAT — `yapf --diff --recursive src/` currently reports three hunks,
-    all inside src/core/triggers.py: (1) L17-L20 has a double blank line between
-    `log = structlog.get_logger()` and `_SYS_pidfd_open = {...}` — yapf wants a single
+    all inside src/core/triggers.py: (1) L17-L20 has a double blank line between `log
+    = structlog.get_logger()` and `_SYS_pidfd_open = {...}` — yapf wants a single
     blank line because `_SYS_pidfd_open` is a module-level assignment, not a top-level
     def/class. (2) L31-L34 — inside `_detect_pidfd()` the nested `def _stdlib_pidfd_open(pid,
     flags=0):` sits directly under `if hasattr(os, "pidfd_open") ...:` with no blank
@@ -3049,6 +3050,6 @@
     src.core.triggers"`. Net result: the entire src/ tree passes yapf --diff cleanly,
     eliminating a recurring false positive from every scheduled code-health scan.'
   category: formatting
-  status: pending
+  status: approved
   created: '2026-04-22T17:11:01Z'
   priority: low

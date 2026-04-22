@@ -39,6 +39,7 @@ Do NOT guess what to optimize based on code reading alone. Measurement is the so
 - **Verify on real infrastructure** — complete the verification step on the target infrastructure before concluding the iteration. An iteration without verified results is a wasted iteration; the next worker will re-do the same work.
 - **Don't revert everything** — if no optimization panned out, choose a safe, always-valid contribution (cleanup, dead code removal, readability) rather than ending with no commit.
 - **Cleanup tasks must not increase LOC.**
+- **Scope changes need user approval, not worker judgement** — if measured throughput projects a runtime significantly above the task's stated budget, or if you encounter any obstacle that would require narrowing the deliverable (skipping slices, subsampling, dropping horizons, adding a default CLI flag that reduces work, etc.), do NOT silently trim scope. These are scope changes — they need the user to decide, not the worker. Surface the situation with concrete numbers (e.g. `observed 180 samples/s × 2.3M rows → projected 3h, task budget said 5-20 min`) and wait for the user's decision before proceeding. "Budget overshoot" is a signal to escalate to the user, not to redefine the deliverable.
 
 ## Anti-Patterns
 
@@ -54,3 +55,4 @@ Do NOT guess what to optimize based on code reading alone. Measurement is the so
 | Loosened test tolerances to make tests pass | Hides real errors; fix the implementation, not the tests |
 | Created new tests with generous tolerances to bypass "never loosen" rule | Same as loosening, just indirect |
 | Deleted tests for still-live functions, ran without them, reported "all pass" | Fake pass — tests for live functions must actually execute |
+| Silently reduced task scope (subsampled, added `--max_samples` default, dropped slices) to fit runtime budget | Scope is the user's decision — escalate with numbers, don't trim silently |

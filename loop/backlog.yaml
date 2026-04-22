@@ -2992,3 +2992,41 @@
   status: pending
   created: '2026-04-22T05:11:46Z'
   priority: low
+- id: '120'
+  title: Resolve or remove stale `--effort` TODO comments in autonamer.py and claude_code.py
+  description: 'WHAT — Two TODO comments in the src/ tree both reference the same
+    upstream blocker: src/core/autonamer.py:105 and src/agents/backends/claude_code.py:38
+    both say "TODO: re-enable when Claude Code version supports --effort". In autonamer.py
+    the TODO sits between the "--model haiku" flag and the commented-out lines `# "--effort",
+    # "low",` inside `_generate_name_via_claude_cli` (L95-L116). In claude_code.py
+    it sits above the commented-out `# if self._effort: self._cmd += ["--effort", self._effort]`
+    block inside `ClaudeCodeBackend.__init__` (L30-L40); the `effort` kwarg is still
+    accepted and stored on `self._effort` but never passed to the CLI. These are the
+    only two TODO/FIXME/HACK/XXX comments in src/ per the 2026-04-22 automated scan.
+    WHY — Stale TODOs accumulate noise, hide whether the blocker has been resolved
+    upstream, and leave the `effort` keyword argument on ClaudeCodeBackend as a zero-op
+    footgun (callers may think they are passing effort when it is silently dropped).
+    Either Claude Code CLI now supports `--effort` (in which case uncomment the lines
+    and delete the TODOs), or it still does not (in which case drop the dead code
+    and the `effort` parameter plumbing entirely and delete the TODOs). Existing backlog
+    coverage — done item 087 mentioned these TODOs in its description but did not
+    resolve them and is closed; no pending item tracks them, so they will keep resurfacing
+    in every code-health scan until explicitly addressed. HOW — (1) Check the installed
+    Claude Code CLI version: `claude --help 2>&1 | grep -- --effort`. (2a) If `--effort`
+    is supported: in claude_code.py uncomment L39-L40 (`if self._effort: self._cmd
+    += ["--effort", self._effort]`) and delete L38; in autonamer.py uncomment L106-L107
+    (`"--effort", "low",`) and delete L105. (2b) If `--effort` is still not supported:
+    in claude_code.py delete L38-L40 and remove the `effort=None` parameter from `__init__`
+    plus the `self._effort = effort` assignment on L32 (grep for `effort=` across src/agents/backends/registry.py
+    and src/agents/master_cc.py to confirm no caller still passes it; update those
+    call sites if needed); in autonamer.py delete L105-L107. (3) Run `grep -rn "TODO\|FIXME\|HACK\|XXX"
+    src/ --include="*.py"` to confirm zero matches. (4) Run `yapf --diff --recursive
+    src/` and `python -m pyflakes src/` to confirm no new formatting or unused-import
+    regressions. Net result: 0 TODO comments in src/, and either the `--effort` flag
+    actually ships to the CLI or the dead `effort` plumbing is removed from ClaudeCodeBackend.
+    Zero runtime behavior change in path 2b (the argument was already never reaching
+    the CLI). Small but measurable code-hygiene improvement either way.'
+  category: cleanup
+  status: pending
+  created: '2026-04-22T15:14:27Z'
+  priority: low

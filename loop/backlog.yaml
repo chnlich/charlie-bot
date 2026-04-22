@@ -3030,3 +3030,25 @@
   status: pending
   created: '2026-04-22T15:14:27Z'
   priority: low
+- id: '121'
+  title: Fix yapf formatting violations in src/core/triggers.py
+  description: 'PURPOSE — Restore the repo to a clean `yapf --diff --recursive src/`
+    state so code-health scans are quiet and future diffs are not polluted by drive-by
+    formatting. WHAT — `yapf --diff --recursive src/` currently reports three hunks,
+    all inside src/core/triggers.py: (1) L17-L20 has a double blank line between
+    `log = structlog.get_logger()` and `_SYS_pidfd_open = {...}` — yapf wants a single
+    blank line because `_SYS_pidfd_open` is a module-level assignment, not a top-level
+    def/class. (2) L31-L34 — inside `_detect_pidfd()` the nested `def _stdlib_pidfd_open(pid,
+    flags=0):` sits directly under `if hasattr(os, "pidfd_open") ...:` with no blank
+    line; yapf inserts a blank line before a nested function definition. (3) L86-L88
+    — same pattern for `class _WaitidResult:` followed immediately by `def __init__(self,
+    si):`; yapf wants a blank line between the class header and the first method.
+    HOW — Run `yapf -i src/core/triggers.py` from the repo root. Verify with `yapf
+    --diff --recursive src/` returning zero output and exit code 0. No logic changes,
+    pure whitespace. Confirm tests still import the module via `python -c "import
+    src.core.triggers"`. Net result: the entire src/ tree passes yapf --diff cleanly,
+    eliminating a recurring false positive from every scheduled code-health scan.'
+  category: formatting
+  status: pending
+  created: '2026-04-22T17:11:01Z'
+  priority: low

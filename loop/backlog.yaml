@@ -2972,3 +2972,23 @@
   status: pending
   created: '2026-04-21T15:11:28Z'
   priority: low
+- id: '119'
+  title: Remove unused `field` import from core/models.py
+  description: 'WHAT — src/core/models.py:4 imports `field` from dataclasses (`from
+    dataclasses import dataclass, field`) but `field` is never referenced in the module
+    (verified via pyflakes and grep — only `dataclass` is used as a decorator). WHY
+    — Dead import adds noise, breaks the project''s "no unused imports" hygiene, and
+    is the only pyflakes-flagged real issue in src/ (the other 6 pyflakes warnings
+    in core/improve_command.py are false positives — `ThreadManager` and `SessionManager`
+    are used as forward-string annotations like `"ThreadManager"` to avoid circular
+    imports, which pyflakes does not understand). HOW — Change line 4 from `from dataclasses
+    import dataclass, field` to `from dataclasses import dataclass`. Single-line edit,
+    zero behavior change, immediately silences pyflakes. After the fix, `pyflakes
+    src/` should report only the 6 known false-positive forward-reference warnings.
+    Optional follow-up (separate item if desired) — also re-run `yapf --recursive
+    --in-place src/core/triggers.py` to fix the one cosmetic blank-line formatting
+    delta yapf currently reports, which is the only yapf diff in all of src/.'
+  category: cleanup
+  status: pending
+  created: '2026-04-22T05:11:46Z'
+  priority: low

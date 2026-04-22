@@ -38,6 +38,7 @@ Do NOT guess what to optimize based on code reading alone. Measurement is the so
 - **Never modify ground truth** — if a reference implementation exists, it is read-only. Do not alter it to make your implementation match.
 - **Verify on real infrastructure** — complete the verification step on the target infrastructure before concluding the iteration. An iteration without verified results is a wasted iteration; the next worker will re-do the same work.
 - **Don't revert everything** — if no optimization panned out, choose a safe, always-valid contribution (cleanup, dead code removal, readability) rather than ending with no commit.
+- **Cleanup tasks must not increase LOC.**
 
 ## Anti-Patterns
 

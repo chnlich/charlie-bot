@@ -3082,3 +3082,33 @@
   status: pending
   created: '2026-04-23T03:12:08Z'
   priority: low
+- id: '123'
+  title: Add TYPE_CHECKING guard for ThreadManager / SessionManager string annotations
+    in improve_command.py
+  description: 'WHY — Running `pyflakes src/` emits six "undefined name" warnings,
+    all in src/core/improve_command.py: L270 (`thread_mgr: "ThreadManager"`), L294
+    (`session_mgr: "SessionManager"`), L431, L432, L553, and L554 (same two types
+    in run_improve_loop and _run_single_iteration signatures). Both classes exist
+    — ThreadManager in src/core/threads.py and SessionManager in src/core/sessions.py
+    — but improve_command.py never imports them, relying on PEP 484 forward-reference
+    strings. This scheme works at runtime (annotations are never evaluated) but trips
+    every static analyzer (pyflakes, pyright, ruff F821), producing noise that hides
+    real issues in every scheduled code-health scan. Item 087 (done 2026-04-12) flagged
+    this as MISSING TYPE IMPORTS but never actually applied the fix. WHAT — Add a
+    TYPE_CHECKING guard at the top of src/core/improve_command.py that imports the
+    two manager classes only during static analysis, and drop the now-redundant string
+    quotes on the annotations. HOW — (1) After the existing `from typing import Optional`
+    on L8, add `from typing import TYPE_CHECKING` (or merge into the same import).
+    (2) Add the guarded block: `if TYPE_CHECKING:\n    from src.core.sessions import
+    SessionManager\n    from src.core.threads import ThreadManager`. (3) Replace the
+    six `"ThreadManager"` / `"SessionManager"` string annotations with bare `ThreadManager`
+    / `SessionManager` identifiers. (4) Verify `pyflakes src/` exits clean with no
+    output. (5) Verify `yapf --diff --recursive src/` remains clean. (6) Verify `python3
+    -c "from src.core.improve_command import run_improve_loop"` still imports without
+    ImportError (confirms no circular-import surprises). Net result: zero pyflakes
+    warnings across src/, eliminating a recurring false positive from every scheduled
+    code-health scan and making future real type errors actually visible.'
+  category: code-health
+  status: pending
+  created: '2026-04-23T21:11:30Z'
+  priority: low

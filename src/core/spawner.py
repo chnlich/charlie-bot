@@ -481,6 +481,9 @@ async def _finalize_worker(
   # Also skip if the thread was marked skip_cleanup (e.g. improve loop shared worktree).
   if thread.skip_cleanup:
     skip_cleanup = True
+  elif thread.review_of:
+    # Reviewer threads never clean up here — the review chain owns the worktree lifecycle.
+    skip_cleanup = True
   else:
     can_spawn_reviewer = all([thread.repo_path, thread.branch_name, thread.worktree_path])
     skip_cleanup = (exit_code == 0 and thread.require_review and not thread.review_of and can_spawn_reviewer)

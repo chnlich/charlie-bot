@@ -17,7 +17,6 @@ from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
 
-
 _SYS_pidfd_open = {"x86_64": 434, "aarch64": 434}
 
 
@@ -29,6 +28,7 @@ def _detect_pidfd():
     (or None on WNOHANG no-event), raises ChildProcessError on ECHILD.
   """
   if hasattr(os, "pidfd_open") and hasattr(os, "P_PIDFD"):
+
     def _stdlib_pidfd_open(pid, flags=0):
       return os.pidfd_open(pid, flags)
 
@@ -84,6 +84,7 @@ def _detect_pidfd():
     ]
 
   class _WaitidResult:
+
     def __init__(self, si):
       self.si_pid = si.si_pid
       self.si_uid = si.si_uid

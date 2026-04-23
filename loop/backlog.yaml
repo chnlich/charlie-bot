@@ -3053,7 +3053,8 @@
     src.core.triggers"`. Net result: the entire src/ tree passes yapf --diff cleanly,
     eliminating a recurring false positive from every scheduled code-health scan.'
   category: formatting
-  status: in_progress
+  status: done
   created: '2026-04-22T17:11:01Z'
   priority: low
   in_progress_at: '2026-04-23T01:09:51Z'
+  completed_at: '2026-04-23T01:10:51Z'

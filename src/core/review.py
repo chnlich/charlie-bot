@@ -8,15 +8,34 @@ import structlog
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.git import git_current_branch, git_worktree_prune, git_worktree_remove
+from src.core.master_trigger import trigger_master
 from src.core.models import BackendOption, SpawnRequest, ThreadMetadata
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.core.git import git_current_branch
-from src.core.master_trigger import trigger_master
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
+
+
+async def finalize_review_chain(
+    session_id: str,
+    original_thread: ThreadMetadata,
+    thread_mgr: ThreadManager,
+) -> None:
+  """Idempotently remove the worktree shared by the original worker + its reviewer(s)."""
+  if not original_thread.repo_path or not original_thread.worktree_path:
+    return
+  wt = Path(original_thread.worktree_path)
+  if not wt.exists():
+    return
+  try:
+    removed = await git_worktree_remove(original_thread.repo_path, wt, original_thread.id)
+    if removed:
+      await git_worktree_prune(original_thread.repo_path, original_thread.id)
+  except Exception as e:
+    log.warning("review_chain_cleanup_failed", session=session_id, thread_id=original_thread.id, error=str(e))
 
 
 def build_review_prompt(
@@ -161,6 +180,13 @@ def validate_review_prerequisites(
         session=session_id,
         thread=original_thread.id,
         detail="original thread missing worktree_path")
+    return None
+  if not Path(original_thread.worktree_path).is_dir():
+    log.error(
+        "spawn_review_worktree_missing",
+        session=session_id,
+        thread=original_thread.id,
+        worktree=original_thread.worktree_path)
     return None
   return Path(original_thread.repo_path), original_thread.branch_name, original_thread.worktree_path
 
@@ -331,9 +357,9 @@ async def maybe_spawn_reviewer(
 
   if thread_meta.review_of:
     # This IS a reviewer thread.
+    original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
     if exit_code != 0:
       # Reviewer failed — attempt retry with next untried backend.
-      original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
       if original_thread:
         retried = await spawn_review_worker(
             session_id,
@@ -357,6 +383,7 @@ async def maybe_spawn_reviewer(
             failed_review=thread_meta.id,
             tried=thread_meta.tried_backends,
         )
+        await finalize_review_chain(session_id, original_thread, thread_mgr)
       else:
         log.warning(
             "reviewer_retry_original_not_found",
@@ -368,6 +395,8 @@ async def maybe_spawn_reviewer(
     original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
     await trigger_master(session_id, combined, cfg, session_mgr)
+    if exit_code == 0 and original_thread:
+      await finalize_review_chain(session_id, original_thread, thread_mgr)
     return
 
   # Failed/cancelled worker -> trigger master immediately

@@ -3058,3 +3058,27 @@
   priority: low
   in_progress_at: '2026-04-23T01:09:51Z'
   completed_at: '2026-04-23T01:10:51Z'
+- id: '122'
+  title: Remove deprecated branch_prefix parameter from improve pipeline
+  description: 'WHY — `branch_prefix` is marked "deprecated, use work_branch" in both
+    src/core/models.py:258 (ImproveRequest.branch_prefix) and src/core/improve_command.py:556
+    (run_improve_loop signature). Since CharlieBot is a single-user project with no
+    external API consumers, there is no compatibility burden preventing its removal.
+    The deprecated param still threads through src/api/internal.py:119 where it falls
+    back into work_branch, and tests/test_improve_command.py:324 still passes it as
+    a kwarg. Keeping the dead fallback violates the "no backwards-compat shims" principle
+    from CLAUDE.md. WHAT — (1) Drop `branch_prefix` field from ImproveRequest in models.py.
+    (2) Drop the `branch_prefix` parameter and the `work_branch or branch_prefix or
+    ...` fallback in run_improve_loop (improve_command.py:556 and :571-572, reducing
+    the expression to `work_branch = work_branch or f"improve/{int(time.time())}"`).
+    (3) Simplify internal.py:119 to `work_branch = req.work_branch or f"improve/{int(time.time())}"`.
+    (4) Update tests/test_improve_command.py:324 to pass `work_branch="improve/test"`
+    instead. HOW — Edit the four call sites, run the full test suite (`pytest tests/`),
+    verify `pyflakes src/` still reports no new issues, and verify `yapf --diff --recursive
+    src/` exits clean. Net result: one API field, one function parameter, one OR branch,
+    and one compat comment removed; fewer surprises for future readers of the improve
+    pipeline.'
+  category: refactoring
+  status: pending
+  created: '2026-04-23T03:12:08Z'
+  priority: low

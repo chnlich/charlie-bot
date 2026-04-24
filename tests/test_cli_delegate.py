@@ -35,6 +35,8 @@ def test_main_posts_to_delegate_endpoint(tmp_path: Path) -> None:
           "codex-o3",
           "--description",
           "do work",
+          "--keep-worktree",
+          "0",
       ]), \
        patch("src.cli.delegate.get_config", return_value=cfg), \
        patch("src.cli.delegate.requests.post", return_value=resp_mock) as post_mock:
@@ -71,6 +73,8 @@ def test_main_uses_error_detail_from_response(tmp_path: Path) -> None:
           "missing",
           "--description",
           "do work",
+          "--keep-worktree",
+          "0",
       ]), \
        patch("src.cli.delegate.get_config", return_value=cfg), \
        patch("src.cli.delegate.requests.post", side_effect=FakeRequestException()):
@@ -78,3 +82,25 @@ def test_main_uses_error_detail_from_response(tmp_path: Path) -> None:
       main()
 
   assert exc_info.value.code == 1
+
+
+def test_main_requires_keep_worktree_flag(capsys: pytest.CaptureFixture[str]) -> None:
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--description",
+          "do work",
+      ]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  err = capsys.readouterr().err
+  assert "--keep-worktree" in err

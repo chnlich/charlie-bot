@@ -25,11 +25,14 @@ def main() -> None:
   parser.add_argument("--context", default=None, help="Business context for reviewers")
   parser.add_argument(
       "--keep-worktree",
-      action="store_true",
-      default=False,
-      help=("Leave the worker's worktree on disk after the worker exits AND after the reviewer merges. "
-            "Use when the worker launches an external long-running process (e.g. a SLURM job) "
-            "whose WorkDir points into the worktree."),
+      required=True,
+      type=int,
+      choices=[0, 1],
+      help=(
+          "1 = keep worktree on disk after worker exits AND after reviewer merges "
+          "(use when the worker launches an external long-running process, e.g. a SLURM job, "
+          "whose WorkDir lives in the worktree); "
+          "0 = default cleanup behavior."),
   )
   args = parser.parse_args()
 
@@ -37,7 +40,7 @@ def main() -> None:
       "session_id": args.session,
       "description": args.description,
       "base_branch": args.base_branch,
-      "keep_worktree": args.keep_worktree,
+      "keep_worktree": bool(args.keep_worktree),
   }
   if args.backend is not None:
     payload["backend"] = args.backend

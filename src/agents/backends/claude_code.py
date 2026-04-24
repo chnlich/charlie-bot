@@ -44,4 +44,6 @@ class ClaudeCodeBackend(AgentBackend):
     log.debug("claude_code_wrote_claude_md", path=str(claude_md))
 
   def _build_command(self, prompt: str) -> list[str]:
-    return self._cmd + [prompt]
+    # Use `--` end-of-options marker so prompts starting with `--` are not
+    # parsed as CLI flags by the `claude` binary.
+    return self._cmd + ["--", prompt]

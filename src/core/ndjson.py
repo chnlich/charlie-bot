@@ -34,7 +34,7 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   if not path.exists():
     return [], 0, False
 
-  chunk_size = 8192
+  tail_window_size = 512 * 1024
   with open(path, "rb") as f:
     # Fast-count total lines
     total = 0
@@ -45,24 +45,30 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
 
     has_more = total > limit
     take = min(limit, total)
+    if take == 0:
+      return [], total, has_more
 
-    # Seek-from-end to collect the last `take` raw lines
     f.seek(0, 2)
     file_size = f.tell()
-    buf = b""
-    lines: list[bytes] = []
-    pos = file_size
+    if file_size <= tail_window_size:
+      f.seek(0)
+      tail_lines = [line for line in f.read().split(b"\n") if line.strip()][-take:]
+    else:
+      window_start = file_size - tail_window_size
+      f.seek(window_start)
+      window = f.read()
+      split_lines = window.split(b"\n")
 
-    while pos > 0 and len(lines) < take + 1:
-      read_size = min(chunk_size, pos)
-      pos -= read_size
-      f.seek(pos)
-      buf = f.read(read_size) + buf
-      lines = buf.split(b"\n")
+      complete_lines = split_lines[1:]
+      if complete_lines and complete_lines[-1] == b"":
+        complete_lines = complete_lines[:-1]
+      window_lines = [line for line in complete_lines if line.strip()]
 
-    # lines may have an empty trailing element from the final \n
-    raw_lines = [ln for ln in lines if ln.strip()]
-    tail_lines = raw_lines[-take:]
+      if len(window_lines) < take:
+        f.seek(0)
+        tail_lines = [line for line in f.read().split(b"\n") if line.strip()][-take:]
+      else:
+        tail_lines = window_lines[-take:]
 
   events: list[dict] = []
   for raw in tail_lines:

@@ -233,27 +233,42 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
   assistant_buf = ""
   last_event_idx = 0
   last_assistant_ts = None
+  tools_buf: list[dict] = []
 
   def _flush() -> None:
-    nonlocal assistant_buf, last_assistant_ts
-    if assistant_buf:
-      messages.append(
-          {
-              "role": "assistant",
-              "content": assistant_buf,
-              "event_index": last_event_idx,
-              "timestamp": last_assistant_ts,
-          })
+    nonlocal assistant_buf, last_assistant_ts, tools_buf
+    if assistant_buf or tools_buf:
+      msg = {
+          "role": "assistant",
+          "content": assistant_buf,
+          "event_index": last_event_idx,
+          "timestamp": last_assistant_ts,
+      }
+      if tools_buf:
+        msg["tools"] = tools_buf
+      messages.append(msg)
       assistant_buf = ""
       last_assistant_ts = None
+      tools_buf = []
 
   for idx, ev in enumerate(events):
     idx += event_index_offset
     t = ev.get("type")
     if t == ET.USER:
-      # Skip CC-internal user events (tool results) — they have a "message" field
-      # but no top-level "content". Only real user messages have "content".
+      # CC-internal user events carry tool_result blocks — attach the output
+      # to the most recent tool_use entry so the UI can render it inline.
       if "message" in ev and "content" not in ev:
+        for block in (ev.get("message") or {}).get("content", []):
+          if isinstance(block, dict) and block.get("type") == "tool_result":
+            raw = block.get("content", "")
+            if isinstance(raw, list):
+              text = "\n".join(
+                  p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
+            else:
+              text = str(raw)
+            if tools_buf:
+              tools_buf[-1]["output"] = text
+              tools_buf[-1]["is_error"] = bool(block.get("is_error", False))
         continue
       _flush()
       normalized = normalize_user_message_event(ev)
@@ -294,6 +309,14 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
                 })
             assistant_buf = ''
             last_assistant_ts = None
+      for b in blocks:
+        if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') != 'ExitPlanMode':
+          tools_buf.append({
+              'name': b.get('name', ''),
+              'input': b.get('input', {}),
+              'output': '',
+              'is_error': False,
+          })
       text = extract_text_from_message(msg)
       if text and assistant_buf:
         _flush()

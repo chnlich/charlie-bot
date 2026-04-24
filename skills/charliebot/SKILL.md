@@ -39,6 +39,7 @@ Source code: `~/workspace/charlie-bot/src/core/`
 - Session CLAUDE.md: Each session gets a real `CLAUDE.md` file at `~/.charliebot/sessions/{id}/CLAUDE.md`, created by concatenating `MASTER_AGENT_PROMPT.md` + `MEMORY.md`. Done in `_ensure_master_claude_md()` (master_cc.py), called on every `run_message()`. Stale symlinks auto-removed.
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
+- `schedule_trigger --watch-pid` is local-host only (uses `pidfd_open`); do NOT pass a PID from a remote host / SSH job — it will fire `pid_gone` immediately. For remote tasks, use a log marker or sentinel file with a regular delay-based trigger.
 
 ---
 

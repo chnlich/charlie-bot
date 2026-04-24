@@ -6,13 +6,14 @@ def _build_backend(monkeypatch, **kwargs) -> GeminiCliBackend:
       "src.agents.backends.gemini_cli.resolve_binary",
       lambda name, fallback: "/usr/bin/gemini",
   )
+  kwargs.setdefault("model", "gemini-test-model")
   return GeminiCliBackend(**kwargs)
 
 
 def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:
   backend = _build_backend(
       monkeypatch,
-      model="gemini-3-pro-preview",
+      model="gemini-test-model",
       instructions_content="Use concise answers.",
       resume_session_id="session-123",
       extra_flags=["--approval-mode", "yolo"],
@@ -23,7 +24,7 @@ def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:
   assert cmd == [
       "/usr/bin/gemini",
       "-m",
-      "gemini-3-pro-preview",
+      "gemini-test-model",
       "-p",
       expected_prompt,
       "-o",
@@ -38,14 +39,14 @@ def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:
 
 
 def test_build_command_preserves_dash_prefixed_prompt(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="gemini-3-pro-preview")
+  backend = _build_backend(monkeypatch, model="gemini-test-model")
 
   cmd = backend._build_command("--watch-pid only local")
 
   assert cmd == [
       "/usr/bin/gemini",
       "-m",
-      "gemini-3-pro-preview",
+      "gemini-test-model",
       "-p",
       "--watch-pid only local",
       "-o",

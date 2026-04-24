@@ -3,7 +3,6 @@
 // ---------------------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
-  normalizeBackendLabels();
   initSidebarResize();
   initLatexResize();
   initBacklogResize();

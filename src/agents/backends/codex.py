@@ -20,7 +20,9 @@ _MODEL_REASONING_EFFORT_CONFIG = 'model_reasoning_effort="xhigh"'
 class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, *, model="gpt-5.3-codex", **kwargs):
+  def __init__(self, *, model: str, **kwargs):
+    if not model:
+      raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
     super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
     # Track accumulated text per item_id for delta computation

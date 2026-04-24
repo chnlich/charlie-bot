@@ -14,7 +14,9 @@ log = structlog.get_logger()
 class GeminiCliBackend(AgentBackend):
   """Runs a `gemini` CLI subprocess in stream-json mode and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, *, model="gemini-3-pro-preview", **kwargs):
+  def __init__(self, *, model: str, **kwargs):
+    if not model:
+      raise ValueError("gemini backend requires a model")
     super().__init__(model=model, **kwargs)
     self._gemini_bin = resolve_binary("gemini", str(Path.home() / ".local" / "bin"))
     self._text_buffer = ""

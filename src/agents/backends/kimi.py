@@ -16,7 +16,9 @@ class KimiBackend(ClaudeCodeBackend):
   def __init__(self, *, api_key: str, **kwargs):
     # Pop model before super().__init__ — Kimi sets model via ANTHROPIC_MODEL
     # env var, NOT --model CLI flag.
-    self._kimi_model = kwargs.pop("model", "kimi-k2.5")
+    self._kimi_model = kwargs.pop("model")
+    if not self._kimi_model:
+      raise ValueError("kimi backend requires a model")
     self._api_key = api_key
     super().__init__(model=None, **kwargs)
 

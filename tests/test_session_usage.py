@@ -16,7 +16,7 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path,
       backend_options=[
           BackendOption(id="claude-opus-4.6", label="Claude", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-gpt-5.4", label="Codex", type="codex", model="gpt-5.4"),
+          BackendOption(id="codex-test", label="Codex", type="codex", model="codex-test-model"),
       ],
   )
 
@@ -79,7 +79,7 @@ async def test_resolve_session_usage_reads_live_codex_thread_id_from_chat_events
   meta = SessionMetadata(
       id="session-live",
       name="Live Codex Session",
-      backend="codex-gpt-5.4",
+      backend="codex-test",
       cc_session_id=None,
   )
   _write_session(
@@ -151,7 +151,7 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
   meta = SessionMetadata(
       id="session-complete",
       name="Completed Codex Session",
-      backend="codex-gpt-5.4",
+      backend="codex-test",
       cc_session_id=native_thread_id,
   )
   _write_session(
@@ -166,7 +166,7 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
                   "cache_read_input_tokens": 1000,
                   "cache_creation_input_tokens": 0,
               },
-              "modelUsage": {"codex-gpt-5.4": {"contextWindow": 200000}},
+              "modelUsage": {"codex-test": {"contextWindow": 200000}},
               "total_cost_usd": 1.25,
               "timestamp": "2026-03-25T21:33:03Z",
           },
@@ -208,7 +208,7 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
       "context_tokens": 176028,
       "context_limit": 258400,
       "total_cost_usd": 1.25,
-      "model": "codex-gpt-5.4",
+      "model": "codex-test",
   }
 
 

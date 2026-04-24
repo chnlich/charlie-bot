@@ -212,7 +212,7 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 ## 9. Error Handling & Resilience
 
 ### 9.1 Model Fallback
-- Multiple backends configured via `backend_options` in `config.yaml` (Claude Opus 4.6, Kimi K2.5, Codex GPT-5.3, Gemini 3 Pro)
+- Multiple backends configured via `backend_options` in `config.yaml` (see that file for the current list)
 - `model_preference` controls reviewer backend selection order, enabling cross-backend code review
 - Failed reviewers automatically retry with the next untried backend
 
@@ -274,7 +274,7 @@ Each Thread's `CLAUDE.md` contains:
 
 **Configuration**
 - `~/.charliebot/config.yaml` is the single source of truth for API keys and settings — no environment variables
-- `backend_options`: configurable list of LLM backends (Claude Opus 4.6, Kimi K2.5, Codex GPT-5.3, Gemini 3 Pro)
+- `backend_options`: configurable list of LLM backends (see that file for the current list)
 - `model_preference`: ordered list of backend IDs for cross-backend reviewer selection
 
 ### 11.2 Pending / Not Yet Implemented

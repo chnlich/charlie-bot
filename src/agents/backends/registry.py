@@ -32,11 +32,11 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
   elif option.type == "cc-kimi":
     if not cfg.moonshot_api_key:
       raise ValueError("moonshot_api_key not set in config")
-    return KimiBackend(api_key=cfg.moonshot_api_key, model=option.model or cfg.kimi_model, **kwargs)
+    return KimiBackend(api_key=cfg.moonshot_api_key, model=option.model, **kwargs)
   elif option.type == "codex":
     return CodexBackend(model=option.model, **kwargs)
   elif option.type == "gemini":
-    return GeminiCliBackend(model=option.model or cfg.gemini_model, **kwargs)
+    return GeminiCliBackend(model=option.model, **kwargs)
   elif option.type == "opencode":
     return OpenCodeBackend(model=option.model, **kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

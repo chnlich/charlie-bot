@@ -66,11 +66,12 @@ class CharlieBotConfig(BaseModel):
 
   # LLM
   gemini_api_key: str = ""
+  # Gemini API model for autonamer / audio transcription
+  # (NOT the CLI backend model — that lives in backend_options[].model)
   gemini_model: str = "gemini-3.1-pro-preview"
 
   # Kimi (Moonshot) — optional, not wired in by default
   moonshot_api_key: Optional[str] = None
-  kimi_model: str = "kimi-k2.5"
 
   # Authentication — shared secret; empty string disables auth
   charliebot_access_key: str = ""

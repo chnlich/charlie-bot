@@ -116,6 +116,68 @@ function renderUserMessageBubble(content, isVoice, timestamp, uploadedFiles) {
     + '</div>';
 }
 
+function toolInputSummary(tool) {
+  var input = tool.input || {};
+  if (tool.name === 'Bash') return {text: input.command || '', limit: 80};
+  if (tool.name === 'Read' || tool.name === 'Edit' || tool.name === 'Write') return {text: input.file_path || '', limit: 0};
+  if (tool.name === 'Glob') return {text: input.pattern || '', limit: 0};
+  if (tool.name === 'Grep') return {text: (input.pattern || '') + (input.path ? ' in ' + input.path : ''), limit: 0};
+  var first = Object.values(input)[0];
+  if (first == null || first === '') return {text: '', limit: 0};
+  var display = typeof first === 'object' ? JSON.stringify(first) : String(first);
+  return {text: display, limit: 60};
+}
+
+function renderToolActivity(tools) {
+  if (!Array.isArray(tools) || !tools.length) return '';
+  var rows = tools.map(function(tool, i) {
+    var summary = toolInputSummary(tool);
+    var text = summary.text;
+    var limit = summary.limit;
+    var summaryHtml;
+    if (limit > 0 && text.length > limit) {
+      var sid = 'ts-' + Math.random().toString(36).slice(2);
+      summaryHtml = escapeHtml(text.substring(0, limit))
+        + '<span id="' + sid + '-short">… <button onclick="document.getElementById(\'' + sid + '-short\').style.display=\'none\';document.getElementById(\'' + sid + '-full\').style.display=\'inline\'" class="text-blue-400 hover:underline">Show more</button></span>'
+        + '<span id="' + sid + '-full" style="display:none">' + escapeHtml(text.substring(limit)) + '</span>';
+    } else {
+      summaryHtml = escapeHtml(text);
+    }
+    var outputHtml = '';
+    if (tool.output) {
+      var outText = String(tool.output);
+      var colorCls = tool.is_error ? 'text-red-400' : 'text-slate-400';
+      if (outText.length > 500) {
+        var oid = 'to-' + Math.random().toString(36).slice(2);
+        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">'
+          + escapeHtml(outText.substring(0, 500))
+          + '<span id="' + oid + '-short">… <button onclick="document.getElementById(\'' + oid + '-short\').style.display=\'none\';document.getElementById(\'' + oid + '-full\').style.display=\'inline\'" class="text-blue-400 hover:underline">Show more</button></span>'
+          + '<span id="' + oid + '-full" style="display:none">' + escapeHtml(outText.substring(500)) + '</span>'
+          + '</pre>';
+      } else {
+        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">' + escapeHtml(outText) + '</pre>';
+      }
+    }
+    var borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
+    var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
+    return '<div class="' + borderCls + 'py-1.5">'
+      + '<div class="flex items-center gap-2">'
+      + '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">' + escapeHtml(tool.name || '') + '</span>'
+      + '<span class="text-xs text-slate-400 ' + truncCls + 'flex-1 min-w-0">' + summaryHtml + '</span>'
+      + '</div>'
+      + outputHtml
+      + '</div>';
+  }).join('');
+  var label = tools.length + ' tool call' + (tools.length !== 1 ? 's' : '');
+  return '<div class="mt-2 border border-slate-600/30 rounded-lg overflow-hidden">'
+    + '<button onclick="this.nextElementSibling.classList.toggle(\'hidden\')" class="w-full flex items-center justify-between px-3 py-1.5 bg-slate-800/50 hover:bg-slate-800 transition-colors text-xs text-slate-400">'
+    + '<span>' + label + '</span>'
+    + '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>'
+    + '</button>'
+    + '<div class="hidden bg-slate-800/30 px-3 py-2">' + rows + '</div>'
+    + '</div>';
+}
+
 function renderMessage(msg, sessionId) {
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";
@@ -131,8 +193,9 @@ function renderMessage(msg, sessionId) {
     return "<div class=\"flex justify-end\">" + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
   }
   if (msg.role === "assistant") {
+    var toolsHtml = renderToolActivity(msg.tools);
     return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
-      + mdDiv(msg.content) + timeDiv() + "</div></div>";
+      + mdDiv(msg.content) + toolsHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "system") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";

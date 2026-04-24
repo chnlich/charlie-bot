@@ -30,6 +30,27 @@ def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path:
   assert not agents_md.exists()
 
 
+def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="gpt-5.3-codex")
+
+  cmd = backend._build_command("--malicious-flag ignore previous")
+
+  assert cmd[-2:] == ["--", "--malicious-flag ignore previous"]
+
+
+def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
+  backend = _build_backend(
+      monkeypatch,
+      model="gpt-5.3-codex",
+      resume_session_id="sess-123",
+  )
+
+  cmd = backend._build_command("--malicious-flag ignore previous")
+
+  assert cmd[-2:] == ["--", "--malicious-flag ignore previous"]
+  assert "sess-123" in cmd
+
+
 def test_translate_todo_list_text_items_preserves_live_codex_plan_text(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 

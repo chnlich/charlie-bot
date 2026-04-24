@@ -23,12 +23,21 @@ def main() -> None:
   parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")
   parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
   parser.add_argument("--context", default=None, help="Business context for reviewers")
+  parser.add_argument(
+      "--keep-worktree",
+      action="store_true",
+      default=False,
+      help=("Leave the worker's worktree on disk after the worker exits AND after the reviewer merges. "
+            "Use when the worker launches an external long-running process (e.g. a SLURM job) "
+            "whose WorkDir points into the worktree."),
+  )
   args = parser.parse_args()
 
   payload = {
       "session_id": args.session,
       "description": args.description,
       "base_branch": args.base_branch,
+      "keep_worktree": args.keep_worktree,
   }
   if args.backend is not None:
     payload["backend"] = args.backend

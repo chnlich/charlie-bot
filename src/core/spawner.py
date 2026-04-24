@@ -43,6 +43,7 @@ def _build_worker_prompt(
     loop_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
     is_continuation: bool = False,
+    keep_worktree: bool = False,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   session_info = (f"## Session Info\n"
@@ -105,9 +106,16 @@ def _build_worker_prompt(
       "- You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.\n"
       "- Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.\n")
 
+  keep_worktree_section = ""
+  if keep_worktree:
+    keep_worktree_section = (
+        "\n\n## Worktree Persistence\n"
+        "This worktree will persist after the reviewer merges. "
+        "You may safely use it as the WorkDir for external long-running processes (e.g. SLURM jobs).")
+
   return (
       f"{session_info}\n{_CODING_PRINCIPLES}\n{skills_section}\n{role_section}\n"
-      f"{worktree_section}{iteration_reports_section}")
+      f"{worktree_section}{iteration_reports_section}{keep_worktree_section}")
 
 
 def _short_desc(description: str, limit: int = 120) -> str:
@@ -273,6 +281,7 @@ async def _create_worktree_and_process(
     thread.worktree_path = str(wt_path)
     thread.base_branch = base_branch
     thread.skip_cleanup = req.skip_cleanup
+    thread.keep_worktree = req.keep_worktree
     thread.context = req.context
 
     session_meta = await session_mgr.get_session(session_id)
@@ -285,7 +294,8 @@ async def _create_worktree_and_process(
         session_meta,
         loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,
-        is_continuation=req.is_continuation)
+        is_continuation=req.is_continuation,
+        keep_worktree=req.keep_worktree)
     worktree_path = wt_path.resolve()
   else:
     # Get current branch as the base for the worktree
@@ -305,6 +315,7 @@ async def _create_worktree_and_process(
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
     thread.base_branch = base_branch
+    thread.keep_worktree = req.keep_worktree
     thread.context = req.context
 
     # Build enriched prompt with worktree workflow instructions
@@ -317,7 +328,8 @@ async def _create_worktree_and_process(
         str(wt_path),
         session_meta,
         loop_dir=req.loop_dir,
-        iteration_number=req.iteration_number)
+        iteration_number=req.iteration_number,
+        keep_worktree=req.keep_worktree)
     worktree_path = wt_path.resolve()
 
   if worktree_path is None:
@@ -479,7 +491,10 @@ async def _finalize_worker(
   # Clean up the thread's worktree/temp directory.
   # Skip cleanup if a reviewer will be spawned — it needs the worktree.
   # Also skip if the thread was marked skip_cleanup (e.g. improve loop shared worktree).
-  if thread.skip_cleanup:
+  if thread.keep_worktree:
+    # keep_worktree wins over the require_review branching — the worktree must persist.
+    skip_cleanup = True
+  elif thread.skip_cleanup:
     skip_cleanup = True
   elif thread.review_of:
     # Reviewer threads never clean up here — the review chain owns the worktree lifecycle.

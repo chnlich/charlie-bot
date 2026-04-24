@@ -81,6 +81,7 @@ class ThreadMetadata(BaseModel):
   model: Optional[str] = None
   require_review: bool = True
   skip_cleanup: bool = False
+  keep_worktree: bool = False
   tried_backends: list[str] = Field(default_factory=list)
 
 
@@ -245,6 +246,7 @@ class DelegateRequest(BaseModel):
   repo_path: Optional[str] = None
   context: Optional[str] = None
   require_review: bool = True
+  keep_worktree: bool = False
 
 
 class ImproveRequest(BaseModel):
@@ -304,3 +306,4 @@ class SpawnRequest:
   skip_cleanup: bool = False
   skip_notify: bool = False
   is_continuation: bool = False
+  keep_worktree: bool = False

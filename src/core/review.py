@@ -27,6 +27,8 @@ async def finalize_review_chain(
   """Idempotently remove the worktree shared by the original worker + its reviewer(s)."""
   if not original_thread.repo_path or not original_thread.worktree_path:
     return
+  if original_thread.keep_worktree:
+    return
   wt = Path(original_thread.worktree_path)
   if not wt.exists():
     return

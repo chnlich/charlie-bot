@@ -71,6 +71,7 @@ async def delegate_task(
               resolved_backend=resolved_backend,
               resolved_model=resolved_model,
               require_takeoff=True,
+              keep_worktree=req.keep_worktree,
           ),
       ))
 

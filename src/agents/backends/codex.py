@@ -66,8 +66,6 @@ class CodexBackend(AgentBackend):
           _MODEL_REASONING_EFFORT_CONFIG,
       ]
     cmd.extend(self._extra_flags)
-    # Use `--` end-of-options marker so prompts starting with `--` are not
-    # parsed as CLI flags by the `codex` binary.
     cmd.extend(["--", effective_prompt])
 
     self._last_agent_text.clear()

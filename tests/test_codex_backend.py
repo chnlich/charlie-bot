@@ -8,6 +8,7 @@ def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
       "src.agents.backends.codex.resolve_binary",
       lambda name, fallback: "/usr/bin/codex",
   )
+  kwargs.setdefault("model", "codex-test-model")
   return CodexBackend(**kwargs)
 
 
@@ -31,7 +32,7 @@ def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path:
 
 
 def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="gpt-5.3-codex")
+  backend = _build_backend(monkeypatch, model="codex-test-model")
 
   cmd = backend._build_command("--malicious-flag ignore previous")
 
@@ -41,7 +42,7 @@ def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch) -> Non
 def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
   backend = _build_backend(
       monkeypatch,
-      model="gpt-5.3-codex",
+      model="codex-test-model",
       resume_session_id="sess-123",
   )
 

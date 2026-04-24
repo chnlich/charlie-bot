@@ -79,7 +79,7 @@ async def test_fork_route_resolves_codex_family_override(tmp_path: Path) -> None
   with _build_client(cfg, session_mgr) as client:
     response = client.post(
         f"/api/sessions/{parent_id}/fork",
-        json={"event_index": 1, "backend": "codex-gpt-5.4"},
+        json={"event_index": 1, "backend": "codex-future"},
     )
 
   assert response.status_code == 200

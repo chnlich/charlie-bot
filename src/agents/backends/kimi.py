@@ -16,8 +16,8 @@ class KimiBackend(ClaudeCodeBackend):
   def __init__(self, *, api_key: str, **kwargs):
     # Pop model before super().__init__ — Kimi sets model via ANTHROPIC_MODEL
     # env var, NOT --model CLI flag.
-    self._kimi_model = kwargs.pop("model")
-    if not self._kimi_model:
+    self._model = kwargs.pop("model")
+    if not self._model:
       raise ValueError("kimi backend requires a model")
     self._api_key = api_key
     super().__init__(model=None, **kwargs)
@@ -27,9 +27,9 @@ class KimiBackend(ClaudeCodeBackend):
         **env,
         "ANTHROPIC_BASE_URL": _MOONSHOT_BASE_URL,
         "ANTHROPIC_AUTH_TOKEN": self._api_key,
-        "ANTHROPIC_MODEL": self._kimi_model,
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": self._kimi_model,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": self._kimi_model,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": self._kimi_model,
-        "CLAUDE_CODE_SUBAGENT_MODEL": self._kimi_model,
+        "ANTHROPIC_MODEL": self._model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": self._model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": self._model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": self._model,
+        "CLAUDE_CODE_SUBAGENT_MODEL": self._model,
     }

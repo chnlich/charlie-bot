@@ -3112,3 +3112,30 @@
   status: pending
   created: '2026-04-23T21:11:30Z'
   priority: low
+- id: '124'
+  title: Fix yapf formatting violation in src/api/message_utils.py introduced by tool-call
+    rendering change
+  description: 'WHY — `yapf --diff --recursive src/` currently reports exactly one
+    hunk in the entire src/ tree, in src/api/message_utils.py at L262-266 inside the
+    USER-event branch of events_to_messages. The text-extraction generator was wrapped
+    across two lines (`text = "\n".join(\n    p.get("text", "") for p in raw if isinstance(p,
+    dict) and p.get("type") == "text")`) but the collapsed single-line form is 113
+    characters wide, fits inside the project''s 120-column yapf limit (.style.yapf
+    sets `column_limit = 120`), and is what yapf wants. The violation was introduced
+    in commit a36f45e (`feat(chat): show tool call activity in main chat view`) which
+    added the new tool_result rendering branch but did not run yapf on the result.
+    Until this is fixed, every scheduled code-health scan will continue to report
+    the same single hunk and the repo will not pass `yapf --diff --recursive src/`
+    cleanly, masking any future real formatting drift behind expected noise. WHAT
+    — Run `yapf -i src/api/message_utils.py` to collapse L265-266 into a single line.
+    The change is a one-hunk diff with zero behavior impact; the generator expression
+    semantics are identical. HOW — (1) From the worktree root, run `yapf -i src/api/message_utils.py`.
+    (2) Verify with `yapf --diff --recursive src/` exits clean (no output, exit code
+    0). (3) Verify the existing tests still pass and the import smoke check (`python3
+    -c "from src.api.message_utils import events_to_messages"`) still succeeds. Net
+    result: the entire src/ tree returns to a clean yapf state and future code-health
+    scans surface only genuine new violations.'
+  category: formatting
+  status: pending
+  created: '2026-04-25T12:00:00Z'
+  priority: low

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve paths relative to this script so setup works from any current directory.
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
@@ -10,6 +11,7 @@ usage() {
   echo "Usage: $0 [-n|--dry-run]"
 }
 
+# Parse setup flags. Dry-run keeps the flow read-only and skips skill writes.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -n|--dry-run)
@@ -29,6 +31,7 @@ done
 
 cd "$REPO_ROOT"
 
+# Sync shared and host-specific skills into backend skill directories.
 echo "==> Syncing skills"
 if (( DRY_RUN )); then
   "$SCRIPT_DIR/sync-skills.sh" -n
@@ -36,6 +39,7 @@ else
   "$SCRIPT_DIR/sync-skills.sh"
 fi
 
+# Smoke-check the Claude Code backend command for headless-unsafe tools.
 echo "==> Checking Claude Code backend tools"
 python - <<'PY'
 from src.agents.backends.claude_code import BASE_COMMAND

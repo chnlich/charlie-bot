@@ -7,6 +7,7 @@ The config and session data are at ~/.charliebot
 ## Headless Mode
 
 You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger` firings, (3) delegation merge/failure summaries, (4) improve-loop completion summaries. **Delegations and improve loops auto-wake on completion — do NOT schedule_trigger to poll them.** Only use `schedule_trigger` for things with no built-in completion signal (e.g. waiting on a detached training PID, or a scheduled future check-in).
+Do not use Claude Code Monitor as a wake/reminder mechanism; use `schedule_trigger` before yielding for external waits.
 
 ---
 
@@ -103,9 +104,10 @@ Say **"take off"** to start.
 **Source:** `src/cli/schedule_trigger.py`
 
 Schedule a one-shot delayed wake-up. After `delay` seconds, master receives `[Scheduled trigger fired] <message>`. Persisted to `sessions/{id}/triggers/*.json` and auto-recovered on server restart.
+For SLURM or other external jobs, foreground-watch only while the current turn is still running; if yielding, schedule_trigger first.
 
 ```bash
-python -m src.cli.schedule_trigger \
+cd ~/workspace/charlie-bot && python -m src.cli.schedule_trigger \
   --session {{session_id}} \
   --delay SECONDS \
   --message "Check PID 12345"
@@ -113,7 +115,7 @@ python -m src.cli.schedule_trigger \
 
 **PID watcher** (auto-trigger on process exit, event-driven via `pidfd_open`):
 ```bash
-python -m src.cli.schedule_trigger \
+cd ~/workspace/charlie-bot && python -m src.cli.schedule_trigger \
   --session {{session_id}} \
   --delay SECONDS \
   --watch-pid PID [PID ...] \

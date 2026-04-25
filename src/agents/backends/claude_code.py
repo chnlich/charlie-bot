@@ -15,12 +15,12 @@ BASE_COMMAND: list[str] = [
     "stream-json",
     "--verbose",
     "--dangerously-skip-permissions",
-    # Disable scheduling tools that only work in interactive Claude Code sessions.
-    # In -p (one-shot) mode these tools are no-ops, but the model may still attempt
-    # to use them (e.g. "I'll check back later"), creating false promises.
+    # Disable Claude Code scheduling/monitoring tools that are unsafe in CharlieBot
+    # headless one-shot mode. In -p mode, scheduling tools are no-ops, and Monitor
+    # can create false recall expectations after external waits.
     # Workers should use CharlieBot's schedule_trigger mechanism instead.
     "--disallowed-tools",
-    "ScheduleWakeup,CronCreate,CronDelete,CronList",
+    "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList",
 ]
 
 

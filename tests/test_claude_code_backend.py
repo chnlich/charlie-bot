@@ -1,4 +1,4 @@
-from src.agents.backends.claude_code import ClaudeCodeBackend
+from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 
 
 def test_build_command_uses_double_dash_separator_for_prompt() -> None:
@@ -15,3 +15,17 @@ def test_build_command_preserves_plain_prompt_after_separator() -> None:
   cmd = backend._build_command("hello world")
 
   assert cmd[-2:] == ["--", "hello world"]
+
+
+def test_base_command_disallows_headless_unsafe_tools() -> None:
+  disallowed_index = BASE_COMMAND.index("--disallowed-tools")
+  disallowed_tools = set(BASE_COMMAND[disallowed_index + 1].split(","))
+  required_tools = {
+      "Monitor",
+      "ScheduleWakeup",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+  }
+
+  assert required_tools <= disallowed_tools

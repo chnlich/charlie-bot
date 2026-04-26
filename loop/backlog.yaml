@@ -3109,7 +3109,7 @@
     warnings across src/, eliminating a recurring false positive from every scheduled
     code-health scan and making future real type errors actually visible.'
   category: code-health
-  status: pending
+  status: approved
   created: '2026-04-23T21:11:30Z'
   priority: low
 - id: '124'

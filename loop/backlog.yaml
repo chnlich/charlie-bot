@@ -3109,10 +3109,11 @@
     warnings across src/, eliminating a recurring false positive from every scheduled
     code-health scan and making future real type errors actually visible.'
   category: code-health
-  status: in_progress
+  status: done
   created: '2026-04-23T21:11:30Z'
   priority: low
   in_progress_at: '2026-04-26T17:09:48Z'
+  completed_at: '2026-04-26T17:13:06Z'
 - id: '124'
   title: Fix yapf formatting violation in src/api/message_utils.py introduced by tool-call
     rendering change

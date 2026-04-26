@@ -1,14 +1,20 @@
 """Iterative /improve loop orchestrator."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+  from src.core.sessions import SessionManager
+  from src.core.threads import ThreadManager
 
 from src.api.ext_usage import CcOpusProvider
 from src.api.message_utils import extract_text_from_message
@@ -267,7 +273,7 @@ async def reserve_loop_state(
 # ---------------------------------------------------------------------------
 
 
-async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: "ThreadManager") -> bool:
+async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> bool:
   """Check if a failed thread was due to quota exhaustion."""
   from src.core.ndjson import parse_ndjson_file
 
@@ -291,7 +297,7 @@ async def _wait_for_quota_recovery(
     session_id: str,
     loop_id: int,
     cfg: CharlieBotConfig,
-    session_mgr: "SessionManager",
+    session_mgr: SessionManager,
 ) -> bool:
   """Wait for API quota to recover. Returns True if recovered, False if stopped by user."""
   provider = CcOpusProvider()
@@ -428,8 +434,8 @@ async def _run_single_iteration(
     wt_path: Path,
     loop_dir: Path,
     cfg: CharlieBotConfig,
-    session_mgr: "SessionManager",
-    thread_mgr: "ThreadManager",
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
     resolved_backend: str,
     resolved_model: str,
     previous_summaries: list[str],
@@ -550,8 +556,8 @@ async def run_improve_loop(
     iterations: int,
     goal: str,
     cfg: CharlieBotConfig,
-    session_mgr: "SessionManager",
-    thread_mgr: "ThreadManager",
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
     base_branch: Optional[str] = None,
     branch_prefix: Optional[str] = None,  # deprecated, use work_branch
     work_branch: Optional[str] = None,

@@ -3138,7 +3138,7 @@
     result: the entire src/ tree returns to a clean yapf state and future code-health
     scans surface only genuine new violations.'
   category: formatting
-  status: in_progress
+  status: done
   created: '2026-04-25T12:00:00Z'
   priority: low
   in_progress_at: '2026-04-26T19:09:48Z'

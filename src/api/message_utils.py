@@ -262,8 +262,7 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
           if isinstance(block, dict) and block.get("type") == "tool_result":
             raw = block.get("content", "")
             if isinstance(raw, list):
-              text = "\n".join(
-                  p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
+              text = "\n".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
             else:
               text = str(raw)
             if tools_buf:

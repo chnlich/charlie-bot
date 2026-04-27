@@ -3190,3 +3190,35 @@
   status: pending
   created: '2026-04-26T21:12:17Z'
   priority: low
+- id: '126'
+  title: Split _run_cc into setup and finalize phases (master_cc.py)
+  description: 'WHY — Code-health scan flagged _run_cc in src/agents/master_cc.py
+    (L192-300) as the 5th-longest function in the codebase at 109 lines. It conflates
+    four distinct phases inline: (1) execution-context setup L200-223 — building cwd,
+    instructions_content, extra_flags, env dict, and prompt — 24 lines of preparation
+    that obscure the function''s actual intent; (2) backend construction and event-stream
+    loop L240-263 — the only lines that meaningfully describe what _run_cc does; (3)
+    cancel/exception handling L264-272; (4) finally-side-effects L274-298 — error-event
+    broadcast, mark_unread call, optional tex-check, and finish log. Reviewers must
+    read past 30 lines of setup boilerplate to find the `async for event in backend.run(...)`
+    line that is the function''s reason to exist. WHAT — Extract two focused helpers
+    so _run_cc reads as a clean orchestrator. HOW — (1) Add `async def _build_run_context(session_meta,
+    cfg, item) -> tuple[str, list[str], dict[str, str], str, str]` returning (cwd,
+    extra_flags, env, prompt, instructions_content). All five values are computed
+    deterministically from session_meta, cfg, and item; the helper keeps the existing
+    `await asyncio.to_thread(_build_instructions_content, ...)` call. (2) Add `async
+    def _finalize_run(item, session_meta, error_msg, exit_code, finish_extras) ->
+    None` that handles the error-event broadcast (when error_msg), the mark_unread
+    callback, the optional tex_check side-effect (item.should_check_tex), and the
+    master_cc_finished log line. The cancel/exception paths and the _active_procs
+    bookkeeping stay inline in _run_cc since they touch the local `backend` variable.
+    (3) Call both helpers from _run_cc; the body shrinks from 109 to ~55 lines and
+    each phase becomes individually testable. (4) Verify `yapf --diff --recursive
+    src/` exits clean, `pyflakes src/` exits clean, and `python3 -c "from src.agents.master_cc
+    import run_message"` imports without error. Pure refactoring with zero behavior
+    change. Follows the same playbook as items 003, 027, 041, 062, and 095 which split
+    other long functions in master_cc.py and elsewhere.'
+  category: maintainability
+  status: pending
+  created: '2026-04-27T12:00:00Z'
+  priority: low

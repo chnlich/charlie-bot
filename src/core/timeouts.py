@@ -13,6 +13,9 @@ debugging) requires changing exactly one file.
 SUBPROCESS_GIT_READ_TIMEOUT = 10  # seconds — synchronous subprocess.run
 SUBPROCESS_GIT_READ_TIMEOUT_ASYNC = 30.0  # seconds — async subprocess via asyncio.wait_for
 
+# `git diff` between two refs — may scan a large amount of history.
+SUBPROCESS_GIT_DIFF_TIMEOUT = 30  # seconds — synchronous subprocess.run
+
 # Mutating / heavier git commands (worktree add, add+commit+push).
 SUBPROCESS_GIT_WRITE_TIMEOUT = 60.0  # seconds — worktree creation, commit+push sequences
 

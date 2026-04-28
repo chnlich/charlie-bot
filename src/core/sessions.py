@@ -13,6 +13,7 @@ import structlog
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.json_utils import load_json_meta
 from src.core.models import (
     CreateSessionRequest,
     SessionCallbacks,
@@ -714,16 +715,11 @@ class SessionManager:
       if not threads_dir.exists():
         return False
       for thread_dir in threads_dir.iterdir():
-        meta_path = thread_dir / "metadata.json"
-        if not meta_path.exists():
+        meta = load_json_meta(thread_dir / "metadata.json", "thread_meta_read_failed")
+        if meta is None:
           continue
-        try:
-          meta = json.loads(meta_path.read_text(encoding="utf-8"))
-          if meta.get("status") == "running":
-            return True
-        except (json.JSONDecodeError, OSError) as e:
-          log.debug('thread_meta_read_failed', thread_dir=thread_dir.name, error=str(e))
-          continue
+        if meta.get("status") == "running":
+          return True
       return False
 
     return await asyncio.to_thread(_check)
@@ -739,10 +735,12 @@ class SessionManager:
       pending_count = 0
       next_trigger_at: Optional[datetime] = None
       for trigger_path in triggers_dir.glob("*.json"):
-        try:
-          trigger = json.loads(trigger_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, ValueError) as e:
-          log.debug("trigger_meta_read_failed", trigger_path=str(trigger_path), error=str(e))
+        trigger = load_json_meta(
+            trigger_path,
+            "trigger_meta_read_failed",
+            catch=(json.JSONDecodeError, OSError, ValueError),
+        )
+        if trigger is None:
           continue
         if trigger.get("status") != "pending":
           continue

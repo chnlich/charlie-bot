@@ -10,6 +10,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import get_config
+from src.core.json_utils import load_json_meta
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
@@ -108,12 +109,8 @@ def _recover_orphaned_threads(cfg) -> None:
       continue
     for thread_dir in threads_dir.iterdir():
       meta_path = thread_dir / "metadata.json"
-      if not meta_path.exists():
-        continue
-      try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-      except (json.JSONDecodeError, OSError) as e:
-        log.warning("thread_meta_unreadable", path=str(meta_path), error=str(e))
+      meta = load_json_meta(meta_path, "thread_meta_unreadable")
+      if meta is None:
         continue
       if meta.get("status") != "running":
         continue
@@ -144,12 +141,8 @@ def _clear_stale_thinking(cfg) -> None:
   cleared = 0
   for session_dir in cfg.sessions_dir.iterdir():
     meta_path = session_dir / "metadata.json"
-    if not meta_path.exists():
-      continue
-    try:
-      meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-      log.warning("session_meta_unreadable", path=str(meta_path), error=str(e))
+    meta = load_json_meta(meta_path, "session_meta_unreadable")
+    if meta is None:
       continue
     if meta.get("thinking_since") is None:
       continue

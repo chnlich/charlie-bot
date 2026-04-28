@@ -303,18 +303,24 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 async def _session_consumer(session_id: str) -> None:
   """Drain the per-session queue sequentially, one CC run at a time."""
   queue = _session_queues[session_id]
+  # Relay cc_session_id across items: queued _WorkItems may carry distinct
+  # SessionMetadata instances (e.g. fork bootstrap vs. user message loaded later).
+  last_cc_session_id: Optional[str] = None
   try:
     while True:
       item: _WorkItem = await queue.get()
       try:
-        # Update cc_session_id from session_meta before each run so --resume
-        # uses the latest value (possibly set by a previous run in this batch).
+        # Carry the previous run's cc_session_id onto a freshly-loaded meta
+        # so --resume picks up the in-progress CC transcript.
+        if last_cc_session_id and not item.session_meta.cc_session_id:
+          item.session_meta.cc_session_id = last_cc_session_id
         result = await _run_cc(item)
         cc_session_id, exit_code, _error_msg, finish_extras = result
 
         # Update session_meta.cc_session_id for subsequent queued runs.
         if cc_session_id:
           item.session_meta.cc_session_id = cc_session_id
+          last_cc_session_id = cc_session_id
 
         still_thinking = not queue.empty()
 

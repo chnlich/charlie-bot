@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Awaitable, Callable, Literal, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
 def ensure_utc(v: datetime | str) -> datetime:
@@ -251,6 +251,8 @@ class DelegateRequest(BaseModel):
 
 class ImproveRequest(BaseModel):
   """Request body for the internal improve endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
   session_id: str
   repo_path: str
   base_branch: str

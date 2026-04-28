@@ -3079,7 +3079,7 @@
     and one compat comment removed; fewer surprises for future readers of the improve
     pipeline.'
   category: refactoring
-  status: pending
+  status: approved
   created: '2026-04-23T03:12:08Z'
   priority: low
 - id: '123'
@@ -3148,44 +3148,43 @@
     as the 3rd-longest function in the codebase at 114 lines (L249-362). The bulk
     of the length is structural duplication between the `req.worktree_path_override`
     branch (L273-299, ~27 lines) and the fresh-worktree else-branch (L300-333, ~34
-    lines). Both branches perform the same six-step setup in the same order: (1)
-    resolve `base_branch = req.base_branch or await git_current_branch(resolved_repo)`,
-    (2) compute `branch_name = req.branch_name_override or f"charliebot/task-{ts}-{thread.id[:8]}"`,
+    lines). Both branches perform the same six-step setup in the same order: (1) resolve
+    `base_branch = req.base_branch or await git_current_branch(resolved_repo)`, (2)
+    compute `branch_name = req.branch_name_override or f"charliebot/task-{ts}-{thread.id[:8]}"`,
     (3) determine `wt_path`, (4) assign the same five thread metadata fields (branch_name,
     repo_path, worktree_path, base_branch, context — plus skip_cleanup in the override
     branch and keep_worktree in both), (5) load session_meta and call _build_worker_prompt
     with eight identical keyword arguments differing only by `is_continuation=req.is_continuation`
     in the override branch, (6) set `worktree_path = wt_path.resolve()`. The only
-    real divergence is whether `git_create_worktree` is invoked (else branch) or
-    skipped (override branch reuses an existing path). This duplication has the
-    same risk profile that motivated items 002 (six session-toggle methods), 083
-    (worker-construction tail), 094 (git subprocess helper), and 102 (session-dir
-    iteration helper): every future change to thread metadata or _build_worker_prompt
-    keyword arguments must be applied to both branches, and any divergence is a
-    silent bug. WHAT — Refactor the two branches to share their setup body. HOW
-    — (1) Inside _create_worktree_and_process, after the `req.prompt_override` early-return
-    branch (L262-272), unify the remaining branches: compute `base_branch`, `branch_name`,
-    and `wt_path` once with a single `if req.worktree_path_override:` guard that
-    only chooses `wt_path` and `should_create_worktree`. (2) Run `await git_create_worktree(resolved_repo,
-    base_branch, branch_name, wt_path)` inside `if should_create_worktree:` after
-    ensuring `Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)`. (3) Apply
-    the shared thread-metadata block once (branch_name, repo_path, worktree_path,
-    base_branch, keep_worktree, context — set `thread.skip_cleanup = req.skip_cleanup`
-    unconditionally since the field already defaults to False on fresh worktrees).
-    (4) Build worker_prompt once via _build_worker_prompt with `is_continuation=req.is_continuation`
-    threaded through unconditionally (the parameter already defaults to False, so
-    the fresh-worktree path stays semantically identical). (5) Set `worktree_path
-    = wt_path.resolve()` once. Net effect: the function shrinks from 114 to roughly
-    70 lines, the override-vs-fresh divergence narrows from ~60 lines to a 3-line
-    branch, and future _build_worker_prompt or thread-metadata changes touch a single
-    site. (6) Verify `yapf --diff --recursive src/` exits clean, `pyflakes src/`
-    exits clean, `python3 -c "from src.core.spawner import spawn_worker"` imports
+    real divergence is whether `git_create_worktree` is invoked (else branch) or skipped
+    (override branch reuses an existing path). This duplication has the same risk
+    profile that motivated items 002 (six session-toggle methods), 083 (worker-construction
+    tail), 094 (git subprocess helper), and 102 (session-dir iteration helper): every
+    future change to thread metadata or _build_worker_prompt keyword arguments must
+    be applied to both branches, and any divergence is a silent bug. WHAT — Refactor
+    the two branches to share their setup body. HOW — (1) Inside _create_worktree_and_process,
+    after the `req.prompt_override` early-return branch (L262-272), unify the remaining
+    branches: compute `base_branch`, `branch_name`, and `wt_path` once with a single
+    `if req.worktree_path_override:` guard that only chooses `wt_path` and `should_create_worktree`.
+    (2) Run `await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)`
+    inside `if should_create_worktree:` after ensuring `Path(cfg.worktree_dir).mkdir(parents=True,
+    exist_ok=True)`. (3) Apply the shared thread-metadata block once (branch_name,
+    repo_path, worktree_path, base_branch, keep_worktree, context — set `thread.skip_cleanup
+    = req.skip_cleanup` unconditionally since the field already defaults to False
+    on fresh worktrees). (4) Build worker_prompt once via _build_worker_prompt with
+    `is_continuation=req.is_continuation` threaded through unconditionally (the parameter
+    already defaults to False, so the fresh-worktree path stays semantically identical).
+    (5) Set `worktree_path = wt_path.resolve()` once. Net effect: the function shrinks
+    from 114 to roughly 70 lines, the override-vs-fresh divergence narrows from ~60
+    lines to a 3-line branch, and future _build_worker_prompt or thread-metadata changes
+    touch a single site. (6) Verify `yapf --diff --recursive src/` exits clean, `pyflakes
+    src/` exits clean, `python3 -c "from src.core.spawner import spawn_worker"` imports
     without error, and a manual /improve run still spawns iteration workers correctly
     (the override branch is exclusively used by improve_command iterations). Pure
     refactoring with zero behavior change. Not covered by item 083 (worker-construction
-    tail), item 079 (double save_metadata), or item 099 (SpawnRequest dataclass)
-    — all three handled different aspects of the same function and explicitly left
-    the override-vs-fresh body duplication intact.'
+    tail), item 079 (double save_metadata), or item 099 (SpawnRequest dataclass) —
+    all three handled different aspects of the same function and explicitly left the
+    override-vs-fresh body duplication intact.'
   category: duplication
   status: pending
   created: '2026-04-26T21:12:17Z'

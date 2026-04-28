@@ -41,16 +41,11 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
   )
   if result.returncode != 0:
     raise HTTPException(status_code=500, detail=result.stderr.strip())
-  seen: set[str] = set()
-  branches: list[str] = []
+  seen: set[str] = {"HEAD"}
+  branches: list[str] = ["HEAD"]
   for line in result.stdout.splitlines():
     name = line.strip()
-    if not name or name == "origin":
-      continue
-    # Strip origin/ prefix from remote branches
-    if name.startswith("origin/"):
-      name = name[len("origin/"):]
-    if name == "HEAD":
+    if not name or name == "origin" or name == "HEAD":
       continue
     if name not in seen:
       seen.add(name)

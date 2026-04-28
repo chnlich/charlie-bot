@@ -1,12 +1,12 @@
 """Tests for src/cli/improve.py and the /api/internal/improve endpoint."""
-
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from src.cli.improve import main
+from src.core.models import ImproveRequest
 
 
 def _mock_config(tmp_path: Path):
@@ -76,6 +76,19 @@ def test_main_exits_on_request_error(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Tests for the /api/internal/improve endpoint
 # ---------------------------------------------------------------------------
+
+
+def test_improve_request_rejects_branch_prefix():
+  """ImproveRequest fails fast on the removed branch_prefix field."""
+  with pytest.raises(ValidationError):
+    ImproveRequest(
+        session_id="s1",
+        repo_path="/tmp/repo",
+        base_branch="main",
+        iterations=1,
+        goal="fix",
+        branch_prefix="improve/old",
+    )
 
 
 @pytest.mark.asyncio

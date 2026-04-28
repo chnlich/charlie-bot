@@ -3081,9 +3081,10 @@
     and one compat comment removed; fewer surprises for future readers of the improve
     pipeline.'
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-04-23T03:12:08Z'
   priority: low
+  in_progress_at: '2026-04-28T09:09:52Z'
 - id: '123'
   title: Add TYPE_CHECKING guard for ThreadManager / SessionManager string annotations
     in improve_command.py

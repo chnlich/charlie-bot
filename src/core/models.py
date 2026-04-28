@@ -257,7 +257,6 @@ class ImproveRequest(BaseModel):
   backend: Optional[str] = None
   iterations: int = 3
   goal: str
-  branch_prefix: Optional[str] = None  # deprecated, use work_branch
   work_branch: Optional[str] = None
   merge_back: bool = False
 

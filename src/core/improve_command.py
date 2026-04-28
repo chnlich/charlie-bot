@@ -559,7 +559,6 @@ async def run_improve_loop(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     base_branch: Optional[str] = None,
-    branch_prefix: Optional[str] = None,  # deprecated, use work_branch
     work_branch: Optional[str] = None,
     merge_back: bool = False,
     resolved_backend: str = "",
@@ -574,8 +573,7 @@ async def run_improve_loop(
   """
   previous_summaries: list[str] = []
 
-  # Compat: work_branch = work_branch or branch_prefix or auto-generated
-  work_branch = work_branch or branch_prefix or f'improve/{int(time.time())}'
+  work_branch = work_branch or f'improve/{int(time.time())}'
   resolved_repo = Path(repo_path).resolve()
   if loop_id is None:
     state = await reserve_loop_state(

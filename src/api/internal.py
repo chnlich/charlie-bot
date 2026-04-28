@@ -117,7 +117,7 @@ async def start_improve_loop(
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
-  work_branch = req.work_branch or req.branch_prefix or f"improve/{int(time.time())}"
+  work_branch = req.work_branch or f"improve/{int(time.time())}"
   try:
     state = await reserve_loop_state(
         req.session_id,

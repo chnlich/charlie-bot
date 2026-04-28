@@ -321,7 +321,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
       session_mgr=FakeSessionManager(),
       thread_mgr=FakeThreadManager(),
       base_branch="main",
-      branch_prefix="improve/test",
+      work_branch="improve/test",
       resolved_backend="codex-o3",
       resolved_model="o3",
   )

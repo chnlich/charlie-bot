@@ -124,7 +124,8 @@
     }
 
     const diffText = data.diff || '';
-    statusEl.textContent = `${data.size_bytes.toLocaleString()} bytes · ${data.mode}`;
+    const sep = data.mode === 'three-dot' ? '...' : '..';
+    statusEl.textContent = `${data.size_bytes.toLocaleString()} bytes · ${data.mode} · ${data.base}${sep}${data.head}`;
     if (!diffText.trim()) {
       emptyEl.classList.remove('hidden');
       return;

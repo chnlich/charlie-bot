@@ -2689,8 +2689,9 @@
     path, which is strictly more informative), no circular-import risk (core/json_utils.py
     has zero intra-package imports).'
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-04-20T15:16:21Z'
+  in_progress_at: '2026-04-28T07:09:37Z'
   priority: low
 - id: '116'
   title: Collapse SessionManager.mark_read and mark_unread into a single _set_unread_flag

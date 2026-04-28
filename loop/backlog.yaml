@@ -2689,7 +2689,7 @@
     path, which is strictly more informative), no circular-import risk (core/json_utils.py
     has zero intra-package imports).'
   category: refactoring
-  status: pending
+  status: approved
   created: '2026-04-20T15:16:21Z'
   priority: low
 - id: '116'

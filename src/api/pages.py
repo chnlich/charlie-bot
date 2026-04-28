@@ -128,6 +128,15 @@ async def perfetto_viewer(
       })
 
 
+@router.get("/diff", response_class=HTMLResponse)
+async def diff_viewer(request: Request):
+  """Render the GitHub-style diff viewer page."""
+  return templates.TemplateResponse(
+      request,
+      "diff.html",
+      context={"hostname": socket.gethostname()})
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(
     request: Request,

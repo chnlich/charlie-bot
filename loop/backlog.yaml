@@ -3225,3 +3225,63 @@
   status: pending
   created: '2026-04-27T12:00:00Z'
   priority: low
+- id: '127'
+  title: Extract setup and finalize phases from run_improve_loop (improve_command.py)
+  description: 'WHY — Code-health scan flagged run_improve_loop in src/core/improve_command.py
+    (L553-706) as the longest function in the codebase at 154 lines, ahead of _run_single_iteration
+    at 120 lines (L426-545) and _create_worktree_and_process at 114 lines (item 125).
+    Item 062 previously reduced run_improve_loop from 128 → ~50 lines target by extracting
+    summary helpers and adopting extract_text_from_message, but the function has since
+    grown back to 154 lines as new responsibilities accreted: the worktree-creation
+    failure broadcast (L618-628), the merge-back-vs-push branch (L676-687), the post-loop
+    status determination + payload assembly (L658-674), and the loop-state restoration
+    that copies six fields from state when loop_id is provided (L592-601). The current
+    body conflates five distinct phases inline: (1) state initialization L574-613
+    — reserve OR load+restore six state fields (resolved_repo, work_branch, base_branch,
+    merge_back, resolved_backend, resolved_model) + create loop_dir + log; (2) shared
+    worktree creation L615-628 with broadcast-on-failure path; (3) iteration for-loop
+    L630-656 calling _run_single_iteration and incrementing iterations_completed;
+    (4) post-loop finalization L658-689 — determine stopped_by_user, build IMPROVE_STOPPED
+    or IMPROVE_COMPLETED payload, optional merge_back via _merge_back_to_base or push
+    via git_push_branch, broadcast; (5) exception/finally cleanup L691-706. Reviewers
+    must read past 40 lines of state-loading boilerplate before reaching the actual
+    iteration loop, and the state-restoration block (L592-601) is itself a candidate
+    for the require_loop_state pattern from item 103 but with a different distinction
+    — here load_loop_state legitimately may return existing state to resume from.
+    WHAT — Extract two focused helpers so run_improve_loop reads as a clean orchestrator,
+    matching the playbook from items 062 (run_improve_loop earlier split), 095 (master_cc),
+    125 (spawner), and 126 (master_cc). HOW — (1) Add `async def _initialize_improve_state(session_id:
+    str, repo_path: str, iterations: int, goal: str, cfg: CharlieBotConfig, loop_id:
+    Optional[int], base_branch: Optional[str], work_branch: str, merge_back: bool,
+    resolved_backend: str, resolved_model: str) -> tuple[ImproveState, int, Path,
+    str, Optional[str], bool, str, str, Path]` returning (state, loop_id, resolved_repo,
+    work_branch, base_branch, merge_back, resolved_backend, resolved_model, loop_dir).
+    The helper handles the reserve_loop_state vs load_loop_state branch (L578-601),
+    creates loop_dir (L602-603), and emits the improve_loop_backend_pinned log (L605-613).
+    (2) Add `async def _finalize_improve_loop(session_id: str, loop_id: int, work_branch:
+    str, base_branch: Optional[str], merge_back: bool, previous_summaries: list[str],
+    goal: str, resolved_repo: Path, cfg: CharlieBotConfig, session_mgr: SessionManager)
+    -> None` covering the post-loop block (L658-689): refresh state to determine stopped_by_user,
+    build the appropriate IMPROVE_STOPPED/IMPROVE_COMPLETED payload via _build_summary_payload,
+    persist final state, attach work_branch/base_branch fields, branch to _merge_back_to_base
+    OR git_push_branch, then persist_and_broadcast. (3) Optionally extract `async
+    def _broadcast_worktree_failure(session_id: str, goal: str, error: str, cfg: CharlieBotConfig,
+    session_mgr: SessionManager, state: ImproveState, loop_id: int) -> None` for L621-628
+    to keep the worktree-failure path single-purpose. (4) The main run_improve_loop
+    body shrinks from 154 to ~70 lines: call _initialize_improve_state, create the
+    shared worktree (with one helper for failure), run the iteration for-loop, call
+    _finalize_improve_loop, then the existing CancelledError/Exception/finally block
+    stays inline. (5) Verify `yapf --diff --recursive src/` exits clean, `pyflakes
+    src/` exits clean, `python3 -c "from src.core.improve_command import run_improve_loop"`
+    imports without error, and `pytest tests/test_improve_command.py` passes. Pure
+    refactoring with zero behavior change. Not covered by item 062 (done — extracted
+    summary helpers when function was 128 lines, before merge_back/push branch was
+    added), item 091/092 (extracted iteration body into _run_single_iteration), item
+    103 (still pending — addresses load_loop_state None-check duplication, complementary
+    to this item), or item 125/126 (different files). Composes cleanly with item 103:
+    after both land, the require_loop_state helper from 103 can be used inside the
+    new _finalize_improve_loop helper.'
+  category: maintainability
+  status: pending
+  created: '2026-04-28T12:00:00Z'
+  priority: low

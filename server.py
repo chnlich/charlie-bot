@@ -14,12 +14,18 @@ from starlette.middleware.gzip import GZipMiddleware
 from src.api import backlog, chat, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
+from src.core import event_types as ET
 from src.core.config import get_config
 from src.core.http import close_http_client
 from src.core.init import init_charliebot_home
+from src.core.message_aggregator import MessageAggregator
 from src.core.scheduler import Scheduler
 from src.core.streaming import streaming_manager
 from src.core.triggers import TriggerManager
+
+# Raw event types replaced by aggregator deltas on the wire (kept in sync
+# with src.core.sessions._RAW_EVENTS_REPLACED_BY_DELTAS).
+_RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER})
 
 log = structlog.get_logger()
 
@@ -175,19 +181,14 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     session_mgr = get_session_manager()
     try:
       events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-      for event in events[cursor:]:
-        try:
-          await websocket.send_json(event)
-        except Exception as e:
-          log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
-          return
+      sent = await _replay_aggregated_catchup(websocket, events, cursor, session_id)
       await websocket.send_json({"type": "catchup_complete"})
       log.debug(
         "session_ws_catchup_sent",
         session_id=session_id,
         cursor=cursor,
         total=len(events),
-        sent=max(0, len(events) - cursor),
+        sent=sent,
       )
     except Exception as e:
       log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
@@ -197,6 +198,60 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe("sidebar", websocket)
     log.info("session_ws_disconnected", session_id=session_id)
+
+
+async def _replay_aggregated_catchup(
+  websocket: WebSocket,
+  events: list[dict],
+  cursor: int,
+  session_id: str,
+) -> int:
+  """Replay events past *cursor* as aggregator deltas + raw side-effect events.
+
+  Walks the full event list to keep the aggregator state aligned with how the
+  client's SSR/SPA aggregator processed events[0..cursor-1]; deltas from events
+  before the cursor are dropped because the client has already rendered them.
+  Raw `assistant`/`user` events are suppressed because their content is
+  represented by `message`/`stream` deltas on the wire. Returns the number of
+  frames sent.
+  """
+  aggregator = MessageAggregator()
+  sent = 0
+  latest_stream: dict | None = None
+  for idx, ev in enumerate(events):
+    deltas = list(aggregator.feed(ev))
+    if idx < cursor:
+      continue
+    for delta in deltas:
+      if delta["type"] == "stream":
+        # Coalesce: only the most recent stream snapshot matters for catchup.
+        latest_stream = delta
+        continue
+      # A `message` commit makes any buffered stream obsolete -- the commit
+      # carries the same (or more complete) content and the client clears the
+      # streaming preview when it appends a committed bubble.
+      latest_stream = None
+      try:
+        await websocket.send_json(delta)
+        sent += 1
+      except Exception as e:
+        log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
+        return sent
+    if ev.get("type") in _RAW_EVENTS_REPLACED_BY_DELTAS:
+      continue
+    try:
+      await websocket.send_json(ev)
+      sent += 1
+    except Exception as e:
+      log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
+      return sent
+  if latest_stream is not None:
+    try:
+      await websocket.send_json(latest_stream)
+      sent += 1
+    except Exception as e:
+      log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
+  return sent
 
 
 # ---------------------------------------------------------------------------

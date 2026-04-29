@@ -221,6 +221,126 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
 }
 
 
+class MessageAggregator:
+  """Stateful aggregator that converts chat events into displayable messages.
+
+  Streamed assistant text and tool_use blocks are buffered across consecutive
+  ASSISTANT events and emitted as a single message when the buffer is flushed
+  (on user input, simple events, or completion).
+  """
+
+  def __init__(self) -> None:
+    self.messages: list[dict] = []
+    self._assistant_buf: str = ""
+    self._last_event_idx: int = 0
+    self._last_assistant_ts: str | None = None
+    self._tools_buf: list[dict] = []
+
+  def flush(self) -> None:
+    if self._assistant_buf or self._tools_buf:
+      msg = {
+          "role": "assistant",
+          "content": self._assistant_buf,
+          "event_index": self._last_event_idx,
+          "timestamp": self._last_assistant_ts,
+      }
+      if self._tools_buf:
+        msg["tools"] = self._tools_buf
+      self.messages.append(msg)
+      self._assistant_buf = ""
+      self._last_assistant_ts = None
+      self._tools_buf = []
+
+  def process(self, idx: int, ev: dict) -> None:
+    t = ev.get("type")
+    if t == ET.USER:
+      self._handle_user(idx, ev)
+    elif t == ET.ASSISTANT:
+      self._handle_assistant(idx, ev)
+    else:
+      self._handle_simple(idx, ev)
+
+  def _handle_user(self, idx: int, ev: dict) -> None:
+    # CC-internal user events carry tool_result blocks — attach the output
+    # to the most recent tool_use entry so the UI can render it inline.
+    if "message" in ev and "content" not in ev:
+      for block in (ev.get("message") or {}).get("content", []):
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+          raw = block.get("content", "")
+          if isinstance(raw, list):
+            text = "\n".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
+          else:
+            text = str(raw)
+          if self._tools_buf:
+            self._tools_buf[-1]["output"] = text
+            self._tools_buf[-1]["is_error"] = bool(block.get("is_error", False))
+      return
+    self.flush()
+    normalized = normalize_user_message_event(ev)
+    self.messages.append(
+        {
+            "role": "user",
+            "content": normalized["content"],
+            "uploaded_files": normalized["uploaded_files"],
+            "is_voice": ev.get("is_voice", False),
+            "event_index": idx,
+            "timestamp": ev.get("timestamp"),
+        })
+
+  def _handle_assistant(self, idx: int, ev: dict) -> None:
+    self._last_event_idx = idx
+    if not self._assistant_buf:
+      self._last_assistant_ts = ev.get("timestamp")
+    msg = ev.get("message") or {}
+    blocks = msg.get("content") or []
+    for b in blocks:
+      if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'ExitPlanMode':
+        plan_text = (b.get('input') or {}).get('plan', '')
+        if plan_text:
+          self.flush()
+          self.messages.append(
+              {
+                  'role': 'plan',
+                  'content': plan_text,
+                  'event_index': idx,
+                  'timestamp': ev.get('timestamp'),
+              })
+        elif self._assistant_buf:
+          self.messages.append(
+              {
+                  'role': 'plan',
+                  'content': self._assistant_buf,
+                  'event_index': idx,
+                  'timestamp': self._last_assistant_ts,
+              })
+          self._assistant_buf = ''
+          self._last_assistant_ts = None
+    for b in blocks:
+      if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') != 'ExitPlanMode':
+        self._tools_buf.append({
+            'name': b.get('name', ''),
+            'input': b.get('input', {}),
+            'output': '',
+            'is_error': False,
+        })
+    text = extract_text_from_message(msg)
+    if text and self._assistant_buf:
+      self.flush()
+      self._last_assistant_ts = ev.get("timestamp")
+    self._assistant_buf += text
+
+  def _handle_simple(self, idx: int, ev: dict) -> None:
+    handler = _SIMPLE_HANDLERS.get(ev.get("type"))
+    if handler is None:
+      return
+    self.flush()
+    result = handler(ev)
+    if result is not None:
+      result.setdefault('timestamp', ev.get('timestamp'))
+      result['event_index'] = idx
+      self.messages.append(result)
+
+
 def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[dict]:
   """Convert raw chat_events.jsonl entries into displayable messages.
 
@@ -229,107 +349,8 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
     event_index_offset: added to each local index so event_index values
       match real file line positions (used by tail-loading).
   """
-  messages = []
-  assistant_buf = ""
-  last_event_idx = 0
-  last_assistant_ts = None
-  tools_buf: list[dict] = []
-
-  def _flush() -> None:
-    nonlocal assistant_buf, last_assistant_ts, tools_buf
-    if assistant_buf or tools_buf:
-      msg = {
-          "role": "assistant",
-          "content": assistant_buf,
-          "event_index": last_event_idx,
-          "timestamp": last_assistant_ts,
-      }
-      if tools_buf:
-        msg["tools"] = tools_buf
-      messages.append(msg)
-      assistant_buf = ""
-      last_assistant_ts = None
-      tools_buf = []
-
+  aggregator = MessageAggregator()
   for idx, ev in enumerate(events):
-    idx += event_index_offset
-    t = ev.get("type")
-    if t == ET.USER:
-      # CC-internal user events carry tool_result blocks — attach the output
-      # to the most recent tool_use entry so the UI can render it inline.
-      if "message" in ev and "content" not in ev:
-        for block in (ev.get("message") or {}).get("content", []):
-          if isinstance(block, dict) and block.get("type") == "tool_result":
-            raw = block.get("content", "")
-            if isinstance(raw, list):
-              text = "\n".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
-            else:
-              text = str(raw)
-            if tools_buf:
-              tools_buf[-1]["output"] = text
-              tools_buf[-1]["is_error"] = bool(block.get("is_error", False))
-        continue
-      _flush()
-      normalized = normalize_user_message_event(ev)
-      messages.append(
-          {
-              "role": "user",
-              "content": normalized["content"],
-              "uploaded_files": normalized["uploaded_files"],
-              "is_voice": ev.get("is_voice", False),
-              "event_index": idx,
-              "timestamp": ev.get("timestamp"),
-          })
-    elif t == ET.ASSISTANT:
-      last_event_idx = idx
-      if not assistant_buf:
-        last_assistant_ts = ev.get("timestamp")
-      msg = ev.get("message") or {}
-      blocks = msg.get("content") or []
-      for b in blocks:
-        if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'ExitPlanMode':
-          plan_text = (b.get('input') or {}).get('plan', '')
-          if plan_text:
-            _flush()
-            messages.append(
-                {
-                    'role': 'plan',
-                    'content': plan_text,
-                    'event_index': idx,
-                    'timestamp': ev.get('timestamp'),
-                })
-          elif assistant_buf:
-            messages.append(
-                {
-                    'role': 'plan',
-                    'content': assistant_buf,
-                    'event_index': idx,
-                    'timestamp': last_assistant_ts,
-                })
-            assistant_buf = ''
-            last_assistant_ts = None
-      for b in blocks:
-        if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') != 'ExitPlanMode':
-          tools_buf.append({
-              'name': b.get('name', ''),
-              'input': b.get('input', {}),
-              'output': '',
-              'is_error': False,
-          })
-      text = extract_text_from_message(msg)
-      if text and assistant_buf:
-        _flush()
-        last_assistant_ts = ev.get("timestamp")
-      assistant_buf += text
-    else:
-      handler = _SIMPLE_HANDLERS.get(t)
-      if handler is not None:
-        _flush()
-        result = handler(ev)
-        if result is not None:
-          result.setdefault('timestamp', ev.get('timestamp'))
-          result['event_index'] = idx
-          messages.append(result)
-
-  _flush()
-  return messages
+    aggregator.process(idx + event_index_offset, ev)
+  aggregator.flush()
+  return aggregator.messages

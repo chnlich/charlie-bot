@@ -3285,3 +3285,30 @@
   status: pending
   created: '2026-04-28T12:00:00Z'
   priority: low
+- id: '128'
+  title: Fix yapf formatting violation in src/api/pages.py introduced by /diff page
+  description: 'WHY — `yapf --diff --recursive src/` currently reports exactly one
+    hunk in the entire src/ tree, in src/api/pages.py at L134-137 inside the new
+    `diff_viewer` route handler. The TemplateResponse call was wrapped across four
+    lines (`return templates.TemplateResponse(\n    request,\n    "diff.html",\n    context={"hostname":
+    socket.gethostname()})`) but the collapsed single-line form is 92 characters
+    wide, fits inside the project''s 120-column yapf limit (.style.yapf sets `column_limit
+    = 120`), and is what yapf wants. The violation was introduced in commit 75f74bf
+    (`feat(web): add /diff page with diff2html rendering`) which added the new
+    diff_viewer endpoint but did not run yapf on the result. Until this is fixed,
+    every scheduled code-health scan will continue to report the same single hunk
+    and the repo will not pass `yapf --diff --recursive src/` cleanly, masking any
+    future real formatting drift behind expected noise. WHAT — Run `yapf -i src/api/pages.py`
+    to collapse L134-137 into a single line. The change is a one-hunk diff with
+    zero behavior impact; the TemplateResponse call semantics are identical. HOW
+    — (1) From the worktree root, run `yapf -i src/api/pages.py`. (2) Verify with
+    `yapf --diff --recursive src/` exits clean (no output, exit code 0). (3) Verify
+    the import smoke check (`python3 -c "from src.api.pages import router"`) still
+    succeeds. Net result: the entire src/ tree returns to a clean yapf state and
+    future code-health scans surface only genuine new violations. Follows the same
+    one-file pattern as items 005, 022, 121, and 124 which fixed isolated yapf
+    drift introduced by feature commits.'
+  category: formatting
+  status: pending
+  created: '2026-04-29T12:00:00Z'
+  priority: low

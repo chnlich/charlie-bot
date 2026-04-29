@@ -3312,3 +3312,69 @@
   status: pending
   created: '2026-04-29T12:00:00Z'
   priority: low
+- id: '129'
+  title: Extract _track_pending_tool_calls helper from AgentBackend.run() to deduplicate
+    the four parallel tool-id tracking branches
+  description: 'WHY — Code-health scan flagged AgentBackend.run() in src/agents/backends/base.py
+    (L156-262) as the 6th-longest function in the codebase at 107 lines. Item 061
+    (done) previously extracted _drain_and_cleanup and _graceful_shutdown helpers,
+    bringing the function from 115 to its current 107 lines, but the bulk of what
+    remains is now a 33-line block of pending-tool-call bookkeeping (L218-247) that
+    handles four near-identical event-shape branches in sequence: (1) wrapped
+    assistant.tool_use — `evt_type == ET.ASSISTANT` then iterate `translated["message"]["content"]`
+    looking for blocks with `type == ET.TOOL_USE` and add their `id` to `_pending_tool_calls`;
+    (2) flat tool_use — `evt_type == ET.TOOL_USE` then add the top-level `id`; (3)
+    flat tool_result — `evt_type == ET.TOOL_RESULT` then discard the `tool_use_id`
+    from the set; (4) wrapped user.tool_result — `evt_type == ET.USER` then iterate
+    `translated["message"]["content"]` looking for blocks with `type == ET.TOOL_RESULT`
+    and discard their `tool_use_id`. The four branches share a common shape (resolve
+    an id field on either the top-level event or a nested content-block, mutate
+    `_pending_tool_calls`), differ only in event type and add-vs-discard direction,
+    and are interleaved with the result-detection and yield logic that is the
+    actual purpose of the loop. Reviewers reading run() must mentally skip past
+    33 lines of bookkeeping before reaching the `yield translated` and the result-suppression
+    decision (L249-260) that gate when the post-result timeout starts. This is
+    textbook shotgun duplication — every future change to the tool-tracking model
+    (e.g. correlating ids across nested tool_use_ids, logging tool-call lifecycle
+    transitions, exposing a metric, supporting a new wrapped-format backend) has
+    to land in four places and stay synchronized. No existing backlog item covers
+    this: 042 added the make_*_event factory helpers, 054 simplified backend
+    constructors, 061 extracted the cleanup phase, 110 (pending) factors out a
+    PATH-prepend helper, and items 116-118 target master_cc.py duplication on
+    different schemas. Nothing addresses the run() body itself or the tool-tracking
+    dedup. WHAT — Pull the four tool-tracking branches into a single private
+    helper on AgentBackend so run() reads as `subprocess setup → read NDJSON
+    line → translate → track tool calls → yield → maybe arm post-result timer`
+    instead of the current 33-line interleaved bookkeeping. HOW — (1) Add a
+    private static method on AgentBackend in src/agents/backends/base.py near
+    the existing translate_event default (around L155): `@staticmethod` `def
+    _track_tool_calls(event: dict, pending: set[str]) -> None:` whose body
+    consolidates the four current branches. The helper inspects `event.get("type")`
+    once, dispatches to add (TOOL_USE on flat or nested under ASSISTANT) or
+    discard (TOOL_RESULT on flat or nested under USER), tolerating both wrapped
+    and flat shapes via a small `_iter_blocks(event, target_type)` inner helper
+    that yields each `block` from `event.get("message", {}).get("content", [])`
+    whose `type` matches. Mutates `pending` in place; returns None. (2) In
+    AgentBackend.run() replace L218-247 (the four if-branches) with a single
+    call: `self._track_tool_calls(translated, _pending_tool_calls)`. The yield
+    on L249 and the result-suppression block on L251-260 stay inline since they
+    touch the read-loop locals (_saw_result, _result_time). (3) Verify with
+    `yapf --diff --recursive src/` exits clean, `pyflakes src/` exits clean,
+    `python3 -c "from src.agents.backends.base import AgentBackend"` imports
+    without error, and a manual end-to-end run of each backend (claude_code,
+    codex, opencode, gemini_cli, kimi) still suppresses RESULT events while
+    a tool_use is pending — the behavior tested by the existing wrapped-format
+    (Claude Code) and flat-format (Codex/Gemini) callers. Net result: run()
+    drops from 107 to ~75 lines (below the 50-line target after just one more
+    extraction in a future item), the four tool-tracking branches collapse
+    to a single helper call, and any future tool-lifecycle change (logging,
+    metrics, correlation) lands in one place instead of four. Pure refactoring
+    with zero behavior change. Follows the same playbook as items 002 (six
+    session-toggle methods), 029 (events_to_messages dispatch table), 094
+    (_run_git_cmd helper), 107 (_load_triggers_from_dir helper), 117
+    (_broadcast_running_changed helper), and 118 (_emit_master_done helper)
+    which collapsed parallel branches into single helpers across other modules.'
+  category: refactoring
+  status: pending
+  created: '2026-04-29T12:00:00Z'
+  priority: low

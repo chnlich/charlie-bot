@@ -14,6 +14,7 @@ import structlog
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import load_json_meta
+from src.core.message_aggregator import MessageAggregator
 from src.core.models import (
     CreateSessionRequest,
     SessionCallbacks,
@@ -24,6 +25,11 @@ from src.core.models import (
 from src.core.codex_usage import CodexUsageResolver
 from src.core.ndjson import append_ndjson, parse_ndjson_file, parse_ndjson_range, parse_ndjson_tail
 from src.core.streaming import streaming_manager
+
+# Raw event types whose render content is now produced by the per-session
+# MessageAggregator as `message`/`stream` deltas. We persist these events but
+# do not broadcast them raw -- the deltas are the wire-format replacement.
+_RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER})
 
 log = structlog.get_logger()
 
@@ -85,6 +91,12 @@ class SessionManager:
     # clear_thinking_since), which both load meta, mutate disjoint fields, and
     # save back — without a lock the second save overwrites the first's change.
     self._metadata_locks: dict[str, asyncio.Lock] = {}
+    # Per-session MessageAggregator instance carrying live streaming state
+    # (assistant_buf, tools_buf). Lazy-initialized from disk on first
+    # persist_and_broadcast for a session after server start, then maintained
+    # in memory across calls so consecutive assistant chunks accumulate into
+    # a single bubble and tool-only events attach to the prior text bubble.
+    self._aggregators: dict[str, MessageAggregator] = {}
     # Codex-specific usage resolution delegated to a dedicated module.
     self._codex_resolver = CodexUsageResolver(cfg, self._events_cache, self._chat_events_path)
 
@@ -289,6 +301,7 @@ class SessionManager:
         await self._save_metadata(fresh_parent)
     self._events_cache.pop(parent_id, None)
     self._usage_cache.pop(parent_id, None)
+    self._aggregators.pop(parent_id, None)
 
     log.info(
         'session_eloned',
@@ -351,6 +364,7 @@ class SessionManager:
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._events_cache.pop(session_id, None)
     self._usage_cache.pop(session_id, None)
+    self._aggregators.pop(session_id, None)
     return meta
 
   async def delete_session_permanently(self, session_id: str) -> bool:
@@ -361,6 +375,7 @@ class SessionManager:
     await asyncio.to_thread(shutil.rmtree, session_dir)
     self._events_cache.pop(session_id, None)
     self._usage_cache.pop(session_id, None)
+    self._aggregators.pop(session_id, None)
     self._invalidate_cache(session_id)
     self._metadata_locks.pop(session_id, None)
     log.info("session_deleted_permanently", session_id=session_id)
@@ -517,12 +532,45 @@ class SessionManager:
       self._update_usage_cache(session_id, event)
 
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
-    """Persist event (injecting timestamp) then broadcast to the session WebSocket channel."""
+    """Persist event, run it through the session's aggregator, broadcast deltas + raw event.
+
+    Raw `assistant` and `user` events are no longer broadcast on the wire; the
+    aggregator emits ``message``/``stream`` deltas in their place. All other
+    event types still flow as before because clients use them for state
+    side-effects (e.g. ``master_done`` → stopThinking).
+    """
+    # Prime the events cache + aggregator before persisting so event_index
+    # injection works on the very first call after server start (and so the
+    # aggregator state matches what SSR/SPA-switch produced for the same
+    # events).
+    aggregator = self._get_or_init_aggregator(session_id)
     await self.save_chat_event(session_id, event)
-    # Inject event_index so the frontend can render clone/elone buttons in real-time.
-    if session_id in self._events_cache:
-      event['event_index'] = len(self._events_cache[session_id]) - 1
-    await streaming_manager.broadcast(f"session:{session_id}", event)
+    event['event_index'] = len(self._events_cache[session_id]) - 1
+
+    channel = f"session:{session_id}"
+    deltas = list(aggregator.feed(event))
+    for delta in deltas:
+      await streaming_manager.broadcast(channel, delta)
+    if event.get('type') not in _RAW_EVENTS_REPLACED_BY_DELTAS:
+      await streaming_manager.broadcast(channel, event)
+
+  def _get_or_init_aggregator(self, session_id: str) -> MessageAggregator:
+    """Return the live aggregator for *session_id*, lazy-initialized from disk.
+
+    On first use after server start, the aggregator catches up to the current
+    on-disk state by silently consuming all persisted events. Their deltas are
+    discarded -- subscribed clients have already rendered them via SSR or
+    SPA-switch which both use the same aggregator logic.
+    """
+    aggregator = self._aggregators.get(session_id)
+    if aggregator is not None:
+      return aggregator
+    aggregator = MessageAggregator()
+    for ev in self.load_chat_events_sync(session_id):
+      for _ in aggregator.feed(ev):
+        pass
+    self._aggregators[session_id] = aggregator
+    return aggregator
 
   def callbacks(self) -> SessionCallbacks:
     """Return a bundle of session-related callbacks for run_message()."""

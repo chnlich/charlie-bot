@@ -93,8 +93,6 @@ async function switchSession(sessionId) {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
   // Reset streaming state
-  streamBuf = '';
-  streamTs = null;
   catchupDone = false;
   pendingUserMsg = false;
   hideStreaming();
@@ -210,6 +208,14 @@ function renderSessionView(data) {
     ? '<div id="load-more-sentinel" class="flex justify-center py-3 text-xs text-slate-500">Loading older messages&hellip;</div>'
     : '';
   container.innerHTML = loadMoreHtml + parts.join('') + streamHtml;
+
+  // Initialize streaming preview from pending draft (in-progress assistant
+  // response carried over from a tail-loaded session).
+  if (data.pending_draft && data.pending_draft.content) {
+    showStreaming(data.pending_draft.content);
+  } else {
+    hideStreaming();
+  }
 
   // Scroll to bottom
   container.scrollTop = container.scrollHeight;

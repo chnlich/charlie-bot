@@ -71,7 +71,13 @@ function buildContext(sessionId) {
       messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles: uploadedFiles || []});
     },
     appendMessageObject: (msg) => {
-      messages.push({role: msg.role, content: msg.content, isVoice: false, timestamp: msg.timestamp, uploadedFiles: []});
+      messages.push({
+        role: msg.role,
+        content: msg.content,
+        isVoice: !!msg.is_voice,
+        timestamp: msg.timestamp,
+        uploadedFiles: msg.uploaded_files || [],
+      });
     },
     setSessionSpinner: () => {},
     addWorkerCard: () => {},
@@ -114,8 +120,8 @@ test('ignores stale socket events after rapid session switch', () => {
   const activeSocket = FakeWebSocket.instances[1];
   activeSocket.emitOpen();
 
-  staleSocket.emitMessage({type: 'user', content: 'old session text'});
-  activeSocket.emitMessage({type: 'user', content: 'active session text'});
+  staleSocket.emitMessage({type: 'message', message: {role: 'user', content: 'old session text'}});
+  activeSocket.emitMessage({type: 'message', message: {role: 'user', content: 'active session text'}});
 
   assert.deepEqual(messages.map((m) => m.content), ['active session text']);
 });
@@ -150,7 +156,7 @@ test('disconnectWS detaches handlers and delayed stale callbacks are ignored', (
   assert.equal(socket.onclose, null);
   assert.equal(socket.closed, true);
 
-  delayedMessage({data: JSON.stringify({type: 'user', content: 'should be ignored'})});
+  delayedMessage({data: JSON.stringify({type: 'message', message: {role: 'user', content: 'should be ignored'}})});
   assert.equal(messages.length, 0);
 });
 
@@ -193,13 +199,16 @@ test('result event triggers an immediate session usage refresh', () => {
   assert.equal(pollCalls, 1);
 });
 
-test('user websocket events forward structured uploaded_files to the renderer', () => {
+test('user message deltas forward structured uploaded_files to the renderer', () => {
   const {context, messages} = buildContext('session-a');
 
   context.handleWSEvent({
-    type: 'user',
-    content: '',
-    uploaded_files: [{filename: 'report.pdf', path: '/tmp/report.pdf'}],
+    type: 'message',
+    message: {
+      role: 'user',
+      content: '',
+      uploaded_files: [{filename: 'report.pdf', path: '/tmp/report.pdf'}],
+    },
   }, 'session-a', 0);
 
   assert.equal(messages.length, 1);

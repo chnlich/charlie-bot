@@ -165,6 +165,7 @@ async def index(
   triggers = []
   raw_events: list[dict] = []
   session_usage = None
+  pending_draft: dict | None = None
   if session:
     try:
       active_session = await session_mgr.get_session(session)
@@ -178,6 +179,7 @@ async def index(
         messages = view.messages
         threads = view.threads
         session_usage = view.usage
+        pending_draft = view.pending_draft
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")
@@ -201,6 +203,7 @@ async def index(
           "sessions": sessions,
           "active_session": active_session,
           "messages": messages,
+          "pending_draft": pending_draft,
           "threads": threads,
           "triggers": triggers,
           "pt_tz": _PT_TZ,

@@ -375,9 +375,11 @@
           </div>
           {% endif %}
           {% endfor %}
-          <!-- Streaming target -->
-          <div id="streaming-msg" class="hidden flex justify-start">
-            <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" id="streaming-content"></div>
+          <!-- Streaming target (initialized from pending_draft if present) -->
+          <div id="streaming-msg" class="{% if not pending_draft %}hidden {% endif %}flex justify-start"
+               {% if pending_draft and pending_draft.event_index is not none %}data-event-index="{{ pending_draft.event_index }}"{% endif %}>
+            <div class="max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm prose-msg" id="streaming-content"
+                 {% if pending_draft and pending_draft.content %}data-md{% endif %}>{% if pending_draft and pending_draft.content %}{{ pending_draft.content }}{% endif %}</div>
           </div>
         </div>
 

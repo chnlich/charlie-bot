@@ -247,6 +247,7 @@ async def get_session_view(
   return {
       "session": meta.model_dump(mode="json"),
       "messages": view.messages,
+      "pending_draft": view.pending_draft,
       "threads": [t.model_dump(mode="json") for t in view.threads],
       "triggers": [tr.model_dump(mode="json") for tr in triggers],
       "event_count": view.total_event_count,

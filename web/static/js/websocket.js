@@ -1,9 +1,12 @@
 // ---------------------------------------------------------------------------
 // WebSocket streaming
 // ---------------------------------------------------------------------------
+// Wire format: the server feeds raw chat events through MessageAggregator and
+// broadcasts `message` and `stream` deltas in addition to non-aggregated
+// events. Rendering is fully driven by deltas; raw assistant/user events are
+// no longer sent. Other raw events (master_done, task_delegated, …) still
+// flow but only for state side-effects (stopThinking, spinner, etc).
 let ws = null;
-let streamBuf = '';
-let streamTs = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
 let catchupDone = false;
@@ -30,7 +33,6 @@ function connectWS() {
   if (!SESSION_ID) return;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   catchupDone = false;
-  hideStreaming();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
@@ -72,13 +74,35 @@ function connectWS() {
   socket.onerror = () => { if (!isStaleSocket(socket, targetSession, generation)) socket.close(); };
 }
 
+function _bumpEventCursor(ev) {
+  // Track the highest event_index we've observed so reconnection asks the
+  // server for events strictly after it. Falls back to a per-frame increment
+  // for events without an index (e.g. ext_usage, ping).
+  if (typeof ev.event_index === 'number') {
+    eventCursor = Math.max(eventCursor, ev.event_index + 1);
+  }
+}
+
+function _commitMessage(msg) {
+  // Skip separators emitted during catchup -- the chat already shows the
+  // committed history without per-turn dividers between historical bubbles.
+  if (msg.role === 'separator' && !catchupDone) return;
+  if (msg.role === 'user' && pendingUserMsg) {
+    // The local tab already rendered this user message optimistically; skip
+    // the server-side echo so the bubble doesn't double up.
+    pendingUserMsg = false;
+    return;
+  }
+  if (catchupDone) hideStreaming();
+  appendMessageObject(msg);
+}
+
 function handleWSEvent(ev, socketSessionId, socketGeneration) {
   if (socketSessionId !== SESSION_ID || socketGeneration !== wsGeneration) return;
   const t = ev.type;
 
   if (t === 'catchup_complete') {
     catchupDone = true;
-    if (streamBuf) showStreaming(streamBuf);
     return;
   }
   if (t === 'ping') return;
@@ -127,114 +151,27 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
-  // Track every substantive event for the reconnection cursor
-  eventCursor++;
+  _bumpEventCursor(ev);
 
-  if (t === 'user') {
-    // Skip CC-internal user events (tool results) — they have "message" but no "content"
-    if (ev.message && !ev.content) return;
-    // Flush pending assistant text before showing user message (matches backend)
-    if (streamBuf) {
-      if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
-    // Only show if sent from another tab (this tab already added it optimistically)
-    if (!pendingUserMsg) appendMessage('user', ev.content || '', ev.is_voice, ev.timestamp, ev.uploaded_files);
-    pendingUserMsg = false;
-  } else if (t === 'assistant') {
-    const blocks = (ev.message || {}).content || [];
-    for (const b of blocks) {
-      if (b.type === 'tool_use' && b.name === 'ExitPlanMode') {
-        const planText = (b.input && b.input.plan) || streamBuf;
-        if (planText) {
-          if (b.input && b.input.plan && streamBuf) {
-            if (catchupDone) hideStreaming();
-            appendMessage('assistant', streamBuf, false, streamTs);
-          } else if (catchupDone) {
-            hideStreaming();
-          }
-          streamBuf = '';
-          streamTs = null;
-          appendMessage('plan', planText, false, ev.timestamp);
-        }
-      }
-    }
-    let text = '';
-    for (const b of blocks) {
-      if (b.type === 'text') text += b.text || '';
-    }
-    if (text && streamBuf) {
-      if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
-    if (!streamBuf) streamTs = ev.timestamp;
-    streamBuf += text;
-    if (catchupDone && streamBuf) showStreaming(streamBuf);
+  if (t === 'message') {
+    _commitMessage(ev.message || {});
+  } else if (t === 'stream') {
+    const draft = ev.message || {};
+    if (catchupDone && draft.content) showStreaming(draft.content);
   } else if (t === 'master_done') {
-    if (streamBuf) {
-      if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
     if (!ev.still_thinking) {
-      const elapsed = ev.thinking_seconds != null
-        ? ev.thinking_seconds
-        : (thinkingStart ? Math.floor((Date.now() - thinkingStart) / 1000) : null);
       stopThinking({preserveSessionIndicator: true});
-      if (catchupDone) appendSeparator(elapsed, ev.event_index);
     }
   } else if (t === 'assistant_error') {
     if (catchupDone) hideStreaming();
-    if (streamBuf) {
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
     stopThinking();
-    appendMessage('system', 'Error: ' + (ev.content || ''), false, ev.timestamp);
   } else if (t === 'error') {
     if (catchupDone) hideStreaming();
-    if (streamBuf) {
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
-    const msg = ev.content || ev.message || 'Unknown error';
-    appendMessage('system', 'Error: ' + msg, false, ev.timestamp);
   } else if (t === 'task_delegated') {
-    // Flush pending assistant text before task_delegated bubble (matches backend)
-    if (streamBuf) {
-      if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
-    appendMessage('task_delegated', `Task delegated: ${ev.description || ''}`, false, ev.timestamp);
     setSessionSpinner(SESSION_ID, true);
   } else if (t === 'worker_summary') {
-    // Flush pending assistant text before worker summary (matches backend)
-    if (streamBuf) {
-      if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
-    appendMessageObject({
-      role: "worker_summary",
-      content: ev.content || "",
-      full_content: ev.full_content || "",
-      timestamp: ev.timestamp,
-    });
     if (ev.status === 'running') refreshSessionStatusNow({refreshWorkers: true});
     else updateSpinner();
-  } else if (t === 'handler_result') {
-    const icon = ev.status === 'ok' ? '✓' : '✗';
-    appendMessage('system', `${icon} ${ev.task}: ${ev.message || ''}`, false, ev.timestamp);
   } else if (t === 'result') {
     updateUsageDisplay(ev);
     // Codex result events carry translated usage; refresh from session view
@@ -244,20 +181,5 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     showDiffModal();
   } else if (t === 'ext_usage') {
     renderExtUsage(ev);
-  } else if (t === 'context_compacted') {
-    const trigger = ev.trigger || 'auto';
-    const preTokens = ev.pre_tokens;
-    let msg = 'Context compacted';
-    if (trigger) msg += ' (' + trigger + ')';
-    if (preTokens) msg += ' — was ' + Math.round(preTokens / 1000) + 'k tokens';
-    appendMessage('system', msg, false, ev.timestamp);
-  } else if (t === 'clone_start') {
-    if (streamBuf) {
-      if (catchupDone) hideStreaming();
-      appendMessage('assistant', streamBuf, false, streamTs);
-      streamBuf = '';
-      streamTs = null;
-    }
-    appendCloneBanner(ev.parent_session_name || 'Unknown session', ev.parent_session_id || '');
   }
 }

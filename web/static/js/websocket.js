@@ -76,10 +76,13 @@ function connectWS() {
 
 function _bumpEventCursor(ev) {
   // Track the highest event_index we've observed so reconnection asks the
-  // server for events strictly after it. Falls back to a per-frame increment
-  // for events without an index (e.g. ext_usage, ping).
-  if (typeof ev.event_index === 'number') {
-    eventCursor = Math.max(eventCursor, ev.event_index + 1);
+  // server for events strictly after it. The index lives on the top level
+  // for raw events and inside `message` for aggregator deltas.
+  let idx = null;
+  if (typeof ev.event_index === 'number') idx = ev.event_index;
+  else if (ev.message && typeof ev.message.event_index === 'number') idx = ev.message.event_index;
+  if (idx !== null) {
+    eventCursor = Math.max(eventCursor, idx + 1);
   }
 }
 

@@ -3,11 +3,12 @@
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import structlog
 
 from src.core import event_types as ET
+from src.core.message_aggregator import MessageAggregator, extract_text_from_message
 
 if TYPE_CHECKING:
   from src.core.models import ThreadMetadata
@@ -18,13 +19,20 @@ log = structlog.get_logger()
 
 _ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
 
-
-def extract_text_from_message(msg: dict | None) -> str:
-  """Join text from content blocks of a CC assistant message."""
-  blocks = (msg or {}).get("content") or []
-  if not isinstance(blocks, list):
-    return ""
-  return "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+# Re-export so existing call sites (src.core.spawner, src.core.improve_command,
+# tests) keep importing extract_text_from_message from this module.
+__all__ = [
+    "extract_text_from_message",
+    "serialize_uploaded_files",
+    "build_agent_input_content",
+    "build_user_event",
+    "strip_attached_files_block",
+    "normalize_user_message_event",
+    "SessionViewData",
+    "build_session_view_data",
+    "events_to_messages",
+    "events_to_view",
+]
 
 
 def serialize_uploaded_files(uploaded_files: list[object] | None) -> list[dict]:
@@ -104,6 +112,7 @@ class SessionViewData:
   messages: list[dict]
   threads: list['ThreadMetadata']
   usage: dict | None
+  pending_draft: dict | None = None
   total_event_count: int | None = None
   has_more: bool = False
 
@@ -119,6 +128,12 @@ async def build_session_view_data(
 
   When tail_limit is None, loads all events. When set, loads only the last
   tail_limit events (fast path for SPA session switching).
+
+  Returns committed messages plus an optional pending_draft (the in-progress
+  assistant draft that has not yet been flushed). Live render paths show the
+  pending_draft in the streaming preview, not as a committed bubble; this
+  keeps SSR aligned with the per-session live aggregator and avoids the
+  duplicate-bubble seen on mid-stream reload.
   """
   if tail_limit is not None:
     events_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, tail_limit)
@@ -133,14 +148,14 @@ async def build_session_view_data(
   if tail_limit is not None:
     tail_events, total_count, has_more = events_result
     offset = total_count - len(tail_events)
-    messages = events_to_messages(tail_events, event_index_offset=offset)
+    messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
     raw_events = tail_events
   else:
     raw_events = events_result
     total_count = None
     has_more = False
-    messages = events_to_messages(raw_events)
+    messages, pending_draft = events_to_view(raw_events)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
 
   try:
@@ -153,204 +168,39 @@ async def build_session_view_data(
       messages=messages,
       threads=threads,
       usage=usage,
+      pending_draft=pending_draft,
       total_event_count=total_count,
       has_more=has_more,
   )
 
 
-def _handler_result_msg(ev: dict) -> dict:
-  icon = '\u2713' if ev.get('status') == 'ok' else '\u2717'
-  return {
-      'role': 'system',
-      'content': f"{icon} {ev.get('task', '')}: {ev.get('message', '')}",
-  }
-
-
-def _context_compacted_msg(ev: dict) -> dict:
-  trigger = ev.get('trigger', 'auto')
-  pre_tokens = ev.get('pre_tokens')
-  msg = 'Context compacted'
-  if trigger:
-    msg += f' ({trigger})'
-  if pre_tokens:
-    msg += f' \u2014 was {round(pre_tokens / 1000)}k tokens'
-  return {'role': 'system', 'content': msg}
-
-
-# Dispatch table for event types that follow the flush-then-append pattern.
-# Each handler returns a message dict (role + content + any extras) or None to
-# skip the event.  The loop adds event_index and a default timestamp.
-_SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
-    ET.MASTER_DONE:
-        lambda ev: None if ev.get('still_thinking') else {
-            'role': 'separator',
-            'thinking_seconds': ev.get('thinking_seconds'),
-        },
-    ET.ASSISTANT_ERROR:
-        lambda ev: {
-            'role': 'system',
-            'content': f"Error: {ev.get('content', '')}",
-        },
-    ET.ERROR:
-        lambda ev: {
-            'role': 'system',
-            'content': f"Error: {ev.get('content') or ev.get('message') or 'Unknown error'}",
-        },
-    ET.TASK_DELEGATED:
-        lambda ev: {
-            'role': 'task_delegated',
-            'content': f"Task delegated: {ev.get('description', '')}",
-            'timestamp': ev.get('timestamp') or ev.get('created_at'),
-        },
-    ET.WORKER_SUMMARY:
-        lambda ev: {
-            'role': 'worker_summary',
-            'content': ev.get('content', ''),
-            'full_content': ev.get('full_content', ''),
-        },
-    ET.HANDLER_RESULT:
-        _handler_result_msg,
-    ET.CONTEXT_COMPACTED:
-        _context_compacted_msg,
-    ET.CLONE_START:
-        lambda ev: {
-            "role": "clone_start",
-            "content": ev.get("parent_session_name", "Unknown session"),
-            "parent_session_id": ev.get("parent_session_id", ""),
-        },
-}
-
-
-class MessageAggregator:
-  """Stateful aggregator that converts chat events into displayable messages.
-
-  Streamed assistant text and tool_use blocks are buffered across consecutive
-  ASSISTANT events and emitted as a single message when the buffer is flushed
-  (on user input, simple events, or completion).
-  """
-
-  def __init__(self) -> None:
-    self.messages: list[dict] = []
-    self._assistant_buf: str = ""
-    self._last_event_idx: int = 0
-    self._last_assistant_ts: str | None = None
-    self._tools_buf: list[dict] = []
-
-  def flush(self) -> None:
-    if self._assistant_buf or self._tools_buf:
-      msg = {
-          "role": "assistant",
-          "content": self._assistant_buf,
-          "event_index": self._last_event_idx,
-          "timestamp": self._last_assistant_ts,
-      }
-      if self._tools_buf:
-        msg["tools"] = self._tools_buf
-      self.messages.append(msg)
-      self._assistant_buf = ""
-      self._last_assistant_ts = None
-      self._tools_buf = []
-
-  def process(self, idx: int, ev: dict) -> None:
-    t = ev.get("type")
-    if t == ET.USER:
-      self._handle_user(idx, ev)
-    elif t == ET.ASSISTANT:
-      self._handle_assistant(idx, ev)
-    else:
-      self._handle_simple(idx, ev)
-
-  def _handle_user(self, idx: int, ev: dict) -> None:
-    # CC-internal user events carry tool_result blocks — attach the output
-    # to the most recent tool_use entry so the UI can render it inline.
-    if "message" in ev and "content" not in ev:
-      for block in (ev.get("message") or {}).get("content", []):
-        if isinstance(block, dict) and block.get("type") == "tool_result":
-          raw = block.get("content", "")
-          if isinstance(raw, list):
-            text = "\n".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
-          else:
-            text = str(raw)
-          if self._tools_buf:
-            self._tools_buf[-1]["output"] = text
-            self._tools_buf[-1]["is_error"] = bool(block.get("is_error", False))
-      return
-    self.flush()
-    normalized = normalize_user_message_event(ev)
-    self.messages.append(
-        {
-            "role": "user",
-            "content": normalized["content"],
-            "uploaded_files": normalized["uploaded_files"],
-            "is_voice": ev.get("is_voice", False),
-            "event_index": idx,
-            "timestamp": ev.get("timestamp"),
-        })
-
-  def _handle_assistant(self, idx: int, ev: dict) -> None:
-    self._last_event_idx = idx
-    if not self._assistant_buf:
-      self._last_assistant_ts = ev.get("timestamp")
-    msg = ev.get("message") or {}
-    blocks = msg.get("content") or []
-    for b in blocks:
-      if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'ExitPlanMode':
-        plan_text = (b.get('input') or {}).get('plan', '')
-        if plan_text:
-          self.flush()
-          self.messages.append(
-              {
-                  'role': 'plan',
-                  'content': plan_text,
-                  'event_index': idx,
-                  'timestamp': ev.get('timestamp'),
-              })
-        elif self._assistant_buf:
-          self.messages.append(
-              {
-                  'role': 'plan',
-                  'content': self._assistant_buf,
-                  'event_index': idx,
-                  'timestamp': self._last_assistant_ts,
-              })
-          self._assistant_buf = ''
-          self._last_assistant_ts = None
-    for b in blocks:
-      if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') != 'ExitPlanMode':
-        self._tools_buf.append({
-            'name': b.get('name', ''),
-            'input': b.get('input', {}),
-            'output': '',
-            'is_error': False,
-        })
-    text = extract_text_from_message(msg)
-    if text and self._assistant_buf:
-      self.flush()
-      self._last_assistant_ts = ev.get("timestamp")
-    self._assistant_buf += text
-
-  def _handle_simple(self, idx: int, ev: dict) -> None:
-    handler = _SIMPLE_HANDLERS.get(ev.get("type"))
-    if handler is None:
-      return
-    self.flush()
-    result = handler(ev)
-    if result is not None:
-      result.setdefault('timestamp', ev.get('timestamp'))
-      result['event_index'] = idx
-      self.messages.append(result)
-
-
 def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[dict]:
-  """Convert raw chat_events.jsonl entries into displayable messages.
+  """Convert raw chat_events.jsonl entries into a flat list of displayable messages.
 
-  Args:
-    events: parsed NDJSON event dicts.
-    event_index_offset: added to each local index so event_index values
-      match real file line positions (used by tail-loading).
+  Final-flushes any in-progress assistant draft; suitable for stable history
+  (paginated older events). For the live-render entrypoint, see ``events_to_view``.
   """
-  aggregator = MessageAggregator()
-  for idx, ev in enumerate(events):
-    aggregator.process(idx + event_index_offset, ev)
-  aggregator.flush()
-  return aggregator.messages
+  agg = MessageAggregator(event_index_offset=event_index_offset)
+  messages: list[dict] = []
+  for delta in agg.feed_all(events):
+    if delta["type"] == "message":
+      messages.append(delta["message"])
+  for delta in agg.flush_pending():
+    messages.append(delta["message"])
+  return messages
+
+
+def events_to_view(events: list[dict], event_index_offset: int = 0) -> tuple[list[dict], dict | None]:
+  """Aggregate events without final-flush; return (committed_messages, pending_draft).
+
+  Used for the initial render of a live session: committed messages render in
+  chat history, pending_draft (if any) renders into the streaming preview.
+  This matches the per-session live aggregator's state so subsequent live
+  events extend the draft rather than producing a duplicate bubble.
+  """
+  agg = MessageAggregator(event_index_offset=event_index_offset)
+  messages: list[dict] = []
+  for delta in agg.feed_all(events):
+    if delta["type"] == "message":
+      messages.append(delta["message"])
+  return messages, agg.pending_draft_message()

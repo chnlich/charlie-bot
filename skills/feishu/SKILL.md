@@ -150,9 +150,9 @@ Common block types:
 - `3` — Heading 1
 - `4` — Heading 2
 - `5` — Heading 3
-- `12` — Code block
+- `12` — Bullet (unordered list)
 - `13` — Ordered list
-- `14` — Unordered list
+- `14` — Code block
 - `31` — Table (use two-step process below)
 - `32` — Table cell (auto-created, do not insert manually)
 

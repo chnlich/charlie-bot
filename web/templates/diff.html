@@ -5,101 +5,87 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Diff Viewer — CharlieBot@{{ hostname }}</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: { extend: { colors: { slate: { 850: '#172033' } } } }
-    };
-  </script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/diff/dist/diff.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
   <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; }
-    /* Match diff2html dark feel */
-    #diff-output .d2h-wrapper { background: transparent; }
-    #diff-output .d2h-file-header { background: #172033; border-color: #334155; }
-    #diff-output .d2h-files-diff,
-    #diff-output .d2h-file-list-wrapper,
-    #diff-output .d2h-file-side-diff,
-    #diff-output .d2h-code-line,
-    #diff-output .d2h-code-side-line { background: transparent; }
     .spinner {
       width: 18px; height: 18px; border-radius: 50%;
-      border: 2px solid #334155; border-top-color: #60a5fa;
+      border: 2px solid #cbd5e1; border-top-color: #2563eb;
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
-<body class="dark bg-slate-900 text-slate-100 min-h-screen">
+<body class="bg-white text-slate-900 min-h-screen">
 
   <!-- Top bar -->
-  <header class="sticky top-0 z-10 bg-slate-850 border-b border-slate-700 flex items-center gap-3 px-4 py-3">
-    <a href="/" class="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors text-sm">
+  <header class="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 flex items-center gap-3 px-4 py-3">
+    <a href="/" class="flex items-center gap-1.5 text-slate-600 hover:text-slate-900 transition-colors text-sm">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
       </svg>
       Back
     </a>
-    <div class="h-4 w-px bg-slate-700"></div>
-    <h1 class="text-sm font-semibold text-slate-200">Diff Viewer</h1>
+    <div class="h-4 w-px bg-slate-300"></div>
+    <h1 class="text-sm font-semibold text-slate-700">Diff Viewer</h1>
   </header>
 
   <!-- Form bar -->
-  <div class="border-b border-slate-800 px-4 py-3 bg-slate-900/80">
+  <div class="border-b border-slate-200 px-4 py-3 bg-slate-50">
     <form id="diff-form" class="flex flex-wrap items-end gap-3">
       <div class="flex flex-col gap-1">
-        <label for="repo-input" class="text-xs text-slate-500">Repo</label>
+        <label for="repo-input" class="text-xs text-slate-600">Repo</label>
         <input id="repo-input" list="repo-list" type="text" placeholder="/path/to/repo"
-               class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-200 placeholder-slate-600 w-80" />
+               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-80" />
         <datalist id="repo-list"></datalist>
       </div>
       <div class="flex flex-col gap-1">
-        <label for="base-input" class="text-xs text-slate-500">Base</label>
+        <label for="base-input" class="text-xs text-slate-600">Base</label>
         <input id="base-input" list="branches-list" type="text" placeholder="main"
-               class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-200 placeholder-slate-600 w-48" />
+               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48" />
       </div>
       <div class="flex flex-col gap-1">
-        <label for="head-input" class="text-xs text-slate-500">Head</label>
+        <label for="head-input" class="text-xs text-slate-600">Head</label>
         <input id="head-input" list="branches-list" type="text" placeholder="HEAD"
-               class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-200 placeholder-slate-600 w-48" />
+               class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 placeholder-slate-400 w-48" />
         <datalist id="branches-list"></datalist>
       </div>
       <div class="flex flex-col gap-1">
-        <label for="mode-select" class="text-xs text-slate-500">Mode</label>
+        <label for="mode-select" class="text-xs text-slate-600">Mode</label>
         <select id="mode-select"
-                class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-200">
+                class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900">
           <option value="three-dot">three-dot (base...head)</option>
           <option value="two-dot">two-dot (base..head)</option>
         </select>
       </div>
       <div class="flex flex-col gap-1">
-        <label for="format-select" class="text-xs text-slate-500">Format</label>
+        <label for="format-select" class="text-xs text-slate-600">Format</label>
         <select id="format-select"
-                class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-200">
+                class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900">
           <option value="side-by-side">side-by-side</option>
           <option value="line-by-line">line-by-line</option>
         </select>
       </div>
       <button type="submit"
-              class="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors">
+              class="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors">
         Compare
       </button>
-      <span id="status" class="text-xs text-slate-500 ml-2"></span>
+      <span id="status" class="text-xs text-slate-600 ml-2"></span>
     </form>
   </div>
 
   <!-- Diff output -->
   <main class="p-4">
-    <div id="loading" class="hidden items-center gap-2 text-sm text-slate-400">
+    <div id="loading" class="hidden items-center gap-2 text-sm text-slate-600">
       <span class="spinner"></span>
       <span>Loading diff…</span>
     </div>
-    <div id="error" class="hidden px-3 py-2 rounded bg-red-900/40 border border-red-700/50 text-red-300 text-sm"></div>
-    <div id="empty" class="hidden text-sm text-slate-400 italic">No differences between these refs.</div>
+    <div id="error" class="hidden px-3 py-2 rounded bg-red-50 border border-red-300 text-red-700 text-sm"></div>
+    <div id="empty" class="hidden text-sm text-slate-500 italic">No differences between these refs.</div>
     <div id="diff-output"></div>
   </main>
 

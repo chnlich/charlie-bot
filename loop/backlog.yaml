@@ -2118,7 +2118,7 @@
     runtime behavior change — `utc_now()` is definitionally equivalent to the inline
     expression it replaces.'
   category: refactoring
-  status: pending
+  status: approved
   created: '2026-04-18T19:12:53Z'
   priority: low
 - id: '107'
@@ -3288,26 +3288,25 @@
 - id: '128'
   title: Fix yapf formatting violation in src/api/pages.py introduced by /diff page
   description: 'WHY — `yapf --diff --recursive src/` currently reports exactly one
-    hunk in the entire src/ tree, in src/api/pages.py at L134-137 inside the new
-    `diff_viewer` route handler. The TemplateResponse call was wrapped across four
-    lines (`return templates.TemplateResponse(\n    request,\n    "diff.html",\n    context={"hostname":
-    socket.gethostname()})`) but the collapsed single-line form is 92 characters
-    wide, fits inside the project''s 120-column yapf limit (.style.yapf sets `column_limit
+    hunk in the entire src/ tree, in src/api/pages.py at L134-137 inside the new `diff_viewer`
+    route handler. The TemplateResponse call was wrapped across four lines (`return
+    templates.TemplateResponse(\n    request,\n    "diff.html",\n    context={"hostname":
+    socket.gethostname()})`) but the collapsed single-line form is 92 characters wide,
+    fits inside the project''s 120-column yapf limit (.style.yapf sets `column_limit
     = 120`), and is what yapf wants. The violation was introduced in commit 75f74bf
-    (`feat(web): add /diff page with diff2html rendering`) which added the new
-    diff_viewer endpoint but did not run yapf on the result. Until this is fixed,
-    every scheduled code-health scan will continue to report the same single hunk
-    and the repo will not pass `yapf --diff --recursive src/` cleanly, masking any
-    future real formatting drift behind expected noise. WHAT — Run `yapf -i src/api/pages.py`
-    to collapse L134-137 into a single line. The change is a one-hunk diff with
-    zero behavior impact; the TemplateResponse call semantics are identical. HOW
-    — (1) From the worktree root, run `yapf -i src/api/pages.py`. (2) Verify with
-    `yapf --diff --recursive src/` exits clean (no output, exit code 0). (3) Verify
-    the import smoke check (`python3 -c "from src.api.pages import router"`) still
-    succeeds. Net result: the entire src/ tree returns to a clean yapf state and
-    future code-health scans surface only genuine new violations. Follows the same
-    one-file pattern as items 005, 022, 121, and 124 which fixed isolated yapf
-    drift introduced by feature commits.'
+    (`feat(web): add /diff page with diff2html rendering`) which added the new diff_viewer
+    endpoint but did not run yapf on the result. Until this is fixed, every scheduled
+    code-health scan will continue to report the same single hunk and the repo will
+    not pass `yapf --diff --recursive src/` cleanly, masking any future real formatting
+    drift behind expected noise. WHAT — Run `yapf -i src/api/pages.py` to collapse
+    L134-137 into a single line. The change is a one-hunk diff with zero behavior
+    impact; the TemplateResponse call semantics are identical. HOW — (1) From the
+    worktree root, run `yapf -i src/api/pages.py`. (2) Verify with `yapf --diff --recursive
+    src/` exits clean (no output, exit code 0). (3) Verify the import smoke check
+    (`python3 -c "from src.api.pages import router"`) still succeeds. Net result:
+    the entire src/ tree returns to a clean yapf state and future code-health scans
+    surface only genuine new violations. Follows the same one-file pattern as items
+    005, 022, 121, and 124 which fixed isolated yapf drift introduced by feature commits.'
   category: formatting
   status: pending
   created: '2026-04-29T12:00:00Z'
@@ -3320,60 +3319,56 @@
     (done) previously extracted _drain_and_cleanup and _graceful_shutdown helpers,
     bringing the function from 115 to its current 107 lines, but the bulk of what
     remains is now a 33-line block of pending-tool-call bookkeeping (L218-247) that
-    handles four near-identical event-shape branches in sequence: (1) wrapped
-    assistant.tool_use — `evt_type == ET.ASSISTANT` then iterate `translated["message"]["content"]`
-    looking for blocks with `type == ET.TOOL_USE` and add their `id` to `_pending_tool_calls`;
+    handles four near-identical event-shape branches in sequence: (1) wrapped assistant.tool_use
+    — `evt_type == ET.ASSISTANT` then iterate `translated["message"]["content"]` looking
+    for blocks with `type == ET.TOOL_USE` and add their `id` to `_pending_tool_calls`;
     (2) flat tool_use — `evt_type == ET.TOOL_USE` then add the top-level `id`; (3)
     flat tool_result — `evt_type == ET.TOOL_RESULT` then discard the `tool_use_id`
     from the set; (4) wrapped user.tool_result — `evt_type == ET.USER` then iterate
     `translated["message"]["content"]` looking for blocks with `type == ET.TOOL_RESULT`
     and discard their `tool_use_id`. The four branches share a common shape (resolve
-    an id field on either the top-level event or a nested content-block, mutate
-    `_pending_tool_calls`), differ only in event type and add-vs-discard direction,
-    and are interleaved with the result-detection and yield logic that is the
-    actual purpose of the loop. Reviewers reading run() must mentally skip past
-    33 lines of bookkeeping before reaching the `yield translated` and the result-suppression
-    decision (L249-260) that gate when the post-result timeout starts. This is
-    textbook shotgun duplication — every future change to the tool-tracking model
-    (e.g. correlating ids across nested tool_use_ids, logging tool-call lifecycle
-    transitions, exposing a metric, supporting a new wrapped-format backend) has
-    to land in four places and stay synchronized. No existing backlog item covers
-    this: 042 added the make_*_event factory helpers, 054 simplified backend
-    constructors, 061 extracted the cleanup phase, 110 (pending) factors out a
-    PATH-prepend helper, and items 116-118 target master_cc.py duplication on
-    different schemas. Nothing addresses the run() body itself or the tool-tracking
-    dedup. WHAT — Pull the four tool-tracking branches into a single private
-    helper on AgentBackend so run() reads as `subprocess setup → read NDJSON
-    line → translate → track tool calls → yield → maybe arm post-result timer`
-    instead of the current 33-line interleaved bookkeeping. HOW — (1) Add a
-    private static method on AgentBackend in src/agents/backends/base.py near
-    the existing translate_event default (around L155): `@staticmethod` `def
-    _track_tool_calls(event: dict, pending: set[str]) -> None:` whose body
-    consolidates the four current branches. The helper inspects `event.get("type")`
-    once, dispatches to add (TOOL_USE on flat or nested under ASSISTANT) or
-    discard (TOOL_RESULT on flat or nested under USER), tolerating both wrapped
-    and flat shapes via a small `_iter_blocks(event, target_type)` inner helper
-    that yields each `block` from `event.get("message", {}).get("content", [])`
-    whose `type` matches. Mutates `pending` in place; returns None. (2) In
-    AgentBackend.run() replace L218-247 (the four if-branches) with a single
-    call: `self._track_tool_calls(translated, _pending_tool_calls)`. The yield
-    on L249 and the result-suppression block on L251-260 stay inline since they
-    touch the read-loop locals (_saw_result, _result_time). (3) Verify with
-    `yapf --diff --recursive src/` exits clean, `pyflakes src/` exits clean,
-    `python3 -c "from src.agents.backends.base import AgentBackend"` imports
-    without error, and a manual end-to-end run of each backend (claude_code,
-    codex, opencode, gemini_cli, kimi) still suppresses RESULT events while
-    a tool_use is pending — the behavior tested by the existing wrapped-format
-    (Claude Code) and flat-format (Codex/Gemini) callers. Net result: run()
-    drops from 107 to ~75 lines (below the 50-line target after just one more
-    extraction in a future item), the four tool-tracking branches collapse
-    to a single helper call, and any future tool-lifecycle change (logging,
-    metrics, correlation) lands in one place instead of four. Pure refactoring
-    with zero behavior change. Follows the same playbook as items 002 (six
-    session-toggle methods), 029 (events_to_messages dispatch table), 094
-    (_run_git_cmd helper), 107 (_load_triggers_from_dir helper), 117
-    (_broadcast_running_changed helper), and 118 (_emit_master_done helper)
-    which collapsed parallel branches into single helpers across other modules.'
+    an id field on either the top-level event or a nested content-block, mutate `_pending_tool_calls`),
+    differ only in event type and add-vs-discard direction, and are interleaved with
+    the result-detection and yield logic that is the actual purpose of the loop. Reviewers
+    reading run() must mentally skip past 33 lines of bookkeeping before reaching
+    the `yield translated` and the result-suppression decision (L249-260) that gate
+    when the post-result timeout starts. This is textbook shotgun duplication — every
+    future change to the tool-tracking model (e.g. correlating ids across nested tool_use_ids,
+    logging tool-call lifecycle transitions, exposing a metric, supporting a new wrapped-format
+    backend) has to land in four places and stay synchronized. No existing backlog
+    item covers this: 042 added the make_*_event factory helpers, 054 simplified backend
+    constructors, 061 extracted the cleanup phase, 110 (pending) factors out a PATH-prepend
+    helper, and items 116-118 target master_cc.py duplication on different schemas.
+    Nothing addresses the run() body itself or the tool-tracking dedup. WHAT — Pull
+    the four tool-tracking branches into a single private helper on AgentBackend so
+    run() reads as `subprocess setup → read NDJSON line → translate → track tool calls
+    → yield → maybe arm post-result timer` instead of the current 33-line interleaved
+    bookkeeping. HOW — (1) Add a private static method on AgentBackend in src/agents/backends/base.py
+    near the existing translate_event default (around L155): `@staticmethod` `def
+    _track_tool_calls(event: dict, pending: set[str]) -> None:` whose body consolidates
+    the four current branches. The helper inspects `event.get("type")` once, dispatches
+    to add (TOOL_USE on flat or nested under ASSISTANT) or discard (TOOL_RESULT on
+    flat or nested under USER), tolerating both wrapped and flat shapes via a small
+    `_iter_blocks(event, target_type)` inner helper that yields each `block` from
+    `event.get("message", {}).get("content", [])` whose `type` matches. Mutates `pending`
+    in place; returns None. (2) In AgentBackend.run() replace L218-247 (the four if-branches)
+    with a single call: `self._track_tool_calls(translated, _pending_tool_calls)`.
+    The yield on L249 and the result-suppression block on L251-260 stay inline since
+    they touch the read-loop locals (_saw_result, _result_time). (3) Verify with `yapf
+    --diff --recursive src/` exits clean, `pyflakes src/` exits clean, `python3 -c
+    "from src.agents.backends.base import AgentBackend"` imports without error, and
+    a manual end-to-end run of each backend (claude_code, codex, opencode, gemini_cli,
+    kimi) still suppresses RESULT events while a tool_use is pending — the behavior
+    tested by the existing wrapped-format (Claude Code) and flat-format (Codex/Gemini)
+    callers. Net result: run() drops from 107 to ~75 lines (below the 50-line target
+    after just one more extraction in a future item), the four tool-tracking branches
+    collapse to a single helper call, and any future tool-lifecycle change (logging,
+    metrics, correlation) lands in one place instead of four. Pure refactoring with
+    zero behavior change. Follows the same playbook as items 002 (six session-toggle
+    methods), 029 (events_to_messages dispatch table), 094 (_run_git_cmd helper),
+    107 (_load_triggers_from_dir helper), 117 (_broadcast_running_changed helper),
+    and 118 (_emit_master_done helper) which collapsed parallel branches into single
+    helpers across other modules.'
   category: refactoring
   status: pending
   created: '2026-04-29T12:00:00Z'
@@ -3381,39 +3376,34 @@
 - id: '130'
   title: Fix yapf formatting violations in src/core/message_aggregator.py introduced
     by MessageAggregator extraction
-  description: 'WHY — `yapf --diff --recursive src/` currently reports two hunks
-    in src/core/message_aggregator.py: one at L182-193 inside the user-message
-    yield path of `_feed`, and one at L227-235 inside the assistant tool_use
-    block-collection loop of `_feed`. Both hunks are dict-literal layout drift
-    — yapf wants the inline `"message": { ... }` dict and the `self._tools_buf.append({...})`
-    call to wrap with the dict on its own indented line (under the project''s
-    `split_before_first_argument = true` rule from .style.yapf, combined with
-    the 120-column limit). The current single-line-key layout violates that
-    rule. The violations were introduced in commit 442cef1 (`refactor(core):
-    extract MessageAggregator as the single chat-event aggregator`) which
-    moved the aggregation logic from api/message_utils.py into the new
-    core/message_aggregator.py without running yapf on the result. Until
-    these hunks are fixed, every scheduled code-health scan will report the
-    same two hunks alongside the existing one in src/api/pages.py L134-137
-    (item 128), and the repo will not pass `yapf --diff --recursive src/`
-    cleanly — masking any future genuine formatting drift behind expected
-    noise. WHAT — Run `yapf -i src/core/message_aggregator.py` to apply the
-    canonical layout to both dict literals. The change is a two-hunk diff
-    with zero behavior impact; the dict contents and the user-message yield
-    plus the tool_use append semantics are identical. HOW — (1) From the
-    worktree root, run `yapf -i src/core/message_aggregator.py`. (2) Verify
-    with `yapf --diff --recursive src/` no longer reports any hunk in
-    message_aggregator.py (the only remaining hunk should be the pages.py
-    one tracked by item 128, until that is also fixed). (3) Verify the
-    import smoke check (`python3 -c "from src.core.message_aggregator import
-    MessageAggregator"`) still succeeds. (4) Verify the existing
-    tests/test_message_aggregator.py suite still passes
-    (`pytest tests/test_message_aggregator.py`). Net result: src/core/
-    returns to a clean yapf state, and once item 128 lands the entire src/
-    tree will pass `yapf --diff --recursive src/` cleanly so future scans
-    surface only genuine new violations. Follows the same one-file pattern
-    as items 005, 022, 121, 124, and 128 which fixed isolated yapf drift
-    introduced by feature or refactor commits.'
+  description: 'WHY — `yapf --diff --recursive src/` currently reports two hunks in
+    src/core/message_aggregator.py: one at L182-193 inside the user-message yield
+    path of `_feed`, and one at L227-235 inside the assistant tool_use block-collection
+    loop of `_feed`. Both hunks are dict-literal layout drift — yapf wants the inline
+    `"message": { ... }` dict and the `self._tools_buf.append({...})` call to wrap
+    with the dict on its own indented line (under the project''s `split_before_first_argument
+    = true` rule from .style.yapf, combined with the 120-column limit). The current
+    single-line-key layout violates that rule. The violations were introduced in commit
+    442cef1 (`refactor(core): extract MessageAggregator as the single chat-event aggregator`)
+    which moved the aggregation logic from api/message_utils.py into the new core/message_aggregator.py
+    without running yapf on the result. Until these hunks are fixed, every scheduled
+    code-health scan will report the same two hunks alongside the existing one in
+    src/api/pages.py L134-137 (item 128), and the repo will not pass `yapf --diff
+    --recursive src/` cleanly — masking any future genuine formatting drift behind
+    expected noise. WHAT — Run `yapf -i src/core/message_aggregator.py` to apply the
+    canonical layout to both dict literals. The change is a two-hunk diff with zero
+    behavior impact; the dict contents and the user-message yield plus the tool_use
+    append semantics are identical. HOW — (1) From the worktree root, run `yapf -i
+    src/core/message_aggregator.py`. (2) Verify with `yapf --diff --recursive src/`
+    no longer reports any hunk in message_aggregator.py (the only remaining hunk should
+    be the pages.py one tracked by item 128, until that is also fixed). (3) Verify
+    the import smoke check (`python3 -c "from src.core.message_aggregator import MessageAggregator"`)
+    still succeeds. (4) Verify the existing tests/test_message_aggregator.py suite
+    still passes (`pytest tests/test_message_aggregator.py`). Net result: src/core/
+    returns to a clean yapf state, and once item 128 lands the entire src/ tree will
+    pass `yapf --diff --recursive src/` cleanly so future scans surface only genuine
+    new violations. Follows the same one-file pattern as items 005, 022, 121, 124,
+    and 128 which fixed isolated yapf drift introduced by feature or refactor commits.'
   category: formatting
   status: pending
   created: '2026-05-02T12:00:00Z'

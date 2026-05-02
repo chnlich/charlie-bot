@@ -1,7 +1,6 @@
 """Thread management for CharlieBot Worker tasks."""
 
 import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -9,7 +8,7 @@ import aiofiles
 import structlog
 
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
+from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus, utc_now
 
 log = structlog.get_logger()
 
@@ -83,9 +82,9 @@ class ThreadManager:
     if exit_code is not None:
       meta.exit_code = exit_code
     if status == ThreadStatus.RUNNING and not meta.started_at:
-      meta.started_at = datetime.now(timezone.utc)
+      meta.started_at = utc_now()
     if status in (ThreadStatus.COMPLETED, ThreadStatus.FAILED, ThreadStatus.CANCELLED):
-      meta.completed_at = datetime.now(timezone.utc)
+      meta.completed_at = utc_now()
     await self._save_metadata(meta)
 
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:

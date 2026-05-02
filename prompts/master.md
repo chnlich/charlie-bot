@@ -103,38 +103,44 @@ Say **"take off"** to start.
 
 **Source:** `src/cli/schedule_trigger.py`
 
-Schedule a one-shot delayed wake-up. After `max-wait` seconds, master receives `[Scheduled trigger fired] <message>`. Persisted to `sessions/{id}/triggers/*.json` and auto-recovered on server restart.
-For SLURM or other external jobs, foreground-watch only while the current turn is still running; if yielding, schedule_trigger first.
+Schedule a one-shot delayed wake-up. After `--max-wait` seconds, master receives `[Scheduled trigger fired] <message>`. Persisted to `sessions/{id}/triggers/*.json` and auto-recovered on server restart.
 
-From the CharlieBot repo root:
+Pure delay (no PID watch):
 ```bash
 python -m src.cli.schedule_trigger \
   --session {{session_id}} \
   --max-wait SECONDS \
-  --message "Check PID 12345"
+  --message "Check status"
 ```
 
-**PID watcher** (auto-trigger on process exit, event-driven via `pidfd_open` for
-local PIDs, ssh polling for remote `host:pid` values):
+**PID watcher** (auto-trigger when watched PIDs exit). `--watch-pid` accepts local PIDs (integer) or remote PIDs (`host:integer`); cannot mix in one trigger:
+
 ```bash
+# Local PID(s) — event-driven via os.pidfd_open + asyncio reader (no polling)
 python -m src.cli.schedule_trigger \
   --session {{session_id}} \
   --max-wait SECONDS \
   --watch-pid PID [PID ...] \
-  --message "Training finished"
+  --message "Local job finished"
+
+# Remote PID(s) — ssh probe with exponential backoff (10s -> 600s, +0-10s noise)
+python -m src.cli.schedule_trigger \
+  --session {{session_id}} \
+  --max-wait SECONDS \
+  --watch-pid host:PID [host2:PID2 ...] \
+  --message "Remote job finished"
 ```
 
-With `--watch-pid`, `--max-wait` is the **upper bound**: the trigger fires
-when **ALL** watched PIDs have exited **OR** when `--max-wait` elapses —
-whichever happens first. Each `--watch-pid` value is either a local PID
-(`12345`) or a remote PID (`host:12345`); all values in a single trigger
-must be all local or all remote.
+With `--watch-pid`, `--max-wait` is the upper bound: trigger fires when **ALL** watched PIDs have exited OR `--max-wait` elapses, whichever first.
+
+**Verify-on-create**: for any remote PID, the trigger ssh-probes `kill -0` at create time. If any remote PID is already dead, the CLI exits non-zero — your launch-failed signal. Do NOT yield in that case; retry the launch.
 
 The fired message is prefixed with the reason:
-- `[Scheduled trigger fired | pid_exit] <msg> (exited: pid=status, ...)`
-- `[Scheduled trigger fired | timeout]  <msg> (exited: ...; still alive: ...)`
-- `[Scheduled trigger fired | pid_gone] <msg> (pid_gone: pid, ...)` — fires
-  immediately if any watched PID didn't exist at schedule time.
+- `[Scheduled trigger fired | pid_exit] <msg> (exited: 1234, neptune:5678)` — all PIDs exited
+- `[Scheduled trigger fired | pid_gone] <msg> (pid_gone: ...)` — some PID was already gone at create time
+- `[Scheduled trigger fired | timeout]  <msg> (exited: ...; still alive: neptune:1234)` — `--max-wait` elapsed
+
+For starting long-running remote jobs alongside `--watch-pid host:PID`, see `remote_launch` (separate CLI; the two are independent and master glues them).
 
 ---
 

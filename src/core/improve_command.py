@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -30,7 +29,7 @@ from src.core.git import (
     git_worktree_remove,
 )
 from src.core.master_trigger import trigger_master
-from src.core.models import SpawnRequest, ThreadStatus, parse_utc_datetime
+from src.core.models import SpawnRequest, ThreadStatus, parse_utc_datetime, utc_now
 from src.core.tasks import create_logged_task
 from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
@@ -257,7 +256,7 @@ async def reserve_loop_state(
         merge_back=merge_back,
         backend=resolved_backend or None,
         model=resolved_model or None,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=utc_now().isoformat(),
         iterations_completed=0,
     )
     await save_loop_state(session_id, state, cfg)
@@ -327,7 +326,7 @@ async def _wait_for_quota_recovery(
       if resets_at_str:
         try:
           resets_at = parse_utc_datetime(resets_at_str)
-          now = datetime.now(timezone.utc)
+          now = utc_now()
           wait_seconds = (resets_at - now).total_seconds() + 60  # 60s buffer
           if wait_seconds > 0:
             msg = f"Quota exhausted, waiting until {resets_at_str} (+60s buffer)..."

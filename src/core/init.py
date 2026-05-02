@@ -2,7 +2,6 @@
 
 import json
 import signal
-from datetime import datetime, timezone
 
 import yaml
 from pathlib import Path
@@ -11,6 +10,7 @@ import structlog
 
 from src.core.config import get_config
 from src.core.json_utils import load_json_meta
+from src.core.models import utc_now
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
@@ -121,7 +121,7 @@ def _recover_orphaned_threads(cfg) -> None:
       # Mark as failed
       meta["status"] = "failed"
       meta["exit_code"] = -1
-      meta["completed_at"] = datetime.now(timezone.utc).isoformat()
+      meta["completed_at"] = utc_now().isoformat()
       meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
       log.warning("recovered_orphaned_thread", thread=meta.get("id"), pid=pid)
       recovered += 1

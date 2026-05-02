@@ -4,7 +4,7 @@ import asyncio
 import json
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -21,6 +21,7 @@ from src.core.models import (
     SessionMetadata,
     SessionStatus,
     parse_utc_datetime,
+    utc_now,
 )
 from src.core.codex_usage import CodexUsageResolver
 from src.core.ndjson import append_ndjson, parse_ndjson_file, parse_ndjson_range, parse_ndjson_tail
@@ -247,7 +248,7 @@ class SessionManager:
         "type": ET.CLONE_START,
         "parent_session_id": parent_id,
         "parent_session_name": parent.name,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
     await append_ndjson(events_path, clone_event)
 
@@ -297,7 +298,7 @@ class SessionManager:
       if fresh_parent:
         fresh_parent.status = SessionStatus.ARCHIVED
         fresh_parent.rating = 'thumbs_down'
-        fresh_parent.updated_at = datetime.now(timezone.utc)
+        fresh_parent.updated_at = utc_now()
         await self._save_metadata(fresh_parent)
     self._events_cache.pop(parent_id, None)
     self._usage_cache.pop(parent_id, None)
@@ -323,7 +324,7 @@ class SessionManager:
       if not meta:
         return None
       meta.name = new_name
-      meta.updated_at = datetime.now(timezone.utc)
+      meta.updated_at = utc_now()
       await self._save_metadata(meta)
     log.info("session_renamed", session_id=session_id, new_name=new_name)
     return meta
@@ -417,7 +418,7 @@ class SessionManager:
         if not fresh or fresh.group != old_name:
           continue
         fresh.group = new_name
-        fresh.updated_at = datetime.now(timezone.utc)
+        fresh.updated_at = utc_now()
         await self._save_metadata(fresh)
       count += 1
     if count:
@@ -436,7 +437,7 @@ class SessionManager:
         if not fresh or fresh.group != group:
           continue
         fresh.group = None
-        fresh.updated_at = datetime.now(timezone.utc)
+        fresh.updated_at = utc_now()
         await self._save_metadata(fresh)
       count += 1
     if count:
@@ -522,7 +523,7 @@ class SessionManager:
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     """Append a single NDJSON event line to chat_events.jsonl."""
     if 'timestamp' not in event:
-      event['timestamp'] = datetime.now(timezone.utc).isoformat()
+      event['timestamp'] = utc_now().isoformat()
     await append_ndjson(self._chat_events_path(session_id), event)
     # Keep in-memory cache in sync
     if session_id in self._events_cache:
@@ -750,7 +751,7 @@ class SessionManager:
       if not meta:
         return None
       setattr(meta, field, value)
-      meta.updated_at = datetime.now(timezone.utc)
+      meta.updated_at = utc_now()
       await self._save_metadata(meta)
     log.info(log_event, session_id=session_id)
     return meta

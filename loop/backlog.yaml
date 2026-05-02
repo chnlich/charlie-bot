@@ -3378,3 +3378,43 @@
   status: pending
   created: '2026-04-29T12:00:00Z'
   priority: low
+- id: '130'
+  title: Fix yapf formatting violations in src/core/message_aggregator.py introduced
+    by MessageAggregator extraction
+  description: 'WHY — `yapf --diff --recursive src/` currently reports two hunks
+    in src/core/message_aggregator.py: one at L182-193 inside the user-message
+    yield path of `_feed`, and one at L227-235 inside the assistant tool_use
+    block-collection loop of `_feed`. Both hunks are dict-literal layout drift
+    — yapf wants the inline `"message": { ... }` dict and the `self._tools_buf.append({...})`
+    call to wrap with the dict on its own indented line (under the project''s
+    `split_before_first_argument = true` rule from .style.yapf, combined with
+    the 120-column limit). The current single-line-key layout violates that
+    rule. The violations were introduced in commit 442cef1 (`refactor(core):
+    extract MessageAggregator as the single chat-event aggregator`) which
+    moved the aggregation logic from api/message_utils.py into the new
+    core/message_aggregator.py without running yapf on the result. Until
+    these hunks are fixed, every scheduled code-health scan will report the
+    same two hunks alongside the existing one in src/api/pages.py L134-137
+    (item 128), and the repo will not pass `yapf --diff --recursive src/`
+    cleanly — masking any future genuine formatting drift behind expected
+    noise. WHAT — Run `yapf -i src/core/message_aggregator.py` to apply the
+    canonical layout to both dict literals. The change is a two-hunk diff
+    with zero behavior impact; the dict contents and the user-message yield
+    plus the tool_use append semantics are identical. HOW — (1) From the
+    worktree root, run `yapf -i src/core/message_aggregator.py`. (2) Verify
+    with `yapf --diff --recursive src/` no longer reports any hunk in
+    message_aggregator.py (the only remaining hunk should be the pages.py
+    one tracked by item 128, until that is also fixed). (3) Verify the
+    import smoke check (`python3 -c "from src.core.message_aggregator import
+    MessageAggregator"`) still succeeds. (4) Verify the existing
+    tests/test_message_aggregator.py suite still passes
+    (`pytest tests/test_message_aggregator.py`). Net result: src/core/
+    returns to a clean yapf state, and once item 128 lands the entire src/
+    tree will pass `yapf --diff --recursive src/` cleanly so future scans
+    surface only genuine new violations. Follows the same one-file pattern
+    as items 005, 022, 121, 124, and 128 which fixed isolated yapf drift
+    introduced by feature or refactor commits.'
+  category: formatting
+  status: pending
+  created: '2026-05-02T12:00:00Z'
+  priority: low

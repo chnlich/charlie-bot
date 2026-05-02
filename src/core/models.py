@@ -95,6 +95,11 @@ class ThreadMetadata(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class WatchTarget(BaseModel):
+  host: Optional[str] = None  # None means local
+  pid: int
+
+
 class PendingTrigger(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   session_id: str
@@ -103,7 +108,7 @@ class PendingTrigger(BaseModel):
   created_at: UtcDatetime = Field(default_factory=utc_now)
   status: TriggerStatus = TriggerStatus.PENDING
   fired_at: Optional[UtcDatetime] = None
-  watch_pids: Optional[list[int]] = None
+  watch_targets: list[WatchTarget] = Field(default_factory=list)
   fire_reason: Optional[str] = None  # one of 'timeout', 'pid_exit', 'pid_gone', populated when fired
 
 
@@ -270,10 +275,12 @@ class ImproveRequest(BaseModel):
 
 class ScheduleTriggerRequest(BaseModel):
   """Request body for the internal schedule-trigger endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
   session_id: str
   delay_seconds: int
   message: str
-  watch_pids: Optional[list[int]] = None
+  watch_targets: Optional[list[WatchTarget]] = None
 
 
 # ---------------------------------------------------------------------------

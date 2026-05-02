@@ -535,6 +535,7 @@ async def _run_single_iteration(
         'status': status,
         'summary': summary[:200],
         'work_branch': work_branch,
+        'instructions': "Report iteration progress with commit identifier and link. Briefly assess and recommend.",
     }
     create_logged_task(
         trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr),
@@ -686,6 +687,11 @@ async def run_improve_loop(
         log.warning("improve_loop_push_failed", session=session_id, error=push_err)
 
     await session_mgr.persist_and_broadcast(session_id, payload)
+    final_payload = {
+        **payload,
+        'instructions': "Report final state and summarize what changed across iterations.",
+    }
+    await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr)
 
   except asyncio.CancelledError:
     log.warning("improve_loop_cancelled", session=session_id)

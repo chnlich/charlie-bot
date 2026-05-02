@@ -23,6 +23,11 @@ def parse_utc_datetime(v: str) -> datetime:
   return ensure_utc(v)
 
 
+def utc_now() -> datetime:
+  """Return the current UTC datetime as a tz-aware value."""
+  return datetime.now(timezone.utc)
+
+
 UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 
 # ---------------------------------------------------------------------------
@@ -65,7 +70,7 @@ class ThreadMetadata(BaseModel):
   session_id: str
   description: str
   status: ThreadStatus = ThreadStatus.IDLE
-  created_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  created_at: UtcDatetime = Field(default_factory=utc_now)
   started_at: Optional[UtcDatetime] = None
   completed_at: Optional[UtcDatetime] = None
   pid: Optional[int] = None
@@ -95,7 +100,7 @@ class PendingTrigger(BaseModel):
   session_id: str
   fire_at: UtcDatetime
   message: str
-  created_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  created_at: UtcDatetime = Field(default_factory=utc_now)
   status: TriggerStatus = TriggerStatus.PENDING
   fired_at: Optional[UtcDatetime] = None
   watch_pids: Optional[list[int]] = None
@@ -131,8 +136,8 @@ class SessionMetadata(BaseModel):
   next_trigger_at: Optional[datetime] = None
   starred: bool = False
   thinking_since: Optional[UtcDatetime] = None
-  created_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-  updated_at: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  created_at: UtcDatetime = Field(default_factory=utc_now)
+  updated_at: UtcDatetime = Field(default_factory=utc_now)
   cc_session_id: Optional[str] = None
   cc_session_started_at: Optional[UtcDatetime] = None
   backend: str = ""  # empty default; create_session always provides the real value
@@ -174,7 +179,7 @@ class WorkerEvent(BaseModel):
   status: Optional[str] = None
   tool_name: Optional[str] = None
   input: Optional[dict] = None
-  timestamp: UtcDatetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+  timestamp: UtcDatetime = Field(default_factory=utc_now)
 
 
 # ---------------------------------------------------------------------------

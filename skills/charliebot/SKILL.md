@@ -44,6 +44,7 @@ Source code: `~/workspace/charlie-bot/src/core/`
   1. Use absolute paths, or wrap the command with `bash -lc "..."` so PATH is correct.
   2. After launch, `sleep 30` then run `ssh host 'tail -N <log>'` AND `ssh host 'kill -0 $REMOTE_PID'` to verify the process is actually alive and producing real output (not just shell setup noise).
   3. Only after both checks pass, schedule the long delay-based trigger and yield.
+
   Without this verification, a `nohup` exit-on-fail is invisible until the trigger fires hours later — wasted wall time.
 
 ---

@@ -40,6 +40,11 @@ Source code: `~/workspace/charlie-bot/src/core/`
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
 - `schedule_trigger --watch-pid` is local-host only (uses `pidfd_open`); do NOT pass a PID from a remote host / SSH job — it will fire `pid_gone` immediately. For remote tasks, use a log marker or sentinel file with a regular delay-based trigger.
+- **Remote `nohup`/`setsid` background launches must be verified before yielding the turn.** Non-interactive SSH does not source login rc files, so PATH-dependent commands (e.g. tools installed under `~/.local/bin`) silently exit immediately with `command not found`. Required pattern:
+  1. Use absolute paths, or wrap the command with `bash -lc "..."` so PATH is correct.
+  2. After launch, `sleep 30` then run `ssh host 'tail -N <log>'` AND `ssh host 'kill -0 $REMOTE_PID'` to verify the process is actually alive and producing real output (not just shell setup noise).
+  3. Only after both checks pass, schedule the long delay-based trigger and yield.
+  Without this verification, a `nohup` exit-on-fail is invisible until the trigger fires hours later — wasted wall time.
 
 ---
 

@@ -2118,7 +2118,8 @@
     runtime behavior change — `utc_now()` is definitionally equivalent to the inline
     expression it replaces.'
   category: refactoring
-  status: approved
+  status: in_progress
+  in_progress_at: '2026-05-02T15:09:46Z'
   created: '2026-04-18T19:12:53Z'
   priority: low
 - id: '107'

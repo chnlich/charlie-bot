@@ -103,29 +103,32 @@ Say **"take off"** to start.
 
 **Source:** `src/cli/schedule_trigger.py`
 
-Schedule a one-shot delayed wake-up. After `delay` seconds, master receives `[Scheduled trigger fired] <message>`. Persisted to `sessions/{id}/triggers/*.json` and auto-recovered on server restart.
+Schedule a one-shot delayed wake-up. After `max-wait` seconds, master receives `[Scheduled trigger fired] <message>`. Persisted to `sessions/{id}/triggers/*.json` and auto-recovered on server restart.
 For SLURM or other external jobs, foreground-watch only while the current turn is still running; if yielding, schedule_trigger first.
 
 From the CharlieBot repo root:
 ```bash
 python -m src.cli.schedule_trigger \
   --session {{session_id}} \
-  --delay SECONDS \
+  --max-wait SECONDS \
   --message "Check PID 12345"
 ```
 
-**PID watcher** (auto-trigger on process exit, event-driven via `pidfd_open`):
+**PID watcher** (auto-trigger on process exit, event-driven via `pidfd_open` for
+local PIDs, ssh polling for remote `host:pid` values):
 ```bash
 python -m src.cli.schedule_trigger \
   --session {{session_id}} \
-  --delay SECONDS \
+  --max-wait SECONDS \
   --watch-pid PID [PID ...] \
   --message "Training finished"
 ```
 
-With `--watch-pid`, `--delay` is the **max-wait upper bound**: the trigger fires
-when **ALL** watched PIDs have exited **OR** when `--delay` elapses — whichever
-happens first. No polling; uses `os.pidfd_open` + `asyncio.loop.add_reader`.
+With `--watch-pid`, `--max-wait` is the **upper bound**: the trigger fires
+when **ALL** watched PIDs have exited **OR** when `--max-wait` elapses —
+whichever happens first. Each `--watch-pid` value is either a local PID
+(`12345`) or a remote PID (`host:12345`); all values in a single trigger
+must be all local or all remote.
 
 The fired message is prefixed with the reason:
 - `[Scheduled trigger fired | pid_exit] <msg> (exited: pid=status, ...)`

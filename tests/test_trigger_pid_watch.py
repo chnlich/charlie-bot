@@ -13,9 +13,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
+from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus, WatchTarget
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager, _format_suffix
+
+
+def _local(*pids: int) -> list[WatchTarget]:
+  return [WatchTarget(host=None, pid=p) for p in pids]
 
 
 @pytest.fixture
@@ -59,7 +63,7 @@ async def test_pid_gone_immediate_fire(tmp_path: Path, pidfd_open_available: Non
         session_id,
         delay_seconds=30,
         message="watch gone",
-        watch_pids=[missing_pid],
+        watch_targets=_local(missing_pid),
     )
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=5)
@@ -86,7 +90,7 @@ async def test_pid_exit_before_timeout(tmp_path: Path, pidfd_open_available: Non
         session_id,
         delay_seconds=30,
         message="watch exit",
-        watch_pids=[proc.pid],
+        watch_targets=_local(proc.pid),
     )
     task = trigger_mgr._tasks[trigger.id]
     start = time.monotonic()
@@ -118,7 +122,7 @@ async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: Non
           session_id,
           delay_seconds=1,
           message="watch timeout",
-          watch_pids=[proc.pid],
+          watch_targets=_local(proc.pid),
       )
       task = trigger_mgr._tasks[trigger.id]
       await asyncio.wait_for(task, timeout=10)
@@ -150,7 +154,7 @@ async def test_multiple_pids_all_semantics(tmp_path: Path, pidfd_open_available:
           session_id,
           delay_seconds=30,
           message="watch all",
-          watch_pids=[fast.pid, slow.pid],
+          watch_targets=_local(fast.pid, slow.pid),
       )
       task = trigger_mgr._tasks[trigger.id]
       start = time.monotonic()
@@ -193,7 +197,7 @@ async def test_time_only_path_unchanged(tmp_path: Path) -> None:
   assert stored.fire_reason == "timeout"
   msg = mock_master.await_args.args[1]
   assert msg == "[Scheduled trigger fired] hello"
-  assert stored.watch_pids is None
+  assert stored.watch_targets == []
 
 
 @pytest.mark.asyncio
@@ -206,7 +210,7 @@ async def test_pidfd_fallback_works_on_host(tmp_path: Path) -> None:
     cfg, session_mgr, trigger_mgr, session_id = await _make_mgr(tmp_path)
     with patch("src.core.triggers.trigger_master", new=AsyncMock()):
       trigger = await trigger_mgr.create_trigger(
-          session_id, delay_seconds=10, message="live", watch_pids=[proc.pid],
+          session_id, delay_seconds=10, message="live", watch_targets=_local(proc.pid),
       )
       fresh = None
       for _ in range(50):
@@ -221,25 +225,35 @@ async def test_pidfd_fallback_works_on_host(tmp_path: Path) -> None:
 
 
 def test_format_suffix_pid_gone() -> None:
-  assert _format_suffix("pid_gone", [], [], [111, 222]) == " (pid_gone: 111, 222)"
+  assert _format_suffix("pid_gone", [], [], ["111", "222"]) == " (pid_gone: 111, 222)"
 
 
 def test_format_suffix_pid_exit_with_unknown() -> None:
-  out = _format_suffix("pid_exit", [(111, 0), (222, None)], [], [])
+  out = _format_suffix("pid_exit", [("111", 0), ("222", None)], [], [])
   assert out == " (exited: 111=0, 222=unknown)"
 
 
 def test_format_suffix_timeout_with_exited() -> None:
-  out = _format_suffix("timeout", [(111, 0)], [222, 333], [])
+  out = _format_suffix("timeout", [("111", 0)], ["222", "333"], [])
   assert out == " (exited: 111=0; still alive: 222, 333)"
 
 
 def test_format_suffix_timeout_all_alive() -> None:
-  out = _format_suffix("timeout", [], [222, 333], [])
+  out = _format_suffix("timeout", [], ["222", "333"], [])
   assert out == " (still alive: 222, 333)"
 
 
-def test_backwards_compat_load_legacy_trigger() -> None:
+def test_format_suffix_pid_exit_remote_only() -> None:
+  out = _format_suffix("pid_exit", [("neptune:5678", None), ("noire:9012", None)], [], [])
+  assert out == " (exited: neptune:5678, noire:9012)"
+
+
+def test_format_suffix_timeout_remote_mix() -> None:
+  out = _format_suffix("timeout", [("neptune:5678", None)], ["noire:9012"], [])
+  assert out == " (exited: neptune:5678; still alive: noire:9012)"
+
+
+def test_load_legacy_trigger_without_watch_pids() -> None:
   """An existing JSON file without watch_pids/fire_reason must still load."""
   legacy = (
       '{"id": "legacy-1", "session_id": "sess", '
@@ -248,5 +262,5 @@ def test_backwards_compat_load_legacy_trigger() -> None:
       '"fired_at": null}'
   )
   trigger = PendingTrigger.model_validate_json(legacy)
-  assert trigger.watch_pids is None
+  assert trigger.watch_targets == []
   assert trigger.fire_reason is None

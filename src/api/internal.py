@@ -10,7 +10,7 @@ from src.api.deps import get_session_manager, get_thread_manager, get_trigger_ma
 from src.core import event_types as ET
 from src.core.config import get_config
 from src.core.improve_command import ImproveLoopAlreadyRunningError, reserve_loop_state, run_improve_loop
-from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest, SpawnRequest
+from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest, SpawnRequest, WatchTarget
 from src.core.sessions import SessionManager
 from src.core.spawner import (
     DelegationBlockedError,
@@ -20,7 +20,7 @@ from src.core.spawner import (
 )
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
-from src.core.triggers import TriggerManager
+from src.core.triggers import RemoteVerifyError, TriggerManager
 
 log = structlog.get_logger()
 
@@ -169,26 +169,36 @@ async def schedule_trigger(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  if req.watch_pids is not None:
-    if len(req.watch_pids) == 0:
-      raise HTTPException(status_code=400, detail="watch_pids must be non-empty when provided")
-    if not all(isinstance(p, int) and p > 0 for p in req.watch_pids):
-      raise HTTPException(status_code=400, detail="watch_pids must contain only positive integers")
+  if req.watch_targets is not None:
+    if len(req.watch_targets) == 0:
+      raise HTTPException(status_code=400, detail="watch_targets must be non-empty when provided")
+    if not all(t.pid > 0 for t in req.watch_targets):
+      raise HTTPException(status_code=400, detail="watch_targets pids must be positive integers")
+    has_local = any(t.host is None for t in req.watch_targets)
+    has_remote = any(t.host is not None for t in req.watch_targets)
+    if has_local and has_remote:
+      raise HTTPException(
+          status_code=400,
+          detail="watch_targets must be all local or all remote, not mixed",
+      )
 
   try:
     trigger = await trigger_mgr.create_trigger(
         req.session_id,
         req.delay_seconds,
         req.message,
-        watch_pids=req.watch_pids,
+        watch_targets=req.watch_targets,
     )
+  except RemoteVerifyError as e:
+    # Verify-on-create rejection: surface as 422 so the CLI exits with code 2.
+    raise HTTPException(status_code=422, detail=str(e)) from e
   except RuntimeError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
   log.info(
       "trigger_scheduled",
       session=req.session_id,
       trigger_id=trigger.id,
-      watch_pids=req.watch_pids,
+      watch_targets=[t.model_dump() for t in (req.watch_targets or [])],
   )
 
   return {"trigger_id": trigger.id, "fire_at": trigger.fire_at.isoformat()}

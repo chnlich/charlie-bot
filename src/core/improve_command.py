@@ -21,8 +21,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import (
     git_create_worktree,
-    git_merge_ff_only,
-    git_pull_ff_only,
+    git_fetch,
     git_push_branch,
     git_push_refspec,
     git_worktree_prune,
@@ -358,66 +357,6 @@ async def _wait_for_quota_recovery(
 
 
 # ---------------------------------------------------------------------------
-# Merge-back helper
-# ---------------------------------------------------------------------------
-
-
-async def _merge_back_to_base(
-    repo_path: Path,
-    base_branch: str,
-    work_branch: str,
-    cfg: CharlieBotConfig,
-    session_id: str,
-) -> tuple[bool, str]:
-  """Merge work_branch into base_branch and push. Returns (success, error_message).
-
-  Primary: create an ephemeral worktree on base_branch, pull, merge --ff-only, push.
-  Fallback: if base_branch is already checked out, use refspec push.
-  """
-  tmp_path = Path(cfg.worktree_dir) / f"merge-{work_branch.replace('/', '-')}-{int(time.time())}"
-
-  try:
-    # Step 1: create ephemeral worktree on base_branch
-    try:
-      # Use a temp branch name for the worktree (we'll operate on base_branch directly)
-      tmp_branch = f"_merge-tmp-{int(time.time())}"
-      await git_create_worktree(repo_path, base_branch, tmp_branch, tmp_path)
-    except RuntimeError as e:
-      err_str = str(e)
-      if 'already checked out' in err_str or 'is already checked out' in err_str:
-        # Fallback: refspec push
-        log.info("merge_back_fallback_refspec", session=session_id, reason=err_str)
-        ok, push_err = await git_push_refspec(repo_path, work_branch, base_branch)
-        if ok:
-          return True, ""
-        return False, f"refspec push failed: {push_err}"
-      return False, f"worktree creation failed: {err_str}"
-
-    # Step 2: pull latest base_branch
-    ok, err = await git_pull_ff_only(tmp_path, base_branch)
-    if not ok:
-      log.warning("merge_back_pull_failed", session=session_id, error=err)
-      # Non-fatal: the worktree was just created from base_branch, it should be up to date
-
-    # Step 3: merge --ff-only work_branch
-    ok, err = await git_merge_ff_only(tmp_path, work_branch)
-    if not ok:
-      return False, f"merge --ff-only failed: {err}"
-
-    # Step 4: push the merged result (on tmp_branch) to remote base_branch
-    ok, err = await git_push_refspec(tmp_path, "HEAD", base_branch)
-    if not ok:
-      return False, f"push failed: {err}"
-
-    return True, ""
-  finally:
-    # Step 5: clean up ephemeral worktree
-    if tmp_path.exists():
-      await git_worktree_remove(str(repo_path), tmp_path, session_id)
-      await git_worktree_prune(str(repo_path), session_id)
-
-
-# ---------------------------------------------------------------------------
 # Single-iteration helper
 # ---------------------------------------------------------------------------
 
@@ -612,11 +551,16 @@ async def run_improve_loop(
       merge_back=merge_back,
   )
 
-  # Create the single worktree for all iterations
+  # Create the single worktree for all iterations.
+  # Fetch + branch off origin/<base> so iterations start from the latest remote tip,
+  # not a stale local copy of base_branch.
   wt_path = Path(cfg.worktree_dir) / work_branch.replace('/', '-')
   Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
   try:
-    await git_create_worktree(resolved_repo, base_branch, work_branch, wt_path)
+    fetched, fetch_err = await git_fetch(resolved_repo, "origin", base_branch)
+    if not fetched:
+      raise RuntimeError(f"git fetch origin {base_branch} failed: {fetch_err}")
+    await git_create_worktree(resolved_repo, f"origin/{base_branch}", work_branch, wt_path)
   except Exception as e:
     state.status = 'failed'
     await save_loop_state(session_id, state, cfg)
@@ -673,13 +617,27 @@ async def run_improve_loop(
     payload['work_branch'] = work_branch
     payload['base_branch'] = base_branch
 
-    # Post-loop: merge back or push work branch
+    # Post-loop landing: fast-forward push work_branch onto base_branch.
+    # Worktree was created from origin/<base>, so the FF push only fails if origin/<base>
+    # advanced during the loop. On failure, hand the work branch back to the master agent
+    # via the trigger payload — no rebase-retry, no fallback subagent — so it can decide
+    # how to land (e.g. open a PR, manual rebase).
     if merge_back and not stopped_by_user and previous_summaries:
-      success, error = await _merge_back_to_base(resolved_repo, base_branch, work_branch, cfg, session_id)
-      if success:
+      ok, push_err = await git_push_refspec(resolved_repo, work_branch, base_branch)
+      if ok:
         payload['merge_result'] = {'merged': True, 'base_branch': base_branch}
       else:
-        payload['merge_result'] = {'merged': False, 'error': error}
+        log.warning("improve_loop_landing_ff_push_failed", session=session_id, error=push_err)
+        payload['merge_result'] = {
+            'merged': False,
+            'error': push_err,
+            'work_branch': work_branch,
+            'base_branch': base_branch,
+        }
+        # Keep the work branch on origin so the master agent can act on it.
+        ok_push, push_branch_err = await git_push_branch(resolved_repo, work_branch)
+        if not ok_push:
+          log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
     else:
       # Best-effort push work_branch to remote
       ok, push_err = await git_push_branch(resolved_repo, work_branch)
@@ -687,9 +645,15 @@ async def run_improve_loop(
         log.warning("improve_loop_push_failed", session=session_id, error=push_err)
 
     await session_mgr.persist_and_broadcast(session_id, payload)
+    instructions = "Report final state and summarize what changed across iterations."
+    if payload.get('merge_result', {}).get('merged') is False:
+      instructions += (
+          " The fast-forward landing onto base_branch failed (origin/base_branch advanced"
+          " during the loop). The work branch has been pushed to origin — decide how to land it"
+          " (e.g. open a PR, request a manual rebase). Do NOT retry a fast-forward push.")
     final_payload = {
         **payload,
-        'instructions': "Report final state and summarize what changed across iterations.",
+        'instructions': instructions,
     }
     await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr)
 

@@ -140,15 +140,15 @@ async def _run_git_cmd(
   return True, ""
 
 
-async def git_merge_ff_only(repo_path: Path, source_branch: str) -> tuple[bool, str]:
-  """Run git merge --ff-only. Returns (success, stderr)."""
+async def git_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:
+  """Run git fetch <remote> <branch>. Returns (success, stderr)."""
   return await _run_git_cmd(
       repo_path,
-      "merge",
-      "--ff-only",
-      source_branch,
+      "fetch",
+      remote,
+      branch,
       timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git merge --ff-only",
+      timeout_label="git fetch",
   )
 
 
@@ -165,7 +165,10 @@ async def git_push_branch(repo_path: Path, branch: str) -> tuple[bool, str]:
 
 
 async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: str) -> tuple[bool, str]:
-  """Run git push origin <local>:refs/heads/<remote>. Returns (success, stderr)."""
+  """Run git push origin <local>:refs/heads/<remote>. Returns (success, stderr).
+
+  Git rejects non-fast-forward pushes by default, so this is implicitly an FF-only push.
+  """
   return await _run_git_cmd(
       repo_path,
       "push",
@@ -173,19 +176,6 @@ async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: st
       f"{local_branch}:refs/heads/{remote_branch}",
       timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
       timeout_label="git push refspec",
-  )
-
-
-async def git_pull_ff_only(repo_path: Path, branch: str) -> tuple[bool, str]:
-  """Run git pull --ff-only origin <branch>. Returns (success, stderr)."""
-  return await _run_git_cmd(
-      repo_path,
-      "pull",
-      "--ff-only",
-      "origin",
-      branch,
-      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git pull --ff-only",
   )
 
 

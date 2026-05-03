@@ -36,6 +36,10 @@ Codex and Gemini both read `~/.agents/skills/`, so syncing to **two** targets co
 - Remove stale symlinks whose targets no longer exist
 - Sync script: `<charlie-bot-repo>/scripts/sync-skills.sh`
 
+## Host-Specific Content Boundary
+
+Repo-level shared files (`<charlie-bot-repo>/skills/**`, `<charlie-bot-repo>/prompts/**`) MUST NOT contain host-specific info — hostnames, local paths, GPU specs, per-host ports/IPs. Anything host-specific belongs in `~/.charliebot/MEMORY.host.md` or `~/.charliebot/skills/<name>/`. Rules like "feature X is local-host only" must be flagged in the repo-level skill so that workers running anywhere see them.
+
 ## File Name Convention
 
 All three CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file.

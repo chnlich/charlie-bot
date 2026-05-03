@@ -23,6 +23,8 @@ Source code: `~/workspace/charlie-bot/src/core/`
 4. Reviewer: checks diff, fixes issues, rebases, merges `--ff-only`
 5. On merge → master agent gets summary
 
+**Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
+
 ---
 
 ## Repo-Specific Merge Policy

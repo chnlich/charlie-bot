@@ -38,8 +38,8 @@ def test_main_posts_to_delegate_endpoint(tmp_path: Path) -> None:
           "--keep-worktree",
           "0",
       ]), \
-       patch("src.cli.delegate.get_config", return_value=cfg), \
-       patch("src.cli.delegate.requests.post", return_value=resp_mock) as post_mock:
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -48,6 +48,38 @@ def test_main_posts_to_delegate_endpoint(tmp_path: Path) -> None:
   assert payload["base_branch"] == "main"
   assert payload["backend"] == "codex-o3"
   assert payload["description"] == "do work"
+  assert payload["require_review"] is True
+
+
+def test_main_require_review_zero_lands_in_payload(tmp_path: Path) -> None:
+  cfg = _mock_config(tmp_path)
+  resp_mock = MagicMock()
+  resp_mock.json.return_value = {"thread_id": "t2", "description": "trivial cherry-pick"}
+  resp_mock.raise_for_status = MagicMock()
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--description",
+          "trivial cherry-pick",
+          "--keep-worktree",
+          "0",
+          "--require-review",
+          "0",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["require_review"] is False
 
 
 def test_main_uses_error_detail_from_response(tmp_path: Path) -> None:
@@ -76,8 +108,8 @@ def test_main_uses_error_detail_from_response(tmp_path: Path) -> None:
           "--keep-worktree",
           "0",
       ]), \
-       patch("src.cli.delegate.get_config", return_value=cfg), \
-       patch("src.cli.delegate.requests.post", side_effect=FakeRequestException()):
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", side_effect=FakeRequestException()):
     with pytest.raises(SystemExit) as exc_info:
       main()
 

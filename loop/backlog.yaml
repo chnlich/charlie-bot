@@ -3409,3 +3409,71 @@
   status: pending
   created: '2026-05-02T12:00:00Z'
   priority: low
+- id: '131'
+  title: Fix yapf drift in triggers.py and schedule_trigger.py and drop the unused
+    WatchTarget import in internal.py
+  description: 'WHY — The 2026-05-03 scheduled code-health scan (yapf --diff --recursive
+    src/, full-tree import, TODO/FIXME/HACK/XXX grep, AST scan for unused top-level
+    imports and functions over 50 lines) surfaced three new defects that no existing
+    pending item covers. (1) src/core/triggers.py has fresh yapf drift introduced
+    by the remote-probe refactor: a double blank line at L132-134 between the "Remote
+    probe via ssh" banner comment and `async def _ssh_probe_pid` (yapf wants a single
+    blank line because the banner is a comment, not a top-level def/class), plus
+    two over-wrapped calls inside `_verify_remote_targets` at L255-257 (`await asyncio.gather(*[_ssh_probe_pid(t.host,
+    t.pid) for t in targets if t.host is not None])`) and L264-266 (the `raise RemoteVerifyError("verify-on-create
+    failed for remote watch target(s): " + "; ".join(bad))` line) that yapf wants
+    collapsed to a single line each since both fit inside the project''s 120-column
+    limit (.style.yapf). These hunks are entirely distinct from the three hunks that
+    item 121 (done, 2026-04-23) fixed in the same file (those covered the L17-L20
+    `_SYS_pidfd_open` blank-line gap and the nested-def blank-line rules inside `_detect_pidfd`
+    and `_WaitidResult`). (2) src/cli/schedule_trigger.py has two fresh yapf hunks:
+    a stray blank line at L34-37 between the `from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT`
+    line and the `EXIT_VERIFY_REJECTED = 2` module-level assignment (yapf wants a
+    single blank line, not two), and an over-wrapped multi-line argparse `help=...`
+    string at L84-87 inside `main()` whose closing `."),` should sit on the same
+    line as the final string literal under yapf''s `coalesce_brackets` rule. No prior
+    backlog item touches schedule_trigger.py formatting. (3) src/api/internal.py:13
+    imports `WatchTarget` from src.core.models alongside DelegateRequest, ImproveRequest,
+    ScheduleTriggerRequest, and SpawnRequest, but `WatchTarget` is never referenced
+    anywhere in internal.py — `grep -n WatchTarget src/api/internal.py` returns only
+    the import line itself, and the file has no `__all__` re-export. The actual WatchTarget
+    consumers are src/core/models.py (defining and using it in PendingTrigger.watch_targets
+    and ScheduleTriggerRequest.watch_targets) and src/core/triggers.py (using it
+    in `_verify_remote_targets` and the schema migration). The dead import is a leftover
+    from an earlier internal.py revision and violates CLAUDE.md''s "no backwards-compat
+    shims" / "no dead code" principle. Until all three are fixed, every scheduled
+    code-health scan reports the same yapf hunks alongside the existing pending items
+    128 (pages.py) and 130 (message_aggregator.py), and the repo will not pass `yapf
+    --diff --recursive src/` cleanly — masking any future genuine drift behind expected
+    noise. WHAT — Three small, independent, zero-behavior-change fixes that together
+    return src/ to a clean yapf state once items 128 and 130 also land. HOW — (1)
+    From the worktree root run `yapf -i src/core/triggers.py src/cli/schedule_trigger.py`
+    to apply the canonical layout to all five hunks across the two files. (2) Edit
+    src/api/internal.py:13 and remove the trailing `, WatchTarget` from the `from
+    src.core.models import ...` line so it ends with `SpawnRequest`. (3) Verify with
+    `yapf --diff src/core/triggers.py src/cli/schedule_trigger.py` exits clean (zero
+    output, exit code 0). (4) Verify the import smoke checks `python3 -c "from src.core.triggers
+    import TriggerManager"`, `python3 -c "from src.cli.schedule_trigger import main"`,
+    and `python3 -c "from src.api.internal import router"` all succeed. (5) Run the
+    AST unused-import scan again to confirm only `from __future__ import annotations`
+    remains in the unused list (which is a directive, not a real unused import).
+    (6) Run the existing trigger and schedule-trigger test suites (`pytest tests/test_triggers.py
+    tests/test_schedule_trigger.py`) to confirm no behavior regression. Net result:
+    src/core/ and src/cli/ return to a clean yapf state, src/api/internal.py loses
+    one dead import line, and once items 128 and 130 land the entire src/ tree will
+    pass `yapf --diff --recursive src/` cleanly so future code-health scans surface
+    only genuine new violations. Follows the same one-file fix-up pattern as items
+    005, 022, 121, 124, 128, and 130 for the formatting hunks, and the same dead-import
+    cleanup pattern as item 004 (ClaudeCodeBackend false alarm in master_cc.py).
+    Other findings from the same scan are already covered: items 128 (pages.py yapf)
+    and 130 (message_aggregator.py yapf) cover the remaining two yapf-affected files;
+    the long-function audit (40 functions over 50 lines, longest run_improve_loop
+    at 184 and _run_single_iteration at 121 in improve_command.py) overlaps with
+    pending items 003, 042, 061, 094, 107, 117, 118, and 129 plus several others
+    that target specific functions; TODO/FIXME/HACK/XXX grep returned zero hits;
+    full-tree import returned zero errors. So this single combined item captures
+    everything genuinely new from the 2026-05-03 scan.'
+  category: code-health
+  status: pending
+  created: '2026-05-03T12:00:00Z'
+  priority: low

@@ -62,6 +62,12 @@ Shared skills live in `<charlie-bot-repo>/skills/`; host-specific skills live in
 `~/.charliebot/skills/`. Both sync into `~/.claude/skills/`.
 Skills with `user-invocable: false` are auto-loaded by CC when contextually relevant.
 
+`~/.charliebot/` holds host-specific state (skills, sessions, config, credentials).
+On some hosts it may happen to be a local git repo, but its contents are NOT meant to
+be committed or pushed — workers must edit files in place and must never `git add` them
+to a `~/.charliebot` repo if one exists. Cross-host shared skills go in
+`<charlie-bot-repo>/skills/` instead.
+
 ---
 
 ## Code Server (VS Code Web)

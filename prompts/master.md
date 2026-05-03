@@ -55,10 +55,13 @@ python -m src.cli.delegate \
   --repo /path/to/target/repo \
   --description "concise task description" \
   --context "optional business context for reviewers" \
-  --keep-worktree 0
+  --keep-worktree 0 \
+  --require-review 1
 ```
 
 Pass `--keep-worktree 1` instead when the worker launches a long-running external job (e.g. a SLURM submission) whose WorkDir lives in the worktree.
+
+Pass `--require-review 0` for trivial repo ops (cherry-picks, branch pushes, single-line/doc-only edits, anything not touching CUDA kernels) to skip reviewer + GPU verification overhead. Default 1.
 
 - **Always delegate**: feature implementation, bug fixes, refactoring, writing tests, any code change — including tooling setup commands like `uv init`, `npm init`, `cargo init` that create/modify tracked files.
 - **Do NOT delegate**: answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.

@@ -6,7 +6,9 @@ Called by the master Claude Code instance via its run_command tool:
     --session SESSION_ID \
     --repo /path/to/repo \
     --base-branch main \
-    --description "implement feature X"
+    --description "implement feature X" \
+    --keep-worktree 0 \
+    --require-review 1
 """
 
 import argparse
@@ -34,6 +36,15 @@ def main() -> None:
           "whose WorkDir lives in the worktree); "
           "0 = default cleanup behavior."),
   )
+  parser.add_argument(
+      "--require-review",
+      type=int,
+      choices=[0, 1],
+      default=1,
+      help=(
+          "0 = skip auto-spawn reviewer (use for trivial repo ops: cherry-picks, branch pushes, "
+          "single-line edits, doc-only changes); 1 = default reviewer flow."),
+  )
   args = parser.parse_args()
 
   payload = {
@@ -41,6 +52,7 @@ def main() -> None:
       "description": args.description,
       "base_branch": args.base_branch,
       "keep_worktree": bool(args.keep_worktree),
+      "require_review": bool(args.require_review),
   }
   if args.backend is not None:
     payload["backend"] = args.backend

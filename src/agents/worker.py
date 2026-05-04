@@ -1,5 +1,6 @@
 """Worker Agent — spawns and monitors Claude Code CLI subprocesses."""
 
+import asyncio
 import json
 import os
 from datetime import datetime, timezone
@@ -79,6 +80,7 @@ class Worker:
           buffer_limit=self._cfg.subprocess_buffer_limit,
           on_spawn=_on_spawn,
           instructions_content=self._instructions_content,
+          log_dir=self._events_log.parent,
       )
     else:
       # Fallback to default ClaudeCodeBackend
@@ -86,6 +88,7 @@ class Worker:
           buffer_limit=self._cfg.subprocess_buffer_limit,
           on_spawn=_on_spawn,
           instructions_content=self._instructions_content,
+          log_dir=self._events_log.parent,
       )
 
     log.info("worker_starting", thread=self._thread.id, cwd=str(self._worktree))
@@ -97,6 +100,24 @@ class Worker:
         await self._process_event(event, log_file)
 
     exit_code = self._backend.exit_code
+
+    if self._backend.hang_diagnostics:
+      diag_path = self._events_log.parent / "hang_diagnostics.json"
+      try:
+        await asyncio.to_thread(
+            diag_path.write_text, json.dumps(self._backend.hang_diagnostics, indent=2))
+        log.warning("worker_wrote_hang_diagnostics", thread=self._thread.id, path=str(diag_path))
+      except Exception as e:
+        log.error("worker_write_hang_diagnostics_failed", thread=self._thread.id, error=str(e))
+      diag_event = {
+          "type": ET.SYSTEM,
+          "subtype": "hang_diagnostics",
+          "diagnostics_path": str(diag_path),
+          "exit_code": exit_code,
+          "timestamp": datetime.now(timezone.utc).isoformat(),
+      }
+      await append_ndjson(self._events_log, diag_event)
+      await streaming_manager.broadcast(self._thread.id, diag_event)
 
     if self._backend.stderr_text:
       stderr_event = {

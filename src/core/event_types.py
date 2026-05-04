@@ -10,6 +10,7 @@ ASSISTANT = "assistant"
 USER = "user"
 ERROR = "error"
 RESULT = "result"
+SYSTEM = "system"
 
 # -- Tool events -------------------------------------------------------------
 TOOL_USE = "tool_use"

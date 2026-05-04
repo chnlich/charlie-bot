@@ -1,15 +1,19 @@
 """Abstract base class for agent subprocess backends with template-method run()."""
 
 import asyncio
+import contextlib
 import json
+import os
 import shutil
 import signal
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+import aiofiles
 import structlog
 
 from src.core import event_types as ET
@@ -18,6 +22,31 @@ from src.core.process import kill_process_group
 log = structlog.get_logger()
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
+_STDERR_TAIL_BYTES = 64 * 1024
+
+
+async def _capture_proc_diagnostics(pid: int) -> dict:
+  """Best-effort snapshot of a hung subprocess: pgid, ps tree, /proc state, fds, children."""
+  out: dict = {"captured_at": datetime.now(timezone.utc).isoformat(), "pid": pid}
+  try:
+    out["pgid"] = os.getpgid(pid)
+  except Exception as e:
+    out["pgid"] = f"<error: {e}>"
+  pgid_for_cmd = out["pgid"] if isinstance(out["pgid"], int) else pid
+  for key, cmd in [
+      ("process_tree", ["bash", "-c", f"ps --forest -o pid,pgid,stat,etime,wchan,cmd -g {pgid_for_cmd} 2>&1"]),
+      ("fds", ["bash", "-c", f"ls -l /proc/{pid}/fd 2>&1 | head -200"]),
+      ("status", ["bash", "-c", f"cat /proc/{pid}/status 2>&1"]),
+      ("children", ["bash", "-c", f"ps -o pid,stat,etime,cmd --ppid {pid} 2>&1"]),
+  ]:
+    try:
+      r = await asyncio.create_subprocess_exec(
+          *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+      data, _ = await asyncio.wait_for(r.communicate(), timeout=2.0)
+      out[key] = data.decode("utf-8", errors="replace")
+    except Exception as e:
+      out[key] = f"<capture failed: {e}>"
+  return out
 
 
 def resolve_binary(name: str, fallback_dir: str) -> str:
@@ -93,6 +122,10 @@ class AgentBackend(ABC):
     optional — the persistence layer injects one if missing.
   """
 
+  # Tunable lifecycle timeouts (class attrs so tests can monkey-patch).
+  _POST_RESULT_TIMEOUT: float = 90.0
+  _CLEANUP_TIMEOUT: float = 30.0
+
   def __init__(
       self,
       *,
@@ -103,6 +136,7 @@ class AgentBackend(ABC):
       system_prompt_path: Optional[str] = None,
       instructions_content: Optional[str] = None,
       resume_session_id: Optional[str] = None,
+      log_dir: Optional[Path] = None,
       **_extra,
   ):
     self._model = model
@@ -112,9 +146,13 @@ class AgentBackend(ABC):
     self._system_prompt_path = system_prompt_path
     self._instructions_content = instructions_content
     self._resume_session_id = resume_session_id
+    self._log_dir = log_dir
     self._proc: Optional[asyncio.subprocess.Process] = None
+    self._stderr_task: Optional[asyncio.Task] = None
+    self._stderr_tail = bytearray()
     self.exit_code: int = -1
     self.stderr_text: str = ""
+    self.hang_diagnostics: Optional[dict] = None
 
   def _effective_prompt(self, prompt: str) -> str:
     """Return prompt with instructions prepended, if any are configured."""
@@ -182,82 +220,97 @@ class AgentBackend(ABC):
     assert self._proc.stdout is not None
     _saw_result = False
     _result_time: float = 0.0
-    _POST_RESULT_TIMEOUT = 30.0
-    _CLEANUP_TIMEOUT = 5.0
+    _POST_RESULT_TIMEOUT = self._POST_RESULT_TIMEOUT
+    _CLEANUP_TIMEOUT = self._CLEANUP_TIMEOUT
     _pending_tool_calls: set[str] = set()
 
-    while True:
-      if _saw_result:
-        remaining = _POST_RESULT_TIMEOUT - (time.monotonic() - _result_time)
-        if remaining <= 0:
-          log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
+    if self._log_dir is not None:
+      self._log_dir.mkdir(parents=True, exist_ok=True)
+      stdout_log_cm = aiofiles.open(self._log_dir / "stdout.log", "wb")
+      stderr_log_path: Optional[Path] = self._log_dir / "stderr.log"
+    else:
+      stdout_log_cm = contextlib.nullcontext(None)
+      stderr_log_path = None
+
+    self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
+
+    async with stdout_log_cm as stdout_log:
+      while True:
+        if _saw_result:
+          remaining = _POST_RESULT_TIMEOUT - (time.monotonic() - _result_time)
+          if remaining <= 0:
+            log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
+            break
+          try:
+            raw_line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=remaining)
+          except asyncio.TimeoutError:
+            log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
+            break
+        else:
+          raw_line = await self._proc.stdout.readline()
+
+        if not raw_line:
           break
+
+        if stdout_log is not None:
+          await stdout_log.write(raw_line)
+          await stdout_log.flush()
+
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line:
+          continue
         try:
-          raw_line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=remaining)
-        except asyncio.TimeoutError:
-          log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
-          break
-      else:
-        raw_line = await self._proc.stdout.readline()
+          event = json.loads(line)
+        except json.JSONDecodeError as e:
+          log.debug("backend_line_not_json", error=str(e))
+          continue
 
-      if not raw_line:
-        break
+        for translated in self.translate_event(event):
+          evt_type = translated.get("type")
 
-      line = raw_line.decode("utf-8", errors="replace").strip()
-      if not line:
-        continue
-      try:
-        event = json.loads(line)
-      except json.JSONDecodeError as e:
-        log.debug("backend_line_not_json", error=str(e))
-        continue
+          # Track pending tool calls — wrapped format (OpenCode/GLM-5):
+          # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
+          if evt_type == ET.ASSISTANT:
+            for item in translated.get("message", {}).get("content", []):
+              if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
+                tool_id = item.get("id", "")
+                if tool_id:
+                  _pending_tool_calls.add(tool_id)
 
-      for translated in self.translate_event(event):
-        evt_type = translated.get("type")
+          # Track pending tool calls — flat format (Codex/Gemini):
+          # {type: 'tool_use', id: '...', name: '...'}
+          if evt_type == ET.TOOL_USE:
+            tool_id = translated.get("id", "")
+            if tool_id:
+              _pending_tool_calls.add(tool_id)
 
-        # Track pending tool calls — wrapped format (OpenCode/GLM-5):
-        # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
-        if evt_type == ET.ASSISTANT:
-          for item in translated.get("message", {}).get("content", []):
-            if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
-              tool_id = item.get("id", "")
-              if tool_id:
-                _pending_tool_calls.add(tool_id)
+          # Clear pending tool calls on tool_result events — flat format.
+          if evt_type == ET.TOOL_RESULT:
+            tool_use_id = translated.get("tool_use_id", "")
+            if tool_use_id:
+              _pending_tool_calls.discard(tool_use_id)
 
-        # Track pending tool calls — flat format (Codex/Gemini):
-        # {type: 'tool_use', id: '...', name: '...'}
-        if evt_type == ET.TOOL_USE:
-          tool_id = translated.get("id", "")
-          if tool_id:
-            _pending_tool_calls.add(tool_id)
+          # Clear pending tool calls — wrapped format (Claude Code):
+          # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
+          if evt_type == ET.USER:
+            for item in translated.get("message", {}).get("content", []):
+              if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
+                tool_use_id = item.get("tool_use_id", "")
+                if tool_use_id:
+                  _pending_tool_calls.discard(tool_use_id)
 
-        # Clear pending tool calls on tool_result events — flat format.
-        if evt_type == ET.TOOL_RESULT:
-          tool_use_id = translated.get("tool_use_id", "")
-          if tool_use_id:
-            _pending_tool_calls.discard(tool_use_id)
+          yield translated
 
-        # Clear pending tool calls — wrapped format (Claude Code):
-        # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
-        if evt_type == ET.USER:
-          for item in translated.get("message", {}).get("content", []):
-            if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
-              tool_use_id = item.get("tool_use_id", "")
-              if tool_use_id:
-                _pending_tool_calls.discard(tool_use_id)
-
-        yield translated
-
-        if not _saw_result and evt_type == ET.RESULT:
-          if _pending_tool_calls:
-            log.debug(
-                "backend_result_suppressed_pending_tools",
-                pending=len(_pending_tool_calls),
-                tool_ids=list(_pending_tool_calls),
-            )
-          else:
-            _saw_result = True
-            _result_time = time.monotonic()
+          if not _saw_result and evt_type == ET.RESULT:
+            if _pending_tool_calls:
+              log.debug(
+                  "backend_result_suppressed_pending_tools",
+                  pending=len(_pending_tool_calls),
+                  tool_ids=list(_pending_tool_calls),
+              )
+            else:
+              _saw_result = True
+              _result_time = time.monotonic()
 
     await self._drain_and_cleanup(_CLEANUP_TIMEOUT)
 
@@ -279,24 +332,52 @@ class AgentBackend(ABC):
       log.warning(timeout_log_event, pid=self._proc.pid)
       kill_process_group(self._proc.pid, signal.SIGKILL)
 
-  async def _drain_and_cleanup(self, timeout: float) -> None:
-    """Drain stderr, wait for process exit, and escalate to kill if needed."""
+  async def _stream_stderr(self, stderr_log_path: Optional[Path]) -> None:
+    """Continuously read subprocess stderr; tee to <log_dir>/stderr.log and a 64 KB tail buffer.
+
+    Streams live so `tail -f stderr.log` works during long runs and the in-memory
+    tail is always up to date for `self.stderr_text`.
+    """
     assert self._proc is not None and self._proc.stderr is not None
-    try:
-      stderr_bytes = await asyncio.wait_for(self._proc.stderr.read(), timeout=timeout)
-    except asyncio.TimeoutError:
-      stderr_bytes = b""
+    stderr_log_cm = aiofiles.open(stderr_log_path, "wb") if stderr_log_path is not None else contextlib.nullcontext(None)
+    async with stderr_log_cm as stderr_log:
+      while True:
+        chunk = await self._proc.stderr.read(8192)
+        if not chunk:
+          break
+        if stderr_log is not None:
+          await stderr_log.write(chunk)
+          await stderr_log.flush()
+        self._stderr_tail.extend(chunk)
+        if len(self._stderr_tail) > _STDERR_TAIL_BYTES:
+          del self._stderr_tail[:len(self._stderr_tail) - _STDERR_TAIL_BYTES]
+
+  async def _drain_and_cleanup(self, timeout: float) -> None:
+    """Wait for stderr-streamer + process exit; capture diagnostics + escalate to kill on hang."""
+    assert self._proc is not None
+    if self._stderr_task is not None:
+      try:
+        await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=timeout)
+      except asyncio.TimeoutError:
+        pass
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
       log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
+      self.hang_diagnostics = await _capture_proc_diagnostics(self._proc.pid)
       await self._graceful_shutdown(
           timeout,
           timeout_log_event="backend_sigkill_after_result",
           wait_even_if_sigterm_not_sent=True,
       )
+    if self._stderr_task is not None and not self._stderr_task.done():
+      self._stderr_task.cancel()
+      try:
+        await self._stderr_task
+      except (asyncio.CancelledError, Exception):
+        pass
     self.exit_code = self._proc.returncode or 0
-    self.stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
+    self.stderr_text = bytes(self._stderr_tail).decode("utf-8", errors="replace").strip()
 
   async def terminate(self) -> None:
     """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""

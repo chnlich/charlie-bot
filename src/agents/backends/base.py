@@ -339,7 +339,8 @@ class AgentBackend(ABC):
     tail is always up to date for `self.stderr_text`.
     """
     assert self._proc is not None and self._proc.stderr is not None
-    stderr_log_cm = aiofiles.open(stderr_log_path, "wb") if stderr_log_path is not None else contextlib.nullcontext(None)
+    stderr_log_cm = (
+        aiofiles.open(stderr_log_path, "wb") if stderr_log_path is not None else contextlib.nullcontext(None))
     async with stderr_log_cm as stderr_log:
       while True:
         chunk = await self._proc.stderr.read(8192)
@@ -359,7 +360,7 @@ class AgentBackend(ABC):
       try:
         await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=timeout)
       except asyncio.TimeoutError:
-        pass
+        log.debug("backend_stderr_stream_timeout", pid=self._proc.pid, timeout=timeout)
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
@@ -374,8 +375,10 @@ class AgentBackend(ABC):
       self._stderr_task.cancel()
       try:
         await self._stderr_task
-      except (asyncio.CancelledError, Exception):
-        pass
+      except asyncio.CancelledError:
+        log.debug("backend_stderr_stream_cancelled", pid=self._proc.pid)
+      except Exception as e:
+        log.warning("backend_stderr_stream_cancel_failed", pid=self._proc.pid, error=str(e))
     self.exit_code = self._proc.returncode or 0
     self.stderr_text = bytes(self._stderr_tail).decode("utf-8", errors="replace").strip()
 

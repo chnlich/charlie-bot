@@ -39,8 +39,91 @@ async def git_current_branch(repo_path: Path) -> str:
   return stdout.decode().strip()
 
 
+async def _resolve_worktree_start_point(repo_path: Path, base_branch: str) -> str:
+  """Pick a start-point for `git worktree add` that prefers origin when local is behind.
+
+  Fetches origin/<base_branch>, then compares the local branch tip to the remote tip:
+    - local is ancestor of origin   → start from origin/<base_branch> (avoids stale local)
+    - local is strictly ahead       → start from <base_branch> (preserve unpushed commits)
+    - diverged                      → start from <base_branch> + warning
+    - fetch failure / unknown state → start from <base_branch> + warning
+
+  If <base_branch> already includes a remote prefix (e.g. 'origin/main'), the caller
+  has already chosen an explicit ref; return it unchanged without fetching.
+  """
+  if base_branch.startswith("origin/"):
+    return base_branch
+
+  fetch_ok, fetch_err = await _run_git_cmd(
+      repo_path,
+      "fetch",
+      "origin",
+      base_branch,
+      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+      timeout_label="git fetch",
+  )
+  if not fetch_ok:
+    log.warning(
+        "git_fetch_failed_using_local_base",
+        repo=str(repo_path),
+        base=base_branch,
+        stderr=fetch_err,
+    )
+    return base_branch
+
+  remote_ref = f"origin/{base_branch}"
+  local_is_ancestor = await _git_is_ancestor(repo_path, base_branch, remote_ref)
+  if local_is_ancestor == 0:
+    return remote_ref
+  if local_is_ancestor == 1:
+    origin_is_ancestor = await _git_is_ancestor(repo_path, remote_ref, base_branch)
+    if origin_is_ancestor == 0:
+      # Local strictly ahead — user has unpushed commits we must preserve.
+      return base_branch
+    if origin_is_ancestor == 1:
+      log.warning("git_local_diverged_from_origin", repo=str(repo_path), base=base_branch)
+      return base_branch
+
+  log.warning(
+      "git_ancestor_check_failed_using_local_base",
+      repo=str(repo_path),
+      base=base_branch,
+      returncode=local_is_ancestor,
+  )
+  return base_branch
+
+
+async def _git_is_ancestor(repo_path: Path, ancestor: str, descendant: str) -> int:
+  """Run `git merge-base --is-ancestor <ancestor> <descendant>` and return the exit code.
+
+  Exit code 0 → ancestor relationship holds; 1 → does not hold; other → error.
+  Returns -1 on timeout to distinguish from git's documented exit codes.
+  """
+  proc = await asyncio.create_subprocess_exec(
+      "git",
+      "merge-base",
+      "--is-ancestor",
+      ancestor,
+      descendant,
+      cwd=str(repo_path),
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  try:
+    await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+  except asyncio.TimeoutError:
+    proc.kill()
+    return -1
+  return proc.returncode if proc.returncode is not None else -1
+
+
 async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> None:
-  """Create a git worktree and fail loudly if git reports an error."""
+  """Create a git worktree and fail loudly if git reports an error.
+
+  Resolves the start-point via `_resolve_worktree_start_point` so that a stale local
+  copy of <base_branch> doesn't silently produce a worker rooted at an old commit.
+  """
+  start_point = await _resolve_worktree_start_point(repo_path, base_branch)
   proc = await asyncio.create_subprocess_exec(
       "git",
       "worktree",
@@ -48,7 +131,7 @@ async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: st
       "-b",
       branch_name,
       str(wt_path),
-      base_branch,
+      start_point,
       cwd=str(repo_path),
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
@@ -67,11 +150,19 @@ async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: st
         branch=branch_name,
         worktree=str(wt_path),
         base_branch=base_branch,
+        start_point=start_point,
         stdout=out,
         stderr=err,
         returncode=proc.returncode,
     )
     raise RuntimeError(f"git worktree add failed for {branch_name}: {err or out or 'unknown error'}")
+  log.info(
+      "git_worktree_created",
+      repo=str(repo_path),
+      base=base_branch,
+      start_point=start_point,
+      worktree=str(wt_path),
+  )
 
 
 async def git_worktree_remove(repo_path: str, wt_path: Path, thread_id: str) -> bool:

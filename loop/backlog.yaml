@@ -2006,7 +2006,6 @@
   priority: low
 - id: '104'
   title: Wrap blocking sync I/O in improve_command loop-state helpers with asyncio.to_thread
-  in_progress_at: '2026-04-19T21:09:28Z'
   done_reason: 'Already resolved: commit f01a500 ("Wrap improve loop state I/O in
     to_thread") converted the six improve-loop state helpers to async/to_thread and
     updated their await sites in src/api/internal.py and src/core/improve_command.py.'
@@ -2122,6 +2121,9 @@
   in_progress_at: '2026-05-02T15:09:46Z'
   created: '2026-04-18T19:12:53Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '107'
   title: Extract shared _load_triggers_from_dir helper to deduplicate list_triggers
     and recover_pending in core/triggers.py
@@ -2291,9 +2293,12 @@
     new dependencies, no external API change, no circular-import risk (base.py does
     not import Path; codex/opencode already do).'
   category: refactoring
-  status: pending
+  status: done
   created: '2026-04-19T11:10:51Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '111'
   title: Extract shared _decode_ndjson_line helper in core/ndjson.py to deduplicate
     strip-skip-blank-json.loads-except-debug-log pattern across three parsers
@@ -2348,9 +2353,12 @@
     no behavior change (same log event names, same debug level, same skip semantics),
     no circular-import risk (helper is private to the module).'
   category: refactoring
-  status: pending
+  status: done
   created: '2026-04-19T15:10:54Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '112'
   title: Extract shared _write_instructions_file helper in backends/base.py to deduplicate
     CLAUDE.md/AGENTS.md write-to-cwd pattern across three concrete backends
@@ -2420,9 +2428,12 @@
     encoding, same skip semantics), no circular-import risk (helper is on the already-imported
     AgentBackend class and uses only stdlib Path + existing structlog logger).'
   category: refactoring
-  status: pending
+  status: done
   created: '2026-04-19T17:12:45Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '113'
   title: Extract shared _create_child_session helper in SessionManager to deduplicate
     metadata/subdir scaffolding between fork_session and elone_session
@@ -2490,9 +2501,12 @@
     parents=True + exist_ok=True semantics), no circular-import risk (helper is private
     to the class and uses only existing imports).'
   category: refactoring
-  status: pending
+  status: done
   created: '2026-04-20T05:11:17Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '114'
   title: Extract shared _load_json_meta / _save_json_meta helpers in core/init.py
     to deduplicate the startup-recovery metadata read-modify-write pattern between
@@ -2574,9 +2588,12 @@
     ordering), no circular-import risk (helpers are private module-level functions
     using only the already-imported json, Path, and structlog logger).'
   category: refactoring
-  status: pending
+  status: done
   created: '2026-04-20T11:10:57Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '115'
   title: Promote the json-meta load helper from core/init.py into a shared core/json_utils.py
     module and dedupe the two sessions.py metadata-load + JSONDecodeError-or-OSError-swallow
@@ -2695,6 +2712,9 @@
   in_progress_at: '2026-04-28T07:09:37Z'
   completed_at: '2026-04-28T07:12:36Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '116'
   title: Collapse SessionManager.mark_read and mark_unread into a single _set_unread_flag
     helper to deduplicate the lock + guard + save + sidebar-broadcast pipeline
@@ -2856,9 +2876,12 @@
     same isoformat-on-non-None contract), no circular-import risk (helper uses only
     already-imported streaming_manager + ET + datetime).'
   category: refactoring
-  status: pending
+  status: done
   created: '2026-04-21T13:13:22Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '118'
   title: Extract shared _emit_master_done helper to deduplicate the four MASTER_DONE
     done-event construction + persist_and_broadcast sites across api/chat.py and agents/master_cc.py
@@ -2972,9 +2995,12 @@
     already imports run_message from master_cc; adding _emit_master_done to the same
     import does not create a new edge).'
   category: refactoring
-  status: pending
+  status: done
   created: '2026-04-21T15:11:28Z'
   priority: low
+  done_reason: 'Closed per dedup discipline added to ~/.charliebot/config.d/cron.yaml
+    on 2026-05-05: shared block is under 50 lines AND the proposed helper does not
+    carry a single-responsibility name worth its own concept (per extra_rules).'
 - id: '119'
   title: Remove unused `field` import from core/models.py
   description: WHAT — src/core/models.py:4 imports `field` from dataclasses (`from

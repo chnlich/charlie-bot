@@ -3503,3 +3503,85 @@
   status: pending
   created: '2026-05-03T12:00:00Z'
   priority: low
+- id: '132'
+  title: Split MessageAggregator._feed into per-event-type handlers to drop the dispatcher
+    below 50 lines
+  description: 'WHY — The 2026-05-05 scheduled code-health scan flagged MessageAggregator._feed
+    in src/core/message_aggregator.py:160 as a 99-line function that is structurally
+    a three-way dispatcher: branch (1) USER events at L162-195 (~33 lines, attaches
+    tool_result blocks to the most recent _tools_buf entry, then either yields a
+    streaming delta or flushes the assistant buffer and yields a normalized user
+    message via api.message_utils.normalize_user_message_event); branch (2) ASSISTANT
+    events at L197-248 (~52 lines, walks message.content blocks twice — once to
+    surface ExitPlanMode tool_use blocks as a synthetic ''plan''-role message, once
+    to push every other tool_use into _tools_buf — then accumulates assistant text
+    into _assistant_buf and yields a streaming delta); branch (3) the simple-handler
+    dispatch at L250-258 (~9 lines, looks up t in _SIMPLE_HANDLERS and yields a
+    flushed message). The three branches share zero local state besides ``self``
+    and ``idx`` — no fall-through between them, each branch ends with ``return``
+    or ``yield``. Reviewers reading _feed must hold ~100 lines of branch-specific
+    bookkeeping in their head before reaching the dispatch tail. This is the longest
+    function in src/core/ that is not already covered by a structural refactoring
+    item: items 128 and 130 (both pending) target only the yapf layout of two dict
+    literals inside _feed; nothing addresses the dispatcher shape itself. The other
+    long-function findings from the same scan are already covered — run_improve_loop
+    (184L) by items 091/092/103/127, AgentBackend.run (122L) by item 129, _run_single_iteration
+    (121L) by items 091/092/103/127, _create_worktree_and_process (114L) by item
+    021, _run_cc (109L) by item 3198 (already in backlog), run_message (101L) by
+    item 003, maybe_auto_name (96L) by item 2049, execute_command (91L) by item
+    1000-series, _detect_pidfd (88L) by item 2198, _build_worker_prompt (83L) by
+    item 1863, spawn_review_worker (80L) and maybe_spawn_reviewer (71L) by items
+    1086+, spawn_worker (68L) by items 021/1701. WHAT — Pull the USER and ASSISTANT
+    branches into private methods on MessageAggregator so _feed reads as ``if t
+    == ET.USER → _handle_user_event; if t == ET.ASSISTANT → _handle_assistant_event;
+    else simple-handler dispatch``. The USER and ASSISTANT helpers each have a
+    clear single-responsibility name worth its own concept (per the dedup rule),
+    and once extracted _feed drops from 99 to ~25 lines. HOW — (1) Add ``def _handle_user_event(self,
+    ev: dict, idx: int) -> Iterator[dict]:`` to MessageAggregator that contains
+    the current L162-195 body verbatim — the tool_result-attach loop, the in-place
+    update of _tools_buf[-1], the optional ``_stream_delta`` yield, the ``_flush_to_message_delta``
+    yield, the ``normalize_user_message_event`` import (move to module-top level
+    to avoid the per-call import) and the user-message dict yield. (2) Add ``def
+    _handle_assistant_event(self, ev: dict, idx: int) -> Iterator[dict]:`` that
+    contains the current L197-248 body verbatim — the _last_event_idx assignment,
+    the two for-loops over blocks (ExitPlanMode plan emission, then tool_use append
+    to _tools_buf), the ``extract_text_from_message`` accumulation into _assistant_buf,
+    the ``_stream_delta`` yield. (3) Rewrite _feed to: ``t = ev.get(''type''); if
+    t == ET.USER: yield from self._handle_user_event(ev, idx); return; if t ==
+    ET.ASSISTANT: yield from self._handle_assistant_event(ev, idx); return; handler
+    = _SIMPLE_HANDLERS.get(t); if handler is None: return; yield from self._flush_to_message_delta();
+    result = handler(ev); if result is not None: result.setdefault(''timestamp'',
+    ev.get(''timestamp'')); result[''event_index''] = idx; yield {"type": "message",
+    "message": result}``. (4) Move the ``from src.api.message_utils import normalize_user_message_event``
+    import to the module top to make _handle_user_event self-contained and avoid
+    the import being executed on every USER event. (5) Verify the existing tests/test_message_aggregator.py
+    suite still passes (``pytest tests/test_message_aggregator.py``) — the public
+    behavior (the sequence of message + stream deltas yielded by _feed for each
+    event type) is unchanged, only the dispatcher shape moves. (6) Verify ``yapf
+    --diff --recursive src/`` still exits clean and ``pyflakes src/`` still reports
+    only the existing unused WatchTarget import (covered by item 131). Net result:
+    _feed becomes a true 25-line dispatcher that mirrors the _SIMPLE_HANDLERS dispatch
+    table, the USER and ASSISTANT branches each become independently readable and
+    independently testable, and any future change to user-message normalization
+    or assistant-block walking lands in one named place. Pure refactoring with
+    zero behavior change. Follows the same playbook as items 003 (split run_message),
+    021 (split spawn_worker into phases), 091/092 (extract _run_single_iteration),
+    1086+ (split _spawn_review_worker), 3198 (split _run_cc), and 129 (extract
+    _track_tool_calls from AgentBackend.run) which all collapsed multi-branch dispatchers
+    or long orchestrators into named per-phase helpers. Other findings from the
+    2026-05-05 scan: yapf was clean after the in-run ``yapf --in-place --recursive
+    src/`` commit (style commit on this branch, fixing six files including pages.py,
+    message_aggregator.py, triggers.py, and schedule_trigger.py — which subsumed
+    the formatting parts of pending items 128, 130, and 131; item 131 still has
+    the WatchTarget cleanup pending so it remains relevant); pyflakes reports only
+    the WatchTarget unused import in src/api/internal.py:13 already covered by
+    131; vulture flagged only the cls argument of config.migrate_and_expand which
+    is a Pydantic ``@model_validator(mode="before") @classmethod`` decorator false
+    positive (cls IS used by Pydantic at runtime even though the static analyzer
+    cannot see it); TODO/FIXME/HACK/XXX grep returned zero hits across src/. So
+    this single new item captures the only structural finding not already in the
+    backlog.'
+  category: refactoring
+  status: pending
+  created: '2026-05-05T12:00:00Z'
+  priority: low

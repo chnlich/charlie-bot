@@ -3585,3 +3585,65 @@
   status: pending
   created: '2026-05-05T12:00:00Z'
   priority: low
+- id: '133'
+  title: Drop the unused system_prompt_path constructor parameter and instance attribute
+    from AgentBackend
+  description: 'PURPOSE — Remove a small but unambiguous piece of dead code on the
+    AgentBackend base class (src/agents/backends/base.py) so the constructor signature
+    accurately reflects what subclasses and callers actually use, and the next reader
+    is not misled into thinking there is a system-prompt-path mechanism worth understanding.
+    The 2026-05-05 scheduled code-health scan ran ``vulture src/ --min-confidence 80``
+    after the in-run yapf commit and ``pyflakes src/`` and found exactly one new high-confidence
+    finding not covered by an existing backlog item: AgentBackend.__init__ at src/agents/backends/base.py:135
+    accepts a keyword-only ``system_prompt_path: Optional[str] = None`` parameter
+    and assigns it to ``self._system_prompt_path`` at L145, but a full-tree grep
+    (``grep -rn "system_prompt_path\\|_system_prompt_path" src/ tests/``) returns
+    only those two definition sites — zero readers in src/, zero callers passing
+    the kwarg, zero references in the existing test suite. None of the five concrete
+    backend subclasses (ClaudeCodeBackend, CodexBackend, GeminiCliBackend, OpenCodeBackend,
+    KimiBackend) override __init__ to consume it, none of the call sites that build
+    backends (src/agents/backends/registry.py:build_backend forwards **kwargs but
+    no caller of build_backend passes system_prompt_path; src/agents/master_cc.py
+    _run_cc, src/agents/worker.py Worker.run, src/core/spawner.py worker spawning
+    paths) pass it, and the constructor already absorbs unknown kwargs via the
+    ``**_extra`` catch-all on L139 so deleting the explicit parameter cannot break
+    any hypothetical caller. Per CLAUDE.md the codebase has a single user, "no defensive
+    programming" / "no dead code" / "no backwards-compat shims" — and the unused
+    attribute is exactly the kind of leftover from an earlier design (predating
+    the current ``instructions_content`` mechanism that actually carries the system-prompt
+    payload via ``_effective_prompt`` at L156-160) that should be deleted, not preserved
+    as a vestigial knob. No existing pending or done backlog item covers this finding:
+    item 042 added the make_*_event factory helpers but did not touch AgentBackend.__init__;
+    item 054 simplified backend constructors but specifically targeted the model/extra_flags
+    parameters, leaving system_prompt_path in place; items 110/115 added the _prepend_path
+    and _write_instructions_file shared helpers on the base class without revisiting
+    the constructor surface; items 128/130/131 are formatting/import cleanups in
+    different files. WHAT — Two-line deletion in src/agents/backends/base.py: remove
+    the ``system_prompt_path: Optional[str] = None,`` parameter from AgentBackend.__init__
+    and remove the corresponding ``self._system_prompt_path = system_prompt_path``
+    assignment. No other file changes needed. HOW — (1) From the worktree root edit
+    src/agents/backends/base.py: delete L135 (the parameter declaration) and delete
+    L145 (the attribute assignment). (2) Verify with ``grep -rn "system_prompt_path"
+    src/ tests/`` — should return zero matches. (3) Verify with ``python -m pyflakes
+    src/`` — should still report only the existing WatchTarget unused import (covered
+    by item 131). (4) Verify with ``python -m vulture src/ --min-confidence 80``
+    — the unused-attribute finding for _system_prompt_path should disappear, leaving
+    only the cls Pydantic false positive. (5) Verify with ``python -c "from src.agents.backends.base
+    import AgentBackend; from src.agents.backends.claude_code import ClaudeCodeBackend;
+    from src.agents.backends.codex import CodexBackend; from src.agents.backends.gemini_cli
+    import GeminiCliBackend; from src.agents.backends.opencode import OpenCodeBackend;
+    from src.agents.backends.kimi import KimiBackend"`` — all backend imports succeed.
+    (6) Verify ``yapf --diff --recursive src/`` exits clean. (7) Run the existing
+    backend test suite (``pytest tests/`` selecting any backend tests) to confirm
+    no behavior regression — the parameter was never read so removal cannot change
+    runtime behavior. Net result: AgentBackend.__init__ drops one parameter and
+    one attribute, the constructor signature accurately reflects its actual contract,
+    and the next reader is not misled by a vestigial system-prompt-path knob whose
+    value was always ignored. Pure dead-code deletion, zero behavior change. Follows
+    the same dead-import / dead-attribute cleanup pattern as items 004 (ClaudeCodeBackend
+    false alarm in master_cc.py), 015 (drop unused imports in core/spawner.py),
+    and the WatchTarget cleanup half of item 131.'
+  category: code-health
+  status: pending
+  created: '2026-05-05T18:00:00Z'
+  priority: low

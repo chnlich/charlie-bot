@@ -3750,3 +3750,108 @@
   status: pending
   created: '2026-05-05T20:00:00Z'
   priority: low
+- id: '135'
+  title: Split TriggerManager._wait_with_pidfd into _open_local_pidfds helper and
+    a slim await/cleanup body
+  description: 'WHY — The 2026-05-05 scheduled code-health scan (yapf --in-place
+    --recursive src/, pyflakes src/, TODO/FIXME/HACK/XXX grep, AST scan for
+    functions over 50 lines and duplication meeting the dedup rule) flagged
+    `TriggerManager._wait_with_pidfd` in src/core/triggers.py at L386-466 as an
+    81-line orchestrator that no existing pending or done backlog item touches.
+    Item 109 (still pending) targets the *separate* concern of pulling the
+    `_detect_pidfd` ctypes shim and `_SYS_pidfd_open` syscall table out of
+    triggers.py into a dedicated `src/core/pidfd.py` module — that work is about
+    relocating low-level kernel plumbing, not about restructuring the
+    asyncio-level wait coroutine itself. Inside `_wait_with_pidfd` three
+    distinct phases are inlined back-to-back with no named seams: (1) L395-415
+    iterates `local_pids = [t.pid for t in trigger.watch_targets if t.host is
+    None]`, calls `_pidfd_open(pid)` for each, collects (fd -> pid) into a
+    `pidfds` dict, accumulates any `ProcessLookupError` victims into a
+    `missing` list, and on early-exit closes every fd it has already opened
+    before returning `("pid_gone", [], [], missing)` — this is a self-contained
+    "open pidfds for all local targets" routine that knows nothing about the
+    asyncio reader, the timeout, or the exited-list bookkeeping; (2) L417-443
+    creates the `done = asyncio.Event()`, defines the nested `on_ready(fd)`
+    callback that pops the (fd, pid) from `pidfds`, removes the reader, calls
+    `_waitid_pidfd(fd, os.WEXITED | os.WNOHANG)` to harvest `si_status`,
+    closes the fd, appends `(str(pid), status)` to `exited`, and signals
+    `done` when `pidfds` is empty, then registers the callback for every fd
+    via `loop.add_reader(fd, on_ready, fd)`; (3) L445-466 computes the
+    remaining timeout from `trigger.fire_at`, awaits `done.wait()` with
+    `asyncio.wait_for`, classifies the exit reason as `pid_exit` vs `timeout`,
+    and unconditionally drains any leftover fds in the `finally` block before
+    returning `(reason, exited, still_alive, missing)`. The fd-cleanup loop
+    appears verbatim *twice* in the body — once at L410-414 for the early
+    `pid_gone` exit and once at L455-463 for the normal/timeout exit — both
+    are five-line `for fd in list(pidfds): try: loop.remove_reader(fd)
+    except: pass; try: os.close(fd) except OSError: pass` blocks that should
+    live in one place. At 81 lines the function is the third-longest in
+    triggers.py (after `_detect_pidfd` 88 lines covered by 109 and
+    `_wait_with_remote_probe` 68 lines), busts the 50-line target by 60%, and
+    forces every reader to scroll past kernel-fd bookkeeping to reach the
+    `await done.wait()` that is the actual point of the coroutine. Splitting
+    it also unblocks future test coverage: the fd-open phase is currently
+    impossible to unit-test without spawning real subprocesses, but a pure
+    `_open_local_pidfds(targets)` returning `(dict[int, int], list[str])` is
+    trivial to test by stubbing `_pidfd_open`. WHAT — Pure refactoring of
+    src/core/triggers.py with zero behavior change. No new module, no public
+    API change, no signature change to `_wait_with_pidfd` itself. The four-
+    tuple return shape `(reason, exited, still_alive, missing)`, the labels
+    used in `still_alive`/`missing` (string-form local PIDs), the order in
+    which fds are closed on early-exit, and the `pid_gone` reason string all
+    stay byte-for-byte identical. HOW — (1) Add a private method
+    `_open_local_pidfds(self, trigger: PendingTrigger) -> tuple[dict[int,
+    int], list[str]]` immediately above `_wait_with_pidfd`. Body: build
+    `local_pids` from `trigger.watch_targets`, walk it calling
+    `_pidfd_open(pid)`, collect `pidfds: dict[int, int] = {}` and `missing:
+    list[str] = []` exactly as today (catch `ProcessLookupError` -> append
+    `str(pid)` to missing, continue). On return, the caller is responsible
+    for closing fds — do NOT close inside the helper, so a single cleanup
+    path covers both the `pid_gone` early-exit and the normal-exit drain.
+    (2) Add a private method `_close_pidfds(self, pidfds: dict[int, int])
+    -> None` that runs the existing five-line cleanup loop (`for fd in
+    list(pidfds): try loop.remove_reader; try os.close`) — also takes the
+    `loop` from `asyncio.get_running_loop()` at call time so the helper has
+    no implicit dependency. Use this from both the early-exit and the
+    `finally` block. (3) Rewrite `_wait_with_pidfd` body as: `pidfds,
+    missing = self._open_local_pidfds(trigger); if missing:
+    self._close_pidfds(pidfds); return "pid_gone", [], [], missing` followed
+    by the existing `done = asyncio.Event()`, `on_ready` nested function,
+    `loop.add_reader` registration, `await asyncio.wait_for(done.wait(),
+    ...)`, and the `finally: self._close_pidfds(pidfds)` call. The function
+    drops from 81 lines to ~45 lines — under the 50-line target — and the
+    nested `on_ready` callback stays inline because it captures `pidfds`,
+    `exited`, and `done` from the enclosing scope (extracting it would
+    require threading three closure variables through method arguments,
+    which is more obscuring than helpful per the dedup rule''s "three similar
+    lines is better than premature abstraction" guidance — only the two
+    cleanly-separable phases get their own helpers). (4) Verify with `yapf
+    --diff src/core/triggers.py` exits clean, `python3 -c "from
+    src.core.triggers import TriggerManager"` still imports, and the
+    existing trigger test suite (`pytest tests/test_triggers.py`) passes
+    unchanged. (5) Verify the AST function-length scan reports
+    `_wait_with_pidfd` is no longer over 50 lines. Other findings from the
+    same scan: yapf was NOT clean — six files had drift (src/agents/backends/base.py,
+    src/agents/worker.py, src/api/pages.py, src/cli/schedule_trigger.py,
+    src/core/message_aggregator.py, src/core/triggers.py) and were fixed
+    in-run by the style commit on this branch (which subsumed the
+    formatting parts of pending items 128, 130, and 131; item 131 still
+    has the WatchTarget cleanup pending so it remains relevant); pyflakes
+    src/ reports only the existing `WatchTarget` unused import in
+    src/api/internal.py:13 already covered by item 131; TODO/FIXME/HACK/XXX
+    grep returned zero hits across src/; the AST scan flagged 41 functions
+    over 50 lines but every other long function is already covered by an
+    existing pending or done item (the long-function list overlap was
+    cross-checked against items 003, 021, 091, 092, 093, 094, 109, 117,
+    126, 127, 132, 134 plus the various split-and-extract items 248-1685).
+    The matching 68-line `_wait_with_remote_probe` (L468-535) is similar
+    in shape but distinctly above the 50-line target; this item only
+    targets `_wait_with_pidfd` so the change stays small and reviewable in
+    one commit, and a follow-up scan will surface `_wait_with_remote_probe`
+    as the next-longest-untouched function if the same dedup discipline
+    still applies. So this single new item captures the only structural
+    finding not already in the backlog after items 132, 133, and 134.'
+  category: refactoring
+  status: pending
+  created: '2026-05-06T05:13:57Z'
+  priority: low

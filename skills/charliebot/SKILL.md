@@ -25,6 +25,28 @@ Source code: `~/workspace/charlie-bot/src/core/`
 
 **Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
 
+### Codex backend transcript-recording bug
+
+Long Codex-backed worker/reviewer sessions occasionally hit `failed to record rollout items: thread <id> not found` at the very end of execution. Symptoms:
+- Result message in chat is truncated mid-summary
+- Worker process actually completed successfully and pushed work
+- Reviewer (if any) likewise pushed the merge
+
+Master should NOT treat the truncation as failure. Verify final state directly:
+- `git log origin/<base_branch>` — confirm the expected commit landed
+- `git ls-remote origin <branch_name>` — confirm push happened
+
+If both confirm, work is done; the truncated chat output is harmless. If commit is missing, follow the usual SIGTERM-stranded-commit recovery (cherry-pick from local task branch, etc.).
+
+### Don't include unverified test code snippets in delegation prompts
+
+When writing a delegation that asks the worker to add a unit test or run a verification command, do NOT paste a code snippet you haven't run yourself. Workers copy delegation prompts verbatim, so any typo in the snippet (wrong API name, wrong type assertion, missing import) becomes the worker's debug task. Observed pattern: master spends 30 seconds writing a "helpful" assertion, worker spends 5 minutes figuring out it was wrong.
+
+Better practice — choose one of:
+- Verify the snippet locally before pasting (cheapest if the env is convenient)
+- Describe the test conceptually ("assert per_channel_chosen[0] equals an independent argsort of channel 0's predictions") and let the worker write the actual code
+- Reference an existing test that does something similar and ask the worker to mirror its style
+
 ---
 
 ## Repo-Specific Merge Policy

@@ -3855,3 +3855,60 @@
   status: pending
   created: '2026-05-06T05:13:57Z'
   priority: low
+- id: '136'
+  title: Split _run_single_iteration into _finalize_iteration helper to drop the
+    body below 50 lines
+  description: 'src/core/improve_command.py:_run_single_iteration (L364-484) is 121
+    lines — the second-longest function in src/ after run_improve_loop (L492-675,
+    already covered by item 127). The function mixes three concerns inside one
+    `while True` retry loop: (a) load+stop-check loop state and build the iteration
+    description, (b) create a thread, spawn the worker, and detect a quota-failure
+    retry, and (c) post-success finalization — extract the iteration summary from
+    the worker''s NDJSON event log, write a fallback report file, log
+    improve_iteration_completed, broadcast IMPROVE_ITERATION_COMPLETED to the
+    session, and fire trigger_master with an iteration-progress payload. Concern
+    (c) is a self-contained 35-40 line block (L443-484) that runs exactly once per
+    successful iteration and never touches the retry loop''s control flow — it
+    only reads the spawned `thread`, the iteration index `i`, and the surrounding
+    managers/config, then returns the summary string. Extract it as a private
+    helper `_finalize_iteration(thread, i, iterations, goal, session_id, work_branch,
+    loop_dir, cfg, session_mgr, thread_mgr, previous_summaries) -> str` placed
+    immediately above `_run_single_iteration` in the same module. The new helper
+    has a clear single-responsibility name worth its own concept per the dedup
+    rule — "turn a completed worker thread into a summary + persisted report +
+    progress broadcast + master trigger" — and the body of `_run_single_iteration`
+    drops to roughly 80 lines: the retry-on-quota-failure loop with a single tail
+    `return await _finalize_iteration(thread, ...)` call. Keep the existing import
+    of `parse_ndjson_file` and `spawn_worker` inside `_run_single_iteration`
+    because `_finalize_iteration` only needs `parse_ndjson_file`; move that import
+    (and the `_extract_iteration_summary`, `create_logged_task`, `trigger_master`,
+    `json` references, all already module-level) to the new helper''s scope as
+    appropriate. Verify with `yapf --diff src/core/improve_command.py` exits clean,
+    `python3 -c "from src.core.improve_command import _run_single_iteration,
+    _finalize_iteration"` imports both names, the AST function-length scan reports
+    `_run_single_iteration` is no longer over 50 lines (and `_finalize_iteration`
+    stays under 50), and any existing improve_command tests still pass unchanged.
+    Other findings from the same scan: `yapf --in-place --recursive src/` was NOT
+    clean — six files had drift (src/agents/backends/base.py, src/agents/worker.py,
+    src/api/pages.py, src/cli/schedule_trigger.py, src/core/message_aggregator.py,
+    src/core/triggers.py) and were fixed in-run by the style commit on this branch
+    per the task''s yapf rule (this subsumes any remaining formatting parts of
+    pending items 128, 130, and 131; item 131 still has the WatchTarget cleanup
+    pending so it stays relevant); pyflakes src/ reports only the existing
+    `WatchTarget` unused import in src/api/internal.py:13 already covered by
+    item 131; TODO/FIXME/HACK/XXX grep returned zero hits across src/; the AST
+    function-length scan flagged 41 functions over 50 lines, but every other
+    long function is already covered by an existing pending or done item — for
+    example run_improve_loop (item 127), AgentBackend.run (item 129), MessageAggregator._feed
+    (item 132), _session_consumer (item 134), _wait_with_pidfd (item 135),
+    _create_worktree_and_process (item 125), _run_cc (item 126), _detect_pidfd
+    (item 109), maybe_auto_name (item 105), and run_message (item 003 done).
+    `_run_single_iteration` is the only remaining structural finding not already
+    covered after items 132-135, so this is the single new code-health backlog
+    entry for the May 6 scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-06T15:11:45Z'
+  priority: low

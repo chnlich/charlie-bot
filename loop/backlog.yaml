@@ -3647,3 +3647,106 @@
   status: pending
   created: '2026-05-05T18:00:00Z'
   priority: low
+- id: '134'
+  title: Split _session_consumer into per-item handler and dispatch loop in master_cc.py
+  description: 'WHY — The 2026-05-05 scheduled code-health scan flagged
+    _session_consumer in src/agents/master_cc.py:303 as a 97-line function — the
+    longest function in the entire src/ tree that is not already covered by a
+    structural refactoring backlog item after items 132 (split _feed) and 133
+    (drop system_prompt_path) were filed earlier today. The function bundles two
+    distinct responsibilities under a single name: (a) the queue-dispatch loop
+    skeleton at L309-311, L389-394, and L395-399 — get_item / try-finally /
+    queue.task_done / queue.empty break / final pop of _session_consumers and
+    _session_queues — which is the consumer''s actual reason to exist; and (b)
+    the 70-line per-item processing body at L312-388 — cc_session_id relay,
+    _run_cc invocation, MASTER_DONE done_event construction and broadcast,
+    queue-recheck-after-await race-window guard, RUNNING_CHANGED restore-thinking
+    branch (L355-366), RUNNING_CHANGED idle-declared branch (L367-378), and the
+    item.future.set_result/set_exception resolution. Reviewers reading
+    _session_consumer must hold ~80 lines of per-item bookkeeping in their head
+    before reaching the queue.empty break that defines when the consumer stops.
+    The per-item body is a clear single-responsibility unit (per the dedup rule:
+    "extract a shared helper only if the helper has a clear, single-responsibility
+    name worth its own concept") that earns its own concept name —
+    _process_consumer_item — because it owns the entire CC-run-and-broadcast
+    lifecycle for one queued message: run CC, decide still-thinking, emit
+    MASTER_DONE, re-check queue under the RUNNING_CHANGED race window, resolve
+    the future. None of the existing items address the function''s length: item
+    003 (done) split run_message into smaller functions in the same file but
+    explicitly left _session_consumer alone; item 117 (closed per dedup discipline
+    on 2026-05-05 because the shared block was under 50 lines and lacked a
+    single-responsibility name) extracted a _broadcast_running_changed helper for
+    the three RUNNING_CHANGED sites — that helper would shave ~16 lines off
+    _session_consumer''s two RUNNING_CHANGED branches but the function would
+    still be ~81 lines, well over 50; item 118 (pending) extracts an
+    _emit_master_done helper for the four MASTER_DONE sites — applying it would
+    shave ~3 more lines but does not address the orchestrator shape; item 126
+    (pending) splits _run_cc on a different axis (setup vs finalize phases of a
+    sibling function); items 127, 132, and 133 target other files. WHAT — Pull
+    the entire per-item body (L312-388 — everything inside the outer
+    `while True:` and the inner `try: ... except Exception: ... finally:
+    queue.task_done()`) into a private module-level async helper so
+    _session_consumer reads as: get item, call helper, break when queue empty,
+    cleanup. The helper has a clear single-responsibility name worth its own
+    concept (the per-item CC-run-and-broadcast lifecycle) and once extracted
+    _session_consumer drops from 97 to ~25 lines. HOW — (1) Add `async def
+    _process_consumer_item(session_id: str, item: _WorkItem, queue:
+    asyncio.Queue, last_cc_session_id: Optional[str]) -> Optional[str]:` to
+    src/agents/master_cc.py near the existing _session_consumer (immediately
+    above it, before L303) that contains the current L313-387 body verbatim — the
+    cc_session_id relay (L313-316), the `result = await _run_cc(item)` call and
+    unpack (L317-318), the cc_session_id update (L321-323), the `still_thinking
+    = not queue.empty()` derivation (L325), the MASTER_DONE thinking_seconds
+    computation (L327-334), the `done_event` dict build and
+    `item.callbacks.persist_and_broadcast` call (L332-336), the queue re-check
+    after the broadcast await (L343-344), the `not still_thinking` block with
+    `clear_thinking_since` and the two RUNNING_CHANGED branches (L346-378), and
+    the future resolution (L381-382). Return the new last_cc_session_id (or the
+    incoming one if unchanged) so the caller can thread it across iterations.
+    (2) Replace L312-387 inside _session_consumer with a single call: `try:
+    last_cc_session_id = await _process_consumer_item(session_id, item, queue,
+    last_cc_session_id)` wrapped in the existing try/except Exception that logs
+    `session_consumer_item_error` and propagates the exception to item.future.
+    Keep the `finally: queue.task_done()` and `if queue.empty(): break` inline
+    in _session_consumer since they are dispatch-loop concerns, not per-item
+    concerns. (3) Verify with `python3 -c "from src.agents.master_cc import
+    run_message, _session_consumer, _process_consumer_item"` — all three names
+    import without error. (4) Verify `yapf --diff --recursive src/` exits clean.
+    (5) Verify `pyflakes src/` reports only the existing WatchTarget unused
+    import (covered by item 131). (6) Run the existing master_cc test suite
+    (`pytest tests/test_master_cc.py` and any session-consumer tests) to confirm
+    no behavior regression — the per-item processing is structurally unchanged,
+    only its containing scope moves. (7) Smoke-test end-to-end: send a user
+    message to a session, observe MASTER_DONE and RUNNING_CHANGED broadcasts
+    fire correctly; queue a second message during the first''s run to exercise
+    the still_thinking-from-queue.empty path and the restore-thinking branch;
+    let a session drain fully to exercise the idle-declared branch. All payloads
+    must match today''s wire format byte-for-byte. Net result: _session_consumer
+    becomes a clean ~25-line dispatch loop that mirrors the queue-consumer
+    pattern, _process_consumer_item is independently readable and testable as
+    the CC-run-and-broadcast unit, and any future change to per-item handling
+    (e.g. adding a metrics hook around _run_cc, enriching MASTER_DONE with new
+    fields, restructuring the RUNNING_CHANGED race-window guard) lands in one
+    named place. Pure refactoring with zero behavior change. Follows the same
+    playbook as items 003 (split run_message), 021 (split spawn_worker into
+    phases), 091/092 (extract _run_single_iteration), 126 (split _run_cc into
+    setup/finalize), and 132 (split _feed into per-event-type handlers) which
+    all collapsed multi-phase orchestrators into named per-phase helpers. Other
+    findings from the same scan: yapf was clean after the in-run `yapf
+    --in-place --recursive src/` commit (style commit on this branch fixing six
+    files including pages.py, message_aggregator.py, triggers.py, and
+    schedule_trigger.py — which subsumed the formatting parts of pending items
+    128, 130, and 131; item 131 still has the WatchTarget cleanup pending so it
+    remains relevant); pyflakes reports only the WatchTarget unused import in
+    src/api/internal.py:13 already covered by 131; vulture flagged only the cls
+    argument of config.migrate_and_expand which is a Pydantic
+    `@model_validator(mode="before") @classmethod` decorator false positive (cls
+    IS used by Pydantic at runtime even though the static analyzer cannot see
+    it — and the matching _system_prompt_path attribute is already covered by
+    item 133); TODO/FIXME/HACK/XXX grep returned zero hits across src/. So this
+    single new item captures the only structural finding not already in the
+    backlog after items 132 and 133.'
+  category: refactoring
+  status: pending
+  created: '2026-05-05T20:00:00Z'
+  priority: low

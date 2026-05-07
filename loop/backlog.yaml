@@ -4552,3 +4552,154 @@
   status: pending
   created: '2026-05-07T03:00:00Z'
   priority: low
+- id: '144'
+  title: Extract slash-command interception block from chat.send_message into _try_handle_slash_command
+  description: 'WHY — The 2026-05-07 scheduled code-health scan ran `yapf
+    --in-place --recursive src/` (committed 6 small wrapping fixes in
+    src/agents/backends/base.py, src/agents/worker.py, src/api/pages.py,
+    src/cli/schedule_trigger.py, src/core/message_aggregator.py, and
+    src/core/triggers.py — pure formatting, no behavior change), `pyflakes
+    src/` (only the existing `WatchTarget` unused import in
+    src/api/internal.py:13, already covered by pending item 139), `vulture
+    src/ --min-confidence 80` (only the false-positive `cls` unused-variable
+    on the @classmethod `migrate_and_expand` in src/core/config.py:127 —
+    `cls` is the bound class arg required by the decorator, not dead code;
+    same finding as items 141, 142, and 143), `grep -rEn
+    "TODO|FIXME|HACK|XXX" src/ --include="*.py"` (zero matches), and an AST
+    scan for functions over 50 body lines. After excluding functions covered
+    by pending items 109 (`_detect_pidfd`), 125
+    (`_create_worktree_and_process`), 126 (`_run_cc`), 127
+    (`run_improve_loop`), 129 (`AgentBackend.run`), 132
+    (`MessageAggregator._feed`), 134 (`_session_consumer`), 135
+    (`_wait_with_pidfd`), 136 (`_run_single_iteration`), 137 (`Worker.run`),
+    138 (`OpenCodeBackend.translate_event`), 140 (`pages.index`), 141
+    (`gemini_cli.translate_event`), 142 (`master_cc.run_message`), and 143
+    (`slash.execute_command`), and excluding `core/autonamer.maybe_auto_name`
+    (88 lines, already targeted by pending item 105) and
+    `core/spawner._build_worker_prompt` (71 lines, mostly literal section
+    strings — explicitly deferred by item 142 footnote and earlier scans on
+    the grounds that the residual body is template text and the dedup work
+    was already done by item 101), and excluding
+    `core/review.spawn_review_worker` (72 lines, already addressed by
+    completed item 041 — helpers `_validate_review_prerequisites` and
+    `_select_reviewer_backend` already extracted; the residual body is the
+    orchestrator and earlier scans deemed it acceptable), the longest
+    remaining function is `api/chat.send_message` at 63 body lines
+    (src/api/chat.py:60-129). Item 143''s explicit footnote called this out
+    as the next-scan candidate ("`api/chat.send_message` 70L —
+    slash-interception block parallels the same /run extraction proposed
+    here and is the natural next-scan candidate"). The previous 70-line
+    figure dropped to 63 after the yapf normalization committed earlier in
+    this run (the L114-115 wrapped ternary now fits on fewer lines), but the
+    function is still well over 50 and the slash-interception block remains
+    the single largest internal block.
+
+    WHAT — Extract one private async helper `_try_handle_slash_command` from
+    the L80-123 `if is_slash:` block of `send_message` in src/api/chat.py.
+    The block has a single, name-worthy concept: "if the user message is a
+    slash command we can dispatch locally, do so and return the 202
+    JSONResponse; otherwise return None so the caller falls through to the
+    normal master-CC run." It is 44 lines of self-contained orchestration
+    that no other backlog item touches, and item 010 (done) already
+    centralized the cross-file dispatch logic into
+    `core/slash_commands.dispatch_slash_command`, so what remains in chat.py
+    is purely the chat-side rendering of the dispatch result into ASSISTANT
+    + MASTER_DONE WebSocket events:
+
+      - L82-84 (3 lines): parse `name` and `args` from `req.content` by
+        splitting on the first space.
+      - L86 (1 line): `await dispatch_slash_command(name, args,
+        session_dir=str(cfg.sessions_dir / session_id))`.
+      - L88-89 (2 lines): early-return guard if `dispatch.kind ==
+        ''not_found''`; if non-not_found, persist the user event before
+        rendering the result.
+      - L91-102 (12 lines): `prompt` branch — fire-and-forget
+        `run_and_finalize` with the substituted prompt and
+        `claude_code_flags`, return 202.
+      - L104-110 (7 lines): `error` branch — emit ASSISTANT event with the
+        error text and MASTER_DONE with exit_code=1, return 202.
+      - L112-121 (10 lines): `shell_result` branch — pick stderr if exit
+        code non-zero else stdout, wrap in fenced code block, emit
+        ASSISTANT + MASTER_DONE (exit_code=0), return 202.
+      - L123 (comment line): documents the fall-through case for
+        not_found / unknown commands like /compact.
+
+    HOW — Add `async def _try_handle_slash_command(req:
+    SendMessageRequest, session_id: str, cfg: CharlieBotConfig, meta:
+    SessionMetadata, session_mgr: SessionManager, content: str,
+    uploaded_files: list[dict]) -> JSONResponse | None` as a module-level
+    function in src/api/chat.py, placed immediately above `send_message`
+    (between `upload_file` and `send_message`, matching the existing module
+    structure where related helpers precede the route handler). The helper
+    parses `name`/`args`, calls `dispatch_slash_command`, and either:
+
+      - Returns `None` if `dispatch.kind == ''not_found''` (caller falls
+        through to normal master-CC run).
+      - Persists the user event and renders the matching branch
+        (`prompt` / `error` / `shell_result`), returning the 202
+        JSONResponse.
+
+    Move L80-123 verbatim into the helper, replacing the references to
+    outer-scope `req`, `session_id`, `cfg`, `meta`, `session_mgr`,
+    `content`, `uploaded_files` with the corresponding parameters. The body
+    needs no other changes — `dispatch_slash_command`, `build_user_event`,
+    `run_and_finalize`, `build_agent_input_content`, `create_logged_task`,
+    `JSONResponse`, and `ET` are all already imported at module scope.
+
+    Replace L80-123 in `send_message` with the two-line dispatch:
+
+      ```python
+      if is_slash:
+        resp = await _try_handle_slash_command(req, session_id, cfg, meta,
+                                               session_mgr, content, uploaded_files)
+        if resp is not None:
+          return resp
+      ```
+
+    After the extraction, `send_message` shrinks from 63 body lines to
+    ~22 body lines (cleanly under 50). The new `_try_handle_slash_command`
+    helper is ~44 lines and reads as a single straight-line function
+    "parse → dispatch → render result kind → return response." No
+    behavior change — pure refactor.
+
+    DEDUP RULE CHECK — Per the task spec ("extract a shared helper only
+    if the shared block is > 50 lines OR the helper has a clear,
+    single-responsibility name worth its own concept"),
+    `_try_handle_slash_command` qualifies on the second clause: it is the
+    chat-side counterpart to slash.py''s `_handle_run_command` (item 143)
+    and `execute_command` dispatcher, and its name expresses a single
+    binary contract ("did the slash command produce a terminal response,
+    or should we fall through to the master agent?"). Per item 143''s
+    footnote and earlier scans, a SHARED renderer across chat.py and
+    slash.py is explicitly NOT proposed because the two endpoints render
+    the same dispatch result kinds with different response shapes
+    (slash.py returns inline JSON to the slash UI; chat.py wraps results
+    in ASSISTANT + MASTER_DONE WebSocket events) — there is no clean
+    cross-file boundary. The chat.py-local extraction proposed here is
+    parallel in structure to item 143 (each endpoint extracts its own
+    largest internal slash branch into its own private helper), not a
+    cross-file dedup.
+
+    NON-DUPLICATION CHECK — pyflakes/vulture/TODO results enumerated
+    above; the >50-line function scan after excluding all
+    pending-item-covered functions plus the 88L `maybe_auto_name` (item
+    105), the 71L `_build_worker_prompt` (excluded as template text), and
+    the 72L `spawn_review_worker` (item 041 done, helpers already
+    extracted) leaves `api/chat.send_message` (63L) as the single longest.
+    Other shorter long functions exist (`core/review.maybe_spawn_reviewer`
+    61L; `cli/remote_launch.main` 67L; `core/triggers._wait_with_remote_probe`
+    64L; `cli/schedule_trigger.main` 62L; `api/internal.delegate_task`
+    59L; `core/spawner.spawn_worker` 59L; `api/internal.start_improve_loop`
+    56L; `api/backlog.patch_backlog` 59L; `core/improve_command._wait_for_quota_recovery`
+    57L; `core/triggers._wait_and_fire` 53L; `core/sessions.fork_session`
+    52L; `core/ndjson.parse_ndjson_tail` 51L; `core/git._resolve_worktree_start_point`
+    51L; `api/files._dir_listing_html` 60L) but every one is shorter than
+    `send_message`, so per the one-finding-per-scan rule the
+    chat.py slash-interception extraction is the single new code-health
+    backlog entry for this 2026-05-07 scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-07T04:00:00Z'
+  priority: low

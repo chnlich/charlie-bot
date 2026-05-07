@@ -94,6 +94,22 @@ function fixNestedFences(md) {
   marked.use({ renderer });
 })();
 
+function renderChatMath(el) {
+  // throwOnError:false keeps stray dollar amounts ("$5 ... $10") from
+  // breaking the whole bubble — invalid math renders as red inline text.
+  renderMathInElement(el, {
+    delimiters: [
+      {left: '$$', right: '$$', display: true},
+      {left: '\\[', right: '\\]', display: true},
+      {left: '\\(', right: '\\)', display: false},
+      {left: '$', right: '$', display: false},
+    ],
+    ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
+    ignoredClasses: ['code-block'],
+    throwOnError: false,
+  });
+}
+
 function toggleMobileSidebar() {
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebar-overlay');

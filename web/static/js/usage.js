@@ -55,6 +55,7 @@ function showStreaming(content) {
   const wasAtBottom = shouldAutoScroll(container);
   el.classList.remove('hidden');
   inner.innerHTML = marked.parse(fixNestedFences(content));
+  renderChatMath(inner);
   if (wasAtBottom) {
     container.scrollTop = container.scrollHeight;
   } else {

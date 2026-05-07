@@ -4703,3 +4703,122 @@
   status: pending
   created: '2026-05-07T04:00:00Z'
   priority: low
+- id: '145'
+  title: Extract ssh-launch wrapper construction and execution from cli/remote_launch.main into _ssh_launch_remote helper
+  description: 'WHY — The 2026-05-07 scheduled code-health scan ran `yapf
+    --in-place --recursive src/` (no diff this run — the morning scheduled
+    run already committed the only outstanding wrapping fixes earlier
+    today; running yapf again produced no changes), `pyflakes src/` (only
+    the existing `WatchTarget` unused import in src/api/internal.py:13,
+    already covered by pending item 139), `grep -rEn
+    "TODO|FIXME|HACK|XXX" src/ --include="*.py"` (zero matches), and an
+    AST scan for functions with >50 body lines. After excluding functions
+    covered by pending items 105 (`maybe_auto_name`), 109 (`_detect_pidfd`),
+    125 (`_create_worktree_and_process`), 126 (`_run_cc`), 127
+    (`run_improve_loop`), 129 (`AgentBackend.run`), 132
+    (`MessageAggregator._feed`), 134 (`_session_consumer`), 135
+    (`_wait_with_pidfd`), 136 (`_run_single_iteration`), 137 (`Worker.run`),
+    138 (`OpenCodeBackend.translate_event`), 140 (`pages.index`), 141
+    (`gemini_cli.translate_event`), 142 (`master_cc.run_message`), 143
+    (`slash.execute_command`), and 144 (`chat.send_message`), and
+    excluding `core/spawner._build_worker_prompt` (still mostly literal
+    template strings — same exclusion rationale as items 142/143/144) and
+    `core/review.spawn_review_worker` (item 041 done, helpers already
+    extracted), the longest remaining function is `cli/remote_launch.main`
+    at 67 body lines (src/cli/remote_launch.py:30-97). Item 144''s
+    footnote enumerated this as the second-longest after `send_message`,
+    so it is the natural next-scan candidate.
+
+    WHAT — Extract one private helper `_ssh_launch_remote(host: str,
+    cwd: str, cmd: str, launch_id: str) -> int` from the L41-76 block of
+    `main` in src/cli/remote_launch.py. The block has a single,
+    name-worthy concept: "build the remote-side wrapper script that
+    creates the run dir + redirects stdout/stderr + records the sentinel
+    exit code, run it via `ssh -o BatchMode=yes`, and parse the captured
+    PID from stdout — exiting with the matching CLI exit code (2 or 3)
+    on any failure." It is 36 lines of self-contained orchestration and
+    the only other significant block in `main` is the local
+    metadata-persistence block (L78-97, 20 lines) which is too small and
+    too wired into the surrounding `args` namespace to be worth its own
+    helper:
+
+      - L41-44 (4 lines): build the four remote paths (`remote_dir`,
+        `remote_log`, `remote_sentinel`, `remote_pid_file`) from
+        `launch_id`.
+      - L46-52 (7 lines): construct `inner` (the user-supplied command
+        wrapped to write its exit code to the sentinel file) and
+        `wrapper` (the outer mkdir+cd+setsid+pid-capture script).
+      - L54-69 (16 lines): run the SSH subprocess with
+        `ConnectTimeout=10`, `BatchMode=yes`, and a 30-second total
+        timeout; on `TimeoutExpired` print to stderr and `sys.exit(2)`;
+        on non-zero return code print to stderr and `sys.exit(2)`.
+      - L71-76 (6 lines): extract the last non-blank line of stdout,
+        parse it as `int`; on `IndexError`/`ValueError` print to stderr
+        and `sys.exit(3)`.
+
+    HOW — Add `def _ssh_launch_remote(host: str, cwd: str, cmd: str,
+    launch_id: str) -> int` as a module-level function in
+    src/cli/remote_launch.py, placed immediately above `main` (between
+    the imports and `main`, matching the convention used in
+    src/cli/schedule_trigger.py where `_parse_watch_target` and other
+    helpers precede `main`). The helper internally constructs the four
+    remote paths, builds `inner` and `wrapper`, runs `ssh`, and parses
+    the PID. Exit-code semantics are preserved verbatim — the helper
+    calls `sys.exit(2)` on ssh-timeout / ssh-non-zero and
+    `sys.exit(3)` on PID-parse failure, identical to the current
+    behavior. The CLI exit codes documented in the module docstring
+    (`0`, `2`, `3`, `4`) are preserved unchanged: `sys.exit(2)` and
+    `sys.exit(3)` move into the helper; `sys.exit(4)` (session-dir
+    missing) stays in `main` after the helper returns.
+
+    Replace L41-76 in `main` with the single-line dispatch:
+
+      ```python
+      remote_pid = _ssh_launch_remote(args.host, args.cwd, args.cmd,
+                                      launch_id)
+      ```
+
+    After the extraction, `main` shrinks from 67 body lines to ~26 body
+    lines (cleanly under 50). The new `_ssh_launch_remote` helper is
+    ~36 body lines and reads as a single straight-line function "build
+    paths → build wrapper → ssh → parse PID → return." No behavior
+    change — pure refactor; the helper is internal to remote_launch.py
+    and not exported.
+
+    DEDUP RULE CHECK — Per the task spec ("extract a shared helper only
+    if the shared block is > 50 lines OR the helper has a clear,
+    single-responsibility name worth its own concept"),
+    `_ssh_launch_remote` qualifies on the second clause: it is the
+    remote-side counterpart to schedule_trigger.py''s HTTP-POST
+    response-handling block, and its name expresses a single concrete
+    contract ("ssh into HOST, start CMD inside a setsid wrapper that
+    captures the exit code into a sentinel file, return the captured
+    PID — failing the CLI with the documented exit code on any
+    error"). A SHARED helper across remote_launch.py and any other CLI
+    is explicitly NOT proposed — there is no other call site that
+    builds setsid+sentinel wrappers, and the wrapper format is
+    tightly coupled to this script''s sentinel-and-pid-file protocol
+    documented in MEMORY.md (`/tmp/charliebot_runs/<launch_id>/`).
+
+    NON-DUPLICATION CHECK — pyflakes/TODO results enumerated above; the
+    >50-body-line function scan after excluding all pending-item-covered
+    functions plus the `_build_worker_prompt` template-text exclusion
+    and the `spawn_review_worker` already-addressed exclusion leaves
+    `cli/remote_launch.main` (67L) as the single longest. Other shorter
+    long functions exist (`core/triggers._wait_with_remote_probe` 64L;
+    `cli/schedule_trigger.main` 62L; `core/review.maybe_spawn_reviewer`
+    61L; `api/files._dir_listing_html` 60L; `core/spawner.spawn_worker`
+    59L; `api/internal.delegate_task` 59L; `api/backlog.patch_backlog`
+    59L; `core/improve_command._wait_for_quota_recovery` 57L;
+    `api/internal.start_improve_loop` 56L; `core/triggers._wait_and_fire`
+    53L; `core/sessions.fork_session` 52L; `core/ndjson.parse_ndjson_tail`
+    51L; `core/git._resolve_worktree_start_point` 51L) but every one is
+    shorter than `cli/remote_launch.main`, so per the one-finding-per-scan
+    rule the remote_launch.py ssh-launch extraction is the single new
+    code-health backlog entry for this 2026-05-07 evening scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-07T16:00:00Z'
+  priority: low

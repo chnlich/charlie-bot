@@ -3912,3 +3912,80 @@
   status: pending
   created: '2026-05-06T15:11:45Z'
   priority: low
+- id: '137'
+  title: Split Worker.run into the event-stream loop and a _emit_post_run_artifacts
+    helper
+  description: 'WHY — The 2026-05-06 (second-pass) scheduled code-health scan ran
+    `yapf --in-place --recursive src/` (six files had drift, fixed in-run by the
+    style commit on this branch per the task''s yapf rule), `pyflakes src/` (only
+    the existing `WatchTarget` unused import in src/api/internal.py:13 already
+    covered by pending item 131), a TODO/FIXME/HACK/XXX grep (zero hits across
+    src/), and an AST scan for functions over 50 lines. The scan flagged
+    `Worker.run` in src/agents/worker.py at L63-140 as a 78-line function that
+    no existing pending or done backlog item touches — pending item 135 named
+    `_wait_with_remote_probe` (triggers.py, 68 lines) as "the next-longest
+    untouched function" but in fact `Worker.run` at 78 lines is longer and also
+    untouched, and item 136 (the 2026-05-06 first-pass scan) reached the same
+    backlog without flagging it. The function bundles two distinct concerns
+    behind one name. Concern (a) — the actual run loop — is L65-100 (~36 lines):
+    build the env dict, define the `_on_spawn` callback, construct the backend
+    via `build_backend(...)` or fall back to `ClaudeCodeBackend(...)`, ensure
+    the events_log directory exists, and `async for event in self._backend.run(...)`
+    while persisting each event through `_process_event`. Concern (b) — post-run
+    artifact emission — is L102-140 (~39 lines) and runs unconditionally after
+    the event stream ends: read `self._backend.exit_code`, optionally write
+    `hang_diagnostics.json` and broadcast a SYSTEM/hang_diagnostics event,
+    optionally append-and-broadcast an ERROR stderr event when
+    `self._backend.stderr_text` is non-empty, then build and broadcast the
+    final COMPLETE-or-ERROR event with the timestamp, and log
+    `worker_finished`. Concern (b) reads only `self._backend`, `self._thread`,
+    `self._events_log`, and the freshly-known `exit_code` — it never touches
+    the event-stream loop control flow.
+
+    WHAT — Extract concern (b) as a private async method `async def
+    _emit_post_run_artifacts(self, exit_code: int) -> None` placed immediately
+    below `run` on the `Worker` class. After extraction `Worker.run` reads as
+    a clean orchestrator: build env, build backend, run event loop, then
+    `await self._emit_post_run_artifacts(self._backend.exit_code); return
+    self._backend.exit_code`. Both halves drop comfortably below 50 lines (the
+    run-loop half ~38, the helper ~38). The helper name is single-responsibility
+    per the dedup rule — "after the worker subprocess finishes, write the
+    hang-diagnostics file if any, append-and-broadcast stderr/error/complete
+    events, and log worker_finished" is one concept worth its own name.
+
+    HOW — (1) Move L102-140 verbatim into the new `_emit_post_run_artifacts`
+    method, taking `exit_code: int` as a parameter so the method does not
+    re-read `self._backend.exit_code` (passing it in keeps the existing
+    semantics unchanged: `exit_code` is captured exactly once after the
+    `async for` loop completes). (2) Replace L102-140 in `run` with `exit_code
+    = self._backend.exit_code; await self._emit_post_run_artifacts(exit_code);
+    return exit_code`. (3) Verify the refactor: `yapf --diff
+    src/agents/worker.py` exits clean, `python3 -c "from src.agents.worker
+    import Worker"` succeeds, the AST function-length scan reports `Worker.run`
+    is no longer over 50 lines (and `_emit_post_run_artifacts` stays under 50),
+    and any existing worker tests still pass unchanged. (4) Do not change any
+    callers or signatures — `Worker.run() -> int` keeps the same public
+    contract; the helper is purely internal.
+
+    Other findings from the same scan that are NOT new defects: yapf drift in
+    six files (subsumed by the style commit on this branch per the yapf rule);
+    the `WatchTarget` unused import in src/api/internal.py:13 (already covered
+    by pending item 131); 41 functions over 50 lines, but every other long
+    function is already covered by an existing pending or done item — for
+    example run_improve_loop (item 127), AgentBackend.run (item 129),
+    MessageAggregator._feed (item 132), _session_consumer (item 134),
+    _wait_with_pidfd (item 135), _create_worktree_and_process (item 125),
+    _run_cc (item 126), _detect_pidfd (item 109), maybe_auto_name (item 105),
+    _run_single_iteration (item 136), spawn_review_worker (item 041 done,
+    structure already factored into validate_review_prerequisites /
+    select_reviewer_backend / extract_review_context / build_review_prompt),
+    _build_worker_prompt (item 101 done), and run_message (items 003/069/098
+    done). `Worker.run` is the only remaining structural finding not already
+    covered, so this is the single new code-health backlog entry for the
+    second-pass May 6 scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-06T16:00:00Z'
+  priority: low

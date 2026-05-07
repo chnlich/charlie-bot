@@ -4296,3 +4296,123 @@
   status: pending
   created: '2026-05-07T01:00:00Z'
   priority: low
+- id: '142'
+  title: Split master_cc.run_message into _init_thinking_state and _dispatch_to_consumer
+    helpers
+  description: 'PURPOSE — Reduce the longest function not already covered by a pending
+    backlog item. The 2026-05-07 scheduled code-health scan ran the in-run yapf commit
+    (style commit landed in this run), then `pyflakes src/` (only the existing
+    `WatchTarget` unused import in src/api/internal.py:13 already covered by pending
+    item 139), `vulture src/ --min-confidence 80` (only the `cls` finding in
+    src/core/config.py:127 already enumerated as a low-value vulture artifact in
+    item 141), `grep -rEn "TODO|FIXME|HACK|XXX" src/ --include="*.py"` (zero
+    matches), and the AST-based >50-line function scan. After excluding functions
+    already covered by pending items 109 (`_detect_pidfd`), 125
+    (`_create_worktree_and_process`), 126 (`_run_cc`), 127 (`run_improve_loop`),
+    129 (`AgentBackend.run`), 132 (`MessageAggregator._feed`), 134
+    (`_session_consumer`), 135 (`_wait_with_pidfd`), 136 (`_run_single_iteration`),
+    137 (`Worker.run`), 138 (`OpenCodeBackend.translate_event`), 140
+    (`pages.index`), and 141 (`gemini_cli.translate_event`), and excluding
+    `core/autonamer.maybe_auto_name` (96 lines, already targeted by pending item
+    105 which extracts the sanitization pipeline) and `core/spawner._build_worker_prompt`
+    (83 lines, mostly literal section strings, dedup already done by item 101 and
+    no further single-responsibility helper has a name worth its own concept), the
+    longest remaining function is `master_cc.run_message` at 101 lines
+    (src/agents/master_cc.py:402-502). Item 003 (done, 2026-02-27) split the
+    180-line event-loop version that predated the queue-based refactor; the
+    current shape is a producer that enqueues a `_WorkItem` to a per-session
+    `asyncio.Queue` consumed by `_session_consumer`, and items 069 (timing
+    tracker) and 098 (callbacks bundling) finished extracting orthogonal
+    concerns from older shapes. The 101-line current body still contains two
+    distinct, name-worthy phases that no existing item targets and that
+    interleave to obscure the orchestration: (a) the thinking-state-init
+    branch at L453-470 (18 lines) which checks whether a consumer task is
+    already running for this session and either sets `session_meta.thinking_since
+    = datetime.now(timezone.utc)`, calls `callbacks.update_thinking_state`,
+    and broadcasts a `RUNNING_CHANGED` sidebar event with the new
+    `thinking_since` and `auto_trigger`, or — when a consumer is already
+    running and thinking is already active — just persists the updated
+    `updated_at` timestamp; and (b) the work-item dispatch block at L472-499
+    (28 lines) which builds the `_WorkItem` dataclass with all 10 fields, lazily
+    creates the per-session `asyncio.Queue` if absent, calls `put_nowait`, and
+    lazily creates the per-session consumer task if absent or done with a
+    deterministic name `f"master-consumer-{session_meta.id[:8]}"`. Both phases
+    have clear single-responsibility names, both encapsulate non-trivial state
+    (the `consumer_already_running` predicate is duplicated between the two
+    blocks — at L455 for the thinking-state branch and at L495 for the
+    consumer-spawn check — which means a future change to "what counts as a
+    running consumer" must land in two places), and after both extractions land
+    `run_message` reads as `prepare session dir + tex snapshot → optionally
+    persist user event → init thinking state → dispatch work item → await
+    future` — six straight-line steps in roughly 50 lines. Same code-health
+    pattern as item 134 (`_session_consumer` split), 135 (`_wait_with_pidfd`
+    split), 136 (`_run_single_iteration` split), 137 (`Worker.run` split), and
+    138/141 (translate_event splits). WHAT — Two named-helper extractions in
+    src/agents/master_cc.py: (1) `async def _init_thinking_state(session_meta:
+    SessionMetadata, callbacks: SessionCallbacks, auto_trigger: bool) -> None`
+    that takes the consumer-already-running predicate, decides whether to set
+    `thinking_since` + broadcast `RUNNING_CHANGED`, and persists the
+    `updated_at` either way; (2) `def _dispatch_to_consumer(session_id: str,
+    work_item: _WorkItem) -> None` that does the queue-create-if-absent +
+    put_nowait + consumer-spawn-if-absent dance and returns nothing (caller
+    keeps the future from `work_item.future` and awaits it). HOW — (1) Add
+    `_init_thinking_state` near the existing private helpers above
+    `_session_consumer` (around L300). Move the body of L453-470 verbatim
+    inside, parametrising on `session_meta`, `callbacks`, and `auto_trigger`;
+    re-derive `consumer_already_running` inside the helper from the
+    module-level `_session_consumers` dict (same predicate as L455). Replace
+    L453-470 in `run_message` with a single `await _init_thinking_state(session_meta,
+    callbacks, auto_trigger)` call. (2) Add `_dispatch_to_consumer` next to
+    `_init_thinking_state`. Move L489-499 verbatim inside, parametrising on
+    `session_id` and `work_item`. Replace L489-499 in `run_message` with a
+    single `_dispatch_to_consumer(session_meta.id, work_item)` call. (3) Keep
+    L472-487 (the `_WorkItem(...)` construction) inline in `run_message` — it
+    is the natural pivot between "decide whether to announce thinking" and
+    "hand off to the consumer" and extracting it into a third helper would not
+    have a meaningfully clearer name than the dataclass constructor itself.
+    (4) Verify with `python -m pyflakes src/agents/master_cc.py` (no new
+    findings), `yapf --diff src/agents/master_cc.py` (clean per the task''s
+    yapf rule), and an AST line-count of `run_message` showing it has dropped
+    from 101 lines to roughly 50 lines. (5) Re-run the >50-line function scan
+    — `run_message` should no longer appear at the top, and the two new
+    helpers should each be well under 50 lines (`_init_thinking_state` ~22
+    lines including signature/await wrapper, `_dispatch_to_consumer` ~13
+    lines). DEDUP RULE CHECK — Per the task spec ("extract a shared helper
+    only if the shared block is > 50 lines OR the helper has a clear,
+    single-responsibility name worth its own concept"), both helpers qualify
+    on the second clause: `_init_thinking_state` is the named lifecycle
+    transition that the codebase already has analogues for in
+    `_session_consumer`''s thinking-restoration block (L355-366) and would
+    plausibly grow to absorb that logic in a future refactor; `_dispatch_to_consumer`
+    is the named lazy-init pattern for the per-session work queue and consumer
+    task that lives nowhere else in the codebase yet but is the single
+    operational concept "hand a work item to the session''s serialized
+    runner." Neither helper is being introduced for hypothetical future use —
+    both replace existing inline logic and both have a single,
+    immediately-readable purpose at the call site. NON-DUPLICATION CHECK —
+    `pyflakes src/` (only the existing `WatchTarget` unused import in
+    src/api/internal.py:13 already covered by pending item 139); `vulture
+    src/ --min-confidence 80` (only the `cls` finding in
+    src/core/config.py:127 already enumerated as a low-value artifact in item
+    141); `grep -rEn "TODO|FIXME|HACK|XXX" src/ --include="*.py"` (zero
+    matches); the >50-line function scan after excluding all functions
+    covered by pending items 109/125/126/127/129/132/134/135/136/137/138/140/141
+    plus item 105 (which targets `maybe_auto_name`) leaves `run_message` (101
+    lines) as the longest. Other shorter long functions exist
+    (`api/slash.execute_command` 91 lines — item 067 failed-stale and the
+    function still contains the /run handler, candidate for next scan;
+    `core/review.spawn_review_worker` 80 lines — item 041 done, helpers
+    already extracted; `core/review.maybe_spawn_reviewer` 71 lines;
+    `api/chat.send_message` 70 lines; `core/triggers._wait_with_remote_probe`
+    68 lines; `core/spawner.spawn_worker` 68 lines; `cli/remote_launch.main`
+    68 lines; `agents/backends/gemini_cli.translate_event` 65 lines covered by
+    item 141; `api/internal.delegate_task` 64 lines; etc.) but every one is
+    shorter than `run_message`, so per the one-finding-per-scan rule
+    `run_message` is the single new code-health backlog entry for this
+    2026-05-07 scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-07T02:00:00Z'
+  priority: low

@@ -3989,3 +3989,124 @@
   status: pending
   created: '2026-05-06T16:00:00Z'
   priority: low
+- id: '138'
+  title: Split OpenCodeBackend.translate_event into per-event-type handlers to drop
+    the dispatcher under 50 lines
+  description: 'WHY — The 2026-05-06 (third-pass) scheduled code-health scan ran
+    `yapf --in-place --recursive src/` (six files had drift in
+    src/agents/backends/base.py, src/agents/worker.py, src/api/pages.py,
+    src/cli/schedule_trigger.py, src/core/message_aggregator.py, and
+    src/core/triggers.py — fixed in-run by the style commit on this branch per
+    the task''s yapf rule), `pyflakes src/` (only the existing `WatchTarget`
+    unused import in src/api/internal.py:13 already covered by pending item
+    131), `vulture src/ --min-confidence 80` (only a false-positive `cls`
+    unused-variable on the @classmethod `migrate_and_expand` in
+    src/core/config.py:127 — `cls` is the bound class arg required by the
+    decorator, not dead code), a TODO/FIXME/HACK/XXX grep (zero hits across
+    src/), and an AST scan for functions over 50 lines. The scan flagged
+    `OpenCodeBackend.translate_event` in src/agents/backends/opencode.py at
+    L88-170 as an 83-line dispatcher that no existing pending or done backlog
+    item touches — it is the longest untouched function after items 132-137
+    landed. The function is a pure event-type dispatcher: after a 4-line
+    session_id-emission preamble (L93-96) it switches on `ev.get("type", "")`
+    through five branches — `step_start` (1 line, no-op), `text` (L103-108,
+    6 lines), `tool_use`/`tool` (L110-145, 36 lines and the largest branch),
+    `error` (L147-150, 4 lines), and `step_finish` (L152-167, 16 lines) — then
+    falls through to a `log.debug("opencode_event_unhandled", ...)` default.
+    Each branch builds and returns its own `results: list[dict]`; no branch
+    shares state with another beyond the preamble append. The same
+    dispatcher-by-event-type pattern is already being addressed for
+    `MessageAggregator._feed` in pending item 132, and the per-handler names
+    here are clear single-responsibility concepts worth their own names per
+    the dedup rule.
+
+    WHAT — Extract each non-trivial branch as a private method on
+    `OpenCodeBackend`, placed immediately below `translate_event` in
+    src/agents/backends/opencode.py:
+
+      - `_translate_text(self, ev: dict) -> list[dict]` — body of the current
+        `text` branch (~5 lines): read `ev.get("part", {}).get("text", "")`
+        and return `[make_text_event(text)]` if non-empty, else `[]`.
+      - `_translate_tool(self, ev: dict) -> list[dict]` — body of the current
+        `tool_use`/`tool` branch (~30 lines): read `callID`, `tool`, `state`
+        from the part, build the ASSISTANT/tool_use event, then append a
+        TOOL_RESULT event with `output` (or `error` as fallback) when present.
+        This is one concept — "translate an OpenCode tool part into a CC
+        tool_use ASSISTANT event plus an optional TOOL_RESULT" — worth its
+        own name per the dedup rule.
+      - `_translate_error(self, ev: dict) -> list[dict]` — body of the current
+        `error` branch (~3 lines): read `ev.get("part", {}).get("error",
+        str(ev))` and return `[make_error_event(msg)]`.
+      - `_translate_step_finish(self, ev: dict) -> list[dict]` — body of the
+        current `step_finish` branch (~14 lines): read `reason`, `cost`,
+        `tokens`, `cache` and return `[make_result_event(...)]` only when
+        `reason == "stop"`, else `[]`.
+
+    `translate_event` becomes a thin dispatcher of roughly 22 lines:
+
+      ```python
+      def translate_event(self, ev: dict) -> list[dict]:
+        results: list[dict] = []
+        session_id = ev.get("sessionID")
+        if session_id and not self._session_id_emitted:
+          results.append({"session_id": session_id})
+          self._session_id_emitted = True
+        ev_type = ev.get("type", "")
+        if ev_type == "step_start":
+          return results
+        if ev_type == "text":
+          return results + self._translate_text(ev)
+        if ev_type in ("tool_use", "tool"):
+          return results + self._translate_tool(ev)
+        if ev_type == "error":
+          return results + self._translate_error(ev)
+        if ev_type == "step_finish":
+          return results + self._translate_step_finish(ev)
+        log.debug("opencode_event_unhandled", type=ev_type)
+        return results
+      ```
+
+    HOW — (1) Move each branch body verbatim into its dedicated `_translate_*`
+    method; signatures take only `ev: dict` because none of the branches read
+    `self` other than `self._session_id_emitted` (preserved in the dispatcher
+    preamble). (2) Replace each branch in `translate_event` with `return
+    results + self._translate_<type>(ev)` so the session_id preamble result
+    is preserved exactly as today. (3) Keep the `step_start` early-return and
+    the trailing `log.debug("opencode_event_unhandled", ...)` default in the
+    dispatcher — neither warrants its own helper. (4) Verify the refactor:
+    `yapf --diff src/agents/backends/opencode.py` exits clean, `python3 -c
+    "from src.agents.backends.opencode import OpenCodeBackend"` succeeds,
+    the AST function-length scan reports `translate_event` is no longer over
+    50 lines (and every new `_translate_*` helper stays under 50), and any
+    existing opencode backend tests still pass unchanged. (5) Do not change
+    the `translate_event` signature or any callers — `AgentBackend.run` in
+    src/agents/backends/base.py drives it through the abstract base class
+    and must keep the same contract.
+
+    Other findings from the same scan that are NOT new defects: yapf drift
+    in six files (subsumed by the style commit on this branch per the yapf
+    rule); the `WatchTarget` unused import in src/api/internal.py:13 (already
+    covered by pending item 131); the vulture `cls` finding in
+    src/core/config.py:127 (false positive on a @classmethod); 41 functions
+    over 50 lines, but every other long function is already covered by an
+    existing pending or done item — for example run_improve_loop (item 127),
+    AgentBackend.run (item 129), _run_single_iteration (item 136),
+    _create_worktree_and_process (item 125), _run_cc (item 126),
+    MessageAggregator._feed (item 132), _session_consumer (item 134),
+    maybe_auto_name (item 105), _detect_pidfd (item 109), _wait_with_pidfd
+    (item 135), Worker.run (item 137), _build_worker_prompt (item 101 done),
+    spawn_review_worker (item 041 done), spawn_worker (item 021 done /
+    SpawnRequest item 096 done), and run_message (items 003/069/098 done).
+    Other untouched long functions exist (pages.py:index 79 lines,
+    chat.py:send_message 70 lines, maybe_spawn_reviewer 71 lines,
+    _wait_with_remote_probe 68 lines, cli/remote_launch.main 68 lines, and a
+    few smaller ones) but none of them are longer than
+    `OpenCodeBackend.translate_event`, so per the one-finding-per-scan rule
+    `translate_event` is the single new code-health backlog entry for the
+    third-pass May 6 scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-06T16:30:00Z'
+  priority: low

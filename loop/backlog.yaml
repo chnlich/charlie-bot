@@ -4110,3 +4110,18 @@
   status: pending
   created: '2026-05-06T16:30:00Z'
   priority: low
+- id: '139'
+  title: Remove unused WatchTarget import from src/api/internal.py
+  description: 'pyflakes flags `src/api/internal.py:13` for importing `WatchTarget`
+    from `src.core.models` without using it anywhere in the file. The other names on
+    that line (DelegateRequest, ImproveRequest, ScheduleTriggerRequest, SpawnRequest)
+    are all referenced in the route handlers, so only `WatchTarget` should be dropped
+    from the import list. Verify with `python -m pyflakes src/api/internal.py` (should
+    report no findings) and `grep -n WatchTarget src/api/internal.py` (should be
+    empty) after the edit.
+
+    '
+  category: imports
+  status: pending
+  created: '2026-05-07T00:15:00Z'
+  priority: low

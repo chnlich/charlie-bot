@@ -2,8 +2,8 @@
 
 Called by the master Claude Code instance via its run_command tool:
 
+  # --session is optional; auto-derived from cwd when run inside a CharlieBot session dir.
   python -m src.cli.improve \
-    --session SESSION_ID \
     --repo /path/to/repo \
     --base-branch main \
     --iterations 3 \
@@ -17,12 +17,16 @@ Master CC will be notified via _trigger_master when the loop completes.
 import argparse
 import json
 
-from src.cli.common import post_internal_api
+from src.cli.common import post_internal_api, resolve_session_id
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Run an iterative improvement loop via CharlieBot workers")
-  parser.add_argument("--session", required=True, help="Session ID")
+  parser.add_argument(
+      "--session",
+      required=False,
+      default=None,
+      help="Session ID (optional; auto-derived from cwd when run inside a CharlieBot session dir)")
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument("--goal", required=True, help="Improvement goal")
@@ -40,9 +44,10 @@ def main() -> None:
       default=False,
       help="Merge work_branch into base_branch after all iterations complete")
   args = parser.parse_args()
+  session_id = resolve_session_id(args.session)
 
   payload = {
-      "session_id": args.session,
+      "session_id": session_id,
       "repo_path": args.repo,
       "base_branch": args.base_branch,
       "backend": args.backend,

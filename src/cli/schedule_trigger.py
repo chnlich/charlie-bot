@@ -1,9 +1,9 @@
 """CLI script for master CC to schedule a delayed trigger.
 
-Called by the master Claude Code instance via its run_command tool:
+Called by the master Claude Code instance via its run_command tool. ``--session``
+is optional; auto-derived from cwd when run inside a CharlieBot session dir.
 
   python -m src.cli.schedule_trigger \
-    --session SESSION_ID \
     --max-wait 3600 \
     --message 'Check PID 12345'
 
@@ -14,13 +14,11 @@ value is either a local PID (e.g. ``12345``) or a remote PID of the form
 either all local or all remote — mixing is rejected.
 
   python -m src.cli.schedule_trigger \
-    --session SESSION_ID \
     --max-wait 3600 \
     --watch-pid 12345 67890 \
     --message 'Training finished'
 
   python -m src.cli.schedule_trigger \
-    --session SESSION_ID \
     --max-wait 3600 \
     --watch-pid neptune:12345 noire:67890 \
     --message 'Remote training finished'
@@ -32,6 +30,7 @@ import sys
 
 import requests
 
+from src.cli.common import resolve_session_id
 from src.core.config import get_config
 from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
 
@@ -64,7 +63,11 @@ def _parse_watch_target(raw: str) -> dict:
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Schedule a delayed trigger for a CharlieBot session")
-  parser.add_argument("--session", required=True, help="Session ID")
+  parser.add_argument(
+      "--session",
+      required=False,
+      default=None,
+      help="Session ID (optional; auto-derived from cwd when run inside a CharlieBot session dir)")
   parser.add_argument(
       "--max-wait",
       required=True,
@@ -88,6 +91,7 @@ def main() -> None:
       ),
   )
   args = parser.parse_args()
+  session_id = resolve_session_id(args.session)
 
   watch_targets: list[dict] | None = args.watch_pid
   if watch_targets is not None:
@@ -97,7 +101,7 @@ def main() -> None:
       parser.error("--watch-pid values must be all local or all remote, not mixed")
 
   payload: dict = {
-      "session_id": args.session,
+      "session_id": session_id,
       "delay_seconds": args.max_wait,
       "message": args.message,
   }

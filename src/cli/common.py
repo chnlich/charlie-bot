@@ -6,6 +6,7 @@ entry point, including consistent error-detail extraction on 4xx/5xx responses.
 
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -35,3 +36,38 @@ def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         pass
     print(json.dumps({"error": msg}), file=sys.stderr)
     sys.exit(1)
+
+
+def resolve_session_id(arg_session: str | None) -> str:
+  """Resolve the session id to use for a CLI invocation.
+
+  Master CC always cd's into ~/.charliebot/sessions/{session_id} before
+  running these CLIs. We use that fact to (a) auto-derive the session id
+  when --session is omitted, and (b) reject mismatches when an explicit
+  --session disagrees with cwd — which catches the fork-imitation bug
+  where master copies an old session id from inherited transcript history.
+  """
+  cwd = Path.cwd().resolve()
+  sessions_dir = get_config().sessions_dir.resolve()
+  in_session_dir = cwd.parent == sessions_dir
+  if in_session_dir:
+    sid = cwd.name
+    if arg_session is None or arg_session == sid:
+      return sid
+    print(
+        json.dumps({
+            "error": (
+                f"session id mismatch: cwd={sid} --session={arg_session}; "
+                "refusing to delegate to a different session"
+            )
+        }),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+  if arg_session is None:
+    print(
+        json.dumps({"error": "--session required when not running from a CharlieBot session dir"}),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+  return arg_session

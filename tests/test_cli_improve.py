@@ -18,9 +18,12 @@ def _mock_config(tmp_path: Path):
   return cfg
 
 
-def test_main_posts_to_improve_endpoint(tmp_path: Path):
+def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   """main() posts to /api/internal/improve and returns immediately."""
   cfg = _mock_config(tmp_path)
+  cfg.sessions_dir = tmp_path / "fake_sessions"
+  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.chdir(tmp_path)
 
   resp_mock = MagicMock()
   resp_mock.json.return_value = {"status": "started", "session_id": "s1", "iterations": 2}
@@ -43,8 +46,8 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path):
           "--goal",
           "optimize",
       ]), \
-       patch("src.cli.improve.get_config", return_value=cfg), \
-       patch("src.cli.improve.requests.post", return_value=resp_mock) as post_mock:
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
     main()
 
   # Should have posted exactly once to the improve endpoint
@@ -60,17 +63,139 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path):
   assert payload["goal"] == "optimize"
 
 
-def test_main_exits_on_request_error(tmp_path: Path):
+def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   """main() exits with code 1 on request failure."""
   cfg = _mock_config(tmp_path)
+  cfg.sessions_dir = tmp_path / "fake_sessions"
+  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.chdir(tmp_path)
 
   import requests as req_lib
   with patch("sys.argv", ["improve", "--session", "s1", "--repo", "/tmp/repo", "--base-branch", "main", "--goal", "fix"]), \
-       patch("src.cli.improve.get_config", return_value=cfg), \
-       patch("src.cli.improve.requests.post", side_effect=req_lib.RequestException("conn error")):
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", side_effect=req_lib.RequestException("conn error")):
     with pytest.raises(SystemExit) as exc_info:
       main()
     assert exc_info.value.code == 1
+
+
+def _setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
+  """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it."""
+  cfg = MagicMock()
+  cfg.server_port = 9443
+  cfg.sessions_dir = tmp_path / "sessions"
+  session_dir = cfg.sessions_dir / sid
+  session_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.chdir(session_dir)
+  return cfg
+
+
+def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  resp_mock = MagicMock()
+  resp_mock.json.return_value = {"status": "started"}
+  resp_mock.raise_for_status = MagicMock()
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--goal",
+          "fix",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["session_id"] == "abc"
+
+
+def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  resp_mock = MagicMock()
+  resp_mock.json.return_value = {"status": "started"}
+  resp_mock.raise_for_status = MagicMock()
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--session",
+          "abc",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--goal",
+          "fix",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["session_id"] == "abc"
+
+
+def test_session_mismatch_with_cwd_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--session",
+          "xyz",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--goal",
+          "fix",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code == 2
+  err = capsys.readouterr().err
+  assert "mismatch" in err
+  assert "abc" in err
+  assert "xyz" in err
+
+
+def test_no_session_outside_session_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = MagicMock()
+  cfg.server_port = 9443
+  cfg.sessions_dir = tmp_path / "sessions"
+  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.chdir(tmp_path)
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--goal",
+          "fix",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code == 2
+  err = capsys.readouterr().err
+  assert "session dir" in err or "--session required" in err
 
 
 # ---------------------------------------------------------------------------

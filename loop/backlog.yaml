@@ -4416,3 +4416,139 @@
   status: pending
   created: '2026-05-07T02:00:00Z'
   priority: low
+- id: '143'
+  title: Extract built-in /run handler from slash.execute_command into _handle_run_command
+  description: 'WHY — The 2026-05-07 scheduled code-health scan ran `yapf
+    --in-place --recursive src/` (no drift after the in-run style commit on item
+    142 landed earlier in this branch — fresh `yapf --in-place --recursive src/`
+    on this scan reported zero file changes), `pyflakes src/` (only the existing
+    `WatchTarget` unused import in src/api/internal.py:13, already covered by
+    pending item 139), `vulture src/ --min-confidence 80` (only the
+    false-positive `cls` unused-variable on the @classmethod
+    `migrate_and_expand` in src/core/config.py:127 — `cls` is the bound class
+    arg required by the decorator, not dead code; same finding as items 141 and
+    142), `grep -rEn "TODO|FIXME|HACK|XXX" src/ --include="*.py"` (zero
+    matches), and an AST scan for functions over 50 body lines. After excluding
+    functions covered by pending items 109 (`_detect_pidfd`), 125
+    (`_create_worktree_and_process`), 126 (`_run_cc`), 127 (`run_improve_loop`),
+    129 (`AgentBackend.run`), 132 (`MessageAggregator._feed`), 134
+    (`_session_consumer`), 135 (`_wait_with_pidfd`), 136 (`_run_single_iteration`),
+    137 (`Worker.run`), 138 (`OpenCodeBackend.translate_event`), 140
+    (`pages.index`), 141 (`gemini_cli.translate_event`), and 142
+    (`master_cc.run_message`), and excluding `core/autonamer.maybe_auto_name`
+    (96 lines, already targeted by pending item 105) and
+    `core/spawner._build_worker_prompt` (83 lines, mostly literal section
+    strings — explicitly deferred by item 142 footnote and earlier scans on the
+    grounds that the residual body is template text and the dedup work was
+    already done by item 101), the longest remaining function is
+    `api/slash.execute_command` at 91 lines (src/api/slash.py:96-187).
+    Item 142''s explicit footnote called this out as the next-scan candidate
+    ("`api/slash.execute_command` 91 lines — item 067 failed-stale and the
+    function still contains the /run handler, candidate for next scan").
+    Item 067 (failed 2026-04-17) targeted both the /improve and /run built-in
+    handlers; the /improve handler was deleted in commit 9db634d
+    ("fix: remove /improve slash command and build_improve_master_prompt"),
+    invalidating the 067 task scope, but the /run handler still lives at
+    L125-150 of src/api/slash.py and is the single largest internal block in
+    the function. Extracting just the /run handler is in scope for item 067''s
+    obsoleted plan but was never re-scoped; the failed_reason on 067 explicitly
+    suggested "Re-scope the task to either extract only /run, or close as
+    obsolete." This item performs that re-scope.
+
+    WHAT — Extract one private async helper `_handle_run_command` from the
+    L125-150 `if name == ''run'':` branch of `execute_command`. The /help
+    branch (L111-114, 3 lines: persist user event + return HELP+commands list)
+    and the /stop-improve branch (L116-123, 7 lines: import +
+    `stop_improve_loop` call + branch on stopped) stay inline — neither is
+    big enough or unique enough to earn its own helper per the dedup rule
+    ("three similar lines is better than premature abstraction"). The
+    dispatch-result tail (L152-186, 34 lines spanning four `dispatch.kind`
+    branches: not_found / error / shell_result / prompt) also stays inline:
+    earlier scans flagged this block as "branches bound to different external
+    dependencies" with no clear single-responsibility name, and slash.py:execute_command
+    and chat.py:send_message render the same dispatch result kinds with
+    different response shapes (slash.py returns inline JSON to the slash UI;
+    chat.py wraps results in ASSISTANT + MASTER_DONE events) so a shared
+    renderer would not have a clean single-responsibility boundary.
+
+    The /run handler in contrast IS a single, name-worthy concept ("execute
+    the built-in /run scheduled-task trigger command") with 26 lines of
+    self-contained orchestration that no other backlog item touches:
+
+      - L127-132 (6 lines): empty-args validation. Reads
+        `get_scheduled_tasks()` and either returns "No scheduled tasks
+        configured" or "Usage: /run <task-name>. Available: ...".
+      - L133-135 (3 lines): scheduler lookup from `request.app.state.scheduler`
+        with None-check returning "Scheduler not available".
+      - L136-140 (5 lines): `await scheduler.run_task_now(task_name)` with a
+        `ValueError` catch that logs at debug and returns the error message
+        (the only exception handler in the function — fail-fast everywhere
+        else).
+      - L141 (1 line): persist user event via `session_mgr.persist_and_broadcast`.
+      - L142-150 (9 lines): build and return the 202 JSONResponse with
+        `type=TASK_TRIGGERED`, `task`, `session_id`, `thread_id`.
+
+    HOW — Add `async def _handle_run_command(args_text: str, request: Request,
+    session_id: str, session_mgr: SessionManager, display_text: str,
+    uploaded_files: list[dict]) -> dict | JSONResponse` as a module-level
+    function in src/api/slash.py, placed immediately above `execute_command`
+    (between `_build_command_list` and the `SlashExecuteRequest` BaseModel,
+    matching the existing module structure where helpers precede the route
+    handler). Move L127-150 verbatim into the helper, replacing the references
+    to outer-scope `request`, `session_id`, `session_mgr`, `display_text`,
+    `uploaded_files` with the corresponding parameters. The body needs no
+    other changes — `args_text`, `get_scheduled_tasks`, `log`,
+    `build_user_event`, `serialize_uploaded_files`, `JSONResponse`, and `ET`
+    are all already imported at module scope.
+
+    Replace L125-150 in `execute_command` with the two-line dispatch:
+
+      ```python
+      if name == ''run'':
+        return await _handle_run_command(args_text, request, session_id,
+                                         session_mgr, display_text, uploaded_files)
+      ```
+
+    After the extraction, `execute_command` shrinks from 91 lines to ~67
+    lines (still longer than 50 but within the band that earlier scans deem
+    acceptable for a multi-branch dispatcher whose remaining branches are
+    each <10 lines). The /run handler at the new helper is ~26 lines and
+    reads as a single straight-line function "validate task name → look up
+    scheduler → run task → persist event → return 202 response." No
+    behavior change — pure refactor.
+
+    DEDUP RULE CHECK — Per the task spec ("extract a shared helper only if
+    the shared block is > 50 lines OR the helper has a clear,
+    single-responsibility name worth its own concept"), `_handle_run_command`
+    qualifies on the second clause: it is the named entry point for the
+    built-in /run command, parallel in scope to the existing module-level
+    `_build_command_list` helper that handles the listing side of the same
+    command surface. The /help and /stop-improve branches are explicitly
+    NOT extracted because (a) /help is 3 lines and (b) /stop-improve is 7
+    lines and its only non-trivial work is a deferred import already
+    co-located with the call site. Three short lines is better than premature
+    abstraction.
+
+    NON-DUPLICATION CHECK — pyflakes/vulture/TODO results enumerated above;
+    the >50-line function scan after excluding all pending-item-covered
+    functions plus the 96L `maybe_auto_name` (item 105) and the 83L
+    `_build_worker_prompt` (excluded as template text) leaves
+    `slash.execute_command` (91L) as the single longest. Other shorter long
+    functions exist (`core/review.spawn_review_worker` 80L — item 041 done,
+    helpers already extracted; `core/review.maybe_spawn_reviewer` 71L;
+    `api/chat.send_message` 70L — slash-interception block parallels the
+    same /run extraction proposed here and is the natural next-scan
+    candidate; `core/triggers._wait_with_remote_probe` 68L; `core/spawner.spawn_worker`
+    68L — items 021 and 1701 covered earlier extractions; `cli/remote_launch.main`
+    68L; `api/internal.delegate_task` 64L; `core/improve_command._wait_for_quota_recovery`
+    63L; `cli/schedule_trigger.main` 63L; `api/internal.start_improve_loop`
+    61L; `api/files._dir_listing_html` 61L; `api/backlog.patch_backlog`
+    60L; etc.) but every one is shorter than `slash.execute_command`, so
+    per the one-finding-per-scan rule the /run extraction is the single new
+    code-health backlog entry for this 2026-05-07 scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-07T03:00:00Z'
+  priority: low

@@ -2,8 +2,8 @@
 
 Called by the master Claude Code instance via its run_command tool:
 
+  # --session is optional; auto-derived from cwd when run inside a CharlieBot session dir.
   python -m src.cli.delegate \
-    --session SESSION_ID \
     --repo /path/to/repo \
     --base-branch main \
     --description "implement feature X" \
@@ -14,12 +14,16 @@ Called by the master Claude Code instance via its run_command tool:
 import argparse
 import json
 
-from src.cli.common import post_internal_api
+from src.cli.common import post_internal_api, resolve_session_id
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
-  parser.add_argument("--session", required=True, help="Session ID")
+  parser.add_argument(
+      "--session",
+      required=False,
+      default=None,
+      help="Session ID (optional; auto-derived from cwd when run inside a CharlieBot session dir)")
   parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
   parser.add_argument("--description", required=True, help="Task description")
   parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")
@@ -46,9 +50,10 @@ def main() -> None:
           "single-line edits, doc-only changes); 1 = default reviewer flow."),
   )
   args = parser.parse_args()
+  session_id = resolve_session_id(args.session)
 
   payload = {
-      "session_id": args.session,
+      "session_id": session_id,
       "description": args.description,
       "base_branch": args.base_branch,
       "keep_worktree": bool(args.keep_worktree),

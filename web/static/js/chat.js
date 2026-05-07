@@ -263,6 +263,7 @@ function _appendRenderedMessage(html, forceScroll) {
   var el = wrapper.firstElementChild || wrapper;
   var streamEl = document.getElementById("streaming-msg");
   container.insertBefore(el, streamEl);
+  el.querySelectorAll(".prose-msg").forEach(renderChatMath);
   if (forceScroll || wasAtBottom) {
     container.scrollTop = container.scrollHeight;
   } else {

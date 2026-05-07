@@ -4161,3 +4161,138 @@
   status: pending
   created: '2026-05-07T00:30:00Z'
   priority: low
+- id: '141'
+  title: Split GeminiCliBackend.translate_event into per-event-type handlers to drop
+    the dispatcher under 50 lines
+  description: 'WHY — The 2026-05-07 scheduled code-health scan ran `yapf
+    --in-place --recursive src/` (six files had drift in src/agents/backends/base.py,
+    src/agents/worker.py, src/api/pages.py, src/cli/schedule_trigger.py,
+    src/core/message_aggregator.py, and src/core/triggers.py — fixed in-run by the
+    style commit on this branch per the task''s yapf rule), `pyflakes src/` (only
+    the existing `WatchTarget` unused import in src/api/internal.py:13, already
+    covered by pending item 139), `vulture src/ --min-confidence 80` (only the
+    false-positive `cls` unused-variable on the @classmethod `migrate_and_expand`
+    in src/core/config.py:127 — `cls` is the bound class arg required by the
+    decorator, not dead code), a TODO/FIXME/HACK/XXX grep (zero hits across src/),
+    and an AST scan for functions over 50 body lines. The scan flagged
+    `GeminiCliBackend.translate_event` in src/agents/backends/gemini_cli.py at
+    L41-105 as a 64-line dispatcher that no existing pending or done backlog item
+    touches. It is the direct sibling of `OpenCodeBackend.translate_event`
+    (pending item 138), and the same per-event-type-handler split applies. The
+    function is a pure dispatcher: after a 6-line `flush_buffer` closure (L45-50)
+    it switches on `ev.get("type", "")` through six branches — `init` (L53-54,
+    1 line), `message` (L57-65, 9 lines including a buffered-text accumulator),
+    `tool_use` (L68-71, 4 lines), `tool_result` (L74-83, 10 lines with a
+    success/error fork), `error` (L86-90, 5 lines), and `result` (L93-102,
+    10 lines) — then falls through to a `log.debug("gemini_event_unhandled", ...)`
+    default that still flushes any pending buffered text. Each branch is a single
+    nameable concept, so the per-handler names earn their own concept per the
+    dedup rule.
+
+    WHAT — Extract each non-trivial branch as a private method on
+    `GeminiCliBackend`, placed immediately below `translate_event` in
+    src/agents/backends/gemini_cli.py:
+
+      - `_translate_message(self, ev: dict) -> list[dict]` — body of the current
+        `message` branch (~7 lines): if `role == "user"` return `[]`; if `role ==
+        "assistant"` append `ev.get("content", "")` to `self._text_buffer` and
+        flush via the shared flush helper when `delta` is False, else return `[]`.
+        Move `flush_buffer` out of the closure and into a private
+        `_flush_text_buffer(self) -> list[dict]` method on the class so every
+        per-branch helper can reuse it; this is the one piece of cross-branch
+        state and naming it earns its own concept.
+      - `_translate_tool_use(self, ev: dict) -> list[dict]` — body of the current
+        `tool_use` branch (~3 lines): flush, then append `make_tool_use_event(
+        ev.get("tool_name", ""), ev.get("parameters", {}))` and return.
+      - `_translate_tool_result(self, ev: dict) -> list[dict]` — body of the
+        current `tool_result` branch (~9 lines): flush, then append a
+        `make_tool_result_event` with `output` on `status == "success"` or with
+        the rendered error message on `status == "error"`. Keep the
+        `isinstance(error, dict)` guard exactly as today.
+      - `_translate_error(self, ev: dict) -> list[dict]` — body of the current
+        `error` branch (~3 lines): flush, then append `make_error_event(
+        ev.get("message", ""))` and return.
+      - `_translate_result(self, ev: dict) -> list[dict]` — body of the current
+        `result` branch (~9 lines): flush, then append `make_result_event` with
+        `input_tokens`, `output_tokens`, and `cache_read` read from
+        `ev.get("stats", {})`.
+
+    `translate_event` becomes a thin dispatcher of roughly 18 lines:
+
+      ```python
+      def translate_event(self, ev: dict) -> list[dict]:
+        ev_type = ev.get("type", "")
+        if ev_type == "init":
+          return [{"session_id": ev.get("session_id", "")}]
+        if ev_type == "message":
+          return self._translate_message(ev)
+        if ev_type == "tool_use":
+          return self._translate_tool_use(ev)
+        if ev_type == "tool_result":
+          return self._translate_tool_result(ev)
+        if ev_type == "error":
+          return self._translate_error(ev)
+        if ev_type == "result":
+          return self._translate_result(ev)
+        log.debug("gemini_event_unhandled", type=ev_type)
+        return self._flush_text_buffer()
+      ```
+
+    HOW — (1) Promote the inner `flush_buffer` closure into a private method
+    `_flush_text_buffer(self) -> list[dict]` so every helper can reuse it
+    without re-creating a per-call closure; the existing `_text_buffer` instance
+    attribute is untouched. (2) Move each branch body verbatim into its
+    dedicated `_translate_*` method, replacing the local `flush_buffer()` calls
+    with `self._flush_text_buffer()`. (3) Replace each branch in
+    `translate_event` with `return self._translate_<type>(ev)` so the buffered-
+    text invariant is preserved exactly as today (every non-`message` event
+    still flushes the buffer first). (4) Keep the `init` early-return inline
+    (one line, no helper warranted) and the trailing `log.debug(
+    "gemini_event_unhandled", ...)` + final flush in the dispatcher. (5) Verify
+    the refactor: `yapf --diff src/agents/backends/gemini_cli.py` exits clean,
+    `python3 -c "from src.agents.backends.gemini_cli import GeminiCliBackend"`
+    succeeds, the AST function-length scan reports `translate_event` is no
+    longer over 50 lines (and every new `_translate_*` helper stays under 50),
+    and any existing gemini-cli backend tests still pass unchanged. (6) Do not
+    change the `translate_event` signature or any callers — `AgentBackend.run`
+    in src/agents/backends/base.py drives it through the abstract base class
+    and must keep the same contract.
+
+    Other findings from the same scan that are NOT new defects: yapf drift in
+    six files (subsumed by the style commit on this branch per the yapf rule);
+    the `WatchTarget` unused import in src/api/internal.py:13 (already covered
+    by pending item 139); the vulture `cls` finding in src/core/config.py:127
+    (false positive on a Pydantic @classmethod validator that requires the
+    bound `cls` arg by signature). 33 functions over 50 body lines, but every
+    one longer than `translate_event` is already covered by an existing
+    pending or done item — `run_improve_loop` (item 127), `AgentBackend.run`
+    (item 129), `_run_cc` (item 126), `_create_worktree_and_process` (item
+    125), `_run_single_iteration` (item 136), `MessageAggregator._feed`
+    (item 132), `_session_consumer` (item 134), `maybe_auto_name` (item 105),
+    `master_cc.run_message` (items 003/069/098/117/118 done — body grew back
+    after subsequent feature additions, and items 134/126 cover the consumer
+    and `_run_cc` it dispatches into; the residual 88 lines are nearly all
+    fan-out into already-covered helpers), `_detect_pidfd` (item 109),
+    `api/slash.execute_command` (item 067 failed and item 087 done covered
+    formatting/dead-code; the residual 82 lines are a multi-branch dispatcher
+    that does NOT meet the dedup rule because each built-in branch is bound
+    to a different external dependency — scheduler, improve loop,
+    dispatch_slash_command — and a single shared helper would not have a
+    clear single-responsibility name), `Worker.run` (item 137), and
+    `OpenCodeBackend.translate_event` (item 138 — same pattern as this item).
+    Other shorter long functions exist (`maybe_spawn_reviewer` 61 lines,
+    `cli/remote_launch.main` 67 lines, `cli/schedule_trigger.main` 62 lines,
+    `_dir_listing_html` 60 lines, `api/internal.delegate_task` 59 lines,
+    `api/backlog.patch_backlog` 59 lines, `api/chat.send_message` 63 lines,
+    `_wait_with_remote_probe` 64 lines, `core/sessions.fork_session` 52
+    lines, `core/ndjson.parse_ndjson_tail` 51 lines,
+    `core/git._resolve_worktree_start_point` 51 lines, etc.) but every one
+    is shorter than `gemini_cli.translate_event`, so per the
+    one-finding-per-scan rule `translate_event` is the single new
+    code-health backlog entry for this 2026-05-07 scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-07T01:00:00Z'
+  priority: low

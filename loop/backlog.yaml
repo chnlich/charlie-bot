@@ -4125,3 +4125,39 @@
   status: pending
   created: '2026-05-07T00:15:00Z'
   priority: low
+- id: '140'
+  title: Extract active-session view loading from pages.index into a helper
+  description: 'src/api/pages.py:index (lines 138-216, 79 lines) is the longest
+    untouched route handler after items 137/138 land. Most of the body is one
+    well-bounded responsibility: when the `session` query param is provided,
+    load the active session metadata, build the message/thread view via
+    `build_session_view_data`, and load triggers via `TriggerManager.list_triggers`
+    — all three calls wrapped in independent try/except blocks that append
+    user-visible strings to `load_errors`. That block (lines 166-189, ~24 lines)
+    has a single, nameable responsibility and is what pushes `index` over 50
+    lines. Extract a helper `_load_active_session_view(session_id, session_mgr,
+    thread_mgr)` in src/api/pages.py (or alongside `build_session_view_data` in
+    src/api/message_utils.py) that returns a dataclass/NamedTuple containing
+    `active_session`, `messages`, `threads`, `triggers`, `raw_events`,
+    `session_usage`, `pending_draft`, and a `load_errors: list[str]` accumulator.
+    The caller in `index` then becomes ~5 lines: call the helper when `session`
+    is set, otherwise short-circuit to the existing redirect-to-first-session
+    branch (lines 188-189), and finally extend the outer `load_errors` list
+    with whatever the helper accumulated. Keep the empty `[]` defaults for
+    `messages`/`threads`/`triggers`/`raw_events` and the `None` defaults for
+    `active_session`/`session_usage`/`pending_draft` so the template context
+    stays unchanged. After the split, `index` should drop below 50 lines, the
+    new helper should also be under 50 lines, and the rendered HTML for both
+    "no session" and "active session" cases must be byte-identical to the
+    current behavior — verify by running the dev server and loading `/` and
+    `/?session=<id>` against an existing sessions store. Do NOT collapse the
+    three try/except blocks into one — each failure mode logs a different
+    `log.exception` key (`get_session_failed`, `load_session_data_failed`,
+    `load_triggers_failed`) and the user-visible error strings differ; preserve
+    those independently inside the helper.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-07T00:30:00Z'
+  priority: low

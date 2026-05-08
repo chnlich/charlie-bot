@@ -4964,3 +4964,115 @@
   status: pending
   created: '2026-05-08T00:00:00Z'
   priority: low
+- id: '147'
+  title: Extract argparse setup from cli/schedule_trigger.main into _build_parser
+    helper
+  description: 'WHY — The 2026-05-08 scheduled code-health scan ran `yapf --in-place
+    --recursive src/` (committed the wrapping fixes in 7 files:
+    src/agents/backends/base.py, src/agents/worker.py, src/api/pages.py,
+    src/cli/common.py, src/cli/schedule_trigger.py,
+    src/core/message_aggregator.py, src/core/triggers.py — all dict-literal
+    split-before-first-argument adjustments per .style.yapf), `pyflakes
+    src/` (only the existing `WatchTarget` unused import in
+    src/api/internal.py:13, already covered by pending item 139), `grep -rEn
+    "TODO|FIXME|HACK|XXX" src/ --include="*.py"` (zero matches), and an AST
+    scan for functions with >50 body lines. After excluding functions
+    covered by pending items 105 (`maybe_auto_name`), 109 (`_detect_pidfd`),
+    125 (`_create_worktree_and_process`), 126 (`_run_cc`), 127
+    (`run_improve_loop`), 129 (`AgentBackend.run`), 132
+    (`MessageAggregator._feed`), 134 (`_session_consumer`), 135
+    (`_wait_with_pidfd`), 136 (`_run_single_iteration`), 137 (`Worker.run`),
+    138 (`OpenCodeBackend.translate_event`), 140 (`pages.index`), 141
+    (`gemini_cli.translate_event`), 142 (`master_cc.run_message`), 143
+    (`slash.execute_command`), 144 (`chat.send_message`), 145
+    (`cli/remote_launch.main`), and 146 (`_wait_with_remote_probe`), and
+    excluding `core/spawner._build_worker_prompt` (still mostly literal
+    template strings — same exclusion rationale as items
+    142/143/144/145/146) and `core/review.spawn_review_worker` (item 041
+    done, helpers already extracted), the longest remaining function is
+    `cli/schedule_trigger.main` at 62 body lines
+    (src/cli/schedule_trigger.py:63-130). Item 146''s footnote enumerated
+    this as the next-scan candidate after `_wait_with_remote_probe`, so it
+    is the natural follow-up.
+
+    WHAT — Extract one private helper `_build_parser() ->
+    argparse.ArgumentParser` from the L64-91 block of `main` in
+    src/cli/schedule_trigger.py. The block has a single, name-worthy
+    concept: "construct the argparse.ArgumentParser for the schedule-trigger
+    CLI, declaring all four arguments (--session, --max-wait, --message,
+    --watch-pid) with their help text, types, requiredness, and the
+    `_parse_watch_target` type-hook for --watch-pid." It is 28 body lines of
+    self-contained declarative argparse setup and the only other significant
+    block in `main` is the HTTP POST + response-handling block (L109-128, 19
+    body lines) which is too small and too tightly coupled to the local
+    `payload`/`cfg`/`EXIT_VERIFY_REJECTED` namespace to be worth its own
+    helper without paying argument-passing tax that exceeds the savings: L64
+    (1 line) `parser = argparse.ArgumentParser(description=...)`; L65-69 (5
+    lines) `--session` (optional, default None, with the
+    auto-derive-from-cwd help string); L70-76 (7 lines) `--max-wait`
+    (required, int, with the upper-bound-vs-watch-pid help string); L77 (1
+    line) `--message` (required); L78-90 (13 lines) `--watch-pid`
+    (nargs="+", type=_parse_watch_target, metavar="PID|HOST:PID",
+    default=None, with the all-local-or-all-remote help string); L91 (1
+    line) `return parser`.
+
+    HOW — Add `def _build_parser() -> argparse.ArgumentParser` as a module-level
+    function in src/cli/schedule_trigger.py, placed immediately above `main`
+    (between `_parse_watch_target` at L41 and `main` at L63 — keeping the
+    existing convention that helpers precede `main`). The helper internally
+    constructs the parser, calls `add_argument` four times, and returns the
+    parser. No arguments — the parser is fully declarative and references
+    only the module-level `_parse_watch_target` symbol which is already in
+    scope. Argparse exit-on-error semantics are preserved verbatim —
+    `parser.error(...)` and `parser.parse_args()` still abort the process
+    with exit code 2 for argparse errors, and the `EXIT_VERIFY_REJECTED = 2`
+    constant at L38 (which is the same code argparse uses, by coincidence)
+    stays in `main`.
+
+    Replace L64-91 in `main` with the two-line dispatch:
+
+      ```python   parser = _build_parser()   args = parser.parse_args()   ```
+
+    After the extraction, `main` shrinks from 62 body lines to ~35 body lines
+    (cleanly under 50). The new `_build_parser` helper is ~28 body lines and
+    reads as a single straight-line declarative function "build parser →
+    declare four args → return." No behavior change — pure refactor; the
+    helper is internal to schedule_trigger.py and not exported.
+
+    DEDUP RULE CHECK — Per the task spec ("extract a shared helper only if the
+    shared block is > 50 lines OR the helper has a clear,
+    single-responsibility name worth its own concept"), `_build_parser`
+    qualifies on the second clause: its name expresses a single concrete
+    contract ("return the fully-configured ArgumentParser for
+    schedule_trigger; everything argparse-related lives here, nothing else
+    does"). A SHARED helper across schedule_trigger.py and any other CLI is
+    explicitly NOT proposed — the four arguments are unique to this CLI (the
+    --watch-pid type-hook in particular references a parser-private helper),
+    and remote_launch.py''s parser is only six lines (L31-36) so
+    consolidating the two would create a less cohesive helper. The
+    parallel-but-not-shared structure mirrors item 145''s
+    `_ssh_launch_remote` extraction relative to item 146''s
+    `_probe_remaining_remote_pids` extraction.
+
+    NON-DUPLICATION CHECK — pyflakes/TODO results enumerated above; the
+    >50-body-line function scan after excluding all pending-item-covered
+    functions plus the `_build_worker_prompt` template-text exclusion and
+    the `spawn_review_worker` already-addressed exclusion leaves
+    `cli/schedule_trigger.main` (62L) as the single longest. Other shorter
+    long functions exist (`core/review.maybe_spawn_reviewer` 61L;
+    `api/files._dir_listing_html` 60L; `core/spawner.spawn_worker` 59L;
+    `api/internal.delegate_task` 59L; `api/backlog.patch_backlog` 59L;
+    `core/improve_command._wait_for_quota_recovery` 57L;
+    `api/internal.start_improve_loop` 56L; `core/triggers._wait_and_fire`
+    53L; `core/sessions.fork_session` 52L; `core/ndjson.parse_ndjson_tail`
+    51L; `core/git._resolve_worktree_start_point` 51L) but every one is
+    shorter than `cli/schedule_trigger.main`, so per the
+    one-finding-per-scan rule the schedule_trigger.py argparse extraction is
+    the single new code-health backlog entry for this 2026-05-08 evening
+    scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-08T00:00:00Z'
+  priority: low

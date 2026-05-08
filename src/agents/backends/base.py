@@ -40,8 +40,7 @@ async def _capture_proc_diagnostics(pid: int) -> dict:
       ("children", ["bash", "-c", f"ps -o pid,stat,etime,cmd --ppid {pid} 2>&1"]),
   ]:
     try:
-      r = await asyncio.create_subprocess_exec(
-          *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+      r = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
       data, _ = await asyncio.wait_for(r.communicate(), timeout=2.0)
       out[key] = data.decode("utf-8", errors="replace")
     except Exception as e:

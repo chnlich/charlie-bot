@@ -55,12 +55,13 @@ def resolve_session_id(arg_session: str | None) -> str:
     if arg_session is None or arg_session == sid:
       return sid
     print(
-        json.dumps({
-            "error": (
-                f"session id mismatch: cwd={sid} --session={arg_session}; "
-                "refusing to delegate to a different session"
-            )
-        }),
+        json.dumps(
+            {
+                "error":
+                    (
+                        f"session id mismatch: cwd={sid} --session={arg_session}; "
+                        "refusing to delegate to a different session")
+            }),
         file=sys.stderr,
     )
     sys.exit(2)

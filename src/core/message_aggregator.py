@@ -182,14 +182,15 @@ class MessageAggregator:
       normalized = normalize_user_message_event(ev)
       yield {
           "type": "message",
-          "message": {
-              "role": "user",
-              "content": normalized["content"],
-              "uploaded_files": normalized["uploaded_files"],
-              "is_voice": ev.get("is_voice", False),
-              "event_index": idx,
-              "timestamp": ev.get("timestamp"),
-          },
+          "message":
+              {
+                  "role": "user",
+                  "content": normalized["content"],
+                  "uploaded_files": normalized["uploaded_files"],
+                  "is_voice": ev.get("is_voice", False),
+                  "event_index": idx,
+                  "timestamp": ev.get("timestamp"),
+              },
       }
       return
 
@@ -227,12 +228,13 @@ class MessageAggregator:
 
       for b in blocks:
         if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') != 'ExitPlanMode':
-          self._tools_buf.append({
-              'name': b.get('name', ''),
-              'input': b.get('input', {}),
-              'output': '',
-              'is_error': False,
-          })
+          self._tools_buf.append(
+              {
+                  'name': b.get('name', ''),
+                  'input': b.get('input', {}),
+                  'output': '',
+                  'is_error': False,
+              })
 
       text = extract_text_from_message(msg)
       if text and self._assistant_buf:

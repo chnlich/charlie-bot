@@ -132,8 +132,6 @@ _PIDFD_SUPPORTED = _pidfd_open is not None
 # ---------------------------------------------------------------------------
 # Remote probe via ssh
 # ---------------------------------------------------------------------------
-
-
 async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
   """Probe a single (host, pid) via ssh `kill -0`.
 
@@ -255,9 +253,7 @@ class TriggerManager:
 
   async def _verify_remote_targets(self, targets: list[WatchTarget]) -> None:
     """Probe each remote target once before persisting; reject if any not ALIVE."""
-    results = await asyncio.gather(
-        *[_ssh_probe_pid(t.host, t.pid) for t in targets if t.host is not None]
-    )
+    results = await asyncio.gather(*[_ssh_probe_pid(t.host, t.pid) for t in targets if t.host is not None])
     bad: list[str] = []
     for t, (status, raw) in zip(
         [t for t in targets if t.host is not None],
@@ -266,9 +262,7 @@ class TriggerManager:
       if status != "ALIVE":
         bad.append(f"{t.host}:{t.pid} -> {status} ({raw.strip()!r})")
     if bad:
-      raise RemoteVerifyError(
-          "verify-on-create failed for remote watch target(s): " + "; ".join(bad)
-      )
+      raise RemoteVerifyError("verify-on-create failed for remote watch target(s): " + "; ".join(bad))
 
   async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
     """Read all triggers for a session from disk."""

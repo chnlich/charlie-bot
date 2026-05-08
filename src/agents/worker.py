@@ -104,8 +104,7 @@ class Worker:
     if self._backend.hang_diagnostics:
       diag_path = self._events_log.parent / "hang_diagnostics.json"
       try:
-        await asyncio.to_thread(
-            diag_path.write_text, json.dumps(self._backend.hang_diagnostics, indent=2))
+        await asyncio.to_thread(diag_path.write_text, json.dumps(self._backend.hang_diagnostics, indent=2))
         log.warning("worker_wrote_hang_diagnostics", thread=self._thread.id, path=str(diag_path))
       except Exception as e:
         log.error("worker_write_hang_diagnostics_failed", thread=self._thread.id, error=str(e))

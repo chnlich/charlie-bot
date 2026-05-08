@@ -4624,9 +4624,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-07T16:00:00Z'
   priority: low
+  in_progress_at: '2026-05-08T17:10:24Z'
 - id: '146'
   title: Extract probe-and-mark-dead block from TriggerManager._wait_with_remote_probe
     into _probe_remaining_remote_pids helper

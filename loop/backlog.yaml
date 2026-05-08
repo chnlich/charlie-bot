@@ -5076,3 +5076,119 @@
   status: pending
   created: '2026-05-08T00:00:00Z'
   priority: low
+- id: '148'
+  title: Extract reviewer-failed-retry block from core/review.maybe_spawn_reviewer into _retry_failed_reviewer helper
+  description: 'WHY — The 2026-05-08 evening scheduled code-health scan ran `yapf
+    --in-place --recursive src/` (committed wrapping fixes in 7 files:
+    src/agents/backends/base.py, src/agents/worker.py, src/api/pages.py,
+    src/cli/common.py, src/cli/schedule_trigger.py,
+    src/core/message_aggregator.py, src/core/triggers.py — all
+    dict-literal/long-call wrapping adjustments per .style.yapf), `pyflakes
+    src/` (only the existing `WatchTarget` unused import in
+    src/api/internal.py:13, already covered by pending items 131 and 139),
+    `grep -rEn "TODO|FIXME|HACK|XXX" src/ --include="*.py"` (zero matches),
+    and an AST scan for functions with >50 body lines. After excluding
+    functions covered by pending items 105, 109, 125, 126, 127, 129, 132, 134,
+    135, 136, 137, 138, 140, 141, 142, 143, 144, 145, 146, and 147, and
+    excluding `core/spawner._build_worker_prompt` (still mostly literal
+    template strings — same exclusion rationale used by items 142–147) and
+    `core/review.spawn_review_worker` (already addressed by prior
+    review-helper extractions), the longest remaining function is
+    `core/review.maybe_spawn_reviewer` at 71 body lines
+    (src/core/review.py:335-405). Item 147''s footnote enumerated this as the
+    next-scan candidate after `cli/schedule_trigger.main`, so it is the
+    natural follow-up.
+
+    WHAT — Extract one private helper `_retry_failed_reviewer(...) -> bool`
+    from the L363-394 block of `maybe_spawn_reviewer` in src/core/review.py.
+    The block has a single, name-worthy concept: "the reviewer thread itself
+    failed (exit_code != 0) — try to spawn a fresh reviewer on the next
+    untried backend; if no original_thread is recoverable, log the anomaly; if
+    the retry exhausts available backends, log exhaustion and finalize the
+    review chain." It is 32 body lines of self-contained retry-and-bookkeeping
+    logic and the only other significant blocks in `maybe_spawn_reviewer` are
+    the initial "successful worker" branch (L351-358, 8 body lines, too small
+    to extract) and the "combine summaries + trigger master" tail (L396-401, 6
+    body lines, too tightly coupled to the local
+    `thread_meta`/`events_summary`/`original_thread` namespace). Body-line
+    breakdown of the target block: L363 `if exit_code != 0:`; L365 `if
+    original_thread:`; L366-373 `await spawn_review_worker(...
+    tried_backends=list(thread_meta.tried_backends))`; L374-381 `if retried:
+    log.info("reviewer_retry_spawned", ...); return`; L382-387
+    `log.info("reviewer_retries_exhausted", ...)`; L388 `await
+    finalize_review_chain(session_id, original_thread, thread_mgr)`; L389-394
+    `else: log.warning("reviewer_retry_original_not_found", ...)`.
+
+    HOW — Add `async def _retry_failed_reviewer(session_id: str, thread_meta,
+    original_thread, cfg: CharlieBotConfig, session_mgr: SessionManager,
+    thread_mgr: ThreadManager) -> bool` as a private module-level coroutine in
+    src/core/review.py, placed immediately above `maybe_spawn_reviewer` at
+    L335 (keeping the existing convention that helpers precede their caller).
+    The helper internally calls `spawn_review_worker` with the carried-over
+    `tried_backends`, emits the `reviewer_retry_spawned` /
+    `reviewer_retries_exhausted` / `reviewer_retry_original_not_found` log
+    events that already exist verbatim in the current code, calls
+    `finalize_review_chain` on exhaustion, and returns True iff the retry
+    succeeded (so the caller can decide whether to skip the trailing
+    combined-summary trigger when a fresh reviewer is now in flight).
+
+    Replace L363-394 in `maybe_spawn_reviewer` with:
+
+      ```python   if exit_code != 0:     retried = await
+    _retry_failed_reviewer(session_id, thread_meta, original_thread, cfg,
+    session_mgr, thread_mgr)     if retried:       return```
+
+    After the extraction, `maybe_spawn_reviewer` shrinks from 71 body lines to
+    ~40 body lines (cleanly under 50). The new `_retry_failed_reviewer` helper
+    is ~30 body lines and reads as a single straight-line retry routine "try
+    next backend → log outcome → on exhaustion, finalize chain." No behavior
+    change — pure refactor; the helper is private to review.py (leading
+    underscore) and not exported. The bool return value is the only interface
+    widening and directly replaces the inline `return` in the original code at
+    L381 so the caller''s control flow is preserved. The trailing
+    combined-summary trigger at L396-401 stays in `maybe_spawn_reviewer`
+    because it must run on both exit_code==0 (successful reviewer) and
+    exit_code!=0 + retries exhausted (failed reviewer with no further retries)
+    — this dual trigger condition is a `maybe_spawn_reviewer` responsibility,
+    not a retry-helper responsibility.
+
+    DEDUP RULE CHECK — Per the task spec ("extract a shared helper only if the
+    shared block is > 50 lines OR the helper has a clear,
+    single-responsibility name worth its own concept"),
+    `_retry_failed_reviewer` qualifies on the second clause: its name
+    expresses a single concrete contract ("reviewer thread failed; either
+    spawn a fresh reviewer on the next untried backend or finalize the
+    chain"). A SHARED helper across other review-related call sites is
+    explicitly NOT proposed — `spawn_review_worker` is already the shared
+    entry point for spawning reviewers, and the retry-bookkeeping
+    (tried_backends carry-over, exhaustion logging, finalize_review_chain) is
+    specific to the failed-reviewer recovery path that only
+    `maybe_spawn_reviewer` triggers.
+
+    NON-DUPLICATION CHECK — pyflakes/TODO results enumerated above; the
+    >50-body-line function scan after excluding all pending-item-covered
+    functions plus the `_build_worker_prompt` template-text exclusion and the
+    `spawn_review_worker` already-addressed exclusion leaves
+    `core/review.maybe_spawn_reviewer` (71L) as the single longest. Other
+    shorter long functions exist (`core/spawner.spawn_worker` 68L;
+    `api/internal.delegate_task` 64L;
+    `core/improve_command._wait_for_quota_recovery` 63L;
+    `api/files._dir_listing_html` 61L; `api/internal.start_improve_loop` 61L;
+    `api/backlog.patch_backlog` 60L; `core/sessions.fork_session` 58L;
+    `core/review.build_review_prompt` 58L; `core/spawner._finalize_worker`
+    56L; `core/master_trigger.run_message_with_resume_recovery` 56L;
+    `api/message_utils.build_session_view_data` 55L;
+    `core/triggers._wait_and_fire` 54L; `core/master_trigger.trigger_master`
+    54L; `core/spawner._broadcast_completion` 53L;
+    `core/review.extract_review_context` 52L; `core/ndjson.parse_ndjson_tail`
+    52L; `core/git._resolve_worktree_start_point` 52L) but every one is
+    shorter than `core/review.maybe_spawn_reviewer`, so per the
+    one-finding-per-scan rule the review.py reviewer-failed-retry extraction
+    is the single new code-health backlog entry for this 2026-05-08 evening
+    scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-08T18:00:00Z'
+  priority: low

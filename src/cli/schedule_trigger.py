@@ -34,7 +34,6 @@ from src.cli.common import resolve_session_id
 from src.core.config import get_config
 from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
 
-
 # Exit code returned when remote-PID verify-on-create rejects the trigger.
 EXIT_VERIFY_REJECTED = 2
 
@@ -87,8 +86,7 @@ def main() -> None:
           "or a remote PID of the form HOST:PID (e.g. neptune:12345). All values "
           "in a single trigger must be either all local or all remote — mixing is "
           "rejected. The trigger fires when ALL listed PIDs have exited (ALL-die "
-          "semantics) OR when --max-wait elapses, whichever comes first."
-      ),
+          "semantics) OR when --max-wait elapses, whichever comes first."),
   )
   args = parser.parse_args()
   session_id = resolve_session_id(args.session)

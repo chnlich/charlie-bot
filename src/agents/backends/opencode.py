@@ -99,72 +99,76 @@ class OpenCodeBackend(AgentBackend):
 
     if ev_type == "step_start":
       return results
-
     if ev_type == "text":
-      part = ev.get("part", {})
-      text = part.get("text", "")
-      if text:
-        results.append(make_text_event(text))
-      return results
-
+      return results + self._translate_text(ev)
     if ev_type in ("tool_use", "tool"):
-      part = ev.get("part", {})
-      call_id = part.get("callID", "")
-      tool_name = part.get("tool", "")
-      state = part.get("state", {})
-      input_data = state.get("input", {})
-      output = state.get("output", "")
-      error = state.get("error", "")
-
-      # Emit tool_use event
-      results.append(
-          {
-              "type": ET.ASSISTANT,
-              "message": {
-                  "content": [{
-                      "type": ET.TOOL_USE,
-                      "name": tool_name,
-                      "id": call_id,
-                      "input": input_data,
-                  }]
-              },
-          })
-      # Emit tool_result event only when output is present
-      if output:
-        results.append({
-            "type": ET.TOOL_RESULT,
-            "tool_use_id": call_id,
-            "content": output,
-        })
-      elif error:
-        results.append({
-            "type": ET.TOOL_RESULT,
-            "tool_use_id": call_id,
-            "content": error,
-        })
-      return results
-
+      return results + self._translate_tool(ev)
     if ev_type == "error":
-      msg = ev.get("part", {}).get("error", str(ev))
-      results.append(make_error_event(msg))
-      return results
-
+      return results + self._translate_error(ev)
     if ev_type == "step_finish":
-      part = ev.get("part", {})
-      reason = part.get("reason", "")
-      if reason == "stop":
-        cost = part.get("cost", 0)
-        tokens = part.get("tokens", {})
-        cache = tokens.get("cache", {})
-        results.append(
-            make_result_event(
-                input_tokens=tokens.get("input", 0),
-                output_tokens=tokens.get("output", 0),
-                cache_read=cache.get("read", 0),
-                cache_creation=cache.get("write", 0),
-                cost=cost,
-            ))
-      return results
+      return results + self._translate_step_finish(ev)
 
     log.debug("opencode_event_unhandled", type=ev_type)
     return results
+
+  def _translate_text(self, ev: dict) -> list[dict]:
+    text = ev.get("part", {}).get("text", "")
+    if text:
+      return [make_text_event(text)]
+    return []
+
+  def _translate_tool(self, ev: dict) -> list[dict]:
+    part = ev.get("part", {})
+    call_id = part.get("callID", "")
+    tool_name = part.get("tool", "")
+    state = part.get("state", {})
+    input_data = state.get("input", {})
+    output = state.get("output", "")
+    error = state.get("error", "")
+
+    results: list[dict] = [
+        {
+            "type": ET.ASSISTANT,
+            "message": {
+                "content": [{
+                    "type": ET.TOOL_USE,
+                    "name": tool_name,
+                    "id": call_id,
+                    "input": input_data,
+                }]
+            },
+        }
+    ]
+    if output:
+      results.append({
+          "type": ET.TOOL_RESULT,
+          "tool_use_id": call_id,
+          "content": output,
+      })
+    elif error:
+      results.append({
+          "type": ET.TOOL_RESULT,
+          "tool_use_id": call_id,
+          "content": error,
+      })
+    return results
+
+  def _translate_error(self, ev: dict) -> list[dict]:
+    msg = ev.get("part", {}).get("error", str(ev))
+    return [make_error_event(msg)]
+
+  def _translate_step_finish(self, ev: dict) -> list[dict]:
+    part = ev.get("part", {})
+    if part.get("reason", "") != "stop":
+      return []
+    tokens = part.get("tokens", {})
+    cache = tokens.get("cache", {})
+    return [
+        make_result_event(
+            input_tokens=tokens.get("input", 0),
+            output_tokens=tokens.get("output", 0),
+            cache_read=cache.get("read", 0),
+            cache_creation=cache.get("write", 0),
+            cost=part.get("cost", 0),
+        )
+    ]

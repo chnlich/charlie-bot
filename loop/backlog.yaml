@@ -4035,9 +4035,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-06T16:30:00Z'
   priority: low
+  in_progress_at: '2026-05-08T15:09:58Z'
 - id: '139'
   title: Remove unused WatchTarget import from src/api/internal.py
   description: 'pyflakes flags `src/api/internal.py:13` for importing `WatchTarget`

@@ -332,6 +332,53 @@ async def spawn_review_worker(
   return True
 
 
+async def _retry_failed_reviewer(
+    session_id: str,
+    thread_meta: ThreadMetadata,
+    original_thread: Optional[ThreadMetadata],
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+) -> bool:
+  """Retry a failed reviewer on the next untried backend; finalize chain if exhausted.
+
+  Returns True iff a fresh reviewer was spawned (caller should skip the trailing
+  combined-summary trigger). Returns False when no original_thread is recoverable
+  or when all backends have been exhausted.
+  """
+  if not original_thread:
+    log.warning(
+        "reviewer_retry_original_not_found",
+        session=session_id,
+        review_of=thread_meta.review_of,
+    )
+    return False
+  retried = await spawn_review_worker(
+      session_id,
+      original_thread,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      tried_backends=list(thread_meta.tried_backends),
+  )
+  if retried:
+    log.info(
+        "reviewer_retry_spawned",
+        session=session_id,
+        failed_review=thread_meta.id,
+        tried=thread_meta.tried_backends,
+    )
+    return True
+  log.info(
+      "reviewer_retries_exhausted",
+      session=session_id,
+      failed_review=thread_meta.id,
+      tried=thread_meta.tried_backends,
+  )
+  await finalize_review_chain(session_id, original_thread, thread_mgr)
+  return False
+
+
 async def maybe_spawn_reviewer(
     session_id: str,
     thread,
@@ -361,37 +408,9 @@ async def maybe_spawn_reviewer(
     # This IS a reviewer thread.
     original_thread = await thread_mgr.get_thread(session_id, thread_meta.review_of)
     if exit_code != 0:
-      # Reviewer failed — attempt retry with next untried backend.
-      if original_thread:
-        retried = await spawn_review_worker(
-            session_id,
-            original_thread,
-            cfg,
-            session_mgr,
-            thread_mgr,
-            tried_backends=list(thread_meta.tried_backends),
-        )
-        if retried:
-          log.info(
-              "reviewer_retry_spawned",
-              session=session_id,
-              failed_review=thread_meta.id,
-              tried=thread_meta.tried_backends,
-          )
-          return
-        log.info(
-            "reviewer_retries_exhausted",
-            session=session_id,
-            failed_review=thread_meta.id,
-            tried=thread_meta.tried_backends,
-        )
-        await finalize_review_chain(session_id, original_thread, thread_mgr)
-      else:
-        log.warning(
-            "reviewer_retry_original_not_found",
-            session=session_id,
-            review_of=thread_meta.review_of,
-        )
+      retried = await _retry_failed_reviewer(session_id, thread_meta, original_thread, cfg, session_mgr, thread_mgr)
+      if retried:
+        return
 
     # Review done (success or retries exhausted) -> combine summaries, trigger master.
     original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)

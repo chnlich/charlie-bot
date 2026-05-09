@@ -4930,3 +4930,115 @@
   created: '2026-05-08T18:00:00Z'
   priority: low
   in_progress_at: '2026-05-09T01:09:57Z'
+- id: '149'
+  title: Extract finalize-with-fallback-broadcast block from core/spawner.spawn_worker
+    into _finalize_worker_safely helper
+  description: 'WHY — The 2026-05-09 morning scheduled code-health scan ran `yapf
+    --in-place --recursive src/` (no diff this run — the prior 2026-05-08 evening
+    scan and item 148''s commit already absorbed all outstanding wrapping fixes;
+    re-running yapf produced no changes, so no formatting commit was made), `pyflakes
+    src/` (only the existing `WatchTarget` unused import in src/api/internal.py:13,
+    already covered by pending items 131 and 139), `grep -rEn "TODO|FIXME|HACK|XXX"
+    src/ --include="*.py"` (zero matches), and an AST scan for functions with >50
+    body lines. After excluding functions covered by pending items 105 (`maybe_auto_name`),
+    109 (`_detect_pidfd`), 125 (`_create_worktree_and_process`), 126 (`_run_cc`),
+    127 (`run_improve_loop`), 129 (`AgentBackend.run`), 132 (`MessageAggregator._feed`),
+    134 (`_session_consumer`), 135 (`_wait_with_pidfd`), 136 (`_run_single_iteration`),
+    137 (`Worker.run`), 140 (`pages.index`), 141 (`gemini_cli.translate_event`),
+    142 (`master_cc.run_message`), 143 (`slash.execute_command`), 144 (`chat.send_message`),
+    and 146 (`_wait_with_remote_probe`), and excluding `core/spawner._build_worker_prompt`
+    (still mostly literal template strings — same exclusion rationale as items 142–148)
+    and `core/review.spawn_review_worker` (already addressed by prior review-helper
+    extractions; recently item 148 covered `maybe_spawn_reviewer`), the longest remaining
+    function is `core/spawner.spawn_worker` at 58 body lines (src/core/spawner.py:550-617).
+    Item 148''s footnote enumerated this as the next-scan candidate ("`core/spawner.spawn_worker`
+    68L" — the 58-body-line count here matches once the docstring and signature
+    block are excluded), so it is the natural follow-up.
+
+    WHAT — Extract one private helper `_finalize_worker_safely(...) -> None` from
+    the L594-617 finally block of `spawn_worker` in src/core/spawner.py. The block
+    has a single, name-worthy concept: "call `_finalize_worker`; if finalization
+    itself raises, log the failure and broadcast a session-level ERROR event to
+    the user (best-effort — if the broadcast itself raises, swallow with a warning
+    log so the original finalization error is not lost behind a secondary fault)."
+    It is 23 body lines of self-contained error-handling-around-finalize logic and
+    is the only block in `spawn_worker` worth its own helper — the surrounding
+    structure is small: takeoff check (L561-562, 2 lines), variable initialization
+    (L564-568, 5 lines), repoless-vs-worktree dispatch (L575-581, 7 lines, too small
+    and too tightly coupled to the local `req`/`thread` namespace), stream call
+    (L583-584, 2 lines), CancelledError handler (L586-590, 5 lines), and the bare
+    Exception handler (L591-593, 3 lines). Body-line breakdown of the target block:
+    L594 `finally:`; L595 `if thread is not None:`; L596-607 `try: await _finalize_worker(session_id,
+    description, thread, exit_code, thread_mgr, session_mgr, cfg, quota_exhausted=...,
+    error=error_msg, skip_notify=req.skip_notify)`; L608-609 `except Exception
+    as e: log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())`;
+    L610-615 `try: await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR,
+    "content": f"Worker finalization failed: {e}"})`; L616-617 `except Exception:
+    log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)`.
+
+    HOW — Add `async def _finalize_worker_safely(session_id: str, description: str,
+    thread: ThreadMetadata, exit_code: int, thread_mgr: ThreadManager, session_mgr:
+    SessionManager, cfg: CharlieBotConfig, quota_exhausted: bool, error: str, skip_notify:
+    bool) -> None` as a private module-level coroutine in src/core/spawner.py, placed
+    immediately above `spawn_worker` at L550 and below the existing `_finalize_worker`
+    definition at L462 (keeping the convention that helpers precede their caller
+    and are grouped by concept; `_finalize_worker_safely` is a thin wrapper around
+    `_finalize_worker` and reads naturally next to it). The helper internally calls
+    `_finalize_worker` with all forwarded keyword arguments, catches any Exception,
+    emits the existing `spawn_worker_finalize_failed` log event verbatim with the
+    same `session=session_id, traceback=traceback.format_exc()` payload, then attempts
+    `session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content":
+    f"Worker finalization failed: {e}"})` inside a nested `try/except Exception:
+    log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)`.
+    The double-fault swallow is preserved verbatim because the original-finalization
+    error has already been logged by `spawn_worker_finalize_failed` — losing the
+    nested broadcast failure as a structured log warning is the documented best-effort
+    contract.
+
+    Replace L594-617 in `spawn_worker` with:
+
+    ```python   finally:     if thread is not None:       await _finalize_worker_safely(
+    session_id, description, thread, exit_code, thread_mgr, session_mgr, cfg, quota_exhausted,
+    error_msg, req.skip_notify)```
+
+    After the extraction, `spawn_worker` shrinks from 58 body lines to ~38 body
+    lines (cleanly under 50). The new `_finalize_worker_safely` helper is ~22 body
+    lines and reads as a single straight-line "finalize → on failure, log and best-effort-broadcast"
+    routine. No behavior change — pure refactor; the helper is private to spawner.py
+    (leading underscore) and not exported. The skip_notify parameter is passed positionally
+    (matching `_finalize_worker`''s keyword-only convention is preserved by the helper
+    forwarding `skip_notify=skip_notify` when calling `_finalize_worker`).
+
+    DEDUP RULE CHECK — Per the task spec ("extract a shared helper only if the shared
+    block is > 50 lines OR the helper has a clear, single-responsibility name worth
+    its own concept"), `_finalize_worker_safely` qualifies on the second clause:
+    its name expresses a single concrete contract ("finalize a worker thread, surfacing
+    finalization failures to the user as a session ERROR event without ever propagating
+    the secondary fault"). A SHARED helper across other call sites is explicitly
+    NOT proposed — `_finalize_worker` is itself the canonical thread-status-update
+    routine and is called only from `spawn_worker`''s finally block; the wrap-with-fallback-broadcast
+    pattern is specific to the `spawn_worker` task lifecycle (fire-and-forget background
+    tasks where finalization failures must be visible to the user without crashing
+    the asyncio task).
+
+    NON-DUPLICATION CHECK — pyflakes/TODO results enumerated above; the >50-body-line
+    function scan after excluding all pending-item-covered functions plus the `_build_worker_prompt`
+    template-text exclusion and the `spawn_review_worker` already-addressed exclusion
+    leaves `core/spawner.spawn_worker` (58L) as the single longest. Other shorter
+    long functions exist (`api/internal.delegate_task` 59L; `core/improve_command._wait_for_quota_recovery`
+    57L; `api/files._dir_listing_html` 56L; `api/internal.start_improve_loop` 56L;
+    `api/backlog.patch_backlog` 55L; `core/sessions.fork_session` 53L; `core/review.build_review_prompt`
+    53L; `core/spawner._finalize_worker` 51L; `core/master_trigger.run_message_with_resume_recovery`
+    51L; `api/message_utils.build_session_view_data` 50L; `core/triggers._wait_and_fire`
+    49L; `core/master_trigger.trigger_master` 49L; `core/spawner._broadcast_completion`
+    48L; `core/review.extract_review_context` 47L; `core/ndjson.parse_ndjson_tail`
+    47L; `core/git._resolve_worktree_start_point` 47L; `api/threads.get_thread_events`
+    47L; `cli/delegate.main` 46L) but every one is shorter than `core/spawner.spawn_worker`,
+    so per the one-finding-per-scan rule the spawner.py finalize-with-fallback extraction
+    is the single new code-health backlog entry for this 2026-05-09 morning scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-09T07:13:05Z'
+  priority: low

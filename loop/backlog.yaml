@@ -4926,6 +4926,7 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-08T18:00:00Z'
   priority: low
+  in_progress_at: '2026-05-09T01:09:57Z'

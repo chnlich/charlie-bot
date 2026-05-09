@@ -5100,3 +5100,30 @@
   status: pending
   created: '2026-05-09T11:13:49Z'
   priority: low
+- id: '151'
+  title: Extract post-loop work-branch landing block from improve_command.run_improve_loop
+  description: 'core/improve_command.py:run_improve_loop is 184 body lines — the longest
+    function in src/ — well over the 50-line guideline and the largest non-pending
+    target after cross-referencing pending items 132/134/135/136/137/140/141/142/143/144/146/149/150
+    against the current >50-line scan. The post-loop landing block (L620-L645, ~26
+    lines, sandwiched between the final-payload assembly at L617-L618 and the master-trigger
+    call at L647-L658) is a self-contained single-responsibility unit: given (resolved_repo,
+    work_branch, base_branch, merge_back, stopped_by_user, previous_summaries) it
+    decides whether to fast-forward push work_branch onto base_branch, and on FF failure
+    falls back to pushing the bare work_branch so the master agent can land it manually.
+    Extract a helper (e.g. `_land_work_branch_after_loop()`) that returns the merge_result
+    dict (or None) and writes it onto the payload at a single call site. The helper
+    has a clear single-responsibility name worth its own concept (it is the natural
+    point of authorization for any future landing strategy — PR open, rebase-merge,
+    etc.) and shrinks run_improve_loop''s body, separating the iteration-loop control
+    flow from the landing-decision logic. Per the one-finding-per-scan rule this is
+    the single new code-health backlog entry for this 2026-05-09 mid-day scan; `yapf
+    --in-place --recursive src/` produced no changes, `grep -E "TODO|FIXME|HACK|XXX"
+    src/` returns zero matches, and `pyflakes src/` reports only the already-tracked
+    `WatchTarget` unused import in api/internal.py (covered by pending #131 and #139).
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-09T15:11:11Z'
+  priority: low

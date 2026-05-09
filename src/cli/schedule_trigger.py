@@ -60,7 +60,7 @@ def _parse_watch_target(raw: str) -> dict:
   return {"host": None, "pid": pid}
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description="Schedule a delayed trigger for a CharlieBot session")
   parser.add_argument(
       "--session",
@@ -88,6 +88,11 @@ def main() -> None:
           "rejected. The trigger fires when ALL listed PIDs have exited (ALL-die "
           "semantics) OR when --max-wait elapses, whichever comes first."),
   )
+  return parser
+
+
+def main() -> None:
+  parser = _build_parser()
   args = parser.parse_args()
   session_id = resolve_session_id(args.session)
 

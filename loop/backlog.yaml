@@ -5042,3 +5042,61 @@
   status: pending
   created: '2026-05-09T07:13:05Z'
   priority: low
+- id: '150'
+  title: Extract shared spawn-endpoint preflight helper from delegate_task and start_improve_loop
+  description: '`api/internal.py:delegate_task` (L31-94, 64 total lines / 59 body
+    lines) and `api/internal.py:start_improve_loop` (L98-158, 61 total lines / 56
+    body lines) both open with the same ~15-line preflight: (1) `session_mgr.get_session(req.session_id)`
+    + 404 if missing (L37-39 and L104-106), (2) `asyncio.to_thread(_check_takeoff_gate,
+    req.session_id, session_mgr)` wrapped in try/except `DelegationBlockedError` →
+    403 (L42-45 and L108-111), (3) `cfg = get_config()` + `resolve_requested_subagent_backend_model(req.session_id,
+    cfg, session_mgr, requested_backend=req.backend)` wrapped in try/except `ValueError`
+    → 400 (L47-53 and L113-118). The three-step block is byte-for-byte identical
+    aside from a comment line. Extract into a shared helper, e.g. `_authorize_spawn_request(req,
+    session_mgr) -> tuple[SessionMetadata, CharlieBotConfig, str | None, str | None]`,
+    that returns `(meta, cfg, resolved_backend, resolved_model)` and raises the same
+    `HTTPException`s the inline blocks raise today. Each caller becomes a single
+    `meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req,
+    session_mgr)` line. Net effect: `delegate_task` body drops from 59L to ~45L (below
+    the 50-body-line threshold), `start_improve_loop` body drops from 56L to ~42L
+    (also below threshold), ~15 duplicated lines collapse to one helper definition,
+    and any future spawn-style endpoint can reuse the same preflight. The helper
+    name maps to a single concept ("preflight authorization for spawn-style internal
+    endpoints"): validate the session exists, ensure the takeoff gate has been opened,
+    and resolve which backend/model the spawn should use. All three checks are mandatory
+    for any endpoint that creates a background worker via `spawn_worker`/`run_improve_loop`,
+    so they are genuinely one bundled concern rather than three unrelated steps.
+    Both `DelegateRequest` and `ImproveRequest` already expose `.session_id` and
+    `.backend`, so a shared `req` typed as `Union[DelegateRequest, ImproveRequest]`
+    (or a small `Protocol` with those two attributes) works without further plumbing.
+
+    REFACTORING SAFETY — the helper must preserve current HTTP status semantics exactly:
+    404 for missing session, 403 for `DelegationBlockedError`, 400 for `ValueError`
+    from `resolve_requested_subagent_backend_model`. The `from e` re-raise on the
+    `ValueError` path must be preserved. The `asyncio.to_thread(_check_takeoff_gate,
+    ...)` wrapping must not be inlined into a sync call — `_check_takeoff_gate` performs
+    blocking file I/O. Both call sites currently rely on `meta` being non-None after
+    the lookup; the helper should return the validated `meta` rather than re-fetching
+    in the caller. The takeoff-gate comment ("block delegation unless the user explicitly
+    approved") in `delegate_task` is informative but redundant once the gate check
+    lives behind a named helper, so it can be dropped at the call sites.
+
+    NON-DUPLICATION CHECK — yapf src/ ran clean (no formatting violations); pyflakes
+    src/ reports only the already-tracked `WatchTarget` unused import in `api/internal.py`
+    (covered by pending #131 and #139); `grep -E "TODO|FIXME|HACK|XXX" src/` returns
+    zero matches. The >50-body-line function scan after excluding all pending-item-covered
+    functions plus the prior-scan exclusions (`_build_worker_prompt` template-text,
+    `spawn_review_worker` already-addressed) and after filing #149 for `core/spawner.spawn_worker`
+    leaves `api/internal.delegate_task` (59 body lines) as the single longest remaining
+    function. The shared-preflight extraction simultaneously addresses the longest
+    remaining function AND a duplication that meets the dedup rule via the "clear
+    single-responsibility name worth its own concept" branch (the helper is the natural
+    point of authorization for any future spawn-style endpoint), so per the one-finding-per-scan
+    rule this is the single new code-health backlog entry for this 2026-05-09 late-morning
+    scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-09T11:13:49Z'
+  priority: low

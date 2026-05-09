@@ -4829,9 +4829,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-08T00:00:00Z'
   priority: low
+  in_progress_at: '2026-05-09T00:36:50Z'
 - id: '148'
   title: Extract reviewer-failed-retry block from core/review.maybe_spawn_reviewer
     into _retry_failed_reviewer helper

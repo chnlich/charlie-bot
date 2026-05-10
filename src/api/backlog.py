@@ -120,6 +120,43 @@ class BacklogPatch(BaseModel):
   revision_feedback: str | None = None
 
 
+def _apply_status_transition(item: dict, patch: BacklogPatch) -> None:
+  """Mutate *item* to reflect transition to *patch.status* (timestamps, reasons, counters)."""
+  item['status'] = patch.status
+  now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+  if patch.status == 'rejected':
+    item['rejected_at'] = now
+    if patch.rejected_reason:
+      item['rejected_reason'] = patch.rejected_reason
+    else:
+      item.pop('rejected_reason', None)
+    item.pop('revision_feedback', None)
+    item.pop('revision_requested_at', None)
+  elif patch.status == 'failed':
+    item['failed_at'] = now
+    if patch.failed_reason:
+      item['failed_reason'] = patch.failed_reason
+    else:
+      item.pop('failed_reason', None)
+    item['failed_count'] = item.get('failed_count', 0) + 1
+  elif patch.status == 'revision_requested':
+    item['revision_requested_at'] = now
+    if patch.revision_feedback:
+      item['revision_feedback'] = patch.revision_feedback
+    else:
+      item.pop('revision_feedback', None)
+  elif patch.status == 'approved':
+    item.pop('failed_at', None)
+    item.pop('failed_reason', None)
+    item.pop('revision_feedback', None)
+    item.pop('revision_requested_at', None)
+  elif patch.status == 'pending':
+    item.pop('rejected_reason', None)
+    item.pop('rejected_at', None)
+    item.pop('revision_feedback', None)
+    item.pop('revision_requested_at', None)
+
+
 @router.patch('/{item_id}')
 async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = None, source: str | None = None):
   """Update status/priority of a backlog item, then git commit+push."""
@@ -132,38 +169,7 @@ async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = No
   for item in items:
     if str(item.get('id')) == item_id:
       if patch.status is not None:
-        item['status'] = patch.status
-        if patch.status == 'rejected':
-          item['rejected_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-          if patch.rejected_reason:
-            item['rejected_reason'] = patch.rejected_reason
-          else:
-            item.pop('rejected_reason', None)
-          item.pop('revision_feedback', None)
-          item.pop('revision_requested_at', None)
-        elif patch.status == 'failed':
-          item['failed_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-          if patch.failed_reason:
-            item['failed_reason'] = patch.failed_reason
-          else:
-            item.pop('failed_reason', None)
-          item['failed_count'] = item.get('failed_count', 0) + 1
-        elif patch.status == 'revision_requested':
-          item['revision_requested_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-          if patch.revision_feedback:
-            item['revision_feedback'] = patch.revision_feedback
-          else:
-            item.pop('revision_feedback', None)
-        elif patch.status == 'approved':
-          item.pop('failed_at', None)
-          item.pop('failed_reason', None)
-          item.pop('revision_feedback', None)
-          item.pop('revision_requested_at', None)
-        elif patch.status == 'pending':
-          item.pop('rejected_reason', None)
-          item.pop('rejected_at', None)
-          item.pop('revision_feedback', None)
-          item.pop('revision_requested_at', None)
+        _apply_status_transition(item, patch)
       if patch.priority is not None:
         item['priority'] = patch.priority
       updated = item

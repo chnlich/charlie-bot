@@ -5037,9 +5037,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-09T07:13:05Z'
   priority: low
+  in_progress_at: '2026-05-10T07:10:16Z'
 - id: '150'
   title: Extract shared spawn-endpoint preflight helper from delegate_task and start_improve_loop
   description: '`api/internal.py:delegate_task` (L31-94, 64 total lines / 59 body

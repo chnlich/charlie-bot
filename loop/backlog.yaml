@@ -5127,3 +5127,33 @@
   status: pending
   created: '2026-05-09T15:11:11Z'
   priority: low
+- id: '152'
+  title: Extract status-transition cleanup block from api/backlog.patch_backlog into _apply_status_transition helper
+  description: '`api/backlog.py:patch_backlog` (L123-183, 60 body lines) sits at the
+    50-line guideline and its body is dominated by a 33-line if/elif tree (L134-166)
+    that applies status-specific side effects on the item dict — set rejected_at /
+    failed_at / revision_requested_at timestamps, increment failed_count, attach or
+    pop rejected_reason / failed_reason / revision_feedback / revision_requested_at
+    fields when transitioning to rejected, failed, revision_requested, approved,
+    or pending. The surrounding code is a thin CRUD pipeline (locate item file →
+    iterate items → save_yaml → git add+commit+push), so the status-side-effects
+    block is the only non-trivial logic in the route and is a natural single-responsibility
+    unit worth its own concept: "given (item dict, BacklogPatch), mutate item to
+    reflect the new status." Extract `_apply_status_transition(item: dict, patch:
+    BacklogPatch) -> None` (module-private in api/backlog.py) and have patch_backlog
+    call it once inside the `if patch.status is not None:` branch. This drops patch_backlog
+    well under 50 lines, isolates the per-status field-cleanup table from the route
+    plumbing, and gives any future status (e.g. `paused`, `blocked`) a single place
+    to land. Per the one-finding-per-scan rule this is the single new code-health
+    backlog entry for this 2026-05-09 evening scan; `yapf --in-place --recursive
+    src/` produced no changes, `grep -rEn "TODO|FIXME|HACK|XXX" src/` returns zero
+    matches, and `pyflakes src/` reports only the already-tracked `WatchTarget` unused
+    import in api/internal.py (covered by pending items #131 and #139). Cross-referenced
+    against pending items 103/105/107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/143/144/146/149/150/151
+    so this function is not already targeted.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-10T01:13:11Z'
+  priority: low

@@ -130,6 +130,47 @@ def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
   return group
 
 
+def _sanitize_session_title(raw: str, session_name: str) -> str | None:
+  """Turn a raw LLM response into a sanitized session title, or None if it should be discarded.
+
+  Pure synchronous pipeline: parse JSON (with first-line fallback for plain-text replies),
+  strip quotes/markdown/preamble, gate on length and word count, then prefix with the
+  session number extracted from a default 'Session N' name.
+  """
+  parsed_name, _group, parsed_json = _parse_name_and_group(raw)
+
+  if parsed_name:
+    name = parsed_name
+  elif parsed_json:
+    return None
+  else:
+    name = ""
+    for line in raw.splitlines():
+      line = line.strip()
+      if line:
+        name = line
+        break
+    if not name:
+      return None
+
+  name = name.strip('"\'').strip()
+  name = _MARKDOWN_CHARS_RE.sub("", name)
+  name = name.strip()
+  name = _PREAMBLE_RE.sub("", name).strip()
+
+  if not name:
+    return None
+
+  if len(name) > 60 or len(name.split()) > _MAX_TITLE_WORDS:
+    return None
+
+  m = _SESSION_NUMBER_RE.match(session_name)
+  if m:
+    name = f"{m.group(1)}: {name}"
+
+  return name
+
+
 async def maybe_auto_name(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -162,44 +203,9 @@ async def maybe_auto_name(
     else:
       raw = await _generate_name_via_claude_cli(full_prompt, system_prompt)
 
-    # Parse JSON response or fall back to plain-text name
-    parsed_name, group, parsed_json = _parse_name_and_group(raw)
-
-    # Use parsed name or fall back to raw first-line extraction for plain-text responses.
-    if parsed_name:
-      name = parsed_name
-    elif parsed_json:
+    name = _sanitize_session_title(raw, session_meta.name)
+    if name is None:
       return
-    else:
-      name = ""
-      for line in raw.splitlines():
-        line = line.strip()
-        if line:
-          name = line
-          break
-      if not name:
-        return
-
-    # Sanitize: extract a concise title from potentially verbose LLM output
-    # 1. Strip quotes and markdown formatting
-    name = name.strip('"\'').strip()
-    name = _MARKDOWN_CHARS_RE.sub("", name)
-    name = name.strip()
-
-    # 2. Strip common LLM preamble patterns
-    name = _PREAMBLE_RE.sub("", name).strip()
-
-    if not name:
-      return
-
-    # 3. Discard if still too long or looks like a sentence
-    if len(name) > 60 or len(name.split()) > _MAX_TITLE_WORDS:
-      return
-
-    # Prefix with session number extracted from 'Session N'
-    m = _SESSION_NUMBER_RE.match(session_meta.name)
-    if m:
-      name = f"{m.group(1)}: {name}"
 
     await session_mgr.rename_session(session_meta.id, name)
 
@@ -218,6 +224,7 @@ async def maybe_auto_name(
     log.info("session_auto_named", session_id=session_meta.id, name=name)
 
     # Auto-assign group if LLM provided one and session doesn't already have a group
+    _, group, _ = _parse_name_and_group(raw)
     current_meta = await session_mgr.get_session(session_meta.id)
     if group and current_meta and not current_meta.group:
       matched_group = _fuzzy_match_group(group, existing_groups)

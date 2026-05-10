@@ -2077,9 +2077,10 @@
     — the helper preserves the exact current order of operations and the same None-returning
     conditions that currently `return` out of maybe_auto_name.'
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-04-18T11:11:37Z'
   priority: low
+  in_progress_at: '2026-05-10T17:12:45Z'
 - id: '106'
   title: Introduce utc_now helper and delete the stale dataclasses.field import in
     core/models.py

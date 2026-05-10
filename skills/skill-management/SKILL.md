@@ -40,6 +40,8 @@ Codex and Gemini both read `~/.agents/skills/`, so syncing to **two** targets co
 
 Repo-level shared files (`<charlie-bot-repo>/skills/**`, `<charlie-bot-repo>/prompts/**`) MUST NOT contain host-specific info — hostnames, local paths, GPU specs, per-host ports/IPs. Anything host-specific belongs in `~/.charliebot/MEMORY.host.md` or `~/.charliebot/skills/<name>/`. Rules like "feature X is local-host only" must be flagged in the repo-level skill so that workers running anywhere see them.
 
+Repo-level skills must also stay free of session-specific debug artifacts: dated transcripts (`observed in D4`, `2026-05-04 run`), internal task IDs, specific bug strings (`bytes-vs-str + train_ranges API mismatches`), or any phrasing that reads like a LESSONS.md entry. Workers loading shared skills cannot see `~/.charliebot/LESSONS.md` and have no context for those references. Keep shared skills as static principles; only promote a finding into a shared skill once the debug is closed and the lesson rewrites cleanly as a generic rule.
+
 ## File Name Convention
 
 All three CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file.

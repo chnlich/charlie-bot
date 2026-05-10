@@ -130,6 +130,14 @@ async def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) 
   return ImproveState.model_validate_json(await asyncio.to_thread(path.read_text))
 
 
+async def require_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> ImproveState:
+  """Read the loop state file, raising RuntimeError if it is missing."""
+  state = await load_loop_state(session_id, loop_id, cfg)
+  if state is None:
+    raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+  return state
+
+
 async def save_loop_state(session_id: str, state: ImproveState, cfg: CharlieBotConfig) -> None:
   """Write the loop state file."""
   path = _loop_state_path(session_id, state.loop_id, cfg)
@@ -302,9 +310,7 @@ async def _wait_for_quota_recovery(
 
   while True:
     # Check stop signal
-    state = await load_loop_state(session_id, loop_id, cfg)
-    if state is None:
-      raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    state = await require_loop_state(session_id, loop_id, cfg)
     if state.status == "stopped":
       return False
 
@@ -389,9 +395,7 @@ async def _run_single_iteration(
 
   while True:  # Retry loop for quota failures
     # Check if stopped
-    state = await load_loop_state(session_id, loop_id, cfg)
-    if state is None:
-      raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    state = await require_loop_state(session_id, loop_id, cfg)
     if state.status == "stopped":
       log.info("improve_loop_stopped", session=session_id, iteration=i)
       return None
@@ -572,9 +576,7 @@ async def run_improve_loop(
     )
     loop_id = state.loop_id
   else:
-    state = await load_loop_state(session_id, loop_id, cfg)
-    if state is None:
-      raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    state = await require_loop_state(session_id, loop_id, cfg)
     resolved_repo = Path(state.repo_path)
     work_branch = state.work_branch
     base_branch = state.base_branch
@@ -636,16 +638,12 @@ async def run_improve_loop(
       )
       if summary is None:
         break  # Stopped by user or session missing
-      state = await load_loop_state(session_id, loop_id, cfg)
-      if state is None:
-        raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+      state = await require_loop_state(session_id, loop_id, cfg)
       state.iterations_completed += 1
       await save_loop_state(session_id, state, cfg)
 
     # Check if we exited because the user stopped the loop
-    state = await load_loop_state(session_id, loop_id, cfg)
-    if state is None:
-      raise RuntimeError(f"missing loop state for session {session_id} loop {loop_id}")
+    state = await require_loop_state(session_id, loop_id, cfg)
     stopped_by_user = state.status == 'stopped'
 
     if stopped_by_user:

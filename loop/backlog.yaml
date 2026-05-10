@@ -5124,9 +5124,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-09T15:11:11Z'
   priority: low
+  in_progress_at: '2026-05-10T11:09:47Z'
 - id: '152'
   title: Extract status-transition cleanup block from api/backlog.patch_backlog into
     _apply_status_transition helper

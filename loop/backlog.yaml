@@ -2077,7 +2077,7 @@
     — the helper preserves the exact current order of operations and the same None-returning
     conditions that currently `return` out of maybe_auto_name.'
   category: refactoring
-  status: in_progress
+  status: done
   created: '2026-04-18T11:11:37Z'
   priority: low
   in_progress_at: '2026-05-10T17:12:45Z'

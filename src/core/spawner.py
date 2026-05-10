@@ -517,6 +517,43 @@ async def _finalize_worker(
         error=error)
 
 
+async def _finalize_worker_safely(
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    exit_code: int,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    quota_exhausted: bool,
+    error: str,
+    skip_notify: bool,
+) -> None:
+  """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
+  try:
+    await _finalize_worker(
+        session_id,
+        description,
+        thread,
+        exit_code,
+        thread_mgr,
+        session_mgr,
+        cfg,
+        quota_exhausted=quota_exhausted,
+        error=error,
+        skip_notify=skip_notify)
+  except Exception as e:
+    log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
+    try:
+      await session_mgr.persist_and_broadcast(
+          session_id, {
+              "type": ET.ERROR,
+              "content": f"Worker finalization failed: {e}"
+          })
+    except Exception:
+      log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
+
+
 class DelegationBlockedError(Exception):
   """Raised when the takeoff gate rejects a delegation attempt."""
 
@@ -593,28 +630,9 @@ async def spawn_worker(
     error_msg = str(e)
   finally:
     if thread is not None:
-      try:
-        await _finalize_worker(
-            session_id,
-            description,
-            thread,
-            exit_code,
-            thread_mgr,
-            session_mgr,
-            cfg,
-            quota_exhausted=quota_exhausted,
-            error=error_msg,
-            skip_notify=req.skip_notify)
-      except Exception as e:
-        log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
-        try:
-          await session_mgr.persist_and_broadcast(
-              session_id, {
-                  "type": ET.ERROR,
-                  "content": f"Worker finalization failed: {e}"
-              })
-        except Exception:
-          log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
+      await _finalize_worker_safely(
+          session_id, description, thread, exit_code, thread_mgr, session_mgr, cfg, quota_exhausted, error_msg,
+          req.skip_notify)
 
 
 async def _broadcast_completion(

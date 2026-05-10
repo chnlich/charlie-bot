@@ -2,15 +2,23 @@
 
 import asyncio
 import time
+from typing import Union
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
 from src.core import event_types as ET
-from src.core.config import get_config
+from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import ImproveLoopAlreadyRunningError, reserve_loop_state, run_improve_loop
-from src.core.models import DelegateRequest, ImproveRequest, ScheduleTriggerRequest, SpawnRequest, WatchTarget
+from src.core.models import (
+    DelegateRequest,
+    ImproveRequest,
+    ScheduleTriggerRequest,
+    SessionMetadata,
+    SpawnRequest,
+    WatchTarget,
+)
 from src.core.sessions import SessionManager
 from src.core.spawner import (
     DelegationBlockedError,
@@ -27,6 +35,30 @@ log = structlog.get_logger()
 router = APIRouter()
 
 
+async def _authorize_spawn_request(
+    req: Union[DelegateRequest, ImproveRequest],
+    session_mgr: SessionManager,
+) -> tuple[SessionMetadata, CharlieBotConfig, str | None, str | None]:
+  """Validate session, enforce takeoff gate, and resolve backend/model for spawn-style endpoints."""
+  meta = await session_mgr.get_session(req.session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  try:
+    await asyncio.to_thread(_check_takeoff_gate, req.session_id, session_mgr)
+  except DelegationBlockedError as e:
+    raise HTTPException(status_code=403, detail=str(e))
+
+  cfg = get_config()
+  try:
+    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+        req.session_id, cfg, session_mgr, requested_backend=req.backend)
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
+  return meta, cfg, resolved_backend, resolved_model
+
+
 @router.post("/delegate")
 async def delegate_task(
     req: DelegateRequest,
@@ -34,23 +66,7 @@ async def delegate_task(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Create a thread and spawn a worker agent directly."""
-  meta = await session_mgr.get_session(req.session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-
-  # Takeoff gate: block delegation unless the user explicitly approved.
-  try:
-    await asyncio.to_thread(_check_takeoff_gate, req.session_id, session_mgr)
-  except DelegationBlockedError as e:
-    raise HTTPException(status_code=403, detail=str(e))
-
-  # Resolve backend/model from session config before spawning
-  cfg = get_config()
-  try:
-    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-        req.session_id, cfg, session_mgr, requested_backend=req.backend)
-  except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+  meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
   # Create thread immediately so it's visible in the UI
   thread = await thread_mgr.create_thread(meta, req.description, context=req.context, require_review=req.require_review)
@@ -101,21 +117,7 @@ async def start_improve_loop(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Launch an iterative improvement loop as a background task."""
-  meta = await session_mgr.get_session(req.session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-
-  try:
-    await asyncio.to_thread(_check_takeoff_gate, req.session_id, session_mgr)
-  except DelegationBlockedError as e:
-    raise HTTPException(status_code=403, detail=str(e))
-
-  cfg = get_config()
-  try:
-    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-        req.session_id, cfg, session_mgr, requested_backend=req.backend)
-  except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+  _meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
   work_branch = req.work_branch or f"improve/{int(time.time())}"
   try:

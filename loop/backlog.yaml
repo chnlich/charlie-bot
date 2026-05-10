@@ -2001,7 +2001,7 @@
     getattr() on pydantic ThreadMetadata with direct attribute") which targeted a
     different file. Follows the exact pattern established by items 002, 094, and 100.'
   category: duplication
-  status: pending
+  status: approved
   created: '2026-04-18T07:11:17Z'
   priority: low
 - id: '104'

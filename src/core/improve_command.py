@@ -489,6 +489,49 @@ async def _run_single_iteration(
 # ---------------------------------------------------------------------------
 
 
+async def _land_work_branch_after_loop(
+    resolved_repo: Path,
+    work_branch: str,
+    base_branch: Optional[str],
+    merge_back: bool,
+    stopped_by_user: bool,
+    previous_summaries: list[str],
+    session_id: str,
+) -> Optional[dict]:
+  """Decide how to land the work branch after the iteration loop finishes.
+
+  Fast-forwards work_branch onto base_branch when merge_back is set and the loop
+  produced summaries without being stopped. On FF push failure, falls back to
+  pushing the bare work branch so the master agent can land it manually (PR,
+  manual rebase, etc.). Returns the merge_result dict to attach to the payload,
+  or None when no landing decision was recorded (best-effort branch push only).
+  """
+  # Worktree was created from origin/<base>, so the FF push only fails if origin/<base>
+  # advanced during the loop. On failure, hand the work branch back to the master agent
+  # via the trigger payload — no rebase-retry, no fallback subagent — so it can decide
+  # how to land (e.g. open a PR, manual rebase).
+  if merge_back and not stopped_by_user and previous_summaries:
+    ok, push_err = await git_push_refspec(resolved_repo, work_branch, base_branch)
+    if ok:
+      return {'merged': True, 'base_branch': base_branch}
+    log.warning("improve_loop_landing_ff_push_failed", session=session_id, error=push_err)
+    # Keep the work branch on origin so the master agent can act on it.
+    ok_push, push_branch_err = await git_push_branch(resolved_repo, work_branch)
+    if not ok_push:
+      log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
+    return {
+        'merged': False,
+        'error': push_err,
+        'work_branch': work_branch,
+        'base_branch': base_branch,
+    }
+  # Best-effort push work_branch to remote
+  ok, push_err = await git_push_branch(resolved_repo, work_branch)
+  if not ok:
+    log.warning("improve_loop_push_failed", session=session_id, error=push_err)
+  return None
+
+
 async def run_improve_loop(
     session_id: str,
     repo_path: str,
@@ -617,32 +660,17 @@ async def run_improve_loop(
     payload['work_branch'] = work_branch
     payload['base_branch'] = base_branch
 
-    # Post-loop landing: fast-forward push work_branch onto base_branch.
-    # Worktree was created from origin/<base>, so the FF push only fails if origin/<base>
-    # advanced during the loop. On failure, hand the work branch back to the master agent
-    # via the trigger payload — no rebase-retry, no fallback subagent — so it can decide
-    # how to land (e.g. open a PR, manual rebase).
-    if merge_back and not stopped_by_user and previous_summaries:
-      ok, push_err = await git_push_refspec(resolved_repo, work_branch, base_branch)
-      if ok:
-        payload['merge_result'] = {'merged': True, 'base_branch': base_branch}
-      else:
-        log.warning("improve_loop_landing_ff_push_failed", session=session_id, error=push_err)
-        payload['merge_result'] = {
-            'merged': False,
-            'error': push_err,
-            'work_branch': work_branch,
-            'base_branch': base_branch,
-        }
-        # Keep the work branch on origin so the master agent can act on it.
-        ok_push, push_branch_err = await git_push_branch(resolved_repo, work_branch)
-        if not ok_push:
-          log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
-    else:
-      # Best-effort push work_branch to remote
-      ok, push_err = await git_push_branch(resolved_repo, work_branch)
-      if not ok:
-        log.warning("improve_loop_push_failed", session=session_id, error=push_err)
+    merge_result = await _land_work_branch_after_loop(
+        resolved_repo,
+        work_branch,
+        base_branch,
+        merge_back,
+        stopped_by_user,
+        previous_summaries,
+        session_id,
+    )
+    if merge_result is not None:
+      payload['merge_result'] = merge_result
 
     await session_mgr.persist_and_broadcast(session_id, payload)
     instructions = "Report final state and summarize what changed across iterations."

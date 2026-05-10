@@ -2001,9 +2001,10 @@
     getattr() on pydantic ThreadMetadata with direct attribute") which targeted a
     different file. Follows the exact pattern established by items 002, 094, and 100.'
   category: duplication
-  status: approved
+  status: in_progress
   created: '2026-04-18T07:11:17Z'
   priority: low
+  in_progress_at: '2026-05-10T15:10:05Z'
 - id: '104'
   title: Wrap blocking sync I/O in improve_command loop-state helpers with asyncio.to_thread
   done_reason: 'Already resolved: commit f01a500 ("Wrap improve loop state I/O in

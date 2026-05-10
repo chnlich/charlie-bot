@@ -4411,9 +4411,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-07T03:00:00Z'
   priority: low
+  in_progress_at: '2026-05-10T19:10:23Z'
 - id: '144'
   title: Extract slash-command interception block from chat.send_message into _try_handle_slash_command
   description: 'WHY — The 2026-05-07 scheduled code-health scan ran `yapf --in-place

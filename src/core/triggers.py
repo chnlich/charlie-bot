@@ -180,6 +180,42 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
   return "ERROR", combined
 
 
+async def _probe_remaining_remote_pids(
+    remaining: dict[str, set[int]],
+    trigger_id: str,
+) -> list[tuple[str, int | None]]:
+  """Probe every (host, pid) in ``remaining`` concurrently via ssh.
+
+  Mutates ``remaining`` in place: DEAD pids are discarded and hosts whose set
+  goes empty are dropped. Returns ``(label, None)`` tuples for newly-exited
+  pids; transient probe errors are logged and the pid stays under observation.
+  """
+  probes: list[tuple[str, int]] = []
+  for host, pids in remaining.items():
+    for pid in pids:
+      probes.append((host, pid))
+  results = await asyncio.gather(*[_ssh_probe_pid(h, p) for h, p in probes])
+  newly_exited: list[tuple[str, int | None]] = []
+  for (host, pid), (status, raw) in zip(probes, results):
+    if status == "DEAD":
+      remaining[host].discard(pid)
+      if not remaining[host]:
+        del remaining[host]
+      newly_exited.append((f"{host}:{pid}", None))
+    elif status == "ALIVE":
+      continue
+    else:
+      # transient error / timeout — keep watching
+      log.debug(
+          "remote_probe_transient_error",
+          trigger_id=trigger_id,
+          host=host,
+          pid=pid,
+          raw=raw.strip(),
+      )
+  return newly_exited
+
+
 # ---------------------------------------------------------------------------
 # Schema migration: legacy `watch_pids: list[int]` -> `watch_targets: list[WatchTarget]`
 # ---------------------------------------------------------------------------
@@ -499,28 +535,8 @@ class TriggerManager:
       if (trigger.fire_at - now).total_seconds() <= 0:
         break
 
-      probes: list[tuple[str, int]] = []
-      for host, pids in remaining.items():
-        for pid in pids:
-          probes.append((host, pid))
-      results = await asyncio.gather(*[_ssh_probe_pid(h, p) for h, p in probes])
-      for (host, pid), (status, raw) in zip(probes, results):
-        if status == "DEAD":
-          remaining[host].discard(pid)
-          if not remaining[host]:
-            del remaining[host]
-          exited.append((f"{host}:{pid}", None))
-        elif status == "ALIVE":
-          continue
-        else:
-          # transient error / timeout — keep watching
-          log.debug(
-              "remote_probe_transient_error",
-              trigger_id=trigger.id,
-              host=host,
-              pid=pid,
-              raw=raw.strip(),
-          )
+      newly_exited = await _probe_remaining_remote_pids(remaining, trigger.id)
+      exited.extend(newly_exited)
 
       step += 1
       if not remaining:

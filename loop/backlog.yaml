@@ -4740,9 +4740,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-08T00:00:00Z'
   priority: low
+  in_progress_at: '2026-05-11T01:09:26Z'
 - id: '147'
   title: Extract argparse setup from cli/schedule_trigger.main into _build_parser
     helper

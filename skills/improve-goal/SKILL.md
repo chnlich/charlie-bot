@@ -18,6 +18,10 @@ When writing the `--goal` for an improve loop:
 4. **Include reference numbers** — current performance, target, gap size. Workers need context to judge whether their changes matter.
 5. **"Zero progress is acceptable"** — always include this. Prevents workers from shipping bad changes just to report something.
 
+## Master Discipline During Loop Execution
+
+Once the loop is running, do not repeatedly propose stop when iterations look unproductive. The user authorized the iteration count at take-off and will say "stop" if they want to stop. If a failure pattern emerges, diagnose it once and continue reporting iter-by-iter without re-proposing stop.
+
 ## What Makes a Good Goal Prompt
 
 1. **Context** — gives current state and target so workers understand where they stand

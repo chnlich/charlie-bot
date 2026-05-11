@@ -39,6 +39,7 @@ Do NOT guess what to optimize based on code reading alone. Measurement is the so
 - **Verify on real infrastructure** — complete the verification step on the target infrastructure before concluding the iteration. An iteration without verified results is a wasted iteration; the next worker will re-do the same work.
 - **No measurable improvement → revert.** Improve loops keep only validated wins. Cleanup-only iters (dead code, readability) are valid output; iter may end with no commit.
 - **Cleanup tasks must not increase LOC.**
+- **Report compute cost** — every iteration report must summarize actual wall-clock cost for each tested configuration separately so the orchestrator can decide cost/benefit.
 - **Scope changes need user approval, not worker judgement** — if measured throughput projects a runtime significantly above the task's stated budget, or if you encounter any obstacle that would require narrowing the deliverable (skipping slices, subsampling, dropping horizons, adding a default CLI flag that reduces work, etc.), do NOT silently trim scope. These are scope changes — they need the user to decide, not the worker. Surface the situation with concrete numbers (e.g. `observed 180 samples/s × 2.3M rows → projected 3h, task budget said 5-20 min`) and wait for the user's decision before proceeding. "Budget overshoot" is a signal to escalate to the user, not to redefine the deliverable.
 
 ## Anti-Patterns

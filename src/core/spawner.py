@@ -440,6 +440,41 @@ async def _stream_worker_events(
     return -1, False, str(e)
 
 
+async def _maybe_override_exit_code_from_result(
+    exit_code: int,
+    session_id: str,
+    thread: ThreadMetadata,
+    thread_mgr: ThreadManager,
+) -> int:
+  """Override a non-zero exit_code to 0 when the last result event in events.jsonl is a success.
+
+  Workers killed by SIGTERM (exit 143) after emitting a success result event should not be
+  treated as failures. Any failure reading events.jsonl is logged and the original exit_code
+  is returned -- this path must never raise.
+  """
+  if exit_code == 0:
+    return exit_code
+  try:
+    events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
+    events = await asyncio.to_thread(parse_ndjson_file, events_path)
+  except Exception as e:
+    log.warning("worker_exit_override_read_failed", thread_id=thread.id, error=str(e))
+    return exit_code
+
+  for ev in reversed(events):
+    if ev.get("type") != ET.RESULT:
+      continue
+    if ev.get("subtype") == "success" and ev.get("is_error") in (False, None):
+      log.warning(
+          "worker_exit_overridden_by_result_subtype",
+          thread_id=thread.id,
+          original_exit_code=exit_code,
+      )
+      return 0
+    break
+  return exit_code
+
+
 async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) -> None:
   """Remove the worker's worktree or temp directory after it finishes."""
   if skip_cleanup:
@@ -619,6 +654,10 @@ async def spawn_worker(
 
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, description, thread, thread_mgr, session_mgr)
+
+    if exit_code != 0 and not quota_exhausted and not error_msg:
+      exit_code = await _maybe_override_exit_code_from_result(
+          exit_code, session_id, thread, thread_mgr)
 
   except asyncio.CancelledError:
     log.warning("spawn_worker_cancelled", session=session_id, thread_id=thread_id)

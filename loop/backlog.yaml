@@ -5167,8 +5167,8 @@
 - id: '153'
   title: Extract duplicated JSONL event-field lookup from core/review.extract_review_context
     into a shared helper
-  description: '`core/review.py:extract_review_context` (L103-154, 52 total lines /
-    ~42 body lines, over the 50-line guideline once docstring is excluded) consists
+  description: '`core/review.py:extract_review_context` (L103-154, 52 total lines
+    / ~42 body lines, over the 50-line guideline once docstring is excluded) consists
     almost entirely of two parallel try/except blocks (L117-132 and L134-149) that
     follow the same shape: build a JSONL log path, `await asyncio.to_thread(parse_ndjson_file,
     path)` to load events, walk them looking for the first event whose `type` matches
@@ -5243,4 +5243,102 @@
   category: refactoring
   status: pending
   created: '2026-05-11T05:13:00Z'
+  priority: low
+- id: '154'
+  title: Extract preflight resolution preamble from core/review.spawn_review_worker
+    into a single-responsibility helper
+  description: '`core/review.py:spawn_review_worker` (L253-332, 80 lines, the longest
+    function in src/core/review.py and the largest >50-line function not yet targeted
+    after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153
+    against the current scan) opens with a 21-line preflight block (L271-291) that
+    is a self-contained single-responsibility unit: given (original_thread, cfg, tried_backends,
+    session_id), it decides whether a reviewer can be spawned and resolves every input
+    the spawn-side logic later needs. The block does five distinct checks/resolutions
+    in sequence — (1) initialize `tried_backends` to `[]` when None, (2) short-circuit
+    with a `reviewer_max_retries_exceeded` warning if `len(tried_backends) > len(cfg.model_preference)`,
+    (3) call `validate_review_prerequisites(original_thread, session_id)` and short-circuit
+    if it returns None, (4) resolve `base_branch` (preferring `original_thread.base_branch`
+    over `await git_current_branch(repo_path)`) and `_require_thread_backend_model(original_thread)`,
+    (5) call `select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)`
+    and short-circuit if it returns None — and on success leaves seven downstream-needed
+    values in scope: `repo_path`, `branch_name`, `wt_path`, `base_branch`, `resolved_backend`,
+    `resolved_model`, and the updated `tried_backends` list. Extract a module-private
+    helper `async def _resolve_review_spawn_context(original_thread, cfg, session_id,
+    tried_backends) -> Optional[ReviewSpawnContext]` that performs these five steps
+    and returns either a small frozen dataclass (`ReviewSpawnContext` with the seven
+    fields above) or None for any abort condition. `spawn_review_worker` then collapses
+    to a thin orchestrator: one call into `_resolve_review_spawn_context`, the existing
+    `extract_review_context` + `build_review_prompt` + `create_thread` + `save_metadata`
+    + `create_logged_task(spawn_worker(...))` pipeline, with the resolved-context
+    fields read off the dataclass at the spawn-side call sites. This drops the function
+    under 50 lines, isolates the "can-we-spawn-and-with-what" decision from the "do-spawn"
+    plumbing, and gives any future retry/backoff/quota gating a single place to land.
+    The helper name maps to a clear single concept ("resolve everything needed to
+    spawn a reviewer for this original thread, or short-circuit") which is worth its
+    own concept per the dedup rule: it is the natural point of authorization for any
+    future review-spawn precondition (per-backend cooldowns, per-thread skip flags,
+    repo-level review opt-outs).
+
+    REFACTORING SAFETY — the helper must preserve current behavior exactly: (1) preserve
+    the `tried_backends is None -> []` defaulting so callers that omit the argument
+    still get the existing semantics; (2) keep the `reviewer_max_retries_exceeded`
+    `log.warning` with `tried=tried_backends, max=len(cfg.model_preference)` keys
+    — this event name is referenced by external log-tooling and must remain string-identical;
+    (3) preserve the `prerequisites is None -> return None` short-circuit so callers
+    do NOT see the missing-prerequisite case as a backend-selection failure; (4) call
+    `await git_current_branch(repo_path)` only when `original_thread.base_branch`
+    is falsy (current `or` short-circuit semantics) — switching to an unconditional
+    `await` would change git behavior on branches that already had a base recorded;
+    (5) keep `tried_backends` updated by `select_reviewer_backend` returned in the
+    context dataclass so it survives back to `spawn_review_worker` and gets persisted
+    on the new review thread''s `tried_backends` field (the recursive retry path in
+    `core/spawner.maybe_spawn_reviewer` depends on this list growing monotonically
+    across retries); (6) the local `from src.core.spawner import (_require_thread_backend_model,
+    _short_desc, spawn_worker)` block at L265-269 stays inside `spawn_review_worker`
+    itself because `_short_desc` + `spawn_worker` are used by the spawn-side body,
+    not the helper — alternatively, split the import: the helper imports `_require_thread_backend_model`
+    lazily inside itself to keep the existing import-cycle workaround intact (`src.core.spawner`
+    imports `src.core.review.spawn_review_worker` via `maybe_spawn_reviewer`); (7)
+    the dataclass should be `@dataclass(frozen=True)` or a `NamedTuple` so downstream
+    code can rely on immutability when threading the context through; (8) `ReviewSpawnContext.tried_backends`
+    is a `list[str]` (mutable) — copy on entry to avoid the caller-passed list being
+    mutated mid-flight by `select_reviewer_backend`. The return value of `spawn_review_worker`
+    must stay `bool` (True iff a reviewer was spawned; False on every short-circuit
+    path) — callers in `core/spawner.maybe_spawn_reviewer` rely on this for retry-loop
+    accounting.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` applied a single one-line
+    fix to `core/spawner.py:spawn_worker` (the `_maybe_override_exit_code_from_result`
+    call now fits on one line at 120 cols), committed separately per the yapf rule;
+    `grep -rE "TODO|FIXME|HACK|XXX" src/` returns zero matches; `pyflakes src/` reports
+    only the already-tracked `WatchTarget` unused import in `api/internal.py` (covered
+    by pending items #131 and #139); `vulture src/ --min-confidence 80` reports only
+    the `cls` classmethod parameter in `core/config.py:127`, which is a required signature
+    element and a known vulture false positive. The >50-line function scan, after
+    cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153
+    and the previously-excluded coherent-algorithm/template/single-flow functions
+    listed in item #153''s description (`_wait_for_quota_recovery`, `maybe_auto_name`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `get_thread_events`,
+    `_finalize_worker`, `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt` per #150), leaves four >50-line functions not yet targeted:
+    `spawn_review_worker` (80, THIS finding), `slash.execute_command` (68, mostly
+    a short dispatcher with three built-in branches plus a four-kind dispatch-result
+    cascade — each branch already short, and a `_render_dispatch_response` extract
+    would need 7-8 params with no internal duplication to collapse), `build_session_view_data`
+    (55, a coherent tail-vs-full branching loader where the two arms differ in the
+    inputs they feed into `events_to_view`/`resolve_session_usage` rather than in
+    any duplicated block), and `spawn_worker` (52, already a thin exception-handling
+    wrapper around `_create_repoless_process` / `_create_worktree_and_process` / `_stream_worker_events`
+    / `_finalize_worker_safely` — every step already a named helper, no clean further
+    split). Of these, `spawn_review_worker` is the only one with both (a) a large
+    enough body (80 lines) to comfortably drop below the 50-line guideline after a
+    single extraction and (b) a clean single-responsibility helper name worth its
+    own concept ("resolve review spawn context"). Per the one-finding-per-scan rule
+    this is the single new code-health backlog entry for this 2026-05-11 mid-day scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-11T15:15:24Z'
   priority: low

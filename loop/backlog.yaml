@@ -5164,3 +5164,83 @@
   created: '2026-05-10T01:13:11Z'
   priority: low
   in_progress_at: '2026-05-10T13:10:15Z'
+- id: '153'
+  title: Extract duplicated JSONL event-field lookup from core/review.extract_review_context
+    into a shared helper
+  description: '`core/review.py:extract_review_context` (L103-154, 52 total lines /
+    ~42 body lines, over the 50-line guideline once docstring is excluded) consists
+    almost entirely of two parallel try/except blocks (L117-132 and L134-149) that
+    follow the same shape: build a JSONL log path, `await asyncio.to_thread(parse_ndjson_file,
+    path)` to load events, walk them looking for the first event whose `type` matches
+    a specific marker, pull a string field, strip+reject-empty, flip a `has_X` flag,
+    and on parse failure log a `review_context_*_failed` warning; afterward, if the
+    flag is still false, log a `review_context_*_unavailable` warning. The two blocks
+    differ only by: (a) the events log path under `sessions_dir/...`, (b) iteration
+    direction (`for ev in events` vs `for ev in reversed(events)`), (c) the predicate
+    on the event dict (`type == TASK_DELEGATED and thread_id == thread_id` vs `type
+    == RESULT`), (d) the field key (`description` vs `result`), and (e) the two warning
+    event names per block. Extract a module-private helper such as `async def _first_event_string_field(log_path:
+    Path, predicate: Callable[[dict], bool], field: str, *, reverse: bool, parse_failed_event:
+    str, missing_event: str, session_id: str, thread_id: str) -> Optional[str]` that
+    encapsulates the parse+scan+strip+warning pipeline and returns `None` on any failure-or-missing
+    path. `extract_review_context` then collapses to two helper calls plus the final
+    `if user_request is None or worker_summary is None: return None, None` guard,
+    dropping the function body well under the 50-line threshold and removing the duplicated
+    error-and-missing logging plumbing. The helper name maps to a single concept ("scan
+    a JSONL event log for the first matching event and return one of its string fields,
+    or None") which is worth its own concept per the dedup rule: it is the natural
+    point of authorization for any future reviewer/master context extraction that
+    needs to pull a single field out of a session/thread event log (e.g. extracting
+    the latest assistant message, the last tool_use input, etc.), and it isolates
+    the structured-logging contract (`review_context_*_failed` / `review_context_*_unavailable`)
+    behind named helper parameters.
+
+    REFACTORING SAFETY — the helper must preserve current behavior exactly: (1) wrap
+    `parse_ndjson_file` in `asyncio.to_thread` (the call is blocking I/O); (2) catch
+    bare `Exception` around the parse-and-scan body and emit a `log.warning` with
+    the supplied `parse_failed_event` name, `session=session_id`, `thread=thread_id`,
+    and `error=str(e)`; (3) outside the try, if no value was extracted, emit a `log.warning`
+    with the supplied `missing_event` name and the same `session`/`thread` keys; (4)
+    treat the field as missing if not a `str`, or if `str.strip()` is empty (matches
+    current `isinstance(..., str)` + `.strip()` truthiness guard); (5) honor the `reverse=True`
+    flag for the worker-summary call so the most-recent RESULT event still wins. The
+    chat-events predicate needs both `type == ET.TASK_DELEGATED` AND `thread_id ==
+    thread_id`; the worker-events predicate needs only `type == ET.RESULT`. Both predicates
+    must short-circuit after the first match (the existing `break` after the field
+    extraction). The two log-event names ("review_context_chat_events_failed", "review_context_user_request_unavailable",
+    "review_context_worker_events_failed", "review_context_worker_summary_unavailable")
+    are referenced by external log-tooling and must remain string-identical at the
+    call sites. The final `(None, None)` short-circuit when either field is missing
+    must stay in `extract_review_context` itself — callers in `core/review.maybe_spawn_reviewer`
+    and `core/review.spawn_review_worker` rely on this all-or-nothing semantics.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` applied a one-line
+    fix to `core/spawner.py:_maybe_override_exit_code_from_result` (committed separately
+    per the yapf rule, never as a backlog entry); `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` returns zero matches; `pyflakes src/` reports only the already-tracked `WatchTarget`
+    unused import in `api/internal.py` (covered by pending items #131 and #139). The
+    >50-line function scan, after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144
+    and the recently-done items 143/145/147/148/149/150/151/152, leaves the following
+    >50-line functions not yet targeted: `_wait_for_quota_recovery` (61, coherent
+    polling state machine), `autonamer.maybe_auto_name` (62, single-flow LLM call),
+    `_resolve_worktree_start_point` (52, coherent decision tree), `parse_ndjson_tail`
+    (52, single seek-from-end algorithm), `fork_session` (58, single-flow clone),
+    `get_thread_events` (52, per-event-type dispatcher already split into branches),
+    `_finalize_worker` (56, sequential status+cleanup pipeline), `_broadcast_completion`
+    (53, sequential summary-assembly+broadcast), `trigger_master` (54, sequential
+    scheduled-session bookkeeping), `run_message_with_resume_recovery` (56, single
+    retry loop), `_wait_and_fire` (54, single trigger loop), `_dir_listing_html` (61,
+    HTML template), `build_review_prompt` (58, prompt template text), `delegate.main`
+    (51, argparse setup — parallels done item #147 for schedule_trigger), `extract_review_context`
+    (52, two parallel JSONL-event-field-lookup blocks — THIS finding), and `_build_worker_prompt`
+    (83, prompt template text, excluded per item #150 note). Of these, `extract_review_context`
+    is the only one with two near-identical blocks following the same parse+scan+strip+warning
+    shape that collapses cleanly into a single named helper. Per the one-finding-per-scan
+    rule this is the single new code-health backlog entry for this 2026-05-10 late-evening
+    scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-11T05:13:00Z'
+  priority: low

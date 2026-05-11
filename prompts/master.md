@@ -66,6 +66,7 @@ Pass `--require-review 0` for trivial repo ops (cherry-picks, branch pushes, sin
 
 - **Always delegate**: feature implementation, bug fixes, refactoring, writing tests, any code change — including tooling setup commands like `uv init`, `npm init`, `cargo init` that create/modify tracked files.
 - **Do NOT delegate**: answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
+- **Never include revert/keep-only-report decision rules in delegate prompts** — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit.
 - Be specific (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success, rebases, and merges `--ff-only`. You receive a summary on merge.
 
 ---

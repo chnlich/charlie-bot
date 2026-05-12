@@ -168,6 +168,7 @@ function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages;
   setActiveBackendId(data.active_backend);
+  setActiveRoundRatings(session.round_ratings || {});
 
   // Store pagination state from tail-loaded response
   sessionHasMore = !!data.has_more;
@@ -877,120 +878,10 @@ function markSessionRead(id) {
 }
 
 async function archiveSession(id) {
-  showRatingModal(id);
-}
-
-let ratingModalKeyHandler = null;
-
-function closeRatingModal() {
-  document.getElementById('rating-modal-overlay')?.remove();
-  if (ratingModalKeyHandler) {
-    document.removeEventListener('keydown', ratingModalKeyHandler);
-    ratingModalKeyHandler = null;
-  }
-}
-
-function showRatingModal(sessionId) {
-  // Remove any existing modal and listeners first.
-  closeRatingModal();
-
-  const overlay = document.createElement('div');
-  overlay.id = 'rating-modal-overlay';
-  overlay.className = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
-  overlay.innerHTML = `
-    <div class="bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72 text-center"
-         onclick="event.stopPropagation()">
-      <p class="text-sm text-slate-300 mb-4">Rate this session before archiving?</p>
-      <div class="flex justify-center gap-3 mb-4">
-        <button data-rating="thumbs_up"
-                class="w-10 h-10 rounded-lg bg-slate-700 hover:bg-green-600/30 hover:text-green-400
-                       text-lg transition-colors flex items-center justify-center" title="Thumbs up">👍</button>
-        <button data-rating="neutral"
-                class="w-10 h-10 rounded-lg bg-slate-700 hover:bg-slate-600 hover:text-slate-200
-                       text-lg transition-colors flex items-center justify-center" title="Neutral">—</button>
-        <button data-rating="thumbs_down"
-                class="w-10 h-10 rounded-lg bg-slate-700 hover:bg-red-600/30 hover:text-red-400
-                       text-lg transition-colors flex items-center justify-center" title="Thumbs down">👎</button>
-      </div>
-      <button data-rating="skip"
-              class="text-xs text-slate-500 hover:text-slate-300 transition-colors">Skip &amp; archive</button>
-      <div class="mt-3 pt-3 border-t border-slate-700">
-        <button id="delete-permanently-btn"
-                class="text-xs text-red-400 hover:text-red-300 transition-colors inline-flex items-center gap-1">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-          </svg>
-          Delete permanently
-        </button>
-      </div>
-    </div>`;
-
-  // Handle rating button clicks
-  overlay.querySelectorAll('[data-rating]').forEach(btn => {
-    btn.addEventListener('click', () => doArchiveWithRating(sessionId, btn.dataset.rating));
-  });
-  // Handle delete permanently
-  overlay.querySelector('#delete-permanently-btn').addEventListener('click', () => doDeletePermanently(sessionId));
-  // Close on overlay background click
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeRatingModal();
-  });
-  // Close on Escape
-  ratingModalKeyHandler = (e) => {
-    if (e.key === 'Escape') closeRatingModal();
-  };
-  document.addEventListener('keydown', ratingModalKeyHandler);
-
-  document.body.appendChild(overlay);
-}
-
-function doDeletePermanently(sessionId) {
-  const overlay = document.getElementById("rating-modal-overlay");
-  if (!overlay) return;
-  const box = overlay.querySelector(".bg-slate-800");
-  if (!box) return;
-
-  box.innerHTML = `
-    <svg class="w-8 h-8 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-    </svg>
-    <p class="text-sm font-semibold text-slate-200 mb-1">Delete permanently?</p>
-    <p class="text-xs text-slate-400 mb-4">This will permanently delete this session and all its data. This cannot be undone.</p>
-    <div class="flex gap-2 justify-center">
-      <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
-      <button id="confirm-delete-btn" class="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors">Delete</button>
-    </div>`;
-
-  box.querySelector("#confirm-cancel-btn").addEventListener("click", () => showRatingModal(sessionId));
-  box.querySelector("#confirm-delete-btn").addEventListener("click", async () => {
-    closeRatingModal();
-    try {
-      await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
-      if (SESSION_ID === sessionId) {
-        location.href = '/?session=';
-      } else {
-        switchSidebarFilter(currentFilter);
-      }
-    } catch (err) {
-      console.error('Permanent delete failed:', err);
-    }
-  });
-}
-
-async function doArchiveWithRating(sessionId, rating) {
-  closeRatingModal();
   try {
-    await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
-    if (rating !== 'skip') {
-      await fetch(`/api/sessions/${sessionId}/rate`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({rating}),
-      });
-    }
-    if (SESSION_ID === sessionId) {
+    const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Archive failed: ${res.status}`);
+    if (SESSION_ID === id) {
       location.href = '/?session=';
     } else {
       switchSidebarFilter(currentFilter);
@@ -1006,49 +897,6 @@ async function unarchiveSession(id) {
     switchSidebarFilter(currentFilter);
   } catch (err) {
     console.error('Unarchive failed:', err);
-  }
-}
-
-async function rateSession(id, rating) {
-  try {
-    const res = await fetch(`/api/sessions/${id}/rate`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({rating}),
-    });
-    if (!res.ok) throw new Error(`Rate failed: ${res.status}`);
-    // Update button highlights
-    const container = document.getElementById('rating-' + id);
-    if (container) {
-      const activeColorClass = {
-        thumbs_up: 'text-green-400',
-        neutral: 'text-slate-300',
-        thumbs_down: 'text-red-400',
-      };
-      const hoverColorClass = {
-        thumbs_up: 'hover:text-green-400',
-        neutral: 'hover:text-slate-300',
-        thumbs_down: 'hover:text-red-400',
-      };
-      container.querySelectorAll('button').forEach(btn => {
-        const btnRating = btn.dataset.rating;
-        const activeColor = activeColorClass[btnRating] || '';
-        const hoverColor = hoverColorClass[btnRating] || '';
-        if (btnRating === rating) {
-          btn.classList.add('!opacity-100');
-          if (activeColor) btn.classList.add(activeColor);
-          btn.classList.remove('opacity-0', 'group-hover:opacity-100');
-          if (hoverColor) btn.classList.remove(hoverColor);
-        } else {
-          btn.classList.remove('!opacity-100');
-          if (activeColor) btn.classList.remove(activeColor);
-          btn.classList.add('opacity-0', 'group-hover:opacity-100');
-          if (hoverColor) btn.classList.add(hoverColor);
-        }
-      });
-    }
-  } catch (err) {
-    console.error('Rate session failed:', err);
   }
 }
 

@@ -18,7 +18,7 @@ from src.core.models import (
     DeleteGroupRequest,
     EloneSessionRequest,
     ForkSessionRequest,
-    RateSessionRequest,
+    RateRoundRequest,
     RenameGroupRequest,
     RenameSessionRequest,
     SessionMetadata,
@@ -402,21 +402,24 @@ async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(
   return meta
 
 
-@router.post("/{session_id}/rate", response_model=SessionMetadata)
-async def rate_session(
+@router.post("/{session_id}/rounds/{event_index}/rate", response_model=SessionMetadata)
+async def rate_round(
     session_id: str,
-    req: RateSessionRequest,
+    event_index: int,
+    req: RateRoundRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  if meta.status != SessionStatus.ARCHIVED:
-    raise HTTPException(status_code=409, detail="Session is not archived")
-  meta.rating = req.rating
+  event_key = str(event_index)
+  if req.rating is None:
+    meta.round_ratings.pop(event_key, None)
+  else:
+    meta.round_ratings[event_key] = req.rating
   meta.updated_at = datetime.now(timezone.utc)
   await session_mgr.save_metadata(meta)
-  log.info("session_rated", session_id=session_id, rating=req.rating)
+  log.info("round_rated", session_id=session_id, event_index=event_index, rating=req.rating)
   return meta
 
 

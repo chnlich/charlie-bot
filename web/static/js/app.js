@@ -23,23 +23,55 @@ document.addEventListener('DOMContentLoaded', () => {
     switchSidebarFilter('all');
   }
   updateRelativeTimes();
-  // Render markdown for server-rendered assistant messages
-  document.querySelectorAll('[data-md]').forEach(el => {
-    el.dataset.raw = el.textContent;
-    el.innerHTML = marked.parse(fixNestedFences(el.textContent));
-    renderChatMath(el);
-  });
-  // Render bubble timestamps (server sends raw ISO, JS formats to local TZ)
+
+  // Initial chat render replaces the deleted Jinja loop with a /view fetch so
+  // JS-only renderers (HTML artifacts, etc.) run on refresh, not just on WS deltas.
+  if (SESSION_ID) {
+    (async () => {
+      try {
+        const res = await fetch('/api/sessions/' + SESSION_ID + '/view');
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        const container = document.getElementById('messages');
+        if (!container) return;
+        sessionHasMore = !!data.has_more;
+        sessionEarliestEventIndex = Infinity;
+        for (const m of (data.messages || [])) {
+          if (m.event_index != null && m.event_index < sessionEarliestEventIndex) {
+            sessionEarliestEventIndex = m.event_index;
+          }
+        }
+        sessionLoadingMore = false;
+        renderMessagesIntoContainer(container, data.messages || [], SESSION_ID);
+        if (sessionHasMore) {
+          const sentinel = document.createElement('div');
+          sentinel.id = 'load-more-sentinel';
+          sentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
+          sentinel.innerHTML = 'Loading older messages&hellip;';
+          container.prepend(sentinel);
+        }
+        if (data.pending_draft && data.pending_draft.content) {
+          showStreaming(data.pending_draft.content);
+        } else {
+          hideStreaming();
+        }
+        container.scrollTop = container.scrollHeight;
+      } catch (err) {
+        console.warn('Initial session view fetch failed:', err);
+      }
+    })();
+  }
+
+  // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.
   document.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
     el.textContent = formatBubbleTime(el.dataset.ts);
   });
-  // Format system pill title attributes from ISO to local time
   document.querySelectorAll('#messages .rounded-full[title]').forEach(el => {
     const t = el.getAttribute('title');
     if (t && t.includes('T')) el.title = formatBubbleTime(t);
   });
 
-  // Scroll to bottom of messages
+  // Scroll to bottom of messages (in case JS render hasn't fired yet)
   const msgs = document.getElementById('messages');
   if (msgs) msgs.scrollTop = msgs.scrollHeight;
 

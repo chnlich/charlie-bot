@@ -157,7 +157,6 @@ async def index(
     load_errors.append("Failed to load sessions. Check server logs for details.")
 
   active_session = None
-  messages: list[dict] = []
   threads = []
   triggers = []
   raw_events: list[dict] = []
@@ -173,7 +172,6 @@ async def index(
       try:
         view = await build_session_view_data(session, session_mgr, thread_mgr)
         raw_events = view.raw_events
-        messages = view.messages
         threads = view.threads
         session_usage = view.usage
         pending_draft = view.pending_draft
@@ -199,7 +197,6 @@ async def index(
       context={
           "sessions": sessions,
           "active_session": active_session,
-          "messages": messages,
           "pending_draft": pending_draft,
           "threads": threads,
           "triggers": triggers,

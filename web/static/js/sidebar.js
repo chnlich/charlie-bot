@@ -200,15 +200,15 @@ function renderSessionView(data) {
   // Build message HTML
   const container = document.getElementById('messages');
   if (!container) return;
-  const streamEl = document.getElementById('streaming-msg');
-  const streamHtml = streamEl ? streamEl.outerHTML : '';
+  renderMessagesIntoContainer(container, messages, session.id);
 
-  const parts = messages.map(msg => renderMessage(msg, session.id));
-
-  const loadMoreHtml = sessionHasMore
-    ? '<div id="load-more-sentinel" class="flex justify-center py-3 text-xs text-slate-500">Loading older messages&hellip;</div>'
-    : '';
-  container.innerHTML = loadMoreHtml + parts.join('') + streamHtml;
+  if (sessionHasMore) {
+    const sentinel = document.createElement('div');
+    sentinel.id = 'load-more-sentinel';
+    sentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
+    sentinel.innerHTML = 'Loading older messages&hellip;';
+    container.prepend(sentinel);
+  }
 
   // Initialize streaming preview from pending draft (in-progress assistant
   // response carried over from a tail-loaded session).

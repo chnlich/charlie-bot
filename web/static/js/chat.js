@@ -418,6 +418,21 @@ function renderToolActivity(tools) {
     + '</div>';
 }
 
+function renderMessagesIntoContainer(container, messages, sessionId) {
+  const streamEl = document.getElementById('streaming-msg');
+  const streamHtml = streamEl ? streamEl.outerHTML : '';
+  const parts = (messages || []).map(msg => renderMessage(msg, sessionId));
+  container.innerHTML = parts.join('') + streamHtml;
+  container.querySelectorAll('.prose-msg').forEach(renderChatMath);
+  container.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
+    el.textContent = formatBubbleTime(el.dataset.ts);
+  });
+  container.querySelectorAll('.rounded-full[title]').forEach(el => {
+    const t = el.getAttribute('title');
+    if (t && t.includes('T')) el.title = formatBubbleTime(t);
+  });
+}
+
 function renderMessage(msg, sessionId) {
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";

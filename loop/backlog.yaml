@@ -5342,3 +5342,74 @@
   status: pending
   created: '2026-05-11T15:15:24Z'
   priority: low
+- id: '155'
+  title: Log silently swallowed inner exception in core/master_trigger.trigger_master
+    error-broadcast fallback
+  description: '`core/master_trigger.py:trigger_master` (L120-130) violates the project''s
+    explicit "never silently swallow exceptions" rule (code-style skill). The outer
+    `except Exception as e` (L120) correctly logs the primary `trigger_master_failed`
+    error, then opens an inner `try` (L122-128) that constructs a best-effort `ET.ERROR`
+    payload and calls `await session_mgr.persist_and_broadcast(session_id, error_payload)`
+    so the failure surfaces in the session UI. The inner `except Exception: pass  #
+    Last resort — nothing more we can do` at L129-130 swallows that broadcast failure
+    with no record at all — no `log.warning`, no `log.debug`, no `exc_info`. This
+    is the only `except: pass` in the codebase that sits inside a real (non-cleanup)
+    error path: every other `except: pass` site in src/ is tightly-scoped resource
+    cleanup (`os.close` / `loop.remove_reader` in `core/triggers.py:449/461/472/494/498`,
+    all already covered by pending refactor item #135 which splits `_wait_with_pidfd`),
+    whereas this one hides a genuine failure mode (broadcast queue down, websocket
+    streaming manager wedged, session metadata corrupted, persist_and_broadcast bug)
+    that operators would otherwise have no way to discover. HOW — replace `pass` at
+    L130 with `log.warning("trigger_master_error_broadcast_failed", session=session_id,
+    exc_info=True)`. Use `log.warning` (not `log.error`) because the outer error has
+    already been logged at error level via `trigger_master_failed`; this is a secondary
+    failure that operators care about but should not double-page on. Use `exc_info=True`
+    rather than `error=str(e)` so the inner traceback is preserved in structlog output
+    — a `persist_and_broadcast` failure is almost always either a Pydantic-serialization
+    bug or a streaming-channel bug, both of which need the stack frame to triage.
+    Keep the outer `except` exactly as-is; do not rename or restructure it. The comment
+    "Last resort — nothing more we can do" can be deleted (the `log.warning` makes
+    the intent self-documenting) or replaced with `# Best-effort broadcast; do not
+    re-raise.` if a comment is wanted to clarify why we don''t propagate.
+
+    REFACTORING SAFETY — (1) `log` is already imported at module top (L16: `log =
+    structlog.get_logger()`); no new imports needed. (2) The `as e2` binding for the
+    inner exception is unnecessary because `exc_info=True` pulls from the active exception
+    context — using `except Exception as e2:` and then `log.warning(..., error=str(e2))`
+    would shadow the outer-scope `e` (the original trigger_master error) and is forbidden;
+    keep the bare `except Exception:` form. (3) Do NOT change the outer `except` to
+    re-raise — `trigger_master` is invoked from spawner finalizers (`_notify_completion`)
+    and from `improve_command.run_improve_loop` finalization where bubbling an exception
+    would crash a fire-and-forget task and leave the session in an inconsistent state;
+    the swallow-and-broadcast pattern is the intentional contract here. (4) The new
+    log event name `trigger_master_error_broadcast_failed` is new and not referenced
+    by any external log-tooling (verified by `grep -r "trigger_master_error_broadcast_failed"
+    .`); name it consistently with the sibling `trigger_master_failed` and `trigger_master_invalid_resume_detected`
+    events in the same file. (5) Do NOT add a `try/except` around the new `log.warning`
+    call — structlog''s `BoundLogger.warning` is documented not to raise on serialization
+    failures (it falls back to `repr` internally), and adding belt-and-suspenders
+    here re-introduces the exact silent-swallow anti-pattern this fix removes.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` applied a single one-line
+    fix to `core/spawner.py:spawn_worker` (committed separately on this branch per
+    the task''s yapf-rule); `grep -rE "TODO|FIXME|HACK|XXX" src/` returns zero matches;
+    `pyflakes src/` reports only the already-tracked `WatchTarget` unused import in
+    `api/internal.py` (covered by pending items #131 and #139); the >50-line function
+    scan was fully enumerated by item #154''s description on this same branch and
+    is not re-litigated here (every long-function candidate is either covered by a
+    pending refactor item — #107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/154
+    — or explicitly rejected as a coherent single-flow function in #154''s description).
+    The remaining `except Exception: pass` sites in src/ are all inside `core/triggers.py`
+    pidfd cleanup paths (L449/461/472/494/498) where the swallow is intentional resource-cleanup
+    idiom and is already structurally addressed by pending item #135 (`Split TriggerManager._wait_with_pidfd
+    into _open_local_pidfds helper and a slim await/cleanup body`), which will reorganize
+    those exact lines. This `core/master_trigger.py:130` site is the only `except:
+    pass` in src/ that (a) sits inside a real error path rather than resource cleanup
+    and (b) is not already covered by any pending refactor item, making it the single
+    new code-health backlog entry for this 2026-05-12 scheduled scan.
+
+    '
+  category: error-handling
+  status: pending
+  created: '2026-05-12T03:13:19Z'
+  priority: medium

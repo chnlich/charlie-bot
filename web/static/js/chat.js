@@ -128,6 +128,119 @@ function toolInputSummary(tool) {
   return {text: display, limit: 60};
 }
 
+// ---------------------------------------------------------------------------
+// HTML artifact rendering — inline sandboxed iframes for Write tool calls
+// targeting artifacts/*.html.
+// ---------------------------------------------------------------------------
+function isHtmlArtifactTool(tool) {
+  if (!tool || tool.name !== 'Write') return false;
+  var input = tool.input || {};
+  var fp = input.file_path || '';
+  if (!fp || !tool.output) return false;
+  return /(^|\/)artifacts\/[^/]+\.html$/.test(fp);
+}
+
+function basename(path) {
+  var parts = String(path || '').split('/');
+  return parts[parts.length - 1];
+}
+
+function resolveArtifactAbsolutePath(filePath) {
+  if (filePath.charAt(0) === '/') return filePath;
+  // TODO: read user home from a backend-injected global instead of hardcoding.
+  var home = '/data/home/user';
+  return home + '/.charliebot/sessions/' + SESSION_ID + '/' + filePath;
+}
+
+function escapeForSrcdoc(html) {
+  return String(html || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function injectResizeScript(html, frameId) {
+  var script = '<script>(function(){'
+    + 'var frameId=' + JSON.stringify(frameId) + ';'
+    + 'function send(){parent.postMessage({type:"html-artifact-height",id:frameId,height:document.documentElement.scrollHeight},"*");}'
+    + 'new ResizeObserver(send).observe(document.documentElement);'
+    + 'window.addEventListener("load",send);'
+    + 'send();'
+    + '})();<\/script>';
+  var src = String(html || '');
+  var idx = src.lastIndexOf('</body>');
+  if (idx === -1) return src + script;
+  return src.slice(0, idx) + script + src.slice(idx);
+}
+
+function renderHtmlArtifact(tool) {
+  var filePath = (tool.input && tool.input.file_path) || '';
+  var rawHtml = (tool.input && tool.input.content) || '';
+  var frameId = 'hf-' + Math.random().toString(36).slice(2);
+  var withScript = injectResizeScript(rawHtml, frameId);
+  var srcdoc = escapeForSrcdoc(withScript);
+  var absPath = resolveArtifactAbsolutePath(filePath);
+  var openUrl = '/files' + absPath;
+  var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
+  var iframeStyle = 'width:100%;min-height:60px;max-height:80vh;'
+    + 'border:1px solid rgba(148,163,184,0.2);border-radius:0 0 0.5rem 0.5rem;'
+    + 'background:white;display:block;';
+  return '<div class="html-artifact">'
+    + '<div class="html-artifact-toolbar">'
+    + '<span class="filename">' + escapeHtml(basename(filePath)) + '</span>'
+    + '<a href="' + escapeHtml(openUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
+    + '<button type="button" onclick="toggleHtmlArtifactSource(this)">View source</button>'
+    + '</div>'
+    + '<iframe class="html-artifact-frame" data-frame-id="' + frameId + '"'
+    + ' sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"'
+    + ' srcdoc="' + srcdoc + '"'
+    + ' style="' + iframeStyle + '"></iframe>'
+    + '<div class="html-artifact-source"><pre><code class="hljs language-html">'
+    + sourceHighlighted + '</code></pre></div>'
+    + '</div>';
+}
+
+function toggleHtmlArtifactSource(btn) {
+  var card = btn.closest('.html-artifact');
+  if (!card) return;
+  var frame = card.querySelector('.html-artifact-frame');
+  var source = card.querySelector('.html-artifact-source');
+  if (!frame || !source) return;
+  var showingSource = source.style.display === 'block';
+  if (showingSource) {
+    source.style.display = 'none';
+    frame.style.display = 'block';
+    btn.textContent = 'View source';
+  } else {
+    frame.style.display = 'none';
+    source.style.display = 'block';
+    btn.textContent = 'View rendered';
+  }
+}
+
+function renderHtmlArtifacts(tools) {
+  if (!Array.isArray(tools) || !tools.length) return '';
+  var out = '';
+  for (var i = 0; i < tools.length; i++) {
+    if (isHtmlArtifactTool(tools[i])) {
+      out += renderHtmlArtifact(tools[i]);
+    }
+  }
+  return out;
+}
+
+function installHtmlArtifactListener() {
+  if (window.__htmlArtifactListenerInstalled) return;
+  window.__htmlArtifactListenerInstalled = true;
+  window.addEventListener('message', function(event) {
+    var data = event.data;
+    if (!data || data.type !== 'html-artifact-height' || !data.id) return;
+    var sel = '.html-artifact-frame[data-frame-id="' + CSS.escape(data.id) + '"]';
+    var frame = document.querySelector(sel);
+    if (!frame) return;
+    var cap = Math.floor(window.innerHeight * 0.8);
+    frame.style.height = Math.min(Number(data.height) + 2, cap) + 'px';
+  });
+}
+installHtmlArtifactListener();
+
 function renderToolActivity(tools) {
   if (!Array.isArray(tools) || !tools.length) return '';
   var rows = tools.map(function(tool, i) {
@@ -160,10 +273,13 @@ function renderToolActivity(tools) {
     }
     var borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
     var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
+    var renderedHint = isHtmlArtifactTool(tool)
+      ? ' <span class="text-xs text-slate-500 italic">(rendered above)</span>'
+      : '';
     return '<div class="' + borderCls + 'py-1.5">'
       + '<div class="flex items-center gap-2">'
       + '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">' + escapeHtml(tool.name || '') + '</span>'
-      + '<span class="text-xs text-slate-400 ' + truncCls + 'flex-1 min-w-0">' + summaryHtml + '</span>'
+      + '<span class="text-xs text-slate-400 ' + truncCls + 'flex-1 min-w-0">' + summaryHtml + renderedHint + '</span>'
       + '</div>'
       + outputHtml
       + '</div>';
@@ -193,9 +309,10 @@ function renderMessage(msg, sessionId) {
     return "<div class=\"flex justify-end\">" + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
   }
   if (msg.role === "assistant") {
+    var artifactsHtml = renderHtmlArtifacts(msg.tools);
     var toolsHtml = renderToolActivity(msg.tools);
     return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
-      + mdDiv(msg.content) + toolsHtml + timeDiv() + "</div></div>";
+      + mdDiv(msg.content) + artifactsHtml + toolsHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "system") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";

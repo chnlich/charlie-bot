@@ -162,6 +162,8 @@ class SessionMetadata(BaseModel):
   rewind_summary: Optional[str] = None  # context summary from parent session
   # Rating
   rating: Optional[SessionRating] = None
+  # Key is the round event id (UUID generated at event write time, or
+  # "legacy:<event_index>" for events predating the UUID migration).
   round_ratings: Dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)
   # Grouping
   group: Optional[str] = None

@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -127,6 +128,8 @@ class SessionManager:
     if cached is not None:
       meta, ts = cached
       if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
+        if self._migrate_round_rating_keys(meta):
+          await self._save_metadata(meta)
         return meta.model_copy()
       del self._metadata_cache[session_id]
     path = self._metadata_path(session_id)
@@ -138,7 +141,10 @@ class SessionManager:
       log.warning("session_metadata_empty", session_id=session_id, path=str(path))
       return None
     meta = SessionMetadata.model_validate_json(raw)
-    self._metadata_cache[session_id] = (meta, time.monotonic())
+    if self._migrate_round_rating_keys(meta):
+      await self._save_metadata(meta)
+    else:
+      self._metadata_cache[session_id] = (meta, time.monotonic())
     return meta.model_copy()
 
   async def list_sessions(
@@ -522,6 +528,8 @@ class SessionManager:
 
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     """Append a single NDJSON event line to chat_events.jsonl."""
+    if 'id' not in event:
+      event['id'] = str(uuid.uuid4())
     if 'timestamp' not in event:
       event['timestamp'] = utc_now().isoformat()
     await append_ndjson(self._chat_events_path(session_id), event)
@@ -713,6 +721,23 @@ class SessionManager:
   def _invalidate_cache(self, session_id: str) -> None:
     """Remove a session from the metadata cache."""
     self._metadata_cache.pop(session_id, None)
+
+  @staticmethod
+  def _migrate_round_rating_keys(meta: SessionMetadata) -> bool:
+    """Rewrite pre-UUID rating keys from event_index strings to legacy ids."""
+    if not meta.round_ratings:
+      return False
+    migrated = {}
+    changed = False
+    for key, value in meta.round_ratings.items():
+      if key.isdigit():
+        migrated[f"legacy:{key}"] = value
+        changed = True
+      else:
+        migrated[key] = value
+    if changed:
+      meta.round_ratings = migrated
+    return changed
 
   async def _iter_session_metas(self) -> list[SessionMetadata]:
     """Load all session metadata from disk concurrently.

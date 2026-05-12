@@ -19,6 +19,7 @@ def test_user_event_emits_a_user_message_delta() -> None:
           "uploaded_files": [],
           "is_voice": False,
           "event_index": 0,
+          "id": "legacy:0",
           "timestamp": "2026-04-29T00:00:00Z",
       },
   }]
@@ -37,6 +38,7 @@ def test_assistant_text_event_emits_a_stream_delta() -> None:
           "role": "assistant",
           "content": "Hello ",
           "event_index": 0,
+          "id": "legacy:0",
           "timestamp": "2026-04-29T00:00:00Z",
       },
   }]
@@ -55,6 +57,7 @@ def test_assistant_text_then_master_done_commits_message() -> None:
               "role": "assistant",
               "content": "Hi",
               "event_index": 0,
+              "id": "legacy:0",
               "timestamp": "t1",
           },
       },
@@ -64,6 +67,7 @@ def test_assistant_text_then_master_done_commits_message() -> None:
               "role": "separator",
               "thinking_seconds": 3,
               "event_index": 1,
+              "id": "legacy:1",
               "timestamp": "t2",
           },
       },
@@ -82,6 +86,7 @@ def test_master_done_with_still_thinking_skips_separator() -> None:
           "role": "assistant",
           "content": "Hi",
           "event_index": 0,
+          "id": "legacy:0",
           "timestamp": "t1",
       },
   }]
@@ -132,6 +137,7 @@ def test_exit_plan_mode_emits_plan_message_with_explicit_text() -> None:
           "role": "plan",
           "content": "Step 1\nStep 2",
           "event_index": 0,
+          "id": "legacy:0",
           "timestamp": "t1",
       },
   }]
@@ -153,6 +159,7 @@ def test_exit_plan_mode_without_explicit_plan_promotes_buffer() -> None:
           "role": "plan",
           "content": "Plan body",
           "event_index": 1,
+          "id": "legacy:1",
           "timestamp": "t1",
       },
   }
@@ -175,6 +182,7 @@ def test_consecutive_assistant_text_events_split_into_separate_bubbles() -> None
           "role": "assistant",
           "content": "First",
           "event_index": 1,
+          "id": "legacy:0",
           "timestamp": "t1",
       },
   }
@@ -184,6 +192,7 @@ def test_consecutive_assistant_text_events_split_into_separate_bubbles() -> None
           "role": "assistant",
           "content": "Second",
           "event_index": 1,
+          "id": "legacy:1",
           "timestamp": "t2",
       },
   }
@@ -207,6 +216,7 @@ def test_flush_pending_emits_dangling_draft() -> None:
           "role": "assistant",
           "content": "tail",
           "event_index": 0,
+          "id": "legacy:0",
           "timestamp": "t",
       },
   }]
@@ -229,3 +239,10 @@ def test_event_index_offset_is_applied() -> None:
   agg = MessageAggregator(event_index_offset=10)
   deltas = list(agg.feed({"type": "user", "content": "hi", "timestamp": "t"}))
   assert deltas[0]["message"]["event_index"] == 10
+  assert deltas[0]["message"]["id"] == "legacy:10"
+
+
+def test_event_id_is_propagated_when_present() -> None:
+  agg = MessageAggregator()
+  deltas = list(agg.feed({"id": "event-uuid", "type": "user", "content": "hi", "timestamp": "t"}))
+  assert deltas[0]["message"]["id"] == "event-uuid"

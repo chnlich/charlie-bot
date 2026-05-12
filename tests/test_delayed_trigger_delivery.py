@@ -47,6 +47,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
           "uploaded_files": [],
           "is_voice": False,
           "event_index": 0,
+          "id": events[0]["id"],
           "timestamp": events[0]["timestamp"],
       },
   ]
@@ -63,6 +64,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
           "uploaded_files": [],
           "is_voice": False,
           "event_index": 0,
+          "id": events[0]["id"],
           "timestamp": events[0]["timestamp"],
       },
   }

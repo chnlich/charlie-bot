@@ -71,6 +71,7 @@ function loadChatScript() {
     console: {error: () => {}},
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
+    window: {addEventListener() {}},
     document: {
       addEventListener() {},
       createElement() {

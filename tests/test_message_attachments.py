@@ -47,6 +47,7 @@ def test_events_to_messages_uses_structured_uploaded_files_without_leaking_paths
           ],
           "is_voice": False,
           "event_index": 0,
+          "id": "legacy:0",
           "timestamp": "2026-04-02T10:00:00Z",
       },
   ]
@@ -155,5 +156,4 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
   assert mock_run.call_args.kwargs["uploaded_files"] == [
       {"filename": "report.pdf", "path": "/tmp/report.pdf", "size": 99},
   ]
-
 

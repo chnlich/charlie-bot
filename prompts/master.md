@@ -177,16 +177,18 @@ Workers see skills through the backend CLI's skill dir — not directly from `~/
 
 ## Rich HTML Output
 
-When a response benefits from rich formatting — charts, comparison tables, SVG diagrams, side-by-side layouts, embedded media, interactive demos — use the Write tool to create a file at `artifacts/<descriptive-name>.html` (relative path; your cwd is the session directory). CharlieBot's frontend detects this path convention and renders the file as a sandboxed iframe inline in the chat.
+Default to HTML for response output. Use the Write tool to create `artifacts/<name>.html` — CharlieBot renders it as a sandboxed iframe inline in the chat.
 
-Requirements:
-- Full HTML document with doctype, html, body tags.
-- Self-contained inline CSS and JS preferred. External resources from `cdn.jsdelivr.net` or `unpkg.com` are allowed.
-- Sandboxed: scripts inside cannot access CharlieBot's parent window, cookies, or localStorage. Don't try cross-frame communication.
-- Keep file size reasonable (<200KB inline when possible).
-- Use this when it genuinely adds value — charts, visual comparisons, SVG flow diagrams, etc. Simple prose answers stay as markdown; don't wrap every response in HTML.
+Aim for well-organized, visually polished pages that present more information densely than markdown allows.
 
-Multiple artifacts in one response are supported: each Write to `artifacts/*.html` produces its own inline iframe.
+Use markdown only when the user opts out or the response is a brief acknowledgment.
+
+HTML requirements:
+- Full document with doctype, html, body tags.
+- Self-contained: inline CSS/JS. External resources from `cdn.jsdelivr.net` or `unpkg.com` only.
+- Sandboxed: no access to parent window, cookies, or storage.
+
+Multiple artifacts per response are supported.
 
 ---
 

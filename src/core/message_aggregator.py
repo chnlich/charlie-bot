@@ -102,6 +102,7 @@ class MessageAggregator:
     self._assistant_buf = ""
     self._last_assistant_ts: str | None = None
     self._last_event_idx = 0
+    self._last_event_id: str | None = None
     self._tools_buf: list[dict] = []
 
   def feed(self, event: dict) -> Iterator[dict]:
@@ -133,6 +134,7 @@ class MessageAggregator:
         "role": "assistant",
         "content": self._assistant_buf,
         "event_index": self._last_event_idx,
+        "id": self._last_event_id or f"legacy:{self._last_event_idx}",
         "timestamp": self._last_assistant_ts,
     }
     if self._tools_buf:
@@ -148,6 +150,7 @@ class MessageAggregator:
     if msg is not None:
       self._assistant_buf = ""
       self._last_assistant_ts = None
+      self._last_event_id = None
       self._tools_buf = []
       yield {"type": "message", "message": msg}
 
@@ -159,6 +162,7 @@ class MessageAggregator:
 
   def _feed(self, ev: dict, idx: int) -> Iterator[dict]:
     t = ev.get("type")
+    ev_id = str(ev.get("id") or f"legacy:{idx}")
     if t == ET.USER:
       # CC-internal user events carry tool_result blocks -- attach the output
       # to the most recent tool_use entry so the UI can render it inline.
@@ -189,6 +193,7 @@ class MessageAggregator:
                   "uploaded_files": normalized["uploaded_files"],
                   "is_voice": ev.get("is_voice", False),
                   "event_index": idx,
+                  "id": ev_id,
                   "timestamp": ev.get("timestamp"),
               },
       }
@@ -212,6 +217,7 @@ class MessageAggregator:
                     'role': 'plan',
                     'content': plan_text,
                     'event_index': idx,
+                    'id': ev_id,
                     'timestamp': ev.get('timestamp'),
                 },
             }
@@ -220,10 +226,12 @@ class MessageAggregator:
                 'role': 'plan',
                 'content': self._assistant_buf,
                 'event_index': idx,
+                'id': ev_id,
                 'timestamp': self._last_assistant_ts,
             }
             self._assistant_buf = ''
             self._last_assistant_ts = None
+            self._last_event_id = None
             yield {"type": "message", "message": plan_msg}
 
       for b in blocks:
@@ -241,6 +249,8 @@ class MessageAggregator:
         yield from self._flush_to_message_delta()
         self._last_assistant_ts = ev.get("timestamp")
       self._assistant_buf += text
+      if self._assistant_buf or self._tools_buf:
+        self._last_event_id = ev_id
 
       delta = self._stream_delta()
       if delta is not None:
@@ -255,4 +265,5 @@ class MessageAggregator:
     if result is not None:
       result.setdefault('timestamp', ev.get('timestamp'))
       result['event_index'] = idx
+      result['id'] = ev_id
       yield {"type": "message", "message": result}

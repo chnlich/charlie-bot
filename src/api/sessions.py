@@ -402,24 +402,23 @@ async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(
   return meta
 
 
-@router.post("/{session_id}/rounds/{event_index}/rate", response_model=SessionMetadata)
+@router.post("/{session_id}/rounds/{round_id}/rate", response_model=SessionMetadata)
 async def rate_round(
     session_id: str,
-    event_index: int,
+    round_id: str,
     req: RateRoundRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  event_key = str(event_index)
   if req.rating is None:
-    meta.round_ratings.pop(event_key, None)
+    meta.round_ratings.pop(round_id, None)
   else:
-    meta.round_ratings[event_key] = req.rating
+    meta.round_ratings[round_id] = req.rating
   meta.updated_at = datetime.now(timezone.utc)
   await session_mgr.save_metadata(meta)
-  log.info("round_rated", session_id=session_id, event_index=event_index, rating=req.rating)
+  log.info("round_rated", session_id=session_id, round_id=round_id, rating=req.rating)
   return meta
 
 

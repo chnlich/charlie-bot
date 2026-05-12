@@ -12,8 +12,8 @@ function setActiveRoundRatings(roundRatings) {
   globalThis.ACTIVE_ROUND_RATINGS = activeRoundRatings;
 }
 
-function getRoundRating(eventIndex) {
-  return activeRoundRatings[String(eventIndex)] || null;
+function getRoundRating(roundId) {
+  return activeRoundRatings[String(roundId)] || null;
 }
 
 function escapeChatAttr(str) {
@@ -35,20 +35,20 @@ function roundRatingButtonClass(buttonRating, activeRating) {
   return 'round-rating-button p-0.5 text-sm leading-none ' + (active ? activeClass : 'text-slate-500 ' + hoverClass);
 }
 
-function renderRoundRatingButtons(sessionId, eventIndex) {
-  const activeRating = getRoundRating(eventIndex);
+function renderRoundRatingButtons(sessionId, roundId) {
+  const activeRating = getRoundRating(roundId);
   const sessionArg = escapeJsSingleQuoted(sessionId);
-  const eventKey = String(eventIndex);
-  const eventNumber = Number(eventIndex);
+  const roundKey = String(roundId);
+  const roundArg = escapeJsSingleQuoted(roundKey);
   const sharedAttrs = ' data-round-rating-session="' + escapeChatAttr(sessionId) + '"'
-    + ' data-round-rating-event="' + escapeChatAttr(eventKey) + '"';
+    + ' data-round-rating-event="' + escapeChatAttr(roundKey) + '"';
   return '<button type="button" data-round-rating="thumbs_up"' + sharedAttrs
     + ' aria-pressed="' + String(activeRating === 'thumbs_up') + '"'
-    + ' onclick="rateRound(\'' + sessionArg + '\', ' + eventNumber + ', \'thumbs_up\')"'
+    + ' onclick="rateRound(\'' + sessionArg + '\', \'' + roundArg + '\', \'thumbs_up\')"'
     + ' class="' + roundRatingButtonClass('thumbs_up', activeRating) + '" title="Thumbs up">👍</button>'
     + '<button type="button" data-round-rating="thumbs_down"' + sharedAttrs
     + ' aria-pressed="' + String(activeRating === 'thumbs_down') + '"'
-    + ' onclick="rateRound(\'' + sessionArg + '\', ' + eventNumber + ', \'thumbs_down\')"'
+    + ' onclick="rateRound(\'' + sessionArg + '\', \'' + roundArg + '\', \'thumbs_down\')"'
     + ' class="' + roundRatingButtonClass('thumbs_down', activeRating) + '" title="Thumbs down">👎</button>';
 }
 
@@ -63,10 +63,10 @@ function applyRoundRatingButtonState(btn, activeRating) {
   btn.setAttribute('aria-pressed', String(isActive));
 }
 
-function updateRoundRatingButtons(sessionId, eventIndex, activeRating) {
-  const eventKey = String(eventIndex);
+function updateRoundRatingButtons(sessionId, roundId, activeRating) {
+  const roundKey = String(roundId);
   document.querySelectorAll('[data-round-rating]').forEach(btn => {
-    if (btn.dataset.roundRatingSession === String(sessionId) && btn.dataset.roundRatingEvent === eventKey) {
+    if (btn.dataset.roundRatingSession === String(sessionId) && btn.dataset.roundRatingEvent === roundKey) {
       applyRoundRatingButtonState(btn, activeRating);
     }
   });
@@ -78,24 +78,7 @@ function refreshAllRoundRatingButtons() {
   });
 }
 
-function hydrateServerRenderedRoundControls() {
-  document.querySelectorAll('#messages .separator-line').forEach(separator => {
-    if (separator.querySelector('[data-round-rating]')) return;
-    const forkButton = separator.querySelector('button[onclick^="forkSession"]');
-    if (!forkButton) return;
-    const match = (forkButton.getAttribute('onclick') || '').match(/^forkSession\('([^']+)',\s*(\d+)\)$/);
-    if (!match) return;
-    const controls = document.createElement('span');
-    controls.innerHTML = renderRoundRatingButtons(match[1], Number(match[2]));
-    while (controls.firstChild) {
-      separator.insertBefore(controls.firstChild, separator.lastElementChild);
-    }
-  });
-  refreshAllRoundRatingButtons();
-}
-
 async function initializeRoundRatings() {
-  hydrateServerRenderedRoundControls();
   if (!SESSION_ID) return;
   const sessionId = SESSION_ID;
   try {
@@ -104,17 +87,17 @@ async function initializeRoundRatings() {
     const session = await res.json();
     if (SESSION_ID !== sessionId) return;
     setActiveRoundRatings(session.round_ratings || {});
-    hydrateServerRenderedRoundControls();
+    refreshAllRoundRatingButtons();
   } catch (err) {
     console.error('Load round ratings failed:', err);
   }
 }
 
-async function rateRound(sessionId, eventIndex, rating) {
-  const eventKey = String(eventIndex);
-  const nextRating = activeRoundRatings[eventKey] === rating ? null : rating;
+async function rateRound(sessionId, roundId, rating) {
+  const roundKey = String(roundId);
+  const nextRating = activeRoundRatings[roundKey] === rating ? null : rating;
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/rounds/' + eventIndex + '/rate', {
+    const res = await fetch('/api/sessions/' + sessionId + '/rounds/' + encodeURIComponent(roundKey) + '/rate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({rating: nextRating}),
@@ -123,7 +106,7 @@ async function rateRound(sessionId, eventIndex, rating) {
     const session = await res.json();
     if (SESSION_ID !== sessionId) return;
     setActiveRoundRatings(session.round_ratings || {});
-    updateRoundRatingButtons(sessionId, eventIndex, getRoundRating(eventIndex));
+    updateRoundRatingButtons(sessionId, roundKey, getRoundRating(roundKey));
   } catch (err) {
     console.error('Rate round failed:', err);
   }
@@ -492,16 +475,20 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "separator") {
     var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
     var buttons = "";
-    if (msg.event_index != null && sessionId) {
-      buttons = "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
-        + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
-        + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
-        + "</button>"
-        + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
-        + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
-        + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
-        + "</button>"
-        + renderRoundRatingButtons(sessionId, msg.event_index);
+    if (sessionId) {
+      if (msg.event_index != null) {
+        buttons = "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
+          + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
+          + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
+          + "</button>"
+          + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
+          + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
+          + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
+          + "</button>";
+      }
+      if (msg.id != null) {
+        buttons += renderRoundRatingButtons(sessionId, msg.id);
+      }
     }
     return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\">"
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"

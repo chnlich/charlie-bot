@@ -139,6 +139,7 @@ function loadChatContext(document) {
     },
     console: {error: () => {}},
     relativeTime: (iso) => `relative:${iso}`,
+    window: {addEventListener() {}},
     Date: class FakeDate {
       toISOString() {
         return nowIso;

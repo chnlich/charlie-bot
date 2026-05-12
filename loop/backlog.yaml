@@ -5607,3 +5607,137 @@
   status: pending
   created: '2026-05-12T09:12:48Z'
   priority: low
+- id: '158'
+  title: Extract shared extract_tool_result_text helper to deduplicate the list-or-string
+    tool_result content parsing between api/threads.get_thread_events and core/message_aggregator.MessageAggregator._feed
+  description: 'WHY — The 2026-05-12T11:14Z scheduled code-health scan (yapf --in-place
+    --recursive src/, full-tree pyflakes, TODO/FIXME/HACK/XXX grep, vulture --min-confidence
+    80, AST >50-line scan, manual duplication audit cross-referenced against the
+    27 pending backlog items 107/108/109/116/125/126/127/129/132/134/135/136/137/139/140/141/142/144/153/154/155/156/157)
+    found one unfiled duplication: the list-or-string ``tool_result`` content-text
+    parser appears verbatim (modulo a defensive ``isinstance(p, dict)`` guard) in
+    two separate call sites that both convert a Claude-Code ``tool_result`` block''s
+    ``content`` field into a single result string. Site 1 is ``src/api/threads.py:109-114``
+    inside ``get_thread_events``: ``raw_content = block.get(''content'', '''')`` /
+    ``if isinstance(raw_content, list): text_parts = [p.get(''text'', '''') for p
+    in raw_content if p.get(''type'') == ''text'']; result_text = ''\n''.join(text_parts)``
+    / ``else: result_text = str(raw_content)``. Site 2 is ``src/core/message_aggregator.py:168-172``
+    inside ``MessageAggregator._feed``: ``raw = block.get("content", "")`` / ``if
+    isinstance(raw, list): text = "\n".join(p.get("text", "") for p in raw if isinstance(p,
+    dict) and p.get("type") == "text")`` / ``else: text = str(raw)``. The two snippets
+    encode the same subtle invariant from the Anthropic streaming format — a ``tool_result``
+    block''s ``content`` is either a plain string (legacy form) or a list of typed
+    parts where only ``{"type": "text"}`` parts carry renderable text — and the two
+    implementations have already drifted on the defensive ``isinstance(p, dict)``
+    guard, which is exactly the kind of slow-drift the dedup rule is meant to prevent.
+    Both call sites also live two seams apart (an HTTP route handler and the stateful
+    message aggregator), so the next time the underlying ``tool_result`` schema gains
+    a new part type (image, citation, etc.) a fix to one site will silently miss
+    the other.
+
+    WHAT — One new public helper in ``src/core/message_aggregator.py`` co-located
+    with the existing ``extract_text_from_message`` (L25-30): ``def extract_tool_result_text(block:
+    dict) -> str:`` with a one-line docstring ("Return the renderable text of a CC
+    ``tool_result`` block; ``content`` is either a plain string or a list of typed
+    parts where only ``{"type": "text"}`` parts contribute."). The body is the conservative
+    union of both existing implementations: read ``block.get("content", "")``; if
+    it is a list, join only the ``{"type": "text"}`` parts that are themselves dicts
+    (preserves the aggregator''s ``isinstance(p, dict)`` guard); otherwise return
+    ``str(raw)``. Both call sites collapse to a one-liner: ``result_text = extract_tool_result_text(block)``
+    in ``threads.py:109-114`` and ``text = extract_tool_result_text(block)`` in ``message_aggregator.py:168-172``.
+    No behavior change for the aggregator''s well-formed inputs; ``threads.py`` gains
+    the same defensive ``isinstance(p, dict)`` guard the aggregator already has,
+    which is the strictly safer direction.
+
+    HOW — (1) In ``src/core/message_aggregator.py``, add ``def extract_tool_result_text(block:
+    dict) -> str:`` immediately after ``extract_text_from_message`` (L30) so the
+    two text-extraction helpers sit together. Body: ``raw = block.get("content",
+    "")`` / ``if isinstance(raw, list): return "\n".join(p.get("text", "") for p
+    in raw if isinstance(p, dict) and p.get("type") == "text")`` / ``return str(raw)``.
+    (2) In ``src/core/message_aggregator.py:168-172`` inside ``_feed``, replace the
+    five-line ``raw = block.get("content", "")`` / ``if isinstance(raw, list): ...``
+    / ``else: text = str(raw)`` block with ``text = extract_tool_result_text(block)``.
+    (3) In ``src/api/threads.py:109-114`` inside ``get_thread_events``, replace the
+    six-line ``raw_content = block.get(''content'', '''')`` / ``if isinstance(raw_content,
+    list): ...`` / ``else: result_text = str(raw_content)`` block with ``result_text
+    = extract_tool_result_text(block)``. Add ``extract_tool_result_text`` to the
+    existing ``from src.api.message_utils import extract_text_from_message`` import
+    only if ``message_utils.py`` re-exports it; otherwise import directly from ``src.core.message_aggregator``
+    (the simpler path — the helper lives in the aggregator module and the existing
+    ``__all__`` re-export pattern at ``message_utils.py:22-26`` can be extended in
+    the same change so ``threads.py`` keeps importing from ``message_utils`` for
+    consistency with its current style). (4) Verify with ``yapf --diff src/core/message_aggregator.py
+    src/api/threads.py src/api/message_utils.py`` (exit code 0, no drift), ``python
+    -m pyflakes src/`` (no new warnings; the existing ``WatchTarget`` warning in
+    ``api/internal.py`` from pending items #131/#139 stays as-is). (5) Run the existing
+    aggregator and threads tests if any exist; otherwise rely on the call sites''
+    pre-existing coverage.
+
+    REFACTORING SAFETY — (1) The helper is a pure function with no I/O, no async,
+    no module state, so the extraction is fully additive on the implementation side.
+    (2) The two call sites are grep-confirmed (``grep -rn "tool_result" src/`` plus
+    ``grep -rn "isinstance(raw" src/api src/core``) to be the only ``tool_result``-content
+    parsers in the codebase that handle the list-or-string union — every other ``tool_result``
+    reference in ``src/`` either constructs a fresh ``tool_result`` event (``agents/backends/base.py:103``
+    ``make_tool_result_event``, ``agents/backends/opencode.py:145-151``) or only
+    reads ``tool_use_id`` for pending-tool-call tracking (``agents/backends/base.py:288-299``);
+    none of those would change. (3) The aggregator''s existing ``isinstance(p, dict)``
+    guard is the strictly-safer behavior of the two existing copies; adopting it
+    in ``threads.py`` cannot break a request that already succeeds and shields against
+    a malformed ``content`` list where a non-dict slipped in (e.g. a future schema
+    addition). (4) The dedup-rule line "extract a shared helper only if the shared
+    block is > 50 lines OR the helper has a clear, single-responsibility name worth
+    its own concept" is satisfied by the second clause: ``extract_tool_result_text``
+    answers exactly one question ("what is the renderable text of this tool_result
+    block?"), returns one ``str``, and the helper sits next to the existing ``extract_text_from_message``
+    sibling that answers the analogous question for assistant messages. (5) Pending
+    items #132 (split ``MessageAggregator._feed`` into per-event-type handlers) and
+    #137 (split ``Worker.run`` into the event-stream loop and a ``_emit_post_run_artifacts``
+    helper) touch the aggregator/worker streams but neither one mutates the ``tool_result``
+    content-text parsing logic; this dedup can land before or after either of those
+    items without conflict. (6) Do NOT generalize the helper into a "universal block-content
+    extractor" that also handles ``tool_use.input``, ``image.source``, or other block
+    types — the call sites only need ``tool_result``-text, and a broader helper would
+    invite a different drift problem (silently picking up new block types the caller
+    did not intend to handle).
+
+    NON-DUPLICATION CHECK — ``yapf --in-place --recursive src/`` for this scheduled
+    scan applied one whitespace-only fix to ``core/spawner.py:spawn_worker`` (committed
+    separately on this branch per the yapf-rule). ``grep -rE "TODO|FIXME|HACK|XXX"
+    src/`` returns zero matches. ``python -m pyflakes src/`` reports only the already-tracked
+    ``WatchTarget`` unused import in ``api/internal.py`` (covered by pending items
+    #131 and #139). ``vulture src/ --min-confidence 80`` reports only the ``cls``
+    classmethod parameter in ``core/config.py:127``, which is a Pydantic-validator
+    requirement and a known false positive; the lower-confidence ``vulture --min-confidence
+    60`` hits (FastAPI route handlers, Pydantic model fields, ``close_http_client``,
+    ``init_charliebot_home``) are all confirmed-used via grep (``server.py:19`` and
+    ``server.py:113`` for ``close_http_client``; ``server.py`` and ``project.md``
+    for ``init_charliebot_home``; FastAPI dispatchers for the route handlers) and
+    are not real findings. The >50-line function scan was already enumerated in items
+    #154 (``spawn_review_worker``) / #155 (``trigger_master`` swallowed-exception)
+    / #157 (``_finalize_worker`` skip-cleanup predicate); the remaining un-filed
+    long functions (``_build_worker_prompt``, ``slash.execute_command``, ``autonamer.maybe_auto_name``,
+    ``_wait_for_quota_recovery``, ``_dir_listing_html``, ``fork_session``, ``build_review_prompt``,
+    ``parse_ndjson_tail``, ``_resolve_worktree_start_point``, ``get_thread_events``,
+    ``build_session_view_data``, ``_wait_and_fire``, ``trigger_master``, ``_broadcast_completion``,
+    ``spawn_worker``, ``delegate.main``) were each inspected and confirmed as coherent
+    single-flow functions whose splits would amount to premature abstraction (e.g.
+    ``_build_worker_prompt`` is a six-section prompt concatenation; ``_dir_listing_html``
+    is an HTML template assembler; ``delegate.main`` is 100% argparse boilerplate;
+    ``_resolve_worktree_start_point`` is a linear ancestor-check ladder; ``_broadcast_completion``''s
+    suffix-builder is a 10-line ladder with a single caller and no duplication elsewhere
+    — extracting it would not survive the dedup rule''s "clear single-responsibility
+    name worth its own concept" test as well as this finding does). The ``extract_tool_result_text``
+    extraction is the strongest of the remaining un-filed candidates because: it
+    is the only one with a *concrete* duplication across two distinct modules (not
+    merely a long single-flow function), the duplication is already drifting on the
+    ``isinstance(p, dict)`` guard, and the helper consolidates a subtle Anthropic-format
+    schema invariant (list-or-string ``content`` union) into one named seam that
+    a future schema change can update once. This is the single new code-health backlog
+    entry for this 2026-05-12T11:14Z scheduled scan.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-05-12T11:14:40Z'
+  priority: low

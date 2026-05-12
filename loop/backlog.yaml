@@ -5501,3 +5501,109 @@
   status: pending
   created: '2026-05-12T07:12:56Z'
   priority: low
+- id: '157'
+  title: Extract the skip-cleanup predicate from core/spawner._finalize_worker into
+    a single-responsibility _should_skip_worktree_cleanup helper
+  description: 'WHY — The 2026-05-12T09:12Z scheduled code-health scan (yapf --in-place
+    --recursive src/, full-tree pyflakes, TODO/FIXME/HACK/XXX grep, AST scan for functions
+    over 50 lines) walked the >50-line function list against the pending items in
+    this backlog and found `_finalize_worker` (src/core/spawner.py:497, 56 lines)
+    is the largest remaining unfiled long-function candidate that also exposes a
+    clean single-responsibility extraction point. Inside `_finalize_worker` the lines
+    that decide whether the worker''s worktree must survive past this exit (L526-540,
+    13 lines including the explanatory comment) implement a multi-case predicate
+    with four named conditions — `thread.keep_worktree`, `thread.skip_cleanup`,
+    `thread.review_of`, and the composite `exit_code == 0 and thread.require_review
+    and not thread.review_of and can_spawn_reviewer` reviewer-gate — that together
+    answer one question: "given this worker''s terminal state, do we keep its worktree
+    alive for downstream consumers (reviewer chain, improve-loop shared worktree,
+    keep_worktree pin)?" That question is exactly the kind of named concept the
+    dedup rule rewards: even though the block is well under 50 lines, the helper has
+    a clear, single-responsibility name (`_should_skip_worktree_cleanup`) worth its
+    own concept, the predicate is independently testable, and the rest of `_finalize_worker`
+    becomes a linear status-update + notify pipeline. WHAT — One new private helper
+    in src/core/spawner.py, `_should_skip_worktree_cleanup(thread: ThreadMetadata,
+    exit_code: int) -> bool`, that owns the L529-539 branch ladder and returns the
+    same boolean. `_finalize_worker` shrinks from 56 lines to ~43 lines (below the
+    50-line threshold the code-health scan uses), the predicate gains a tight signature
+    that future contributors can read in isolation, and the cleanup decision becomes
+    a one-line call site (`skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)`).
+    No behavior change, no signature change for `_finalize_worker` itself, no log-event
+    rename. HOW — (1) In src/core/spawner.py, add a synchronous module-level helper
+    immediately above `_finalize_worker` (after `_cleanup_worker_directory`): `def
+    _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) -> bool:`
+    with a one-line docstring ("Decide whether the worker''s worktree must survive
+    past this exit (reviewer chain, keep_worktree pin, improve-loop shared worktree,
+    or explicit skip_cleanup)."). The body is the four-branch ladder moved verbatim
+    from L529-539: `if thread.keep_worktree: return True` / `if thread.skip_cleanup:
+    return True` / `if thread.review_of: return True` / `can_spawn_reviewer = all([thread.repo_path,
+    thread.branch_name, thread.worktree_path])` / `return exit_code == 0 and thread.require_review
+    and not thread.review_of and can_spawn_reviewer`. (2) Inside `_finalize_worker`,
+    replace the L526-540 block with a single line: `skip_cleanup = _should_skip_worktree_cleanup(thread,
+    exit_code)` so the existing call `await _cleanup_worker_directory(thread, skip_cleanup)`
+    at L540 still works unchanged. (3) Verify with `yapf --diff src/core/spawner.py`
+    (exit code 0, no drift), `python -m pyflakes src/core/spawner.py` (still zero
+    warnings), and the AST scan reporting `_finalize_worker` below 50 lines. (4)
+    Run `pytest tests/test_spawner_exit_override.py tests/test_spawner_backend_propagation.py`
+    to confirm no behavior regression in the spawner''s exit-handling and backend-propagation
+    paths. (5) Optionally (not required) add a focused unit test in tests/test_spawner_skip_cleanup.py
+    that exercises the four branches of `_should_skip_worktree_cleanup` with hand-built
+    `ThreadMetadata` instances — the helper is pure and synchronous so a table-driven
+    parametrize is trivial. REFACTORING SAFETY — (1) `_finalize_worker` is `grep`-confirmed
+    (`grep -rn _finalize_worker src/ tests/`) to be referenced only inside src/core/spawner.py
+    itself: the def at L497, the wrapper `_finalize_worker_safely` at L555 calling
+    it at L569, and the indirect path from `spawn_worker` via `_finalize_worker_safely`
+    at L671. No test, no CLI, no external module imports it, so this is a fully
+    private contract change. (2) The change is purely additive (one new helper)
+    + a single-line substitution at the call site — no signature change for `_finalize_worker`,
+    no parameter reordering, no new log events. (3) All four `ThreadMetadata` fields
+    consumed by the predicate (`keep_worktree`, `skip_cleanup`, `review_of`, `require_review`,
+    `repo_path`, `branch_name`, `worktree_path`) are confirmed defined on `ThreadMetadata`
+    at src/core/models.py L79-89, so the helper compiles against the current model.
+    (4) The dedup-rule line "extract a shared helper only if the shared block is
+    > 50 lines OR the helper has a clear, single-responsibility name worth its own
+    concept" is satisfied by the second clause: the helper name `_should_skip_worktree_cleanup`
+    states one question, returns one bool, and consolidates four scattered conditions
+    that today only make sense when read together inside a 56-line method body.
+    (5) Pending items #125 (`_create_worktree_and_process` dedup), #154 (`spawn_review_worker`
+    preflight extraction), and #156 (`finalize_review_chain.thread_mgr` removal)
+    all touch the worker/review chain but none of them mutate `_finalize_worker`
+    or its skip-cleanup branch ladder, so the three changes can land in any order
+    without conflict. (6) Do NOT attempt to also inline `_cleanup_worker_directory`
+    into `_finalize_worker` as a "while we''re here" simplification — the cleanup
+    routine has its own try/except branches around git_worktree_remove and tempdir
+    rm that form an independent responsibility (file-op error surfacing) worth keeping
+    behind its own named seam. NON-DUPLICATION CHECK — `yapf --in-place --recursive
+    src/` for this scheduled scan applied one whitespace-only fix to `core/spawner.py:spawn_worker`
+    (committed separately on this branch per the yapf-rule). `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` returns zero matches. `python -m pyflakes src/` reports only the already-tracked
+    `WatchTarget` unused import in `api/internal.py` (covered by pending items #131
+    and #139). The >50-line function scan returned 34 functions; cross-referencing
+    against pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/154
+    leaves these uncovered candidates: `_build_worker_prompt` (83, spawner.py), `slash.execute_command`
+    (68, slash.py), `autonamer.maybe_auto_name` (62, autonamer.py), `_wait_for_quota_recovery`
+    (61, improve_command.py), `_dir_listing_html` (61, files.py), `fork_session`
+    (58, sessions.py), `build_review_prompt` (58, review.py), `_finalize_worker`
+    (56, spawner.py), `run_message_with_resume_recovery` (56, master_trigger.py),
+    `build_session_view_data` (55, message_utils.py), `_wait_and_fire` (54, triggers.py),
+    `trigger_master` (54, master_trigger.py), `_broadcast_completion` (53, spawner.py),
+    and `spawn_worker` (52, spawner.py). Per the one-finding-per-scan rule and the
+    dedup rule''s preference for "clear, single-responsibility name worth its own
+    concept" over premature abstraction, `_finalize_worker` is the strongest of
+    those candidates because: its skip-cleanup block is the only one of the fourteen
+    where a contiguous sub-block already reads as a named question (the others —
+    e.g. `_build_worker_prompt`''s six prompt-section concatenation, `_wait_for_quota_recovery`''s
+    single polling loop, `slash.execute_command`''s linear dispatcher — are coherent
+    single-flow functions whose splits would amount to premature abstraction); the
+    extraction also tightens the public-shape contract a future test author would
+    most likely want to exercise in isolation (worktree-lifetime decisions are easy
+    to get wrong on the reviewer-chain path and SIGTERM-after-success path); and
+    the helper is fully private to spawner.py, so the cleanup is contained. This
+    is the single new code-health backlog entry for this 2026-05-12T09:12Z scheduled
+    scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-12T09:12:48Z'
+  priority: low

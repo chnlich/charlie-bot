@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Awaitable, Callable, Literal, Optional
+from typing import Annotated, Awaitable, Callable, Dict, Literal, Optional
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -162,6 +162,7 @@ class SessionMetadata(BaseModel):
   rewind_summary: Optional[str] = None  # context summary from parent session
   # Rating
   rating: Optional[SessionRating] = None
+  round_ratings: Dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)
   # Grouping
   group: Optional[str] = None
 
@@ -230,8 +231,8 @@ class RenameSessionRequest(BaseModel):
   name: str
 
 
-class RateSessionRequest(BaseModel):
-  rating: SessionRating
+class RateRoundRequest(BaseModel):
+  rating: Optional[Literal['thumbs_up', 'thumbs_down']]
 
 
 class SetGroupRequest(BaseModel):

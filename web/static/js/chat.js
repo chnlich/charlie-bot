@@ -5,6 +5,130 @@ function shouldAutoScroll(container, threshold = 150) {
   return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
 }
 
+let activeRoundRatings = {};
+
+function setActiveRoundRatings(roundRatings) {
+  activeRoundRatings = roundRatings || {};
+  globalThis.ACTIVE_ROUND_RATINGS = activeRoundRatings;
+}
+
+function getRoundRating(eventIndex) {
+  return activeRoundRatings[String(eventIndex)] || null;
+}
+
+function escapeChatAttr(str) {
+  return escapeHtml(String(str)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function escapeJsSingleQuoted(str) {
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
+function roundRatingButtonClass(buttonRating, activeRating) {
+  const active = buttonRating === activeRating;
+  const activeClass = buttonRating === 'thumbs_up' ? 'text-green-400' : 'text-red-400';
+  const hoverClass = buttonRating === 'thumbs_up' ? 'hover:text-green-400' : 'hover:text-red-400';
+  return 'round-rating-button p-0.5 text-sm leading-none ' + (active ? activeClass : 'text-slate-500 ' + hoverClass);
+}
+
+function renderRoundRatingButtons(sessionId, eventIndex) {
+  const activeRating = getRoundRating(eventIndex);
+  const sessionArg = escapeJsSingleQuoted(sessionId);
+  const eventKey = String(eventIndex);
+  const eventNumber = Number(eventIndex);
+  const sharedAttrs = ' data-round-rating-session="' + escapeChatAttr(sessionId) + '"'
+    + ' data-round-rating-event="' + escapeChatAttr(eventKey) + '"';
+  return '<button type="button" data-round-rating="thumbs_up"' + sharedAttrs
+    + ' aria-pressed="' + String(activeRating === 'thumbs_up') + '"'
+    + ' onclick="rateRound(\'' + sessionArg + '\', ' + eventNumber + ', \'thumbs_up\')"'
+    + ' class="' + roundRatingButtonClass('thumbs_up', activeRating) + '" title="Thumbs up">👍</button>'
+    + '<button type="button" data-round-rating="thumbs_down"' + sharedAttrs
+    + ' aria-pressed="' + String(activeRating === 'thumbs_down') + '"'
+    + ' onclick="rateRound(\'' + sessionArg + '\', ' + eventNumber + ', \'thumbs_down\')"'
+    + ' class="' + roundRatingButtonClass('thumbs_down', activeRating) + '" title="Thumbs down">👎</button>';
+}
+
+function applyRoundRatingButtonState(btn, activeRating) {
+  const buttonRating = btn.dataset.roundRating;
+  const isActive = buttonRating === activeRating;
+  btn.classList.toggle('text-slate-500', !isActive);
+  btn.classList.toggle('text-green-400', buttonRating === 'thumbs_up' && isActive);
+  btn.classList.toggle('text-red-400', buttonRating === 'thumbs_down' && isActive);
+  btn.classList.toggle('hover:text-green-400', buttonRating === 'thumbs_up' && !isActive);
+  btn.classList.toggle('hover:text-red-400', buttonRating === 'thumbs_down' && !isActive);
+  btn.setAttribute('aria-pressed', String(isActive));
+}
+
+function updateRoundRatingButtons(sessionId, eventIndex, activeRating) {
+  const eventKey = String(eventIndex);
+  document.querySelectorAll('[data-round-rating]').forEach(btn => {
+    if (btn.dataset.roundRatingSession === String(sessionId) && btn.dataset.roundRatingEvent === eventKey) {
+      applyRoundRatingButtonState(btn, activeRating);
+    }
+  });
+}
+
+function refreshAllRoundRatingButtons() {
+  document.querySelectorAll('[data-round-rating]').forEach(btn => {
+    applyRoundRatingButtonState(btn, getRoundRating(btn.dataset.roundRatingEvent));
+  });
+}
+
+function hydrateServerRenderedRoundControls() {
+  document.querySelectorAll('#messages .separator-line').forEach(separator => {
+    if (separator.querySelector('[data-round-rating]')) return;
+    const forkButton = separator.querySelector('button[onclick^="forkSession"]');
+    if (!forkButton) return;
+    const match = (forkButton.getAttribute('onclick') || '').match(/^forkSession\('([^']+)',\s*(\d+)\)$/);
+    if (!match) return;
+    const controls = document.createElement('span');
+    controls.innerHTML = renderRoundRatingButtons(match[1], Number(match[2]));
+    while (controls.firstChild) {
+      separator.insertBefore(controls.firstChild, separator.lastElementChild);
+    }
+  });
+  refreshAllRoundRatingButtons();
+}
+
+async function initializeRoundRatings() {
+  hydrateServerRenderedRoundControls();
+  if (!SESSION_ID) return;
+  const sessionId = SESSION_ID;
+  try {
+    const res = await fetch('/api/sessions/' + sessionId);
+    if (!res.ok) throw new Error(`Load round ratings failed: ${res.status}`);
+    const session = await res.json();
+    if (SESSION_ID !== sessionId) return;
+    setActiveRoundRatings(session.round_ratings || {});
+    hydrateServerRenderedRoundControls();
+  } catch (err) {
+    console.error('Load round ratings failed:', err);
+  }
+}
+
+async function rateRound(sessionId, eventIndex, rating) {
+  const eventKey = String(eventIndex);
+  const nextRating = activeRoundRatings[eventKey] === rating ? null : rating;
+  try {
+    const res = await fetch('/api/sessions/' + sessionId + '/rounds/' + eventIndex + '/rate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({rating: nextRating}),
+    });
+    if (!res.ok) throw new Error(`Rate round failed: ${res.status}`);
+    const session = await res.json();
+    if (SESSION_ID !== sessionId) return;
+    setActiveRoundRatings(session.round_ratings || {});
+    updateRoundRatingButtons(sessionId, eventIndex, getRoundRating(eventIndex));
+  } catch (err) {
+    console.error('Rate round failed:', err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Send message
 // ---------------------------------------------------------------------------
@@ -361,7 +485,8 @@ function renderMessage(msg, sessionId) {
         + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
         + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
         + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
-        + "</button>";
+        + "</button>"
+        + renderRoundRatingButtons(sessionId, msg.event_index);
     }
     return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\">"
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
@@ -498,6 +623,7 @@ function scrollToBottom() {
 
 // Hide the button when user scrolls back to bottom
 document.addEventListener('DOMContentLoaded', () => {
+  initializeRoundRatings();
   const container = document.getElementById('messages');
   if (container) {
     container.addEventListener('scroll', () => {

@@ -5413,3 +5413,91 @@
   status: pending
   created: '2026-05-12T03:13:19Z'
   priority: medium
+- id: '156'
+  title: Drop the unused thread_mgr parameter from core/review.finalize_review_chain
+    and stop threading it through the two call sites
+  description: 'WHY — `core/review.py:finalize_review_chain` (L22-40) declares a `thread_mgr:
+    ThreadManager` parameter at L25 that is never referenced anywhere in the function
+    body. The body only reads `original_thread.repo_path` / `original_thread.worktree_path`
+    / `original_thread.keep_worktree` / `original_thread.id` (all already on the second
+    `original_thread: ThreadMetadata` argument) and calls module-level helpers `git_worktree_remove`
+    and `git_worktree_prune` from `src.core.git` — neither of which takes a ThreadManager.
+    Both call sites pass `thread_mgr` for no reason: `_retry_failed_reviewer` at `core/review.py:378`
+    (`await finalize_review_chain(session_id, original_thread, thread_mgr)`) and `maybe_spawn_reviewer`
+    at `core/review.py:420` (`await finalize_review_chain(session_id, original_thread,
+    thread_mgr)`). pylint W0613 confirms (`pylint --disable=all --enable=unused-argument
+    src/core/review.py` → `src/core/review.py:25:4: W0613: Unused argument ''thread_mgr''
+    (unused-argument)`). This is a small dead-parameter that has accumulated through
+    refactors — every reader of `finalize_review_chain` has to mentally trace `thread_mgr`
+    to discover it does nothing, and every change to the review-chain cleanup signature
+    has to keep an unused argument in sync. Dropping it tightens the contract and
+    removes one false dependency in the review module''s seam with ThreadManager.
+
+    HOW — (1) In `src/core/review.py`, change the `finalize_review_chain` signature
+    at L22-26 from `async def finalize_review_chain(session_id: str, original_thread:
+    ThreadMetadata, thread_mgr: ThreadManager) -> None:` to `async def finalize_review_chain(session_id:
+    str, original_thread: ThreadMetadata) -> None:`. (2) Update the two call sites
+    inside the same file: at L378 change `await finalize_review_chain(session_id,
+    original_thread, thread_mgr)` to `await finalize_review_chain(session_id, original_thread)`,
+    and at L420 apply the identical edit. (3) Do NOT remove `from src.core.threads
+    import ThreadManager` at L16 — `ThreadManager` is still referenced by `_retry_failed_reviewer`
+    (L367), `maybe_spawn_reviewer` (L388), `spawn_review_worker` (L256-260 per item
+    #154''s description), and `extract_review_context` (L103 per item #153''s description)
+    as their own typed parameters, and removing the import would break those signatures.
+    (4) Verify with `python -m pyflakes src/core/review.py` (should remain at the
+    current zero-warning baseline) and `pylint --disable=all --enable=unused-argument
+    src/core/review.py` (the W0613 line for L25 should disappear).
+
+    REFACTORING SAFETY — (1) `finalize_review_chain` is grep-confirmed (`grep -rn
+    finalize_review_chain src/ tests/`) to be referenced only inside `src/core/review.py`
+    itself (definition L22, calls L378 and L420); no external module, test, or CLI
+    imports it, so this is a private contract change with no broader fan-out. (2)
+    The change is purely subtractive — no new helper extraction, no behavior change,
+    no log-event rename. The function still does the same `git_worktree_remove` /
+    `git_worktree_prune` flow under the same `try`/`except Exception` guard at L35-40.
+    (3) Pending items #153 (extract JSONL event-field lookup helper from `extract_review_context`)
+    and #154 (extract preflight resolution preamble from `spawn_review_worker`) target
+    different functions in the same file and do not touch `finalize_review_chain`
+    or its callers'' parameter lists; the three changes can land in any order without
+    conflict. (4) Pending item #138 / done item #146 (and the broader reviewer-retry
+    refactors logged in earlier items) reshaped the review-chain flow around `_retry_failed_reviewer`
+    and `maybe_spawn_reviewer` but did not touch `finalize_review_chain`''s signature
+    — this is the first cleanup of its argument list since the function was extracted.
+    (5) Do NOT attempt to inline `finalize_review_chain` into its two callers as a
+    "while we''re here" simplification — the function''s explicit early-returns (`if
+    not original_thread.repo_path or not original_thread.worktree_path: return`, `if
+    original_thread.keep_worktree: return`, `if not wt.exists(): return`) form a coherent
+    idempotency contract that both callers rely on and that is worth keeping behind
+    a named seam.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` for this scheduled
+    scan applied one whitespace-only fix to `core/spawner.py:spawn_worker` (committed
+    separately on this branch per the task''s yapf-rule, separate from this finding).
+    `grep -rE "TODO|FIXME|HACK|XXX" src/` returns zero matches. `pyflakes src/` reports
+    only the already-tracked `WatchTarget` unused import in `api/internal.py` (covered
+    by pending items #131 and #139). `vulture src/ --min-confidence 80` reports only
+    the `cls` classmethod parameter in `core/config.py:127`, which is a Pydantic-validator
+    requirement and a known vulture false positive. The >50-line function scan was
+    fully enumerated by items #154 and #155 on this same branch and is not re-litigated
+    here (every long-function candidate is either covered by a pending refactor item
+    — #107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/154
+    — or explicitly rejected as a coherent single-flow function in #154''s description,
+    and the `except Exception: pass` survey was settled by #155). pylint''s `unused-argument`
+    pass also flags `_create_repoless_process` (session_mgr at `core/spawner.py:370`),
+    `_execute_handler_task` (unpacked `cfg` local at `core/scheduler.py:183`), `list_scheduled_sessions`
+    (`cfg = Depends(get_config)` at `api/sessions.py:158`), and a handful of FastAPI/CLI
+    handlers whose unused arguments are required by the framework dispatcher signature
+    (`api/slash.py:137 thread_mgr`, `cli/backup.py:16/22 args`); per the one-finding-per-scan
+    rule those are deliberately not filed here. `finalize_review_chain.thread_mgr`
+    is the strongest of the genuine (non-framework) dead-parameter candidates because
+    it is a project-internal helper (no framework dispatcher contract), it is private
+    to a single file (so the cleanup is fully contained), and it is the only one whose
+    removal also tightens the public-shape of a review-module seam rather than a private
+    composite-spawn helper. This is the single new code-health backlog entry for this
+    2026-05-12 scheduled scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-12T07:12:56Z'
+  priority: low

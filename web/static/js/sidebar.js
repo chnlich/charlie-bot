@@ -900,6 +900,63 @@ async function unarchiveSession(id) {
   }
 }
 
+let deleteConfirmKeyHandler = null;
+
+function closeDeleteConfirmModal() {
+  document.getElementById('delete-confirm-overlay')?.remove();
+  if (deleteConfirmKeyHandler) {
+    document.removeEventListener('keydown', deleteConfirmKeyHandler);
+    deleteConfirmKeyHandler = null;
+  }
+}
+
+function confirmDeletePermanently(sessionId) {
+  closeDeleteConfirmModal();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'delete-confirm-overlay';
+  overlay.className = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
+  overlay.innerHTML = `
+    <div class="bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72 text-center"
+         onclick="event.stopPropagation()">
+      <svg class="w-8 h-8 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+      </svg>
+      <p class="text-sm font-semibold text-slate-200 mb-1">Delete permanently?</p>
+      <p class="text-xs text-slate-400 mb-4">This will permanently delete this session and all its data. This cannot be undone.</p>
+      <div class="flex gap-2 justify-center">
+        <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
+        <button id="confirm-delete-btn" class="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors">Delete</button>
+      </div>
+    </div>`;
+
+  overlay.querySelector('#confirm-cancel-btn').addEventListener('click', closeDeleteConfirmModal);
+  overlay.querySelector('#confirm-delete-btn').addEventListener('click', async () => {
+    closeDeleteConfirmModal();
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`Permanent delete failed: ${res.status}`);
+      if (SESSION_ID === sessionId) {
+        location.href = '/?session=';
+      } else {
+        switchSidebarFilter(currentFilter);
+      }
+    } catch (err) {
+      console.error('Permanent delete failed:', err);
+    }
+  });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDeleteConfirmModal();
+  });
+  deleteConfirmKeyHandler = (e) => {
+    if (e.key === 'Escape') closeDeleteConfirmModal();
+  };
+  document.addEventListener('keydown', deleteConfirmKeyHandler);
+
+  document.body.appendChild(overlay);
+}
+
 // ---------------------------------------------------------------------------
 // Sidebar filter & star
 // ---------------------------------------------------------------------------
@@ -1343,6 +1400,10 @@ function renderSessionItem(s, filter) {
       <button onclick="event.preventDefault(); event.stopPropagation(); unarchiveSession('${s.id}')"
               class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Unarchive">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/></svg>
+      </button>
+      <button onclick="event.preventDefault(); event.stopPropagation(); confirmDeletePermanently('${s.id}')"
+              class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Delete permanently">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
       </button>`;
   } else {
     const gearBtn = (filter === 'scheduled' && s.scheduled_task) ? `

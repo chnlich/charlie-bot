@@ -5741,3 +5741,120 @@
   status: pending
   created: '2026-05-12T11:14:40Z'
   priority: low
+- id: '159'
+  title: Drop three unused dependency parameters surfaced by pylint W0613 in core/spawner._create_repoless_process,
+    api/slash.execute_command, and api/sessions.list_scheduled_sessions
+  description: 'WHY — The 2026-05-12T17:14Z scheduled code-health scan ran `pylint
+    --disable=all --enable=unused-argument src/` after the yapf pass (which applied
+    a single one-line fix to `core/spawner.py:spawn_worker` already committed separately
+    on this branch per the task''s yapf rule) and surfaced three live dead-parameter
+    findings beyond the already-tracked `core/review.finalize_review_chain.thread_mgr`
+    that pending item #156 covers and beyond the two `src/cli/backup.py` `args` parameters
+    that are required by the argparse-handler signature (subcommand handlers in `backup.py`
+    are dispatched by `args.func(args)` so the `args` parameter is part of the contract
+    even when unused). The three new findings are: (1) `src/core/spawner.py:365-399`
+    `_create_repoless_process` declares `session_mgr: SessionManager` at L370 but
+    the body never references it — `grep -n session_mgr src/core/spawner.py` shows
+    no occurrence between L370 and L400. The sister helper `_create_worktree_and_process`
+    at L249-362 DOES use `session_mgr` (calling `await session_mgr.get_session(session_id)`
+    at L287 and L322), so the parameter was likely propagated from the parallel signature
+    when the two helpers were factored out of `spawn_worker`. The single call site
+    is `spawn_worker` at L649 (`worker = await _create_repoless_process(session_id,
+    thread, description, cfg, session_mgr, thread_mgr, req)`). (2) `src/api/slash.py:130-139`
+    `execute_command` declares `thread_mgr: ThreadManager = Depends(get_thread_manager)`
+    at L137 but the body never references `thread_mgr` (verified by `grep -n thread_mgr
+    src/api/slash.py`). The dependency injection still fires `get_thread_manager()`
+    on every slash-command request — a singleton accessor in `api/deps.py:24-28`
+    with no side effects beyond lazy instantiation that already runs from other endpoints,
+    so dropping the dep is safe and saves one Depends-resolution per request. (3)
+    `src/api/sessions.py:155-180` `list_scheduled_sessions` declares `cfg: CharlieBotConfig
+    = Depends(get_config)` at L158 but the body never references `cfg` (it only uses
+    `session_mgr`, `get_scheduled_tasks()`, and `ZoneInfo`/`datetime`/`croniter` from
+    module scope). Same FastAPI-Depends pattern as the slash.py finding. None of
+    these three are covered by any pending item — item #156 is scoped exclusively
+    to `core/review.finalize_review_chain.thread_mgr` (its description names that
+    one function in its title and HOW steps), item #131 is scoped to the `WatchTarget`
+    unused import in `api/internal.py`, and items #154/155/157/158 each target distinct
+    refactors. Per CLAUDE.md''s "no defensive programming" / "no dead code" principles,
+    declaring a parameter you never use is a contract lie that future readers must
+    trace before they discover it does nothing.
+
+    HOW — Three small, independent, zero-behavior-change edits. (1) In `src/core/spawner.py`
+    drop `session_mgr: SessionManager,` from the `_create_repoless_process` signature
+    at L370 and remove `session_mgr` from the call site at L649 — the new call becomes
+    `worker = await _create_repoless_process(session_id, thread, description, cfg,
+    thread_mgr, req)`. Do NOT touch `_create_worktree_and_process` at L249 — its
+    `session_mgr` parameter IS used at L287 and L322 and the call site at L653 must
+    keep passing it. (2) In `src/api/slash.py` drop `thread_mgr: ThreadManager = Depends(get_thread_manager),`
+    from the `execute_command` signature at L137. Then in `tests/test_message_attachments.py:139`
+    drop the `thread_mgr=object()` kwarg from the `execute_command(...)` call inside
+    `test_execute_command_persists_uploaded_files_for_prompt_dispatch` (the existing
+    placeholder `object()` confirms the param has long been known-unused). Verify
+    `from src.core.threads import ThreadManager` and `from src.api.deps import ...
+    get_thread_manager ...` imports in `slash.py` are still referenced elsewhere
+    in the file (`get_thread_manager` is currently only used in `execute_command`;
+    drop the import too if no other reference remains, but keep `ThreadManager` if
+    any annotation still uses it — verify with `grep -n ThreadManager src/api/slash.py`).
+    (3) In `src/api/sessions.py` drop `cfg: CharlieBotConfig = Depends(get_config),`
+    from the `list_scheduled_sessions` signature at L158. Verify `from src.core.config
+    import ... get_config ...` and `CharlieBotConfig` imports remain in use elsewhere
+    in `sessions.py` (they are — multiple other endpoints in this module depend on
+    `get_config` and reference `CharlieBotConfig`), so leave the imports alone.
+
+    REFACTORING SAFETY — (a) No pylint W0613 noise should remain after these three
+    edits: re-run `pylint --disable=all --enable=unused-argument src/` and confirm
+    output drops to only `src/cli/backup.py:16` / `:22` (argparse handler boilerplate,
+    not actionable) and `src/core/review.py:25` (already covered by pending item
+    #156). (b) `_create_repoless_process` has exactly one call site in src/ and zero
+    in tests/ (verified `grep -rn _create_repoless_process src/ tests/` returns only
+    the def + L649 call). (c) `execute_command` has one test call site that must
+    be updated in lockstep — failure to remove the `thread_mgr=object()` kwarg from
+    `test_execute_command_persists_uploaded_files_for_prompt_dispatch` will surface
+    as a TypeError "got an unexpected keyword argument ''thread_mgr''" on the first
+    test run. Run `pytest tests/test_message_attachments.py -q` to confirm green.
+    (d) `list_scheduled_sessions` has zero internal call sites (FastAPI routes it
+    via the `@router.get("/scheduled")` decorator) and no test in `tests/` references
+    it by name (verified `grep -rn list_scheduled_sessions tests/` returns empty),
+    so the only thing to verify is that the route still mounts cleanly — `python3
+    -c "from src.api.sessions import router; print(len(router.routes))"` should
+    print the same route count as before. (e) Do NOT introduce a `_` prefix on the
+    unused params instead of removing them; pylint W0613 would still flag the FastAPI
+    Depends versions (and the spawner one is a real positional arg with a single
+    caller, so renaming would just push the noise into the caller). (f) Do NOT extend
+    the cleanup to `src/cli/backup.py:16` / `:22` — those `args` parameters are required
+    by the argparse subcommand dispatch contract (`args.func(args)` in `main()`)
+    and are intentional even though pylint flags them. (g) Keep the description-arg
+    position in `_create_repoless_process` and the test-kwarg ordering in
+    `test_execute_command_persists_uploaded_files_for_prompt_dispatch` unchanged
+    except for the removed parameter — both call sites use positional / kwarg passing
+    that does not require reordering remaining args.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` applied a single one-line
+    fix to `core/spawner.py:spawn_worker` (the `_maybe_override_exit_code_from_result`
+    call now fits on one line at 120 cols), committed separately per the yapf rule;
+    `grep -rE "TODO|FIXME|HACK|XXX" src/` returns zero matches; `pyflakes src/` reports
+    only the already-tracked `WatchTarget` unused import in `api/internal.py` (covered
+    by pending item #131); `vulture src/ --min-confidence 80` reports only the `cls`
+    classmethod parameter in `core/config.py:127`, a required signature element and
+    a known vulture false positive. The >50-line function scan, after cross-referencing
+    pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/154
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153 and #154 (`_wait_for_quota_recovery`, `maybe_auto_name`, `_resolve_worktree_start_point`,
+    `parse_ndjson_tail`, `fork_session`, `get_thread_events`, `_finalize_worker`
+    [now also covered by pending #157], `_broadcast_completion`, `trigger_master`
+    [body-content covered by pending #155], `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`,
+    `spawn_worker`), leaves no >50-line function not already targeted or rejected.
+    The pylint W0613 scan is the only fresh signal this scheduled scan surfaces that
+    is not already tracked, and these three findings are the complete unused-parameter
+    inventory in src/ once the existing pending #156 (`core/review.finalize_review_chain.thread_mgr`)
+    is excluded and the two `src/cli/backup.py` argparse-required `args` parameters
+    are excluded. Per the one-finding-per-scan rule this is the single new code-health
+    backlog entry for the 2026-05-12T17:14Z scheduled scan.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-12T17:14:10Z'
+  priority: low

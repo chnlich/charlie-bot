@@ -17,6 +17,7 @@ from src.core.models import (
     ScheduleTriggerRequest,
     SessionMetadata,
     SpawnRequest,
+    TaskType,
     WatchTarget,
 )
 from src.core.sessions import SessionManager
@@ -68,8 +69,10 @@ async def delegate_task(
   """Create a thread and spawn a worker agent directly."""
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
+  require_review = req.task_type == TaskType.IMPLEMENT
+
   # Create thread immediately so it's visible in the UI
-  thread = await thread_mgr.create_thread(meta, req.description, context=req.context, require_review=req.require_review)
+  thread = await thread_mgr.create_thread(meta, req.description, context=req.context, require_review=require_review)
 
   # Fire-and-forget: spawn worker in background
   create_logged_task(
@@ -88,6 +91,7 @@ async def delegate_task(
               resolved_model=resolved_model,
               require_takeoff=True,
               keep_worktree=req.keep_worktree,
+              task_type=req.task_type,
           ),
       ))
 

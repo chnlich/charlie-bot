@@ -55,19 +55,23 @@ python -m src.cli.delegate \
   --description "concise task description" \
   --context "optional business context for reviewers" \
   --keep-worktree 0 \
-  --require-review 1
+  --task-type implement
 ```
 
 `--session` is auto-derived from cwd (master CC always runs in `~/.charliebot/sessions/{session_id}`), so do NOT pass it explicitly — passing a wrong/stale session id will be rejected. The same applies to the `improve` and `schedule_trigger` examples below.
 
 Pass `--keep-worktree 1` instead when the worker launches a long-running external job (e.g. a SLURM submission) whose WorkDir lives in the worktree.
 
-Pass `--require-review 0` for trivial repo ops (cherry-picks, branch pushes, single-line/doc-only edits, anything not touching CUDA kernels) to skip reviewer + GPU verification overhead. Default 1.
+`--task-type` picks the worker prompt template AND the post-task pipeline. Three profiles:
+
+- `implement` (default) — worker commits; reviewer auto-spawns, rebases, and ff-merges to base branch. Use for feature implementation, bug fixes, refactoring, writing tests — any code change that should be reviewed before landing.
+- `quick-edit` — worker commits; NO reviewer; master handles push/merge manually. Use for trivial repo ops (cherry-picks, branch pushes, single-line/doc-only edits, anything not touching CUDA kernels) to skip reviewer + GPU verification overhead.
+- `script-run` — worker uses the worktree as an isolated sandbox to run scripts / submit jobs / query state. **Worker must NOT modify tracked files and must NOT commit.** No reviewer, no merge, worktree cleaned up after the worker exits. Use for one-shot exploratory commands, training/eval launches, status queries.
 
 - **Always delegate**: feature implementation, bug fixes, refactoring, writing tests, any code change — including tooling setup commands like `uv init`, `npm init`, `cargo init` that create/modify tracked files.
 - **Do NOT delegate**: answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
 - **Never include revert/keep-only-report decision rules in delegate prompts** — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit.
-- Be specific (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success, rebases, and merges `--ff-only`. You receive a summary on merge.
+- Be specific (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success (for `implement`), rebases, and merges `--ff-only`. You receive a summary on merge.
 
 ---
 

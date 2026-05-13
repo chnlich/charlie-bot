@@ -12,7 +12,7 @@ import pytest
 
 from src.core import review, spawner
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata, ThreadStatus
+from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -33,6 +33,7 @@ def test_build_worker_prompt_includes_keep_worktree_note() -> None:
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="bench"),
+      task_type=TaskType.IMPLEMENT,
       keep_worktree=True,
   )
   assert "This worktree will persist after the reviewer merges." in prompt
@@ -47,6 +48,7 @@ def test_build_worker_prompt_omits_keep_worktree_note_by_default() -> None:
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="bench"),
+      task_type=TaskType.IMPLEMENT,
   )
   assert "This worktree will persist after the reviewer merges." not in prompt
 

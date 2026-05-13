@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api import internal
-from src.core.models import DelegateRequest, SessionMetadata, SpawnRequest, ThreadMetadata
+from src.core.models import DelegateRequest, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata
 from src.core.spawner import DelegationBlockedError
 
 
@@ -111,6 +111,7 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
       resolved_backend="codex-o3",
       resolved_model="o3",
       require_takeoff=True,
+      task_type=TaskType.IMPLEMENT,
   )
   session_mgr.persist_and_broadcast.assert_awaited_once()
 

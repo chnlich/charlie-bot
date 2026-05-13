@@ -28,7 +28,7 @@ from src.core.git import (
     git_worktree_remove,
 )
 from src.core.master_trigger import trigger_master
-from src.core.models import SpawnRequest, ThreadStatus, parse_utc_datetime, utc_now
+from src.core.models import SpawnRequest, TaskType, ThreadStatus, parse_utc_datetime, utc_now
 from src.core.tasks import create_logged_task
 from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
@@ -431,6 +431,7 @@ async def _run_single_iteration(
             loop_dir=str(loop_dir),
             iteration_number=i,
             is_continuation=(i > 1),
+            task_type=TaskType.IMPLEMENT,
         ),
     )
 

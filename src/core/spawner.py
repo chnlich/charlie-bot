@@ -14,7 +14,7 @@ from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
-from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata, ThreadStatus
+from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
 from src.core.git import git_current_branch, git_create_worktree, git_worktree_prune, git_worktree_remove
 from src.core.sessions import SessionManager
@@ -40,6 +40,7 @@ def _build_worker_prompt(
     branch_name: str,
     wt_path: str,
     session_meta: SessionMetadata,
+    task_type: TaskType,
     loop_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
     is_continuation: bool = False,
@@ -56,18 +57,47 @@ def _build_worker_prompt(
   else:
     intro_line = "A dedicated git worktree is already created for you."
 
-  worktree_section = (
-      f"## Worktree Workflow\n"
-      f"{intro_line}\n"
-      f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
-      f"- Worktree: `{wt_path}`\n"
-      f"- Repo: `{repo_path}`\n\n"
+  branch_lines = (f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
+                  f"- Worktree: `{wt_path}`\n"
+                  f"- Repo: `{repo_path}`")
+
+  commit_steps = (
       f"Follow these steps exactly:\n"
       f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
       f"2. Commit your changes with descriptive messages.\n"
       f"   Use structured commit messages: first line is a short summary, then a blank line, "
-      f"then a \"Why:\" line explaining the business reason for the change.\n\n"
-      f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.\n\n"
+      f"then a \"Why:\" line explaining the business reason for the change.\n")
+
+  if task_type == TaskType.IMPLEMENT:
+    workflow_body = (
+        f"{intro_line}\n"
+        f"{branch_lines}\n\n"
+        f"{commit_steps}\n"
+        f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.")
+  elif task_type == TaskType.QUICK_EDIT:
+    workflow_body = (
+        f"{intro_line}\n"
+        f"{branch_lines}\n\n"
+        f"{commit_steps}\n"
+        f"STOP here. Do NOT rebase, push, or remove the worktree. "
+        f"No reviewer will run; the orchestrator will handle merge/push.")
+  elif task_type == TaskType.SCRIPT_RUN:
+    workflow_body = (
+        f"A dedicated git worktree is provided as your isolated sandbox.\n"
+        f"{branch_lines}\n\n"
+        f"This is a script-run task. The worktree exists only to give you an isolated environment "
+        f"to run commands, submit jobs, or inspect state.\n"
+        f"- Do NOT modify tracked files.\n"
+        f"- Do NOT commit.\n"
+        f"- Finish with `git status --short` showing a clean tree.\n"
+        f"- If you discover that a repo change is actually required to complete the task, "
+        f"STOP and report back instead of making the change.")
+  else:
+    raise ValueError(f"unsupported task_type: {task_type!r}")
+
+  worktree_section = (
+      f"## Worktree Workflow\n"
+      f"{workflow_body}\n\n"
       f"## Task\n{description}")
 
   iteration_reports_section = ""
@@ -292,6 +322,7 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
+        task_type=req.task_type,
         loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,
         is_continuation=req.is_continuation,
@@ -327,6 +358,7 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
+        task_type=req.task_type,
         loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,
         keep_worktree=req.keep_worktree)

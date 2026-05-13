@@ -4,7 +4,7 @@ from typing import Any, Optional
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata, ThreadStatus
+from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 from src.core import review, spawner
 
 
@@ -41,6 +41,7 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
       branch_name="improve/test/iter2",
       wt_path="/tmp/worktrees/improve-test-iter2",
       session_meta=SessionMetadata(id="session-id", name="Improve Session"),
+      task_type=TaskType.IMPLEMENT,
       loop_dir="/tmp/loops/2",
       iteration_number=2,
   )
@@ -51,6 +52,54 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
   assert "### Evidence" in prompt
   assert "### Advisory Notes" in prompt
   assert "### Next" not in prompt
+
+
+def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None:
+  """IMPLEMENT preserves the historical worker prompt exactly."""
+  prompt = spawner._build_worker_prompt(
+      description="Implement X",
+      repo_path=Path("/tmp/repo"),
+      base_branch="main",
+      branch_name="charliebot/task-xyz",
+      wt_path="/tmp/worktrees/charliebot-task-xyz",
+      session_meta=SessionMetadata(id="session-id", name="impl"),
+      task_type=TaskType.IMPLEMENT,
+  )
+  assert "Commit your changes with descriptive messages." in prompt
+  assert "A reviewer will handle that." in prompt
+  assert "Do NOT modify tracked files." not in prompt
+  assert "Do NOT commit." not in prompt
+
+
+def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> None:
+  prompt = spawner._build_worker_prompt(
+      description="Cherry-pick fix",
+      repo_path=Path("/tmp/repo"),
+      base_branch="main",
+      branch_name="charliebot/task-xyz",
+      wt_path="/tmp/worktrees/charliebot-task-xyz",
+      session_meta=SessionMetadata(id="session-id", name="quick"),
+      task_type=TaskType.QUICK_EDIT,
+  )
+  assert "Commit your changes with descriptive messages." in prompt
+  assert "No reviewer will run" in prompt
+  assert "A reviewer will handle that." not in prompt
+
+
+def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() -> None:
+  prompt = spawner._build_worker_prompt(
+      description="Run SLURM benchmark",
+      repo_path=Path("/tmp/repo"),
+      base_branch="main",
+      branch_name="charliebot/task-xyz",
+      wt_path="/tmp/worktrees/charliebot-task-xyz",
+      session_meta=SessionMetadata(id="session-id", name="script"),
+      task_type=TaskType.SCRIPT_RUN,
+  )
+  assert "Do NOT modify tracked files" in prompt
+  assert "Do NOT commit" in prompt
+  assert "Commit your changes with descriptive messages." not in prompt
+  assert "A reviewer will handle that." not in prompt
 
 
 @pytest.mark.asyncio

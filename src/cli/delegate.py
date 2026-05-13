@@ -8,7 +8,7 @@ Called by the master Claude Code instance via its run_command tool:
     --base-branch main \
     --description "implement feature X" \
     --keep-worktree 0 \
-    --require-review 1
+    --task-type implement
 """
 
 import argparse
@@ -41,13 +41,16 @@ def main() -> None:
           "0 = default cleanup behavior."),
   )
   parser.add_argument(
-      "--require-review",
-      type=int,
-      choices=[0, 1],
-      default=1,
+      "--task-type",
+      choices=["implement", "quick-edit", "script-run"],
+      default="implement",
       help=(
-          "0 = skip auto-spawn reviewer (use for trivial repo ops: cherry-picks, branch pushes, "
-          "single-line edits, doc-only changes); 1 = default reviewer flow."),
+          "Worker task profile. "
+          "'implement' (default) = worker commits, reviewer rebases + ff-merges to base branch. "
+          "'quick-edit' = worker commits, no reviewer (use for trivial repo ops: cherry-picks, "
+          "branch pushes, single-line/doc-only edits); master handles push/merge manually. "
+          "'script-run' = worker uses worktree as an isolated sandbox to run scripts / submit jobs / "
+          "query state; worker must NOT modify tracked files and must NOT commit. No reviewer, no merge."),
   )
   args = parser.parse_args()
   session_id = resolve_session_id(args.session)
@@ -57,7 +60,7 @@ def main() -> None:
       "description": args.description,
       "base_branch": args.base_branch,
       "keep_worktree": bool(args.keep_worktree),
-      "require_review": bool(args.require_review),
+      "task_type": args.task_type,
   }
   if args.backend is not None:
     payload["backend"] = args.backend

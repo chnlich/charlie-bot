@@ -60,6 +60,12 @@ class TriggerStatus(str, Enum):
   CANCELLED = "cancelled"
 
 
+class TaskType(str, Enum):
+  IMPLEMENT = "implement"
+  QUICK_EDIT = "quick-edit"
+  SCRIPT_RUN = "script-run"
+
+
 # ---------------------------------------------------------------------------
 # Thread Models
 # ---------------------------------------------------------------------------
@@ -258,7 +264,7 @@ class DelegateRequest(BaseModel):
   backend: Optional[str] = None
   repo_path: Optional[str] = None
   context: Optional[str] = None
-  require_review: bool = True
+  task_type: TaskType = TaskType.IMPLEMENT
   keep_worktree: bool = False
 
 
@@ -323,3 +329,4 @@ class SpawnRequest:
   skip_notify: bool = False
   is_continuation: bool = False
   keep_worktree: bool = False
+  task_type: TaskType = TaskType.IMPLEMENT

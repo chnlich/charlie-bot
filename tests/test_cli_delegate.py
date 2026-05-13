@@ -51,14 +51,16 @@ def test_main_posts_to_delegate_endpoint(tmp_path: Path, monkeypatch: pytest.Mon
   assert payload["base_branch"] == "main"
   assert payload["backend"] == "codex-o3"
   assert payload["description"] == "do work"
-  assert payload["require_review"] is True
+  assert payload["task_type"] == "implement"
 
 
-def test_main_require_review_zero_lands_in_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
+def test_main_task_type_lands_in_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t2", "description": "trivial cherry-pick"}
+  resp_mock.json.return_value = {"thread_id": "t2", "description": "task"}
   resp_mock.raise_for_status = MagicMock()
 
   with patch(
@@ -72,18 +74,80 @@ def test_main_require_review_zero_lands_in_payload(tmp_path: Path, monkeypatch: 
           "--base-branch",
           "main",
           "--description",
-          "trivial cherry-pick",
+          "task",
           "--keep-worktree",
           "0",
-          "--require-review",
-          "0",
+          "--task-type",
+          task_type,
       ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
-  assert payload["require_review"] is False
+  assert payload["task_type"] == task_type
+
+
+def test_main_rejects_invalid_task_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _mock_config(tmp_path)
+  monkeypatch.chdir(tmp_path)
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--description",
+          "task",
+          "--keep-worktree",
+          "0",
+          "--task-type",
+          "bogus",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  err = capsys.readouterr().err
+  assert "--task-type" in err
+
+
+def test_main_rejects_legacy_require_review_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _mock_config(tmp_path)
+  monkeypatch.chdir(tmp_path)
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--description",
+          "task",
+          "--keep-worktree",
+          "0",
+          "--require-review",
+          "0",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  err = capsys.readouterr().err
+  assert "--require-review" in err or "unrecognized" in err
 
 
 def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

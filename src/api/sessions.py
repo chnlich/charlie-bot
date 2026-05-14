@@ -204,6 +204,41 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
   return result
 
 
+@router.get('/tui/status')
+async def tui_status_all(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Return tmux liveness for every tui-cli session."""
+  sessions = await session_mgr.list_sessions()
+  tui_sessions = []
+  for meta in sessions:
+    option = cfg.get_backend_option(meta.backend)
+    if option is not None and option.type == "tui-cli":
+      tui_sessions.append(meta)
+  if not tui_sessions:
+    return {}
+
+  from src.agents.backends.tui import tmux_session_exists
+  statuses = await asyncio.gather(*(tmux_session_exists(meta.id) for meta in tui_sessions))
+  return {meta.id: running for meta, running in zip(tui_sessions, statuses)}
+
+
+@router.post('/{session_id}/tui/stop')
+async def stop_tui(
+    session_id: str,
+    meta: SessionMetadata = Depends(require_session),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  option = cfg.get_backend_option(meta.backend)
+  if option is None or option.type != "tui-cli":
+    raise HTTPException(status_code=400, detail="Session backend is not tui-cli")
+
+  from src.agents.backends.tui import kill_tmux_session
+  await kill_tmux_session(session_id)
+  return {"stopped": True}
+
+
 @router.get('/search', response_model=list[SessionMetadata])
 async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
   """Full-text search across session names and chat content."""

@@ -4,6 +4,66 @@
 // Tracks server-reported unread state per session so we can restore the
 // unread dot after the spinner hides.
 const sessionUnread = {};
+globalThis.TuiStatusMap = globalThis.TuiStatusMap || {};
+let tuiStatusPollInterval = null;
+
+function sessionBackendType(session) {
+  return session && session.backend && typeof BACKEND_TYPES !== 'undefined' ? (BACKEND_TYPES[session.backend] || '') : '';
+}
+
+function isTuiSession(session) {
+  return sessionBackendType(session) === 'tui-cli';
+}
+
+function renderTuiStatusDot(session) {
+  if (!isTuiSession(session)) return '';
+  const running = !!globalThis.TuiStatusMap[session.id];
+  const title = running ? 'Claude running' : 'Claude stopped';
+  return `<span class="tui-status-dot ${running ? 'running' : ''}" data-session-id="${escapeHtmlAttr(session.id)}" title="${title}"></span>`;
+}
+
+async function fetchTuiStatus() {
+  try {
+    const r = await fetch('/api/sessions/tui/status');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    globalThis.TuiStatusMap = await r.json();
+    refreshTuiDots();
+  } catch (err) {
+    console.error('fetchTuiStatus failed:', err);
+  }
+}
+
+function refreshTuiDots() {
+  document.querySelectorAll('.tui-status-dot[data-session-id]').forEach(dot => {
+    const running = !!globalThis.TuiStatusMap[dot.dataset.sessionId];
+    dot.classList.toggle('running', running);
+    dot.title = running ? 'Claude running' : 'Claude stopped';
+  });
+}
+
+function startTuiStatusPolling() {
+  if (tuiStatusPollInterval) return;
+  fetchTuiStatus();
+  tuiStatusPollInterval = setInterval(fetchTuiStatus, 10000);
+}
+
+function updateTuiHeaderControls(backendType, sessionId) {
+  const stopBtn = document.getElementById('stop-tui-btn');
+  if (!stopBtn) return;
+  const isTui = backendType === 'tui-cli';
+  stopBtn.classList.toggle('hidden', !isTui);
+  stopBtn.dataset.sessionId = isTui ? sessionId : '';
+}
+
+function updateSidebarSessionName(sessionId, name) {
+  const link = document.getElementById('session-' + sessionId);
+  if (!link) return;
+  const nameEl = link.querySelector('.session-name');
+  if (!nameEl) return;
+  const tuiStatusDot = nameEl.querySelector('.tui-status-dot');
+  nameEl.textContent = name;
+  if (tuiStatusDot) nameEl.appendChild(tuiStatusDot);
+}
 
 function getSessionIndicatorState(status) {
   if (status.thinking_since) return 'thinking';
@@ -175,6 +235,7 @@ function renderSessionView(data) {
   } else {
     globalThis.ACTIVE_BACKEND_TYPE = backendType;
   }
+  updateTuiHeaderControls(backendType, session.id);
 
   // Store pagination state from tail-loaded response
   sessionHasMore = !!data.has_more;
@@ -906,6 +967,29 @@ async function unarchiveSession(id) {
   }
 }
 
+async function stopActiveTui() {
+  if (!SESSION_ID) return;
+  if (!confirm('Stop the claude process for this session? You can reopen to resume.')) return;
+  const sessionId = SESSION_ID;
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/tui/stop`, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (data.stopped !== true) throw new Error('Stop endpoint did not return stopped=true');
+    globalThis.TuiStatusMap[sessionId] = false;
+    refreshTuiDots();
+    if (globalThis.TuiSession && globalThis.TuiSession.showStoppedBanner) {
+      globalThis.TuiSession.showStoppedBanner();
+    }
+  } catch (err) {
+    showToast('Stop Claude failed: ' + err.message, true);
+    console.error('Stop Claude failed:', err);
+  }
+}
+
 let deleteConfirmKeyHandler = null;
 
 function closeDeleteConfirmModal() {
@@ -1189,7 +1273,7 @@ function renderScheduledSessionItem(s) {
     ${renderPendingTriggerIndicator(s)}
     <svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
+      <span class="truncate block session-name">${escapeHtml(s.name)}${renderTuiStatusDot(s)}</span>
       ${s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : ''}
       ${s.last_run_status ? `<span class="block text-xs ${s.last_run_status === 'success' ? 'text-green-400' : s.last_run_status === 'running' ? 'text-yellow-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400')}">Last: ${escapeHtml(s.last_run_status)}${s.last_scheduled_run ? ', ' + formatLastRun(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>` : ''}
     </span>
@@ -1248,6 +1332,7 @@ function renderGroupedScheduledList(sessions) {
   // Resync sessionUnread dict from fresh DOM data
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();
+  refreshTuiDots();
 }
 
 function toggleCronGroup(key) {
@@ -1331,6 +1416,7 @@ function renderGroupedSessionList(sessions, filter) {
   nav.innerHTML = html;
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();
+  refreshTuiDots();
 }
 
 function toggleSessionGroup(key) {
@@ -1444,7 +1530,7 @@ function renderSessionItem(s, filter) {
     ${renderPendingTriggerIndicator(s)}
     ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
+      <span class="truncate block session-name">${escapeHtml(s.name)}${renderTuiStatusDot(s)}</span>
       ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : `<span class="block text-xs text-slate-500 session-time" data-time="${timeIso}">${timeStr}</span>`}
     </span>
     ${actions}
@@ -1477,6 +1563,7 @@ function renderSessionList(sessions, filter) {
   // Resync sessionUnread dict from fresh DOM data
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();
+  refreshTuiDots();
 }
 
 // Inline rename
@@ -1517,8 +1604,7 @@ async function commitRename() {
       body: JSON.stringify({ name: newName }),
     });
     // Update DOM — sidebar and header
-    const link = document.getElementById('session-' + renameSessionId);
-    if (link) link.querySelector('.session-name').textContent = newName;
+    updateSidebarSessionName(renameSessionId, newName);
     const header = document.getElementById('header-session-name');
     if (header && renameSessionId === SESSION_ID) header.textContent = newName;
   } catch (err) {

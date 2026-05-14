@@ -26,9 +26,11 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
     tmp_path: Path,
 ) -> None:
   config_dir = tmp_path / "claude-config"
+  home_dir = tmp_path / "home"
   working_dir = tmp_path / "session"
   calls = []
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
   async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
     calls.append(args)
@@ -41,11 +43,54 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
   await tui.ensure_tmux_session("session-id", working_dir)
 
   new_session_call = next(args for args in calls if args[0] == "new-session")
-  assert new_session_call[-4:] == (
+  assert new_session_call[-6:] == (
       "claude",
       "--settings",
       '{"skipDangerousModePermissionPrompt":true}',
       "--dangerously-skip-permissions",
+      "--session-id",
+      "session-id",
   )
   data = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))
   assert data["projects"][str(working_dir.resolve())]["hasTrustDialogAccepted"] is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  config_dir = tmp_path / "claude-config"
+  home_dir = tmp_path / "home"
+  jsonl_path = home_dir / ".claude" / "projects" / "project-a" / "session-id.jsonl"
+  jsonl_path.parent.mkdir(parents=True)
+  jsonl_path.write_text("", encoding="utf-8")
+  working_dir = tmp_path / "session"
+  calls = []
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
+
+  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
+    calls.append(args)
+    if args[0] == "has-session":
+      return 1, ""
+    return 0, ""
+
+  monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+
+  await tui.ensure_tmux_session("session-id", working_dir)
+
+  new_session_call = next(args for args in calls if args[0] == "new-session")
+  assert "--resume" in new_session_call
+  assert "--session-id" not in new_session_call
+  assert new_session_call[-2:] == ("--resume", "session-id")
+
+
+def test_find_existing_claude_jsonl_returns_first_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  home_dir = tmp_path / "home"
+  first = home_dir / ".claude" / "projects" / "a" / "session-id.jsonl"
+  first.parent.mkdir(parents=True)
+  first.write_text("", encoding="utf-8")
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
+
+  assert tui._find_existing_claude_jsonl("session-id") == first

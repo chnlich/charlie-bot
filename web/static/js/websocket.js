@@ -118,8 +118,12 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   // Session rename can arrive at any time — handle before catchup guard
   if (t === 'session_renamed') {
     const sid = ev.session_id || SESSION_ID;
-    const link = document.getElementById('session-' + sid);
-    if (link) link.querySelector('.session-name').textContent = ev.name;
+    if (typeof updateSidebarSessionName === 'function') {
+      updateSidebarSessionName(sid, ev.name);
+    } else {
+      const link = document.getElementById('session-' + sid);
+      if (link) link.querySelector('.session-name').textContent = ev.name;
+    }
     if (sid === SESSION_ID) {
       const header = document.getElementById('header-session-name');
       if (header) header.textContent = ev.name;

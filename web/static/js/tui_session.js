@@ -8,6 +8,7 @@
   let fitAddon = null;
   let resizeObs = null;
   let activeSessionId = null;
+  let manualStopBannerShown = false;
 
   function getContainer() {
     return document.getElementById('tui-container');
@@ -114,6 +115,7 @@
     }
     unmount();
     activeSessionId = sessionId;
+    manualStopBannerShown = false;
 
     container.classList.remove('hidden');
     setChatChromeHidden(true);
@@ -180,7 +182,21 @@
 
   function onPtyExit() {
     if (!term) return;
+    if (manualStopBannerShown) return;
     term.write('\r\n\x1b[33m[claude exited — refresh the page to restart]\x1b[0m\r\n');
+  }
+
+  function showStoppedBanner() {
+    manualStopBannerShown = true;
+    const message = 'claude stopped — reopen to resume';
+    if (term) {
+      term.write('\r\n\x1b[33m' + message + '\x1b[0m\r\n');
+      return;
+    }
+    const container = getContainer();
+    if (!container) return;
+    container.classList.remove('hidden');
+    container.innerHTML = '<div class="h-full flex items-center justify-center text-sm text-amber-300">' + message + '</div>';
   }
 
   function syncBackend(backendType, sessionId) {
@@ -210,6 +226,7 @@
     onPtyOutput,
     onPtyExit,
     onWsOpenIfTui,
+    showStoppedBanner,
   };
 
   // Initial mount on page load if the SSR-rendered active session is a TUI.

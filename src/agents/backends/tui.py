@@ -33,6 +33,8 @@ _INITIAL_ROWS = 24
 _HISTORY_LIMIT = 50000
 _PTY_READ_CHUNK = 4096
 _WS_RECV_TIMEOUT = 30.0
+_CLAUDE_TUI_SETTINGS = json.dumps({"skipDangerousModePermissionPrompt": True}, separators=(",", ":"))
+_DEFAULT_COMMAND = ("claude", "--settings", _CLAUDE_TUI_SETTINGS, "--dangerously-skip-permissions")
 
 
 def _tmux_binary() -> str:
@@ -71,16 +73,43 @@ async def tmux_session_exists(session_id: str) -> bool:
   return rc == 0
 
 
+def _claude_config_path() -> Path:
+  config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+  if config_dir:
+    return Path(config_dir) / ".claude.json"
+  return Path.home() / ".claude.json"
+
+
+def _ensure_claude_project_trusted(working_dir: Path) -> None:
+  """Mark CharlieBot's generated Claude TUI cwd trusted before interactive startup."""
+  project_path = str(working_dir.resolve())
+  config_path = _claude_config_path()
+  if config_path.exists():
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+  else:
+    config = {}
+  project = config.setdefault("projects", {}).setdefault(project_path, {})
+  changed = project.get("hasTrustDialogAccepted") is not True or "projectOnboardingSeenCount" not in project
+  project["hasTrustDialogAccepted"] = True
+  project.setdefault("projectOnboardingSeenCount", 1)
+  if not changed:
+    return
+  config_path.parent.mkdir(parents=True, exist_ok=True)
+  config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+  log.info("tui_claude_project_trusted", path=project_path, config_path=str(config_path))
+
+
 async def ensure_tmux_session(
     session_id: str,
     working_dir: Path,
-    command: str | Sequence[str] = ("claude", "--dangerously-skip-permissions"),
+    command: str | Sequence[str] = _DEFAULT_COMMAND,
 ) -> None:
   """Idempotently create the tmux session running *command* in *working_dir*."""
   name = tmux_session_name(session_id)
+  working_dir.mkdir(parents=True, exist_ok=True)
+  _ensure_claude_project_trusted(working_dir)
   if await tmux_session_exists(session_id):
     return
-  working_dir.mkdir(parents=True, exist_ok=True)
   command_args = [command] if isinstance(command, str) else list(command)
   rc, stderr = await _run_tmux(
       "new-session",

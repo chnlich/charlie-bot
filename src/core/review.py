@@ -1,6 +1,7 @@
 """Review pipeline — builds prompts, selects backends, and spawns review workers."""
 
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -250,6 +251,62 @@ def select_reviewer_backend(
   return resolved_backend, resolved_model, tried_backends + [resolved_backend]
 
 
+@dataclass(frozen=True)
+class ReviewSpawnContext:
+  """Resolved inputs needed to spawn a review worker for an original thread."""
+  repo_path: Path
+  branch_name: str
+  wt_path: str
+  base_branch: str
+  resolved_backend: str
+  resolved_model: str
+  tried_backends: list[str]
+
+
+async def _resolve_review_spawn_context(
+    original_thread,
+    cfg: CharlieBotConfig,
+    session_id: str,
+    tried_backends: Optional[list[str]],
+) -> Optional[ReviewSpawnContext]:
+  """Decide whether a reviewer can be spawned and resolve every input the spawn-side needs.
+
+  Returns a `ReviewSpawnContext` on success, or None to short-circuit (retries
+  exceeded, prerequisites missing, or all backends exhausted).
+  """
+  from src.core.spawner import _require_thread_backend_model
+
+  tried_backends = list(tried_backends) if tried_backends is not None else []
+
+  # Max retries guard: at most len(model_preference) retries after the initial spawn.
+  if len(tried_backends) > len(cfg.model_preference):
+    log.warning("reviewer_max_retries_exceeded", tried=tried_backends, max=len(cfg.model_preference))
+    return None
+
+  prerequisites = validate_review_prerequisites(original_thread, session_id)
+  if prerequisites is None:
+    return None
+  repo_path, branch_name, wt_path = prerequisites
+
+  base_branch = original_thread.base_branch or await git_current_branch(repo_path)
+  worker_backend, worker_model = _require_thread_backend_model(original_thread)
+
+  backend_result = select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)
+  if backend_result is None:
+    return None
+  resolved_backend, resolved_model, tried_backends = backend_result
+
+  return ReviewSpawnContext(
+      repo_path=repo_path,
+      branch_name=branch_name,
+      wt_path=wt_path,
+      base_branch=base_branch,
+      resolved_backend=resolved_backend,
+      resolved_model=resolved_model,
+      tried_backends=tried_backends,
+  )
+
+
 async def spawn_review_worker(
     session_id: str,
     original_thread,
@@ -262,39 +319,17 @@ async def spawn_review_worker(
 
   Returns True if a reviewer was spawned, False if all backends are exhausted.
   """
-  from src.core.spawner import (
-      _require_thread_backend_model,
-      _short_desc,
-      spawn_worker,
-  )
+  from src.core.spawner import _short_desc, spawn_worker
 
-  if tried_backends is None:
-    tried_backends = []
-
-  # Max retries guard: at most len(model_preference) retries after the initial spawn.
-  if len(tried_backends) > len(cfg.model_preference):
-    log.warning("reviewer_max_retries_exceeded", tried=tried_backends, max=len(cfg.model_preference))
+  ctx = await _resolve_review_spawn_context(original_thread, cfg, session_id, tried_backends)
+  if ctx is None:
     return False
-
-  prerequisites = validate_review_prerequisites(original_thread, session_id)
-  if prerequisites is None:
-    return False
-  repo_path, branch_name, wt_path = prerequisites
-
-  base_branch = original_thread.base_branch or await git_current_branch(repo_path)
-  worker_backend, worker_model = _require_thread_backend_model(original_thread)
-
-  backend_result = select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)
-  if backend_result is None:
-    return False
-  resolved_backend, resolved_model, tried_backends = backend_result
 
   user_request, worker_summary = await extract_review_context(session_id, original_thread.id, cfg.sessions_dir)
-
   review_prompt = build_review_prompt(
-      branch_name,
-      wt_path,
-      base_branch,
+      ctx.branch_name,
+      ctx.wt_path,
+      ctx.base_branch,
       session_id=session_id,
       original_thread_id=original_thread.id,
       sessions_dir=cfg.sessions_dir,
@@ -308,27 +343,21 @@ async def spawn_review_worker(
       f"Review: {original_thread.context or _short_desc(original_thread.description)}",
       review_of=original_thread.id,
   )
-  review_thread.branch_name = branch_name
-  review_thread.repo_path = str(repo_path)
-  review_thread.worktree_path = wt_path
-  review_thread.tried_backends = tried_backends
+  review_thread.branch_name = ctx.branch_name
+  review_thread.repo_path = str(ctx.repo_path)
+  review_thread.worktree_path = ctx.wt_path
+  review_thread.tried_backends = ctx.tried_backends
   await thread_mgr.save_metadata(review_thread)
 
+  request = SpawnRequest(
+      repo_path=str(ctx.repo_path),
+      prompt_override=review_prompt,
+      resolved_backend=ctx.resolved_backend,
+      resolved_model=ctx.resolved_model,
+  )
   create_logged_task(
       spawn_worker(
-          session_id,
-          review_thread.description,
-          review_thread.id,
-          cfg,
-          session_mgr,
-          thread_mgr,
-          request=SpawnRequest(
-              repo_path=str(repo_path),
-              prompt_override=review_prompt,
-              resolved_backend=resolved_backend,
-              resolved_model=resolved_model,
-          ),
-      ))
+          session_id, review_thread.description, review_thread.id, cfg, session_mgr, thread_mgr, request=request))
   return True
 
 

@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import get_thread_manager, get_trigger_manager
-from src.api.message_utils import extract_text_from_message
+from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.core.models import (
     ThreadMetadata,
     ThreadStatus,
@@ -106,12 +106,7 @@ async def get_thread_events(
         if block.get('type') == 'tool_result':
           tool_use_id = block.get('tool_use_id', '')
           name = tool_id_to_name.get(tool_use_id, '')
-          raw_content = block.get('content', '')
-          if isinstance(raw_content, list):
-            text_parts = [p.get('text', '') for p in raw_content if p.get('type') == 'text']
-            result_text = '\n'.join(text_parts)
-          else:
-            result_text = str(raw_content)
+          result_text = extract_tool_result_text(block)
           events.append(
               WorkerEvent(
                   type='tool_result',

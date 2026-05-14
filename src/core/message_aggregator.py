@@ -30,6 +30,14 @@ def extract_text_from_message(msg: dict | None) -> str:
   return "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
 
 
+def extract_tool_result_text(block: dict) -> str:
+  """Return the renderable text of a CC ``tool_result`` block; ``content`` is either a plain string or a list of typed parts where only ``{"type": "text"}`` parts contribute."""
+  raw = block.get("content", "")
+  if isinstance(raw, list):
+    return "\n".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
+  return str(raw)
+
+
 def _handler_result_msg(ev: dict) -> dict:
   icon = '✓' if ev.get('status') == 'ok' else '✗'
   return {
@@ -169,11 +177,7 @@ class MessageAggregator:
       if "message" in ev and "content" not in ev:
         for block in (ev.get("message") or {}).get("content", []):
           if isinstance(block, dict) and block.get("type") == "tool_result":
-            raw = block.get("content", "")
-            if isinstance(raw, list):
-              text = "\n".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
-            else:
-              text = str(raw)
+            text = extract_tool_result_text(block)
             if self._tools_buf:
               self._tools_buf[-1]["output"] = text
               self._tools_buf[-1]["is_error"] = bool(block.get("is_error", False))

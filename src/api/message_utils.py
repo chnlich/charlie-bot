@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from src.core import event_types as ET
-from src.core.message_aggregator import MessageAggregator, extract_text_from_message
+from src.core.message_aggregator import MessageAggregator, extract_text_from_message, extract_tool_result_text
 
 if TYPE_CHECKING:
   from src.core.models import ThreadMetadata
@@ -23,6 +23,7 @@ _ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
 # tests) keep importing extract_text_from_message from this module.
 __all__ = [
     "extract_text_from_message",
+    "extract_tool_result_text",
     "serialize_uploaded_files",
     "build_agent_input_content",
     "build_user_event",

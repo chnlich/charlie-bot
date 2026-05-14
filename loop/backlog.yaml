@@ -5245,6 +5245,7 @@
   created: '2026-05-11T05:13:00Z'
   priority: low
 - id: '154'
+  in_progress_at: '2026-05-14T19:09:55Z'
   title: Extract preflight resolution preamble from core/review.spawn_review_worker
     into a single-responsibility helper
   description: '`core/review.py:spawn_review_worker` (L253-332, 80 lines, the longest
@@ -5339,7 +5340,7 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-11T15:15:24Z'
   priority: low
 - id: '155'

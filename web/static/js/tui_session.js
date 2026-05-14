@@ -86,6 +86,20 @@
     wsSendJson({type: 'pty_resize', cols, rows});
   }
 
+  function fitAndSendResize() {
+    if (!fitAddon || !term) return;
+    try {
+      fitAddon.fit();
+      if (term.cols && term.rows) sendResize(term.cols, term.rows);
+    } catch (err) {
+      console.warn('TUI terminal fit failed', err);
+    }
+  }
+
+  function scheduleFitAndSendResize() {
+    requestAnimationFrame(() => requestAnimationFrame(fitAndSendResize));
+  }
+
   function ensureMount(sessionId) {
     const container = getContainer();
     if (!container) return false;
@@ -95,6 +109,7 @@
     }
     if (term && activeSessionId === sessionId) {
       // Already mounted for this session.
+      scheduleFitAndSendResize();
       return true;
     }
     unmount();
@@ -119,32 +134,16 @@
 
     term.onData(sendInput);
 
-    function performInitialFit() {
-      if (!fitAddon || !term) return;
-      try {
-        fitAddon.fit();
-        if (term.cols && term.rows) sendResize(term.cols, term.rows);
-      } catch (e) {
-        // ignore intermediate layout/font-metric errors
-      }
-    }
-
     // Defer once until after the initial layout/paint, then again.
-    requestAnimationFrame(() => requestAnimationFrame(performInitialFit));
+    scheduleFitAndSendResize();
 
     // Re-fit after monospace font has loaded; xterm cell metrics depend on it.
     if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(performInitialFit);
+      document.fonts.ready.then(fitAndSendResize);
     }
 
     resizeObs = new ResizeObserver(() => {
-      if (!fitAddon || !term) return;
-      try {
-        fitAddon.fit();
-        sendResize(term.cols, term.rows);
-      } catch (e) {
-        // ignore intermediate resize errors
-      }
+      fitAndSendResize();
     });
     resizeObs.observe(container);
     return true;

@@ -26,10 +26,9 @@
   }
 
   function setChatChromeHidden(hidden) {
-    // Hide the message list, input bar, scroll button, streaming preview, and
-    // thinking indicator. We keep the tab buttons, header, and worker tab
+    // Hide the message list. We keep the tab buttons, header, and worker tab
     // intact so the user can still see workers/usage if any.
-    const ids = ['messages', 'scroll-to-bottom', 'thinking'];
+    const ids = ['messages'];
     for (const id of ids) {
       const el = document.getElementById(id);
       if (el) el.classList.toggle('hidden', hidden);

@@ -5508,34 +5508,33 @@
     --recursive src/, full-tree pyflakes, TODO/FIXME/HACK/XXX grep, AST scan for functions
     over 50 lines) walked the >50-line function list against the pending items in
     this backlog and found `_finalize_worker` (src/core/spawner.py:497, 56 lines)
-    is the largest remaining unfiled long-function candidate that also exposes a
-    clean single-responsibility extraction point. Inside `_finalize_worker` the lines
-    that decide whether the worker''s worktree must survive past this exit (L526-540,
-    13 lines including the explanatory comment) implement a multi-case predicate
-    with four named conditions — `thread.keep_worktree`, `thread.skip_cleanup`,
-    `thread.review_of`, and the composite `exit_code == 0 and thread.require_review
-    and not thread.review_of and can_spawn_reviewer` reviewer-gate — that together
-    answer one question: "given this worker''s terminal state, do we keep its worktree
-    alive for downstream consumers (reviewer chain, improve-loop shared worktree,
-    keep_worktree pin)?" That question is exactly the kind of named concept the
-    dedup rule rewards: even though the block is well under 50 lines, the helper has
-    a clear, single-responsibility name (`_should_skip_worktree_cleanup`) worth its
-    own concept, the predicate is independently testable, and the rest of `_finalize_worker`
-    becomes a linear status-update + notify pipeline. WHAT — One new private helper
-    in src/core/spawner.py, `_should_skip_worktree_cleanup(thread: ThreadMetadata,
-    exit_code: int) -> bool`, that owns the L529-539 branch ladder and returns the
-    same boolean. `_finalize_worker` shrinks from 56 lines to ~43 lines (below the
-    50-line threshold the code-health scan uses), the predicate gains a tight signature
-    that future contributors can read in isolation, and the cleanup decision becomes
-    a one-line call site (`skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)`).
-    No behavior change, no signature change for `_finalize_worker` itself, no log-event
-    rename. HOW — (1) In src/core/spawner.py, add a synchronous module-level helper
-    immediately above `_finalize_worker` (after `_cleanup_worker_directory`): `def
-    _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) -> bool:`
-    with a one-line docstring ("Decide whether the worker''s worktree must survive
-    past this exit (reviewer chain, keep_worktree pin, improve-loop shared worktree,
-    or explicit skip_cleanup)."). The body is the four-branch ladder moved verbatim
-    from L529-539: `if thread.keep_worktree: return True` / `if thread.skip_cleanup:
+    is the largest remaining unfiled long-function candidate that also exposes a clean
+    single-responsibility extraction point. Inside `_finalize_worker` the lines that
+    decide whether the worker''s worktree must survive past this exit (L526-540, 13
+    lines including the explanatory comment) implement a multi-case predicate with
+    four named conditions — `thread.keep_worktree`, `thread.skip_cleanup`, `thread.review_of`,
+    and the composite `exit_code == 0 and thread.require_review and not thread.review_of
+    and can_spawn_reviewer` reviewer-gate — that together answer one question: "given
+    this worker''s terminal state, do we keep its worktree alive for downstream consumers
+    (reviewer chain, improve-loop shared worktree, keep_worktree pin)?" That question
+    is exactly the kind of named concept the dedup rule rewards: even though the block
+    is well under 50 lines, the helper has a clear, single-responsibility name (`_should_skip_worktree_cleanup`)
+    worth its own concept, the predicate is independently testable, and the rest of
+    `_finalize_worker` becomes a linear status-update + notify pipeline. WHAT — One
+    new private helper in src/core/spawner.py, `_should_skip_worktree_cleanup(thread:
+    ThreadMetadata, exit_code: int) -> bool`, that owns the L529-539 branch ladder
+    and returns the same boolean. `_finalize_worker` shrinks from 56 lines to ~43
+    lines (below the 50-line threshold the code-health scan uses), the predicate gains
+    a tight signature that future contributors can read in isolation, and the cleanup
+    decision becomes a one-line call site (`skip_cleanup = _should_skip_worktree_cleanup(thread,
+    exit_code)`). No behavior change, no signature change for `_finalize_worker` itself,
+    no log-event rename. HOW — (1) In src/core/spawner.py, add a synchronous module-level
+    helper immediately above `_finalize_worker` (after `_cleanup_worker_directory`):
+    `def _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) ->
+    bool:` with a one-line docstring ("Decide whether the worker''s worktree must
+    survive past this exit (reviewer chain, keep_worktree pin, improve-loop shared
+    worktree, or explicit skip_cleanup)."). The body is the four-branch ladder moved
+    verbatim from L529-539: `if thread.keep_worktree: return True` / `if thread.skip_cleanup:
     return True` / `if thread.review_of: return True` / `can_spawn_reviewer = all([thread.repo_path,
     thread.branch_name, thread.worktree_path])` / `return exit_code == 0 and thread.require_review
     and not thread.review_of and can_spawn_reviewer`. (2) Inside `_finalize_worker`,
@@ -5543,8 +5542,8 @@
     exit_code)` so the existing call `await _cleanup_worker_directory(thread, skip_cleanup)`
     at L540 still works unchanged. (3) Verify with `yapf --diff src/core/spawner.py`
     (exit code 0, no drift), `python -m pyflakes src/core/spawner.py` (still zero
-    warnings), and the AST scan reporting `_finalize_worker` below 50 lines. (4)
-    Run `pytest tests/test_spawner_exit_override.py tests/test_spawner_backend_propagation.py`
+    warnings), and the AST scan reporting `_finalize_worker` below 50 lines. (4) Run
+    `pytest tests/test_spawner_exit_override.py tests/test_spawner_backend_propagation.py`
     to confirm no behavior regression in the spawner''s exit-handling and backend-propagation
     paths. (5) Optionally (not required) add a focused unit test in tests/test_spawner_skip_cleanup.py
     that exercises the four branches of `_should_skip_worktree_cleanup` with hand-built
@@ -5553,53 +5552,52 @@
     (`grep -rn _finalize_worker src/ tests/`) to be referenced only inside src/core/spawner.py
     itself: the def at L497, the wrapper `_finalize_worker_safely` at L555 calling
     it at L569, and the indirect path from `spawn_worker` via `_finalize_worker_safely`
-    at L671. No test, no CLI, no external module imports it, so this is a fully
-    private contract change. (2) The change is purely additive (one new helper)
-    + a single-line substitution at the call site — no signature change for `_finalize_worker`,
-    no parameter reordering, no new log events. (3) All four `ThreadMetadata` fields
+    at L671. No test, no CLI, no external module imports it, so this is a fully private
+    contract change. (2) The change is purely additive (one new helper) + a single-line
+    substitution at the call site — no signature change for `_finalize_worker`, no
+    parameter reordering, no new log events. (3) All four `ThreadMetadata` fields
     consumed by the predicate (`keep_worktree`, `skip_cleanup`, `review_of`, `require_review`,
     `repo_path`, `branch_name`, `worktree_path`) are confirmed defined on `ThreadMetadata`
     at src/core/models.py L79-89, so the helper compiles against the current model.
-    (4) The dedup-rule line "extract a shared helper only if the shared block is
-    > 50 lines OR the helper has a clear, single-responsibility name worth its own
-    concept" is satisfied by the second clause: the helper name `_should_skip_worktree_cleanup`
+    (4) The dedup-rule line "extract a shared helper only if the shared block is >
+    50 lines OR the helper has a clear, single-responsibility name worth its own concept"
+    is satisfied by the second clause: the helper name `_should_skip_worktree_cleanup`
     states one question, returns one bool, and consolidates four scattered conditions
-    that today only make sense when read together inside a 56-line method body.
-    (5) Pending items #125 (`_create_worktree_and_process` dedup), #154 (`spawn_review_worker`
-    preflight extraction), and #156 (`finalize_review_chain.thread_mgr` removal)
-    all touch the worker/review chain but none of them mutate `_finalize_worker`
-    or its skip-cleanup branch ladder, so the three changes can land in any order
-    without conflict. (6) Do NOT attempt to also inline `_cleanup_worker_directory`
-    into `_finalize_worker` as a "while we''re here" simplification — the cleanup
-    routine has its own try/except branches around git_worktree_remove and tempdir
-    rm that form an independent responsibility (file-op error surfacing) worth keeping
-    behind its own named seam. NON-DUPLICATION CHECK — `yapf --in-place --recursive
-    src/` for this scheduled scan applied one whitespace-only fix to `core/spawner.py:spawn_worker`
-    (committed separately on this branch per the yapf-rule). `grep -rE "TODO|FIXME|HACK|XXX"
-    src/` returns zero matches. `python -m pyflakes src/` reports only the already-tracked
-    `WatchTarget` unused import in `api/internal.py` (covered by pending items #131
-    and #139). The >50-line function scan returned 34 functions; cross-referencing
-    against pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/154
+    that today only make sense when read together inside a 56-line method body. (5)
+    Pending items #125 (`_create_worktree_and_process` dedup), #154 (`spawn_review_worker`
+    preflight extraction), and #156 (`finalize_review_chain.thread_mgr` removal) all
+    touch the worker/review chain but none of them mutate `_finalize_worker` or its
+    skip-cleanup branch ladder, so the three changes can land in any order without
+    conflict. (6) Do NOT attempt to also inline `_cleanup_worker_directory` into `_finalize_worker`
+    as a "while we''re here" simplification — the cleanup routine has its own try/except
+    branches around git_worktree_remove and tempdir rm that form an independent responsibility
+    (file-op error surfacing) worth keeping behind its own named seam. NON-DUPLICATION
+    CHECK — `yapf --in-place --recursive src/` for this scheduled scan applied one
+    whitespace-only fix to `core/spawner.py:spawn_worker` (committed separately on
+    this branch per the yapf-rule). `grep -rE "TODO|FIXME|HACK|XXX" src/` returns
+    zero matches. `python -m pyflakes src/` reports only the already-tracked `WatchTarget`
+    unused import in `api/internal.py` (covered by pending items #131 and #139). The
+    >50-line function scan returned 34 functions; cross-referencing against pending
+    items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/154
     leaves these uncovered candidates: `_build_worker_prompt` (83, spawner.py), `slash.execute_command`
     (68, slash.py), `autonamer.maybe_auto_name` (62, autonamer.py), `_wait_for_quota_recovery`
-    (61, improve_command.py), `_dir_listing_html` (61, files.py), `fork_session`
-    (58, sessions.py), `build_review_prompt` (58, review.py), `_finalize_worker`
-    (56, spawner.py), `run_message_with_resume_recovery` (56, master_trigger.py),
-    `build_session_view_data` (55, message_utils.py), `_wait_and_fire` (54, triggers.py),
-    `trigger_master` (54, master_trigger.py), `_broadcast_completion` (53, spawner.py),
-    and `spawn_worker` (52, spawner.py). Per the one-finding-per-scan rule and the
-    dedup rule''s preference for "clear, single-responsibility name worth its own
-    concept" over premature abstraction, `_finalize_worker` is the strongest of
-    those candidates because: its skip-cleanup block is the only one of the fourteen
-    where a contiguous sub-block already reads as a named question (the others —
-    e.g. `_build_worker_prompt`''s six prompt-section concatenation, `_wait_for_quota_recovery`''s
-    single polling loop, `slash.execute_command`''s linear dispatcher — are coherent
-    single-flow functions whose splits would amount to premature abstraction); the
-    extraction also tightens the public-shape contract a future test author would
-    most likely want to exercise in isolation (worktree-lifetime decisions are easy
-    to get wrong on the reviewer-chain path and SIGTERM-after-success path); and
-    the helper is fully private to spawner.py, so the cleanup is contained. This
-    is the single new code-health backlog entry for this 2026-05-12T09:12Z scheduled
+    (61, improve_command.py), `_dir_listing_html` (61, files.py), `fork_session` (58,
+    sessions.py), `build_review_prompt` (58, review.py), `_finalize_worker` (56, spawner.py),
+    `run_message_with_resume_recovery` (56, master_trigger.py), `build_session_view_data`
+    (55, message_utils.py), `_wait_and_fire` (54, triggers.py), `trigger_master` (54,
+    master_trigger.py), `_broadcast_completion` (53, spawner.py), and `spawn_worker`
+    (52, spawner.py). Per the one-finding-per-scan rule and the dedup rule''s preference
+    for "clear, single-responsibility name worth its own concept" over premature abstraction,
+    `_finalize_worker` is the strongest of those candidates because: its skip-cleanup
+    block is the only one of the fourteen where a contiguous sub-block already reads
+    as a named question (the others — e.g. `_build_worker_prompt`''s six prompt-section
+    concatenation, `_wait_for_quota_recovery`''s single polling loop, `slash.execute_command`''s
+    linear dispatcher — are coherent single-flow functions whose splits would amount
+    to premature abstraction); the extraction also tightens the public-shape contract
+    a future test author would most likely want to exercise in isolation (worktree-lifetime
+    decisions are easy to get wrong on the reviewer-chain path and SIGTERM-after-success
+    path); and the helper is fully private to spawner.py, so the cleanup is contained.
+    This is the single new code-health backlog entry for this 2026-05-12T09:12Z scheduled
     scan.
 
     '
@@ -5612,8 +5610,8 @@
     tool_result content parsing between api/threads.get_thread_events and core/message_aggregator.MessageAggregator._feed
   description: 'WHY — The 2026-05-12T11:14Z scheduled code-health scan (yapf --in-place
     --recursive src/, full-tree pyflakes, TODO/FIXME/HACK/XXX grep, vulture --min-confidence
-    80, AST >50-line scan, manual duplication audit cross-referenced against the
-    27 pending backlog items 107/108/109/116/125/126/127/129/132/134/135/136/137/139/140/141/142/144/153/154/155/156/157)
+    80, AST >50-line scan, manual duplication audit cross-referenced against the 27
+    pending backlog items 107/108/109/116/125/126/127/129/132/134/135/136/137/139/140/141/142/144/153/154/155/156/157)
     found one unfiled duplication: the list-or-string ``tool_result`` content-text
     parser appears verbatim (modulo a defensive ``isinstance(p, dict)`` guard) in
     two separate call sites that both convert a Claude-Code ``tool_result`` block''s
@@ -5632,8 +5630,8 @@
     guard, which is exactly the kind of slow-drift the dedup rule is meant to prevent.
     Both call sites also live two seams apart (an HTTP route handler and the stateful
     message aggregator), so the next time the underlying ``tool_result`` schema gains
-    a new part type (image, citation, etc.) a fix to one site will silently miss
-    the other.
+    a new part type (image, citation, etc.) a fix to one site will silently miss the
+    other.
 
     WHAT — One new public helper in ``src/core/message_aggregator.py`` co-located
     with the existing ``extract_text_from_message`` (L25-30): ``def extract_tool_result_text(block:
@@ -5646,32 +5644,31 @@
     ``str(raw)``. Both call sites collapse to a one-liner: ``result_text = extract_tool_result_text(block)``
     in ``threads.py:109-114`` and ``text = extract_tool_result_text(block)`` in ``message_aggregator.py:168-172``.
     No behavior change for the aggregator''s well-formed inputs; ``threads.py`` gains
-    the same defensive ``isinstance(p, dict)`` guard the aggregator already has,
-    which is the strictly safer direction.
+    the same defensive ``isinstance(p, dict)`` guard the aggregator already has, which
+    is the strictly safer direction.
 
     HOW — (1) In ``src/core/message_aggregator.py``, add ``def extract_tool_result_text(block:
-    dict) -> str:`` immediately after ``extract_text_from_message`` (L30) so the
-    two text-extraction helpers sit together. Body: ``raw = block.get("content",
-    "")`` / ``if isinstance(raw, list): return "\n".join(p.get("text", "") for p
-    in raw if isinstance(p, dict) and p.get("type") == "text")`` / ``return str(raw)``.
-    (2) In ``src/core/message_aggregator.py:168-172`` inside ``_feed``, replace the
-    five-line ``raw = block.get("content", "")`` / ``if isinstance(raw, list): ...``
-    / ``else: text = str(raw)`` block with ``text = extract_tool_result_text(block)``.
-    (3) In ``src/api/threads.py:109-114`` inside ``get_thread_events``, replace the
-    six-line ``raw_content = block.get(''content'', '''')`` / ``if isinstance(raw_content,
+    dict) -> str:`` immediately after ``extract_text_from_message`` (L30) so the two
+    text-extraction helpers sit together. Body: ``raw = block.get("content", "")``
+    / ``if isinstance(raw, list): return "\n".join(p.get("text", "") for p in raw
+    if isinstance(p, dict) and p.get("type") == "text")`` / ``return str(raw)``. (2)
+    In ``src/core/message_aggregator.py:168-172`` inside ``_feed``, replace the five-line
+    ``raw = block.get("content", "")`` / ``if isinstance(raw, list): ...`` / ``else:
+    text = str(raw)`` block with ``text = extract_tool_result_text(block)``. (3) In
+    ``src/api/threads.py:109-114`` inside ``get_thread_events``, replace the six-line
+    ``raw_content = block.get(''content'', '''')`` / ``if isinstance(raw_content,
     list): ...`` / ``else: result_text = str(raw_content)`` block with ``result_text
-    = extract_tool_result_text(block)``. Add ``extract_tool_result_text`` to the
-    existing ``from src.api.message_utils import extract_text_from_message`` import
-    only if ``message_utils.py`` re-exports it; otherwise import directly from ``src.core.message_aggregator``
+    = extract_tool_result_text(block)``. Add ``extract_tool_result_text`` to the existing
+    ``from src.api.message_utils import extract_text_from_message`` import only if
+    ``message_utils.py`` re-exports it; otherwise import directly from ``src.core.message_aggregator``
     (the simpler path — the helper lives in the aggregator module and the existing
     ``__all__`` re-export pattern at ``message_utils.py:22-26`` can be extended in
-    the same change so ``threads.py`` keeps importing from ``message_utils`` for
-    consistency with its current style). (4) Verify with ``yapf --diff src/core/message_aggregator.py
+    the same change so ``threads.py`` keeps importing from ``message_utils`` for consistency
+    with its current style). (4) Verify with ``yapf --diff src/core/message_aggregator.py
     src/api/threads.py src/api/message_utils.py`` (exit code 0, no drift), ``python
-    -m pyflakes src/`` (no new warnings; the existing ``WatchTarget`` warning in
-    ``api/internal.py`` from pending items #131/#139 stays as-is). (5) Run the existing
-    aggregator and threads tests if any exist; otherwise rely on the call sites''
-    pre-existing coverage.
+    -m pyflakes src/`` (no new warnings; the existing ``WatchTarget`` warning in ``api/internal.py``
+    from pending items #131/#139 stays as-is). (5) Run the existing aggregator and
+    threads tests if any exist; otherwise rely on the call sites'' pre-existing coverage.
 
     REFACTORING SAFETY — (1) The helper is a pure function with no I/O, no async,
     no module state, so the extraction is fully additive on the implementation side.
@@ -5679,11 +5676,11 @@
     ``grep -rn "isinstance(raw" src/api src/core``) to be the only ``tool_result``-content
     parsers in the codebase that handle the list-or-string union — every other ``tool_result``
     reference in ``src/`` either constructs a fresh ``tool_result`` event (``agents/backends/base.py:103``
-    ``make_tool_result_event``, ``agents/backends/opencode.py:145-151``) or only
-    reads ``tool_use_id`` for pending-tool-call tracking (``agents/backends/base.py:288-299``);
+    ``make_tool_result_event``, ``agents/backends/opencode.py:145-151``) or only reads
+    ``tool_use_id`` for pending-tool-call tracking (``agents/backends/base.py:288-299``);
     none of those would change. (3) The aggregator''s existing ``isinstance(p, dict)``
-    guard is the strictly-safer behavior of the two existing copies; adopting it
-    in ``threads.py`` cannot break a request that already succeeds and shields against
+    guard is the strictly-safer behavior of the two existing copies; adopting it in
+    ``threads.py`` cannot break a request that already succeeds and shields against
     a malformed ``content`` list where a non-dict slipped in (e.g. a future schema
     addition). (4) The dedup-rule line "extract a shared helper only if the shared
     block is > 50 lines OR the helper has a clear, single-responsibility name worth
@@ -5715,8 +5712,8 @@
     for ``init_charliebot_home``; FastAPI dispatchers for the route handlers) and
     are not real findings. The >50-line function scan was already enumerated in items
     #154 (``spawn_review_worker``) / #155 (``trigger_master`` swallowed-exception)
-    / #157 (``_finalize_worker`` skip-cleanup predicate); the remaining un-filed
-    long functions (``_build_worker_prompt``, ``slash.execute_command``, ``autonamer.maybe_auto_name``,
+    / #157 (``_finalize_worker`` skip-cleanup predicate); the remaining un-filed long
+    functions (``_build_worker_prompt``, ``slash.execute_command``, ``autonamer.maybe_auto_name``,
     ``_wait_for_quota_recovery``, ``_dir_listing_html``, ``fork_session``, ``build_review_prompt``,
     ``parse_ndjson_tail``, ``_resolve_worktree_start_point``, ``get_thread_events``,
     ``build_session_view_data``, ``_wait_and_fire``, ``trigger_master``, ``_broadcast_completion``,
@@ -5728,13 +5725,13 @@
     suffix-builder is a 10-line ladder with a single caller and no duplication elsewhere
     — extracting it would not survive the dedup rule''s "clear single-responsibility
     name worth its own concept" test as well as this finding does). The ``extract_tool_result_text``
-    extraction is the strongest of the remaining un-filed candidates because: it
-    is the only one with a *concrete* duplication across two distinct modules (not
-    merely a long single-flow function), the duplication is already drifting on the
-    ``isinstance(p, dict)`` guard, and the helper consolidates a subtle Anthropic-format
-    schema invariant (list-or-string ``content`` union) into one named seam that
-    a future schema change can update once. This is the single new code-health backlog
-    entry for this 2026-05-12T11:14Z scheduled scan.
+    extraction is the strongest of the remaining un-filed candidates because: it is
+    the only one with a *concrete* duplication across two distinct modules (not merely
+    a long single-flow function), the duplication is already drifting on the ``isinstance(p,
+    dict)`` guard, and the helper consolidates a subtle Anthropic-format schema invariant
+    (list-or-string ``content`` union) into one named seam that a future schema change
+    can update once. This is the single new code-health backlog entry for this 2026-05-12T11:14Z
+    scheduled scan.
 
     '
   category: duplication
@@ -5764,37 +5761,36 @@
     `execute_command` declares `thread_mgr: ThreadManager = Depends(get_thread_manager)`
     at L137 but the body never references `thread_mgr` (verified by `grep -n thread_mgr
     src/api/slash.py`). The dependency injection still fires `get_thread_manager()`
-    on every slash-command request — a singleton accessor in `api/deps.py:24-28`
-    with no side effects beyond lazy instantiation that already runs from other endpoints,
+    on every slash-command request — a singleton accessor in `api/deps.py:24-28` with
+    no side effects beyond lazy instantiation that already runs from other endpoints,
     so dropping the dep is safe and saves one Depends-resolution per request. (3)
     `src/api/sessions.py:155-180` `list_scheduled_sessions` declares `cfg: CharlieBotConfig
     = Depends(get_config)` at L158 but the body never references `cfg` (it only uses
     `session_mgr`, `get_scheduled_tasks()`, and `ZoneInfo`/`datetime`/`croniter` from
-    module scope). Same FastAPI-Depends pattern as the slash.py finding. None of
-    these three are covered by any pending item — item #156 is scoped exclusively
-    to `core/review.finalize_review_chain.thread_mgr` (its description names that
-    one function in its title and HOW steps), item #131 is scoped to the `WatchTarget`
-    unused import in `api/internal.py`, and items #154/155/157/158 each target distinct
-    refactors. Per CLAUDE.md''s "no defensive programming" / "no dead code" principles,
-    declaring a parameter you never use is a contract lie that future readers must
-    trace before they discover it does nothing.
+    module scope). Same FastAPI-Depends pattern as the slash.py finding. None of these
+    three are covered by any pending item — item #156 is scoped exclusively to `core/review.finalize_review_chain.thread_mgr`
+    (its description names that one function in its title and HOW steps), item #131
+    is scoped to the `WatchTarget` unused import in `api/internal.py`, and items #154/155/157/158
+    each target distinct refactors. Per CLAUDE.md''s "no defensive programming" /
+    "no dead code" principles, declaring a parameter you never use is a contract lie
+    that future readers must trace before they discover it does nothing.
 
     HOW — Three small, independent, zero-behavior-change edits. (1) In `src/core/spawner.py`
     drop `session_mgr: SessionManager,` from the `_create_repoless_process` signature
     at L370 and remove `session_mgr` from the call site at L649 — the new call becomes
     `worker = await _create_repoless_process(session_id, thread, description, cfg,
-    thread_mgr, req)`. Do NOT touch `_create_worktree_and_process` at L249 — its
-    `session_mgr` parameter IS used at L287 and L322 and the call site at L653 must
-    keep passing it. (2) In `src/api/slash.py` drop `thread_mgr: ThreadManager = Depends(get_thread_manager),`
+    thread_mgr, req)`. Do NOT touch `_create_worktree_and_process` at L249 — its `session_mgr`
+    parameter IS used at L287 and L322 and the call site at L653 must keep passing
+    it. (2) In `src/api/slash.py` drop `thread_mgr: ThreadManager = Depends(get_thread_manager),`
     from the `execute_command` signature at L137. Then in `tests/test_message_attachments.py:139`
     drop the `thread_mgr=object()` kwarg from the `execute_command(...)` call inside
     `test_execute_command_persists_uploaded_files_for_prompt_dispatch` (the existing
     placeholder `object()` confirms the param has long been known-unused). Verify
     `from src.core.threads import ThreadManager` and `from src.api.deps import ...
-    get_thread_manager ...` imports in `slash.py` are still referenced elsewhere
-    in the file (`get_thread_manager` is currently only used in `execute_command`;
-    drop the import too if no other reference remains, but keep `ThreadManager` if
-    any annotation still uses it — verify with `grep -n ThreadManager src/api/slash.py`).
+    get_thread_manager ...` imports in `slash.py` are still referenced elsewhere in
+    the file (`get_thread_manager` is currently only used in `execute_command`; drop
+    the import too if no other reference remains, but keep `ThreadManager` if any
+    annotation still uses it — verify with `grep -n ThreadManager src/api/slash.py`).
     (3) In `src/api/sessions.py` drop `cfg: CharlieBotConfig = Depends(get_config),`
     from the `list_scheduled_sessions` signature at L158. Verify `from src.core.config
     import ... get_config ...` and `CharlieBotConfig` imports remain in use elsewhere
@@ -5804,30 +5800,28 @@
     REFACTORING SAFETY — (a) No pylint W0613 noise should remain after these three
     edits: re-run `pylint --disable=all --enable=unused-argument src/` and confirm
     output drops to only `src/cli/backup.py:16` / `:22` (argparse handler boilerplate,
-    not actionable) and `src/core/review.py:25` (already covered by pending item
-    #156). (b) `_create_repoless_process` has exactly one call site in src/ and zero
-    in tests/ (verified `grep -rn _create_repoless_process src/ tests/` returns only
-    the def + L649 call). (c) `execute_command` has one test call site that must
-    be updated in lockstep — failure to remove the `thread_mgr=object()` kwarg from
-    `test_execute_command_persists_uploaded_files_for_prompt_dispatch` will surface
-    as a TypeError "got an unexpected keyword argument ''thread_mgr''" on the first
-    test run. Run `pytest tests/test_message_attachments.py -q` to confirm green.
-    (d) `list_scheduled_sessions` has zero internal call sites (FastAPI routes it
-    via the `@router.get("/scheduled")` decorator) and no test in `tests/` references
+    not actionable) and `src/core/review.py:25` (already covered by pending item #156).
+    (b) `_create_repoless_process` has exactly one call site in src/ and zero in tests/
+    (verified `grep -rn _create_repoless_process src/ tests/` returns only the def
+    + L649 call). (c) `execute_command` has one test call site that must be updated
+    in lockstep — failure to remove the `thread_mgr=object()` kwarg from `test_execute_command_persists_uploaded_files_for_prompt_dispatch`
+    will surface as a TypeError "got an unexpected keyword argument ''thread_mgr''"
+    on the first test run. Run `pytest tests/test_message_attachments.py -q` to confirm
+    green. (d) `list_scheduled_sessions` has zero internal call sites (FastAPI routes
+    it via the `@router.get("/scheduled")` decorator) and no test in `tests/` references
     it by name (verified `grep -rn list_scheduled_sessions tests/` returns empty),
     so the only thing to verify is that the route still mounts cleanly — `python3
-    -c "from src.api.sessions import router; print(len(router.routes))"` should
-    print the same route count as before. (e) Do NOT introduce a `_` prefix on the
-    unused params instead of removing them; pylint W0613 would still flag the FastAPI
-    Depends versions (and the spawner one is a real positional arg with a single
-    caller, so renaming would just push the noise into the caller). (f) Do NOT extend
-    the cleanup to `src/cli/backup.py:16` / `:22` — those `args` parameters are required
-    by the argparse subcommand dispatch contract (`args.func(args)` in `main()`)
-    and are intentional even though pylint flags them. (g) Keep the description-arg
-    position in `_create_repoless_process` and the test-kwarg ordering in
-    `test_execute_command_persists_uploaded_files_for_prompt_dispatch` unchanged
-    except for the removed parameter — both call sites use positional / kwarg passing
-    that does not require reordering remaining args.
+    -c "from src.api.sessions import router; print(len(router.routes))"` should print
+    the same route count as before. (e) Do NOT introduce a `_` prefix on the unused
+    params instead of removing them; pylint W0613 would still flag the FastAPI Depends
+    versions (and the spawner one is a real positional arg with a single caller, so
+    renaming would just push the noise into the caller). (f) Do NOT extend the cleanup
+    to `src/cli/backup.py:16` / `:22` — those `args` parameters are required by the
+    argparse subcommand dispatch contract (`args.func(args)` in `main()`) and are
+    intentional even though pylint flags them. (g) Keep the description-arg position
+    in `_create_repoless_process` and the test-kwarg ordering in `test_execute_command_persists_uploaded_files_for_prompt_dispatch`
+    unchanged except for the removed parameter — both call sites use positional /
+    kwarg passing that does not require reordering remaining args.
 
     NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` applied a single one-line
     fix to `core/spawner.py:spawn_worker` (the `_maybe_override_exit_code_from_result`
@@ -5840,21 +5834,21 @@
     pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/154
     and the previously-excluded coherent-single-flow functions enumerated in items
     #153 and #154 (`_wait_for_quota_recovery`, `maybe_auto_name`, `_resolve_worktree_start_point`,
-    `parse_ndjson_tail`, `fork_session`, `get_thread_events`, `_finalize_worker`
-    [now also covered by pending #157], `_broadcast_completion`, `trigger_master`
-    [body-content covered by pending #155], `run_message_with_resume_recovery`,
-    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
-    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`,
-    `spawn_worker`), leaves no >50-line function not already targeted or rejected.
-    The pylint W0613 scan is the only fresh signal this scheduled scan surfaces that
-    is not already tracked, and these three findings are the complete unused-parameter
-    inventory in src/ once the existing pending #156 (`core/review.finalize_review_chain.thread_mgr`)
-    is excluded and the two `src/cli/backup.py` argparse-required `args` parameters
-    are excluded. Per the one-finding-per-scan rule this is the single new code-health
+    `parse_ndjson_tail`, `fork_session`, `get_thread_events`, `_finalize_worker` [now
+    also covered by pending #157], `_broadcast_completion`, `trigger_master` [body-content
+    covered by pending #155], `run_message_with_resume_recovery`, `_wait_and_fire`,
+    `_dir_listing_html`, `build_review_prompt`, `delegate.main`, `_build_worker_prompt`,
+    `slash.execute_command`, `build_session_view_data`, `spawn_worker`), leaves no
+    >50-line function not already targeted or rejected. The pylint W0613 scan is the
+    only fresh signal this scheduled scan surfaces that is not already tracked, and
+    these three findings are the complete unused-parameter inventory in src/ once
+    the existing pending #156 (`core/review.finalize_review_chain.thread_mgr`) is
+    excluded and the two `src/cli/backup.py` argparse-required `args` parameters are
+    excluded. Per the one-finding-per-scan rule this is the single new code-health
     backlog entry for the 2026-05-12T17:14Z scheduled scan.
 
     '
   category: dead-code
-  status: pending
+  status: approved
   created: '2026-05-12T17:14:10Z'
   priority: low

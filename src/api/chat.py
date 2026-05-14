@@ -65,6 +65,10 @@ async def send_message(
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
+  backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None
+  if backend_option is not None and backend_option.type == "tui-cli":
+    raise HTTPException(status_code=400, detail="Chat input is not supported for tui-cli sessions; use the terminal.")
+
   uploaded_files = serialize_uploaded_files(req.uploaded_files)
   content = build_agent_input_content(req.content, uploaded_files)
 

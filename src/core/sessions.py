@@ -118,9 +118,32 @@ class SessionManager:
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     await self._save_metadata(meta)
+    await self._backend_create_hook(meta)
 
     log.info("session_created", session_id=meta.id, name=meta.name)
     return meta
+
+  async def _backend_create_hook(self, meta: SessionMetadata) -> None:
+    """Run backend-specific session-create work (e.g. spawn tmux for tui-cli)."""
+    option = self._cfg.get_backend_option(meta.backend)
+    if option is None or option.type != "tui-cli":
+      return
+    from src.agents.backends.tui import ensure_tmux_session
+    try:
+      await ensure_tmux_session(meta.id, self._session_dir(meta.id))
+    except Exception as e:
+      log.exception("backend_create_hook_failed", session_id=meta.id, backend=meta.backend)
+      raise
+
+  async def _backend_destroy_hook(self, session_id: str, meta: Optional[SessionMetadata]) -> None:
+    """Run backend-specific teardown (e.g. kill tmux for tui-cli)."""
+    if meta is None:
+      return
+    option = self._cfg.get_backend_option(meta.backend)
+    if option is None or option.type != "tui-cli":
+      return
+    from src.agents.backends.tui import kill_tmux_session
+    await kill_tmux_session(session_id)
 
   async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Load session metadata, using in-memory cache when available."""
@@ -369,6 +392,7 @@ class SessionManager:
   async def archive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Mark a session as archived (does not delete files)."""
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
+    await self._backend_destroy_hook(session_id, meta)
     self._events_cache.pop(session_id, None)
     self._usage_cache.pop(session_id, None)
     self._aggregators.pop(session_id, None)
@@ -379,6 +403,8 @@ class SessionManager:
     session_dir = self._session_dir(session_id)
     if not session_dir.exists():
       return False
+    meta = await self.get_session(session_id)
+    await self._backend_destroy_hook(session_id, meta)
     await asyncio.to_thread(shutil.rmtree, session_dir)
     self._events_cache.pop(session_id, None)
     self._usage_cache.pop(session_id, None)

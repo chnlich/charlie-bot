@@ -5737,9 +5737,10 @@
 
     '
   category: duplication
-  status: approved
+  status: in_progress
   created: '2026-05-12T11:14:40Z'
   priority: low
+  in_progress_at: '2026-05-14T23:09:57Z'
 - id: '159'
   title: Drop three unused dependency parameters surfaced by pylint W0613 in core/spawner._create_repoless_process,
     api/slash.execute_command, and api/sessions.list_scheduled_sessions

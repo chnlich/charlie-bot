@@ -244,6 +244,8 @@ async def get_session_view(
   trigger_mgr = get_trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
+  active_backend_opt = cfg.get_backend_option(active_backend)
+  active_backend_type = active_backend_opt.type if active_backend_opt else ""
   return {
       "session": meta.model_dump(mode="json"),
       "messages": view.messages,
@@ -253,6 +255,7 @@ async def get_session_view(
       "event_count": view.total_event_count,
       "usage": view.usage,
       "active_backend": active_backend,
+      "active_backend_type": active_backend_type,
       "has_more": view.has_more,
   }
 

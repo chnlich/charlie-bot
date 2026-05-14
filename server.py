@@ -193,7 +193,14 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     except Exception as e:
       log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
 
-    await _ws_keepalive(websocket, "session_ws", session_id=session_id)
+    cfg = get_config()
+    meta = await session_mgr.get_session(session_id)
+    backend_option = cfg.get_backend_option(meta.backend) if meta and meta.backend else None
+    if backend_option is not None and backend_option.type == "tui-cli":
+      from src.agents.backends.tui import run_tui_attachment
+      await run_tui_attachment(websocket, session_id, cfg.sessions_dir)
+    else:
+      await _ws_keepalive(websocket, "session_ws", session_id=session_id)
   finally:
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe("sidebar", websocket)

@@ -190,6 +190,7 @@ async def index(
       cfg.backend_options[0].id if cfg.backend_options else "claude")
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
+  active_backend_type = active_backend_opt.type if active_backend_opt else ""
 
   return templates.TemplateResponse(
       request,
@@ -206,6 +207,7 @@ async def index(
           "backend_options": cfg.backend_options,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,
+          "active_backend_type": active_backend_type,
           "load_errors": load_errors,
           "auth_enabled": bool(cfg.charliebot_access_key),
           "hostname": socket.gethostname(),

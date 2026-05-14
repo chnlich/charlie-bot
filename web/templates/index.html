@@ -22,6 +22,9 @@
   <script src="https://cdn.jsdelivr.net/npm/diff/dist/diff.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
   <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <link rel="stylesheet" href="/static/css/styles.css">
   <script type="module">
     import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs';
@@ -39,7 +42,13 @@
       {{ opt.id|tojson }}: {{ opt.label|tojson }},
       {% endfor %}
     };
+    const BACKEND_TYPES = {
+      {% for opt in backend_options %}
+      {{ opt.id|tojson }}: {{ opt.type|tojson }},
+      {% endfor %}
+    };
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
+    globalThis.ACTIVE_BACKEND_TYPE = {{ (active_backend_type or '')|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
   </script>
 </head>
@@ -254,6 +263,8 @@
       <div class="flex-1 flex min-h-0">
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
+        <!-- TUI terminal container (hidden unless backend.type === 'tui-cli') -->
+        <div id="tui-container" class="hidden flex-1 min-h-0 bg-black"></div>
         <!-- Messages -->
         <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           <!-- Streaming target (initialized from pending_draft if present) -->
@@ -544,6 +555,7 @@
   <script src="/static/js/context-panel.js"></script>
   <script src="/static/js/file-upload.js"></script>
   <script src="/static/js/chat.js"></script>
+  <script src="/static/js/tui_session.js"></script>
   <script src="/static/js/websocket.js"></script>
   <script src="/static/js/usage.js"></script>
   <script src="/static/js/sidebar.js"></script>

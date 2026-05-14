@@ -55,6 +55,11 @@ function connectWS() {
     reconnectDelay = 1000;
     // Send cursor so the server only replays events beyond this index.
     socket.send(JSON.stringify({type: 'cursor', index: eventCursor}));
+    // If this is a TUI session, make sure the xterm.js terminal is mounted
+    // and a fresh resize is sent (server has spawned a new PTY for this WS).
+    if (globalThis.TuiSession && globalThis.TuiSession.isTuiActive()) {
+      globalThis.TuiSession.onWsOpenIfTui();
+    }
   };
 
   socket.onmessage = (e) => {
@@ -184,5 +189,9 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     showDiffModal();
   } else if (t === 'ext_usage') {
     renderExtUsage(ev);
+  } else if (t === 'pty_output') {
+    if (globalThis.TuiSession) globalThis.TuiSession.onPtyOutput(ev.data || '');
+  } else if (t === 'pty_exit') {
+    if (globalThis.TuiSession) globalThis.TuiSession.onPtyExit();
   }
 }

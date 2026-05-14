@@ -137,6 +137,8 @@ class SessionManager:
 
   async def _backend_destroy_hook(self, session_id: str, meta: Optional[SessionMetadata]) -> None:
     """Run backend-specific teardown (e.g. kill tmux for tui-cli)."""
+    # Only called on permanent delete. Archive is a status-only flag and must
+    # NOT kill the underlying tmux/claude process for tui-cli sessions.
     if meta is None:
       return
     option = self._cfg.get_backend_option(meta.backend)
@@ -392,7 +394,6 @@ class SessionManager:
   async def archive_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Mark a session as archived (does not delete files)."""
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
-    await self._backend_destroy_hook(session_id, meta)
     self._events_cache.pop(session_id, None)
     self._usage_cache.pop(session_id, None)
     self._aggregators.pop(session_id, None)

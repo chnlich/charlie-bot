@@ -20,7 +20,7 @@ import signal
 import struct
 import termios
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
@@ -34,7 +34,24 @@ _HISTORY_LIMIT = 50000
 _PTY_READ_CHUNK = 4096
 _WS_RECV_TIMEOUT = 30.0
 _CLAUDE_TUI_SETTINGS = json.dumps({"skipDangerousModePermissionPrompt": True}, separators=(",", ":"))
-_DEFAULT_COMMAND = ("claude", "--settings", _CLAUDE_TUI_SETTINGS, "--dangerously-skip-permissions")
+
+
+def _find_existing_claude_jsonl(session_id: str) -> Optional[Path]:
+  """Glob ~/.claude/projects/*/<session_id>.jsonl and return first match (or None)."""
+  matches = list(Path.home().glob(f".claude/projects/*/{session_id}.jsonl"))
+  return matches[0] if matches else None
+
+
+def _build_claude_argv(session_id: str, resume: bool) -> list[str]:
+  session_arg = "--resume" if resume else "--session-id"
+  return [
+      "claude",
+      "--settings",
+      _CLAUDE_TUI_SETTINGS,
+      "--dangerously-skip-permissions",
+      session_arg,
+      session_id,
+  ]
 
 
 def _tmux_binary() -> str:
@@ -102,15 +119,16 @@ def _ensure_claude_project_trusted(working_dir: Path) -> None:
 async def ensure_tmux_session(
     session_id: str,
     working_dir: Path,
-    command: str | Sequence[str] = _DEFAULT_COMMAND,
 ) -> None:
-  """Idempotently create the tmux session running *command* in *working_dir*."""
+  """Idempotently create the tmux session running Claude TUI in *working_dir*."""
   name = tmux_session_name(session_id)
   working_dir.mkdir(parents=True, exist_ok=True)
   _ensure_claude_project_trusted(working_dir)
   if await tmux_session_exists(session_id):
     return
-  command_args = [command] if isinstance(command, str) else list(command)
+  resume = _find_existing_claude_jsonl(session_id) is not None
+  command_args = _build_claude_argv(session_id, resume)
+  log.info("tui_claude_invocation", mode="resume" if resume else "fresh", session_id=session_id)
   rc, stderr = await _run_tmux(
       "new-session",
       "-d",

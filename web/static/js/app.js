@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initLatexResize();
   initBacklogResize();
   fetchSlashCommands();
+  startTuiStatusPolling();
   // Seed sessionUnread from server-rendered unread dots
   document.querySelectorAll('[id^="unread-"]').forEach(el => {
     sessionUnread[el.id.replace('unread-', '')] = el.dataset.hasUnread === '1';

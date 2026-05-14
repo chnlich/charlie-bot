@@ -169,6 +169,12 @@ function renderSessionView(data) {
   const messages = data.messages;
   setActiveBackendId(data.active_backend);
   setActiveRoundRatings(session.round_ratings || {});
+  const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';
+  if (globalThis.TuiSession) {
+    globalThis.TuiSession.syncBackend(backendType, session.id);
+  } else {
+    globalThis.ACTIVE_BACKEND_TYPE = backendType;
+  }
 
   // Store pagination state from tail-loaded response
   sessionHasMore = !!data.has_more;

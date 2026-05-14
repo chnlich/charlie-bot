@@ -115,13 +115,27 @@
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
-    try { fitAddon.fit(); } catch (e) { /* container has no size yet */ }
     term.focus();
 
     term.onData(sendInput);
 
-    // Initial resize ack to server.
-    if (term.cols && term.rows) sendResize(term.cols, term.rows);
+    function performInitialFit() {
+      if (!fitAddon || !term) return;
+      try {
+        fitAddon.fit();
+        if (term.cols && term.rows) sendResize(term.cols, term.rows);
+      } catch (e) {
+        // ignore intermediate layout/font-metric errors
+      }
+    }
+
+    // Defer once until after the initial layout/paint, then again.
+    requestAnimationFrame(() => requestAnimationFrame(performInitialFit));
+
+    // Re-fit after monospace font has loaded; xterm cell metrics depend on it.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(performInitialFit);
+    }
 
     resizeObs = new ResizeObserver(() => {
       if (!fitAddon || !term) return;

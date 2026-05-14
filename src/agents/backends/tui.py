@@ -20,7 +20,7 @@ import signal
 import struct
 import termios
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
@@ -28,8 +28,8 @@ from fastapi import WebSocket, WebSocketDisconnect
 log = structlog.get_logger()
 
 _TMUX_SOCKET = "charliebot"
-_INITIAL_COLS = 200
-_INITIAL_ROWS = 50
+_INITIAL_COLS = 80
+_INITIAL_ROWS = 24
 _HISTORY_LIMIT = 50000
 _PTY_READ_CHUNK = 4096
 _WS_RECV_TIMEOUT = 30.0
@@ -71,12 +71,17 @@ async def tmux_session_exists(session_id: str) -> bool:
   return rc == 0
 
 
-async def ensure_tmux_session(session_id: str, working_dir: Path, command: str = "claude") -> None:
+async def ensure_tmux_session(
+    session_id: str,
+    working_dir: Path,
+    command: str | Sequence[str] = ("claude", "--dangerously-skip-permissions"),
+) -> None:
   """Idempotently create the tmux session running *command* in *working_dir*."""
   name = tmux_session_name(session_id)
   if await tmux_session_exists(session_id):
     return
   working_dir.mkdir(parents=True, exist_ok=True)
+  command_args = [command] if isinstance(command, str) else list(command)
   rc, stderr = await _run_tmux(
       "new-session",
       "-d",
@@ -88,7 +93,7 @@ async def ensure_tmux_session(session_id: str, working_dir: Path, command: str =
       str(_INITIAL_ROWS),
       "-c",
       str(working_dir),
-      command,
+      *command_args,
   )
   if rc != 0:
     raise RuntimeError(f"tmux new-session failed for {name}: {stderr.strip()}")

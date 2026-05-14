@@ -5603,9 +5603,10 @@
 
     '
   category: refactoring
-  status: approved
+  status: in_progress
   created: '2026-05-12T09:12:48Z'
   priority: low
+  in_progress_at: '2026-05-14T21:09:44Z'
 - id: '158'
   title: Extract shared extract_tool_result_text helper to deduplicate the list-or-string
     tool_result content parsing between api/threads.get_thread_events and core/message_aggregator.MessageAggregator._feed

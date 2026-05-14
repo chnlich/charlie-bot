@@ -294,6 +294,7 @@ function renderHtmlArtifact(tool) {
   return '<div class="html-artifact">'
     + '<div class="html-artifact-toolbar">'
     + '<span class="filename">' + escapeHtml(basename(filePath)) + '</span>'
+    + '<button type="button" onclick="expandHtmlArtifact(this)">Expand</button>'
     + '<a href="' + escapeHtml(openUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
     + '<button type="button" onclick="toggleHtmlArtifactSource(this)">View source</button>'
     + '</div>'
@@ -322,6 +323,58 @@ function toggleHtmlArtifactSource(btn) {
     source.style.display = 'block';
     btn.textContent = 'View rendered';
   }
+}
+
+function expandHtmlArtifact(btn) {
+  var card = btn.closest('.html-artifact');
+  if (!card) return;
+  var inlineFrame = card.querySelector('.html-artifact-frame');
+  if (!inlineFrame) return;
+  var srcdoc = inlineFrame.getAttribute('srcdoc') || '';
+  var sandbox = inlineFrame.getAttribute('sandbox') || '';
+  var filenameEl = card.querySelector('.html-artifact-toolbar .filename');
+  var filenameText = filenameEl ? filenameEl.textContent : '';
+
+  var overlay = document.createElement('div');
+  overlay.className = 'html-artifact-modal-overlay';
+
+  var content = document.createElement('div');
+  content.className = 'html-artifact-modal-content';
+  content.addEventListener('click', function (e) { e.stopPropagation(); });
+
+  var toolbar = document.createElement('div');
+  toolbar.className = 'html-artifact-modal-toolbar';
+
+  var filenameSpan = document.createElement('span');
+  filenameSpan.className = 'filename';
+  filenameSpan.textContent = filenameText;
+  toolbar.appendChild(filenameSpan);
+
+  var closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Close';
+  toolbar.appendChild(closeBtn);
+
+  var modalFrame = document.createElement('iframe');
+  modalFrame.setAttribute('sandbox', sandbox);
+  modalFrame.setAttribute('srcdoc', srcdoc);
+
+  content.appendChild(toolbar);
+  content.appendChild(modalFrame);
+  overlay.appendChild(content);
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') close();
+  }
+  function close() {
+    document.removeEventListener('keydown', onKeydown);
+    if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+  }
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', close);
+  document.addEventListener('keydown', onKeydown);
+
+  document.body.appendChild(overlay);
 }
 
 function renderHtmlArtifacts(tools) {

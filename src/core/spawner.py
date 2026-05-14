@@ -526,6 +526,18 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) 
     return
 
 
+def _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) -> bool:
+  """Decide whether the worker's worktree must survive past this exit (reviewer chain, keep_worktree pin, improve-loop shared worktree, or explicit skip_cleanup)."""
+  if thread.keep_worktree:
+    return True
+  if thread.skip_cleanup:
+    return True
+  if thread.review_of:
+    return True
+  can_spawn_reviewer = all([thread.repo_path, thread.branch_name, thread.worktree_path])
+  return exit_code == 0 and thread.require_review and not thread.review_of and can_spawn_reviewer
+
+
 async def _finalize_worker(
     session_id: str,
     description: str,
@@ -555,20 +567,7 @@ async def _finalize_worker(
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
-  # Clean up the thread's worktree/temp directory.
-  # Skip cleanup if a reviewer will be spawned — it needs the worktree.
-  # Also skip if the thread was marked skip_cleanup (e.g. improve loop shared worktree).
-  if thread.keep_worktree:
-    # keep_worktree wins over the require_review branching — the worktree must persist.
-    skip_cleanup = True
-  elif thread.skip_cleanup:
-    skip_cleanup = True
-  elif thread.review_of:
-    # Reviewer threads never clean up here — the review chain owns the worktree lifecycle.
-    skip_cleanup = True
-  else:
-    can_spawn_reviewer = all([thread.repo_path, thread.branch_name, thread.worktree_path])
-    skip_cleanup = (exit_code == 0 and thread.require_review and not thread.review_of and can_spawn_reviewer)
+  skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
   await _cleanup_worker_directory(thread, skip_cleanup)
 
   if not skip_notify:

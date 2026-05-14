@@ -57,9 +57,10 @@ def _build_worker_prompt(
   else:
     intro_line = "A dedicated git worktree is already created for you."
 
-  branch_lines = (f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
-                  f"- Worktree: `{wt_path}`\n"
-                  f"- Repo: `{repo_path}`")
+  branch_lines = (
+      f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
+      f"- Worktree: `{wt_path}`\n"
+      f"- Repo: `{repo_path}`")
 
   commit_steps = (
       f"Follow these steps exactly:\n"
@@ -95,10 +96,9 @@ def _build_worker_prompt(
   else:
     raise ValueError(f"unsupported task_type: {task_type!r}")
 
-  worktree_section = (
-      f"## Worktree Workflow\n"
-      f"{workflow_body}\n\n"
-      f"## Task\n{description}")
+  worktree_section = (f"## Worktree Workflow\n"
+                      f"{workflow_body}\n\n"
+                      f"## Task\n{description}")
 
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:
@@ -688,8 +688,7 @@ async def spawn_worker(
         worker, session_id, description, thread, thread_mgr, session_mgr)
 
     if exit_code != 0 and not quota_exhausted and not error_msg:
-      exit_code = await _maybe_override_exit_code_from_result(
-          exit_code, session_id, thread, thread_mgr)
+      exit_code = await _maybe_override_exit_code_from_result(exit_code, session_id, thread, thread_mgr)
 
   except asyncio.CancelledError:
     log.warning("spawn_worker_cancelled", session=session_id, thread_id=thread_id)

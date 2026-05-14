@@ -213,13 +213,14 @@ class MessageAggregator:
             yield from self._flush_to_message_delta()
             yield {
                 "type": "message",
-                "message": {
-                    'role': 'plan',
-                    'content': plan_text,
-                    'event_index': idx,
-                    'id': ev_id,
-                    'timestamp': ev.get('timestamp'),
-                },
+                "message":
+                    {
+                        'role': 'plan',
+                        'content': plan_text,
+                        'event_index': idx,
+                        'id': ev_id,
+                        'timestamp': ev.get('timestamp'),
+                    },
             }
           elif self._assistant_buf:
             plan_msg = {

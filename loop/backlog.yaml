@@ -5852,7 +5852,8 @@
 
     '
   category: dead-code
-  status: in_progress
+  status: done
   created: '2026-05-12T17:14:10Z'
   priority: low
   in_progress_at: '2026-05-15T01:10:21Z'
+  done_at: '2026-05-15T01:13:12Z'

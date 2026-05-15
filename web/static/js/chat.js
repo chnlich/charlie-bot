@@ -279,6 +279,30 @@ function injectResizeScript(html, frameId) {
   return src.slice(0, idx) + script + src.slice(idx);
 }
 
+function htmlArtifactSizeStorageKey(filePath) {
+  return filePath ? 'html-artifact-size:' + filePath : '';
+}
+
+function loadHtmlArtifactSavedSize(filePath) {
+  var key = htmlArtifactSizeStorageKey(filePath);
+  if (!key) return null;
+  try {
+    var raw = localStorage.getItem(key);
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.height === 'number' && parsed.height > 0) return parsed;
+  } catch (e) {}
+  return null;
+}
+
+function saveHtmlArtifactSavedSize(filePath, size) {
+  var key = htmlArtifactSizeStorageKey(filePath);
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(size));
+  } catch (e) {}
+}
+
 function renderHtmlArtifact(tool) {
   var filePath = (tool.input && tool.input.file_path) || '';
   var rawHtml = (tool.input && tool.input.content) || '';
@@ -288,9 +312,15 @@ function renderHtmlArtifact(tool) {
   var absPath = resolveArtifactAbsolutePath(filePath);
   var openUrl = '/files' + absPath;
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
-  var iframeStyle = 'width:100%;min-height:60px;max-height:80vh;'
+  var savedSize = loadHtmlArtifactSavedSize(filePath);
+  var sizeStyle = savedSize
+    ? 'height:' + Number(savedSize.height) + 'px;max-height:none;'
+    : 'min-height:60px;max-height:80vh;';
+  var iframeStyle = 'width:100%;' + sizeStyle
     + 'border:1px solid rgba(148,163,184,0.2);border-bottom:none;border-radius:0;'
     + 'background:white;display:block;';
+  var manualAttr = savedSize ? ' data-manual-size="1"' : '';
+  var filePathAttr = ' data-file-path="' + escapeHtml(filePath) + '"';
   return '<div class="html-artifact">'
     + '<div class="html-artifact-toolbar">'
     + '<span class="filename">' + escapeHtml(basename(filePath)) + '</span>'
@@ -298,7 +328,7 @@ function renderHtmlArtifact(tool) {
     + '<a href="' + escapeHtml(openUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
     + '<button type="button" onclick="toggleHtmlArtifactSource(this)">View source</button>'
     + '</div>'
-    + '<iframe class="html-artifact-frame" data-frame-id="' + frameId + '"'
+    + '<iframe class="html-artifact-frame" data-frame-id="' + frameId + '"' + manualAttr + filePathAttr
     + ' sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"'
     + ' srcdoc="' + srcdoc + '"'
     + ' style="' + iframeStyle + '"></iframe>'
@@ -355,6 +385,10 @@ function startHtmlArtifactResize(e, handle) {
     frame.style.pointerEvents = '';
     document.body.style.cursor = prevBodyCursor;
     frame.dataset.manualSize = '1';
+    var finalHeight = frame.getBoundingClientRect().height;
+    if (frame.dataset.filePath && finalHeight > 0) {
+      saveHtmlArtifactSavedSize(frame.dataset.filePath, {height: finalHeight});
+    }
   }
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);

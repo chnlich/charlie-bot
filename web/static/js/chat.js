@@ -292,7 +292,10 @@ function loadHtmlArtifactSavedSize(filePath) {
     var raw = localStorage.getItem(key);
     if (!raw) return null;
     var parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.height === 'number' && parsed.height > 0) return parsed;
+    if (!parsed || typeof parsed !== 'object') return null;
+    var height = (typeof parsed.height === 'number' && parsed.height > 0) ? parsed.height : 0;
+    var width = (typeof parsed.width === 'number' && parsed.width > 0) ? parsed.width : 0;
+    if (height || width) return {height: height, width: width};
   } catch (e) {}
   return null;
 }
@@ -315,27 +318,36 @@ function renderHtmlArtifact(tool) {
   var openUrl = '/files' + absPath;
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
   var savedSize = loadHtmlArtifactSavedSize(filePath);
-  var sizeStyle = savedSize
-    ? 'height:' + Number(savedSize.height) + 'px;max-height:none;'
-    : 'min-height:60px;max-height:80vh;';
-  var iframeStyle = 'width:100%;' + sizeStyle
-    + 'border:1px solid rgba(148,163,184,0.2);border-bottom:none;border-radius:0;'
+  var iframeSizeStyle = 'min-height:60px;max-height:80vh;';
+  var widthStyle = '';
+  if (savedSize) {
+    if (savedSize.height) iframeSizeStyle = 'height:' + savedSize.height + 'px;max-height:none;';
+    if (savedSize.width) widthStyle = 'width:' + savedSize.width + 'px;';
+  }
+  var iframeStyle = 'width:100%;' + iframeSizeStyle
+    + 'border:1px solid rgba(148,163,184,0.2);border-bottom:none;border-right:none;border-radius:0;'
     + 'background:white;display:block;';
-  var manualAttr = savedSize ? ' data-manual-size="1"' : '';
+  var manualHeightAttr = (savedSize && savedSize.height) ? ' data-manual-height="1"' : '';
   var filePathAttr = ' data-file-path="' + escapeHtml(filePath) + '"';
   return '<div class="html-artifact">'
-    + '<div class="html-artifact-toolbar">'
+    + '<div class="html-artifact-toolbar" style="' + widthStyle + '">'
     + '<span class="filename">' + escapeHtml(basename(filePath)) + '</span>'
     + '<button type="button" onclick="expandHtmlArtifact(this)">Expand</button>'
     + '<a href="' + escapeHtml(openUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
     + '<button type="button" onclick="toggleHtmlArtifactSource(this)">View source</button>'
     + '</div>'
-    + '<iframe class="html-artifact-frame" data-frame-id="' + frameId + '"' + manualAttr + filePathAttr
+    + '<div class="html-artifact-frame-wrap" style="' + widthStyle + '">'
+    + '<iframe class="html-artifact-frame" data-frame-id="' + frameId + '"' + manualHeightAttr + filePathAttr
     + ' sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"'
     + ' srcdoc="' + srcdoc + '"'
     + ' style="' + iframeStyle + '"></iframe>'
-    + '<div class="html-artifact-resize-handle" title="Drag to resize"'
-    + ' onpointerdown="startHtmlArtifactResize(event, this)"></div>'
+    + '<div class="html-artifact-resize-handle html-artifact-resize-s" title="Drag to resize height"'
+    + ' onpointerdown="startHtmlArtifactResize(event, this, \'y\')"></div>'
+    + '<div class="html-artifact-resize-handle html-artifact-resize-e" title="Drag to resize width"'
+    + ' onpointerdown="startHtmlArtifactResize(event, this, \'x\')"></div>'
+    + '<div class="html-artifact-resize-handle html-artifact-resize-se" title="Drag to resize"'
+    + ' onpointerdown="startHtmlArtifactResize(event, this, \'xy\')"></div>'
+    + '</div>'
     + '<div class="html-artifact-source"><pre><code class="hljs language-html">'
     + sourceHighlighted + '</code></pre></div>'
     + '</div>';
@@ -344,41 +356,52 @@ function renderHtmlArtifact(tool) {
 function toggleHtmlArtifactSource(btn) {
   var card = btn.closest('.html-artifact');
   if (!card) return;
-  var frame = card.querySelector('.html-artifact-frame');
-  var handle = card.querySelector('.html-artifact-resize-handle');
+  var wrap = card.querySelector('.html-artifact-frame-wrap');
   var source = card.querySelector('.html-artifact-source');
-  if (!frame || !source) return;
+  if (!wrap || !source) return;
   var showingSource = source.style.display === 'block';
   if (showingSource) {
     source.style.display = 'none';
-    frame.style.display = 'block';
-    if (handle) handle.style.display = '';
+    wrap.style.display = '';
     btn.textContent = 'View source';
   } else {
-    frame.style.display = 'none';
-    if (handle) handle.style.display = 'none';
+    wrap.style.display = 'none';
     source.style.display = 'block';
     btn.textContent = 'View rendered';
   }
 }
 
-function startHtmlArtifactResize(e, handle) {
+function startHtmlArtifactResize(e, handle, axis) {
   e.preventDefault();
   var card = handle.closest('.html-artifact');
   if (!card) return;
+  var wrap = card.querySelector('.html-artifact-frame-wrap');
   var frame = card.querySelector('.html-artifact-frame');
-  if (!frame) return;
+  if (!wrap || !frame) return;
+  var resizeY = axis.indexOf('y') !== -1;
+  var resizeX = axis.indexOf('x') !== -1;
+  var startX = e.clientX;
   var startY = e.clientY;
   var startHeight = frame.getBoundingClientRect().height;
+  var startWidth = wrap.getBoundingClientRect().width;
   // Block the iframe from absorbing pointer events while dragging — without
   // this, pointermove stops firing the moment the cursor enters the iframe.
   frame.style.pointerEvents = 'none';
   var prevBodyCursor = document.body.style.cursor;
-  document.body.style.cursor = 'ns-resize';
+  document.body.style.cursor = resizeX && resizeY ? 'nwse-resize'
+    : resizeX ? 'ew-resize' : 'ns-resize';
   function onMove(ev) {
-    var newHeight = Math.max(60, startHeight + (ev.clientY - startY));
-    frame.style.height = newHeight + 'px';
-    frame.style.maxHeight = 'none';
+    if (resizeY) {
+      var newHeight = Math.max(60, startHeight + (ev.clientY - startY));
+      frame.style.height = newHeight + 'px';
+      frame.style.maxHeight = 'none';
+    }
+    if (resizeX) {
+      var newWidth = Math.max(120, startWidth + (ev.clientX - startX));
+      wrap.style.width = newWidth + 'px';
+      var toolbar = card.querySelector('.html-artifact-toolbar');
+      if (toolbar) toolbar.style.width = newWidth + 'px';
+    }
   }
   function onUp() {
     document.removeEventListener('pointermove', onMove);
@@ -386,11 +409,13 @@ function startHtmlArtifactResize(e, handle) {
     document.removeEventListener('pointercancel', onUp);
     frame.style.pointerEvents = '';
     document.body.style.cursor = prevBodyCursor;
-    frame.dataset.manualSize = '1';
-    var finalHeight = frame.getBoundingClientRect().height;
-    if (frame.dataset.filePath && finalHeight > 0) {
-      saveHtmlArtifactSavedSize(frame.dataset.filePath, {height: finalHeight});
-    }
+    if (resizeY) frame.dataset.manualHeight = '1';
+    if (!frame.dataset.filePath) return;
+    var existing = loadHtmlArtifactSavedSize(frame.dataset.filePath) || {height: 0, width: 0};
+    var newSize = {height: existing.height, width: existing.width};
+    if (resizeY) newSize.height = frame.getBoundingClientRect().height;
+    if (resizeX) newSize.width = wrap.getBoundingClientRect().width;
+    saveHtmlArtifactSavedSize(frame.dataset.filePath, newSize);
   }
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);
@@ -470,7 +495,7 @@ function installHtmlArtifactListener() {
     var frame = document.querySelector(sel);
     if (!frame) return;
     // Stop auto-fitting height once the user has manually resized the frame.
-    if (frame.dataset.manualSize === '1') return;
+    if (frame.dataset.manualHeight === '1') return;
     var cap = Math.floor(window.innerHeight * 0.8);
     frame.style.height = Math.min(Number(data.height) + 2, cap) + 'px';
   });

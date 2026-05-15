@@ -5936,3 +5936,121 @@
   status: pending
   created: '2026-05-15T03:11:45Z'
   priority: low
+- id: '161'
+  title: Split run_tui_attachment into a _setup_pty_attachment helper plus a _handle_pty_client_message
+    dispatcher to drop the function under 50 lines
+  description: 'WHY — The 2026-05-15T13:13Z scheduled code-health scan ran `yapf --in-place
+    --recursive src/` (no changes; the tree is already clean), `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` (zero matches), `python -m pyflakes src/`, `pylint --disable=all --enable=unused-argument
+    src/`, and `vulture src/ --min-confidence 80`. All non-formatting signals are
+    already tracked by existing pending items (pyflakes ''e'' unused in `core/sessions.py:134`
+    by pending #160; pyflakes ''WatchTarget'' unused in `api/internal.py:14` by pending
+    #131 and #139; pylint ''thread_mgr'' unused in `core/review.finalize_review_chain`
+    by pending #156; vulture ''cls'' in `core/config.py:128` is a Pydantic-validator
+    false positive; the two `cli/backup.py` argparse-required ''args'' parameters
+    are intentional). The fresh signal this scan surfaces is the >50-line function
+    audit: `src/agents/backends/tui.py:run_tui_attachment` at L294-366 is 73 lines
+    and is the only >50-line function in src/ that is not (a) covered by a pending
+    refactor item (107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153),
+    (b) a previously-rejected coherent single-flow function enumerated in items #153/#154/#158/#159
+    (`_wait_for_quota_recovery`, `maybe_auto_name`, `_resolve_worktree_start_point`,
+    `parse_ndjson_tail`, `fork_session`, `get_thread_events`, `_finalize_worker`,
+    `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`),
+    or (c) borderline single-flow at 51-52L (`api/internal.delegate_task` 51L —
+    same character as the rejected `cli/delegate.main` 54L; `core/review.spawn_review_worker`
+    52L — already extracted by done item #154 into a thin orchestrator). A backlog
+    grep for `run_tui_attachment` returns zero hits; this function has never been
+    looked at by a prior scan.
+
+    HOW — One refactor with two clean extraction boundaries, both with single-responsibility
+    names worth their own concept per the dedup rule. (1) Extract `async def _setup_pty_attachment(websocket:
+    WebSocket, session_id: str, sessions_dir: Path) -> Optional[PtyAttachment]` covering
+    L300-319 (20 lines): runs the two preflight steps `ensure_tmux_session(session_id,
+    sessions_dir / session_id)` and `PtyAttachment(session_id).spawn()`, each wrapped
+    in the identical `try / except Exception as e: log.exception(...); try: await
+    websocket.send_json({"type": "pty_exit", "error": str(e)}) except Exception: pass;
+    return` block. Helper returns the spawned attachment on success, or None after
+    notifying the client on either failure. Caller checks `if attachment is None:
+    return`. (2) Extract `def _handle_pty_client_message(msg: dict, attachment: PtyAttachment,
+    session_id: str) -> None` covering L341-357 (17 lines): the per-type dispatch
+    for `pty_input` (base64-decode + `attachment.write(chunk)`) and `pty_resize` (int-parse
+    cols/rows + `attachment.resize(cols, rows)`), with the `# Other types ... are
+    ignored.` comment as the natural fall-through. The receive-side error handling
+    (`json.JSONDecodeError`, `base64.b64decode` failure, int-parse failure) stays
+    inside the helper as it is per-message, not per-loop. (3) `run_tui_attachment`
+    collapses to: setup call + `if None: return` + create pump_task + while loop with
+    `receive_text` + timeout/disconnect handling + dispatch call + finally cleanup
+    block — approximately 38-40 lines, well under 50. The function''s docstring (L295-298)
+    still accurately describes the orchestration role after the split.
+
+    REFACTORING SAFETY — (1) Both helpers are module-private (underscore prefix) and
+    have no external callers — `run_tui_attachment` is the only entry point into
+    this PTY-attachment flow, called from the session WebSocket handler after subscription/catchup
+    (per the existing docstring). (2) `_setup_pty_attachment` preserves the exact
+    failure semantics: same log event names (`tui_ensure_session_failed`, `tui_pty_spawn_failed`),
+    same structured fields (`session_id`), same client-side `pty_exit` payload shape
+    (`{"type": "pty_exit", "error": str(e)}`), same inner `try/except Exception: pass`
+    around the WS send (the WS may already be closed when notification is attempted).
+    The two `log.exception` calls remain distinct so log analytics can still distinguish
+    "tmux session creation failed" from "PTY spawn failed". (3) `_handle_pty_client_message`
+    is synchronous because both branches do synchronous work (`attachment.write` and
+    `attachment.resize` are sync `os.write`/`ioctl` calls per the `PtyAttachment`
+    class definition earlier in the file). No `await` is needed. (4) The split does
+    not touch `_pump_pty_to_ws` (L249-291), `PtyAttachment` (defined earlier in the
+    file), `ensure_tmux_session`, or any other helper — purely a body-level reshape
+    of one function. (5) No test changes required: tui.py is exercised end-to-end
+    via the WebSocket layer; per-helper behavior is identical to the inline behavior.
+    (6) The two new helpers each map to a clear single concept: "set up the PTY attachment
+    or surface the failure to the client" and "dispatch one decoded client message
+    to the attachment". Per the dedup rule (`extract a shared helper only if the shared
+    block is > 50 lines OR the helper has a clear, single-responsibility name worth
+    its own concept`), both qualify on the name criterion even though neither block
+    is >50 lines on its own.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` produced no changes
+    this scan (the tree is already clean); `grep -rE "TODO|FIXME|HACK|XXX" src/` returns
+    zero matches; `python -m pyflakes src/` reports exactly two warnings — the unused
+    ''e'' in `core/sessions.py:134` (covered by pending #160) and the unused `WatchTarget`
+    import in `api/internal.py:14` (covered by pending #131 and #139). `pylint --disable=all
+    --enable=unused-argument src/` reports only the already-tracked `core/review.finalize_review_chain.thread_mgr`
+    (covered by pending #156) and the two `cli/backup.py` argparse-required `args`
+    parameters (intentional, not actionable). `vulture src/ --min-confidence 80` reports
+    only the `cls` classmethod parameter in `core/config.py:128`, a Pydantic-validator
+    requirement and a known false positive. The full >50-line function inventory in
+    src/ this scan (ast-walked, function and async-function bodies) is: `core/improve_command._wait_for_quota_recovery`
+    (61L, rejected coherent-flow per #153/#154), `core/improve_command._run_single_iteration`
+    (120L, pending #136), `core/improve_command.run_improve_loop` (163L, pending #127),
+    `core/sessions.fork_session` (58L, rejected coherent-flow), `core/message_aggregator._feed`
+    (104L, pending #132), `core/ndjson.parse_ndjson_tail` (52L, rejected coherent-flow),
+    `core/git._resolve_worktree_start_point` (52L, rejected coherent-flow), `core/triggers._detect_pidfd`
+    (88L, pending #109), `core/triggers._wait_and_fire` (54L, rejected coherent-flow),
+    `core/triggers._wait_with_pidfd` (81L, pending #135), `core/spawner._build_worker_prompt`
+    (113L, rejected coherent-flow per #153), `core/spawner._create_worktree_and_process`
+    (116L, pending #125), `core/spawner.spawn_worker` (52L, rejected coherent-flow),
+    `core/spawner._broadcast_completion` (53L, rejected coherent-flow), `core/review.build_review_prompt`
+    (58L, rejected coherent-flow), `core/review.extract_review_context` (52L, pending
+    #153), `core/review.spawn_review_worker` (52L, post-#154 thin orchestrator —
+    borderline coherent-flow), `core/autonamer.maybe_auto_name` (62L, rejected coherent-flow),
+    `core/master_trigger.run_message_with_resume_recovery` (56L, rejected coherent-flow),
+    `core/master_trigger.trigger_master` (54L, rejected coherent-flow; body-content
+    pending #155), `cli/delegate.main` (54L, rejected coherent-flow), `agents/worker.run`
+    (78L, pending #137), `agents/master_cc._run_cc` (109L, pending #126), `agents/master_cc._session_consumer`
+    (97L, pending #134), `agents/master_cc.run_message` (110L, pending #142), `api/files._dir_listing_html`
+    (61L, rejected coherent-flow), `api/message_utils.build_session_view_data` (55L,
+    rejected coherent-flow), `api/pages.index` (78L, pending #140), `api/slash.execute_command`
+    (67L, rejected coherent-flow), `api/internal.delegate_task` (51L, borderline coherent-flow
+    — same character as the rejected `cli/delegate.main` 54L), `api/chat.send_message`
+    (74L, pending #144), `agents/backends/gemini_cli.translate_event` (65L, pending
+    #141), `agents/backends/base.run` (122L, pending #129), and `agents/backends/tui.run_tui_attachment`
+    (73L, THIS ITEM — not covered by any pending item, never mentioned in the backlog,
+    has two clean extraction boundaries with named helpers worth their own concept).
+    Per the one-finding-per-scan rule this is the single new code-health backlog entry
+    for the 2026-05-15T13:13Z scheduled scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-15T13:13:42Z'
+  priority: low

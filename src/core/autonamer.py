@@ -206,7 +206,12 @@ async def _apply_name_to_session(
   """
   if not name:
     return
-  if not is_default_session_name(session_meta.name):
+
+  current_meta = await session_mgr.get_session(session_meta.id)
+  if current_meta is None:
+    log.warning("autonamer_session_missing", session_id=session_meta.id)
+    return
+  if not is_default_session_name(current_meta.name):
     return
 
   await session_mgr.rename_session(session_meta.id, name)

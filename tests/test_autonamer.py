@@ -25,7 +25,10 @@ async def test_maybe_auto_name_passes_existing_groups_to_claude() -> None:
   cfg = SimpleNamespace(gemini_api_key=None, gemini_model="gemini-2.5-flash")
   session_meta = SessionMetadata(id="session-1", name="Session 7")
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="session-1", name="7: Test Name", group=None)
+  session_mgr.get_session.side_effect = [
+      SessionMetadata(id="session-1", name="Session 7", group=None),
+      SessionMetadata(id="session-1", name="7: Test Name", group=None),
+  ]
 
   with (
       patch(
@@ -54,7 +57,10 @@ async def test_maybe_auto_name_does_not_overwrite_existing_manual_group() -> Non
   cfg = SimpleNamespace(gemini_api_key=None, gemini_model="gemini-2.5-flash")
   session_meta = SessionMetadata(id="session-2", name="Session 8")
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="session-2", name="8: Test Name", group="Manual")
+  session_mgr.get_session.side_effect = [
+      SessionMetadata(id="session-2", name="Session 8", group="Manual"),
+      SessionMetadata(id="session-2", name="8: Test Name", group="Manual"),
+  ]
 
   with (
       patch(
@@ -75,6 +81,34 @@ async def test_maybe_auto_name_does_not_overwrite_existing_manual_group() -> Non
   session_mgr.rename_session.assert_awaited_once_with("session-2", "8: Test Name")
   session_mgr.set_group.assert_not_awaited()
   assert [call.args[0] for call in mock_broadcast.await_args_list] == ["session:session-2", "sidebar"]
+
+
+@pytest.mark.asyncio
+async def test_maybe_auto_name_rechecks_current_name_before_renaming() -> None:
+  cfg = SimpleNamespace(gemini_api_key=None, gemini_model="gemini-2.5-flash")
+  session_meta = SessionMetadata(id="session-renamed", name="Session 9")
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="session-renamed", name="Manual Name")
+
+  with (
+      patch(
+          "src.core.autonamer._generate_name_via_claude_cli",
+          new=AsyncMock(return_value='{"name":"Generated Name","group":"Work"}'),
+      ),
+      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
+  ):
+    await maybe_auto_name(
+        cfg,
+        session_meta,
+        "Help me review the PR",
+        "Here is the review summary.",
+        session_mgr,
+        ["Work"],
+    )
+
+  session_mgr.rename_session.assert_not_awaited()
+  session_mgr.set_group.assert_not_awaited()
+  mock_broadcast.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -125,6 +159,7 @@ async def test_claude_ai_title_applies_title_for_default_session(
   monkeypatch.setattr(autonamer.Path, "home", staticmethod(lambda: home_dir))
   session_meta = SessionMetadata(id="session-title", name="Session 3")
   session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="session-title", name="Session 3")
   _write_claude_jsonl(
       home_dir,
       session_meta.id,
@@ -151,6 +186,7 @@ async def test_claude_ai_title_does_not_overwrite_manual_session_name(
   monkeypatch.setattr(autonamer.Path, "home", staticmethod(lambda: home_dir))
   session_meta = SessionMetadata(id="session-manual", name="My Custom Name")
   session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="session-manual", name="My Custom Name")
   _write_claude_jsonl(
       home_dir,
       session_meta.id,

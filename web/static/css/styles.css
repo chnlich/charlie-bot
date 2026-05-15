@@ -75,31 +75,72 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 .html-artifact-toolbar a:hover,
 .html-artifact-toolbar button:hover { text-decoration: underline; }
-.html-artifact-frame { display: block; }
+.html-artifact-frame { display: block; width: 100%; }
+.html-artifact-frame-wrap {
+  display: grid;
+  grid-template-rows: auto 10px;
+  grid-template-columns: 1fr 10px;
+  width: 100%;
+  max-width: 100%;
+}
 .html-artifact-resize-handle {
-  height: 10px;
-  cursor: ns-resize;
   background: rgba(15, 23, 42, 0.5);
   border: 1px solid rgba(148, 163, 184, 0.2);
-  border-top: none;
-  border-radius: 0 0 0.5rem 0.5rem;
   position: relative;
   user-select: none;
   touch-action: none;
 }
-.html-artifact-resize-handle::after {
+.html-artifact-resize-s {
+  grid-row: 2; grid-column: 1;
+  cursor: ns-resize;
+  border-top: none;
+  border-right: none;
+  border-radius: 0 0 0 0.5rem;
+}
+.html-artifact-resize-s::after {
   content: '';
   position: absolute;
-  left: 50%;
-  top: 50%;
+  left: 50%; top: 50%;
   transform: translate(-50%, -50%);
-  width: 32px;
-  height: 2px;
+  width: 32px; height: 2px;
   background: rgba(148, 163, 184, 0.5);
   border-radius: 1px;
 }
-.html-artifact-resize-handle:hover::after {
-  background: rgba(148, 163, 184, 0.9);
+.html-artifact-resize-s:hover::after { background: rgba(148, 163, 184, 0.9); }
+.html-artifact-resize-e {
+  grid-row: 1; grid-column: 2;
+  cursor: ew-resize;
+  border-left: none;
+  border-bottom: none;
+}
+.html-artifact-resize-e::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px; height: 32px;
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 1px;
+}
+.html-artifact-resize-e:hover::after { background: rgba(148, 163, 184, 0.9); }
+.html-artifact-resize-se {
+  grid-row: 2; grid-column: 2;
+  cursor: nwse-resize;
+  border-top: none;
+  border-left: none;
+  border-radius: 0 0 0.5rem 0;
+}
+.html-artifact-resize-se::after {
+  content: '';
+  position: absolute;
+  right: 2px; bottom: 2px;
+  width: 5px; height: 5px;
+  border-right: 2px solid rgba(148, 163, 184, 0.5);
+  border-bottom: 2px solid rgba(148, 163, 184, 0.5);
+}
+.html-artifact-resize-se:hover::after {
+  border-right-color: rgba(148, 163, 184, 0.9);
+  border-bottom-color: rgba(148, 163, 184, 0.9);
 }
 .html-artifact-source {
   display: none;

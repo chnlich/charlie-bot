@@ -258,8 +258,7 @@ function resolveArtifactAbsolutePath(filePath) {
   if (filePath.charAt(0) === '/') return filePath;
   var home = (typeof window !== 'undefined' && window.USER_HOME) ? window.USER_HOME : '';
   if (!home) {
-    console.warn('window.USER_HOME not injected; artifact path will be session-relative');
-    return '.charliebot/sessions/' + SESSION_ID + '/' + filePath;
+    throw new Error('window.USER_HOME not injected');
   }
   return home + '/.charliebot/sessions/' + SESSION_ID + '/' + filePath;
 }

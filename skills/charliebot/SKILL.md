@@ -65,7 +65,7 @@ Better practice — choose one of:
 
 - Use git worktrees for branch operations by default.
 - For `charlie-bot`, after a verified worktree change, it is okay to merge back into the main checkout automatically.
-- For other repos, especially `your_project`, keep the main checkout untouched unless the user explicitly approves otherwise.
+- For other repos, keep the main checkout untouched unless the user explicitly approves otherwise.
 
 ---
 

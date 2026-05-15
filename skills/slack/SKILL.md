@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Slack
 
-Read messages, search conversations, and look up users in the Meshy Slack workspace using the Slack Web API.
+Read messages, search conversations, and look up users in the configured Slack workspace using the Slack Web API.
 
 ## Configuration
 

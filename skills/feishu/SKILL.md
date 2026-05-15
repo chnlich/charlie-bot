@@ -94,7 +94,7 @@ Required user scopes:
 `PATCH` is a write and still requires explicit user approval before execution.
 
 Default policy for Linear-linked docs:
-- `link_share_entity: tenant_readable` so the document is readable within the Meshy tenant
+- `link_share_entity: tenant_readable` so the document is readable within the configured tenant
 - Do **not** widen to `tenant_editable` unless the user explicitly asks
 - Do **not** enable external public access by default
 
@@ -246,7 +246,7 @@ Content-Type: application/json
 ## Workflow Rules
 
 - All writes still require explicit user approval first. This includes document creation, document edits, and permission changes, including the default `tenant_readable` permission update for a new Linear-linked doc.
-- When creating a Feishu document for a Linear issue, immediately call `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}` after document creation so the doc is Meshy-internal readable by default.
+- When creating a Feishu document for a Linear issue, immediately call `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}` after document creation so the doc is tenant-internal readable by default.
 - Do NOT widen sharing to `tenant_editable` unless the user explicitly asks for edit access.
 - Do NOT enable external public access by default.
 - Before any permission write, show the exact change and get explicit user approval first.
@@ -301,8 +301,8 @@ Current scopes: `docx:document`, `docx:document:create`, `docx:document:readonly
 ## URL Parsing
 
 Extract tokens from Feishu URLs:
-- `https://xxx.feishu.cn/wiki/<wiki-node-token>` → node_token = `<wiki-node-token>` (wiki, needs 2-step)
-- `https://xxx.feishu.cn/docx/<doc-token>` → doc_token = `<doc-token>` (direct read)
+- `https://<tenant>.feishu.cn/wiki/WIKINODETOKENEXAMPLE0123` → node_token = `WIKINODETOKENEXAMPLE0123` (wiki, needs 2-step)
+- `https://<tenant>.feishu.cn/docx/DOCTOKENEXAMPLE0123` → doc_token = `DOCTOKENEXAMPLE0123` (direct read)
 
 ## Workflow
 
@@ -317,13 +317,13 @@ Extract tokens from Feishu URLs:
 ### Creating / Editing
 1. **Draft the content and show it to the user for approval** — do NOT write to Feishu without explicit confirmation
 2. Once approved, create the document and add content blocks
-3. If the document is created for a Linear issue and the user approved the permission write, immediately set its public permission to Meshy-internal readable by calling `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}`
+3. If the document is created for a Linear issue and the user approved the permission write, immediately set its public permission to tenant-internal readable by calling `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}`
 4. Return the document URL to the user: `https://<tenant>.feishu.cn/docx/{document_id}`
 5. Do not widen the document to `tenant_editable` unless the user explicitly asks
 6. Do not enable external public access by default
 
 ### Linking with Linear
-- **Title format:** `{identifier} {title}` — e.g. `ALG-865 Low overhead transformer traning MVP`
+- **Title format:** `{identifier} {title}` — e.g. `ABC-123 Example Linear issue title`
 - Each Linear issue maps to **one** Feishu doc — subsequent updates append to the same doc, never a new one
 - After creating the doc and getting explicit user approval for the permission write, set its public permission with `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` and `{"link_share_entity":"tenant_readable"}`, then update the Linear issue description to include the Feishu doc URL
 - **Organize by date:** Feishu docs linked from Linear issues are living documents with ongoing updates. Structure content with **H1 date headers** (e.g. `# 2026-03-26`) as top-level sections. Each day's work goes under its date. New updates append a new date section — never overwrite previous dates.

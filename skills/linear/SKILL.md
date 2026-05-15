@@ -175,10 +175,10 @@ query($teamId: String!) {
 ## Rules
 
 - **English only:** All ticket titles and descriptions must be written in English, regardless of conversation language.
-- **Default assignee:** Always assign to Chao Li (ID: `<linear-user-uuid>`) unless specified otherwise.
+- **Default assignee:** Use the host-configured default assignee if one is set (host-specific skill / MEMORY); otherwise leave unassigned and ask the user.
 - **User approval required:** Always show the draft and get user confirmation before creating or updating any issue.
 - **Use Feishu for documentation:** Detailed updates and notes for a Linear issue should be recorded in a Feishu document (using the `feishu` skill), NOT as Linear comments or long descriptions. Each Linear issue maps to **one** Feishu document — subsequent updates are appended to the same Feishu doc, never a new one. The Feishu doc title should match the Linear issue title. The Feishu doc URL must be linked in the Linear issue description.
-- **Default Feishu doc sharing:** When creating the Feishu doc associated with a Linear issue, set its public permission to Meshy-internal readable via `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}` after the user explicitly approves that permission write. Do not widen to `tenant_editable` unless the user explicitly asks, and do not enable external public access by default.
+- **Default Feishu doc sharing:** When creating the Feishu doc associated with a Linear issue, set its public permission to tenant-internal readable via `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}` after the user explicitly approves that permission write. Do not widen to `tenant_editable` unless the user explicitly asks, and do not enable external public access by default.
 - **Permission-write approval:** Any Feishu permission change for an associated Feishu doc, including the default `tenant_readable` setup for a new doc, still requires explicit user approval before sending the Feishu permission write.
 
 ## Workflow

@@ -256,8 +256,11 @@ function basename(path) {
 
 function resolveArtifactAbsolutePath(filePath) {
   if (filePath.charAt(0) === '/') return filePath;
-  // TODO: read user home from a backend-injected global instead of hardcoding.
-  var home = '/data/home/user';
+  var home = (typeof window !== 'undefined' && window.USER_HOME) ? window.USER_HOME : '';
+  if (!home) {
+    console.warn('window.USER_HOME not injected; artifact path will be session-relative');
+    return '.charliebot/sessions/' + SESSION_ID + '/' + filePath;
+  }
   return home + '/.charliebot/sessions/' + SESSION_ID + '/' + filePath;
 }
 

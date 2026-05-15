@@ -42,6 +42,12 @@ Repo-level shared files (`<charlie-bot-repo>/skills/**`, `<charlie-bot-repo>/pro
 
 Repo-level skills must also stay free of session-specific debug artifacts: dated transcripts (`observed in D4`, `2026-05-04 run`), internal task IDs, specific bug strings (`bytes-vs-str + train_ranges API mismatches`), or any phrasing that reads like a LESSONS.md entry. Workers loading shared skills cannot see `~/.charliebot/LESSONS.md` and have no context for those references. Keep shared skills as static principles; only promote a finding into a shared skill once the debug is closed and the lesson rewrites cleanly as a generic rule.
 
+A local pre-commit hook enforces this boundary. One-time setup per clone:
+
+    git config --local core.hooksPath scripts/git-hooks
+
+Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `~/.charliebot/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. Run `scripts/check-skills-host-leak.sh` manually anytime to scan the whole tree.
+
 ## File Name Convention
 
 All three CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file.

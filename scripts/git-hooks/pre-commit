@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+staged_files=()
+while IFS= read -r file; do
+  [[ "$file" =~ ^(skills|prompts)/.*\.md$ ]] || continue
+  staged_files+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACMR)
+
+if [[ ${#staged_files[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+if ! scripts/check-skills-host-leak.sh "${staged_files[@]}"; then
+  printf '%s\n' 'PII/host-specific leak detected in staged skills/prompts files. Fix or amend ~/.charliebot/skills_leak_patterns.local.txt. To bypass: git commit --no-verify (NOT recommended).' >&2
+  exit 1
+fi

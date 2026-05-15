@@ -39,7 +39,7 @@ commands:
   #   description: "Run git command"
   #   args: "<git args>"
   #   command: "git {args}"
-  #   cwd: "/home/chnlich/workspace/charlie-bot"
+  #   cwd: "/path/to/repo"
   #   timeout: 10
   #
   # Example prompt command:

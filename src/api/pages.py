@@ -1,6 +1,7 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
 import fnmatch
+import pathlib
 import socket
 import subprocess
 from pathlib import Path
@@ -211,5 +212,6 @@ async def index(
           "load_errors": load_errors,
           "auth_enabled": bool(cfg.charliebot_access_key),
           "hostname": socket.gethostname(),
+          "user_home": str(pathlib.Path.home()),
           "version": _RUNTIME_GIT_VERSION,
       })

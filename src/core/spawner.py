@@ -126,10 +126,7 @@ def _build_worker_prompt(
       "  - Alternatively: `~/.claude/skills/` (Claude Code) or `~/.agents/skills/` (Codex/Gemini).\n"
       "- **Read matching skills first** to avoid wasting time on environment setup, tooling issues, "
       "or reinventing existing workflows.\n"
-      "- **Mandatory for your_project / your_project tasks**: you MUST read the `your_project` and/or "
-      "`your_project` skill BEFORE writing any code, running any command, or submitting any job. "
-      "This includes profiling, metrics analysis, data processing — not just training. "
-      "Starting work without reading the skill is forbidden.\n")
+      "- **Mandatory for tasks in any domain that has a matching skill**: you MUST read that skill BEFORE writing any code, running any command, or submitting any job. This includes profiling, metrics analysis, data processing — not just training. Starting work without reading the relevant skill is forbidden.\n")
 
   role_section = (
       "## Role\n"

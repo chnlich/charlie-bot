@@ -87,7 +87,7 @@ Iterative change→run→verify loop; workers are fully autonomous (human on the
 
 - Use improve when the task needs iteration/convergence ("make it better until X", tuning, repeated test-fix). Use one-shot delegation when there's a discrete deliverable.
 - **Goal prompt: what, not how.** Specify outcome + constraints, NOT methods.
-- All iterations commit to a single work branch in a shared worktree. Use descriptive names (e.g. `improve/optimize-step-time`); include Linear ticket when relevant (e.g. `MES-123/owner/20260402/optimize-step-time`).
+- All iterations commit to a single work branch in a shared worktree. Use descriptive names (e.g. `improve/optimize-step-time`); include Linear ticket when relevant (e.g. `XYZ-123/owner/20260402/optimize-step-time`).
 - Add `--merge-back` to ff-merge the work branch into base_branch after the loop.
 - The CLI returns immediately. You'll receive a summary when iterations complete — do NOT wait or poll.
 

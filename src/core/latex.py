@@ -13,7 +13,7 @@ log = structlog.get_logger()
 
 # Single source of truth — change here when adding more projects.
 LATEX_PROJECT = {
-    'project_dir': Path('/home/chnlich/workspace/lichao-tree'),
+    'project_dir': Path('~/workspace/latex-project').expanduser(),
     'tex_file': Path('doc/report.tex'),
     'pdf_file': Path('doc/report.pdf'),
     'build_cmd': 'make pdf',

@@ -5857,3 +5857,82 @@
   priority: low
   in_progress_at: '2026-05-15T01:10:21Z'
   done_at: '2026-05-15T01:13:12Z'
+- id: '160'
+  title: Drop the unused 'as e' binding in core/sessions._backend_create_hook's except
+    clause
+  description: 'WHY — The 2026-05-15T03:11Z scheduled code-health scan ran `yapf --in-place
+    --recursive src/` (no changes; the tree is already clean), `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` (zero matches), `python -m pyflakes src/`, `pylint --disable=all --enable=unused-argument
+    src/`, and `vulture src/ --min-confidence 80`. The only fresh pyflakes finding
+    not already tracked is `src/core/sessions.py:134:5: local variable ''e'' is assigned
+    to but never used`. The `_backend_create_hook` method at L126-136 wraps a single
+    `await ensure_tmux_session(...)` call in `try: ... except Exception as e: log.exception(...);
+    raise`. The `as e` binding is dead: `log.exception` pulls the active exception
+    from `sys.exc_info()` and writes its traceback into structlog''s `exc_info` key
+    without needing a name, and the unconditional `raise` re-raises the same active
+    exception (a bare `raise` rebinds to `sys.exc_info()`, not to the local name).
+    Nothing in the body reads `e`. This is the only `except ... as <name>:` site in
+    src/ where the bound name is unused (verified by `python -m pyflakes src/` returning
+    exactly two warnings: this one and the already-tracked `WatchTarget` unused import
+    in `api/internal.py` covered by pending items #131 and #139).
+
+    HOW — One small, zero-behavior-change edit. In `src/core/sessions.py` change L134
+    from `except Exception as e:` to `except Exception:`. Do NOT touch L135 (`log.exception("backend_create_hook_failed",
+    session_id=meta.id, backend=meta.backend)`) or L136 (`raise`) — both work identically
+    with or without the `as e` binding because `log.exception` and bare `raise` both
+    operate on the active exception context, not on a local name. Verify with `python
+    -m pyflakes src/core/sessions.py` (should drop from one warning to zero) and `python
+    -m pyflakes src/` (should drop from two warnings to one — the remaining `WatchTarget`
+    line is still tracked by pending #131 / #139). No test changes are required: this
+    code path is exercised by tui-cli backend session creation and the behavior is
+    "log + re-raise", which is preserved exactly.
+
+    REFACTORING SAFETY — (1) `log.exception` is the structlog standard for "log the
+    active exception with traceback"; it does not accept or require a positional exception
+    argument — the active exception is pulled from `sys.exc_info()` (see structlog
+    docs and the sibling call sites at `src/core/spawner.py`, `src/core/triggers.py`,
+    and `src/api/threads.py` which all use `log.exception(...)` without `as e`). (2)
+    Bare `raise` inside an `except` block re-raises the active exception with its
+    original traceback frame intact, identical to `raise e`. There is no difference
+    in observable behavior or in the traceback presented to the caller. (3) The `log.exception`
+    call already includes the two relevant structured fields (`session_id`, `backend`)
+    and structlog auto-attaches the exception type/value/traceback via `exc_info=True`
+    (the default for `log.exception`), so no diagnostic information is lost. (4) This
+    is purely subtractive — no new helper, no signature change, no log-event rename
+    (the event name `backend_create_hook_failed` is referenced by external log-tooling
+    and must remain string-identical). (5) Do NOT broaden the cleanup to other `except
+    ... as <name>:` sites in this scan: `grep -rn "except [A-Za-z]* as " src/` shows
+    the `as` binding is used in every other site (either `log.warning(..., error=str(e))`
+    or `raise NewError(...) from e` or a follow-up `if isinstance(e, ...)` check),
+    so this is the only legitimate finding. (6) The fix does not interact with any
+    pending refactor item — pending #131 / #139 cover the `WatchTarget` unused-import
+    finding in a different file; pending #156 covers the `finalize_review_chain.thread_mgr`
+    unused-parameter finding in a different file; no pending item touches `sessions.py:_backend_create_hook`.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` produced no changes
+    this scan (the tree is already clean); `grep -rE "TODO|FIXME|HACK|XXX" src/` returns
+    zero matches; `python -m pyflakes src/` reports exactly two warnings — this finding
+    (`src/core/sessions.py:134` unused `e`) and the already-tracked `WatchTarget`
+    unused import in `api/internal.py` (covered by pending items #131 and #139). `pylint
+    --disable=all --enable=unused-argument src/` reports only the already-tracked
+    `core/review.finalize_review_chain.thread_mgr` (covered by pending #156) and the
+    two `cli/backup.py` argparse-required `args` parameters (intentional, not actionable).
+    `vulture src/ --min-confidence 80` reports only the `cls` classmethod parameter
+    in `core/config.py:128`, a Pydantic-validator requirement and a known false positive.
+    The >50-line function scan, after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/155/156/157
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153, #154, #158, and #159 (`_wait_for_quota_recovery`, `maybe_auto_name`, `_resolve_worktree_start_point`,
+    `parse_ndjson_tail`, `fork_session`, `get_thread_events`, `_finalize_worker`,
+    `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`),
+    leaves no >50-line function not already targeted or rejected. The unused-`e`
+    pyflakes finding is the single fresh signal this scheduled scan surfaces that
+    is not already tracked. Per the one-finding-per-scan rule this is the single new
+    code-health backlog entry for the 2026-05-15T03:11Z scheduled scan.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-15T03:11:45Z'
+  priority: low

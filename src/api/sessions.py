@@ -153,10 +153,7 @@ async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = De
 
 
 @router.get("/scheduled", response_model=list[SessionMetadata])
-async def list_scheduled_sessions(
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
-):
+async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List sessions with a scheduled task, newest first."""
   sessions = await session_mgr.list_sessions(
       scheduled=True,

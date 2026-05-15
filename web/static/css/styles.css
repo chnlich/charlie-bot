@@ -32,7 +32,7 @@
 .prose-msg th { background: #1e293b; font-weight: 600; }
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
-.tui-status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; vertical-align: middle; background: #475569; }
+.tui-status-dot { background: #475569; }
 .tui-status-dot.running { background: #22c55e; }
 /* Sidebar resize handle */
 .resize-handle {

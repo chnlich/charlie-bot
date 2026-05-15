@@ -289,7 +289,7 @@ function renderHtmlArtifact(tool) {
   var openUrl = '/files' + absPath;
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
   var iframeStyle = 'width:100%;min-height:60px;max-height:80vh;'
-    + 'border:1px solid rgba(148,163,184,0.2);border-radius:0 0 0.5rem 0.5rem;'
+    + 'border:1px solid rgba(148,163,184,0.2);border-bottom:none;border-radius:0;'
     + 'background:white;display:block;';
   return '<div class="html-artifact">'
     + '<div class="html-artifact-toolbar">'
@@ -302,6 +302,8 @@ function renderHtmlArtifact(tool) {
     + ' sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"'
     + ' srcdoc="' + srcdoc + '"'
     + ' style="' + iframeStyle + '"></iframe>'
+    + '<div class="html-artifact-resize-handle" title="Drag to resize"'
+    + ' onpointerdown="startHtmlArtifactResize(event, this)"></div>'
     + '<div class="html-artifact-source"><pre><code class="hljs language-html">'
     + sourceHighlighted + '</code></pre></div>'
     + '</div>';
@@ -311,18 +313,52 @@ function toggleHtmlArtifactSource(btn) {
   var card = btn.closest('.html-artifact');
   if (!card) return;
   var frame = card.querySelector('.html-artifact-frame');
+  var handle = card.querySelector('.html-artifact-resize-handle');
   var source = card.querySelector('.html-artifact-source');
   if (!frame || !source) return;
   var showingSource = source.style.display === 'block';
   if (showingSource) {
     source.style.display = 'none';
     frame.style.display = 'block';
+    if (handle) handle.style.display = '';
     btn.textContent = 'View source';
   } else {
     frame.style.display = 'none';
+    if (handle) handle.style.display = 'none';
     source.style.display = 'block';
     btn.textContent = 'View rendered';
   }
+}
+
+function startHtmlArtifactResize(e, handle) {
+  e.preventDefault();
+  var card = handle.closest('.html-artifact');
+  if (!card) return;
+  var frame = card.querySelector('.html-artifact-frame');
+  if (!frame) return;
+  var startY = e.clientY;
+  var startHeight = frame.getBoundingClientRect().height;
+  // Block the iframe from absorbing pointer events while dragging — without
+  // this, pointermove stops firing the moment the cursor enters the iframe.
+  frame.style.pointerEvents = 'none';
+  var prevBodyCursor = document.body.style.cursor;
+  document.body.style.cursor = 'ns-resize';
+  function onMove(ev) {
+    var newHeight = Math.max(60, startHeight + (ev.clientY - startY));
+    frame.style.height = newHeight + 'px';
+    frame.style.maxHeight = 'none';
+  }
+  function onUp() {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    frame.style.pointerEvents = '';
+    document.body.style.cursor = prevBodyCursor;
+    frame.dataset.manualSize = '1';
+  }
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
 }
 
 function expandHtmlArtifact(btn) {
@@ -397,6 +433,8 @@ function installHtmlArtifactListener() {
     var sel = '.html-artifact-frame[data-frame-id="' + CSS.escape(data.id) + '"]';
     var frame = document.querySelector(sel);
     if (!frame) return;
+    // Stop auto-fitting height once the user has manually resized the frame.
+    if (frame.dataset.manualSize === '1') return;
     var cap = Math.floor(window.innerHeight * 0.8);
     frame.style.height = Math.min(Number(data.height) + 2, cap) + 'px';
   });

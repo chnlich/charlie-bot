@@ -399,7 +399,6 @@ async def _create_repoless_process(
     thread: ThreadMetadata,
     description: str,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     req: SpawnRequest,
 ) -> Worker:
@@ -677,7 +676,7 @@ async def spawn_worker(
 
     if req.repo_path is None:
       # Repo-less worker: run prompt directly without worktree
-      worker = await _create_repoless_process(session_id, thread, description, cfg, session_mgr, thread_mgr, req)
+      worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, req)
     else:
       resolved_repo = Path(req.repo_path).resolve()
       worker = await _create_worktree_and_process(

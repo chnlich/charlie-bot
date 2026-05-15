@@ -137,7 +137,6 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
         req=req,
         meta=meta,
         session_mgr=session_mgr,
-        thread_mgr=object(),
         cfg=cfg,
     )
 

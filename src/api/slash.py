@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.api.chat import run_and_finalize
-from src.api.deps import get_session_manager, get_thread_manager, require_session
+from src.api.deps import get_session_manager, require_session
 from src.api.message_utils import build_agent_input_content, build_user_event, serialize_uploaded_files
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
@@ -16,7 +16,6 @@ from src.core.models import SessionMetadata, UploadedFileRef
 from src.core.sessions import SessionManager
 from src.core.slash_commands import dispatch_slash_command, load_slash_commands
 from src.core.tasks import create_logged_task
-from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 
@@ -134,7 +133,6 @@ async def execute_command(
     req: SlashExecuteRequest,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Execute a slash command for a session."""

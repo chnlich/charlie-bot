@@ -62,6 +62,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-bottom: none;
   border-radius: 0.5rem 0.5rem 0 0;
+  max-width: 100%;
 }
 .html-artifact-toolbar .filename { font-weight: 500; color: #cbd5e1; }
 .html-artifact-toolbar a,

@@ -1,9 +1,30 @@
-"""Auto-name and auto-group sessions after the first chat turn using Gemini or Claude CLI."""
+"""Session auto-naming.
+
+Two strategies, picked by who triggers them:
+
+1. Gemini-based (SDK sessions: cc-claude / codex / opencode / etc.)
+   - Entry: maybe_auto_name(...) — called from src/api/chat.py after a master_done event.
+   - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
+   - Sends user+assistant text to Gemini; receives {name, group}.
+   - Group may reuse an existing group name from other sessions.
+
+2. Claude ai-title (TUI sessions, backend.type = "tui-cli")
+   - Entry: maybe_auto_name_from_claude_ai_title(...) — called from
+     src/agents/backends/tui.py at the end of run_tui_attachment().
+   - Reads ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl looking for the first
+     event with {"type": "ai-title", "aiTitle": "..."}.
+   - Uses aiTitle directly as the session name. No group inference (left empty).
+   - No external API call (Claude writes the title itself).
+
+Both strategies share _apply_name_to_session(), which guards against overwriting
+a name the user has already set (matched via is_default_session_name).
+"""
 
 import asyncio
 import json
 import re
 import signal
+from pathlib import Path
 
 import structlog
 
@@ -171,6 +192,47 @@ def _sanitize_session_title(raw: str, session_name: str) -> str | None:
   return name
 
 
+async def _apply_name_to_session(
+    session_mgr: SessionManager,
+    session_meta: SessionMetadata,
+    name: str | None,
+    group: str | None,
+) -> None:
+  """Apply a generated name (and optional group) to a session metadata,
+  but ONLY if the current name is still the system-generated default
+  (matched by is_default_session_name). User-renamed sessions are left alone.
+
+  Empty / None name is a no-op. Empty / None group is left as-is on metadata.
+  """
+  if not name:
+    return
+  if not is_default_session_name(session_meta.name):
+    return
+
+  await session_mgr.rename_session(session_meta.id, name)
+
+  channel = f"session:{session_meta.id}"
+  await streaming_manager.broadcast(channel, {
+      "type": ET.SESSION_RENAMED,
+      "name": name,
+  })
+  await streaming_manager.broadcast(
+      "sidebar", {
+          "type": ET.SESSION_RENAMED,
+          "session_id": session_meta.id,
+          "name": name,
+      })
+
+  log.info("session_auto_named", session_id=session_meta.id, name=name)
+
+  if not group:
+    return
+  current_meta = await session_mgr.get_session(session_meta.id)
+  if current_meta and not current_meta.group:
+    await session_mgr.set_group(session_meta.id, group)
+    log.info("session_auto_grouped", session_id=session_meta.id, group=group)
+
+
 async def maybe_auto_name(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -207,29 +269,71 @@ async def maybe_auto_name(
     if name is None:
       return
 
-    await session_mgr.rename_session(session_meta.id, name)
-
-    channel = f"session:{session_meta.id}"
-    await streaming_manager.broadcast(channel, {
-        "type": ET.SESSION_RENAMED,
-        "name": name,
-    })
-    await streaming_manager.broadcast(
-        "sidebar", {
-            "type": ET.SESSION_RENAMED,
-            "session_id": session_meta.id,
-            "name": name,
-        })
-
-    log.info("session_auto_named", session_id=session_meta.id, name=name)
-
-    # Auto-assign group if LLM provided one and session doesn't already have a group
     _, group, _ = _parse_name_and_group(raw)
-    current_meta = await session_mgr.get_session(session_meta.id)
-    if group and current_meta and not current_meta.group:
-      matched_group = _fuzzy_match_group(group, existing_groups)
-      await session_mgr.set_group(session_meta.id, matched_group)
-      log.info("session_auto_grouped", session_id=session_meta.id, group=matched_group)
+    matched_group = _fuzzy_match_group(group, existing_groups) if group else None
+    await _apply_name_to_session(session_mgr, session_meta, name=name, group=matched_group)
 
   except Exception as e:
     log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
+
+
+async def maybe_auto_name_from_claude_ai_title(
+    session_meta: SessionMetadata,
+    session_mgr: SessionManager,
+) -> None:
+  """Claude ai-title strategy. For TUI sessions only.
+
+  Locates the claude jsonl for this session by globbing
+  ~/.claude/projects/*/<session_id>.jsonl. If found, scans for the first
+  {"type": "ai-title", "aiTitle": "<title>"} event and applies the title
+  via _apply_name_to_session.
+
+  Idempotent: safe to call repeatedly. Does nothing if:
+    - No jsonl found (claude hasn't started yet or no conversation).
+    - No ai-title event in the jsonl yet (conversation too short).
+    - Session name is no longer the default (user already renamed).
+
+  Group is intentionally left empty for TUI sessions in this version.
+  """
+  session_id = session_meta.id
+  claude_projects = Path.home() / ".claude/projects"
+  matches = list(claude_projects.glob(f"*/{session_id}.jsonl"))
+  if not matches:
+    return
+
+  if len(matches) == 1:
+    jsonl_path = matches[0]
+  else:
+    try:
+      jsonl_path = max(matches, key=lambda path: path.stat().st_mtime)
+    except OSError:
+      log.warning("claude_ai_title_stat_failed", session_id=session_id, exc_info=True)
+      return
+
+  title: str | None = None
+  try:
+    with jsonl_path.open("r", encoding="utf-8") as f:
+      for line_number, line in enumerate(f, start=1):
+        try:
+          data = json.loads(line)
+        except json.JSONDecodeError as e:
+          log.debug(
+              "claude_ai_title_json_parse_failed",
+              session_id=session_id,
+              path=str(jsonl_path),
+              line=line_number,
+              error=str(e),
+          )
+          continue
+        if not isinstance(data, dict) or data.get("type") != "ai-title":
+          continue
+        ai_title = data.get("aiTitle")
+        if isinstance(ai_title, str) and ai_title.strip():
+          title = ai_title
+          break
+  except (OSError, UnicodeDecodeError):
+    log.warning("claude_ai_title_read_failed", session_id=session_id, path=str(jsonl_path), exc_info=True)
+    return
+
+  if title:
+    await _apply_name_to_session(session_mgr, session_meta, name=title, group=None)

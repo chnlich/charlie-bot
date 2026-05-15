@@ -364,3 +364,15 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
     except Exception as e:  # noqa: BLE001
       log.debug("tui_pump_task_exit", session_id=session_id, error=str(e))
     attachment.close()
+    try:
+      from src.api.deps import get_session_manager
+      from src.core.autonamer import maybe_auto_name_from_claude_ai_title
+
+      session_mgr = get_session_manager()
+      meta = await session_mgr.get_session(session_id)
+      if meta is None:
+        log.warning("tui_autoname_session_missing", session_id=session_id)
+      else:
+        await maybe_auto_name_from_claude_ai_title(meta, session_mgr)
+    except Exception as e:  # noqa: BLE001 — autonaming must not break PTY cleanup
+      log.warning("tui_autoname_failed", session_id=session_id, error=str(e), exc_info=True)

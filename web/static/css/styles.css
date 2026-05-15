@@ -76,6 +76,31 @@ body.resizing { cursor: col-resize; user-select: none; }
 .html-artifact-toolbar a:hover,
 .html-artifact-toolbar button:hover { text-decoration: underline; }
 .html-artifact-frame { display: block; }
+.html-artifact-resize-handle {
+  height: 10px;
+  cursor: ns-resize;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-top: none;
+  border-radius: 0 0 0.5rem 0.5rem;
+  position: relative;
+  user-select: none;
+  touch-action: none;
+}
+.html-artifact-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 2px;
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 1px;
+}
+.html-artifact-resize-handle:hover::after {
+  background: rgba(148, 163, 184, 0.9);
+}
 .html-artifact-source {
   display: none;
   max-height: 80vh;

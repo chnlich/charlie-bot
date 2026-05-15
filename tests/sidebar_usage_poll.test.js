@@ -209,9 +209,17 @@ function buildContext(overrides = {}) {
     loadedThreads: {clear: () => {}},
     _backlogLoaded: false,
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
+    BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     alert: (message) => {
       alerts.push(message);
     },
+  };
+  context.window = {
+    addEventListener: () => {},
+    innerHeight: 800,
+  };
+  context.CSS = {
+    escape: (value) => String(value),
   };
 
   vm.createContext(context);
@@ -306,7 +314,7 @@ test('renderMessage passes uploaded_files through for user attachment bubbles', 
 
 test('pollSessionStatus updates pending trigger indicators from the status endpoint', async () => {
   const {context} = buildContext();
-  const spinnerUpdates = [];
+  const indicatorUpdates = [];
   const pendingUpdates = [];
 
   context.fetch = async (url) => {
@@ -333,8 +341,8 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
       },
     };
   };
-  context.setSessionSpinner = (sid, visible) => {
-    spinnerUpdates.push({sid, visible});
+  context.setSessionIndicator = (sid, state) => {
+    indicatorUpdates.push({sid, state});
   };
   context.setSessionPendingTriggerIndicator = (sid, status) => {
     pendingUpdates.push({sid, status});
@@ -343,9 +351,9 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
   const anyRunning = await context.pollSessionStatus();
 
   assert.equal(anyRunning, true);
-  assert.deepEqual(spinnerUpdates, [
-    {sid: 'session-a', visible: false},
-    {sid: 'session-b', visible: true},
+  assert.deepEqual(indicatorUpdates, [
+    {sid: 'session-a', state: 'idle'},
+    {sid: 'session-b', state: 'worker_only'},
   ]);
   assert.deepEqual(pendingUpdates, [
     {
@@ -372,11 +380,14 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
 });
 
 test('renderSessionItem shows separate delayed-trigger and scheduled indicators', () => {
-  const {context} = buildContext();
+  const {context} = buildContext({
+    BACKEND_TYPES: {'claude-tui': 'tui-cli'},
+  });
 
   const html = context.renderSessionItem({
     id: 'session-a',
     name: 'Wake later',
+    backend: 'claude-tui',
     updated_at: '2026-04-02T04:00:00Z',
     has_running_tasks: false,
     has_unread: false,
@@ -391,14 +402,21 @@ test('renderSessionItem shows separate delayed-trigger and scheduled indicators'
   assert.match(html, /id="pending-trigger-session-a"/);
   assert.match(html, /1 pending delayed trigger/);
   assert.match(html, /Scheduled: nightly/);
+  assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 /);
+  assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 [^"]*" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
+  assert.match(html, /<span class="truncate block session-name">Wake later<\/span>/);
+  assert.doesNotMatch(html, /session-name">[^<]*<span class="tui-status-dot/);
 });
 
 test('renderScheduledSessionItem keeps delayed-trigger and cron indicators distinct', () => {
-  const {context} = buildContext();
+  const {context} = buildContext({
+    BACKEND_TYPES: {'claude-tui': 'tui-cli'},
+  });
 
   const html = context.renderScheduledSessionItem({
     id: 'session-a',
     name: 'Wake later',
+    backend: 'claude-tui',
     has_running_tasks: false,
     has_unread: false,
     has_pending_trigger: true,
@@ -414,6 +432,52 @@ test('renderScheduledSessionItem keeps delayed-trigger and cron indicators disti
   assert.match(html, /id="pending-trigger-session-a"/);
   assert.match(html, /2 pending delayed triggers/);
   assert.match(html, /Scheduled: nightly/);
+  assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 /);
+  assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 [^"]*" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
+  assert.match(html, /<span class="truncate block session-name">Wake later<\/span>/);
+  assert.doesNotMatch(html, /session-name">[^<]*<span class="tui-status-dot/);
+});
+
+test('renderSessionItem omits tui dot for non-tui backend', () => {
+  const {context} = buildContext({
+    BACKEND_TYPES: {'codex-o3': 'codex-cli'},
+  });
+
+  const html = context.renderSessionItem({
+    id: 'session-a',
+    name: 'SDK session',
+    backend: 'codex-o3',
+    updated_at: '2026-04-02T04:00:00Z',
+    has_running_tasks: false,
+    has_unread: false,
+    has_pending_trigger: false,
+    pending_trigger_count: 0,
+    next_trigger_at: null,
+    scheduled_task: '',
+    starred: false,
+  }, 'search');
+
+  assert.doesNotMatch(html, /tui-status-dot/);
+});
+
+test('updateSidebarSessionName leaves sibling tui dot untouched', () => {
+  const nameEl = {textContent: 'Old name'};
+  const tuiDot = {className: 'tui-status-dot w-2 h-2 rounded-full flex-shrink-0'};
+  const link = {
+    children: [tuiDot, nameEl],
+    querySelector(selector) {
+      assert.equal(selector, '.session-name');
+      return nameEl;
+    },
+  };
+  const {context} = buildContext({
+    elements: new Map([['session-session-a', link]]),
+  });
+
+  context.updateSidebarSessionName('session-a', 'New name');
+
+  assert.equal(nameEl.textContent, 'New name');
+  assert.deepEqual(link.children, [tuiDot, nameEl]);
 });
 
 test('forkSession opens the reusable modal with the active backend selected by default', () => {

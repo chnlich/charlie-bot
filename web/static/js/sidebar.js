@@ -19,7 +19,7 @@ function renderTuiStatusDot(session) {
   if (!isTuiSession(session)) return '';
   const running = !!globalThis.TuiStatusMap[session.id];
   const title = running ? 'Claude running' : 'Claude stopped';
-  return `<span class="tui-status-dot ${running ? 'running' : ''}" data-session-id="${escapeHtmlAttr(session.id)}" title="${title}"></span>`;
+  return `<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 ${running ? 'running' : ''}" data-session-id="${escapeHtmlAttr(session.id)}" title="${title}"></span>`;
 }
 
 async function fetchTuiStatus() {
@@ -60,9 +60,7 @@ function updateSidebarSessionName(sessionId, name) {
   if (!link) return;
   const nameEl = link.querySelector('.session-name');
   if (!nameEl) return;
-  const tuiStatusDot = nameEl.querySelector('.tui-status-dot');
   nameEl.textContent = name;
-  if (tuiStatusDot) nameEl.appendChild(tuiStatusDot);
 }
 
 function getSessionIndicatorState(status) {
@@ -1272,8 +1270,9 @@ function renderScheduledSessionItem(s) {
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
     ${renderPendingTriggerIndicator(s)}
     <svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>
+    ${renderTuiStatusDot(s)}
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(s.name)}${renderTuiStatusDot(s)}</span>
+      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
       ${s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : ''}
       ${s.last_run_status ? `<span class="block text-xs ${s.last_run_status === 'success' ? 'text-green-400' : s.last_run_status === 'running' ? 'text-yellow-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400')}">Last: ${escapeHtml(s.last_run_status)}${s.last_scheduled_run ? ', ' + formatLastRun(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>` : ''}
     </span>
@@ -1529,8 +1528,9 @@ function renderSessionItem(s, filter) {
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
     ${renderPendingTriggerIndicator(s)}
     ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
+    ${renderTuiStatusDot(s)}
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(s.name)}${renderTuiStatusDot(s)}</span>
+      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
       ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : `<span class="block text-xs text-slate-500 session-time" data-time="${timeIso}">${timeStr}</span>`}
     </span>
     ${actions}

@@ -5852,6 +5852,7 @@
 
     '
   category: dead-code
-  status: approved
+  status: in_progress
   created: '2026-05-12T17:14:10Z'
   priority: low
+  in_progress_at: '2026-05-15T01:10:21Z'

@@ -46,9 +46,9 @@ Pass one or more `trace=` params with `/files/`-prefixed absolute paths.
 
 | Scenario | URL |
 |---|---|
-| Cross-rank merge for one step | `<base_url>/perfetto?dir=/data/checkpoints/foo/trace/step100` |
-| Scope `?dir=` to one time window | `<base_url>/perfetto?dir=/data/checkpoints/foo/trace&pattern=trace_rank*_step100.json` |
-| Only rank 0 | `<base_url>/perfetto?trace=/files/data/checkpoints/foo/trace/trace_rank000_step100.json` |
+| Cross-rank merge for one step | `<base_url>/perfetto?dir=/path/to/traces/step100` |
+| Scope `?dir=` to one time window | `<base_url>/perfetto?dir=/path/to/traces&pattern=trace_rank*_step100.json` |
+| Only rank 0 | `<base_url>/perfetto?trace=/files/path/to/traces/trace_rank000_step100.json` |
 | Two time windows of rank 0 | generate **two separate links**, one per window — do not combine in a single `?dir=` |
 
 ## Rules

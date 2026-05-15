@@ -20,8 +20,8 @@ The path after `/files/` is the absolute filesystem path (without leading `/`). 
 
 | Filesystem path | URL |
 |---|---|
-| `/data/checkpoints/foo/trace.json` | `<base_url>/files/data/checkpoints/foo/trace.json` |
-| `/home/user/results/` | `<base_url>/files/home/user/results/` |
+| `/path/to/trace.json` | `<base_url>/files/path/to/trace.json` |
+| `/path/to/results/` | `<base_url>/files/path/to/results/` |
 
 ## Behavior
 

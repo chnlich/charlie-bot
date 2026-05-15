@@ -183,12 +183,12 @@
   function onPtyExit() {
     if (!term) return;
     if (manualStopBannerShown) return;
-    term.write('\r\n\x1b[33m[claude exited — refresh the page to restart]\x1b[0m\r\n');
+    term.write('\r\n\x1b[33m[claude stopped — click this session in the sidebar to restart]\x1b[0m\r\n');
   }
 
   function showStoppedBanner() {
     manualStopBannerShown = true;
-    const message = 'claude stopped — reopen to resume';
+    const message = '[claude stopped — click this session in the sidebar to restart]';
     if (term) {
       term.write('\r\n\x1b[33m' + message + '\x1b[0m\r\n');
       return;
@@ -213,7 +213,8 @@
   // server starts streaming once the WS receives our cursor message).
   function onWsOpenIfTui() {
     if (!isTuiActive() || !SESSION_ID) return;
-    ensureMount(SESSION_ID);
+    if (!ensureMount(SESSION_ID)) return;
+    if (typeof fetchTuiStatus === 'function') fetchTuiStatus();
   }
 
   // Public API.

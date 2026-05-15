@@ -39,6 +39,7 @@ function refreshTuiDots() {
     dot.classList.toggle('running', running);
     dot.title = running ? 'Claude running' : 'Claude stopped';
   });
+  updateTuiHeaderControls(globalThis.ACTIVE_BACKEND_TYPE || '', SESSION_ID);
 }
 
 function startTuiStatusPolling() {
@@ -51,7 +52,8 @@ function updateTuiHeaderControls(backendType, sessionId) {
   const stopBtn = document.getElementById('stop-tui-btn');
   if (!stopBtn) return;
   const isTui = backendType === 'tui-cli';
-  stopBtn.classList.toggle('hidden', !isTui);
+  const stopped = isTui && globalThis.TuiStatusMap[sessionId] === false;
+  stopBtn.classList.toggle('hidden', !isTui || stopped);
   stopBtn.dataset.sessionId = isTui ? sessionId : '';
 }
 
@@ -123,7 +125,16 @@ async function switchSession(sessionId) {
   // Welcome screen — no SPA state to swap, fall back to full load
   if (!SESSION_ID) { location.href = '/?session=' + sessionId; return; }
   // Already on this session
-  if (sessionId === SESSION_ID) return;
+  if (sessionId === SESSION_ID) {
+    // Same session — but if it's a stopped TUI, force WS reconnect to respawn tmux/claude.
+    if (globalThis.TuiStatusMap[sessionId] === false) {
+      disconnectWS();
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      connectWS();
+      setTimeout(() => { if (typeof fetchTuiStatus === 'function') fetchTuiStatus(); }, 1500);
+    }
+    return;
+  }
 
   switching = true;
   const gen = ++switchGeneration;

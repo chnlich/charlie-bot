@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -94,3 +95,26 @@ def test_find_existing_claude_jsonl_returns_first_match(monkeypatch: pytest.Monk
   monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
   assert tui._find_existing_claude_jsonl("session-id") == first
+
+
+def test_claude_jsonl_busy_uses_recent_mtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  home_dir = tmp_path / "home"
+  jsonl_path = home_dir / ".claude" / "projects" / "a" / "session-id.jsonl"
+  jsonl_path.parent.mkdir(parents=True)
+  jsonl_path.write_text("", encoding="utf-8")
+  os.utime(jsonl_path, (98.0, 98.0))
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
+  monkeypatch.setattr(tui.time, "time", lambda: 100.0)
+
+  assert tui._claude_jsonl_busy("session-id") is True
+  assert tui._claude_jsonl_busy("session-id", threshold_seconds=1.0) is False
+
+
+def test_claude_jsonl_busy_returns_false_when_jsonl_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  home_dir = tmp_path / "home"
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
+
+  assert tui._claude_jsonl_busy("missing-session") is False

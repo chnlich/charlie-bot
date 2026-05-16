@@ -91,6 +91,7 @@ function buildContext(overrides = {}) {
   const fetchCalls = [];
   const fetchRequests = [];
   const intervals = [];
+  const timeouts = [];
   const clears = [];
   const alerts = [];
   const elements = overrides.elements || new Map();
@@ -148,13 +149,17 @@ function buildContext(overrides = {}) {
       intervals.push({fn, ms});
       return intervals.length;
     },
+    setTimeout: (fn, ms) => {
+      timeouts.push({fn, ms});
+      return timeouts.length;
+    },
     clearInterval: (id) => {
       clears.push(id);
     },
     document: {
       getElementById: (id) => elements.get(id) || null,
-      querySelectorAll: () => [],
-      querySelector: () => null,
+      querySelectorAll: overrides.querySelectorAll || (() => []),
+      querySelector: overrides.querySelector || (() => null),
       createElement: (tagName) => {
         const el = createElement({tagName: String(tagName).toUpperCase()});
         // Support escapeHtml pattern: set textContent, read innerHTML as escaped
@@ -206,6 +211,7 @@ function buildContext(overrides = {}) {
     formatBubbleTime: (txt) => txt,
     shouldAutoScroll: () => true,
     showScrollToBottom: () => {},
+    showToast: () => {},
     loadedThreads: {clear: () => {}},
     _backlogLoaded: false,
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
@@ -213,6 +219,7 @@ function buildContext(overrides = {}) {
     alert: (message) => {
       alerts.push(message);
     },
+    confirm: overrides.confirm || (() => true),
   };
   context.window = {
     addEventListener: () => {},
@@ -225,7 +232,7 @@ function buildContext(overrides = {}) {
   vm.createContext(context);
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
-  return {context, fetchCalls, fetchRequests, intervals, clears, alerts, elements};
+  return {context, fetchCalls, fetchRequests, intervals, timeouts, clears, alerts, elements};
 }
 
 function buildSessionActionElements() {
@@ -402,8 +409,8 @@ test('renderSessionItem shows separate delayed-trigger and scheduled indicators'
   assert.match(html, /id="pending-trigger-session-a"/);
   assert.match(html, /1 pending delayed trigger/);
   assert.match(html, /Scheduled: nightly/);
-  assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 /);
-  assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 [^"]*" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
+  assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0"/);
+  assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
   assert.match(html, /<span class="truncate block session-name">Wake later<\/span>/);
   assert.doesNotMatch(html, /session-name">[^<]*<span class="tui-status-dot/);
 });
@@ -432,8 +439,8 @@ test('renderScheduledSessionItem keeps delayed-trigger and cron indicators disti
   assert.match(html, /id="pending-trigger-session-a"/);
   assert.match(html, /2 pending delayed triggers/);
   assert.match(html, /Scheduled: nightly/);
-  assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 /);
-  assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 [^"]*" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
+  assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0"/);
+  assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
   assert.match(html, /<span class="truncate block session-name">Wake later<\/span>/);
   assert.doesNotMatch(html, /session-name">[^<]*<span class="tui-status-dot/);
 });
@@ -458,6 +465,123 @@ test('renderSessionItem omits tui dot for non-tui backend', () => {
   }, 'search');
 
   assert.doesNotMatch(html, /tui-status-dot/);
+});
+
+test('renderTuiStatusDot reflects stopped, idle, and busy states', () => {
+  const {context} = buildContext({
+    BACKEND_TYPES: {'claude-tui': 'tui-cli'},
+  });
+
+  context.TuiStatusMap = {
+    stopped: {running: false, busy: false},
+    idle: {running: true, busy: false},
+    busy: {running: true, busy: true},
+  };
+
+  assert.equal(
+    context.renderTuiStatusDot({id: 'stopped', backend: 'claude-tui'}),
+    '<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0" data-session-id="stopped" title="Claude stopped"></span>'
+  );
+  assert.equal(
+    context.renderTuiStatusDot({id: 'idle', backend: 'claude-tui'}),
+    '<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 running" data-session-id="idle" title="Claude idle"></span>'
+  );
+  assert.equal(
+    context.renderTuiStatusDot({id: 'busy', backend: 'claude-tui'}),
+    '<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 running busy" data-session-id="busy" title="Claude busy"></span>'
+  );
+});
+
+test('refreshTuiDots updates dot classes, titles, and Stop button visibility', () => {
+  const busyDot = createElement({className: 'tui-status-dot', dataset: {sessionId: 'busy'}});
+  const idleDot = createElement({className: 'tui-status-dot busy', dataset: {sessionId: 'idle'}});
+  const stoppedDot = createElement({className: 'tui-status-dot running busy', dataset: {sessionId: 'stopped'}});
+  const stopBtn = createElement();
+  const {context} = buildContext({
+    elements: new Map([['stop-tui-btn', stopBtn]]),
+    querySelectorAll: (selector) => {
+      assert.equal(selector, '.tui-status-dot[data-session-id]');
+      return [busyDot, idleDot, stoppedDot];
+    },
+  });
+
+  context.ACTIVE_BACKEND_TYPE = 'tui-cli';
+  context.SESSION_ID = 'stopped';
+  context.TuiStatusMap = {
+    busy: {running: true, busy: true},
+    idle: {running: true, busy: false},
+    stopped: {running: false, busy: false},
+  };
+
+  context.refreshTuiDots();
+
+  assert.equal(busyDot.classList.contains('running'), true);
+  assert.equal(busyDot.classList.contains('busy'), true);
+  assert.equal(busyDot.title, 'Claude busy');
+  assert.equal(idleDot.classList.contains('running'), true);
+  assert.equal(idleDot.classList.contains('busy'), false);
+  assert.equal(idleDot.title, 'Claude idle');
+  assert.equal(stoppedDot.classList.contains('running'), false);
+  assert.equal(stoppedDot.classList.contains('busy'), false);
+  assert.equal(stoppedDot.title, 'Claude stopped');
+  assert.equal(stopBtn.classList.contains('hidden'), true);
+
+  context.SESSION_ID = 'idle';
+  context.refreshTuiDots();
+  assert.equal(stopBtn.classList.contains('hidden'), false);
+});
+
+test('startTuiStatusPolling polls TUI status every three seconds', () => {
+  const {context, intervals} = buildContext();
+
+  context.startTuiStatusPolling();
+
+  assert.equal(intervals.length, 1);
+  assert.equal(intervals[0].ms, 3000);
+});
+
+test('switchSession reconnects when clicking the active stopped TUI session', async () => {
+  const {context, timeouts} = buildContext();
+  let disconnected = false;
+  let connected = false;
+  context.TuiStatusMap = {'session-a': {running: false, busy: false}};
+  context.disconnectWS = () => { disconnected = true; };
+  context.connectWS = () => { connected = true; };
+
+  await context.switchSession('session-a');
+
+  assert.equal(disconnected, true);
+  assert.equal(connected, true);
+  assert.equal(timeouts.length, 1);
+  assert.equal(timeouts[0].ms, 1500);
+});
+
+test('stopActiveTui writes stopped object status before refreshing dots', async () => {
+  const {context} = buildContext();
+  let stoppedUrl = null;
+  let refreshed = false;
+  let bannerShown = false;
+  context.fetch = async (url, opts = {}) => {
+    stoppedUrl = url;
+    assert.equal(opts.method, 'POST');
+    return {
+      ok: true,
+      async json() {
+        return {stopped: true};
+      },
+    };
+  };
+  context.refreshTuiDots = () => { refreshed = true; };
+  context.TuiSession = {showStoppedBanner: () => { bannerShown = true; }};
+
+  await context.stopActiveTui();
+
+  assert.equal(stoppedUrl, '/api/sessions/session-a/tui/stop');
+  const stoppedStatus = vm.runInContext('globalThis.TuiStatusMap["session-a"]', context);
+  assert.equal(stoppedStatus.running, false);
+  assert.equal(stoppedStatus.busy, false);
+  assert.equal(refreshed, true);
+  assert.equal(bannerShown, true);
 });
 
 test('updateSidebarSessionName leaves sibling tui dot untouched', () => {

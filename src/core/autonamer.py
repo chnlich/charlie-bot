@@ -13,7 +13,8 @@ Two strategies, picked by who triggers them:
      src/agents/backends/tui.py at the end of run_tui_attachment().
    - Reads ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl looking for the first
      event with {"type": "ai-title", "aiTitle": "..."}.
-   - Uses aiTitle directly as the session name. No group inference (left empty).
+   - Uses aiTitle as the base session name, preserving the original session number
+     for default "Session N" names. No group inference (left empty).
    - No external API call (Claude writes the title itself).
 
 Both strategies share _apply_name_to_session(), which guards against overwriting
@@ -50,6 +51,14 @@ _PREAMBLE_RE = re.compile(
 )
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL)
 _MAX_TITLE_WORDS = 8
+
+
+def _prefix_session_number_if_default(session_name: str, name: str) -> str:
+  """If session_name matches the default 'Session N' pattern, prepend 'N: ' to name.
+  Otherwise return name unchanged. Used by both autonaming strategies so the
+  generated title carries the original session number for easier reference."""
+  m = _SESSION_NUMBER_RE.match(session_name)
+  return f"{m.group(1)}: {name}" if m else name
 
 
 def is_default_session_name(name: str) -> bool:
@@ -185,9 +194,7 @@ def _sanitize_session_title(raw: str, session_name: str) -> str | None:
   if len(name) > 60 or len(name.split()) > _MAX_TITLE_WORDS:
     return None
 
-  m = _SESSION_NUMBER_RE.match(session_name)
-  if m:
-    name = f"{m.group(1)}: {name}"
+  name = _prefix_session_number_if_default(session_name, name)
 
   return name
 
@@ -341,4 +348,5 @@ async def maybe_auto_name_from_claude_ai_title(
     return
 
   if title:
+    title = _prefix_session_number_if_default(session_meta.name, title)
     await _apply_name_to_session(session_mgr, session_meta, name=title, group=None)

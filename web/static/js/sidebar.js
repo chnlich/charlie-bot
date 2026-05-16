@@ -17,9 +17,12 @@ function isTuiSession(session) {
 
 function renderTuiStatusDot(session) {
   if (!isTuiSession(session)) return '';
-  const running = !!globalThis.TuiStatusMap[session.id];
-  const title = running ? 'Claude running' : 'Claude stopped';
-  return `<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0 ${running ? 'running' : ''}" data-session-id="${escapeHtmlAttr(session.id)}" title="${title}"></span>`;
+  const status = globalThis.TuiStatusMap[session.id] || {running: false, busy: false};
+  const classes = ['tui-status-dot', 'w-2', 'h-2', 'rounded-full', 'flex-shrink-0'];
+  if (status.running) classes.push('running');
+  if (status.running && status.busy) classes.push('busy');
+  const title = !status.running ? 'Claude stopped' : (status.busy ? 'Claude busy' : 'Claude idle');
+  return `<span class="${classes.join(' ')}" data-session-id="${escapeHtmlAttr(session.id)}" title="${title}"></span>`;
 }
 
 async function fetchTuiStatus() {
@@ -35,9 +38,11 @@ async function fetchTuiStatus() {
 
 function refreshTuiDots() {
   document.querySelectorAll('.tui-status-dot[data-session-id]').forEach(dot => {
-    const running = !!globalThis.TuiStatusMap[dot.dataset.sessionId];
-    dot.classList.toggle('running', running);
-    dot.title = running ? 'Claude running' : 'Claude stopped';
+    const id = dot.dataset.sessionId;
+    const status = globalThis.TuiStatusMap[id] || {running: false, busy: false};
+    dot.classList.toggle('running', !!status.running);
+    dot.classList.toggle('busy', !!status.running && !!status.busy);
+    dot.title = !status.running ? 'Claude stopped' : (status.busy ? 'Claude busy' : 'Claude idle');
   });
   updateTuiHeaderControls(globalThis.ACTIVE_BACKEND_TYPE || '', SESSION_ID);
 }
@@ -45,14 +50,14 @@ function refreshTuiDots() {
 function startTuiStatusPolling() {
   if (tuiStatusPollInterval) return;
   fetchTuiStatus();
-  tuiStatusPollInterval = setInterval(fetchTuiStatus, 10000);
+  tuiStatusPollInterval = setInterval(fetchTuiStatus, 3000);
 }
 
 function updateTuiHeaderControls(backendType, sessionId) {
   const stopBtn = document.getElementById('stop-tui-btn');
   if (!stopBtn) return;
   const isTui = backendType === 'tui-cli';
-  const stopped = isTui && globalThis.TuiStatusMap[sessionId] === false;
+  const stopped = isTui && globalThis.TuiStatusMap[sessionId]?.running === false;
   stopBtn.classList.toggle('hidden', !isTui || stopped);
   stopBtn.dataset.sessionId = isTui ? sessionId : '';
 }
@@ -127,7 +132,7 @@ async function switchSession(sessionId) {
   // Already on this session
   if (sessionId === SESSION_ID) {
     // Same session — but if it's a stopped TUI, force WS reconnect to respawn tmux/claude.
-    if (globalThis.TuiStatusMap[sessionId] === false) {
+    if (globalThis.TuiStatusMap[sessionId]?.running === false) {
       disconnectWS();
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       connectWS();
@@ -988,7 +993,7 @@ async function stopActiveTui() {
     }
     const data = await res.json();
     if (data.stopped !== true) throw new Error('Stop endpoint did not return stopped=true');
-    globalThis.TuiStatusMap[sessionId] = false;
+    globalThis.TuiStatusMap[sessionId] = {running: false, busy: false};
     refreshTuiDots();
     if (globalThis.TuiSession && globalThis.TuiSession.showStoppedBanner) {
       globalThis.TuiSession.showStoppedBanner();

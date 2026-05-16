@@ -206,7 +206,7 @@ async def tui_status_all(
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Return tmux liveness for every tui-cli session."""
+  """Return tmux liveness and recent Claude jsonl activity for every tui-cli session."""
   sessions = await session_mgr.list_sessions()
   tui_sessions = []
   for meta in sessions:
@@ -216,9 +216,12 @@ async def tui_status_all(
   if not tui_sessions:
     return {}
 
-  from src.agents.backends.tui import tmux_session_exists
+  from src.agents.backends.tui import _claude_jsonl_busy, tmux_session_exists
   statuses = await asyncio.gather(*(tmux_session_exists(meta.id) for meta in tui_sessions))
-  return {meta.id: running for meta, running in zip(tui_sessions, statuses)}
+  return {
+      meta.id: {"running": running, "busy": _claude_jsonl_busy(meta.id) if running else False}
+      for meta, running in zip(tui_sessions, statuses)
+  }
 
 
 @router.post('/{session_id}/tui/stop')

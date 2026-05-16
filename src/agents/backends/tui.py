@@ -19,6 +19,7 @@ import shutil
 import signal
 import struct
 import termios
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -34,12 +35,26 @@ _HISTORY_LIMIT = 50000
 _PTY_READ_CHUNK = 4096
 _WS_RECV_TIMEOUT = 30.0
 _CLAUDE_TUI_SETTINGS = json.dumps({"skipDangerousModePermissionPrompt": True}, separators=(",", ":"))
+_BUSY_THRESHOLD_SECONDS = 3.0
 
 
 def _find_existing_claude_jsonl(session_id: str) -> Optional[Path]:
   """Glob ~/.claude/projects/*/<session_id>.jsonl and return first match (or None)."""
   matches = list(Path.home().glob(f".claude/projects/*/{session_id}.jsonl"))
   return matches[0] if matches else None
+
+
+def _claude_jsonl_busy(session_id: str, threshold_seconds: float = _BUSY_THRESHOLD_SECONDS) -> bool:
+  """Return True if claude's jsonl for this session was written to within threshold_seconds.
+  Uses the same glob path as _find_existing_claude_jsonl. Returns False if no jsonl found."""
+  jsonl = _find_existing_claude_jsonl(session_id)
+  if jsonl is None:
+    return False
+  try:
+    mtime = jsonl.stat().st_mtime
+  except OSError:
+    return False
+  return (time.time() - mtime) < threshold_seconds
 
 
 def _build_claude_argv(session_id: str, resume: bool) -> list[str]:

@@ -34,6 +34,13 @@
 .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
 .tui-status-dot { background: #475569; }
 .tui-status-dot.running { background: #22c55e; }
+.tui-status-dot.busy.running {
+  animation: tui-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tui-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
 /* Sidebar resize handle */
 .resize-handle {
   width: 6px;

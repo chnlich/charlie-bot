@@ -118,3 +118,11 @@ def test_claude_jsonl_busy_returns_false_when_jsonl_missing(
   monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
   assert tui._claude_jsonl_busy("missing-session") is False
+
+
+def test_claude_jsonl_busy_surfaces_stat_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  missing_jsonl = tmp_path / "missing.jsonl"
+  monkeypatch.setattr(tui, "_find_existing_claude_jsonl", lambda _: missing_jsonl)
+
+  with pytest.raises(FileNotFoundError):
+    tui._claude_jsonl_busy("session-id")

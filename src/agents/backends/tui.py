@@ -50,10 +50,7 @@ def _claude_jsonl_busy(session_id: str, threshold_seconds: float = _BUSY_THRESHO
   jsonl = _find_existing_claude_jsonl(session_id)
   if jsonl is None:
     return False
-  try:
-    mtime = jsonl.stat().st_mtime
-  except OSError:
-    return False
+  mtime = jsonl.stat().st_mtime
   return (time.time() - mtime) < threshold_seconds
 
 

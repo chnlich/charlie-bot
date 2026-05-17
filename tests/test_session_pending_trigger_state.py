@@ -131,5 +131,88 @@ async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) ->
   _write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-archived.json", trigger)
 
   status = await sessions_api.all_sessions_status(session_mgr=session_mgr)
-  assert status[session.id]["has_pending_trigger"] is True
-  assert status[session.id]["pending_trigger_count"] == 1
+  # Archived sessions remain in the status response but skip per-session
+  # filesystem work, so pending-trigger fields are always empty regardless of
+  # any trigger files still on disk.
+  assert session.id in status
+  assert status[session.id]["has_running_tasks"] is False
+  assert status[session.id]["has_pending_trigger"] is False
+  assert status[session.id]["pending_trigger_count"] == 0
+  assert status[session.id]["next_trigger_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  session_mgr = SessionManager(cfg)
+
+  active = await session_mgr.create_session(CreateSessionRequest(name="Active"))
+  archived = await session_mgr.create_session(CreateSessionRequest(name="Archived"))
+
+  archived_meta = await session_mgr.get_session(archived.id)
+  assert archived_meta is not None
+  archived_meta.status = SessionStatus.ARCHIVED
+  await session_mgr._save_metadata(archived_meta)
+
+  now = datetime.now(timezone.utc)
+  _write_trigger(
+      cfg.sessions_dir / active.id / "triggers" / "pending-active.json",
+      PendingTrigger(
+          id="pending-active",
+          session_id=active.id,
+          fire_at=now + timedelta(minutes=4),
+          message="active",
+      ),
+  )
+  _write_trigger(
+      cfg.sessions_dir / archived.id / "triggers" / "pending-archived.json",
+      PendingTrigger(
+          id="pending-archived",
+          session_id=archived.id,
+          fire_at=now + timedelta(minutes=4),
+          message="archived",
+      ),
+  )
+
+  # Refuse to load archived trigger state from disk. If
+  # _populate_sidebar_state inspects archived sessions, the test fails.
+  original_get_pending = session_mgr._get_pending_trigger_state
+  original_has_running = session_mgr._has_running_tasks
+
+  async def _fail_for_archived_trigger(session_id: str):
+    if session_id == archived.id:
+      raise AssertionError("archived session should not query trigger state")
+    return await original_get_pending(session_id)
+
+  async def _fail_for_archived_running(session_id: str):
+    if session_id == archived.id:
+      raise AssertionError("archived session should not query running tasks")
+    return await original_has_running(session_id)
+
+  session_mgr._get_pending_trigger_state = _fail_for_archived_trigger
+  session_mgr._has_running_tasks = _fail_for_archived_running
+
+  active_fresh = await session_mgr.get_session(active.id)
+  archived_fresh = await session_mgr.get_session(archived.id)
+  assert active_fresh is not None
+  assert archived_fresh is not None
+  # Preserve input list order to validate it is also preserved on output.
+  sessions = [active_fresh, archived_fresh]
+
+  await session_mgr.populate_sidebar_state(
+      sessions,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+  )
+
+  assert [s.id for s in sessions] == [active.id, archived.id]
+
+  assert active_fresh.has_running_tasks is False
+  assert active_fresh.has_pending_trigger is True
+  assert active_fresh.pending_trigger_count == 1
+  assert active_fresh.next_trigger_at is not None
+
+  assert archived_fresh.has_running_tasks is False
+  assert archived_fresh.has_pending_trigger is False
+  assert archived_fresh.pending_trigger_count == 0
+  assert archived_fresh.next_trigger_at is None

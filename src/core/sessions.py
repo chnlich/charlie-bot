@@ -35,7 +35,7 @@ _RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USE
 
 log = structlog.get_logger()
 
-_METADATA_CACHE_TTL = 5.0  # seconds
+_METADATA_CACHE_TTL = 30.0  # seconds
 _UNSET = object()
 _DEFAULT_CONTEXT_LIMIT = 200_000
 
@@ -900,12 +900,29 @@ class SessionManager:
     if not sessions:
       return
 
+    # Archived sessions cannot have running tasks or pending triggers, so skip
+    # the per-session filesystem work for them.
+    active_sessions = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
+    archived_sessions = [m for m in sessions if m.status == SessionStatus.ARCHIVED]
+
+    if include_running_status:
+      for meta in archived_sessions:
+        meta.has_running_tasks = False
+    if include_pending_trigger_status:
+      for meta in archived_sessions:
+        meta.has_pending_trigger = False
+        meta.pending_trigger_count = 0
+        meta.next_trigger_at = None
+
+    if not active_sessions:
+      return
+
     running_future = None
     trigger_future = None
     if include_running_status:
-      running_future = asyncio.gather(*(self._has_running_tasks(meta.id) for meta in sessions))
+      running_future = asyncio.gather(*(self._has_running_tasks(meta.id) for meta in active_sessions))
     if include_pending_trigger_status:
-      trigger_future = asyncio.gather(*(self._get_pending_trigger_state(meta.id) for meta in sessions))
+      trigger_future = asyncio.gather(*(self._get_pending_trigger_state(meta.id) for meta in active_sessions))
 
     if running_future and trigger_future:
       running_flags, trigger_states = await asyncio.gather(running_future, trigger_future)
@@ -919,11 +936,11 @@ class SessionManager:
       return
 
     if running_flags is not None:
-      for meta, running in zip(sessions, running_flags):
+      for meta, running in zip(active_sessions, running_flags):
         meta.has_running_tasks = bool(meta.thinking_since) or running
 
     if trigger_states is not None:
-      for meta, (pending_count, next_trigger_at) in zip(sessions, trigger_states):
+      for meta, (pending_count, next_trigger_at) in zip(active_sessions, trigger_states):
         meta.has_pending_trigger = pending_count > 0
         meta.pending_trigger_count = pending_count
         meta.next_trigger_at = next_trigger_at

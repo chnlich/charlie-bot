@@ -148,15 +148,16 @@ async def build_session_view_data(
 
   if tail_limit is not None:
     tail_events, total_count, has_more = events_result
-    offset = total_count - len(tail_events)
+    offset = session_meta.archive_offset + total_count - len(tail_events)
     messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
     raw_events = tail_events
+    total_event_count = session_meta.archive_offset + total_count
   else:
     raw_events = events_result
-    total_count = None
-    has_more = False
-    messages, pending_draft = events_to_view(raw_events)
+    total_event_count = session_meta.archive_offset + len(raw_events)
+    has_more = session_meta.archive_offset > 0
+    messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
 
   try:
@@ -170,7 +171,7 @@ async def build_session_view_data(
       threads=threads,
       usage=usage,
       pending_draft=pending_draft,
-      total_event_count=total_count,
+      total_event_count=total_event_count,
       has_more=has_more,
   )
 

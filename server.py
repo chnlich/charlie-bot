@@ -179,9 +179,17 @@ async def session_websocket(websocket: WebSocket, session_id: str):
   await streaming_manager.subscribe("sidebar", websocket)
   try:
     session_mgr = get_session_manager()
+    meta = await session_mgr.get_session(session_id)
+    event_index_offset = meta.archive_offset if meta else 0
     try:
       events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-      sent = await _replay_aggregated_catchup(websocket, events, cursor, session_id)
+      sent = await _replay_aggregated_catchup(
+          websocket,
+          events,
+          cursor,
+          session_id,
+          event_index_offset=event_index_offset,
+      )
       await websocket.send_json({"type": "catchup_complete"})
       log.debug(
         "session_ws_catchup_sent",
@@ -194,7 +202,6 @@ async def session_websocket(websocket: WebSocket, session_id: str):
       log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
 
     cfg = get_config()
-    meta = await session_mgr.get_session(session_id)
     backend_option = cfg.get_backend_option(meta.backend) if meta and meta.backend else None
     if backend_option is not None and backend_option.type == "tui-cli":
       from src.agents.backends.tui import run_tui_attachment
@@ -212,6 +219,8 @@ async def _replay_aggregated_catchup(
   events: list[dict],
   cursor: int,
   session_id: str,
+  *,
+  event_index_offset: int = 0,
 ) -> int:
   """Replay events past *cursor* as aggregator deltas + raw side-effect events.
 
@@ -222,12 +231,13 @@ async def _replay_aggregated_catchup(
   represented by `message`/`stream` deltas on the wire. Returns the number of
   frames sent.
   """
-  aggregator = MessageAggregator()
+  aggregator = MessageAggregator(event_index_offset=event_index_offset)
   sent = 0
   latest_stream: dict | None = None
   for idx, ev in enumerate(events):
+    global_idx = event_index_offset + idx
     deltas = list(aggregator.feed(ev))
-    if idx < cursor:
+    if global_idx < cursor:
       continue
     for delta in deltas:
       if delta["type"] == "stream":
@@ -246,8 +256,10 @@ async def _replay_aggregated_catchup(
         return sent
     if ev.get("type") in _RAW_EVENTS_REPLACED_BY_DELTAS:
       continue
+    payload = dict(ev)
+    payload.setdefault("event_index", global_idx)
     try:
-      await websocket.send_json(ev)
+      await websocket.send_json(payload)
       sent += 1
     except Exception as e:
       log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))

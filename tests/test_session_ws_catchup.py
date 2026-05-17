@@ -72,3 +72,31 @@ async def test_replay_with_cursor_at_end_sends_nothing() -> None:
   # Pending draft is shown by SSR via pending_draft; catchup sends nothing.
   assert sent == 0
   assert ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_replay_uses_global_cursor_after_archive_offset() -> None:
+  events = [
+      {"type": "user", "content": "old-live", "timestamp": "t0"},
+      {"type": "user", "content": "missed", "timestamp": "t1"},
+  ]
+  ws = _FakeWebSocket()
+
+  sent = await _replay_aggregated_catchup(ws, events, cursor=6, session_id="s", event_index_offset=5)
+
+  assert sent == 1
+  assert ws.sent == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "user",
+                  "content": "missed",
+                  "uploaded_files": [],
+                  "is_voice": False,
+                  "event_index": 6,
+                  "id": "legacy:6",
+                  "timestamp": "t1",
+              },
+      }
+  ]

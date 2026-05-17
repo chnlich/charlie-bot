@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 import time
 import uuid
@@ -419,6 +420,141 @@ class SessionManager:
     """Restore an archived session back to active."""
     return await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
 
+  async def recycle_scheduled_session(self, session_id: str, cutoff_utc: datetime) -> dict:
+    """GC old threads and archive old chat_events for a scheduled session.
+
+    Threads whose status is completed/failed/cancelled and whose ``completed_at``
+    is earlier than ``cutoff_utc`` are removed. Chat events with timestamp
+    earlier than ``cutoff_utc`` are moved out of the live ``chat_events.jsonl``
+    into a weekly archive file under ``data/archives/``. Best-effort per-thread
+    and per-event-line: a single bad file is logged and skipped, not raised.
+    """
+    threads_deleted = await asyncio.to_thread(self._gc_old_threads_sync, session_id, cutoff_utc)
+    archive_result = await asyncio.to_thread(self._archive_old_chat_events_sync, session_id, cutoff_utc)
+    events_archived = archive_result["events_archived"]
+    archive_file = archive_result["archive_file"]
+
+    if events_archived:
+      async with self._lock_for(session_id):
+        fresh = await self.get_session(session_id)
+        if fresh is not None:
+          fresh.archive_offset += events_archived
+          await self._save_metadata(fresh)
+      self._events_cache.pop(session_id, None)
+      self._usage_cache.pop(session_id, None)
+      self._aggregators.pop(session_id, None)
+
+    log.info(
+        "scheduled_session_recycle_done",
+        session_id=session_id,
+        threads_deleted=threads_deleted,
+        events_archived=events_archived,
+        archive_file=archive_file,
+    )
+    return {
+        "threads_deleted": threads_deleted,
+        "events_archived": events_archived,
+        "archive_file": archive_file,
+    }
+
+  def _gc_old_threads_sync(self, session_id: str, cutoff_utc: datetime) -> int:
+    """Remove thread dirs whose status is terminal and completed_at < cutoff."""
+    threads_dir = self._session_dir(session_id) / "threads"
+    if not threads_dir.exists():
+      return 0
+    gc_statuses = {"completed", "failed", "cancelled"}
+    deleted = 0
+    for thread_dir in threads_dir.iterdir():
+      try:
+        if not thread_dir.is_dir():
+          continue
+        meta = load_json_meta(thread_dir / "metadata.json", "thread_meta_read_failed_during_recycle")
+        if meta is None:
+          continue
+        if meta.get("status") not in gc_statuses:
+          continue
+        completed_at_raw = meta.get("completed_at")
+        if not completed_at_raw:
+          continue
+        try:
+          completed_at = parse_utc_datetime(completed_at_raw)
+        except ValueError as e:
+          log.debug("thread_completed_at_parse_failed", thread=str(thread_dir), error=str(e))
+          continue
+        if completed_at >= cutoff_utc:
+          continue
+        shutil.rmtree(thread_dir)
+        deleted += 1
+      except Exception as e:
+        log.exception("thread_gc_failed", thread=str(thread_dir))
+    return deleted
+
+  def _archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime) -> dict:
+    """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive."""
+    live_path = self._chat_events_path(session_id)
+    if not live_path.exists():
+      return {"events_archived": 0, "archive_file": None}
+
+    archived_raw: list[str] = []
+    kept_raw: list[str] = []
+    split_reached = False
+    with open(live_path, "r", encoding="utf-8") as f:
+      for line in f:
+        raw = line.rstrip("\n")
+        if split_reached:
+          kept_raw.append(raw)
+          continue
+        stripped = raw.strip()
+        if not stripped:
+          continue
+        try:
+          event = json.loads(stripped)
+        except json.JSONDecodeError as e:
+          log.debug("chat_event_archive_parse_skip", session_id=session_id, error=str(e))
+          split_reached = True
+          kept_raw.append(raw)
+          continue
+        ts_raw = event.get("timestamp")
+        if not ts_raw:
+          split_reached = True
+          kept_raw.append(raw)
+          continue
+        try:
+          ts = parse_utc_datetime(ts_raw)
+        except ValueError as e:
+          log.debug("chat_event_archive_ts_parse_skip", session_id=session_id, error=str(e))
+          split_reached = True
+          kept_raw.append(raw)
+          continue
+        if ts < cutoff_utc:
+          archived_raw.append(raw)
+        else:
+          split_reached = True
+          kept_raw.append(raw)
+
+    if not archived_raw:
+      log.info("chat_events_archive_noop", session_id=session_id)
+      return {"events_archived": 0, "archive_file": None}
+
+    iso = cutoff_utc.isocalendar()
+    archives_dir = self._session_dir(session_id) / "data" / "archives"
+    archives_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = archives_dir / f"chat_events.{iso.year}-W{iso.week:02d}.jsonl"
+    with open(archive_path, "a", encoding="utf-8") as f:
+      for raw in archived_raw:
+        f.write(raw + "\n")
+
+    tmp_path = live_path.with_suffix(live_path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+      for raw in kept_raw:
+        f.write(raw + "\n")
+    os.replace(tmp_path, live_path)
+
+    return {
+        "events_archived": len(archived_raw),
+        "archive_file": str(archive_path),
+    }
+
   async def star_session(self, session_id: str) -> Optional[SessionMetadata]:
     """Star a session."""
     return await self._update_field(session_id, "starred", True, "session_starred")
@@ -580,8 +716,10 @@ class SessionManager:
     # aggregator state matches what SSR/SPA-switch produced for the same
     # events).
     aggregator = self._get_or_init_aggregator(session_id)
+    meta = await self.get_session(session_id)
+    archive_offset = meta.archive_offset if meta else 0
     await self.save_chat_event(session_id, event)
-    event['event_index'] = len(self._events_cache[session_id]) - 1
+    event['event_index'] = archive_offset + len(self._events_cache[session_id]) - 1
 
     channel = f"session:{session_id}"
     deltas = list(aggregator.feed(event))
@@ -601,7 +739,10 @@ class SessionManager:
     aggregator = self._aggregators.get(session_id)
     if aggregator is not None:
       return aggregator
-    aggregator = MessageAggregator()
+    # Live file only holds events from index archive_offset onward; seed the
+    # aggregator's offset so the deltas it emits carry the same GLOBAL
+    # event_index that persist_and_broadcast stamps on the raw event.
+    aggregator = MessageAggregator(event_index_offset=self._read_archive_offset_sync(session_id))
     for ev in self.load_chat_events_sync(session_id):
       for _ in aggregator.feed(ev):
         pass
@@ -640,8 +781,83 @@ class SessionManager:
     return events, total, has_more
 
   def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:
-    """Load events in line range [start, end). Returns (events, has_more)."""
-    return parse_ndjson_range(self._chat_events_path(session_id), start, end)
+    """Load events in GLOBAL index range [start, end). Returns (events, has_more).
+
+    Indices are global (archive_offset + line_in_live_file). When the requested
+    range starts before the live file, archived chat_events files under
+    ``data/archives/`` are read in chronological order to fill the gap.
+    """
+    if end <= start:
+      return [], start > 0
+    archive_offset = self._read_archive_offset_sync(session_id)
+    live_path = self._chat_events_path(session_id)
+    if end <= archive_offset:
+      return self._load_archive_range(session_id, start, end), start > 0
+    if start >= archive_offset:
+      rel_start = start - archive_offset
+      rel_end = end - archive_offset
+      events, _ = parse_ndjson_range(live_path, rel_start, rel_end)
+      return events, start > 0
+    archive_events = self._load_archive_range(session_id, start, archive_offset)
+    live_end = end - archive_offset
+    live_events, _ = parse_ndjson_range(live_path, 0, live_end)
+    return archive_events + live_events, start > 0
+
+  def _read_archive_offset_sync(self, session_id: str) -> int:
+    """Synchronously read the archive_offset from metadata.json.
+
+    Used by sync read paths (e.g. ``load_chat_events_range``) so they don't
+    have to go async just to learn the live/archive split. Falls back to 0 if
+    the metadata file is missing or unreadable.
+    """
+    cached = self._metadata_cache.get(session_id)
+    if cached is not None:
+      return cached[0].archive_offset
+    path = self._metadata_path(session_id)
+    if not path.exists():
+      return 0
+    try:
+      raw = path.read_text(encoding="utf-8")
+      if not raw.strip():
+        return 0
+      return SessionMetadata.model_validate_json(raw).archive_offset
+    except (OSError, ValueError) as e:
+      log.debug("archive_offset_read_failed", session_id=session_id, error=str(e))
+      return 0
+
+  def _load_archive_range(self, session_id: str, start: int, end: int) -> list[dict]:
+    """Read events at global indices [start, end) from archive files.
+
+    Archives live in ``<session>/data/archives/chat_events.<YYYY>-W<WW>.jsonl``.
+    Files are walked in chronological order (filename sort happens to match).
+    """
+    if end <= start:
+      return []
+    archives_dir = self._session_dir(session_id) / "data" / "archives"
+    if not archives_dir.exists():
+      return []
+    archive_files = sorted(archives_dir.glob("chat_events.*.jsonl"))
+    events: list[dict] = []
+    cursor = 0
+    for path in archive_files:
+      if cursor >= end:
+        break
+      try:
+        with open(path, "r", encoding="utf-8") as f:
+          for line in f:
+            if cursor >= end:
+              break
+            if cursor >= start:
+              stripped = line.strip()
+              if stripped:
+                try:
+                  events.append(json.loads(stripped))
+                except json.JSONDecodeError as e:
+                  log.debug("archive_parse_skip", session_id=session_id, error=str(e))
+            cursor += 1
+      except OSError as e:
+        log.debug("archive_read_failed", path=str(path), error=str(e))
+    return events
 
   def _chat_events_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"

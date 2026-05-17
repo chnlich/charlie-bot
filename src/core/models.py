@@ -173,6 +173,10 @@ class SessionMetadata(BaseModel):
   round_ratings: Dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)
   # Grouping
   group: Optional[str] = None
+  # Number of chat events that have been moved out of the live chat_events.jsonl
+  # into archive files. All event_index values seen by the UI/API are GLOBAL =
+  # archive_offset + line_number_in_live_file.
+  archive_offset: int = 0
 
 
 # ---------------------------------------------------------------------------

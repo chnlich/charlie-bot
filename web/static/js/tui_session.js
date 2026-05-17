@@ -137,7 +137,8 @@
 
     term.onData(sendInput);
 
-    touchAbort = new AbortController(); const signal = touchAbort.signal;
+    touchAbort = new AbortController();
+    const signal = touchAbort.signal;
     let lastTouchY = null;
     container.addEventListener('touchstart', e => {
       if (e.touches && e.touches.length > 0) lastTouchY = e.touches[0].screenY;
@@ -171,7 +172,10 @@
   }
 
   function unmount() {
-    if (touchAbort) { try { touchAbort.abort(); } catch (e) {} touchAbort = null; }
+    if (touchAbort) {
+      touchAbort.abort();
+      touchAbort = null;
+    }
     if (resizeObs) {
       try { resizeObs.disconnect(); } catch (e) {}
       resizeObs = null;

@@ -99,6 +99,11 @@ async def trigger_master(
         session_meta.cc_session_id = None
         session_meta.cc_session_started_at = None
         await session_mgr.save_metadata(session_meta)
+        try:
+          result = await session_mgr.recycle_scheduled_session(session_id, last_sat_1am_utc)
+          log.info('scheduled_session_recycled', session=session_id, **result)
+        except Exception:
+          log.exception('scheduled_session_recycle_failed', session=session_id)
 
     master_summary = summary
     if not session_meta.cc_session_id and session_meta.scheduled_task:

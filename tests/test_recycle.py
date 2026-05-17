@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.api.message_utils import build_session_view_data
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadMetadata, ThreadStatus
 from src.core.sessions import SessionManager
@@ -181,3 +182,36 @@ async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> 
   mixed, has_more = mgr.load_chat_events_range(session.id, 3, 7)
   assert [e["content"] for e in mixed] == ["e3", "e4", "f0", "f1"]
   assert has_more is True
+
+
+@pytest.mark.asyncio
+async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="t"))
+
+  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
+  cutoff = base + timedelta(days=3)
+  events = [
+      {"type": "user", "content": f"e{i}", "timestamp": (base + timedelta(hours=i)).isoformat()}
+      for i in range(5)
+  ]
+  events += [
+      {"type": "user", "content": f"f{i}", "timestamp": (cutoff + timedelta(hours=i)).isoformat()}
+      for i in range(3)
+  ]
+  _append_events(mgr.get_chat_events_path(session.id), events)
+  await mgr.recycle_scheduled_session(session.id, cutoff)
+
+  thread_mgr = AsyncMock()
+  thread_mgr.list_threads.return_value = []
+
+  full_view = await build_session_view_data(session.id, mgr, thread_mgr)
+  assert full_view.total_event_count == 8
+  assert full_view.has_more is True
+  assert [m["event_index"] for m in full_view.messages] == [5, 6, 7]
+
+  tail_view = await build_session_view_data(session.id, mgr, thread_mgr, tail_limit=2)
+  assert tail_view.total_event_count == 8
+  assert tail_view.has_more is True
+  assert [m["event_index"] for m in tail_view.messages] == [6, 7]

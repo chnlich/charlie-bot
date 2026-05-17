@@ -8,6 +8,7 @@
   let fitAddon = null;
   let resizeObs = null;
   let activeSessionId = null;
+  let touchAbort = null;
   let manualStopBannerShown = false;
 
   function getContainer() {
@@ -136,6 +137,24 @@
 
     term.onData(sendInput);
 
+    touchAbort = new AbortController(); const signal = touchAbort.signal;
+    let lastTouchY = null;
+    container.addEventListener('touchstart', e => {
+      if (e.touches && e.touches.length > 0) lastTouchY = e.touches[0].screenY;
+    }, {passive: true, signal});
+    container.addEventListener('touchmove', e => {
+      if (lastTouchY == null) return;
+      if (!e.changedTouches || e.changedTouches.length === 0) return;
+      const y = e.changedTouches[0].screenY;
+      const deltaY = y - lastTouchY;
+      lastTouchY = y;
+      if (term && typeof term.scrollLines === 'function') {
+        term.scrollLines(-Math.round(deltaY / 10));
+      }
+    }, {passive: true, signal});
+    container.addEventListener('touchend', () => { lastTouchY = null; }, {passive: true, signal});
+    container.addEventListener('touchcancel', () => { lastTouchY = null; }, {passive: true, signal});
+
     // Defer once until after the initial layout/paint, then again.
     scheduleFitAndSendResize();
 
@@ -152,6 +171,7 @@
   }
 
   function unmount() {
+    if (touchAbort) { try { touchAbort.abort(); } catch (e) {} touchAbort = null; }
     if (resizeObs) {
       try { resizeObs.disconnect(); } catch (e) {}
       resizeObs = null;

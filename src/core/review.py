@@ -11,6 +11,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import git_current_branch, git_worktree_prune, git_worktree_remove
 from src.core.master_trigger import trigger_master
+from src.core.message_aggregator import extract_text_from_message
 from src.core.models import BackendOption, SpawnRequest, ThreadMetadata
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
@@ -108,7 +109,8 @@ async def extract_review_context(
 ) -> tuple[Optional[str], Optional[str]]:
   """Extract user request and worker summary from JSONL logs for review context.
 
-  Returns (user_request, worker_summary). Falls back to (None, None) if extraction is incomplete.
+  Returns (user_request, worker_summary); each may independently be None when extraction fails.
+  The caller's prompt builder handles partial context.
   """
   user_request: Optional[str] = None
   worker_summary: Optional[str] = None
@@ -135,22 +137,33 @@ async def extract_review_context(
   try:
     worker_log = sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
     events = await asyncio.to_thread(parse_ndjson_file, worker_log)
+    result_text: Optional[str] = None
+    assistant_text: Optional[str] = None
     for ev in reversed(events):
-      if ev.get("type") == ET.RESULT:
-        worker_summary_value = ev.get("result")
-        if isinstance(worker_summary_value, str):
-          normalized_summary = worker_summary_value.strip()
-          if normalized_summary:
-            worker_summary = normalized_summary
-            has_worker_summary = True
-        break
+      ev_type = ev.get("type")
+      if result_text is None and ev_type == ET.RESULT:
+        val = ev.get("result")
+        if isinstance(val, str):
+          stripped = val.strip()
+          if stripped:
+            result_text = stripped
+            break
+        # empty / non-string: fall through to look for assistant text
+        continue
+      if assistant_text is None and ev_type == ET.ASSISTANT:
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
+        text = extract_text_from_message(msg).strip()
+        if text:
+          assistant_text = text
+          break
+    chosen = result_text or assistant_text
+    if chosen:
+      worker_summary = chosen
+      has_worker_summary = True
   except Exception as e:
     log.warning("review_context_worker_events_failed", session=session_id, thread=thread_id, error=str(e))
   if not has_worker_summary:
     log.warning("review_context_worker_summary_unavailable", session=session_id, thread=thread_id)
-
-  if not has_user_request or not has_worker_summary:
-    return None, None
 
   return user_request, worker_summary
 

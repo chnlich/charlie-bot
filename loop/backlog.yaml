@@ -6142,3 +6142,54 @@
   status: pending
   created: '2026-05-16T21:14:23Z'
   priority: low
+- id: '163'
+  title: Drop the unused 'as e' binding in core/sessions._gc_old_threads_sync's broad
+    except clause
+  description: 'pylint W0612 in `src/core/sessions.py:488` — `_gc_old_threads_sync`
+    catches `except Exception as e:` but the body only calls `log.exception("thread_gc_failed",
+    thread=str(thread_dir))` and never references `e`. `log.exception` already attaches
+    the active traceback via `sys.exc_info()`, so the binding is pure dead state.
+    Change the line to a bare `except Exception:` (matching the style settled on for
+    pending #160 in the sibling `_backend_create_hook` and item #162 in `core/scheduler._execute_handler_task`).
+    Purely subtractive — no behavior change, no log-field change. Verify post-edit
+    with `pylint --disable=all --enable=unused-variable src/` which should drop from
+    three warnings to the two already-tracked ones (`core/sessions.py:135` covered
+    by #160 and `core/scheduler.py:183` covered by #162). Note: the prior 2026-05-16T21:14Z
+    scheduled scan (item #162) claimed pylint reported "exactly two" W0612 warnings,
+    but this line was already present in the file at that time — the previous scan
+    miscounted. This scan re-verifies the full pylint W0612 inventory and confirms
+    three findings.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan reformatted
+    `src/api/sessions.py:tui_status_all` (dict-literal split) and `src/core/spawner.py:_build_worker_prompt`
+    (trailing-paren reflow); both were committed in the same run per the yapf rule
+    (commit 7181fe6) and are NOT tracked as backlog items. `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` returns zero matches. `pyflakes src/` reports three findings — the two
+    unused `e` bindings in `core/sessions.py:135` (covered by pending #160) and `core/sessions.py:488`
+    (THIS ITEM) plus the unused `WatchTarget` import in `api/internal.py:14` (covered
+    by pending #131 and #139). `pylint --disable=all --enable=unused-variable src/`
+    reports three warnings — `core/sessions.py:135` (covered by #160), `core/sessions.py:488`
+    (THIS ITEM), and `core/scheduler.py:183` (covered by #162). `vulture src/ --min-confidence
+    80` reports only the Pydantic `cls` validator parameter in `core/config.py:128`,
+    a known false positive. The >50-line function inventory in src/ this scan, after
+    cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153/#154/#158/#159/#162 (`_wait_for_quota_recovery`, `maybe_auto_name`, `_resolve_worktree_start_point`,
+    `parse_ndjson_tail`, `fork_session`, `get_thread_events`, `_finalize_worker`,
+    `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`),
+    leaves only `core/sessions._archive_old_chat_events_sync` (65 lines, two clean
+    phases — partition lines by cutoff, then write archive + rewrite live file) as
+    an untriaged >50-line function. It is borderline but the partition pass is a
+    single coherent stream loop with multiple early-exit guards that resist clean
+    extraction without losing locality of the `split_reached` flag; defer to a future
+    scan if the function grows further. Per the one-finding-per-scan rule this is
+    the single new code-health backlog entry for the 2026-05-18T01:12Z scheduled
+    scan.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-18T01:12:32Z'
+  priority: low

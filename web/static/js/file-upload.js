@@ -138,3 +138,66 @@ function setUploadingState(busy) {
   btn.classList.remove('opacity-50', 'cursor-not-allowed');
   btn.classList.add('hover:bg-blue-500');
 }
+
+// ---------------------------------------------------------------------------
+// Paste-screenshot support
+// ---------------------------------------------------------------------------
+const MIME_EXTENSION_MAP = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+  'image/tiff': 'tiff',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+};
+
+function extensionForMime(mime) {
+  return MIME_EXTENSION_MAP[(mime || '').toLowerCase()] || 'png';
+}
+
+function screenshotTimestamp(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    String(date.getFullYear())
+    + pad(date.getMonth() + 1)
+    + pad(date.getDate())
+    + '-'
+    + pad(date.getHours())
+    + pad(date.getMinutes())
+    + pad(date.getSeconds())
+  );
+}
+
+function handlePaste(event) {
+  const data = event.clipboardData;
+  if (!data || !data.items) return;
+  const imageBlobs = [];
+  for (const item of data.items) {
+    if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+      const blob = item.getAsFile();
+      if (blob) imageBlobs.push(blob);
+    }
+  }
+  if (!imageBlobs.length) return;
+  event.preventDefault();
+  const stamp = screenshotTimestamp(new Date());
+  imageBlobs.forEach((blob, idx) => {
+    const ext = extensionForMime(blob.type);
+    const suffix = imageBlobs.length > 1 ? `-${idx + 1}` : '';
+    const name = `screenshot-${stamp}${suffix}.${ext}`;
+    const renamed = new File([blob], name, {type: blob.type});
+    uploadFile(renamed);
+  });
+}
+
+function initPasteUpload() {
+  const input = document.getElementById('msg-input');
+  if (!input) return;
+  input.addEventListener('paste', handlePaste);
+}
+
+document.addEventListener('DOMContentLoaded', initPasteUpload);

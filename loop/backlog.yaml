@@ -6257,3 +6257,61 @@
   status: pending
   created: '2026-05-18T03:13:11Z'
   priority: low
+- id: '165'
+  title: Drop the no-op SUPPORTED_MIME_TYPES check and its unreferenced set literal
+    in src/api/voice.py
+  description: '`src/api/voice.py:69-71` contains the three-line block `if content_type
+    not in SUPPORTED_MIME_TYPES:` followed by an "Accept anyway — Gemini is permissive"
+    comment and a bare `pass` — a conditional whose body is literally `pass`. The
+    guard executes the membership test and then does nothing on either branch, so
+    the block has no runtime effect and exists only to host a comment. `grep -rn
+    SUPPORTED_MIME_TYPES src/` confirms the eight-line set literal at `src/api/voice.py:23-31`
+    has exactly one reference site — the dead check itself — so deleting the block
+    also makes the constant unreachable.
+    Purely subtractive cleanup: remove the dead `if ... pass` and the now-unused
+    `SUPPORTED_MIME_TYPES` set (and the implicit `set` literal import is not needed
+    since this is just a top-level literal). No behavior change — the existing
+    code path already accepts any content_type (defaults to "audio/webm" when None
+    on L68) and forwards it directly to `transcriber.transcribe_audio` on L81. The
+    intent expressed by the comment ("Gemini is permissive") is fully captured by
+    simply not gating on the MIME type; the placeholder block adds nothing. If
+    future work wants to filter, it would re-introduce a real check rather than
+    extend a no-op.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan reformatted
+    `src/api/sessions.py:tui_status_all` (dict-literal split) and `src/core/spawner.py:_build_worker_prompt`
+    (trailing-paren reflow); both were committed in the same run per the yapf rule
+    (commit ae3e06a) and are NOT tracked as backlog items. `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` returns zero matches. `pyflakes src/` reports three findings — the unused
+    `e` in `core/sessions.py:135` (covered by pending #160), the unused `e` in `core/sessions.py:488`
+    (covered by pending #163), and the unused `WatchTarget` import in `api/internal.py:14`
+    (covered by pending #131 and #139). `pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/` reports the same three findings plus the unused `cfg` in `core/scheduler.py:183`
+    (covered by pending #162), the unused `thread_mgr` argument in `core/review.py:26`
+    (covered by pending #156), and the two intentional argparse-required `args`
+    parameters in `cli/backup.py:16,22` (not actionable). `vulture src/ --min-confidence
+    80` reports only the Pydantic `cls` validator parameter in `core/config.py:128`,
+    a known false positive. The >50-line function inventory in src/ this scan, after
+    cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153/#154/#158/#159/#162/#163/#164 (`_wait_for_quota_recovery`, `maybe_auto_name`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `get_thread_events`,
+    `_finalize_worker`, `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`,
+    `spawn_worker`, `_archive_old_chat_events_sync`, `_populate_sidebar_state`,
+    `delegate_task`), surfaces no new untriaged >50-line function candidate this
+    scan. Duplication: the three-line cache-pop block in `core/sessions.py` is
+    covered by pending #164; no other new duplicated block of comparable size
+    surfaced. Per the one-finding-per-scan rule the dead-block finding above is
+    the single new code-health backlog entry for the 2026-05-18T15:13Z scheduled
+    scan; it qualifies as a clean subtractive dead-code removal — the no-op `if
+    ... pass` and its dependent eight-line constant set together eliminate ~11
+    lines whose only function today is to host an "intent comment" that the
+    surrounding code already implements by doing nothing.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-18T15:13:12Z'
+  priority: low

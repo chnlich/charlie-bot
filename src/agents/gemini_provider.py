@@ -25,7 +25,10 @@ class GeminiProvider(LLMProvider):
       prompt = (
           "Transcribe this audio exactly, word for word. "
           "The speaker may use English, Chinese, or mix both languages — preserve the original language(s) used. Do not translate. "
-          "For Chinese, always output simplified Chinese (简体字), never traditional Chinese.")
+          "For Chinese, always output simplified Chinese (简体字), never traditional Chinese. "
+          "If the audio contains no speech, only silence, or only background noise, respond with an empty string. "
+          "Never fabricate, summarize, paraphrase, or invent content. "
+          "Do not output any text that is not actually spoken in the audio.")
       if custom_words:
         prompt += " Pay special attention to these terms and spell them exactly: " + ", ".join(custom_words) + "."
       response = self._client.models.generate_content(

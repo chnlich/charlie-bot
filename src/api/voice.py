@@ -1,5 +1,10 @@
 """Voice transcription API route."""
 
+import asyncio
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -24,6 +29,23 @@ SUPPORTED_MIME_TYPES = {
     "audio/flac",
     "audio/x-m4a",
 }
+
+_MIME_EXT = {
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/mp4": ".mp4",
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/flac": ".flac",
+    "audio/x-m4a": ".m4a",
+}
+
+
+def _persist_voice_dump(audio_path: Path, audio_bytes: bytes, transcription: str) -> None:
+  audio_path.parent.mkdir(parents=True, exist_ok=True)
+  audio_path.write_bytes(audio_bytes)
+  audio_path.with_suffix(".txt").write_text(transcription, encoding="utf-8")
+
 
 _transcriber: AudioTranscriber | None = None
 
@@ -51,6 +73,8 @@ async def transcribe_audio(
   audio_bytes = await audio.read()
   if not audio_bytes:
     raise HTTPException(status_code=400, detail="Empty audio file")
+  if len(audio_bytes) < 2048:
+    raise HTTPException(status_code=400, detail="Audio too short to transcribe")
 
   try:
     transcriber = _get_transcriber()
@@ -59,6 +83,24 @@ async def transcribe_audio(
     raise HTTPException(status_code=503, detail="Audio transcription requires Gemini API key")
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+  ext = _MIME_EXT.get(content_type, ".bin")
+  ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"
+  audio_path = cfg.charliebot_home / "sessions" / session_id / "voice" / f"{ts}_{uuid.uuid4().hex[:8]}{ext}"
+  try:
+    # Run blocking I/O off the event loop; don't fail the request if dump fails.
+    await asyncio.to_thread(_persist_voice_dump, audio_path, audio_bytes, transcription)
+    log.info(
+        "voice_transcribed",
+        session_id=session_id,
+        audio_path=str(audio_path),
+        audio_bytes_size=len(audio_bytes),
+        mime_type=content_type,
+        transcription_length=len(transcription),
+        transcription_preview=transcription[:80],
+    )
+  except Exception as e:
+    log.warning("voice_dump_failed", session_id=session_id, error=str(e))
 
   meta = await session_mgr.get_session(session_id)
   if meta:

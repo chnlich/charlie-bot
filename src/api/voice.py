@@ -90,17 +90,17 @@ async def transcribe_audio(
   try:
     # Run blocking I/O off the event loop; don't fail the request if dump fails.
     await asyncio.to_thread(_persist_voice_dump, audio_path, audio_bytes, transcription)
-    log.info(
-        "voice_transcribed",
-        session_id=session_id,
-        audio_path=str(audio_path),
-        audio_bytes_size=len(audio_bytes),
-        mime_type=content_type,
-        transcription_length=len(transcription),
-        transcription_preview=transcription[:80],
-    )
   except Exception as e:
     log.warning("voice_dump_failed", session_id=session_id, error=str(e))
+  log.info(
+      "voice_transcribed",
+      session_id=session_id,
+      audio_path=str(audio_path),
+      audio_bytes_size=len(audio_bytes),
+      mime_type=content_type,
+      transcription_length=len(transcription),
+      transcription_preview=transcription[:80],
+  )
 
   meta = await session_mgr.get_session(session_id)
   if meta:

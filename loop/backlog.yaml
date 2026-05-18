@@ -6193,3 +6193,67 @@
   status: pending
   created: '2026-05-18T01:12:32Z'
   priority: low
+- id: '164'
+  title: Extract shared _drop_session_in_memory_caches helper to deduplicate the three-line
+    cache-pop block now repeated at four sites in core/sessions.py
+  description: 'The three-line block `self._events_cache.pop(session_id, None); self._usage_cache.pop(session_id,
+    None); self._aggregators.pop(session_id, None)` is now repeated verbatim at four
+    sites in `src/core/sessions.py`: (1) L335-337 in the clone/elone path after auto-archiving
+    the parent under `parent_id`; (2) L398-400 in `archive_session`; (3) L411-413
+    in `delete_session_permanently` (immediately followed by `self._invalidate_cache(session_id)`
+    and `self._metadata_locks.pop(session_id, None)`); and (4) L443-445 in `recycle_scheduled_session`
+    (added by commit 6cb9541 on 2026-05-17). The fourth occurrence pushes the pattern
+    past the dedup rule''s second clause — a helper `_drop_session_in_memory_caches(session_id)`
+    has a clear single-responsibility name worth its own concept ("drop the three
+    in-memory per-session caches"), independent of any disk teardown the caller does
+    around it. Replace all four three-line blocks with a single call. Do NOT fold
+    `_invalidate_cache(session_id)` (which broadcasts a sidebar/list-cache invalidation,
+    L414) or `_metadata_locks.pop(session_id, None)` (L415, only safe on permanent
+    delete) into the helper — those are intentionally scoped to `delete_session_permanently`
+    only and folding them in would either spuriously rebroadcast on archive/recycle
+    or drop a lock another in-flight coroutine still holds. Do NOT touch the lone
+    `self._usage_cache.pop(session_id, None)` at L772 inside `get_chat_events`: that
+    one pops only `_usage_cache` to keep it consistent with a freshly recomputed empty-usage
+    dict and is not the same pattern. Purely subtractive — the helper is a private
+    sync method (no I/O), no behavior change, no signature change to any public method.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan reformatted
+    `src/api/sessions.py:tui_status_all` (dict-literal split) and `src/core/spawner.py:_build_worker_prompt`
+    (trailing-paren reflow); both were committed in the same run per the yapf rule
+    (commit e26b8f7) and are NOT tracked as backlog items. `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` returns zero matches. `pyflakes src/` reports three findings — the unused
+    `e` in `core/sessions.py:135` (covered by pending #160), the unused `e` in `core/sessions.py:488`
+    (covered by pending #163), and the unused `WatchTarget` import in `api/internal.py:14`
+    (covered by pending #131 and #139). `pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/` reports the same three findings plus the unused `cfg` in `core/scheduler.py:183`
+    (covered by pending #162), the unused `thread_mgr` argument in `core/review.py:26`
+    (covered by pending #156), and the two intentional argparse-required `args` parameters
+    in `cli/backup.py:16,22` (not actionable). `vulture src/ --min-confidence 80`
+    reports only the Pydantic `cls` validator parameter in `core/config.py:128`, a
+    known false positive. The >50-line function inventory in src/ this scan, after
+    cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153/#154/#158/#159/#162/#163 (`_wait_for_quota_recovery`, `maybe_auto_name`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `get_thread_events`,
+    `_finalize_worker`, `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`,
+    `_archive_old_chat_events_sync`), surfaces two untriaged candidates: (a) `core/sessions._populate_sidebar_state`
+    at 54 lines — barely over threshold and structured as a single coherent two-phase
+    derived-state populator (clear archived defaults, then optionally gather running/trigger
+    flags for active sessions); the gather-and-dispatch core is irreducible without
+    losing the conditional-gather optimization, so defer per the coherent-single-flow
+    precedent; (b) `api/internal.delegate_task` at 51 lines — an HTTP endpoint whose
+    body is mostly a SpawnRequest dataclass construction inside a `create_logged_task`
+    call, no clean split worth its own concept. Per the one-finding-per-scan rule
+    the duplication finding above is the single new code-health backlog entry for
+    the 2026-05-18T03:13Z scheduled scan; it edges out the two long-function candidates
+    because the cache-pop pattern has a clean named helper and four call sites that
+    will silently diverge (one already does: L411 follows the three pops with `_invalidate_cache`
+    + `_metadata_locks.pop` that the other three sites do not).
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-05-18T03:13:11Z'
+  priority: low

@@ -6257,3 +6257,64 @@
   status: pending
   created: '2026-05-18T03:13:11Z'
   priority: low
+- id: '165'
+  title: Extract shared _bulk_update_group helper to deduplicate the iterate-lock-recheck-update
+    pipeline duplicated between core/sessions.rename_group and core/sessions.delete_group
+  description: '`src/core/sessions.py:rename_group` (L578-595, 18 lines) and `src/core/sessions.py:delete_group`
+    (L597-614, 18 lines) share a verbatim 13-line body (`all_sessions = await self.list_sessions();
+    count = 0; for meta in all_sessions: if meta.group != <match>: continue; async
+    with self._lock_for(meta.id): fresh = await self.get_session(meta.id); if not
+    fresh or fresh.group != <match>: continue; fresh.group = <new_value>; fresh.updated_at
+    = utc_now(); await self._save_metadata(fresh); count += 1; if count: log.info(<event>,
+    ..., count=count); return count`) that differs only in three call-site values:
+    the matched group string (`old_name` vs `group`), the new group value (`new_name`
+    vs `None`), and the log event key (`group_renamed` vs `group_deleted`). The
+    iterate-once-then-re-read-under-lock-and-re-check pattern (the two `meta.group
+    != <match>` checks bracketing `_lock_for`) exists specifically to avoid clobbering
+    a concurrent `set_group`/`rename_group` mutation between the list snapshot and
+    the per-session lock acquisition — it is non-obvious and currently duplicated
+    in two places, so a future bug fix to either side must be remembered to apply
+    to the other. Extract a private helper `_bulk_update_group(self, match: str, new_group:
+    Optional[str], log_event: str, log_fields: dict) -> int` that owns the iterate-lock-recheck-update-count
+    loop, and rewrite both public methods as ~3-line wrappers (compute log_fields,
+    delegate). The helper has a clear single-responsibility name worth its own concept
+    ("bulk-update the `group` field across all sessions whose current group matches
+    `match`, preserving the lock-and-re-check invariant"), even though the duplicated
+    block is under 50 lines, per the dedup rule''s second clause and the precedent
+    set by completed item #002 which collapsed six single-session toggle methods
+    behind `_update_field`. Purely subtractive — same external API, same log events,
+    same return value semantics.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan reformatted
+    `src/api/sessions.py:tui_status_all` (dict-literal split) and `src/core/spawner.py:_build_worker_prompt`
+    (trailing-paren reflow); both were committed in the same run per the yapf rule
+    (commit c10ed5c) and are NOT tracked as backlog items. `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` returns zero matches. `pyflakes src/` reports three findings — the unused
+    `e` in `core/sessions.py:135` (covered by pending #160), the unused `e` in `core/sessions.py:488`
+    (covered by pending #163), and the unused `WatchTarget` import in `api/internal.py:14`
+    (covered by pending #131 and #139). `pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/` reports the same three findings plus the unused `cfg` in `core/scheduler.py:183`
+    (covered by pending #162), the unused `thread_mgr` argument in `core/review.py:26`
+    (covered by pending #156), and the two intentional argparse-required `args` parameters
+    in `cli/backup.py:16,22` (not actionable). `vulture src/ --min-confidence 80`
+    reports only the Pydantic `cls` validator parameter in `core/config.py:128`, a
+    known false positive. The >50-line function inventory in src/ this scan is unchanged
+    from the prior 2026-05-18T03:13Z scan: items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    cover the structural splits, and the coherent-single-flow exclusions enumerated
+    in items #153/#154/#158/#159/#162/#163/#164 (`_wait_for_quota_recovery`, `maybe_auto_name`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `get_thread_events`,
+    `_finalize_worker`, `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`,
+    `_archive_old_chat_events_sync`, `_populate_sidebar_state`, `delegate_task`) still
+    apply. The cache-pop duplication filed as pending #164 (2026-05-18T03:13Z) is
+    a separate four-site pattern in the same file and is not subsumed by this finding.
+    No pending item touches `rename_group`/`delete_group`. Per the one-finding-per-scan
+    rule this is the single new code-health backlog entry for the 2026-05-19T19:14Z
+    scheduled scan.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-05-19T19:14:20Z'
+  priority: low

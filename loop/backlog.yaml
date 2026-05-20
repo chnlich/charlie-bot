@@ -6257,3 +6257,119 @@
   status: pending
   created: '2026-05-18T03:13:11Z'
   priority: low
+- id: '165'
+  title: Extract shared _dispatch_substituted_slash_prompt helper to deduplicate the
+    create_logged_task(run_and_finalize(...)) prompt-dispatch block between api/chat.send_message
+    and api/slash.execute_command
+  description: 'WHY — The two HTTP endpoints `api/chat.send_message` (src/api/chat.py:95-105)
+    and `api/slash.execute_command` (src/api/slash.py:184-193) both render the `dispatch.kind
+    == ''prompt''` branch of a `SlashDispatchResult` (from `core.slash_commands.dispatch_slash_command`)
+    by firing-and-forgetting the same `create_logged_task(run_and_finalize(...))`
+    call with the identical 7-keyword-argument shape: `cfg, meta, build_agent_input_content(dispatch.substituted_prompt,
+    uploaded_files), session_mgr, extra_claude_flags=dispatch.claude_code_flags, skip_user_event=True,
+    display_content=<display_text>, uploaded_files=uploaded_files`. The two blocks
+    are character-for-character identical except for the `display_content` source
+    (chat.py passes `req.content`, slash.py passes the synthesized `display_text`
+    = `"/{name}" + (" {args_text}" if args_text else "")`). `pylint --disable=all
+    --enable=duplicate-code src/` flags this pair as R0801 (8-line shared block including
+    the call boilerplate). Pending item #144 explicitly considers and rejects cross-file
+    dedup of the FULL slash-render block (`prompt` + `error` + `shell_result` branches)
+    because the `error` and `shell_result` branches return different response shapes
+    (chat.py wraps results in ASSISTANT + MASTER_DONE WebSocket events; slash.py returns
+    inline JSON), so #144 keeps the chat-side extraction local to chat.py. But the
+    `prompt` branch alone is different: it does NOT render a response inline — it
+    fires off the master CC run and the two callers separately build their own 202
+    JSONResponse with caller-specific content (`{"status": "accepted"}` in chat.py
+    vs `{''type'': ET.PROMPT_DISPATCHED, ''command'': name}` in slash.py). That makes
+    the shared work the fire-and-forget itself, with the response shape staying caller-local.
+    This is the second clause of the dedup rule: the helper has a clear single-responsibility
+    name worth its own concept ("kick off master CC for a slash-command-substituted
+    prompt with the right flags and uploaded-file payload") even though the block
+    is only ~10 lines. Risk of silent divergence is concrete — any future addition
+    of a new keyword argument to `run_and_finalize` for slash dispatch (e.g. a new
+    `slash_command_name` arg for telemetry, or a `dispatch_origin` tag) would have
+    to be added to both call sites in lockstep, and prior commits to this codebase
+    have already shown one path being updated without the other.
+
+    WHAT — Add a module-level sync helper in src/api/message_utils.py (where `build_agent_input_content`,
+    `build_user_event`, `extract_text_from_message`, and `serialize_uploaded_files`
+    already live and are imported by both chat.py and slash.py):
+
+    ```python def dispatch_substituted_slash_prompt(     cfg: CharlieBotConfig,     meta:
+    SessionMetadata,     dispatch: SlashDispatchResult,     display_content: str,     uploaded_files:
+    list[dict],     session_mgr: SessionManager, ) -> None:   """Fire-and-forget master
+    CC run for a substituted slash-command prompt.""" create_logged_task(       run_and_finalize(           cfg,           meta,           build_agent_input_content(dispatch.substituted_prompt,
+    uploaded_files),           session_mgr,           extra_claude_flags=dispatch.claude_code_flags,           skip_user_event=True,           display_content=display_content,           uploaded_files=uploaded_files)) ```
+
+    The helper imports `create_logged_task` from `src.core.tasks`, `run_and_finalize`
+    from `src.agents.master_cc`, `SlashDispatchResult` from `src.core.slash_commands`,
+    `CharlieBotConfig` from `src.core.config`, `SessionManager` from `src.core.sessions`,
+    and `SessionMetadata` from `src.core.models` — all already used elsewhere in `message_utils.py`
+    or trivially available. The helper is sync (returns None) because `create_logged_task`
+    already wraps the coroutine in an asyncio task with logging; no `await` is needed
+    at the call site.
+
+    Replace src/api/chat.py:95-105 (the `if dispatch.kind == ''prompt'':` block body,
+    keeping the `if` guard and the `return JSONResponse(...)` line) with: `dispatch_substituted_slash_prompt(cfg,
+    meta, dispatch, req.content, uploaded_files, session_mgr)`. Replace src/api/slash.py:184-193
+    (same body in the `if dispatch.kind == ''prompt'':` block) with: `dispatch_substituted_slash_prompt(cfg,
+    meta, dispatch, display_text, uploaded_files, session_mgr)`. Each call site retains
+    its caller-specific `persist_and_broadcast` of the user event (already done a
+    couple lines earlier in each function) and its caller-specific `return JSONResponse(...)`
+    on the line after the helper call. No behavior change — pure refactor.
+
+    Interaction with pending item #144: when #144 lands (extracts the full slash-interception
+    block in chat.send_message into `_try_handle_slash_command`), the chat-side call
+    site for this helper moves from `send_message` into `_try_handle_slash_command`
+    but the helper signature and the slash.py call site stay unchanged. The two items
+    are independent and can land in either order; if #144 lands first, the chat-side
+    edit here becomes a one-line change inside `_try_handle_slash_command`. If this
+    item lands first, #144''s WHAT/HOW description should be updated to reference
+    the helper instead of inlining the `create_logged_task(...)` block.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan reformatted
+    `src/api/sessions.py:tui_status_all` (dict-literal split) and `src/core/spawner.py:_build_worker_prompt`
+    (trailing-paren reflow); both were committed in the same run per the yapf rule
+    (commit def6fcd) and are NOT tracked as backlog items. `grep -rEn "TODO|FIXME|HACK|XXX"
+    src/ --include="*.py"` returns zero matches. `pyflakes src/` reports three findings
+    — the unused `e` in `core/sessions.py:135` (covered by pending #160), the unused
+    `e` in `core/sessions.py:488` (covered by pending #163), and the unused `WatchTarget`
+    import in `api/internal.py:14` (covered by pending #131 and #139). `pylint --disable=all
+    --enable=unused-variable,unused-argument,unused-import src/` reports the same
+    three findings plus the unused `cfg` in `core/scheduler.py:183` (covered by pending
+    #162), the unused `thread_mgr` argument in `core/review.py:27` (covered by pending
+    #156), and the two intentional argparse-required `args` parameters in `cli/backup.py:16,22`
+    (not actionable). `vulture src/ --min-confidence 80` reports only the Pydantic
+    `cls` validator parameter in `core/config.py:128`, a known false positive. `pylint
+    --disable=all --enable=duplicate-code src/` reports four R0801 candidates: (a)
+    the chat.py vs slash.py `create_logged_task(run_and_finalize(...))` block (THIS
+    ITEM); (b) `api/internal:81-86` vs `improve_command:417-422` — a 5-line `SpawnRequest(...)`
+    keyword-argument tail inside two different `create_logged_task` calls, not extractable
+    without dragging the surrounding `spawn_worker` call which differs between the
+    two sites; (c) `agents/backends/base:258-263` vs `core/codex_usage:59-64` — the
+    standard 5-line `if not line: continue; try: event = json.loads(line); except
+    json.JSONDecodeError as e:` NDJSON-parse preamble, too small and too generic to
+    warrant a named helper (premature abstraction); (d) `cli/delegate:21-26` vs `cli/improve:24-29`
+    — the 5-line argparse `--session` option declaration, also too small and the
+    surrounding parsers differ enough that a shared helper would mostly forward kwargs.
+    The >50-line function inventory in src/ this scan, after cross-referencing pending
+    items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153/#154/#158/#159/#162/#163/#164 (`_wait_for_quota_recovery`, `maybe_auto_name`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `get_thread_events`,
+    `_finalize_worker`, `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`,
+    `_archive_old_chat_events_sync`, `_populate_sidebar_state`, `delegate_task`),
+    surfaces no untriaged >50-line candidates this scan. Per the one-finding-per-scan
+    rule the duplication finding above is the single new code-health backlog entry
+    for the 2026-05-20T15:13Z scheduled scan; it edges out the other R0801 candidates
+    because the helper has a clear single-responsibility name worth its own concept
+    and the two call sites already have a documented history of needing in-lockstep
+    keyword-argument updates.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-05-20T15:13:36Z'
+  priority: low

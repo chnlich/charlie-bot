@@ -6138,9 +6138,10 @@
 
     '
   category: dead-code
-  status: approved
+  status: in_progress
   created: '2026-05-16T21:14:23Z'
   priority: low
+  in_progress_at: '2026-05-21T17:09:43Z'
 - id: '163'
   title: Drop the unused 'as e' binding in core/sessions._gc_old_threads_sync's broad
     except clause

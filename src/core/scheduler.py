@@ -180,7 +180,7 @@ class Scheduler:
     handler = TASK_HANDLERS.get(task_cfg.handler)
     if handler is None:
       raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
-    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
+    _, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
     try:
       result = await handler()

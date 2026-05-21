@@ -5926,10 +5926,10 @@
     `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
     `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
     `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`),
-    leaves no >50-line function not already targeted or rejected. The unused-`e`
-    pyflakes finding is the single fresh signal this scheduled scan surfaces that
-    is not already tracked. Per the one-finding-per-scan rule this is the single new
-    code-health backlog entry for the 2026-05-15T03:11Z scheduled scan.
+    leaves no >50-line function not already targeted or rejected. The unused-`e` pyflakes
+    finding is the single fresh signal this scheduled scan surfaces that is not already
+    tracked. Per the one-finding-per-scan rule this is the single new code-health
+    backlog entry for the 2026-05-15T03:11Z scheduled scan.
 
     '
   category: dead-code
@@ -5958,8 +5958,8 @@
     `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
     `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
     `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`),
-    or (c) borderline single-flow at 51-52L (`api/internal.delegate_task` 51L —
-    same character as the rejected `cli/delegate.main` 54L; `core/review.spawn_review_worker`
+    or (c) borderline single-flow at 51-52L (`api/internal.delegate_task` 51L — same
+    character as the rejected `cli/delegate.main` 54L; `core/review.spawn_review_worker`
     52L — already extracted by done item #154 into a thin orchestrator). A backlog
     grep for `run_tui_attachment` returns zero hits; this function has never been
     looked at by a prior scan.
@@ -5986,8 +5986,8 @@
     still accurately describes the orchestration role after the split.
 
     REFACTORING SAFETY — (1) Both helpers are module-private (underscore prefix) and
-    have no external callers — `run_tui_attachment` is the only entry point into
-    this PTY-attachment flow, called from the session WebSocket handler after subscription/catchup
+    have no external callers — `run_tui_attachment` is the only entry point into this
+    PTY-attachment flow, called from the session WebSocket handler after subscription/catchup
     (per the existing docstring). (2) `_setup_pty_attachment` preserves the exact
     failure semantics: same log event names (`tui_ensure_session_failed`, `tui_pty_spawn_failed`),
     same structured fields (`session_id`), same client-side `pty_exit` payload shape
@@ -6031,8 +6031,8 @@
     (116L, pending #125), `core/spawner.spawn_worker` (52L, rejected coherent-flow),
     `core/spawner._broadcast_completion` (53L, rejected coherent-flow), `core/review.build_review_prompt`
     (58L, rejected coherent-flow), `core/review.extract_review_context` (52L, pending
-    #153), `core/review.spawn_review_worker` (52L, post-#154 thin orchestrator —
-    borderline coherent-flow), `core/autonamer.maybe_auto_name` (62L, rejected coherent-flow),
+    #153), `core/review.spawn_review_worker` (52L, post-#154 thin orchestrator — borderline
+    coherent-flow), `core/autonamer.maybe_auto_name` (62L, rejected coherent-flow),
     `core/master_trigger.run_message_with_resume_recovery` (56L, rejected coherent-flow),
     `core/master_trigger.trigger_master` (54L, rejected coherent-flow; body-content
     pending #155), `cli/delegate.main` (54L, rejected coherent-flow), `agents/worker.run`
@@ -6057,72 +6057,71 @@
 - id: '162'
   title: Drop the unused 'cfg' local in core/scheduler._execute_handler_task to satisfy
     pylint W0612
-  description: 'WHY — The 2026-05-16T21:14Z scheduled code-health scan ran `yapf
-    --in-place --recursive src/` (applied two small fixes in `src/api/sessions.py`
-    and `src/core/spawner.py`, already committed separately per the yapf rule), `grep
-    -rE "TODO|FIXME|HACK|XXX" src/` (zero matches), `python -m pyflakes src/`, `pylint
-    --disable=all --enable=unused-argument,unused-variable,unused-import src/`, and
-    `vulture src/ --min-confidence 80`. The only fresh signal not already tracked
-    is `src/core/scheduler.py:183:4: W0612: Unused variable ''cfg''` inside `_execute_handler_task`.
-    The method unpacks `cfg, session_mgr, session = await self._prepare_task_execution(task_cfg,
-    initial_status="running")` at L183 but the body (L184-206) never reads `cfg` —
-    the handler is dispatched purely from `TASK_HANDLERS`, results are persisted
-    via `session_mgr.save_metadata(session)` and `session_mgr.persist_and_broadcast(session.id,
-    event)`, and there is no call site that needs the `CharlieBotConfig` return
-    value. Both sibling callers — `_execute_prompt_task` (L210) and `_execute_loop_task`
-    (L223) — DO use `cfg` (passed to `_spawn_scheduled_worker` at L217 and L246
-    respectively), so the helper signature returning `(cfg, session_mgr, session)`
-    is correct for those two paths; only the handler path leaves the first element
-    dead. This finding was previously noted-but-deferred in item #156''s non-duplication
+  description: 'WHY — The 2026-05-16T21:14Z scheduled code-health scan ran `yapf --in-place
+    --recursive src/` (applied two small fixes in `src/api/sessions.py` and `src/core/spawner.py`,
+    already committed separately per the yapf rule), `grep -rE "TODO|FIXME|HACK|XXX"
+    src/` (zero matches), `python -m pyflakes src/`, `pylint --disable=all --enable=unused-argument,unused-variable,unused-import
+    src/`, and `vulture src/ --min-confidence 80`. The only fresh signal not already
+    tracked is `src/core/scheduler.py:183:4: W0612: Unused variable ''cfg''` inside
+    `_execute_handler_task`. The method unpacks `cfg, session_mgr, session = await
+    self._prepare_task_execution(task_cfg, initial_status="running")` at L183 but
+    the body (L184-206) never reads `cfg` — the handler is dispatched purely from
+    `TASK_HANDLERS`, results are persisted via `session_mgr.save_metadata(session)`
+    and `session_mgr.persist_and_broadcast(session.id, event)`, and there is no call
+    site that needs the `CharlieBotConfig` return value. Both sibling callers — `_execute_prompt_task`
+    (L210) and `_execute_loop_task` (L223) — DO use `cfg` (passed to `_spawn_scheduled_worker`
+    at L217 and L246 respectively), so the helper signature returning `(cfg, session_mgr,
+    session)` is correct for those two paths; only the handler path leaves the first
+    element dead. This finding was previously noted-but-deferred in item #156''s non-duplication
     survey (the inventory there listed `_execute_handler_task` ''unpacked cfg local
-    at core/scheduler.py:183'' alongside the framework-required argparse/FastAPI
-    Depends parameters and the `_create_repoless_process.session_mgr` finding, with
-    the latter resolved by done item #159 — but the scheduler `cfg` local was never
-    promoted to its own backlog entry).
+    at core/scheduler.py:183'' alongside the framework-required argparse/FastAPI Depends
+    parameters and the `_create_repoless_process.session_mgr` finding, with the latter
+    resolved by done item #159 — but the scheduler `cfg` local was never promoted
+    to its own backlog entry).
 
     HOW — One-line edit. In `src/core/scheduler.py` change L183 from `cfg, session_mgr,
     session = await self._prepare_task_execution(task_cfg, initial_status="running")`
     to `_, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")`.
-    Do NOT touch the helper signature at L151-168 — both `_execute_prompt_task`
-    (L210) and `_execute_loop_task` (L223) still need the `cfg` return value to forward
-    into `_spawn_scheduled_worker`. Do NOT touch the L194 `except Exception as e:`
-    block — that `e` IS used at L195 and L200. Verify with `python -m pyflakes src/core/scheduler.py`
+    Do NOT touch the helper signature at L151-168 — both `_execute_prompt_task` (L210)
+    and `_execute_loop_task` (L223) still need the `cfg` return value to forward into
+    `_spawn_scheduled_worker`. Do NOT touch the L194 `except Exception as e:` block
+    — that `e` IS used at L195 and L200. Verify with `python -m pyflakes src/core/scheduler.py`
     (should return zero warnings) and `pylint --disable=all --enable=unused-variable
     src/` (the only remaining W0612 should be `src/core/sessions.py:134:4: ''e''`
     covered by pending #160).
 
     REFACTORING SAFETY — (1) `_underscore` is the standard idiom for ''this tuple
-    slot is intentionally discarded''; pylint and pyflakes both treat `_` as an
-    explicit don''t-care and will not flag it. (2) The bookkeeping side effects
-    of `_prepare_task_execution` (config reload via `self._reload_config()` at L157,
-    session metadata mutation at L162-167, persistence at L167) all still fire —
-    they are inside the helper and do not depend on whether the caller binds `cfg`.
-    (3) `_execute_handler_task` is called from `_execute_task` (L173) which dispatches
-    based on `task_cfg.handler`; there are no other call sites in src/ or tests/
-    (verified `grep -rn _execute_handler_task src/ tests/` returns only the def and
-    the dispatch line). (4) The handler-task path is exercised at runtime by handler-typed
-    scheduled tasks (e.g. the daily-backup handler registered in `TASK_HANDLERS`);
-    behavior is identical with `_` vs `cfg` because the binding is purely local. (5)
-    Do NOT extend the cleanup to `_execute_prompt_task` or `_execute_loop_task` —
-    their `cfg` bindings are LIVE and removing them would introduce a NameError at
-    the `_spawn_scheduled_worker(..., cfg, ...)` call site. (6) This is purely subtractive
-    — no helper extraction, no signature change, no log-event rename.
+    slot is intentionally discarded''; pylint and pyflakes both treat `_` as an explicit
+    don''t-care and will not flag it. (2) The bookkeeping side effects of `_prepare_task_execution`
+    (config reload via `self._reload_config()` at L157, session metadata mutation
+    at L162-167, persistence at L167) all still fire — they are inside the helper
+    and do not depend on whether the caller binds `cfg`. (3) `_execute_handler_task`
+    is called from `_execute_task` (L173) which dispatches based on `task_cfg.handler`;
+    there are no other call sites in src/ or tests/ (verified `grep -rn _execute_handler_task
+    src/ tests/` returns only the def and the dispatch line). (4) The handler-task
+    path is exercised at runtime by handler-typed scheduled tasks (e.g. the daily-backup
+    handler registered in `TASK_HANDLERS`); behavior is identical with `_` vs `cfg`
+    because the binding is purely local. (5) Do NOT extend the cleanup to `_execute_prompt_task`
+    or `_execute_loop_task` — their `cfg` bindings are LIVE and removing them would
+    introduce a NameError at the `_spawn_scheduled_worker(..., cfg, ...)` call site.
+    (6) This is purely subtractive — no helper extraction, no signature change, no
+    log-event rename.
 
-    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` applied two small
-    fixes (a dict-literal reformat in `src/api/sessions.py:tui_status_all` and an
-    end-paren reflow in `src/core/spawner.py:_build_worker_prompt`), committed separately
-    per the yapf rule; `grep -rE "TODO|FIXME|HACK|XXX" src/` returns zero matches;
-    `python -m pyflakes src/` reports exactly two warnings — the unused ''e'' in
-    `core/sessions.py:134` (covered by pending #160) and the unused `WatchTarget`
-    import in `api/internal.py:14` (covered by pending #131 and #139). `pylint --disable=all
-    --enable=unused-argument src/` reports only the already-tracked `core/review.finalize_review_chain.thread_mgr`
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` applied two small fixes
+    (a dict-literal reformat in `src/api/sessions.py:tui_status_all` and an end-paren
+    reflow in `src/core/spawner.py:_build_worker_prompt`), committed separately per
+    the yapf rule; `grep -rE "TODO|FIXME|HACK|XXX" src/` returns zero matches; `python
+    -m pyflakes src/` reports exactly two warnings — the unused ''e'' in `core/sessions.py:134`
+    (covered by pending #160) and the unused `WatchTarget` import in `api/internal.py:14`
+    (covered by pending #131 and #139). `pylint --disable=all --enable=unused-argument
+    src/` reports only the already-tracked `core/review.finalize_review_chain.thread_mgr`
     (covered by pending #156) and the two `cli/backup.py` argparse-required `args`
     parameters (intentional, not actionable). `pylint --disable=all --enable=unused-variable
     src/` reports exactly two warnings — `core/sessions.py:134 ''e''` (covered by
-    pending #160) and `core/scheduler.py:183 ''cfg''` (THIS ITEM). `vulture src/
-    --min-confidence 80` reports only the `cls` classmethod parameter in `core/config.py:128`,
-    a Pydantic-validator requirement and a known false positive. The >50-line function
-    inventory in src/ this scan, after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    pending #160) and `core/scheduler.py:183 ''cfg''` (THIS ITEM). `vulture src/ --min-confidence
+    80` reports only the `cls` classmethod parameter in `core/config.py:128`, a Pydantic-validator
+    requirement and a known false positive. The >50-line function inventory in src/
+    this scan, after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
     and the previously-excluded coherent-single-flow functions enumerated in items
     #153/#154/#158/#159 (`_wait_for_quota_recovery`, `maybe_auto_name`, `_resolve_worktree_start_point`,
     `parse_ndjson_tail`, `fork_session`, `get_thread_events`, `_finalize_worker`,
@@ -6139,7 +6138,7 @@
 
     '
   category: dead-code
-  status: pending
+  status: approved
   created: '2026-05-16T21:14:23Z'
   priority: low
 - id: '163'
@@ -6164,8 +6163,8 @@
     `src/api/sessions.py:tui_status_all` (dict-literal split) and `src/core/spawner.py:_build_worker_prompt`
     (trailing-paren reflow); both were committed in the same run per the yapf rule
     (commit 7181fe6) and are NOT tracked as backlog items. `grep -rE "TODO|FIXME|HACK|XXX"
-    src/` returns zero matches. `pyflakes src/` reports three findings — the two
-    unused `e` bindings in `core/sessions.py:135` (covered by pending #160) and `core/sessions.py:488`
+    src/` returns zero matches. `pyflakes src/` reports three findings — the two unused
+    `e` bindings in `core/sessions.py:135` (covered by pending #160) and `core/sessions.py:488`
     (THIS ITEM) plus the unused `WatchTarget` import in `api/internal.py:14` (covered
     by pending #131 and #139). `pylint --disable=all --enable=unused-variable src/`
     reports three warnings — `core/sessions.py:135` (covered by #160), `core/sessions.py:488`
@@ -6181,12 +6180,11 @@
     `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`, `spawn_worker`),
     leaves only `core/sessions._archive_old_chat_events_sync` (65 lines, two clean
     phases — partition lines by cutoff, then write archive + rewrite live file) as
-    an untriaged >50-line function. It is borderline but the partition pass is a
-    single coherent stream loop with multiple early-exit guards that resist clean
-    extraction without losing locality of the `split_reached` flag; defer to a future
-    scan if the function grows further. Per the one-finding-per-scan rule this is
-    the single new code-health backlog entry for the 2026-05-18T01:12Z scheduled
-    scan.
+    an untriaged >50-line function. It is borderline but the partition pass is a single
+    coherent stream loop with multiple early-exit guards that resist clean extraction
+    without losing locality of the `split_reached` flag; defer to a future scan if
+    the function grows further. Per the one-finding-per-scan rule this is the single
+    new code-health backlog entry for the 2026-05-18T01:12Z scheduled scan.
 
     '
   category: dead-code
@@ -6299,7 +6297,8 @@
     SessionMetadata,     dispatch: SlashDispatchResult,     display_content: str,     uploaded_files:
     list[dict],     session_mgr: SessionManager, ) -> None:   """Fire-and-forget master
     CC run for a substituted slash-command prompt.""" create_logged_task(       run_and_finalize(           cfg,           meta,           build_agent_input_content(dispatch.substituted_prompt,
-    uploaded_files),           session_mgr,           extra_claude_flags=dispatch.claude_code_flags,           skip_user_event=True,           display_content=display_content,           uploaded_files=uploaded_files)) ```
+    uploaded_files),           session_mgr,           extra_claude_flags=dispatch.claude_code_flags,           skip_user_event=True,           display_content=display_content,           uploaded_files=uploaded_files))
+    ```
 
     The helper imports `create_logged_task` from `src.core.tasks`, `run_and_finalize`
     from `src.agents.master_cc`, `SlashDispatchResult` from `src.core.slash_commands`,
@@ -6350,10 +6349,9 @@
     standard 5-line `if not line: continue; try: event = json.loads(line); except
     json.JSONDecodeError as e:` NDJSON-parse preamble, too small and too generic to
     warrant a named helper (premature abstraction); (d) `cli/delegate:21-26` vs `cli/improve:24-29`
-    — the 5-line argparse `--session` option declaration, also too small and the
-    surrounding parsers differ enough that a shared helper would mostly forward kwargs.
-    The >50-line function inventory in src/ this scan, after cross-referencing pending
-    items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    — the 5-line argparse `--session` option declaration, also too small and the surrounding
+    parsers differ enough that a shared helper would mostly forward kwargs. The >50-line
+    function inventory in src/ this scan, after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
     and the previously-excluded coherent-single-flow functions enumerated in items
     #153/#154/#158/#159/#162/#163/#164 (`_wait_for_quota_recovery`, `maybe_auto_name`,
     `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `get_thread_events`,

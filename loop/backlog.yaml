@@ -6373,3 +6373,99 @@
   status: pending
   created: '2026-05-20T15:13:36Z'
   priority: low
+- id: '166'
+  title: Extract _locate_claude_session_jsonl helper from maybe_auto_name_from_claude_ai_title
+    in core/autonamer.py
+  description: 'WHY — `src/core/autonamer.py:maybe_auto_name_from_claude_ai_title`
+    (L292-352, 61 body lines) is the only untriaged >50-line function in src/ this
+    scan. It was added by commit 1859ac0 on 2026-05-15 ("Add Claude ai-title TUI
+    autonaming") and post-dates the prior 2026-05-18 (#164) and 2026-05-20 (#165)
+    code-health scans, both of which only enumerated the original sibling function
+    `maybe_auto_name` (L248-289, now 42 lines after the #154 sanitize-helper extraction)
+    as the autonamer.py entry in their excluded long-function lists. As a result
+    the new claude-ai-title strategy slipped past the previous one-finding-per-scan
+    triages and now sits ~22% over the 50-line threshold. The function decomposes
+    cleanly into two coherent phases separated by a blank line in the source: (1)
+    L310-323 — locate the on-disk Claude jsonl by globbing `~/.claude/projects/*/<session_id>.jsonl`,
+    handling the zero-match early return, the single-match fast path, and the multi-match
+    `max(..., key=mtime)` tie-break with its OSError guard; (2) L325-352 — open
+    the jsonl, scan line-by-line for the first `{"type":"ai-title","aiTitle":<title>}`
+    event with per-line `json.JSONDecodeError` logging, guard against `OSError`/`UnicodeDecodeError`
+    on the file read, and call `_apply_name_to_session` with the session-number-prefixed
+    title. Phase (1) has a clear single-responsibility name worth its own concept
+    ("find the Claude CLI jsonl for a given session id") that is independent of
+    the autonaming flow and would also be reusable by any future caller that needs
+    to read state out of the Claude CLI''s per-project jsonl files (e.g. session
+    rewind from a Claude conversation, transcript export, debug tooling).
+
+    WHAT — Add a private synchronous helper at module scope in src/core/autonamer.py
+    immediately above `maybe_auto_name_from_claude_ai_title`:
+
+    ```python def _locate_claude_session_jsonl(session_id: str) -> Path | None:   """Locate
+    the Claude CLI jsonl file for a given session id, or None if no match."""   claude_projects
+    = Path.home() / ".claude/projects"   matches = list(claude_projects.glob(f"*/{session_id}.jsonl"))   if
+    not matches:     return None   if len(matches) == 1:     return matches[0]   try:     return
+    max(matches, key=lambda path: path.stat().st_mtime)   except OSError:     log.warning("claude_ai_title_stat_failed",
+    session_id=session_id, exc_info=True)     return None ```
+
+    Replace L310-323 of `maybe_auto_name_from_claude_ai_title` with:
+
+    ```python jsonl_path = _locate_claude_session_jsonl(session_id) if jsonl_path
+    is None:   return ```
+
+    After the extraction `maybe_auto_name_from_claude_ai_title` shrinks from 61
+    to ~48 body lines (cleanly under 50) and the jsonl-scanning loop reads as a
+    single straight-line "open → scan → apply" routine. The new helper is ~10 body
+    lines, has a clear single-responsibility name, and is independently testable
+    (no async, no I/O on the SessionManager, just filesystem glob + stat). No behavior
+    change — the helper preserves the exact current order of operations and the
+    same None-returning conditions (zero matches → None; stat failure on multi-match
+    → log and None) that currently cause `maybe_auto_name_from_claude_ai_title`
+    to `return` out early.
+
+    DEDUP RULE CHECK — Per the task spec ("extract a shared helper only if the
+    shared block is > 50 lines OR the helper has a clear, single-responsibility
+    name worth its own concept"), `_locate_claude_session_jsonl` qualifies on the
+    second clause: it expresses a single concrete contract ("given a session id,
+    return the path to its Claude CLI jsonl, or None") independent of the autonaming
+    flow that currently calls it.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan produced
+    no diff (last yapf-driven commit was def6fcd from the 2026-05-20 scan), so no
+    formatting commit was made. `grep -rEn "TODO|FIXME|HACK|XXX" src/ --include="*.py"`
+    returns zero matches. `pyflakes src/` reports three findings — the unused `e`
+    in `core/sessions.py:135` (covered by pending #160), the unused `e` in `core/sessions.py:488`
+    (covered by pending #163), and the unused `WatchTarget` import in `api/internal.py:14`
+    (covered by pending #131 and #139). `pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/` reports the same three findings plus the unused `thread_mgr` argument
+    in `core/review.py:27` (covered by pending #156) and the two intentional argparse-required
+    `args` parameters in `cli/backup.py:16,22` (not actionable). `vulture src/ --min-confidence
+    80` reports only the Pydantic `cls` validator parameter in `core/config.py:128`,
+    a known false positive. `pylint --disable=all --enable=duplicate-code src/`
+    reports the same four R0801 candidates the 2026-05-20 scan enumerated: (a)
+    `api/chat:95-103` vs `api/slash:183-191` `create_logged_task(run_and_finalize(...))`
+    block (covered by pending #165); (b) `api/internal:81-86` vs `improve_command:417-422`
+    SpawnRequest kwarg tail (rejected — surrounding `spawn_worker` call differs);
+    (c) `agents/backends/base:258-263` vs `core/codex_usage:59-64` NDJSON-parse
+    preamble (rejected — too small/generic, premature abstraction); (d) `cli/delegate:21-26`
+    vs `cli/improve:24-29` argparse `--session` option (rejected — too small and
+    surrounding parsers differ). The >50-line function inventory in src/ this scan,
+    after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153/#154/#158/#159/#162/#163/#164 (`_wait_for_quota_recovery`, `maybe_auto_name`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `get_thread_events`,
+    `_finalize_worker`, `_broadcast_completion`, `trigger_master`, `run_message_with_resume_recovery`,
+    `_wait_and_fire`, `_dir_listing_html`, `build_review_prompt`, `delegate.main`,
+    `_build_worker_prompt`, `slash.execute_command`, `build_session_view_data`,
+    `spawn_worker`, `_archive_old_chat_events_sync`, `_populate_sidebar_state`,
+    `delegate_task`), surfaces `core/autonamer.maybe_auto_name_from_claude_ai_title`
+    (61 lines, added 2026-05-15, untriaged by prior scans) as the single untriaged
+    candidate. Per the one-finding-per-scan rule the long-function finding above
+    is the single new code-health backlog entry for the 2026-05-21T21:12Z scheduled
+    scan.
+
+    '
+  category: refactoring
+  status: pending
+  created: '2026-05-21T21:12:34Z'
+  priority: low

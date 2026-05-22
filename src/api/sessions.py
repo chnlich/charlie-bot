@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from starlette.responses import Response
 
 from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager, require_session
-from src.api.message_utils import build_session_view_data, events_to_messages
+from src.api.message_utils import build_session_bootstrap_data, build_session_view_data, events_to_messages
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
     CreateSessionRequest,
@@ -35,6 +35,15 @@ router = APIRouter()
 
 def _default_backend_id(cfg: CharlieBotConfig) -> str:
   return cfg.backend_options[0].id if cfg.backend_options else "claude"
+
+
+def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
+  active_backend = meta.backend or _default_backend_id(cfg)
+  active_backend_opt = cfg.get_backend_option(active_backend)
+  return {
+      "active_backend": active_backend,
+      "active_backend_type": active_backend_opt.type if active_backend_opt else "",
+  }
 
 
 def _resolve_requested_backend(
@@ -295,6 +304,47 @@ async def get_session_view(
       "active_backend_type": active_backend_type,
       "has_more": view.has_more,
   }
+
+
+@router.get('/{session_id}/bootstrap')
+async def get_session_bootstrap(
+    session_id: str,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Return the minimal data needed to make one chat session usable."""
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  bootstrap = await build_session_bootstrap_data(session_id, session_mgr, tail_limit=200)
+  payload = {
+      "session": bootstrap.session.model_dump(mode="json"),
+      "messages": bootstrap.messages,
+      "pending_draft": bootstrap.pending_draft,
+      "event_count": bootstrap.total_event_count,
+      "has_more": bootstrap.has_more,
+  }
+  payload.update(_active_backend_payload(bootstrap.session, cfg))
+  return payload
+
+
+@router.get('/{session_id}/usage')
+async def get_session_usage(
+    session_id: str,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Return lazy session status and usage data for the active header."""
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  usage = await session_mgr.resolve_session_usage(session_id, meta)
+  payload = {
+      "session": meta.model_dump(mode="json"),
+      "usage": usage,
+  }
+  payload.update(_active_backend_payload(meta, cfg))
+  return payload
 
 
 @router.get('/{session_id}/events')

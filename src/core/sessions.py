@@ -26,7 +26,7 @@ from src.core.models import (
     utc_now,
 )
 from src.core.codex_usage import CodexUsageResolver
-from src.core.ndjson import append_ndjson, parse_ndjson_file, parse_ndjson_range, parse_ndjson_tail
+from src.core.ndjson import append_ndjson, count_ndjson_lines, parse_ndjson_file, parse_ndjson_range, parse_ndjson_tail
 from src.core.streaming import streaming_manager
 
 # Raw event types whose render content is now produced by the per-session
@@ -779,6 +779,16 @@ class SessionManager:
     """
     events, total, has_more = parse_ndjson_tail(self._chat_events_path(session_id), limit)
     return events, total, has_more
+
+  def get_chat_event_count_sync(self, session_id: str, session_meta: SessionMetadata | None = None) -> int:
+    """Return the current global chat event count without parsing event payloads."""
+    if session_meta is not None:
+      archive_offset = session_meta.archive_offset
+    else:
+      archive_offset = self._read_archive_offset_sync(session_id)
+    if session_id in self._events_cache:
+      return archive_offset + len(self._events_cache[session_id])
+    return archive_offset + count_ndjson_lines(self._chat_events_path(session_id))
 
   def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:
     """Load events in GLOBAL index range [start, end). Returns (events, has_more).

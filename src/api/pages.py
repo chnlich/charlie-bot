@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
-from src.api.message_utils import build_session_view_data
+from src.api.deps import get_session_manager, get_thread_manager
+from src.api.message_utils import build_session_bootstrap_data
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
@@ -143,7 +143,7 @@ async def index(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Render the full page. All data loaded here."""
+  """Render the full page with only critical active-session data."""
   load_errors: list[str] = []
   try:
     sessions = await session_mgr.list_sessions(
@@ -160,10 +160,10 @@ async def index(
   active_session = None
   threads = []
   triggers = []
-  raw_events: list[dict] = []
   session_usage = None
   pending_draft: dict | None = None
   event_count = 0
+  session_bootstrap: dict | None = None
   if session:
     try:
       active_session = await session_mgr.get_session(session)
@@ -172,20 +172,27 @@ async def index(
 
     if active_session:
       try:
-        view = await build_session_view_data(session, session_mgr, thread_mgr)
-        raw_events = view.raw_events
-        threads = view.threads
-        session_usage = view.usage
-        pending_draft = view.pending_draft
-        event_count = view.total_event_count or len(raw_events)
+        bootstrap = await build_session_bootstrap_data(session, session_mgr)
+        active_session = bootstrap.session
+        pending_draft = bootstrap.pending_draft
+        event_count = bootstrap.total_event_count
+        for sidebar_session in sessions:
+          if sidebar_session.id == session:
+            sidebar_session.has_unread = False
+        active_backend = active_session.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
+        active_backend_opt = cfg.get_backend_option(active_backend)
+        session_bootstrap = {
+            "session": active_session.model_dump(mode="json"),
+            "messages": bootstrap.messages,
+            "pending_draft": bootstrap.pending_draft,
+            "event_count": bootstrap.total_event_count,
+            "active_backend": active_backend,
+            "active_backend_type": active_backend_opt.type if active_backend_opt else "",
+            "has_more": bootstrap.has_more,
+        }
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")
-      try:
-        trigger_mgr = get_trigger_manager()
-        triggers = await trigger_mgr.list_triggers(session)
-      except Exception:
-        log.exception("load_triggers_failed", session_id=session)
   elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
@@ -207,6 +214,7 @@ async def index(
           "pt_tz": _PT_TZ,
           "event_count": event_count,
           "session_usage": session_usage,
+          "session_bootstrap": session_bootstrap,
           "backend_options": cfg.backend_options,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,

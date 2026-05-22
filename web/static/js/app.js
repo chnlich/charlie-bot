@@ -18,49 +18,20 @@ document.addEventListener('DOMContentLoaded', () => {
   if (urlQuery) {
     const searchInput = document.getElementById('sidebar-search');
     if (searchInput) { searchInput.value = urlQuery; handleSidebarSearch(urlQuery); }
-  } else if (['all', 'starred', 'archived', 'scheduled'].includes(urlFilter)) {
+  } else if (['starred', 'archived', 'scheduled'].includes(urlFilter)) {
     switchSidebarFilter(urlFilter);
   } else {
-    switchSidebarFilter('all');
+    setSidebarFilterPill('all');
   }
   updateRelativeTimes();
 
-  // Initial chat render replaces the deleted Jinja loop with a /view fetch so
-  // JS-only renderers (HTML artifacts, etc.) run on refresh, not just on WS deltas.
-  if (SESSION_ID) {
-    (async () => {
-      try {
-        const res = await fetch('/api/sessions/' + SESSION_ID + '/view');
-        if (!res.ok) throw new Error(String(res.status));
-        const data = await res.json();
-        const container = document.getElementById('messages');
-        if (!container) return;
-        sessionHasMore = !!data.has_more;
-        sessionEarliestEventIndex = Infinity;
-        for (const m of (data.messages || [])) {
-          if (m.event_index != null && m.event_index < sessionEarliestEventIndex) {
-            sessionEarliestEventIndex = m.event_index;
-          }
-        }
-        sessionLoadingMore = false;
-        renderMessagesIntoContainer(container, data.messages || [], SESSION_ID);
-        if (sessionHasMore) {
-          const sentinel = document.createElement('div');
-          sentinel.id = 'load-more-sentinel';
-          sentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
-          sentinel.innerHTML = 'Loading older messages&hellip;';
-          container.prepend(sentinel);
-        }
-        if (data.pending_draft && data.pending_draft.content) {
-          showStreaming(data.pending_draft.content);
-        } else {
-          hideStreaming();
-        }
-        container.scrollTop = container.scrollHeight;
-      } catch (err) {
-        console.warn('Initial session view fetch failed:', err);
-      }
-    })();
+  // Initial chat render uses the server-embedded minimal bootstrap so refresh
+  // and SPA switches share the same renderer without a duplicate /view fetch.
+  if (SESSION_ID && SESSION_BOOTSTRAP) {
+    renderSessionView(SESSION_BOOTSTRAP);
+    sessionUnread[SESSION_ID] = false;
+    const unreadDot = document.getElementById('unread-' + SESSION_ID);
+    if (unreadDot) unreadDot.classList.add('hidden');
   }
 
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.
@@ -131,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, statusPollMs);
   }
   scheduleStatusPoll();
-  workersPollInterval = setInterval(pollWorkers, 3000);
+  scheduleLazySessionDataLoad();
 
   // Reconnect immediately on tab becoming visible (mobile Chrome background kills WS)
   document.addEventListener('visibilitychange', () => {

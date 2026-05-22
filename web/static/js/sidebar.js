@@ -101,6 +101,9 @@ let activeSessionViewPollInterval = null;
 let activeSessionViewPollInflight = false;
 const ACTIVE_SESSION_VIEW_POLL_MS = 3000;
 let sessionActionModalState = null;
+let workersLoadedForSession = null;
+let workersLoadInflightForSession = null;
+let lazySessionDataTimer = null;
 
 function getDefaultBackendId() {
   const backendIds = Object.keys(BACKEND_OPTIONS || {});
@@ -124,6 +127,51 @@ function updateActiveBackendBadges() {
 
   const inputModelBadge = document.getElementById('input-model-badge');
   if (inputModelBadge) inputModelBadge.textContent = activeBackendLabel;
+}
+
+function scheduleIdleTask(fn) {
+  if (typeof requestIdleCallback === 'function') {
+    return requestIdleCallback(fn, {timeout: 1500});
+  }
+  return setTimeout(fn, 0);
+}
+
+function resetLazySessionData() {
+  if (lazySessionDataTimer) {
+    if (typeof cancelIdleCallback === 'function') cancelIdleCallback(lazySessionDataTimer);
+    else clearTimeout(lazySessionDataTimer);
+    lazySessionDataTimer = null;
+  }
+  if (workersPollInterval) {
+    clearInterval(workersPollInterval);
+    workersPollInterval = null;
+  }
+  workersLoadedForSession = null;
+  workersLoadInflightForSession = null;
+  if (typeof stopAllThreadPolls === 'function') stopAllThreadPolls();
+  if (typeof loadedThreads !== 'undefined') loadedThreads.clear();
+}
+
+function scheduleLazySessionDataLoad() {
+  if (!SESSION_ID || lazySessionDataTimer) return;
+  lazySessionDataTimer = scheduleIdleTask(() => {
+    lazySessionDataTimer = null;
+    pollActiveSessionView({force: true});
+    ensureWorkersLoadedForActiveSession();
+  });
+}
+
+function buildEmptySessionBootstrap(session) {
+  const backend = session.backend || getDefaultBackendId();
+  return {
+    session,
+    messages: [],
+    pending_draft: null,
+    event_count: session.archive_offset || 0,
+    active_backend: backend,
+    active_backend_type: BACKEND_TYPES ? (BACKEND_TYPES[backend] || '') : '',
+    has_more: false,
+  };
 }
 
 async function switchSession(sessionId) {
@@ -154,6 +202,7 @@ async function switchSession(sessionId) {
   // Stop thinking indicator
   if (masterThinking) stopThinking();
   stopActiveSessionViewPolling();
+  resetLazySessionData();
 
   // Clean up transient UI state from previous session
   resetVoiceState();
@@ -171,14 +220,14 @@ async function switchSession(sessionId) {
   pendingUserMsg = false;
   hideStreaming();
 
-  // Fetch session view data
+  // Fetch critical session bootstrap data
   let data;
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/view');
+    const res = await fetch('/api/sessions/' + sessionId + '/bootstrap');
     if (!res.ok) throw new Error(res.status);
     data = await res.json();
   } catch (err) {
-    console.error('switchSession fetch failed:', err);
+    console.error('switchSession bootstrap fetch failed:', err);
     switching = false;
     location.href = '/?session=' + sessionId;
     return;
@@ -192,7 +241,7 @@ async function switchSession(sessionId) {
   DRAFT_KEY = 'charliebot-draft-' + sessionId;
   THINKING_SINCE = data.session.thinking_since || null;
   eventCursor = data.event_count;
-  usageTotalCost = data.usage ? (data.usage.total_cost_usd || 0) : 0;
+  usageTotalCost = 0;
 
   // Update URL
   history.pushState({session: sessionId}, '', '/?session=' + sessionId);
@@ -227,20 +276,14 @@ async function switchSession(sessionId) {
   pollSessionStatus();
   ensureActiveSessionViewPolling();
 
-  // Restart workers poll for the new session
-  if (workersPollInterval) clearInterval(workersPollInterval);
-  pollWorkers();
-  workersPollInterval = setInterval(pollWorkers, 3000);
-
   // Reset lazy-load state
   _backlogLoaded = false;
-  stopAllThreadPolls();
-  loadedThreads.clear();
+  scheduleLazySessionDataLoad();
 }
 
 function renderSessionView(data) {
   const session = data.session;
-  const messages = data.messages;
+  const messages = data.messages || [];
   setActiveBackendId(data.active_backend);
   setActiveRoundRatings(session.round_ratings || {});
   const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';
@@ -276,7 +319,7 @@ function renderSessionView(data) {
   if (evLink) evLink.href = '/sessions/' + session.id + '/events';
 
   // Update usage
-  renderUsageFromData(data.usage);
+  renderUsageFromData(data.usage || null);
 
   // Build message HTML
   const container = document.getElementById('messages');
@@ -303,7 +346,7 @@ function renderSessionView(data) {
   container.scrollTop = container.scrollHeight;
 
   // Render workers tab
-  renderWorkersTab(data.threads, session.id, data.triggers || []);
+  renderWorkersTab(data.threads || [], session.id, data.triggers || []);
 
   updateWorkersTabBadge();
 
@@ -569,13 +612,14 @@ function ensureActiveSessionViewPolling() {
   activeSessionViewPollInterval = setInterval(pollActiveSessionView, ACTIVE_SESSION_VIEW_POLL_MS);
 }
 
-async function pollActiveSessionView() {
-  if (activeSessionViewPollInflight || !SESSION_ID || (!masterThinking && !THINKING_SINCE)) return;
+async function pollActiveSessionView(opts) {
+  const force = opts && opts.force;
+  if (activeSessionViewPollInflight || !SESSION_ID || (!force && !masterThinking && !THINKING_SINCE)) return;
 
   const pollSessionId = SESSION_ID;
   activeSessionViewPollInflight = true;
   try {
-    const res = await fetch('/api/sessions/' + pollSessionId + '/view');
+    const res = await fetch('/api/sessions/' + pollSessionId + '/usage');
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     if (pollSessionId !== SESSION_ID) return;
@@ -647,9 +691,51 @@ function pollSessionStatus() {
 // Poll-based workers tab updates (replaces WS-driven addWorkerCard/updateWorkerStatus)
 let workersPollInterval = null;
 
+function renderWorkersListItems(items, sessionId) {
+  const threads = [];
+  const triggers = [];
+  for (const item of items || []) {
+    if (item.type === 'trigger') triggers.push(item);
+    else threads.push(item);
+  }
+  renderWorkersTab(threads, sessionId, triggers);
+  updateWorkersTabBadge();
+}
+
+function restartWorkersPolling() {
+  if (workersPollInterval) clearInterval(workersPollInterval);
+  workersPollInterval = setInterval(pollWorkers, 3000);
+}
+
+async function ensureWorkersLoadedForActiveSession(opts) {
+  const force = opts && opts.force;
+  const pollSessionId = SESSION_ID;
+  if (!pollSessionId) return;
+  if (!force && workersLoadedForSession === pollSessionId) return;
+  if (workersLoadInflightForSession === pollSessionId) return;
+  workersLoadInflightForSession = pollSessionId;
+  try {
+    const res = await fetch('/api/threads/' + pollSessionId + '/list');
+    if (!res.ok) throw new Error(res.status);
+    const items = await res.json();
+    if (pollSessionId !== SESSION_ID) return;
+    renderWorkersListItems(items || [], pollSessionId);
+    workersLoadedForSession = pollSessionId;
+    restartWorkersPolling();
+  } catch (err) {
+    console.error('loadWorkers failed:', err);
+  } finally {
+    if (workersLoadInflightForSession === pollSessionId) workersLoadInflightForSession = null;
+  }
+}
+
 function pollWorkers() {
   const pollSessionId = SESSION_ID;
   if (!pollSessionId) return;
+  if (workersLoadedForSession !== pollSessionId) {
+    ensureWorkersLoadedForActiveSession({force: true});
+    return;
+  }
   fetch('/api/threads/' + pollSessionId + '/list')
     .then(r => r.ok ? r.json() : null)
     .then(items => {
@@ -935,16 +1021,61 @@ async function createSession() {
   try {
     const backendSel = document.getElementById('new-session-backend');
     const backend = backendSel ? backendSel.value : undefined;
-    // Debug logging
-    console.log('Creating session with backend:', backend, 'select element:', backendSel);
     const res = await fetch('/api/sessions/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ backend }),
     });
+    if (!res.ok) throw new Error(`Create session failed: ${res.status}`);
     const data = await res.json();
-    console.log('Session created:', data.id, 'backend:', data.backend);
-    location.href = '/?session=' + data.id;
+    if (!SESSION_ID) {
+      location.href = '/?session=' + data.id;
+      return;
+    }
+
+    switching = true;
+    ++switchGeneration;
+    if (DRAFT_KEY) {
+      const input = document.getElementById('msg-input');
+      const draft = input ? input.value : '';
+      if (draft) localStorage.setItem(DRAFT_KEY, draft);
+      else localStorage.removeItem(DRAFT_KEY);
+    }
+    if (masterThinking) stopThinking();
+    stopActiveSessionViewPolling();
+    resetLazySessionData();
+    resetVoiceState();
+    uploadedFiles = [];
+    renderFileChips();
+    hideSlashPopup();
+    disconnectWS();
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    catchupDone = false;
+    pendingUserMsg = false;
+    hideStreaming();
+
+    const bootstrap = buildEmptySessionBootstrap(data);
+    SESSION_ID = data.id;
+    DRAFT_KEY = 'charliebot-draft-' + data.id;
+    THINKING_SINCE = data.thinking_since || null;
+    eventCursor = bootstrap.event_count;
+    usageTotalCost = 0;
+    history.pushState({session: data.id}, '', '/?session=' + data.id);
+    renderSessionView(bootstrap);
+    reconnectDelay = 1000;
+    connectWS();
+    switching = false;
+
+    const input = document.getElementById('msg-input');
+    if (input) {
+      input.value = '';
+      autoResize(input);
+      input.focus();
+    }
+    setSidebarFilterPill('all');
+    updateSidebarHighlight(data.id);
+    setTimeout(() => switchSidebarFilter('all'), 0);
+    scheduleLazySessionDataLoad();
   } catch (err) {
     console.error('Create session failed:', err);
   }
@@ -1066,9 +1197,8 @@ function confirmDeletePermanently(sessionId) {
 // ---------------------------------------------------------------------------
 let currentFilter = 'all';
 
-function switchSidebarFilter(filter) {
+function setSidebarFilterPill(filter) {
   currentFilter = filter;
-  // Update pill styles
   document.querySelectorAll('.filter-pill').forEach(btn => {
     btn.classList.remove('bg-blue-600/20', 'text-blue-300');
     btn.classList.add('text-slate-400');
@@ -1078,6 +1208,12 @@ function switchSidebarFilter(filter) {
     active.classList.add('bg-blue-600/20', 'text-blue-300');
     active.classList.remove('text-slate-400');
   }
+  const addBtn = document.getElementById('cron-add-btn');
+  if (addBtn) addBtn.classList.toggle('hidden', filter !== 'scheduled');
+}
+
+function switchSidebarFilter(filter) {
+  setSidebarFilterPill(filter);
   // Fetch sessions for this filter
   const urls = {
     all: '/api/sessions/',
@@ -1085,8 +1221,6 @@ function switchSidebarFilter(filter) {
     archived: '/api/sessions/archived',
     scheduled: '/api/sessions/scheduled',
   };
-  const addBtn = document.getElementById('cron-add-btn');
-  if (addBtn) addBtn.classList.toggle('hidden', filter !== 'scheduled');
   fetch(urls[filter])
     .then(res => res.json())
     .then(sessions => renderSessionList(sessions, filter))

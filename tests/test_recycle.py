@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.api.message_utils import build_session_view_data
+from src.api.message_utils import build_session_bootstrap_data, build_session_view_data
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadMetadata, ThreadStatus
 from src.core.sessions import SessionManager
@@ -215,3 +215,20 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
   assert tail_view.total_event_count == 8
   assert tail_view.has_more is True
   assert [m["event_index"] for m in tail_view.messages] == [6, 7]
+
+
+@pytest.mark.asyncio
+async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  events = [{"type": "user", "content": f"e{i}", "timestamp": f"2026-05-10T00:0{i}:00Z"} for i in range(4)]
+  _append_events(mgr.get_chat_events_path(session.id), events)
+
+  bootstrap = await build_session_bootstrap_data(session.id, mgr, tail_limit=2)
+
+  assert bootstrap.session.id == session.id
+  assert bootstrap.total_event_count == 4
+  assert bootstrap.has_more is True
+  assert [m["content"] for m in bootstrap.messages] == ["e2", "e3"]
+  assert [m["event_index"] for m in bootstrap.messages] == [2, 3]

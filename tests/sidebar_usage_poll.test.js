@@ -65,6 +65,7 @@ function createElement(overrides = {}) {
     remove() {
       this.removed = true;
     },
+    focus() {},
     setAttribute(name, value) {
       this[name] = value;
     },
@@ -122,7 +123,7 @@ function buildContext(overrides = {}) {
     fetch: async (url, opts = {}) => {
       fetchCalls.push(url);
       fetchRequests.push({url, opts});
-      if (url.endsWith('/view')) {
+      if (url.endsWith('/usage')) {
         return {
           ok: true,
           async json() {
@@ -245,7 +246,7 @@ function buildSessionActionElements() {
   ]);
 }
 
-test('pollActiveSessionView refreshes usage from the session view endpoint', async () => {
+test('pollActiveSessionView refreshes usage from the lazy usage endpoint', async () => {
   const {context, fetchCalls} = buildContext();
   let renderedUsage = null;
 
@@ -257,7 +258,7 @@ test('pollActiveSessionView refreshes usage from the session view endpoint', asy
 
   await context.pollActiveSessionView();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/session-a/view']);
+  assert.deepEqual(fetchCalls, ['/api/sessions/session-a/usage']);
   assert.deepEqual(renderedUsage, {
     context_tokens: 49179,
     context_limit: 258400,
@@ -529,6 +530,47 @@ test('refreshTuiDots updates dot classes, titles, and Stop button visibility', (
   context.SESSION_ID = 'idle';
   context.refreshTuiDots();
   assert.equal(stopBtn.classList.contains('hidden'), false);
+});
+
+test('createSession switches open chat through SPA state without full reload', async () => {
+  const input = createElement({value: 'old draft'});
+  const backendSelect = createElement({tagName: 'SELECT', value: 'codex-o3'});
+  const {context, fetchRequests} = buildContext({
+    ACTIVE_BACKEND_ID: 'codex-o3',
+    BACKEND_TYPES: {'codex-o3': 'codex'},
+    elements: new Map([
+      ['msg-input', input],
+      ['new-session-backend', backendSelect],
+    ]),
+  });
+  let rendered = null;
+  let pushedUrl = null;
+  let connected = false;
+
+  context.renderSessionView = (data) => { rendered = data; };
+  context.history.pushState = (_state, _title, url) => { pushedUrl = url; };
+  context.connectWS = () => { connected = true; };
+
+  await context.createSession();
+
+  assert.equal(fetchRequests[0].url, '/api/sessions/');
+  assert.deepEqual(JSON.parse(fetchRequests[0].opts.body), {backend: 'codex-o3'});
+  assert.equal(context.location.href, '');
+  assert.equal(context.SESSION_ID, 'session-b');
+  assert.equal(context.DRAFT_KEY, 'charliebot-draft-session-b');
+  assert.equal(context.eventCursor, 0);
+  assert.equal(pushedUrl, '/?session=session-b');
+  assert.equal(connected, true);
+  assert.equal(input.value, '');
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), {
+    session: {id: 'session-b', backend: 'codex-o3'},
+    messages: [],
+    pending_draft: null,
+    event_count: 0,
+    active_backend: 'codex-o3',
+    active_backend_type: 'codex',
+    has_more: false,
+  });
 });
 
 test('startTuiStatusPolling polls TUI status every three seconds', () => {

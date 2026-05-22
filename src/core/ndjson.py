@@ -26,6 +26,17 @@ def parse_ndjson_file(path: Path) -> list[dict]:
   return events
 
 
+def count_ndjson_lines(path: Path) -> int:
+  """Return the number of persisted NDJSON lines without parsing JSON."""
+  if not path.exists():
+    return 0
+  count = 0
+  with open(path, "rb") as f:
+    for _ in f:
+      count += 1
+  return count
+
+
 def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bool]:
   """Read the last *limit* lines from an NDJSON file using seek-from-end.
 

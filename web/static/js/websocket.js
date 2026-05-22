@@ -186,9 +186,9 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     else updateSpinner();
   } else if (t === 'result') {
     updateUsageDisplay(ev);
-    // Codex result events carry translated usage; refresh from session view
+    // Codex result events carry translated usage; refresh from the lazy usage endpoint
     // immediately so fast turns do not leave the header on stale values.
-    pollActiveSessionView();
+    pollActiveSessionView({force: true});
   } else if (t === 'tex_edit_proposed') {
     showDiffModal();
   } else if (t === 'ext_usage') {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from server import _replay_aggregated_catchup
+from server import _replay_aggregated_catchup, _send_session_catchup
 
 
 class _FakeWebSocket:
@@ -12,6 +12,21 @@ class _FakeWebSocket:
 
   async def send_json(self, payload: dict) -> None:
     self.sent.append(payload)
+
+
+class _CountOnlySessionManager:
+  def __init__(self, count: int) -> None:
+    self.count = count
+    self.full_load_called = False
+
+  def get_chat_event_count_sync(self, session_id: str, meta) -> int:
+    assert session_id == "s"
+    assert meta.archive_offset == 5
+    return self.count
+
+  def load_chat_events_sync(self, session_id: str) -> list[dict]:
+    self.full_load_called = True
+    raise AssertionError("current cursor must not trigger full replay")
 
 
 @pytest.mark.asyncio
@@ -100,3 +115,17 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
               },
       }
   ]
+
+
+@pytest.mark.asyncio
+async def test_session_catchup_fast_skips_when_cursor_is_current() -> None:
+  ws = _FakeWebSocket()
+  mgr = _CountOnlySessionManager(count=7)
+  meta = type("Meta", (), {"archive_offset": 5})()
+
+  sent, total = await _send_session_catchup(ws, mgr, "s", cursor=7, meta=meta)
+
+  assert sent == 0
+  assert total == 7
+  assert ws.sent == []
+  assert mgr.full_load_called is False

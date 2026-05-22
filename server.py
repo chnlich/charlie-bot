@@ -180,23 +180,15 @@ async def session_websocket(websocket: WebSocket, session_id: str):
   try:
     session_mgr = get_session_manager()
     meta = await session_mgr.get_session(session_id)
-    event_index_offset = meta.archive_offset if meta else 0
     try:
-      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-      sent = await _replay_aggregated_catchup(
-          websocket,
-          events,
-          cursor,
-          session_id,
-          event_index_offset=event_index_offset,
-      )
+      sent, total_event_count = await _send_session_catchup(websocket, session_mgr, session_id, cursor, meta)
       await websocket.send_json({"type": "catchup_complete"})
       log.debug(
-        "session_ws_catchup_sent",
-        session_id=session_id,
-        cursor=cursor,
-        total=len(events),
-        sent=sent,
+          "session_ws_catchup_sent",
+          session_id=session_id,
+          cursor=cursor,
+          total=total_event_count,
+          sent=sent,
       )
     except Exception as e:
       log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
@@ -212,6 +204,36 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe("sidebar", websocket)
     log.info("session_ws_disconnected", session_id=session_id)
+
+
+async def _send_session_catchup(
+    websocket: WebSocket,
+    session_mgr,
+    session_id: str,
+    cursor: int,
+    meta,
+) -> tuple[int, int]:
+  """Send catchup frames, fast-skipping replay when the client cursor is current."""
+  event_index_offset = meta.archive_offset if meta else 0
+  total_event_count: int | None
+  try:
+    total_event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
+  except Exception as e:
+    log.warning("session_ws_event_count_failed", session_id=session_id, error=str(e))
+    total_event_count = None
+
+  if total_event_count is not None and cursor >= total_event_count:
+    return 0, total_event_count
+
+  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  sent = await _replay_aggregated_catchup(
+      websocket,
+      events,
+      cursor,
+      session_id,
+      event_index_offset=event_index_offset,
+  )
+  return sent, event_index_offset + len(events)
 
 
 async def _replay_aggregated_catchup(

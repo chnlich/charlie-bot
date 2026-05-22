@@ -11,6 +11,7 @@ from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator, extract_text_from_message, extract_tool_result_text
 
 if TYPE_CHECKING:
+  from src.core.models import SessionMetadata
   from src.core.models import ThreadMetadata
   from src.core.sessions import SessionManager
   from src.core.threads import ThreadManager
@@ -29,7 +30,9 @@ __all__ = [
     "build_user_event",
     "strip_attached_files_block",
     "normalize_user_message_event",
+    "SessionBootstrapData",
     "SessionViewData",
+    "build_session_bootstrap_data",
     "build_session_view_data",
     "events_to_messages",
     "events_to_view",
@@ -107,6 +110,16 @@ def normalize_user_message_event(ev: dict) -> dict:
 
 
 @dataclass
+class SessionBootstrapData:
+  """Critical data needed to make one chat session usable."""
+  session: 'SessionMetadata'
+  messages: list[dict]
+  pending_draft: dict | None = None
+  total_event_count: int = 0
+  has_more: bool = False
+
+
+@dataclass
 class SessionViewData:
   """Data produced by the load-events → messages → usage → mark-read pipeline."""
   raw_events: list[dict]
@@ -116,6 +129,39 @@ class SessionViewData:
   pending_draft: dict | None = None
   total_event_count: int | None = None
   has_more: bool = False
+
+
+async def build_session_bootstrap_data(
+    session_id: str,
+    session_mgr: 'SessionManager',
+    *,
+    tail_limit: int = 200,
+) -> SessionBootstrapData:
+  """Load the minimal session data needed for first paint or SPA switching."""
+  events_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, tail_limit)
+  session_task = session_mgr.get_session(session_id)
+  events_result, session_meta = await asyncio.gather(events_task, session_task)
+  if session_meta is None:
+    raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
+
+  tail_events, total_count, has_more = events_result
+  offset = session_meta.archive_offset + total_count - len(tail_events)
+  messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
+
+  try:
+    read_meta = await session_mgr.mark_read(session_id)
+    if read_meta is not None:
+      session_meta = read_meta
+  except Exception:
+    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+
+  return SessionBootstrapData(
+      session=session_meta,
+      messages=messages,
+      pending_draft=pending_draft,
+      total_event_count=session_meta.archive_offset + total_count,
+      has_more=has_more or session_meta.archive_offset > 0,
+  )
 
 
 async def build_session_view_data(
@@ -153,6 +199,7 @@ async def build_session_view_data(
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
     raw_events = tail_events
     total_event_count = session_meta.archive_offset + total_count
+    has_more = has_more or session_meta.archive_offset > 0
   else:
     raw_events = events_result
     total_event_count = session_meta.archive_offset + len(raw_events)

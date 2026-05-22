@@ -38,6 +38,7 @@
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
     let usageTotalCost = {{ session_usage.total_cost_usd if session_usage else 0 }};
+    const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
     const BACKEND_OPTIONS = {
       {% for opt in backend_options %}
       {{ opt.id|tojson }}: {{ opt.label|tojson }},

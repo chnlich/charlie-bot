@@ -54,6 +54,10 @@ function switchTab(tab) {
     backlogPanel.refresh();
   }
 
+  if (tab === 'workers' && typeof ensureWorkersLoadedForActiveSession === 'function') {
+    ensureWorkersLoadedForActiveSession();
+  }
+
   // Highlight active tab button
   allTabs.forEach(t => {
     const btn = document.getElementById('btn-' + t);

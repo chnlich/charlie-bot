@@ -96,15 +96,16 @@ async def test_index_renders_pending_trigger_indicator(monkeypatch: pytest.Monke
       pending_trigger_count=2,
   )
 
-  async def fake_build_session_view_data(*args, **kwargs) -> SimpleNamespace:
-    return SimpleNamespace(raw_events=[], messages=[], threads=[], usage=None)
+  async def fake_build_session_bootstrap_data(*args, **kwargs) -> SimpleNamespace:
+    return SimpleNamespace(
+        session=session,
+        messages=[],
+        pending_draft=None,
+        total_event_count=0,
+        has_more=False,
+    )
 
-  class FakeTriggerManager:
-    async def list_triggers(self, session_id: str) -> list[object]:
-      return []
-
-  monkeypatch.setattr(pages, "build_session_view_data", fake_build_session_view_data)
-  monkeypatch.setattr(pages, "get_trigger_manager", lambda: FakeTriggerManager())
+  monkeypatch.setattr(pages, "build_session_bootstrap_data", fake_build_session_bootstrap_data)
 
   response = await pages.index(
       request=_build_request(),

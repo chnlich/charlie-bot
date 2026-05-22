@@ -6373,3 +6373,79 @@
   status: pending
   created: '2026-05-20T15:13:36Z'
   priority: low
+- id: '166'
+  title: Drop the unused thread_mgr Depends parameter from api/pages.index and prune
+    its now-orphan imports
+  description: 'WHY — `pyflakes src/` and `pylint --disable=all --enable=unused-argument
+    src/` both flag a new code-health regression in src/api/pages.py:139-145. The `index`
+    route handler still declares `thread_mgr: ThreadManager = Depends(get_thread_manager)`
+    on L143, but commit 30f13e5 (`Optimize session bootstrap latency`) rewrote the
+    inner active-session-loading block (L173-195) to call `build_session_bootstrap_data(session,
+    session_mgr)` instead of the previous `build_session_view_data(session, session_mgr,
+    thread_mgr)`, and also removed the inline `triggers = await trigger_mgr.list_triggers(session)`
+    block that had been the other consumer of a router-scoped manager dependency. The
+    parameter is now dead: no reference to `thread_mgr` survives anywhere inside the
+    function body (verified with `awk` extraction of L139-227). The argument still triggers
+    FastAPI to resolve `get_thread_manager()` on every `GET /` request — a small but
+    non-zero per-request cost — and more importantly leaves a misleading hint that
+    the handler still depends on the thread manager, which it does not. WHAT — Delete
+    L143 of src/api/pages.py (`    thread_mgr: ThreadManager = Depends(get_thread_manager),`)
+    so the signature becomes `async def index(request, session, session_mgr, cfg)`.
+    Then drop the now-orphan imports: remove `get_thread_manager` from the `from src.api.deps
+    import ...` line (L15) leaving `from src.api.deps import get_session_manager`,
+    and remove the entire `from src.core.threads import ThreadManager` line (L20) since
+    `ThreadManager` has no other use in the file. HOW — (1) Edit src/api/pages.py per
+    the WHAT above. (2) Verify with `pyflakes src/api/pages.py` (must exit clean —
+    no more unused-argument or unused-import on that file), `pylint --disable=all --enable=unused-argument,unused-import
+    src/api/pages.py` (clean for this file), `yapf --diff src/api/pages.py` (no diff),
+    and `python3 -c "from src.api.pages import router"` (import smoke). (3) The change
+    is signature-shrinking only; FastAPI ignores extra resolved deps but does not require
+    them, so no caller adjustment is needed (`index` is mounted as a route, not called
+    directly). Pure dead-code removal with zero behavior change. Follows the same one-arg-drop
+    pattern as items 156 (drop unused thread_mgr from finalize_review_chain, pending),
+    159 (drop three unused W0613 deps from spawner helpers, done), and 162 (drop unused
+    cfg local from _execute_handler_task, done).
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan produced zero
+    diffs (working tree clean both before and after), so no yapf finding is filed per
+    the yapf rule. `grep -rEn "TODO|FIXME|HACK|XXX" src/ --include="*.py"` returns
+    zero matches. `pyflakes src/` reports three findings beyond this item: the unused
+    `e` in `core/sessions.py:135` (covered by pending #160), the unused `e` in `core/sessions.py:488`
+    (covered by pending #163), and the unused `WatchTarget` import in `api/internal.py:14`
+    (covered by pending #131 and #139). `pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/` reports the same three plus the unused `thread_mgr` argument in `core/review.py:27`
+    (covered by pending #156) and the two intentional argparse-required `args` parameters
+    in `cli/backup.py:16,22` (not actionable). `vulture src/ --min-confidence 80` reports
+    only the Pydantic `cls` validator parameter in `core/config.py:128`, a known false
+    positive. `pylint --disable=all --enable=duplicate-code src/` reports the same
+    four R0801 candidates as the previous scan: (a) the chat.py vs slash.py `create_logged_task(run_and_finalize(...))`
+    block (covered by pending #165); (b) `api/internal:81-86` vs `improve_command:417-422`
+    — a 5-line `SpawnRequest(...)` keyword-argument tail inside two different `create_logged_task`
+    calls, not extractable without dragging the surrounding `spawn_worker` call which
+    differs between the two sites (premature abstraction); (c) `agents/backends/base:258-263`
+    vs `core/codex_usage:59-64` — the standard 5-line `if not line: continue; try:
+    event = json.loads(line); except json.JSONDecodeError as e:` NDJSON-parse preamble,
+    too small and too generic to warrant a named helper; (d) `cli/delegate:21-26` vs
+    `cli/improve:24-29` — the 5-line argparse `--session` option declaration, also
+    too small and the surrounding parsers differ enough that a shared helper would
+    mostly forward kwargs. The >50-line function inventory in src/ this scan, after
+    cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153/#154/#158/#159/#162/#163/#164/#165 (`_wait_for_quota_recovery`, `maybe_auto_name_from_claude_ai_title`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `_broadcast_completion`,
+    `trigger_master`, `run_message_with_resume_recovery`, `_wait_and_fire`, `_dir_listing_html`,
+    `build_review_prompt`, `delegate.main`, `_build_worker_prompt`, `slash.execute_command`,
+    `build_session_view_data`, `spawn_worker`, `spawn_review_worker`, `_archive_old_chat_events_sync`,
+    `_populate_sidebar_state`, `delegate_task`), surfaces no untriaged >50-line candidates
+    this scan. Per the one-finding-per-scan rule the unused-argument finding above
+    is the single new code-health backlog entry for the 2026-05-22T15:12Z scheduled
+    scan; it is the only pyflakes/pylint finding that is not already covered by an
+    existing pending item, and it is a fresh regression introduced two commits ago
+    by 30f13e5 — exactly the kind of small dead-parameter drift the scheduled scan
+    is designed to catch before it ossifies.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-22T15:12:22Z'
+  priority: low

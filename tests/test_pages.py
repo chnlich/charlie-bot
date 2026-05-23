@@ -67,6 +67,26 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
   assert git_lookup_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+
+  response = await pages.index(
+      request=_build_request(),
+      session=None,
+      session_mgr=FakeSessionManager(),
+      thread_mgr=object(),
+      cfg=cfg,
+  )
+
+  body = response.body.decode("utf-8")
+  assert response.context["static_asset_version"] == "abc1234-03-24"
+  assert 'href="/static/css/styles.css?v=abc1234-03-24"' in body
+  assert 'src="/static/js/sidebar.js?v=abc1234-03-24"' in body
+  assert 'src="/static/js/app.js?v=abc1234-03-24"' in body
+
+
 class PendingTriggerSessionManager(FakeSessionManager):
   def __init__(self, session: SessionMetadata):
     self._session = session

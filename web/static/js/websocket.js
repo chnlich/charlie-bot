@@ -152,12 +152,19 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
 
   // Sidebar spinner update — handle before catchup guard
   if (t === 'running_changed') {
-    if (ev.session_id !== SESSION_ID) {
-      setSessionIndicator(ev.session_id, getSessionIndicatorState({thinking_since: ev.thinking_since, has_running_tasks: ev.has_running_tasks}));
-    } else if (ev.auto_trigger) {
-      // Auto-triggered runs: show spinner/status but keep send button enabled
-      if (ev.has_running_tasks) startThinking({keepSendEnabled: true});
-      else stopThinking({preserveSessionIndicator: true});
+    setSessionIndicator(ev.session_id, getSessionIndicatorState({
+      thinking_since: ev.thinking_since,
+      has_running_tasks: ev.has_running_tasks,
+    }));
+    if ('has_pending_trigger' in ev) {
+      setSessionPendingTriggerIndicator(ev.session_id, ev);
+    }
+    if (ev.session_id === SESSION_ID) {
+      if (ev.thinking_since) {
+        startThinking({keepSendEnabled: true});
+      } else if (!ev.has_running_tasks) {
+        stopThinking({preserveSessionIndicator: true});
+      }
     }
     refreshSessionStatusNow();
     return;
@@ -180,10 +187,9 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   } else if (t === 'error') {
     if (catchupDone) hideStreaming();
   } else if (t === 'task_delegated') {
-    setSessionSpinner(SESSION_ID, true);
+    refreshSessionStatusNow({refreshWorkers: true});
   } else if (t === 'worker_summary') {
-    if (ev.status === 'running') refreshSessionStatusNow({refreshWorkers: true});
-    else updateSpinner();
+    refreshSessionStatusNow({refreshWorkers: true});
   } else if (t === 'result') {
     updateUsageDisplay(ev);
     // Codex result events carry translated usage; refresh from the lazy usage endpoint

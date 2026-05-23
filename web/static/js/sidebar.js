@@ -271,7 +271,6 @@ async function switchSession(sessionId) {
     startThinking({keepSendEnabled: true});
   }
 
-  updateSpinner();
   updateSidebarHighlight(sessionId);
   pollSessionStatus();
   ensureActiveSessionViewPolling();
@@ -345,10 +344,11 @@ function renderSessionView(data) {
   // Scroll to bottom
   container.scrollTop = container.scrollHeight;
 
-  // Render workers tab
-  renderWorkersTab(data.threads || [], session.id, data.triggers || []);
-
-  updateWorkersTabBadge();
+  if (Array.isArray(data.threads) || Array.isArray(data.triggers)) {
+    renderWorkersTab(data.threads || [], session.id, data.triggers || []);
+  } else {
+    renderWorkersTabUnknown();
+  }
 
   // Restore whichever tab was active before the session switch
   const activeBtn = document.querySelector('#btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
@@ -542,6 +542,13 @@ function renderWorkersTab(threads, sessionId, triggers) {
   container.innerHTML = threadCards.join('') + triggerCards.join('');
 }
 
+function renderWorkersTabUnknown() {
+  const container = document.getElementById('tab-workers');
+  if (!container) return;
+  container.innerHTML = '<div id="workers-loading-placeholder" class="flex items-center justify-center h-full text-slate-500 text-sm">Loading worker threads...</div>';
+  updateWorkersTabBadge();
+}
+
 function updateSidebarHighlight(newSessionId) {
   document.querySelectorAll('[id^="session-"]').forEach(el => {
     if (!el.id.startsWith('session-')) return;
@@ -572,7 +579,7 @@ function setSessionIndicator(sid, state) {
 }
 
 function setSessionSpinner(sid, visible) {
-  setSessionIndicator(sid, visible ? 'thinking' : 'idle');
+  return refreshSessionStatusNow();
 }
 
 function setSessionPendingTriggerIndicator(sid, status) {
@@ -587,12 +594,7 @@ function setSessionPendingTriggerIndicator(sid, status) {
 }
 
 function updateSpinner() {
-  var anyWorkerRunning = Array.from(document.querySelectorAll('[id^="thread-status-"]'))
-    .some(function(el) { return el.textContent.startsWith('running'); });
-  setSessionIndicator(SESSION_ID, getSessionIndicatorState({
-    thinking_since: masterThinking ? (THINKING_SINCE || true) : null,
-    has_running_tasks: anyWorkerRunning,
-  }));
+  return refreshSessionStatusNow();
 }
 
 function stopActiveSessionViewPolling() {
@@ -965,7 +967,6 @@ function startThinking(opts) {
     document.getElementById('send-btn').disabled = true;
     document.getElementById('send-btn').classList.add('opacity-50');
   }
-  setSessionIndicator(SESSION_ID, 'thinking');
   ensureActiveSessionViewPolling();
 }
 
@@ -1085,21 +1086,116 @@ function markSessionRead(id) {
   const dot = document.getElementById('unread-' + id);
   if (dot) dot.classList.add('hidden');
   // Fire-and-forget API call
-  fetch(`/api/sessions/${id}/read`, { method: 'POST' }).catch(() => {});
+  fetch(`/api/sessions/${id}/read`, { method: 'POST' }).catch(err => console.error('Mark read failed:', err));
+}
+
+const sidebarFilterUrls = {
+  all: '/api/sessions/',
+  starred: '/api/sessions/starred',
+  archived: '/api/sessions/archived',
+  scheduled: '/api/sessions/scheduled',
+};
+
+function getCurrentSidebarViewRequest() {
+  const searchInput = document.getElementById('sidebar-search');
+  const query = searchInput ? searchInput.value.trim() : '';
+  if (query) {
+    return {
+      filter: 'search',
+      url: '/api/sessions/search?q=' + encodeURIComponent(query),
+    };
+  }
+  const url = sidebarFilterUrls[currentFilter];
+  if (!url) throw new Error('Unknown sidebar filter: ' + currentFilter);
+  return {filter: currentFilter, url};
+}
+
+async function fetchSidebarSessionsForCurrentView() {
+  const view = getCurrentSidebarViewRequest();
+  const res = await fetch(view.url);
+  if (!res.ok) throw new Error(`Fetch sessions failed: ${res.status}`);
+  return {
+    filter: view.filter,
+    sessions: await res.json(),
+  };
+}
+
+function renderNoActiveSessionView() {
+  switching = true;
+  ++switchGeneration;
+
+  if (masterThinking) stopThinking({preserveSessionIndicator: true});
+  stopActiveSessionViewPolling();
+  resetLazySessionData();
+  resetVoiceState();
+  uploadedFiles = [];
+  renderFileChips();
+  hideSlashPopup();
+  hideStreaming();
+  disconnectWS();
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  catchupDone = false;
+  pendingUserMsg = false;
+
+  SESSION_ID = null;
+  DRAFT_KEY = null;
+  THINKING_SINCE = null;
+  eventCursor = 0;
+  usageTotalCost = 0;
+  history.pushState({session: null}, '', '/');
+
+  const main = document.querySelector('main');
+  if (!main) throw new Error('Main element missing');
+  main.innerHTML = `
+    <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4 py-3">
+      <button class="hamburger-btn p-2 -ml-2 mr-1 rounded-lg hover:bg-slate-700 transition-colors" onclick="toggleMobileSidebar()" title="Menu">
+        <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <h2 class="text-sm font-semibold text-slate-400">CharlieBot</h2>
+    </header>
+    <div class="flex-1 flex items-center justify-center">
+      <div class="text-center">
+        <h2 class="text-xl font-semibold text-slate-400 mb-2">Welcome to CharlieBot</h2>
+        <p class="text-slate-500 mb-4">Create or select a session to get started</p>
+        <button onclick="createSession()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">New Session</button>
+      </div>
+    </div>`;
+  switching = false;
+}
+
+async function refreshSidebarAfterSessionRemoval(sessionId) {
+  const {filter, sessions} = await fetchSidebarSessionsForCurrentView();
+  const visibleSessions = sessions.filter(s => s.id !== sessionId);
+  delete sessionUnread[sessionId];
+  renderSessionList(visibleSessions, filter);
+
+  if (SESSION_ID !== sessionId) {
+    updateSidebarHighlight(SESSION_ID);
+    return;
+  }
+
+  const nextSession = visibleSessions[0] || null;
+  if (nextSession) {
+    await switchSession(nextSession.id);
+  } else {
+    renderNoActiveSessionView();
+  }
 }
 
 async function archiveSession(id) {
   try {
     const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error(`Archive failed: ${res.status}`);
-    if (SESSION_ID === id) {
-      location.href = '/?session=';
-    } else {
-      switchSidebarFilter(currentFilter);
-    }
+    await refreshSidebarAfterSessionRemoval(id);
   } catch (err) {
     console.error('Archive failed:', err);
   }
+}
+
+async function deleteSessionPermanently(sessionId) {
+  const res = await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Permanent delete failed: ${res.status}`);
+  await refreshSidebarAfterSessionRemoval(sessionId);
 }
 
 async function unarchiveSession(id) {
@@ -1169,13 +1265,7 @@ function confirmDeletePermanently(sessionId) {
   overlay.querySelector('#confirm-delete-btn').addEventListener('click', async () => {
     closeDeleteConfirmModal();
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(`Permanent delete failed: ${res.status}`);
-      if (SESSION_ID === sessionId) {
-        location.href = '/?session=';
-      } else {
-        switchSidebarFilter(currentFilter);
-      }
+      await deleteSessionPermanently(sessionId);
     } catch (err) {
       console.error('Permanent delete failed:', err);
     }
@@ -1214,14 +1304,13 @@ function setSidebarFilterPill(filter) {
 function switchSidebarFilter(filter) {
   setSidebarFilterPill(filter);
   // Fetch sessions for this filter
-  const urls = {
-    all: '/api/sessions/',
-    starred: '/api/sessions/starred',
-    archived: '/api/sessions/archived',
-    scheduled: '/api/sessions/scheduled',
-  };
-  fetch(urls[filter])
-    .then(res => res.json())
+  const url = sidebarFilterUrls[filter];
+  if (!url) throw new Error('Unknown sidebar filter: ' + filter);
+  fetch(url)
+    .then(res => {
+      if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
+      return res.json();
+    })
     .then(sessions => renderSessionList(sessions, filter))
     .catch(err => console.error('Filter fetch failed:', err));
 }

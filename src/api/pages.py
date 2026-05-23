@@ -225,4 +225,5 @@ async def index(
           "hostname": socket.gethostname(),
           "user_home": str(pathlib.Path.home()),
           "version": _RUNTIME_GIT_VERSION,
+          "static_asset_version": _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-"),
       })

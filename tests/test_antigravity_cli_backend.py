@@ -31,7 +31,7 @@ async def _consume(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
   return events
 
 
-def test_build_command_uses_print_mode_and_prompt_separator(monkeypatch) -> None:
+def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, model="gemini-test-model", extra_flags=["--sandbox"])
 
   cmd = backend._build_command("--dash-prefixed prompt")
@@ -39,12 +39,11 @@ def test_build_command_uses_print_mode_and_prompt_separator(monkeypatch) -> None
   assert cmd == [
       "/usr/bin/agy",
       "--print",
+      "--dash-prefixed prompt",
       "--print-timeout",
       "24h",
       "--dangerously-skip-permissions",
       "--sandbox",
-      "--",
-      "--dash-prefixed prompt",
   ]
 
 
@@ -53,10 +52,8 @@ def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
 
   cmd = backend._build_command("do the work")
 
-  assert cmd[-2:] == [
-      "--",
-      "<system-instructions>\n# Antigravity Instructions\nBuild stuff.\n</system-instructions>\n\ndo the work",
-  ]
+  expected_prompt = "<system-instructions>\n# Antigravity Instructions\nBuild stuff.\n</system-instructions>\n\ndo the work"
+  assert cmd[2] == expected_prompt
 
 
 def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
@@ -92,7 +89,7 @@ async def test_run_emits_final_stdout_as_assistant_text(monkeypatch, tmp_path: P
       tmp_path,
       """
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--" ]; then
+  if [ "$1" = "--print" ]; then
     shift
     break
   fi
@@ -189,4 +186,12 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
   backend = build_backend(option, CharlieBotConfig(), extra_flags=["--sandbox"])
 
   assert isinstance(backend, AntigravityCliBackend)
-  assert backend._build_command("hi")[-3:] == ["--sandbox", "--", "hi"]
+  assert backend._build_command("hi") == [
+      "/usr/bin/agy",
+      "--print",
+      "hi",
+      "--print-timeout",
+      "24h",
+      "--dangerously-skip-permissions",
+      "--sandbox",
+  ]

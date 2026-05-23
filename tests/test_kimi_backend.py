@@ -27,6 +27,14 @@ def test_build_command_does_not_pass_model_flag() -> None:
   assert cmd[-2:] == ["--", "hello"]
 
 
+def test_prepare_env_values_are_subprocess_safe() -> None:
+  backend = KimiBackend(api_key="moonshot-test-key", model="kimi-k2.5")
+
+  prepared = backend._prepare_env({"PATH": "/usr/bin"})
+
+  assert all(isinstance(value, (str, bytes)) for value in prepared.values())
+
+
 def test_requires_model() -> None:
   with pytest.raises(ValueError, match="requires a model"):
     KimiBackend(api_key="moonshot-test-key", model="")

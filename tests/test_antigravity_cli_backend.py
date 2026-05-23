@@ -153,6 +153,22 @@ exit 7
   assert backend.exit_code == 7
 
 
+def test_prepare_env_strips_api_keys_for_oauth(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  env = backend._prepare_env({
+      "PATH": "/usr/bin",
+      "GEMINI_API_KEY": "secret-gemini-key",
+      "GOOGLE_API_KEY": "secret-google-key",
+      "OTHER_VAR": "keep-me",
+  })
+
+  assert "GEMINI_API_KEY" not in env
+  assert "GOOGLE_API_KEY" not in env
+  assert env.get("OTHER_VAR") == "keep-me"
+  assert "/usr/bin" in env.get("PATH", "")
+
+
 def test_registry_builds_antigravity_backend(monkeypatch) -> None:
   monkeypatch.setattr(
       "src.agents.backends.antigravity_cli.resolve_binary",

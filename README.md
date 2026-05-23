@@ -4,7 +4,7 @@ A Python-based orchestration system that coordinates multiple Claude Code worker
 
 ## Features
 
-- **Multi-Agent Orchestration** — Master agent coordinates Worker and Reviewer agents across pluggable backends (Claude Code, Codex, Kimi, Gemini CLI, OpenCode)
+- **Multi-Agent Orchestration** — Master agent coordinates Worker and Reviewer agents across pluggable backends (Claude Code, Codex, Kimi, Gemini CLI, OpenCode, Antigravity CLI)
 - **Task Delegation** — One-shot coding tasks dispatched to workers in isolated git worktrees with automatic cross-backend code review and ff-only merge
 - **Iterative Improvement (/improve)** — Autonomous multi-iteration loop where each worker builds on prior results toward a specified goal
 - **Scheduled Tasks (Cron)** — Configurable cron jobs in three modes: prompt (send to master), handler (run Python function), loop (backlog-driven improvement)

@@ -8,21 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initBacklogResize();
   fetchSlashCommands();
   startTuiStatusPolling();
-  // Seed sessionUnread from server-rendered unread dots
-  document.querySelectorAll('[id^="unread-"]').forEach(el => {
-    sessionUnread[el.id.replace('unread-', '')] = el.dataset.hasUnread === '1';
-  });
-  const params = new URLSearchParams(location.search);
-  const urlFilter = params.get('filter');
-  const urlQuery = params.get('q');
-  if (urlQuery) {
-    const searchInput = document.getElementById('sidebar-search');
-    if (searchInput) { searchInput.value = urlQuery; handleSidebarSearch(urlQuery); }
-  } else if (['starred', 'archived', 'scheduled'].includes(urlFilter)) {
-    switchSidebarFilter(urlFilter);
-  } else {
-    setSidebarFilterPill('all');
-  }
+  restoreSidebarFromUrl();
   updateRelativeTimes();
 
   // Initial chat render uses the server-embedded minimal bootstrap so refresh
@@ -35,13 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.
-  document.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
-    el.textContent = formatBubbleTime(el.dataset.ts);
-  });
-  document.querySelectorAll('#messages .rounded-full[title]').forEach(el => {
-    const t = el.getAttribute('title');
-    if (t && t.includes('T')) el.title = formatBubbleTime(t);
-  });
+  postProcessRenderedMessages(document);
 
   // Scroll to bottom of messages (in case JS render hasn't fired yet)
   const msgs = document.getElementById('messages');

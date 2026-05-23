@@ -49,8 +49,11 @@ function createElement(overrides = {}) {
     style: overrides.style || {},
     children: [],
     options: [],
+    parentNode: null,
     classList: createClassList(overrides.className || ''),
     appendChild(child) {
+      if (child && child.parentNode) child.parentNode.removeChild(child);
+      if (child) child.parentNode = this;
       this.children.push(child);
       if (child && child.tagName === 'OPTION') {
         this.options.push(child);
@@ -59,10 +62,39 @@ function createElement(overrides = {}) {
       return child;
     },
     prepend(child) {
+      if (child && child.parentNode) child.parentNode.removeChild(child);
+      if (child) child.parentNode = this;
       this.children.unshift(child);
       return child;
     },
+    insertBefore(child, referenceChild) {
+      if (child && child.parentNode) child.parentNode.removeChild(child);
+      if (child) child.parentNode = this;
+      if (!referenceChild) {
+        this.children.push(child);
+        return child;
+      }
+      const index = this.children.indexOf(referenceChild);
+      if (index === -1) throw new Error('reference child not found');
+      this.children.splice(index, 0, child);
+      return child;
+    },
+    removeChild(child) {
+      const index = this.children.indexOf(child);
+      if (index === -1) throw new Error('child not found');
+      this.children.splice(index, 1);
+      if (child) child.parentNode = null;
+      return child;
+    },
+    after(child) {
+      if (!this.parentNode) return;
+      if (child && child.parentNode) child.parentNode.removeChild(child);
+      if (child) child.parentNode = this.parentNode;
+      const index = this.parentNode.children.indexOf(this);
+      this.parentNode.children.splice(index + 1, 0, child);
+    },
     remove() {
+      if (this.parentNode) this.parentNode.removeChild(this);
       this.removed = true;
     },
     focus() {},
@@ -72,7 +104,19 @@ function createElement(overrides = {}) {
     getAttribute(name) {
       return this[name];
     },
+    querySelectorAll: () => [],
   };
+
+  Object.defineProperty(element, 'firstElementChild', {
+    get() {
+      return element.children[0] || null;
+    },
+  });
+  Object.defineProperty(element, 'lastChild', {
+    get() {
+      return element.children[element.children.length - 1] || null;
+    },
+  });
 
   Object.defineProperty(element, 'innerHTML', {
     get() {
@@ -117,7 +161,7 @@ function buildContext(overrides = {}) {
       setItem: () => {},
       removeItem: () => {},
     },
-    location: {href: '', protocol: 'http:', host: 'localhost:8000'},
+    location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
     history: {pushState: () => {}},
     console: {error: () => {}, log: () => {}},
     fetch: async (url, opts = {}) => {
@@ -157,6 +201,11 @@ function buildContext(overrides = {}) {
     clearInterval: (id) => {
       clears.push(id);
     },
+    clearTimeout: (id) => {
+      clears.push(id);
+    },
+    URLSearchParams,
+    AbortController,
     document: {
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: overrides.querySelectorAll || (() => []),
@@ -199,6 +248,7 @@ function buildContext(overrides = {}) {
     stopThinking: () => {},
     setSessionSpinner: () => {},
     relativeTime: (txt) => txt,
+    updateRelativeTimes: () => {},
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     formatNextRun: (txt) => txt,
     formatLastRun: (txt) => txt,
@@ -385,6 +435,116 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
       },
     },
   ]);
+});
+
+test('restoreSidebarFromUrl renders initial all sessions through grouped renderer without fetching sessions', () => {
+  const nav = createElement();
+  const filterAll = createElement({className: 'filter-pill'});
+  const filterStarred = createElement({className: 'filter-pill'});
+  const filterArchived = createElement({className: 'filter-pill'});
+  const filterScheduled = createElement({className: 'filter-pill'});
+  const {context, fetchRequests} = buildContext({
+    elements: new Map([
+      ['session-list', nav],
+      ['filter-all', filterAll],
+      ['filter-starred', filterStarred],
+      ['filter-archived', filterArchived],
+      ['filter-scheduled', filterScheduled],
+      ['cron-add-btn', createElement()],
+    ]),
+    querySelectorAll: (selector) => selector === '.filter-pill'
+      ? [filterAll, filterStarred, filterArchived, filterScheduled] : [],
+  });
+
+  context.INITIAL_SESSIONS = [
+    {
+      id: 'session-a',
+      name: 'Grouped session',
+      group: 'Work',
+      updated_at: '2026-04-02T04:00:00Z',
+      has_unread: true,
+      has_running_tasks: false,
+      has_pending_trigger: true,
+      pending_trigger_count: 1,
+      next_trigger_at: '2026-04-02T06:00:00Z',
+      starred: true,
+      backend: 'claude-opus-4.6',
+    },
+    {
+      id: 'session-b',
+      name: 'Ungrouped session',
+      group: null,
+      updated_at: '2026-04-01T04:00:00Z',
+      has_unread: false,
+      has_running_tasks: false,
+      has_pending_trigger: false,
+      pending_trigger_count: 0,
+      next_trigger_at: null,
+      starred: false,
+      backend: 'claude-opus-4.6',
+    },
+  ];
+  context.INITIAL_LOAD_ERRORS = [];
+  context.location.search = '';
+
+  context.restoreSidebarFromUrl();
+
+  assert.equal(fetchRequests.length, 0);
+  assert.match(nav.innerHTML, /class="session-group group"/);
+  assert.match(nav.innerHTML, /Work/);
+  assert.match(nav.innerHTML, /\(No group\)/);
+  assert.match(nav.innerHTML, /id="pending-trigger-session-a"/);
+  assert.match(nav.innerHTML, /id="star-session-a"/);
+  assert.equal(filterAll.classList.contains('bg-blue-600/20'), true);
+});
+
+test('loadOlderIfNeeded post-processes prepended messages through the shared helper', async () => {
+  const messages = createElement({scrollTop: 0});
+  messages.clientHeight = 500;
+  messages.scrollHeight = 1000;
+  const {context} = buildContext({
+    elements: new Map([
+      ['messages', messages],
+    ]),
+  });
+  const postProcessedHtml = [];
+  context.postProcessRenderedMessages = (root) => {
+    postProcessedHtml.push(root.innerHTML);
+  };
+  context.fetch = async (url) => {
+    assert.equal(url, '/api/sessions/session-a/events?before=5&limit=200');
+    return {
+      ok: true,
+      async json() {
+        return {
+          has_more: false,
+          messages: [{
+            role: 'assistant',
+            content: 'older $x$',
+            event_index: 3,
+            timestamp: '2026-04-02T04:00:00Z',
+          }],
+        };
+      },
+    };
+  };
+
+  context.renderSessionView({
+    session: {id: 'session-a', backend: 'claude-opus-4.6', round_ratings: {}},
+    messages: [{role: 'assistant', content: 'newer', event_index: 5}],
+    pending_draft: null,
+    event_count: 6,
+    active_backend: 'claude-opus-4.6',
+    active_backend_type: '',
+    has_more: true,
+  });
+  postProcessedHtml.length = 0;
+  messages.scrollTop = 0;
+
+  await context.loadOlderIfNeeded(messages);
+
+  assert.equal(postProcessedHtml.length, 1);
+  assert.match(postProcessedHtml[0], /older \$x\$/);
 });
 
 test('renderSessionItem shows separate delayed-trigger and scheduled indicators', () => {

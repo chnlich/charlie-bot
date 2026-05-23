@@ -560,14 +560,25 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
   const streamHtml = streamEl ? streamEl.outerHTML : '';
   const parts = (messages || []).map(msg => renderMessage(msg, sessionId));
   container.innerHTML = parts.join('') + streamHtml;
-  container.querySelectorAll('.prose-msg').forEach(renderChatMath);
-  container.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
+  postProcessRenderedMessages(container);
+}
+
+function postProcessRenderedMessages(root) {
+  root.querySelectorAll('.prose-msg').forEach(renderChatMath);
+  root.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
     el.textContent = formatBubbleTime(el.dataset.ts);
   });
-  container.querySelectorAll('.rounded-full[title]').forEach(el => {
+  root.querySelectorAll('.rounded-full[title]').forEach(el => {
     const t = el.getAttribute('title');
     if (t && t.includes('T')) el.title = formatBubbleTime(t);
   });
+}
+
+function renderMessagesToDetachedContainer(messages, sessionId) {
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = (messages || []).map(msg => renderMessage(msg, sessionId)).join('');
+  postProcessRenderedMessages(tempDiv);
+  return tempDiv;
 }
 
 function renderMessage(msg, sessionId) {
@@ -658,10 +669,10 @@ function _appendRenderedMessage(html, forceScroll) {
   var wasAtBottom = shouldAutoScroll(container);
   var wrapper = document.createElement("div");
   wrapper.innerHTML = html;
+  postProcessRenderedMessages(wrapper);
   var el = wrapper.firstElementChild || wrapper;
   var streamEl = document.getElementById("streaming-msg");
   container.insertBefore(el, streamEl);
-  el.querySelectorAll(".prose-msg").forEach(renderChatMath);
   if (forceScroll || wasAtBottom) {
     container.scrollTop = container.scrollHeight;
   } else {

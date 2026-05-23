@@ -87,7 +87,8 @@ class PendingTriggerSessionManager(FakeSessionManager):
 
 
 @pytest.mark.asyncio
-async def test_index_renders_pending_trigger_indicator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_index_embeds_initial_sessions_for_client_sidebar_render(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
   session = SessionMetadata(
       id="session-with-trigger",
@@ -116,6 +117,9 @@ async def test_index_renders_pending_trigger_indicator(monkeypatch: pytest.Monke
   )
 
   body = response.body.decode("utf-8")
-  assert 'id="pending-trigger-session-with-trigger"' in body
-  assert '2 pending delayed triggers' in body
-  assert 'text-amber-400' in body
+  assert "const INITIAL_SESSIONS =" in body
+  assert '"session-with-trigger"' in body
+  assert '"has_pending_trigger": true' in body
+  assert '"pending_trigger_count": 2' in body
+  assert 'id="pending-trigger-session-with-trigger"' not in body
+  assert "Loading sessions..." in body

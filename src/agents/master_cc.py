@@ -95,6 +95,9 @@ _session_consumers: dict[str, asyncio.Task] = {}
 # Per-session running backend reference for external cancellation.
 _active_procs: dict[str, AgentBackend] = {}
 
+_CLAUDE_RESUME_FLAG_BACKEND_TYPES = {"cc-claude", "cc-kimi"}
+_NATIVE_RESUME_SESSION_BACKEND_TYPES = {"codex", "gemini", "opencode"}
+
 
 @dataclasses.dataclass
 class _WorkItem:
@@ -162,6 +165,17 @@ def _build_prompt(user_content: str, is_voice: bool) -> str:
   return user_content
 
 
+def _route_resume_session(backend_type: str, cc_session_id: Optional[str]) -> tuple[list[str], Optional[str]]:
+  """Return CLI resume flags and native resume ID for a backend type."""
+  if not cc_session_id:
+    return [], None
+  if backend_type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    return ["--resume", cc_session_id], None
+  if backend_type in _NATIVE_RESUME_SESSION_BACKEND_TYPES:
+    return [], cc_session_id
+  return [], None
+
+
 async def _handle_event(
     event: dict,
     session_id: str,
@@ -208,10 +222,10 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   from src.agents.backends.registry import build_backend
   option = item.backend_option or cfg.backend_options[0]
 
-  extra_flags: list[str] = []
-  resume_session = bool(session_meta.cc_session_id)
-  if session_meta.cc_session_id and option.type not in ("codex", "gemini", "opencode"):
-    extra_flags = ["--resume", session_meta.cc_session_id]
+  extra_flags, resume_session_id = _route_resume_session(option.type, session_meta.cc_session_id)
+  resume_session = bool(extra_flags or resume_session_id)
+  if session_meta.cc_session_id and not resume_session:
+    log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
   if item.extra_claude_flags:
     extra_flags.extend(item.extra_claude_flags)
 
@@ -247,7 +261,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
         buffer_limit=cfg.subprocess_buffer_limit,
         on_spawn=tracker.on_spawn,
         instructions_content=instructions_content,
-        resume_session_id=session_meta.cc_session_id if option.type in ("codex", "gemini", "opencode") else None,
+        resume_session_id=resume_session_id,
     )
     _active_procs[session_meta.id] = backend
 

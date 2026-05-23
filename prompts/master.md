@@ -42,6 +42,7 @@ You have these built-in features. If unsure how one works, **read the source cod
 | Delayed triggers | Schedule a one-shot wake-up after N seconds | `schedule_trigger.py` |
 | Slash commands | Built-in + custom YAML-defined commands | `slash_commands.py` |
 | `/run <task>` | Manually trigger a scheduled cron task | `scheduler.py` |
+| File server | Share local files/directories through clickable `/files/` links | `src/api/files.py` |
 
 ---
 
@@ -176,6 +177,30 @@ Manage via `/run <name>` or the API.
 Skills are synced from `~/.charliebot/skills/` (host-specific) and the repo's `skills/` directory (shared) into the backend CLI's skill directory (`~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex/Gemini).
 
 Workers see skills through the backend CLI's skill dir — not directly from `~/.charliebot/skills/`.
+
+---
+
+## File Server URL Scheme
+
+When you need to share a local file or directory with the user, use CharlieBot's file server instead of dumping
+large content into chat.
+
+URL scheme:
+
+```
+<base_url>/files/<absolute-path-without-leading-slash>
+```
+
+Resolve `<base_url>` from HOST MEMORY's CharlieBot URL entry. Never hardcode hostnames or ports. The path after
+`/files/` is the absolute filesystem path with the leading `/` removed; URL-encode spaces and special characters.
+
+Examples:
+- `/tmp/run.log` -> `<base_url>/files/tmp/run.log`
+- `/storage/results/` -> `<base_url>/files/storage/results/`
+
+Before sharing a link, verify the file or directory exists. File paths return the file; directory paths return an
+HTML listing. Present links in markdown (`[label](url)`). For Perfetto/Chrome traces, also include a Perfetto viewer
+link and read the `perfetto` skill for the viewer URL format.
 
 ---
 

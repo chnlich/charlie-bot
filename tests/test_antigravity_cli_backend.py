@@ -48,14 +48,24 @@ def test_build_command_uses_print_mode_and_prompt_separator(monkeypatch) -> None
   ]
 
 
-def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
+def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, instructions_content="# Antigravity Instructions\nBuild stuff.")
+
+  cmd = backend._build_command("do the work")
+
+  assert cmd[-2:] == [
+      "--",
+      "<system-instructions>\n# Antigravity Instructions\nBuild stuff.\n</system-instructions>\n\ndo the work",
+  ]
+
+
+def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, instructions_content="# Antigravity Instructions\nBuild stuff.")
 
   backend._prepare_cwd(str(tmp_path))
 
   agents_md = tmp_path / "AGENTS.md"
-  assert agents_md.exists()
-  assert agents_md.read_text(encoding="utf-8") == "# Antigravity Instructions\nBuild stuff."
+  assert not agents_md.exists()
 
 
 def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path: Path) -> None:
@@ -156,12 +166,13 @@ exit 7
 def test_prepare_env_strips_api_keys_for_oauth(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  env = backend._prepare_env({
-      "PATH": "/usr/bin",
-      "GEMINI_API_KEY": "secret-gemini-key",
-      "GOOGLE_API_KEY": "secret-google-key",
-      "OTHER_VAR": "keep-me",
-  })
+  env = backend._prepare_env(
+      {
+          "PATH": "/usr/bin",
+          "GEMINI_API_KEY": "secret-gemini-key",
+          "GOOGLE_API_KEY": "secret-google-key",
+          "OTHER_VAR": "keep-me",
+      })
 
   assert "GEMINI_API_KEY" not in env
   assert "GOOGLE_API_KEY" not in env

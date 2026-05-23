@@ -199,8 +199,9 @@ Examples:
 - `/storage/results/` -> `<base_url>/files/storage/results/`
 
 Before sharing a link, verify the file or directory exists. File paths return the file; directory paths return an
-HTML listing. Present links in markdown (`[label](url)`). For Perfetto/Chrome traces, also include a Perfetto viewer
-link and read the `perfetto` skill for the viewer URL format.
+HTML listing. Present links in markdown (`[label](url)`), but do not use raw local markdown links like
+`[label](/absolute/path)`. For Perfetto/Chrome traces, also include a Perfetto viewer link and read the `perfetto`
+skill for the viewer URL format.
 
 ---
 

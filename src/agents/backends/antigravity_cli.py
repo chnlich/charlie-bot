@@ -7,15 +7,11 @@ from pathlib import Path
 from typing import Optional
 
 import aiofiles
-import structlog
-
 from src.agents.backends.base import AgentBackend
 from src.agents.backends.base import make_error_event
 from src.agents.backends.base import make_result_event
 from src.agents.backends.base import make_text_event
 from src.agents.backends.base import resolve_binary
-
-log = structlog.get_logger()
 
 _PRINT_TIMEOUT = "24h"
 
@@ -31,15 +27,8 @@ class AntigravityCliBackend(AgentBackend):
     super().__init__(model=model, **kwargs)
     self._agy_bin = resolve_binary("agy", str(Path.home() / ".local" / "bin"))
 
-  def _prepare_cwd(self, cwd: str) -> None:
-    """Write AGENTS.md into the cwd so Antigravity CLI loads CharlieBot instructions."""
-    if not self._instructions_content:
-      return
-    agents_md = Path(cwd) / "AGENTS.md"
-    agents_md.write_text(self._instructions_content, encoding="utf-8")
-    log.debug("antigravity_wrote_agents_md", path=str(agents_md))
-
   def _build_command(self, prompt: str) -> list[str]:
+    effective_prompt = self._effective_prompt(prompt)
     cmd = [
         self._agy_bin,
         "--print",
@@ -48,7 +37,7 @@ class AntigravityCliBackend(AgentBackend):
         "--dangerously-skip-permissions",
     ]
     cmd.extend(self._extra_flags)
-    cmd.extend(["--", prompt])
+    cmd.extend(["--", effective_prompt])
     return cmd
 
   def _prepare_env(self, env: dict) -> dict:

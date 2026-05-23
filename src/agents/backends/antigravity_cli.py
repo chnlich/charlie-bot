@@ -32,12 +32,12 @@ class AntigravityCliBackend(AgentBackend):
     cmd = [
         self._agy_bin,
         "--print",
+        effective_prompt,
         "--print-timeout",
         _PRINT_TIMEOUT,
         "--dangerously-skip-permissions",
     ]
     cmd.extend(self._extra_flags)
-    cmd.extend(["--", effective_prompt])
     return cmd
 
   def _prepare_env(self, env: dict) -> dict:

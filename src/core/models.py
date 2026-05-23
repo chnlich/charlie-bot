@@ -126,7 +126,7 @@ class PendingTrigger(BaseModel):
 class BackendOption(BaseModel):
   id: str
   label: str
-  type: str  # 'cc-claude' | 'cc-kimi'
+  type: str  # 'cc-claude' | 'cc-kimi' | 'codex' | 'gemini' | 'opencode' | 'antigravity' | 'tui-cli'
   model: Optional[str] = None
   effort: Optional[str] = None
 

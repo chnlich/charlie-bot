@@ -105,7 +105,7 @@ class CharlieBotConfig(BaseModel):
   voice_custom_words: list[str] = []
 
   # Backend options available for model switching
-  # Additional backends (Codex/Gemini/Kimi/etc.) must be configured via
+  # Additional backends (Codex/Gemini/Kimi/Antigravity/etc.) must be configured via
   # ~/.charliebot/config.yaml -> backend_options.
   backend_options: list[BackendOption] = [
       BackendOption(

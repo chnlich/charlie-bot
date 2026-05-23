@@ -3,6 +3,7 @@
 from typing import Any
 
 from src.agents.backends.base import AgentBackend
+from src.agents.backends.antigravity_cli import AntigravityCliBackend
 from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.codex import CodexBackend
 from src.agents.backends.gemini_cli import GeminiCliBackend
@@ -40,6 +41,8 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
     return GeminiCliBackend(model=option.model, **kwargs)
   elif option.type == "opencode":
     return OpenCodeBackend(model=option.model, **kwargs)
+  elif option.type == "antigravity":
+    return AntigravityCliBackend(model=option.model, **kwargs)
   elif option.type == "tui-cli":
     return TuiBackend(**kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

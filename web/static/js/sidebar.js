@@ -417,8 +417,7 @@ async function loadOlderIfNeeded(container) {
     }
 
     // Build and prepend message elements
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = data.messages.map(msg => renderMessage(msg, SESSION_ID)).join('');
+    const tempDiv = renderMessagesToDetachedContainer(data.messages, SESSION_ID);
 
     // Insert after sentinel (or at top)
     const insertRef = document.getElementById('load-more-sentinel');
@@ -1225,6 +1224,33 @@ function switchSidebarFilter(filter) {
     .then(res => res.json())
     .then(sessions => renderSessionList(sessions, filter))
     .catch(err => console.error('Filter fetch failed:', err));
+}
+
+function renderSidebarLoadErrors(errors) {
+  const nav = document.getElementById('session-list');
+  nav.innerHTML = errors.map(err =>
+    `<div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs">${escapeHtml(err)}</div>`
+  ).join('');
+}
+
+function restoreSidebarFromUrl() {
+  INITIAL_SESSIONS.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  const params = new URLSearchParams(location.search);
+  const urlFilter = params.get('filter');
+  const urlQuery = params.get('q');
+  if (urlQuery) {
+    const searchInput = document.getElementById('sidebar-search');
+    if (searchInput) { searchInput.value = urlQuery; handleSidebarSearch(urlQuery); }
+  } else if (['starred', 'archived', 'scheduled'].includes(urlFilter)) {
+    switchSidebarFilter(urlFilter);
+  } else {
+    setSidebarFilterPill('all');
+    if (INITIAL_LOAD_ERRORS.length) {
+      renderSidebarLoadErrors(INITIAL_LOAD_ERRORS);
+    } else {
+      renderSessionList(INITIAL_SESSIONS, 'all');
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

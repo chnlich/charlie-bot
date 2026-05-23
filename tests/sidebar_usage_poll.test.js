@@ -259,6 +259,7 @@ function buildContext(overrides = {}) {
     switchTab: () => {},
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
+    renderChatMath: () => {},
     formatBubbleTime: (txt) => txt,
     shouldAutoScroll: () => true,
     showScrollToBottom: () => {},
@@ -294,6 +295,23 @@ function buildSessionActionElements() {
     ['session-action-backend', createElement({tagName: 'SELECT'})],
     ['session-action-modal-confirm', createElement()],
   ]);
+}
+
+function makeSession(id, name, overrides = {}) {
+  return {
+    id,
+    name,
+    group: null,
+    updated_at: '2026-04-02T04:00:00Z',
+    has_unread: false,
+    has_running_tasks: false,
+    has_pending_trigger: false,
+    pending_trigger_count: 0,
+    next_trigger_at: null,
+    starred: false,
+    backend: 'claude-opus-4.6',
+    ...overrides,
+  };
 }
 
 test('pollActiveSessionView refreshes usage from the lazy usage endpoint', async () => {
@@ -496,6 +514,89 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
   assert.match(nav.innerHTML, /id="pending-trigger-session-a"/);
   assert.match(nav.innerHTML, /id="star-session-a"/);
   assert.equal(filterAll.classList.contains('bg-blue-600/20'), true);
+});
+
+test('switchSession preserves worker icon until authoritative status returns', async () => {
+  const workerIcon = createElement();
+  const tabWorkers = createElement();
+  const messages = createElement();
+  const input = createElement();
+  const {context} = buildContext({
+    BACKEND_TYPES: {'claude-opus-4.6': 'claude-code'},
+    elements: new Map([
+      ['msg-input', input],
+      ['header-session-name', createElement()],
+      ['backend-badge', createElement()],
+      ['input-model-badge', createElement()],
+      ['messages', messages],
+      ['tab-workers', tabWorkers],
+      ['worker-indicator-session-b', workerIcon],
+      ['spinner-session-b', createElement({className: 'hidden'})],
+      ['unread-session-b', createElement({className: 'hidden'})],
+    ]),
+  });
+  context.fetch = async (url) => {
+    assert.equal(url, '/api/sessions/session-b/bootstrap');
+    return {
+      ok: true,
+      async json() {
+        return {
+          session: makeSession('session-b', 'Session B'),
+          messages: [],
+          pending_draft: null,
+          event_count: 0,
+          active_backend: 'claude-opus-4.6',
+          active_backend_type: 'claude-code',
+          has_more: false,
+        };
+      },
+    };
+  };
+  context.pollSessionStatus = () => new Promise(() => {});
+
+  await context.switchSession('session-b');
+
+  assert.equal(workerIcon.classList.contains('hidden'), false);
+  assert.match(tabWorkers.innerHTML, /Loading worker threads/);
+  assert.equal(context.location.href, '');
+});
+
+test('missing bootstrap worker data and empty worker tab do not imply idle', () => {
+  const workerIcon = createElement();
+  const tabWorkers = createElement();
+  const {context} = buildContext({
+    BACKEND_TYPES: {'claude-opus-4.6': 'claude-code'},
+    elements: new Map([
+      ['header-session-name', createElement()],
+      ['backend-badge', createElement()],
+      ['input-model-badge', createElement()],
+      ['messages', createElement()],
+      ['tab-workers', tabWorkers],
+      ['worker-indicator-session-a', workerIcon],
+      ['spinner-session-a', createElement({className: 'hidden'})],
+      ['unread-session-a', createElement({className: 'hidden'})],
+    ]),
+  });
+  let statusPolls = 0;
+  context.pollSessionStatus = () => {
+    statusPolls += 1;
+    return Promise.resolve(false);
+  };
+
+  context.renderSessionView({
+    session: makeSession('session-a', 'Session A'),
+    messages: [],
+    pending_draft: null,
+    event_count: 0,
+    active_backend: 'claude-opus-4.6',
+    active_backend_type: 'claude-code',
+    has_more: false,
+  });
+  context.updateSpinner();
+
+  assert.match(tabWorkers.innerHTML, /Loading worker threads/);
+  assert.equal(workerIcon.classList.contains('hidden'), false);
+  assert.equal(statusPolls, 1);
 });
 
 test('loadOlderIfNeeded post-processes prepended messages through the shared helper', async () => {
@@ -731,6 +832,118 @@ test('createSession switches open chat through SPA state without full reload', a
     active_backend_type: 'codex',
     has_more: false,
   });
+});
+
+test('archiveSession refreshes backend sidebar and switches active session without full reload', async () => {
+  const nav = createElement();
+  const input = createElement();
+  const {context} = buildContext({
+    elements: new Map([
+      ['session-list', nav],
+      ['msg-input', input],
+      ['filter-all', createElement({className: 'filter-pill'})],
+      ['filter-starred', createElement({className: 'filter-pill'})],
+      ['filter-archived', createElement({className: 'filter-pill'})],
+      ['filter-scheduled', createElement({className: 'filter-pill'})],
+      ['cron-add-btn', createElement()],
+    ]),
+  });
+  const requests = [];
+  let rendered = null;
+  let pushedUrl = null;
+  context.fetch = async (url, opts = {}) => {
+    requests.push({url, opts});
+    if (url === '/api/sessions/session-a') {
+      assert.equal(opts.method, 'DELETE');
+      return {ok: true, async json() { return {}; }};
+    }
+    if (url === '/api/sessions/') {
+      return {
+        ok: true,
+        async json() {
+          return [makeSession('session-b', 'Backend Session B')];
+        },
+      };
+    }
+    if (url === '/api/sessions/session-b/bootstrap') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            session: makeSession('session-b', 'Backend Session B'),
+            messages: [],
+            pending_draft: null,
+            event_count: 0,
+            active_backend: 'claude-opus-4.6',
+            active_backend_type: '',
+            has_more: false,
+          };
+        },
+      };
+    }
+    throw new Error('unexpected fetch ' + url);
+  };
+  context.renderSessionView = (data) => { rendered = data; };
+  context.history.pushState = (_state, _title, url) => { pushedUrl = url; };
+  context.pollSessionStatus = () => Promise.resolve(false);
+
+  await context.archiveSession('session-a');
+
+  assert.deepEqual(requests.map((req) => req.url), [
+    '/api/sessions/session-a',
+    '/api/sessions/',
+    '/api/sessions/session-b/bootstrap',
+  ]);
+  assert.equal(context.location.href, '');
+  assert.equal(pushedUrl, '/?session=session-b');
+  assert.equal(context.SESSION_ID, 'session-b');
+  assert.match(nav.innerHTML, /Backend Session B/);
+  assert.equal(rendered.session.id, 'session-b');
+});
+
+test('deleteSessionPermanently renders welcome state when backend returns no sessions', async () => {
+  const nav = createElement();
+  const main = createElement({tagName: 'MAIN'});
+  const {context} = buildContext({
+    elements: new Map([
+      ['session-list', nav],
+      ['filter-all', createElement({className: 'filter-pill'})],
+      ['filter-starred', createElement({className: 'filter-pill'})],
+      ['filter-archived', createElement({className: 'filter-pill'})],
+      ['filter-scheduled', createElement({className: 'filter-pill'})],
+      ['cron-add-btn', createElement()],
+    ]),
+    querySelector: (selector) => {
+      if (selector === 'main') return main;
+      return null;
+    },
+  });
+  const requests = [];
+  let pushedUrl = null;
+  context.fetch = async (url, opts = {}) => {
+    requests.push({url, opts});
+    if (url === '/api/sessions/session-a/permanent') {
+      assert.equal(opts.method, 'DELETE');
+      return {ok: true, async json() { return {}; }};
+    }
+    if (url === '/api/sessions/') {
+      return {ok: true, async json() { return []; }};
+    }
+    throw new Error('unexpected fetch ' + url);
+  };
+  context.history.pushState = (_state, _title, url) => { pushedUrl = url; };
+
+  await context.deleteSessionPermanently('session-a');
+
+  assert.deepEqual(requests.map((req) => req.url), [
+    '/api/sessions/session-a/permanent',
+    '/api/sessions/',
+  ]);
+  assert.equal(context.location.href, '');
+  assert.equal(pushedUrl, '/');
+  assert.equal(context.SESSION_ID, null);
+  assert.match(nav.innerHTML, /No sessions yet/);
+  assert.match(main.innerHTML, /Welcome to CharlieBot/);
 });
 
 test('startTuiStatusPolling polls TUI status every three seconds', () => {

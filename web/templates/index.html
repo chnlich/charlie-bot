@@ -26,7 +26,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="/static/css/styles.css?v={{ static_asset_version|urlencode }}">
   <script type="module">
     import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs';
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs';
@@ -521,26 +521,26 @@
   </div>
 
   <!-- ==================== JAVASCRIPT ==================== -->
-  <script src="/static/js/platform.js"></script>
-  <script src="/static/js/markdown-renderer.js"></script>
-  <script src="/static/js/config.js"></script>
-  <script src="/static/js/utils.js"></script>
-  <script src="/static/js/tabs.js"></script>
-  <script src="/static/js/slash-commands.js"></script>
-  <script src="/static/js/slash-form.js"></script>
-  <script src="/static/js/context-panel.js"></script>
-  <script src="/static/js/file-upload.js"></script>
-  <script src="/static/js/chat.js"></script>
-  <script src="/static/js/tui_session.js"></script>
-  <script src="/static/js/websocket.js"></script>
-  <script src="/static/js/usage.js"></script>
-  <script src="/static/js/sidebar.js"></script>
-  <script src="/static/js/workers.js"></script>
-  <script src="/static/js/voice-input.js"></script>
-  <script src="/static/js/latex-panel.js"></script>
-  <script src="/static/js/backlog-panel.js"></script>
-  <script src="/static/js/ext_usage.js"></script>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/platform.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/markdown-renderer.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/config.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/utils.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/tabs.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/slash-commands.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/slash-form.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/context-panel.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/file-upload.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/chat.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/tui_session.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/sidebar.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/workers.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/latex-panel.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/backlog-panel.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/ext_usage.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
 
   <div id="cron-modal" class="diff-modal-overlay hidden">
     <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">

@@ -53,6 +53,8 @@ class AntigravityCliBackend(AgentBackend):
 
   def _prepare_env(self, env: dict) -> dict:
     antigravity_env = {**env}
+    antigravity_env.pop("GEMINI_API_KEY", None)
+    antigravity_env.pop("GOOGLE_API_KEY", None)
     local_bin = str(Path.home() / ".local" / "bin")
     current_path = antigravity_env.get("PATH", "")
     if local_bin not in current_path.split(":"):

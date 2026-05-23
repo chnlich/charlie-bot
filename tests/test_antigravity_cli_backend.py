@@ -38,8 +38,7 @@ def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
 
   assert cmd == [
       "/usr/bin/agy",
-      "--print",
-      "--dash-prefixed prompt",
+      "--print=--dash-prefixed prompt",
       "--print-timeout",
       "24h",
       "--dangerously-skip-permissions",
@@ -53,7 +52,7 @@ def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
   cmd = backend._build_command("do the work")
 
   expected_prompt = "<system-instructions>\n# Antigravity Instructions\nBuild stuff.\n</system-instructions>\n\ndo the work"
-  assert cmd[2] == expected_prompt
+  assert cmd[1] == f"--print={expected_prompt}"
 
 
 def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
@@ -88,14 +87,15 @@ async def test_run_emits_final_stdout_as_assistant_text(monkeypatch, tmp_path: P
   fake_agy = _write_fake_agy(
       tmp_path,
       """
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--print" ]; then
-    shift
-    break
-  fi
-  shift
+for arg in "$@"; do
+  case "$arg" in
+    --print=*)
+      prompt="${arg#*=}"
+      break
+      ;;
+  esac
 done
-printf 'final answer: %s\\n' "$1"
+printf 'final answer: %s\\n' "$prompt"
 """,
   )
   monkeypatch.setattr(
@@ -188,8 +188,7 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
   assert isinstance(backend, AntigravityCliBackend)
   assert backend._build_command("hi") == [
       "/usr/bin/agy",
-      "--print",
-      "hi",
+      "--print=hi",
       "--print-timeout",
       "24h",
       "--dangerously-skip-permissions",

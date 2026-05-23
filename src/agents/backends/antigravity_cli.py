@@ -31,8 +31,7 @@ class AntigravityCliBackend(AgentBackend):
     effective_prompt = self._effective_prompt(prompt)
     cmd = [
         self._agy_bin,
-        "--print",
-        effective_prompt,
+        f"--print={effective_prompt}",
         "--print-timeout",
         _PRINT_TIMEOUT,
         "--dangerously-skip-permissions",

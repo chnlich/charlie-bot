@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import cron as cron_api
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig
+from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_config
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata
 from src.core.scheduler import Scheduler
 
@@ -25,6 +25,13 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
           BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
       ],
   )
+
+
+def _build_cron_client(cfg: CharlieBotConfig) -> TestClient:
+  app = FastAPI()
+  app.include_router(cron_api.router, prefix="/api/cron")
+  app.dependency_overrides[get_config] = lambda: cfg
+  return TestClient(app)
 
 
 async def _noop() -> None:
@@ -146,10 +153,9 @@ def test_cron_api_persists_and_clears_backend(
   cron_path = tmp_path / "cron.yaml"
   cron_path.parent.mkdir(parents=True, exist_ok=True)
   monkeypatch.setattr(cron_api, "CRON_PATH", cron_path)
-  app = FastAPI()
-  app.include_router(cron_api.router, prefix="/api/cron")
+  cfg = _build_cfg(tmp_path)
 
-  with TestClient(app) as client:
+  with _build_cron_client(cfg) as client:
     create_response = client.post(
         "/api/cron/tasks",
         json={
@@ -175,3 +181,53 @@ def test_cron_api_persists_and_clears_backend(
     empty_clear_response = client.put("/api/cron/tasks/nightly", json={"backend": ""})
     assert empty_clear_response.status_code == 200
     assert "backend" not in yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]
+
+
+def test_cron_api_rejects_invalid_backend_on_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cron_path = tmp_path / "cron.yaml"
+  monkeypatch.setattr(cron_api, "CRON_PATH", cron_path)
+  cfg = _build_cfg(tmp_path)
+
+  with _build_cron_client(cfg) as client:
+    response = client.post(
+        "/api/cron/tasks",
+        json={
+            "name": "nightly",
+            "cron": "0 2 * * *",
+            "prompt": "run nightly",
+            "backend": "missing-backend",
+        },
+    )
+
+  assert response.status_code == 400
+  assert response.json()["detail"] == "backend 'missing-backend' is not in backend_options"
+  assert not cron_path.exists()
+
+
+def test_cron_api_rejects_invalid_backend_on_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cron_path = tmp_path / "cron.yaml"
+  initial_task = {
+      "name": "nightly",
+      "cron": "0 2 * * *",
+      "prompt": "run nightly",
+      "backend": "codex-o3",
+  }
+  cron_path.write_text(
+      yaml.safe_dump({"scheduled_tasks": [initial_task]}),
+      encoding="utf-8",
+  )
+  monkeypatch.setattr(cron_api, "CRON_PATH", cron_path)
+  cfg = _build_cfg(tmp_path)
+
+  with _build_cron_client(cfg) as client:
+    response = client.put("/api/cron/tasks/nightly", json={"backend": "missing-backend"})
+
+  assert response.status_code == 400
+  assert response.json()["detail"] == "backend 'missing-backend' is not in backend_options"
+  assert yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]["backend"] == "codex-o3"

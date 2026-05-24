@@ -946,6 +946,54 @@ test('deleteSessionPermanently renders welcome state when backend returns no ses
   assert.match(main.innerHTML, /Welcome to CharlieBot/);
 });
 
+test('saveCronTask sends backend selector value and null inherit value', async () => {
+  const requests = [];
+  const cronModal = createElement({className: 'hidden'});
+  const elements = new Map([
+    ['cron-modal-title', createElement()],
+    ['cron-name', createElement()],
+    ['cron-expr', createElement()],
+    ['cron-prompt', createElement()],
+    ['cron-repo', createElement()],
+    ['cron-backend', createElement({tagName: 'SELECT'})],
+    ['cron-project', createElement()],
+    ['cron-timezone', createElement()],
+    ['cron-enabled', createElement({checked: true})],
+    ['cron-delete-btn', createElement({className: 'hidden'})],
+    ['cron-modal', cronModal],
+  ]);
+  const {context} = buildContext({elements});
+  context.fetch = async (url, opts = {}) => {
+    requests.push({url, opts});
+    return {ok: true, async json() { return {}; }, async text() { return ''; }};
+  };
+  context.switchSidebarFilter = () => {};
+
+  context.openCronAdder();
+  elements.get('cron-name').value = 'nightly';
+  elements.get('cron-expr').value = '0 2 * * *';
+  elements.get('cron-prompt').value = 'run nightly';
+  elements.get('cron-backend').value = '';
+
+  await context.saveCronTask();
+
+  let body = JSON.parse(requests[0].opts.body);
+  assert.equal(requests[0].url, '/api/cron/tasks');
+  assert.equal(body.backend, null);
+
+  context.openCronAdder();
+  elements.get('cron-name').value = 'nightly-codex';
+  elements.get('cron-expr').value = '0 3 * * *';
+  elements.get('cron-prompt').value = 'run codex nightly';
+  elements.get('cron-backend').value = 'codex-o3';
+
+  await context.saveCronTask();
+
+  body = JSON.parse(requests[1].opts.body);
+  assert.equal(requests[1].url, '/api/cron/tasks');
+  assert.equal(body.backend, 'codex-o3');
+});
+
 test('startTuiStatusPolling polls TUI status every three seconds', () => {
   const {context, intervals} = buildContext();
 

@@ -39,6 +39,7 @@ class ScheduledTaskConfig(BaseModel):
   handler: Optional[str] = None
   loop: Optional[ImprovementLoopConfig] = None
   repo: Optional[str] = None
+  backend: Optional[str] = None
   timezone: str = "America/Los_Angeles"
   enabled: bool = True
   project: Optional[str] = None

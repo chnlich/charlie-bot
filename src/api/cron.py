@@ -29,6 +29,7 @@ class TaskUpdate(BaseModel):
   cron: Optional[str] = None
   prompt: Optional[str] = None
   repo: Optional[str] = None
+  backend: Optional[str] = None
   timezone: Optional[str] = None
   enabled: Optional[bool] = None
   project: Optional[str] = None
@@ -40,6 +41,7 @@ class TaskCreate(BaseModel):
   cron: str
   prompt: str
   repo: Optional[str] = None
+  backend: Optional[str] = None
   timezone: str = 'America/Los_Angeles'
   enabled: bool = True
   project: Optional[str] = None
@@ -65,6 +67,11 @@ async def update_cron_task(name: str, req: TaskUpdate):
         task['prompt'] = req.prompt
       if req.repo is not None:
         task['repo'] = req.repo or None
+      if 'backend' in req.model_fields_set:
+        if req.backend:
+          task['backend'] = req.backend
+        else:
+          task.pop('backend', None)
       if req.timezone is not None:
         task['timezone'] = req.timezone
       if req.enabled is not None:
@@ -87,7 +94,10 @@ async def create_cron_task(req: TaskCreate):
   tasks = data.get('scheduled_tasks', [])
   if any(t.get('name') == req.name for t in tasks):
     raise HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')
-  new_task = {k: v for k, v in req.model_dump().items() if v is not None or k in ('name', 'cron', 'prompt', 'enabled')}
+  payload = req.model_dump()
+  if not payload.get('backend'):
+    payload.pop('backend', None)
+  new_task = {k: v for k, v in payload.items() if v is not None or k in ('name', 'cron', 'prompt', 'enabled')}
   tasks.append(new_task)
   data['scheduled_tasks'] = tasks
   await asyncio.to_thread(_write_cron_yaml, data)

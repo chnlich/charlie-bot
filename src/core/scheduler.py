@@ -16,7 +16,7 @@ from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled
 from src.core.improvement_loop import determine_action
 from src.core.models import CreateSessionRequest, SessionMetadata, SpawnRequest, TaskType, parse_utc_datetime
 from src.core.sessions import SessionManager
-from src.core.spawner import resolve_session_subagent_backend_model, spawn_worker
+from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
@@ -264,7 +264,8 @@ class Scheduler:
     thread_mgr = ThreadManager(cfg)
     thread = await thread_mgr.create_thread(session, description, require_review=require_review)
 
-    resolved_backend, resolved_model = await resolve_session_subagent_backend_model(session.id, cfg, session_mgr)
+    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+        session.id, cfg, session_mgr, requested_backend=task_cfg.backend)
 
     create_logged_task(
         spawn_worker(

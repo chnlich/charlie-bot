@@ -1951,6 +1951,7 @@ async function openCronEditor(taskName) {
   document.getElementById('cron-expr').value = task.cron || '';
   document.getElementById('cron-prompt').value = task.prompt || '';
   document.getElementById('cron-repo').value = task.repo || '';
+  document.getElementById('cron-backend').value = task.backend || '';
   document.getElementById('cron-project').value = task.project || '';
   document.getElementById('cron-timezone').value = task.timezone || 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = task.enabled !== false;
@@ -1967,6 +1968,7 @@ function openCronAdder() {
   document.getElementById('cron-expr').value = '';
   document.getElementById('cron-prompt').value = '';
   document.getElementById('cron-repo').value = '';
+  document.getElementById('cron-backend').value = '';
   document.getElementById('cron-project').value = '';
   document.getElementById('cron-timezone').value = 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = true;
@@ -1983,6 +1985,7 @@ async function saveCronTask() {
   const cron = document.getElementById('cron-expr').value.trim();
   const prompt = document.getElementById('cron-prompt').value.trim();
   const repo = document.getElementById('cron-repo').value.trim() || null;
+  const backend = document.getElementById('cron-backend').value || null;
   const project = document.getElementById('cron-project').value.trim() || null;
   const timezone = document.getElementById('cron-timezone').value.trim();
   const enabled = document.getElementById('cron-enabled').checked;
@@ -1993,13 +1996,13 @@ async function saveCronTask() {
       res = await fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({cron, prompt, repo, project, timezone, enabled}),
+        body: JSON.stringify({cron, prompt, repo, backend, project, timezone, enabled}),
       });
     } else {
       res = await fetch('/api/cron/tasks', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name, cron, prompt, repo, project, timezone, enabled}),
+        body: JSON.stringify({name, cron, prompt, repo, backend, project, timezone, enabled}),
       });
     }
   } catch (err) {

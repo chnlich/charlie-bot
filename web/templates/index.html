@@ -567,6 +567,15 @@
             <input id="cron-repo" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" placeholder="~/workspace/my-repo" />
           </div>
           <div>
+            <label class="block text-xs text-slate-400 mb-1">Backend</label>
+            <select id="cron-backend" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200">
+              <option value="">Inherit / default</option>
+              {% for opt in backend_options %}
+              <option value="{{ opt.id }}">{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
             <label class="block text-xs text-slate-400 mb-1">Project (optional)</label>
             <input id="cron-project" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" placeholder="e.g. alpha-lab" />
           </div>

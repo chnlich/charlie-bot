@@ -9,7 +9,7 @@ import structlog
 
 from src.agents.master_cc import run_message
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 
@@ -21,16 +21,21 @@ async def run_message_with_resume_recovery(
     session_meta: SessionMetadata,
     summary: str,
     session_mgr: SessionManager,
+    backend_override: Optional[str] = None,
 ) -> Optional[str]:
   """Call run_message, retrying once with cc_session_id cleared on stale-resume errors."""
-  backend_id = session_meta.backend
+  run_session_meta = session_meta if backend_override is None else session_meta.model_copy(
+      update={"backend": backend_override})
+  backend_id = run_session_meta.backend
   backend_option = cfg.get_backend_option(backend_id)
-  if backend_option is None and backend_id.startswith("codex"):
+  if backend_option is None and backend_override is None and backend_id.startswith("codex"):
     backend_option = next((o for o in cfg.backend_options if o.type == "codex"), None)
+  if backend_option is None and backend_override is not None:
+    raise ValueError(f"scheduled task backend '{backend_id}' is not configured")
   try:
     return await run_message(
         cfg,
-        session_meta,
+        run_session_meta,
         summary,
         session_mgr.callbacks(),
         skip_user_event=True,
@@ -49,7 +54,7 @@ async def run_message_with_resume_recovery(
         error=str(e),
     )
 
-    retry_session_meta = session_meta.model_copy(deep=True)
+    retry_session_meta = run_session_meta.model_copy(deep=True)
     retry_session_meta.cc_session_id = None
     log.info(
         "trigger_master_retry_without_resume",
@@ -87,6 +92,8 @@ async def trigger_master(
       log.error("trigger_master_session_not_found", session=session_id)
       return
 
+    scheduled_backend = _scheduled_task_backend_override(session_meta)
+
     if (session_meta.scheduled_task and session_meta.cc_session_id and session_meta.cc_session_started_at):
       pt = ZoneInfo('America/Los_Angeles')
       now_pt = datetime.now(pt)
@@ -113,7 +120,8 @@ async def trigger_master(
           "Are there errors? Summarize the outcome.\n\n"
           f"{summary}")
 
-    new_cc_session_id = await run_message_with_resume_recovery(cfg, session_meta, master_summary, session_mgr)
+    new_cc_session_id = await run_message_with_resume_recovery(
+        cfg, session_meta, master_summary, session_mgr, backend_override=scheduled_backend)
 
     if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:
       await session_mgr.persist_cc_session_id(session_id, new_cc_session_id)
@@ -144,3 +152,13 @@ def is_resume_not_found_error(error: Exception) -> bool:
   has_conversation_not_found = "conversation" in message and "not found" in message
   has_session_not_found = "session" in message and "not found" in message
   return has_conversation_not_found or has_session_not_found
+
+
+def _scheduled_task_backend_override(session_meta: SessionMetadata) -> Optional[str]:
+  """Return the configured backend override for a scheduled session, if any."""
+  if not session_meta.scheduled_task:
+    return None
+  for task in get_scheduled_tasks():
+    if task.name == session_meta.scheduled_task:
+      return task.backend or None
+  return None

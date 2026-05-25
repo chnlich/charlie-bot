@@ -176,6 +176,22 @@ def _route_resume_session(backend_type: str, cc_session_id: Optional[str]) -> tu
   return [], None
 
 
+def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
+  """Build the environment for the master backend subprocess."""
+  env = {**os.environ}
+  env.pop("CLAUDECODE", None)
+  env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
+  env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+  env["CHARLIEBOT_SESSION_ID"] = session_id
+
+  venv_bin = cfg.charlie_bot_repo / ".venv" / "bin"
+  if venv_bin.is_dir():
+    existing_path = env.get("PATH")
+    env["PATH"] = str(venv_bin) if not existing_path else f"{venv_bin}{os.pathsep}{existing_path}"
+
+  return env
+
+
 async def _handle_event(
     event: dict,
     session_id: str,
@@ -229,10 +245,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   if item.extra_claude_flags:
     extra_flags.extend(item.extra_claude_flags)
 
-  env = {**os.environ}
-  env.pop("CLAUDECODE", None)
-  env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
-  env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+  env = _build_master_env(cfg, session_meta.id)
 
   prompt = _build_prompt(item.user_content, item.is_voice)
 

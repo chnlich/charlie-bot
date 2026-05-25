@@ -8,6 +8,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -35,10 +36,17 @@ def _make_session_dir(tmp_path: Path, session: str) -> Path:
   return home
 
 
+def _mock_config(home: Path) -> MagicMock:
+  cfg = MagicMock()
+  cfg.sessions_dir = home / ".charliebot" / "sessions"
+  return cfg
+
+
 def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
   """Drive main() with the supplied ssh argv prefix and return parsed metadata."""
   session = "sess-e2e"
   home = _make_session_dir(tmp_path, session)
+  cfg = _mock_config(home)
   cwd = str(tmp_path)
 
   patches = [
@@ -54,7 +62,8 @@ def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
               "--cmd",
               "sleep 2; echo hi",
           ]),
-      patch("src.cli.remote_launch.Path.home", return_value=home),
+      patch("src.cli.common.get_config", return_value=cfg),
+      patch("src.cli.remote_launch.get_config", return_value=cfg),
   ]
   for p in patches:
     p.start()
@@ -105,6 +114,7 @@ def test_end_to_end_localhost(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   session = "sess-ssh-fail"
   home = _make_session_dir(tmp_path, session)
+  cfg = _mock_config(home)
 
   with patch("sys.argv", [
       "remote_launch",
@@ -116,7 +126,8 @@ def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
       str(tmp_path),
       "--cmd",
       "echo hi",
-  ]), patch("src.cli.remote_launch.Path.home", return_value=home):
+  ]), patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.get_config", return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -129,6 +140,7 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
   # Create a home dir without the requested session subdirectory.
   home = tmp_path / "home"
   (home / ".charliebot" / "sessions").mkdir(parents=True)
+  cfg = _mock_config(home)
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="12345\n", stderr="")
 
@@ -139,7 +151,8 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.remote_launch.Path.home", return_value=home), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
     with pytest.raises(SystemExit) as exc_info:
       main()
@@ -152,6 +165,7 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
 def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   session = "sess-bad-pid"
   home = _make_session_dir(tmp_path, session)
+  cfg = _mock_config(home)
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="not-a-pid\n", stderr="")
 
@@ -162,7 +176,8 @@ def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.remote_launch.Path.home", return_value=home), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
     with pytest.raises(SystemExit) as exc_info:
       main()
@@ -173,6 +188,7 @@ def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture
 def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   session = "sess-timeout"
   home = _make_session_dir(tmp_path, session)
+  cfg = _mock_config(home)
 
   timeout = subprocess.TimeoutExpired(cmd=["ssh"], timeout=30, stderr="still waiting")
 
@@ -183,7 +199,8 @@ def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.remote_launch.Path.home", return_value=home), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", side_effect=timeout):
     with pytest.raises(SystemExit) as exc_info:
       main()
@@ -196,6 +213,7 @@ def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   session = "sess-mock"
   home = _make_session_dir(tmp_path, session)
+  cfg = _mock_config(home)
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="98765\n", stderr="")
 
@@ -210,7 +228,8 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
       "--cwd", cwd,
       "--cmd", cmd,
   ]), \
-       patch("src.cli.remote_launch.Path.home", return_value=home), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc) as mock_run:
     main()
 
@@ -242,3 +261,61 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
   assert "'/some where'" in wrapper
   # cmd is embedded inside the inner string which is itself shlex.quote'd.
   assert "make build && echo done" in wrapper
+
+
+def test_success_path_derives_session_from_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  session = "sess-cwd"
+  home = _make_session_dir(tmp_path, session)
+  cfg = _mock_config(home)
+  monkeypatch.chdir(cfg.sessions_dir / session)
+  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
+
+  fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="24680\n", stderr="")
+
+  with patch("sys.argv", [
+      "remote_launch",
+      "--host", "remote.example.com",
+      "--cwd", str(tmp_path),
+      "--cmd", "echo hi",
+  ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
+    main()
+
+  meta = json.loads(capsys.readouterr().out.strip())
+  assert meta["session_id"] == session
+  assert meta["remote_pid"] == 24680
+
+
+def test_success_path_derives_session_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  session = "sess-env"
+  home = _make_session_dir(tmp_path, session)
+  cfg = _mock_config(home)
+  monkeypatch.chdir(tmp_path)
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session)
+
+  fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="13579\n", stderr="")
+
+  with patch("sys.argv", [
+      "remote_launch",
+      "--host", "remote.example.com",
+      "--cwd", str(tmp_path),
+      "--cmd", "echo hi",
+  ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.get_config", return_value=cfg), \
+       patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
+    main()
+
+  meta = json.loads(capsys.readouterr().out.strip())
+  assert meta["session_id"] == session
+  assert meta["remote_pid"] == 13579

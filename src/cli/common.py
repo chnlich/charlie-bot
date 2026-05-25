@@ -5,6 +5,7 @@ entry point, including consistent error-detail extraction on 4xx/5xx responses.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,33 +43,37 @@ def resolve_session_id(arg_session: str | None) -> str:
   """Resolve the session id to use for a CLI invocation.
 
   Master CC always cd's into ~/.charliebot/sessions/{session_id} before
-  running these CLIs. We use that fact to (a) auto-derive the session id
-  when --session is omitted, and (b) reject mismatches when an explicit
-  --session disagrees with cwd — which catches the fork-imitation bug
-  where master copies an old session id from inherited transcript history.
+  running these CLIs, and master subprocesses also receive
+  CHARLIEBOT_SESSION_ID. We use those facts to (a) auto-derive the session
+  id when --session is omitted, and (b) reject mismatches across explicit,
+  cwd-derived, and env-derived sources — which catches stale copied session
+  ids before they can mutate the wrong session.
   """
   cwd = Path.cwd().resolve()
   sessions_dir = get_config().sessions_dir.resolve()
-  in_session_dir = cwd.parent == sessions_dir
-  if in_session_dir:
-    sid = cwd.name
-    if arg_session is None or arg_session == sid:
-      return sid
-    print(
-        json.dumps(
-            {
-                "error":
-                    (
-                        f"session id mismatch: cwd={sid} --session={arg_session}; "
-                        "refusing to delegate to a different session")
-            }),
-        file=sys.stderr,
-    )
-    sys.exit(2)
-  if arg_session is None:
+  sources: dict[str, str] = {}
+  if arg_session is not None:
+    sources["--session"] = arg_session
+  if cwd.parent == sessions_dir:
+    sources["cwd"] = cwd.name
+  env_session = os.environ.get("CHARLIEBOT_SESSION_ID")
+  if env_session is not None:
+    sources["CHARLIEBOT_SESSION_ID"] = env_session
+
+  if not sources:
     print(
         json.dumps({"error": "--session required when not running from a CharlieBot session dir"}),
         file=sys.stderr,
     )
     sys.exit(2)
-  return arg_session
+
+  unique_session_ids = set(sources.values())
+  if len(unique_session_ids) > 1:
+    source_text = " ".join(f"{name}={value}" for name, value in sources.items())
+    print(
+        json.dumps({"error": f"session id mismatch: {source_text}; refusing to use an ambiguous session"}),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+  return next(iter(unique_session_ids))

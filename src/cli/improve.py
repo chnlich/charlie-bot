@@ -2,8 +2,8 @@
 
 Called by the master Claude Code instance via its run_command tool:
 
-  # --session is optional; auto-derived from cwd when run inside a CharlieBot session dir.
-  python -m src.cli.improve \
+  # --session is optional; auto-derived from cwd/env in normal master use.
+  charliebot improve \
     --repo /path/to/repo \
     --base-branch main \
     --iterations 3 \
@@ -26,7 +26,7 @@ def main() -> None:
       "--session",
       required=False,
       default=None,
-      help="Session ID (optional; auto-derived from cwd when run inside a CharlieBot session dir)")
+      help="Session ID (optional; auto-derived from cwd or CHARLIEBOT_SESSION_ID)")
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument("--goal", required=True, help="Improvement goal")

@@ -51,7 +51,7 @@ You have these built-in features. If unsure how one works, **read the source cod
 Spawn a worker in an isolated git worktree for any code change:
 
 ```bash
-python -m src.cli.delegate \
+charliebot delegate \
   --repo /path/to/target/repo \
   --description "concise task description" \
   --context "optional business context for reviewers" \
@@ -59,7 +59,7 @@ python -m src.cli.delegate \
   --task-type implement
 ```
 
-`--session` is auto-derived from cwd (master CC always runs in `~/.charliebot/sessions/{session_id}`), so do NOT pass it explicitly — passing a wrong/stale session id will be rejected. The same applies to the `improve` and `schedule_trigger` examples below.
+Do NOT pass `--session` in normal master use. Session identity is supplied by cwd (`~/.charliebot/sessions/{session_id}`) and `CHARLIEBOT_SESSION_ID`; a mismatch with an explicit `--session` is rejected. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
 
 Pass `--keep-worktree 1` instead when the worker launches a long-running external job (e.g. a SLURM submission) whose WorkDir lives in the worktree.
 
@@ -79,7 +79,7 @@ Pass `--keep-worktree 1` instead when the worker launches a long-running externa
 ## Improve Loop
 
 ```bash
-python -m src.cli.improve --repo <repo> --base-branch <base> --iterations N --goal '<goal>' --work-branch '<branch>'
+charliebot improve --repo <repo> --base-branch <base> --iterations N --goal '<goal>' --work-branch '<branch>'
 ```
 
 Iterative change→run→verify loop; workers are fully autonomous (human on the loop, not in the loop). You can initiate from natural language — the user does NOT need to type `/improve`.
@@ -117,7 +117,7 @@ Schedule a one-shot delayed wake-up. After `--max-wait` seconds, master receives
 
 Pure delay (no PID watch):
 ```bash
-python -m src.cli.schedule_trigger \
+charliebot schedule-trigger \
   --max-wait SECONDS \
   --message "Check status"
 ```
@@ -126,13 +126,13 @@ python -m src.cli.schedule_trigger \
 
 ```bash
 # Local PID(s) — event-driven via os.pidfd_open + asyncio reader (no polling)
-python -m src.cli.schedule_trigger \
+charliebot schedule-trigger \
   --max-wait SECONDS \
   --watch-pid PID [PID ...] \
   --message "Local job finished"
 
 # Remote PID(s) — ssh probe with exponential backoff (10s -> 600s, +0-10s noise)
-python -m src.cli.schedule_trigger \
+charliebot schedule-trigger \
   --max-wait SECONDS \
   --watch-pid host:PID [host2:PID2 ...] \
   --message "Remote job finished"
@@ -147,7 +147,7 @@ The fired message is prefixed with the reason:
 - `[Scheduled trigger fired | pid_gone] <msg> (pid_gone: ...)` — some PID was already gone at create time
 - `[Scheduled trigger fired | timeout]  <msg> (exited: ...; still alive: neptune:1234)` — `--max-wait` elapsed
 
-For starting long-running remote jobs alongside `--watch-pid host:PID`, see `remote_launch` (separate CLI; the two are independent and master glues them).
+For starting long-running remote jobs alongside `--watch-pid host:PID`, use `charliebot remote-launch` (separate CLI; the two are independent and master glues them).
 
 ---
 

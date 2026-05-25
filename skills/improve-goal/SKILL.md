@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Improve Loop — Goal Prompt Construction
 
-This skill is for the **master CC** (orchestrator). It guides construction of the `--goal` argument passed to `python -m src.cli.improve`. Workers do NOT need this skill — they read `improve-worker` instead.
+This skill is for the **master CC** (orchestrator). It guides construction of the `--goal` argument passed to `charliebot improve`. Workers do NOT need this skill — they read `improve-worker` instead.
 
 ## Goal Prompt Rules
 

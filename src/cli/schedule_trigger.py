@@ -1,9 +1,9 @@
 """CLI script for master CC to schedule a delayed trigger.
 
 Called by the master Claude Code instance via its run_command tool. ``--session``
-is optional; auto-derived from cwd when run inside a CharlieBot session dir.
+is optional; auto-derived from cwd/env in normal master use.
 
-  python -m src.cli.schedule_trigger \
+  charliebot schedule-trigger \
     --max-wait 3600 \
     --message 'Check PID 12345'
 
@@ -13,12 +13,12 @@ value is either a local PID (e.g. ``12345``) or a remote PID of the form
 ``host:pid`` (e.g. ``neptune:12345``). All values in a single trigger must be
 either all local or all remote — mixing is rejected.
 
-  python -m src.cli.schedule_trigger \
+  charliebot schedule-trigger \
     --max-wait 3600 \
     --watch-pid 12345 67890 \
     --message 'Training finished'
 
-  python -m src.cli.schedule_trigger \
+  charliebot schedule-trigger \
     --max-wait 3600 \
     --watch-pid neptune:12345 noire:67890 \
     --message 'Remote training finished'
@@ -66,7 +66,7 @@ def _build_parser() -> argparse.ArgumentParser:
       "--session",
       required=False,
       default=None,
-      help="Session ID (optional; auto-derived from cwd when run inside a CharlieBot session dir)")
+      help="Session ID (optional; auto-derived from cwd or CHARLIEBOT_SESSION_ID)")
   parser.add_argument(
       "--max-wait",
       required=True,

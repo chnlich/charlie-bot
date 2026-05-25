@@ -3,8 +3,7 @@
 Captures the remote PID, stages stdout/stderr/sentinel under a remote dir, and
 writes a local metadata.json describing the launch.
 
-  python -m src.cli.remote_launch \
-    --session SESSION_ID \
+  charliebot remote-launch \
     --host HOST \
     --cwd CWD \
     --cmd CMD
@@ -22,8 +21,9 @@ import secrets
 import shlex
 import subprocess
 import sys
-from pathlib import Path
 
+from src.cli.common import resolve_session_id
+from src.core.config import get_config
 from src.core.models import utc_now
 
 
@@ -68,18 +68,23 @@ def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Launch a long-running command on a remote host via ssh+setsid")
-  parser.add_argument("--session", required=True, help="Session ID")
+  parser.add_argument(
+      "--session",
+      required=False,
+      default=None,
+      help="Session ID (optional; auto-derived from cwd or CHARLIEBOT_SESSION_ID)")
   parser.add_argument("--host", required=True, help="Remote host (ssh target)")
   parser.add_argument("--cwd", required=True, help="Working directory on the remote host")
   parser.add_argument("--cmd", required=True, help="Command to execute on the remote host")
   args = parser.parse_args()
+  session_id = resolve_session_id(args.session)
 
   started_at = utc_now()
   launch_id = f"{started_at:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
 
   remote_pid = _ssh_launch_remote(args.host, args.cwd, args.cmd, launch_id)
 
-  session_dir = Path.home() / ".charliebot" / "sessions" / args.session
+  session_dir = get_config().sessions_dir / session_id
   if not session_dir.is_dir():
     print(f"session dir does not exist: {session_dir}", file=sys.stderr)
     sys.exit(4)
@@ -89,7 +94,7 @@ def main() -> None:
 
   metadata = {
       "launch_id": launch_id,
-      "session_id": args.session,
+      "session_id": session_id,
       "host": args.host,
       "remote_pid": remote_pid,
       "cwd": args.cwd,

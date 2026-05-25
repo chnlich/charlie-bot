@@ -1,5 +1,7 @@
 import asyncio
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,6 +27,27 @@ class _FakeBackend:
 
   async def run(self, prompt: str, cwd: str, env: dict):
     yield backend_base.make_result_event()
+
+
+def test_build_master_env_injects_session_and_prepends_repo_venv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  repo = tmp_path / "repo"
+  venv_bin = repo / ".venv" / "bin"
+  venv_bin.mkdir(parents=True)
+  cfg = SimpleNamespace(charliebot_home=tmp_path / "home", charlie_bot_repo=repo)
+
+  monkeypatch.setenv("PATH", "/usr/bin")
+  monkeypatch.setenv("CLAUDECODE", "1")
+
+  env = master_cc._build_master_env(cfg, "session-id")
+
+  assert env["CHARLIEBOT_SESSION_ID"] == "session-id"
+  assert env["GIT_CEILING_DIRECTORIES"] == str(tmp_path / "home")
+  assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+  assert env["PATH"].split(os.pathsep)[:2] == [str(venv_bin), "/usr/bin"]
+  assert "CLAUDECODE" not in env
 
 
 @pytest.mark.asyncio

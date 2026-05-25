@@ -109,7 +109,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 1. **Task Delegation** (Master → Worker):
    - User submits request via Web UI chat
    - Master Agent (Claude Code session) decides to delegate a coding task
-   - Master calls `python -m src.cli.delegate --session SESSION --repo /path --base-branch main --description "task"` (`src/cli/delegate.py`)
+   - Master calls `charliebot delegate --repo /path --base-branch main --description "task"` (`src/cli/delegate.py`); session identity is supplied by cwd/env in normal master use
    - The CLI POSTs to `/api/internal/delegate`, which creates a thread and spawns a Worker via `spawn_worker()` (`src/core/spawner.py`)
 
 2. **Worker Execution** (Phase 1 — Implement):

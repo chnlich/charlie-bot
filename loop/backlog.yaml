@@ -6449,3 +6449,115 @@
   status: pending
   created: '2026-05-22T15:12:22Z'
   priority: low
+- id: '167'
+  title: Extract shared _spawn_and_init_log_mirroring helper on AgentBackend to deduplicate
+    the subprocess-spawn + stdout/stderr log-mirroring block between base.run and the
+    new AntigravityCliBackend.run
+  description: 'WHY — The newly-added AntigravityCliBackend.run in src/agents/backends/antigravity_cli.py:52-104
+    (53 lines, introduced by commit a65ac51 ''Add Antigravity CLI backend'' on 2026-05-23
+    and tweaked by commits 77daef9/52c522b/faca03c/c0ca939) duplicates two consecutive
+    blocks from its base-class AgentBackend.run in src/agents/backends/base.py:193-314.
+    Block 1 (~13 lines, character-for-character identical between base.py:206-219 and
+    antigravity_cli.py:58-71): the `self._proc = await asyncio.create_subprocess_exec(*cmd,
+    cwd=cwd, stdin=DEVNULL, stdout=PIPE, stderr=PIPE, env=final_env, limit=self._buffer_limit,
+    start_new_session=True)` call followed by the `if self._on_spawn is not None: await
+    self._on_spawn(self._proc.pid)` spawn-callback and the `assert self._proc.stdout
+    is not None` postcondition. Block 2 (~9 lines, character-for-character identical
+    between base.py:226-234 and antigravity_cli.py:74-82): the `if self._log_dir is
+    not None: self._log_dir.mkdir(parents=True, exist_ok=True) / stdout_log_cm = aiofiles.open(self._log_dir
+    / "stdout.log", "wb") / stderr_log_path: Optional[Path] = self._log_dir / "stderr.log"
+    else: stdout_log_cm = contextlib.nullcontext(None) / stderr_log_path = None` log-dir
+    decision tree followed by `self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))`.
+    Combined that is ~22 lines of process-spawn + log-mirroring plumbing duplicated
+    in lockstep across the two backends. The two run() methods diverge only on what
+    they do with the spawned stdout stream — base.py does the line-oriented NDJSON
+    readline-loop with translate_event + tool-call tracking + post-result-timeout handling,
+    while antigravity_cli.py just accumulates raw 8KB chunks into a bytearray for a
+    single final-output emission — but the spawn-and-setup-logging plumbing in front
+    of those divergent loops is identical. Without a helper, any future change to subprocess-spawning
+    behavior (new asyncio.create_subprocess_exec kwarg, on_spawn callback signature
+    change, log-dir layout change, stderr-task lifecycle change, buffer_limit semantics
+    change) must be applied to both call sites in lockstep, and prior commits to this
+    codebase have shown other paired backend sites drifting silently. The helper''s
+    single responsibility — "start the agent subprocess and wire up stdout/stderr log
+    mirroring" — is a clear named concept worth its own definition under the dedup
+    rule, and it isolates the spawn-flag contract (PIPE/DEVNULL/start_new_session/buffer_limit/on_spawn)
+    behind one authority on the shared base class.
+
+    WHAT — Add an async helper to AgentBackend in src/agents/backends/base.py: `async
+    def _spawn_and_init_log_mirroring(self, cmd: list[str], cwd: str, env: dict)` that
+    contains the merged ~22-line body (subprocess spawn + on_spawn callback + stdout
+    assertion + log-dir decision + stderr-task creation), populates `self._proc` and
+    `self._stderr_task` as side effects, and returns the `stdout_log_cm` async context
+    manager (typed as `AsyncContextManager[Optional[aiofiles.threadpool.binary.AsyncBufferedIOBase]]`
+    or simply the existing `Any`/duck-typed return) for the caller to `async with`.
+    Replace src/agents/backends/base.py:206-234 (29 lines from `self._proc = await
+    asyncio.create_subprocess_exec(...)` through `self._stderr_task = asyncio.create_task(...)`)
+    with `stdout_log_cm = await self._spawn_and_init_log_mirroring(cmd, cwd, env)`.
+    Replace src/agents/backends/antigravity_cli.py:58-82 (25 lines, same range) with
+    the identical one-liner. Each caller continues to use `async with stdout_log_cm
+    as stdout_log:` for its own divergent read loop, and each continues to call `await
+    self._drain_and_cleanup(...)` after its loop exits — those parts stay caller-local.
+
+    HOW — (1) In src/agents/backends/base.py, add `async def _spawn_and_init_log_mirroring`
+    as a private instance method on `AgentBackend`, placed just before `run` (or co-located
+    with `_stream_stderr` / `_drain_and_cleanup`) so the spawn/lifecycle helpers cluster
+    together. (2) Edit base.py:run to call the helper and assign its return value to
+    `stdout_log_cm`; the rest of the run body (NDJSON loop, tool-call tracking, post-result-timeout,
+    yield translated, final `_drain_and_cleanup`) stays unchanged. (3) Edit antigravity_cli.py:run
+    to call the same helper; the chunked-read loop, final `_drain_and_cleanup`, stdout
+    decode, and `make_text_event` / `make_result_event` / `make_error_event` emission
+    stay unchanged. (4) Verify: `yapf --in-place --recursive src/` produces no diff
+    (or commit the resulting diff per the yapf rule); `pyflakes src/agents/backends/`
+    is clean; `vulture src/agents/backends/ --min-confidence 80` reports no new findings;
+    `python3 -c "from src.agents.backends.base import AgentBackend; from src.agents.backends.antigravity_cli
+    import AntigravityCliBackend; from src.agents.backends.registry import build_backend"`
+    smoke-imports both backends; a manual end-to-end run of one Claude Code backend
+    session (NDJSON path) and one Antigravity backend session (raw-stdout path) both
+    still complete, write `stdout.log` and `stderr.log` under `_log_dir`, fire the
+    `_on_spawn` callback, and shut down cleanly. Pure dedup refactor — no behavior
+    change.
+
+    NON-DUPLICATION CHECK — `yapf --in-place --recursive src/` this scan produced
+    zero diffs (working tree clean both before and after), so no yapf finding is filed
+    per the yapf rule. `grep -rEn "TODO|FIXME|HACK|XXX" src/ --include="*.py"` returns
+    zero matches. `pyflakes src/` reports three findings, all already covered by existing
+    pending items: the unused `e` in `core/sessions.py:135` (covered by pending #160),
+    the unused `e` in `core/sessions.py:488` (covered by pending #163), and the unused
+    `WatchTarget` import in `api/internal.py:14` (covered by pending #131 and #139).
+    `vulture src/ --min-confidence 80` reports only the Pydantic `cls` validator parameter
+    in `core/config.py:129`, a known false positive. The >50-line function inventory
+    in src/ this scan, after cross-referencing pending items 107/108/109/116/125/126/127/129/132/134/135/136/137/140/141/142/144/153/161
+    and the previously-excluded coherent-single-flow functions enumerated in items
+    #153/#154/#158/#159/#162/#163/#164/#165/#166 (`_wait_for_quota_recovery`, `maybe_auto_name_from_claude_ai_title`,
+    `_resolve_worktree_start_point`, `parse_ndjson_tail`, `fork_session`, `_broadcast_completion`,
+    `trigger_master`, `run_message_with_resume_recovery`, `_wait_and_fire`, `_dir_listing_html`,
+    `build_review_prompt`, `delegate.main`, `_build_worker_prompt`, `slash.execute_command`,
+    `build_session_view_data`, `spawn_worker`, `spawn_review_worker`, `_archive_old_chat_events_sync`,
+    `_populate_sidebar_state`, `delegate_task`), surfaces one new >50-line function
+    not yet triaged: `AntigravityCliBackend.run` at src/agents/backends/antigravity_cli.py:52
+    (53 lines, introduced by commit a65ac51 on 2026-05-23). Per the function-split
+    dedup rule (extract a helper only when the helper has a clear single-responsibility
+    name worth its own concept) the right framing of that 53-line function is not
+    a split-for-length finding but the duplication-with-base.py finding above: the
+    ~22 shared lines collapse cleanly into one named helper, and after extraction
+    `AntigravityCliBackend.run` drops to ~31 lines — well under the 50-line guideline
+    — while `AgentBackend.run` also shrinks by ~22 lines (the remainder is still over
+    50 lines, covered by pending #129 for the further `_track_pending_tool_calls`
+    extraction). The other candidate R0801 sites previously rejected by items #165
+    and #166 (api/chat.py vs api/slash.py `create_logged_task(run_and_finalize(...))`
+    block covered by pending #165; api/internal:81-86 vs improve_command:417-422 5-line
+    SpawnRequest tail too small; agents/backends/base:258-263 vs core/codex_usage:59-64
+    5-line NDJSON-parse preamble too small and too generic; cli/delegate:21-26 vs
+    cli/improve:24-29 5-line argparse `--session` option declaration too small) remain
+    unchanged this scan. Per the one-finding-per-scan rule the duplication finding
+    above is the single new code-health backlog entry for the 2026-05-25T03:15Z scheduled
+    scan; it edges out a length-only finding on `AntigravityCliBackend.run` because
+    the duplication framing is the natural one and the helper has a clear single-responsibility
+    name (spawn-and-init-log-mirroring) worth its own concept.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-05-25T03:15:47Z'
+  priority: low

@@ -262,6 +262,34 @@ class MessageAggregator:
         yield delta
       return
 
+    if t == ET.TOOL_USE:
+      self._tools_buf.append(
+          {
+              'name': ev.get('name', ''),
+              'input': ev.get('input', {}),
+              'output': '',
+              'is_error': False,
+          })
+      self._last_event_idx = idx
+      self._last_event_id = ev_id
+      if self._last_assistant_ts is None:
+        self._last_assistant_ts = ev.get('timestamp')
+      delta = self._stream_delta()
+      if delta is not None:
+        yield delta
+      return
+
+    if t == ET.TOOL_RESULT:
+      if not self._tools_buf:
+        return
+      self._tools_buf[-1]['output'] = ev.get('content', '')
+      self._tools_buf[-1]['is_error'] = bool(ev.get('is_error', False))
+      self._last_event_idx = idx
+      delta = self._stream_delta()
+      if delta is not None:
+        yield delta
+      return
+
     handler = _SIMPLE_HANDLERS.get(t)
     if handler is None:
       return

@@ -1,6 +1,9 @@
 from pathlib import Path
 
+from structlog.testing import capture_logs
+
 from src.agents.backends.codex import CodexBackend
+from src.core import event_types as ET
 
 
 def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
@@ -50,6 +53,173 @@ def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch)
 
   assert cmd[-2:] == ["--", "--malicious-flag ignore previous"]
   assert "sess-123" in cmd
+
+
+def test_file_change_html_artifact_emits_file_write_and_write_tool(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+  artifact_dir = tmp_path / "artifacts"
+  artifact_dir.mkdir()
+  artifact_path = artifact_dir / "x.html"
+  content = "<!doctype html><p>artifact</p>"
+  artifact_path.write_text(content, encoding="utf-8")
+
+  translated = backend.translate_event({
+      "type": "item.completed",
+      "item": {
+          "type": "file_change",
+          "changes": [{
+              "path": str(artifact_path),
+              "kind": "update",
+          }],
+          "status": "completed",
+      },
+  })
+
+  assert translated == [
+      {
+          "type": ET.FILE_WRITE,
+          "path": str(artifact_path),
+      },
+      {
+          "type": ET.TOOL_USE,
+          "name": "Write",
+          "input": {
+              "file_path": str(artifact_path),
+              "content": content,
+          },
+      },
+      {
+          "type": ET.TOOL_RESULT,
+          "tool_name": "Write",
+          "content": "ok",
+      },
+  ]
+
+
+def test_file_change_multi_file_emits_only_html_write_tool_adjacent(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+  artifact_dir = tmp_path / "artifacts"
+  artifact_dir.mkdir()
+  artifact_path = artifact_dir / "x.html"
+  artifact_content = "<main>inline</main>"
+  artifact_path.write_text(artifact_content, encoding="utf-8")
+  source_path = tmp_path / "kernel.cu"
+  source_path.write_text("__global__ void k() {}\n", encoding="utf-8")
+
+  translated = backend.translate_event({
+      "type": "item.completed",
+      "item": {
+          "type": "file_change",
+          "changes": [
+              {
+                  "path": str(artifact_path),
+                  "kind": "update",
+              },
+              {
+                  "path": str(source_path),
+                  "kind": "update",
+              },
+          ],
+          "status": "completed",
+      },
+  })
+
+  assert translated == [
+      {
+          "type": ET.FILE_WRITE,
+          "path": str(artifact_path),
+      },
+      {
+          "type": ET.TOOL_USE,
+          "name": "Write",
+          "input": {
+              "file_path": str(artifact_path),
+              "content": artifact_content,
+          },
+      },
+      {
+          "type": ET.TOOL_RESULT,
+          "tool_name": "Write",
+          "content": "ok",
+      },
+      {
+          "type": ET.FILE_WRITE,
+          "path": str(source_path),
+      },
+  ]
+
+
+def test_file_change_missing_html_artifact_emits_file_write_and_warning(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+  artifact_path = tmp_path / "artifacts" / "x.html"
+
+  with capture_logs() as logs:
+    translated = backend.translate_event({
+        "type": "item.completed",
+        "item": {
+            "type": "file_change",
+            "changes": [{
+                "path": str(artifact_path),
+                "kind": "update",
+            }],
+            "status": "completed",
+        },
+    })
+
+  assert translated == [{
+      "type": ET.FILE_WRITE,
+      "path": str(artifact_path),
+  }]
+  assert any(
+      entry["event"] == "codex_html_artifact_read_failed"
+      and entry["log_level"] == "warning"
+      and entry["path"] == str(artifact_path)
+      for entry in logs
+  )
+
+
+def test_file_change_started_html_artifact_emits_nothing(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+  artifact_dir = tmp_path / "artifacts"
+  artifact_dir.mkdir()
+  artifact_path = artifact_dir / "x.html"
+  artifact_path.write_text("<p>started</p>", encoding="utf-8")
+
+  translated = backend.translate_event({
+      "type": "item.started",
+      "item": {
+          "type": "file_change",
+          "changes": [{
+              "path": str(artifact_path),
+              "kind": "update",
+          }],
+          "status": "in_progress",
+      },
+  })
+
+  assert translated == []
+
+
+def test_file_change_regular_file_emits_file_write_without_filename_field(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+  source_path = tmp_path / "kernel.cu"
+
+  translated = backend.translate_event({
+      "type": "item.completed",
+      "item": {
+          "type": "file_change",
+          "changes": [{
+              "path": str(source_path),
+              "kind": "update",
+          }],
+          "status": "completed",
+      },
+  })
+
+  assert translated == [{
+      "type": ET.FILE_WRITE,
+      "path": str(source_path),
+  }]
 
 
 def test_translate_todo_list_text_items_preserves_live_codex_plan_text(monkeypatch) -> None:

@@ -198,10 +198,7 @@ Examples:
 - `/tmp/run.log` -> `<base_url>/files/tmp/run.log`
 - `/storage/results/` -> `<base_url>/files/storage/results/`
 
-Before sharing a link, verify the file or directory exists. File paths return the file; directory paths return an
-HTML listing. Present links in markdown (`[label](url)`), but do not use raw local markdown links like
-`[label](/absolute/path)`. For Perfetto/Chrome traces, also include a Perfetto viewer link and read the `perfetto`
-skill for the viewer URL format.
+Before sharing a link, verify the file or directory exists. **Never** wrap a filesystem path in markdown `[](...)` — CharlieBot UI renders raw local paths as dead links. Either write the path as plain text `path:line`, or build a `/files/<abs-path-no-leading-slash>` URL (full `<base_url>/files/...` if you want copy-paste portability). For Perfetto/Chrome traces, also include a Perfetto viewer link and read the `perfetto` skill for the viewer URL format.
 
 ---
 

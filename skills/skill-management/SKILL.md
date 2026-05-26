@@ -51,3 +51,11 @@ Additional host-specific blocklist patterns (real names, internal project names,
 ## File Name Convention
 
 All three CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file.
+
+## Updating Existing Skills
+
+When new lessons surface and a skill needs an update, follow these rules:
+
+- **Reorganize, don't append.** If related content already lives in the skill, edit the existing section in place rather than tacking on a new paragraph. Skills must stay concise so they remain scannable; growing them by accretion (one new bullet per session) defeats the purpose. Re-read the whole skill first, then propose the smallest diff that captures the new lesson.
+- **Ask before modifying any local skill.** Surface the intended edit to the user before writing it — never silently mutate a skill file, even when "just adding a clarifying line".
+- **Always present the change as a file diff.** Show the actual before/after (or `Edit` patch) so the user can see surrounding context and judge whether the edit fits. Don't summarize the change as "I'd add a note about X" — the user needs to see the literal lines being added/changed/removed to approve.

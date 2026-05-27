@@ -6561,3 +6561,32 @@
   status: pending
   created: '2026-05-25T03:15:47Z'
   priority: low
+- id: '168'
+  title: Split _create_worktree_and_process in core/spawner.py into per-mode helpers
+  description: 'core/spawner.py:_create_worktree_and_process (L277-392, 116 lines)
+    is the longest function in src/ not already covered by a pending or done backlog
+    item. It contains three mutually exclusive branches selected by SpawnRequest
+    fields — (a) req.prompt_override (L290-300), (b) req.worktree_path_override
+    (L301-328), and (c) the default create-new-worktree path (L329-363) — followed
+    by a common postlude that validates the resolved worktree path, resolves the
+    backend option, writes thread metadata, and constructs the Worker (L365-392).
+    Branches (b) and (c) additionally share ~12 lines of thread-metadata writes
+    (branch_name/repo_path/worktree_path/base_branch/keep_worktree/context) plus
+    the session_meta fetch and _build_worker_prompt call with near-identical kwargs.
+    Extract three helpers — _prepare_from_prompt_override(thread, req) → (prompt,
+    path), _prepare_with_existing_worktree(thread, req, resolved_repo, session_mgr,
+    description) → (prompt, path), _prepare_new_worktree(thread, req, cfg, resolved_repo,
+    session_mgr, description) → (prompt, path) — each returning (worker_prompt,
+    worktree_path) and performing its own thread-metadata writes. _create_worktree_and_process
+    then becomes a thin dispatcher (~8 lines) + the shared postlude (~25 lines),
+    dropping it well under the 50-line guideline. Each helper has a clear single-responsibility
+    name worth its own concept and the three branches map cleanly to the three
+    SpawnRequest configurations they handle, so this is a length-driven split that
+    also captures the latent (b)/(c) metadata-write duplication in the per-helper
+    bodies rather than a forced extraction. No behavior change.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-27T14:22:54Z'
+  priority: low

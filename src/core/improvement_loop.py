@@ -15,6 +15,10 @@ from src.core.yaml_utils import load_yaml, save_yaml
 log = structlog.get_logger()
 
 _PRIORITY_ORDER = {'high': 0, 'medium': 1, 'low': 2}
+_BACKLOG_DESCRIPTION_RULE = (
+    'Description must stay concise: PURPOSE is exactly one short sentence; HOW is at most a few short '
+    'implementation bullets or sentences. Do not include long evidence dumps, grep transcripts, full correctness '
+    'proofs, exhaustive line-by-line implementation plans, or benchmark speculation.')
 
 
 def _load_backlog(backlog_path: Path) -> list[dict]:
@@ -166,6 +170,7 @@ def _build_generate_prompt(items: list[dict], cfg: ImprovementLoopConfig, backlo
       f'Generate exactly ONE new improvement idea not already in the backlog. '
       f'Append to {backlog_path} with fields: id (use {next_id}, format: {id_format}), '
       f'title, description (PURPOSE first, then HOW), status: pending, created (ISO 8601), priority.')
+  parts.append(_BACKLOG_DESCRIPTION_RULE)
   parts.append(_language_rule(cfg.language))
   parts.append('Commit and push.')
   extra = _extra_rules_text(cfg.extra_rules)
@@ -184,6 +189,7 @@ def _build_scan_prompt(cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
   parts.append(
       f'If issues found, create ONE backlog item in {backlog_path} (status: pending). '
       f'If clean, do nothing.')
+  parts.append(_BACKLOG_DESCRIPTION_RULE)
   parts.append(_language_rule(cfg.language))
   parts.append('Commit and push.')
   extra = _extra_rules_text(cfg.extra_rules)

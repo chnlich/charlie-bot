@@ -30,6 +30,16 @@ def _write_backlog(path: Path, items: list[dict]) -> None:
   path.write_text(yaml.dump(items, default_flow_style=False, allow_unicode=True, sort_keys=False))
 
 
+def _assert_concise_description_constraint(prompt: str) -> None:
+  assert 'PURPOSE is exactly one short sentence' in prompt
+  assert 'HOW is at most a few short implementation bullets or sentences' in prompt
+  assert 'long evidence dumps' in prompt
+  assert 'grep transcripts' in prompt
+  assert 'full correctness proofs' in prompt
+  assert 'exhaustive line-by-line implementation plans' in prompt
+  assert 'benchmark speculation' in prompt
+
+
 # ---------------------------------------------------------------------------
 # test_revision_requested_picked_first
 # ---------------------------------------------------------------------------
@@ -84,12 +94,12 @@ async def test_stale_in_progress_reset(tmp_path: Path) -> None:
   _write_backlog(backlog, items)
   cfg = _make_cfg()
 
-  with patch('src.core.improvement_loop.asyncio.to_thread', new_callable=AsyncMock) as mock_thread:
+  with patch('src.core.improvement_loop.git_add_commit_push', new_callable=AsyncMock) as mock_commit:
     action, prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'stale_reset'
   assert prompt is None
-  mock_thread.assert_called_once()
+  mock_commit.assert_awaited_once()
 
   # Verify YAML was updated
   updated = yaml.safe_load(backlog.read_text())
@@ -167,6 +177,7 @@ async def test_generate_when_no_active(tmp_path: Path) -> None:
 
   assert action == 'generate'
   assert '003' in prompt  # next sequential ID
+  _assert_concise_description_constraint(prompt)
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +216,7 @@ async def test_scan_fallback(tmp_path: Path) -> None:
 
   assert action == 'scan'
   assert 'test agent' in prompt
+  _assert_concise_description_constraint(prompt)
 
 
 # ---------------------------------------------------------------------------

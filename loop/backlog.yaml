@@ -6590,3 +6590,53 @@
   status: pending
   created: '2026-05-27T14:22:54Z'
   priority: low
+- id: '169'
+  title: Split _build_worker_prompt in core/spawner.py to drop the function under
+    50 lines
+  description: 'WHY — core/spawner.py:_build_worker_prompt (L36-146, 111 lines) is
+    the second-longest function in src/ and is now the longest one not covered by
+    a pending or done backlog item. Item 101 (done) deduplicated the per-task-type
+    workflow_section f-strings into a template-with-intro-line, and item 021 (done)
+    split the surrounding spawn_worker into phase functions, but the prompt-construction
+    body itself still inlines three task_type branches (L72-97), an 18-line iteration-reports
+    paragraph (L103-120), two large constant blocks (skills_section L122-130 and
+    role_section L132-135), and an optional keep_worktree paragraph (L137-142) all
+    in one function. The skills_section and role_section blocks are pure constant
+    strings that contain no f-string interpolation and are identical across every
+    worker prompt the spawner emits — they belong at module scope alongside the
+    existing _CODING_PRINCIPLES constant rather than rebuilt inside the function
+    on every call. The iteration_reports_section has a clear single-responsibility
+    name worth its own concept ("build the iteration-reports paragraph for an /improve
+    iteration"), is only emitted when both loop_dir and iteration_number are non-None,
+    and currently bloats the function with one of its longest f-string literals.
+    WHAT — Drop _build_worker_prompt under 50 lines by (1) promoting the two pure-constant
+    sections to module-level constants and (2) extracting the iteration-reports
+    paragraph into a small helper, leaving the three task_type branches inline (they
+    differ enough that a per-type dispatch would not improve clarity). HOW — (1)
+    In src/core/spawner.py, near the existing _CODING_PRINCIPLES constant (L28-33),
+    add module-level constants _SKILLS_SECTION and _ROLE_SECTION holding the exact
+    string literals currently built at L122-130 and L132-135 respectively. (2) Add
+    a module-level helper `def _build_iteration_reports_section(loop_dir: Optional[str],
+    iteration_number: Optional[int]) -> str:` that returns "" when either arg is
+    None and otherwise returns the existing f-string (L105-120) verbatim. (3) In
+    _build_worker_prompt, replace the inline `skills_section = (...)` and `role_section
+    = (...)` assignments with references to the new constants, and replace the
+    `iteration_reports_section = ""` + conditional block with `iteration_reports_section
+    = _build_iteration_reports_section(loop_dir, iteration_number)`. (4) Leave the
+    three task_type branches, the intro_line conditional, the keep_worktree_section
+    conditional, and the final return concatenation untouched. (5) Verify with `yapf
+    --diff --recursive src/` exits clean, `pyflakes src/` exits clean, `python3
+    -c "from src.core.spawner import _build_worker_prompt"` imports without error,
+    and the byte-for-byte output of _build_worker_prompt is unchanged for representative
+    inputs (TaskType.IMPLEMENT with and without loop_dir, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN,
+    keep_worktree True/False, is_continuation True/False). Net result: _build_worker_prompt
+    drops from 111 lines to ~45 lines (under the 50-line target), two constant blocks
+    move out of the hot path, the iteration-reports paragraph becomes independently
+    testable and reusable, and no runtime behavior changes. Pure refactoring with
+    zero API surface change.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-28T05:13:45Z'
+  priority: low

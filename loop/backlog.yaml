@@ -6675,3 +6675,53 @@
   status: pending
   created: '2026-05-28T21:15:43Z'
   priority: low
+- id: '171'
+  title: Extract _read_first_ai_title and _pick_claude_jsonl helpers from
+    maybe_auto_name_from_claude_ai_title in core/autonamer.py
+  description: 'core/autonamer.py:maybe_auto_name_from_claude_ai_title (L292-352,
+    61 lines) is the longest function in src/ not already covered by a pending or
+    done backlog item — _build_worker_prompt (L36-146, 111L) is covered by item
+    170, _archive_old_chat_events_sync (L492-556, 65L) by item 169, _create_worktree_and_process
+    (L277-392, 116L) by item 168, execute_command (api/slash.py L130-196, 67L)
+    partially by item 165, and run_message / _run_cc / _session_consumer in master_cc.py
+    by items 142 / 126 / 134 respectively. The function mixes three concerns in
+    one body: (a) a 12-line "locate the right Claude jsonl for this session_id"
+    phase that globs ~/.claude/projects/*/<session_id>.jsonl, returns early on no
+    match, and on multiple matches picks the most-recently-modified path via max(...,
+    key=lambda p: p.stat().st_mtime) with a stat-failed warning + early return
+    (L311-323); (b) a 24-line "scan the jsonl for the first valid ai-title event"
+    phase that opens the file line-by-line, json-loads each line with a JSONDecodeError
+    debug-log + continue per bad line, filters to dict events with type=="ai-title"
+    and a non-empty string aiTitle, and on the first match assigns title and breaks
+    — wrapped in an outer try/except OSError, UnicodeDecodeError that warning-logs
+    and early-returns (L325-348); and (c) a 3-line "apply the title with session-number
+    prefix preservation" phase that calls _prefix_session_number_if_default + _apply_name_to_session
+    (L350-352). The scan-loop phase is the bulk of the body (24L of nested control
+    flow: outer try/except over the file open, inner per-line for-loop, inner try/except
+    JSONDecodeError per line, dict/type-tag filter, isinstance(str)/strip filter)
+    and is the only place in the codebase where the Claude jsonl ai-title event
+    schema is decoded. Extract two helpers: (1) `_pick_claude_jsonl(session_id:
+    str) -> Path | None` absorbs L311-323, returning None when no jsonl matches
+    the session_id, the sole match when len(matches)==1, or the max-mtime match
+    otherwise (warning-logging claude_ai_title_stat_failed and returning None on
+    stat OSError); (2) `_read_first_ai_title(jsonl_path: Path, session_id: str)
+    -> str | None` absorbs L325-348, returning the first valid aiTitle string in
+    the file or None if the file cannot be opened (warning-log claude_ai_title_read_failed
+    + return None on OSError/UnicodeDecodeError) or no valid ai-title event is
+    present (return None after the loop completes). After extraction maybe_auto_name_from_claude_ai_title
+    becomes ~16 lines: signature + docstring + _pick_claude_jsonl call with None
+    early-return + _read_first_ai_title call + title prefix-and-apply tail —
+    each phase one short block. Each helper has a clear single-responsibility name
+    worth its own concept (_pick_claude_jsonl is the only place where the ~/.claude/projects/*/<session_id>.jsonl
+    glob + max-mtime tie-break lives; _read_first_ai_title is the only place where
+    the Claude jsonl ai-title event schema is decoded), and the length-driven
+    split drops the function well under the 50-line guideline. No behavior change;
+    structured-log event names (claude_ai_title_stat_failed / claude_ai_title_json_parse_failed
+    / claude_ai_title_read_failed) and their session_id / path / line / error tags
+    are preserved unchanged in the helpers.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-28T23:14:21Z'
+  priority: low

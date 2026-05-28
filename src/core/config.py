@@ -110,7 +110,7 @@ class CharlieBotConfig(BaseModel):
   # ~/.charliebot/config.yaml -> backend_options.
   backend_options: list[BackendOption] = [
       BackendOption(
-          id="claude-opus-4.7", label="CC \u00b7 Opus 4.7", type="cc-claude", model="claude-opus-4-7", effort="max"),
+          id="claude-opus-4.8", label="CC \u00b7 Opus 4.8", type="cc-claude", model="claude-opus-4-8", effort="max"),
       BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
   ]
 

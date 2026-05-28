@@ -6590,3 +6590,35 @@
   status: pending
   created: '2026-05-27T14:22:54Z'
   priority: low
+- id: '169'
+  title: Extract _split_chat_events_at_cutoff helper from SessionManager._archive_old_chat_events_sync
+  description: 'core/sessions.py:_archive_old_chat_events_sync (L492-556, 65 lines)
+    is the longest function in src/ not already covered by a pending or done backlog
+    item. It mixes three concerns in one body: (a) a 36-line line-oriented JSON parse
+    loop over the live chat_events.jsonl file that classifies each event as either
+    before-cutoff (append to archived_raw) or at-or-after-cutoff / unparseable / no-timestamp
+    / bad-timestamp (set split_reached=True, append to kept_raw and stop classifying),
+    L498-533; (b) an 11-line weekly-archive append phase that computes the ISO-week
+    archive filename and appends archived_raw lines to it, L535-545; and (c) a 5-line
+    atomic-replace phase that writes kept_raw to a .tmp sibling and os.replace()s
+    it over the live file, L547-551. The parse loop has the four-way "set split_reached=True
+    and append to kept_raw" early-out repeated four times (L514-515, L519-521, L526-528,
+    L532-533) — three for parse / missing-ts / bad-ts skips plus the normal at-or-after-cutoff
+    branch — which is hard to follow inline because the surrounding for-loop body
+    intermixes classification logic with the kept_raw/archived_raw assignment. Extract
+    _split_chat_events_at_cutoff(live_path: Path, cutoff_utc: datetime, session_id:
+    str) -> tuple[list[str], list[str]] that owns the file open, the line iteration,
+    and the split_reached state machine, returning (archived_raw, kept_raw). After
+    extraction _archive_old_chat_events_sync becomes ~30 lines: existence check, helper
+    call, noop early-return, weekly-archive append, atomic replace, return summary
+    dict — each phase one short block. The helper has a clear single-responsibility
+    name worth its own concept (it is the only place where the cutoff split-state
+    machine lives) and the length-driven split drops the function well under the 50-line
+    guideline. No behavior change; the json/parse_utc_datetime debug logs preserve
+    their existing session_id, error tags.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-28T11:14:23Z'
+  priority: low

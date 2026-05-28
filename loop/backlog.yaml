@@ -6622,3 +6622,56 @@
   status: pending
   created: '2026-05-28T11:14:23Z'
   priority: low
+- id: '170'
+  title: Split _build_worker_prompt in core/spawner.py into per-section helpers and
+    promote static sections to module constants
+  description: 'core/spawner.py:_build_worker_prompt (L36-146, 111 lines) is the longest
+    function in src/ not already covered by a pending or done backlog item, and at
+    111 lines it is the largest by a 50% margin over the next-largest candidate
+    (`message_aggregator._feed` at 132L — covered by item 132 — and `agents/backends/base.run`
+    at 122L — covered by item 129). Past scans (items #142, #150, #166, #167) deferred
+    this function on the grounds that the residual body after item 101''s `intro_line`
+    dedup was "mostly literal template text" and that the dedup work was already
+    done. That exclusion no longer holds: the function has grown ~28 lines since
+    item 101 landed (skills_section L122-130, role_section L132-135, iteration_reports_section
+    L103-120, keep_worktree_section L137-142, and a 3-way `task_type` branch L72-97
+    that selects one of three distinct workflow_body templates by TaskType.IMPLEMENT
+    / TaskType.QUICK_EDIT / TaskType.SCRIPT_RUN), and the new growth is not pure
+    template text — the `task_type` ladder is a real domain dispatch (each branch
+    has different STOP-instructions and SCRIPT_RUN does not interpolate `intro_line`
+    or `commit_steps` at all), and the `loop_dir`/`iteration_number`/`keep_worktree`
+    conditionals are genuine optional-section logic. The function now mixes six independently-evolving
+    concerns in one body — session_info header, worktree-workflow body (with is_continuation
+    intro + commit_steps + per-task-type STOP rules), iteration-reports addendum,
+    skills-discovery static block, role static block, and keep-worktree addendum
+    — making any future edit (e.g. adding a 4th TaskType, changing iteration-report
+    file naming, updating skills-discovery rules) touch the same 111-line function.
+    Extract three helpers and two module-level constants — (1) `_build_workflow_body(task_type:
+    TaskType, is_continuation: bool, branch_lines: str, wt_path: str) -> str` absorbs
+    L53-58 (intro_line if/else), L65-70 (commit_steps), and L72-97 (the 3-way task_type
+    body assembly), returning the full `workflow_body` string for the caller to
+    embed in the worktree_section; (2) `_build_iteration_reports_section(loop_dir:
+    Optional[str], iteration_number: Optional[int]) -> str` absorbs L103-120, returning
+    `""` when either arg is None and the formatted "## Iteration Reports\n..." block
+    otherwise; (3) `_build_keep_worktree_section(keep_worktree: bool) -> str` absorbs
+    L137-142, returning `""` when False and the "## Worktree Persistence\n..." block
+    when True; (4) promote skills_section (L122-130) to a module-level constant
+    `_SKILLS_SECTION` and (5) promote role_section (L132-135) to `_ROLE_SECTION`
+    since both are pure static text with no f-string substitutions and no per-call
+    variation. After extraction _build_worker_prompt becomes ~44 lines: signature
+    + docstring + session_info + branch_lines + three helper calls + skills/role
+    constants reference + final return f-string — each phase one short block. Each
+    helper has a clear single-responsibility name worth its own concept (workflow-body
+    is the only place where the TaskType→workflow-template dispatch lives; iteration-reports
+    is the only place where the iter_NNNN.md filename format and report template
+    live; keep-worktree is the only place where the persistence-addendum text lives),
+    and the length-driven split drops the function well under the 50-line guideline.
+    No behavior change; the returned prompt string is byte-identical to the current
+    output for every (task_type, is_continuation, loop_dir, iteration_number, keep_worktree)
+    combination.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-28T21:15:43Z'
+  priority: low

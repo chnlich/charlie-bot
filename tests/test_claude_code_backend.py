@@ -17,6 +17,25 @@ def test_build_command_preserves_plain_prompt_after_separator() -> None:
   assert cmd[-2:] == ["--", "hello world"]
 
 
+def test_effort_flag_appended_after_model() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8", effort="max")
+
+  cmd = backend._build_command("hi")
+
+  model_index = cmd.index("--model")
+  effort_index = cmd.index("--effort")
+  assert cmd[effort_index + 1] == "max"
+  assert effort_index == model_index + 2
+
+
+def test_effort_flag_absent_when_unset() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8")
+
+  cmd = backend._build_command("hi")
+
+  assert "--effort" not in cmd
+
+
 def test_base_command_disallows_headless_unsafe_tools() -> None:
   disallowed_index = BASE_COMMAND.index("--disallowed-tools")
   disallowed_tools = set(BASE_COMMAND[disallowed_index + 1].split(","))

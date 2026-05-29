@@ -6740,3 +6740,30 @@
   status: pending
   created: '2026-05-29T13:00:00Z'
   priority: low
+- id: '174'
+  title: Extract the jsonl ai-title scan loop from maybe_auto_name_from_claude_ai_title
+    in core/autonamer.py
+  description: 'core/autonamer.py:maybe_auto_name_from_claude_ai_title (L292-353) is
+    61 lines and mixes two distinct responsibilities: (1) locating the claude jsonl
+    for the session — globbing ~/.claude/projects/*/<session_id>.jsonl and picking
+    the newest match by mtime when more than one is found (L310-323, including the
+    OSError-on-stat early return) — and (2) scanning that jsonl line-by-line for the
+    first {"type": "ai-title", "aiTitle": "<title>"} event, tolerating per-line
+    JSONDecodeError and translating OSError/UnicodeDecodeError on the read into a
+    logged early return (L325-348). Extract `_scan_jsonl_for_ai_title(jsonl_path:
+    Path, session_id: str) -> str | None` that owns the file-open, per-line json
+    parse, ai-title detection, and read-error handling, returning the title string
+    or None. The remaining body — docstring + glob/mtime resolution + a single
+    helper call + the `if title:` apply block (L350-352) — drops under the 50-line
+    threshold. The jsonl-scan is a clear single-responsibility unit worth its own
+    name and is cleanly separable from path resolution, so the split also makes the
+    title-extraction logic independently testable against canned jsonl text without
+    setting up a ~/.claude/projects glob. No behavior change; for every jsonl-path
+    and session_id the applied title (or no-op) is identical, and the read-failure
+    branches log and return exactly as today.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-29T14:00:00Z'
+  priority: low

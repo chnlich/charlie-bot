@@ -30,6 +30,14 @@ SUBPROCESS_GIT_VERSION_TIMEOUT = 5  # seconds — synchronous; only blocks serve
 LATEX_COMPILE_TIMEOUT = 60  # seconds
 
 # ---------------------------------------------------------------------------
+# Nsight Compute report parsing
+# ---------------------------------------------------------------------------
+
+# Fallback `ncu --import <file> --csv --page details` when the ncu_report
+# Python module is unavailable; large reports can take a while to re-import.
+SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT = 120  # seconds
+
+# ---------------------------------------------------------------------------
 # Autonamer (session title generation)
 # ---------------------------------------------------------------------------
 

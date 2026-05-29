@@ -1,5 +1,6 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
+import asyncio
 import fnmatch
 import pathlib
 import socket
@@ -13,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.deps import get_session_manager, get_thread_manager
+from src.api.ncu_parsing import NcuParseError, parse_ncu_report
 from src.api.message_utils import build_session_bootstrap_data
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
@@ -126,6 +128,63 @@ async def perfetto_viewer(
           "trace_names": trace_names,
           "trace_dir": dir,
           "title": title,
+      })
+
+
+def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLResponse:
+  """Render ncu.html with a clean error message and a 4xx status."""
+  return templates.TemplateResponse(
+      request,
+      "ncu.html",
+      context={"error": message, "report": None},
+      status_code=status_code,
+  )
+
+
+@router.get("/ncu", response_class=HTMLResponse)
+async def ncu_viewer(
+    request: Request,
+    file: list[str] = Query(default=[]),
+):
+  """Render the Nsight Compute (.ncu-rep) report viewer page.
+
+  `file` is a repeatable list of absolute paths. v1 renders the first report;
+  additional paths are accepted but only noted, not diffed.
+  """
+  if not file:
+    return _ncu_error_page(
+        request,
+        "No report specified. Provide a 'file' query param with an absolute path to a .ncu-rep file.",
+        400,
+    )
+
+  target = file[0]
+  path = Path(target)
+  if not path.is_absolute():
+    return _ncu_error_page(request, f"Report path must be absolute: {target}", 400)
+
+  if not await asyncio.to_thread(path.is_file):
+    return _ncu_error_page(request, f"Report not found: {target}", 404)
+
+  try:
+    report = await asyncio.to_thread(parse_ncu_report, str(path))
+  except NcuParseError as exc:
+    return _ncu_error_page(request, str(exc), 422)
+
+  download_url = "/files" + str(path)
+  return templates.TemplateResponse(
+      request,
+      "ncu.html",
+      context={
+          "error": None,
+          "report": report,
+          "report_path": str(path),
+          "filename": path.name,
+          "download_url": download_url,
+          "extra_count": len(file) - 1,
+          "ncu_ui_cmd": f"ncu-ui {path}",
+          "ncu_details_cmd": f"ncu --import {path} --page details",
+          "hostname": socket.gethostname(),
       })
 
 

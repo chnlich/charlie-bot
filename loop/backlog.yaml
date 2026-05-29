@@ -6767,3 +6767,33 @@
   status: pending
   created: '2026-05-29T14:00:00Z'
   priority: low
+- id: '175'
+  title: Extract the wait-condition dispatch from TriggerManager._wait_and_fire in
+    core/triggers.py
+  description: 'core/triggers.py:_wait_and_fire (L367-420) is 54 lines and mixes two
+    distinct responsibilities: (1) resolving the fire condition — inspecting the
+    trigger''s watch_targets to decide whether to wait on local pidfds
+    (_wait_with_pidfd), poll remote PIDs (_wait_with_remote_probe), or sleep until
+    fire_at, and producing the (reason, exited, still_alive, missing) tuple that
+    describes why/how the trigger fired (L369-385); and (2) performing the fire
+    action — reloading the trigger to detect cancellation during the sleep
+    (FileNotFoundError / non-PENDING early returns), formatting the trigger_message
+    with the fire-reason suffix, broadcasting the user event, waking the master via
+    trigger_master, and persisting the FIRED status with fired_at/fire_reason
+    (L387-420). Extract `_wait_for_fire_condition(trigger: PendingTrigger) -> tuple[str,
+    list, list, list]` that owns the watch_targets branch and returns the
+    (reason, exited, still_alive, missing) tuple; the remaining body — a single helper
+    call plus the linear reload/broadcast/wake/persist fire sequence — drops under the
+    50-line threshold. The wait-condition resolution is a clear single-responsibility
+    unit worth its own name and is cleanly separable from the fire action, so the
+    split also makes the dispatch independently testable (assert the returned tuple
+    for local-only / remote-only / time-only target sets) without exercising the
+    broadcast and master-wake side effects. Pure refactor; no behavior change — for
+    every trigger the chosen wait path, the fired message, and the persisted FIRED
+    state are identical to today.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-29T15:00:00Z'
+  priority: low

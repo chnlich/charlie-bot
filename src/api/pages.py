@@ -136,7 +136,10 @@ def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLRes
   return templates.TemplateResponse(
       request,
       "ncu.html",
-      context={"error": message, "report": None},
+      context={
+          "error": message,
+          "report": None
+      },
       status_code=status_code,
   )
 

@@ -6675,3 +6675,27 @@
   status: pending
   created: '2026-05-28T21:15:43Z'
   priority: low
+- id: '171'
+  title: Remove unused import and dead `as e` exception bindings flagged by pyflakes
+    in api/internal.py and core/sessions.py
+  description: 'A pyflakes scan of src/ surfaces three pieces of dead code. (1)
+    api/internal.py imports `WatchTarget` from src.core.models in the multi-line
+    import block (L14-21, the symbol is on L21) but never references it anywhere
+    in the file — it is a leftover unused import. Drop `WatchTarget` from the import
+    tuple. (2) core/sessions.py:135 has `except Exception as e:` whose body is
+    `log.exception("backend_create_hook_failed", session_id=meta.id, backend=meta.backend);
+    raise` — `log.exception` already captures the active traceback and the handler
+    re-raises, so the `as e` binding is never read. Change to a bare `except
+    Exception:`. (3) core/sessions.py:488 has `except Exception as e:` whose body
+    is `log.exception("thread_gc_failed", thread=str(thread_dir))` with no reference
+    to `e` (unlike the sibling handler at L482 which does use `error=str(e)`); the
+    `as e` binding is dead. Change to `except Exception:`. None of the three changes
+    alters behavior — the unused import has no side effects and `log.exception`
+    does not depend on the bound variable. This is a pure dead-code prune keeping
+    the module lint-clean under pyflakes.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-28T22:00:00Z'
+  priority: low

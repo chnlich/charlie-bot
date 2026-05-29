@@ -6699,3 +6699,23 @@
   status: pending
   created: '2026-05-28T22:00:00Z'
   priority: low
+- id: '172'
+  title: Split the 64-line _parse_with_csv fallback parser in api/ncu_parsing.py
+  description: 'api/ncu_parsing.py:_parse_with_csv (L213-276) is 64 lines and mixes
+    three distinct responsibilities: (1) invoking the `ncu --import ... --csv --page
+    details` subprocess and translating its failure modes into NcuParseError (L215-230,
+    covering FileNotFoundError, TimeoutExpired, and non-zero returncode), (2) aggregating
+    the flat CSV rows into a per-action map keyed by the `ID` column (L232-255), and
+    (3) projecting that map into the kernel-record dict list (L257-274). Extract a
+    `_run_ncu_csv_import(abspath) -> str` helper that owns the subprocess call and
+    all three error translations and returns stdout; the remaining body (CSV
+    aggregation + kernel projection) then drops under the 50-line threshold. The
+    subprocess-invocation helper is a clear single-responsibility unit worth its own
+    name, so this also improves testability — the parsing logic can be exercised
+    against canned CSV text without spawning `ncu`. Pure refactor; no behavior change.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-29T12:00:00Z'
+  priority: low

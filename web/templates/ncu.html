@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ filename or "Report" }} — Nsight Compute — CharlieBot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+    a { color: #7dd3fc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    #topbar { background: #172033; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 12px; padding: 8px 16px; flex-shrink: 0; }
+    #topbar .report-name { font-size: 14px; font-weight: 500; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #topbar .meta { font-size: 13px; color: #94a3b8; white-space: nowrap; }
+    #topbar .badge { font-size: 11px; color: #cbd5e1; background: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 1px 6px; }
+    #topbar .warn { color: #fbbf24; font-size: 13px; }
+    #topbar .spacer { flex: 1; }
+
+    #error { display: flex; align-items: center; justify-content: center; flex: 1; padding: 48px; font-size: 15px; color: #fca5a5; text-align: center; }
+
+    main { padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+    section { background: #131c2e; border: 1px solid #1e293b; border-radius: 8px; padding: 14px 16px; }
+    section h2 { font-size: 14px; font-weight: 600; color: #cbd5e1; margin-bottom: 10px; }
+    section .hint { font-size: 12px; color: #64748b; font-weight: 400; margin-left: 8px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1e293b; white-space: nowrap; }
+    th { color: #94a3b8; font-weight: 500; cursor: pointer; user-select: none; position: sticky; top: 0; background: #131c2e; }
+    th.sortable:hover { color: #e2e8f0; }
+    th .arrow { color: #7dd3fc; font-size: 11px; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.na { color: #475569; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #0f172a; }
+    tbody tr.selected { background: #1e293b; }
+    .kernel-name { color: #e2e8f0; white-space: normal; word-break: break-word; max-width: 520px; }
+
+    .metrics-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    select, input[type="text"] { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+    input[type="text"] { min-width: 220px; }
+    .metrics-scroll { max-height: 460px; overflow: auto; border: 1px solid #1e293b; border-radius: 6px; }
+    .metric-count { font-size: 12px; color: #64748b; }
+
+    .handoff-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .handoff-row .label { font-size: 12px; color: #94a3b8; width: 130px; flex-shrink: 0; }
+    .cmd { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 12.5px; color: #e2e8f0; flex: 1; overflow-x: auto; white-space: nowrap; }
+    .copy-btn { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+    .copy-btn:hover { background: #334155; }
+  </style>
+</head>
+<body>
+{% if error %}
+  <div id="topbar"><span class="report-name">Nsight Compute</span></div>
+  <div id="error">{{ error }}</div>
+{% else %}
+  <div id="topbar">
+    <span class="report-name">{{ filename }}</span>
+    {% if report.device %}<span class="badge">{{ report.device }}</span>{% endif %}
+    <span class="badge">{{ report.kernels | length }} kernels</span>
+    <span class="badge">parser: {{ report.parser }}</span>
+    {% if extra_count > 0 %}<span class="warn">⚠ {{ extra_count }} more report(s) ignored (single-report view)</span>{% endif %}
+    <span class="spacer"></span>
+    <a href="{{ download_url }}" download>Download .ncu-rep</a>
+  </div>
+
+  <main>
+    <section>
+      <h2>Kernel summary<span class="hint">click a row to inspect its metrics · click a header to sort</span></h2>
+      <table id="summary-table">
+        <thead>
+          <tr>
+            <th class="sortable num" data-key="idx" data-type="num">#<span class="arrow"></span></th>
+            <th class="sortable" data-key="name" data-type="str">Kernel<span class="arrow"></span></th>
+            <th class="sortable num" data-key="duration_ns" data-type="num">Duration<span class="arrow"></span></th>
+            <th class="sortable" data-key="grid" data-type="str">Grid<span class="arrow"></span></th>
+            <th class="sortable" data-key="block" data-type="str">Block<span class="arrow"></span></th>
+            <th class="sortable num" data-key="occupancy_pct" data-type="num">Occupancy<span class="arrow"></span></th>
+            <th class="sortable num" data-key="sol_compute_pct" data-type="num">SOL Compute<span class="arrow"></span></th>
+            <th class="sortable num" data-key="sol_memory_pct" data-type="num">SOL Memory<span class="arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="summary-body"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Per-kernel metrics<span class="hint">all collected metrics for the selected kernel</span></h2>
+      <div class="metrics-controls">
+        <select id="kernel-select"></select>
+        <input type="text" id="metric-filter" placeholder="Filter metrics by name…" autocomplete="off">
+        <span class="metric-count" id="metric-count"></span>
+      </div>
+      <div class="metrics-scroll">
+        <table id="metrics-table">
+          <thead>
+            <tr>
+              <th class="sortable" data-mkey="name" data-type="str">Metric<span class="arrow"></span></th>
+              <th class="sortable num" data-mkey="value" data-type="num">Value<span class="arrow"></span></th>
+              <th class="sortable" data-mkey="unit" data-type="str">Unit<span class="arrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="metrics-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Handoff<span class="hint">open the full report locally with Nsight Compute</span></h2>
+      <div class="handoff-row">
+        <span class="label">Raw report</span>
+        <code class="cmd"><a href="{{ download_url }}" download>{{ report_path }}</a></code>
+      </div>
+      <div class="handoff-row">
+        <span class="label">Open in ncu-ui</span>
+        <code class="cmd" id="cmd-ncu-ui">{{ ncu_ui_cmd }}</code>
+        <button class="copy-btn" data-copy="cmd-ncu-ui">Copy</button>
+      </div>
+      <div class="handoff-row">
+        <span class="label">CLI details</span>
+        <code class="cmd" id="cmd-ncu-details">{{ ncu_details_cmd }}</code>
+        <button class="copy-btn" data-copy="cmd-ncu-details">Copy</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const REPORT = {{ report | tojson }};
+    const kernels = REPORT.kernels;
+
+    function fmtNum(v) {
+      if (v === null || v === undefined) return null;
+      if (typeof v !== 'number') return String(v);
+      if (Number.isInteger(v)) return v.toLocaleString();
+      return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    }
+
+    function fmtDuration(ns) {
+      if (ns === null || ns === undefined) return null;
+      const main = Math.round(ns).toLocaleString() + ' ns';
+      if (ns >= 1000) return main + ' (' + (ns / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' µs)';
+      return main;
+    }
+
+    function fmtPct(v) {
+      if (v === null || v === undefined) return null;
+      return (typeof v === 'number' ? v.toFixed(2) : v) + ' %';
+    }
+
+    function cell(text, cls) {
+      const td = document.createElement('td');
+      if (cls) td.className = cls;
+      if (text === null || text === undefined) {
+        td.textContent = 'N/A';
+        td.classList.add('na');
+      } else {
+        td.textContent = text;
+      }
+      return td;
+    }
+
+    // ---- Section 1: sortable kernel summary ----
+    const summaryBody = document.getElementById('summary-body');
+    let sortState = { key: 'idx', dir: 1 };
+
+    function renderSummary() {
+      const rows = kernels.slice().sort((a, b) => {
+        let av = a[sortState.key], bv = b[sortState.key];
+        const th = document.querySelector(`#summary-table th[data-key="${sortState.key}"]`);
+        const numeric = th && th.dataset.type === 'num';
+        if (numeric) {
+          av = (av === null || av === undefined) ? -Infinity : av;
+          bv = (bv === null || bv === undefined) ? -Infinity : bv;
+          return (av - bv) * sortState.dir;
+        }
+        av = (av === null || av === undefined) ? '' : String(av);
+        bv = (bv === null || bv === undefined) ? '' : String(bv);
+        return av.localeCompare(bv) * sortState.dir;
+      });
+
+      summaryBody.innerHTML = '';
+      for (const k of rows) {
+        const tr = document.createElement('tr');
+        tr.dataset.idx = k.idx;
+        if (k.idx === selectedIdx) tr.classList.add('selected');
+        tr.appendChild(cell(k.idx, 'num'));
+        tr.appendChild(cell(k.name, 'kernel-name'));
+        tr.appendChild(cell(fmtDuration(k.duration_ns), 'num'));
+        tr.appendChild(cell(k.grid));
+        tr.appendChild(cell(k.block));
+        tr.appendChild(cell(fmtPct(k.occupancy_pct), 'num'));
+        tr.appendChild(cell(fmtPct(k.sol_compute_pct), 'num'));
+        tr.appendChild(cell(fmtPct(k.sol_memory_pct), 'num'));
+        tr.addEventListener('click', () => selectKernel(k.idx));
+        summaryBody.appendChild(tr);
+      }
+      updateArrows();
+    }
+
+    function updateArrows() {
+      document.querySelectorAll('#summary-table th .arrow').forEach(a => a.textContent = '');
+      const th = document.querySelector(`#summary-table th[data-key="${sortState.key}"]`);
+      if (th) th.querySelector('.arrow').textContent = sortState.dir === 1 ? ' ▲' : ' ▼';
+    }
+
+    document.querySelectorAll('#summary-table th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.key;
+        if (sortState.key === key) sortState.dir *= -1;
+        else sortState = { key, dir: 1 };
+        renderSummary();
+      });
+    });
+
+    // ---- Section 2: per-kernel metric table ----
+    const kernelSelect = document.getElementById('kernel-select');
+    const metricFilter = document.getElementById('metric-filter');
+    const metricsBody = document.getElementById('metrics-body');
+    const metricCount = document.getElementById('metric-count');
+    let selectedIdx = kernels.length ? kernels[0].idx : null;
+    let metricSort = { key: 'name', dir: 1 };
+
+    kernels.forEach(k => {
+      const opt = document.createElement('option');
+      opt.value = k.idx;
+      opt.textContent = `#${k.idx} — ${k.name}`;
+      kernelSelect.appendChild(opt);
+    });
+
+    function selectKernel(idx) {
+      selectedIdx = idx;
+      kernelSelect.value = String(idx);
+      renderSummary();
+      renderMetrics();
+    }
+
+    function renderMetrics() {
+      const k = kernels.find(x => x.idx === selectedIdx);
+      metricsBody.innerHTML = '';
+      if (!k) { metricCount.textContent = ''; return; }
+      const q = metricFilter.value.trim().toLowerCase();
+      let list = k.metrics.filter(m => !q || m.name.toLowerCase().includes(q));
+      list = list.slice().sort((a, b) => {
+        let av = a[metricSort.key], bv = b[metricSort.key];
+        const th = document.querySelector(`#metrics-table th[data-mkey="${metricSort.key}"]`);
+        if (th && th.dataset.type === 'num') {
+          const an = typeof av === 'number' ? av : -Infinity;
+          const bn = typeof bv === 'number' ? bv : -Infinity;
+          return (an - bn) * metricSort.dir;
+        }
+        return String(av).localeCompare(String(bv)) * metricSort.dir;
+      });
+
+      for (const m of list) {
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'default';
+        tr.appendChild(cell(m.name));
+        tr.appendChild(cell(fmtNum(m.value), 'num'));
+        tr.appendChild(cell(m.unit || ''));
+        metricsBody.appendChild(tr);
+      }
+      metricCount.textContent = `${list.length} of ${k.metrics.length} metrics`;
+      document.querySelectorAll('#metrics-table th .arrow').forEach(a => a.textContent = '');
+      const ath = document.querySelector(`#metrics-table th[data-mkey="${metricSort.key}"]`);
+      if (ath) ath.querySelector('.arrow').textContent = metricSort.dir === 1 ? ' ▲' : ' ▼';
+    }
+
+    kernelSelect.addEventListener('change', () => selectKernel(parseInt(kernelSelect.value, 10)));
+    metricFilter.addEventListener('input', renderMetrics);
+    document.querySelectorAll('#metrics-table th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.mkey;
+        if (metricSort.key === key) metricSort.dir *= -1;
+        else metricSort = { key, dir: 1 };
+        renderMetrics();
+      });
+    });
+
+    // ---- Section 3: copy buttons ----
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = document.getElementById(btn.dataset.copy).textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          const old = btn.textContent;
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = old; }, 1200);
+        } catch (e) {
+          btn.textContent = 'Copy failed';
+        }
+      });
+    });
+
+    renderSummary();
+    renderMetrics();
+  </script>
+{% endif %}
+</body>
+</html>

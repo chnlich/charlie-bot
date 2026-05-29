@@ -6719,3 +6719,24 @@
   status: pending
   created: '2026-05-29T12:00:00Z'
   priority: low
+- id: '173'
+  title: Split the 61-line _dir_listing_html in api/files.py into scan and render phases
+  description: 'api/files.py:_dir_listing_html (L26-86) is 61 lines and mixes two
+    distinct responsibilities: (1) scanning the directory into an entries list (L28-43)
+    — iterating dir_path with the dir-first/name-sorted key, stat-ing each child and
+    skipping OSError entries, building the per-entry dict (name/is_dir/size/mtime),
+    and translating PermissionError into HTTPException(403); and (2) rendering that
+    list into the HTML page (L45-86) — the parent-directory link, per-entry table
+    rows, and the surrounding document template. Extract a `_scan_dir_entries(dir_path:
+    Path) -> list[dict]` helper that owns the iterdir/sort/stat/PermissionError logic
+    and returns the entries list; the remaining render body then drops under the 50-line
+    threshold. Directory enumeration is a clear single-responsibility unit worth its
+    own name and is cleanly separable from HTML rendering, so the split also makes
+    the entry-collection logic independently testable. Pure refactor; no behavior
+    change — the returned HTML is byte-identical for any directory.
+
+    '
+  category: architecture
+  status: pending
+  created: '2026-05-29T13:00:00Z'
+  priority: low

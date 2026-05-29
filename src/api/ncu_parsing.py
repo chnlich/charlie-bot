@@ -260,17 +260,18 @@ def _parse_with_csv(abspath: str) -> dict:
     raw_metrics = entry["metrics"]
     dur_value, dur_unit = raw_metrics.get(_DURATION_METRIC, (None, None))
     metrics = [{"name": n, "value": v, "unit": u} for n, (v, u) in raw_metrics.items() if v is not None]
-    kernels.append({
-        "idx": idx,
-        "name": entry["name"],
-        "duration_ns": _duration_ns(dur_value, dur_unit),
-        "grid": entry["grid"],
-        "block": entry["block"],
-        "occupancy_pct": raw_metrics.get(_OCCUPANCY_METRIC, (None, None))[0],
-        "sol_compute_pct": raw_metrics.get(_SOL_COMPUTE_METRIC, (None, None))[0],
-        "sol_memory_pct": raw_metrics.get(_SOL_MEMORY_METRIC, (None, None))[0],
-        "metrics": metrics,
-    })
+    kernels.append(
+        {
+            "idx": idx,
+            "name": entry["name"],
+            "duration_ns": _duration_ns(dur_value, dur_unit),
+            "grid": entry["grid"],
+            "block": entry["block"],
+            "occupancy_pct": raw_metrics.get(_OCCUPANCY_METRIC, (None, None))[0],
+            "sol_compute_pct": raw_metrics.get(_SOL_COMPUTE_METRIC, (None, None))[0],
+            "sol_memory_pct": raw_metrics.get(_SOL_MEMORY_METRIC, (None, None))[0],
+            "metrics": metrics,
+        })
 
   return {"kernels": kernels, "device": None, "parser": "csv"}
 

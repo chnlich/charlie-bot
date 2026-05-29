@@ -20,10 +20,28 @@
 
     #error { display: flex; align-items: center; justify-content: center; flex: 1; padding: 48px; font-size: 15px; color: #fca5a5; text-align: center; }
 
-    main { padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+    /* ---- tabs ---- */
+    #tabbar { display: flex; gap: 2px; background: #131c2e; border-bottom: 1px solid #1e293b; padding: 0 12px; flex-shrink: 0; overflow-x: auto; }
+    .tab-btn { background: transparent; color: #94a3b8; border: none; border-bottom: 2px solid transparent; padding: 11px 16px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; font-family: inherit; }
+    .tab-btn:hover { color: #e2e8f0; }
+    .tab-btn.active { color: #e2e8f0; border-bottom-color: #7dd3fc; }
+    .tab-btn .tab-tag { font-size: 10px; color: #64748b; margin-left: 6px; }
+
+    main { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+    .tab-panel { display: none; flex-direction: column; gap: 16px; }
+    .tab-panel.active { display: flex; }
+
     section { background: #131c2e; border: 1px solid #1e293b; border-radius: 8px; padding: 14px 16px; }
     section h2 { font-size: 14px; font-weight: 600; color: #cbd5e1; margin-bottom: 10px; }
+    section h3 { font-size: 13px; font-weight: 600; color: #cbd5e1; margin: 4px 0 8px; }
     section .hint { font-size: 12px; color: #64748b; font-weight: 400; margin-left: 8px; }
+
+    /* ---- provenance banners ---- */
+    .provenance { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-radius: 6px; padding: 6px 11px; border: 1px solid; }
+    .provenance .icon { font-size: 13px; }
+    .provenance.mirror { color: #93c5fd; background: #0e1d34; border-color: #1e3a5f; }
+    .provenance.unique { color: #6ee7b7; background: #0d2018; border-color: #14532d; }
+    .provenance.raw { color: #fcd34d; background: #221a06; border-color: #6b5310; }
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1e293b; white-space: nowrap; }
@@ -32,18 +50,65 @@
     th .arrow { color: #7dd3fc; font-size: 11px; }
     td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
     td.na { color: #475569; }
-    tbody tr { cursor: pointer; }
-    tbody tr:hover { background: #0f172a; }
+    tbody tr.clickable { cursor: pointer; }
+    tbody tr.clickable:hover { background: #0f172a; }
     tbody tr.selected { background: #1e293b; }
     .kernel-name { color: #e2e8f0; white-space: normal; word-break: break-word; max-width: 520px; }
 
     .metrics-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-    select, input[type="text"] { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+    select, input[type="text"] { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 13px; font-family: inherit; }
     input[type="text"] { min-width: 220px; }
-    .metrics-scroll { max-height: 460px; overflow: auto; border: 1px solid #1e293b; border-radius: 6px; }
+    .kernel-picker { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+    .kernel-picker .label { font-size: 12px; color: #94a3b8; }
+    .kernel-picker select { min-width: 360px; max-width: 100%; }
+    .metrics-scroll { max-height: 520px; overflow: auto; border: 1px solid #1e293b; border-radius: 6px; }
     .metric-count { font-size: 12px; color: #64748b; }
 
+    /* ---- "not available" notes ---- */
+    .empty-note { font-size: 13px; color: #94a3b8; background: #0f172a; border: 1px dashed #334155; border-radius: 6px; padding: 14px 16px; }
+    .empty-note strong { color: #cbd5e1; font-weight: 600; }
+
+    /* ---- details: sections + rules ---- */
+    .section-block { margin-bottom: 14px; }
+    .section-block:last-child { margin-bottom: 0; }
+    .section-block .sec-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+    .section-block .sec-head .name { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+    .section-block .sec-head .count { font-size: 11px; color: #64748b; }
+
+    .rule-card { border: 1px solid #334155; border-left-width: 3px; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; background: #0f172a; }
+    .rule-card:last-child { margin-bottom: 0; }
+    .rule-card.ok { border-left-color: #22c55e; }
+    .rule-card.optimization { border-left-color: #38bdf8; }
+    .rule-card.warning { border-left-color: #f59e0b; }
+    .rule-card.error { border-left-color: #ef4444; }
+    .rule-card.none { border-left-color: #475569; }
+    .rule-card .rule-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; }
+    .rule-card .rule-title { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+    .rule-card .rule-badge { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid #334155; color: #cbd5e1; }
+    .rule-card.ok .rule-badge { color: #86efac; border-color: #14532d; }
+    .rule-card.optimization .rule-badge { color: #7dd3fc; border-color: #1e3a5f; }
+    .rule-card.warning .rule-badge { color: #fcd34d; border-color: #6b5310; }
+    .rule-card.error .rule-badge { color: #fca5a5; border-color: #7f1d1d; }
+    .rule-card .rule-msg { font-size: 12.5px; color: #cbd5e1; line-height: 1.5; white-space: pre-wrap; }
+    .rule-card .rule-speedup { font-size: 11.5px; color: #64748b; margin-top: 5px; }
+    .rule-card .rule-section { font-size: 11px; color: #64748b; }
+
+    /* ---- source listings ---- */
+    .code-listing { max-height: 560px; overflow: auto; border: 1px solid #1e293b; border-radius: 6px; background: #0b1220; }
+    .code-listing pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; color: #cbd5e1; padding: 10px 12px; white-space: pre; }
+    .code-listing .addr { color: #475569; user-select: none; }
+    .src-file-head { font-size: 12px; color: #94a3b8; margin: 10px 0 4px; }
+    .src-file-head:first-child { margin-top: 0; }
+
+    /* ---- session / device ---- */
+    .kv-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 13px; }
+    .kv-grid .k { color: #94a3b8; }
+    .kv-grid .v { color: #e2e8f0; font-variant-numeric: tabular-nums; }
+
+    /* ---- handoff footer ---- */
+    footer { padding: 0 16px 16px; }
     .handoff-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .handoff-row:last-child { margin-bottom: 0; }
     .handoff-row .label { font-size: 12px; color: #94a3b8; width: 130px; flex-shrink: 0; }
     .cmd { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 12.5px; color: #e2e8f0; flex: 1; overflow-x: auto; white-space: nowrap; }
     .copy-btn { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
@@ -65,47 +130,140 @@
     <a href="{{ download_url }}" download>Download .ncu-rep</a>
   </div>
 
-  <main>
-    <section>
-      <h2>Kernel summary<span class="hint">click a row to inspect its metrics · click a header to sort</span></h2>
-      <table id="summary-table">
-        <thead>
-          <tr>
-            <th class="sortable num" data-key="idx" data-type="num">#<span class="arrow"></span></th>
-            <th class="sortable" data-key="name" data-type="str">Kernel<span class="arrow"></span></th>
-            <th class="sortable num" data-key="duration_ns" data-type="num">Duration<span class="arrow"></span></th>
-            <th class="sortable" data-key="grid" data-type="str">Grid<span class="arrow"></span></th>
-            <th class="sortable" data-key="block" data-type="str">Block<span class="arrow"></span></th>
-            <th class="sortable num" data-key="occupancy_pct" data-type="num">Occupancy<span class="arrow"></span></th>
-            <th class="sortable num" data-key="sol_compute_pct" data-type="num">SOL Compute<span class="arrow"></span></th>
-            <th class="sortable num" data-key="sol_memory_pct" data-type="num">SOL Memory<span class="arrow"></span></th>
-          </tr>
-        </thead>
-        <tbody id="summary-body"></tbody>
-      </table>
-    </section>
+  <div id="tabbar">
+    <button class="tab-btn active" data-tab="summary">Summary</button>
+    <button class="tab-btn" data-tab="details">Details</button>
+    <button class="tab-btn" data-tab="source">Source / SASS</button>
+    <button class="tab-btn" data-tab="session">Session / Device</button>
+    <button class="tab-btn" data-tab="raw">Raw metrics<span class="tab-tag">source of truth</span></button>
+  </div>
 
-    <section>
-      <h2>Per-kernel metrics<span class="hint">all collected metrics for the selected kernel</span></h2>
-      <div class="metrics-controls">
-        <select id="kernel-select"></select>
-        <input type="text" id="metric-filter" placeholder="Filter metrics by name…" autocomplete="off">
-        <span class="metric-count" id="metric-count"></span>
-      </div>
-      <div class="metrics-scroll">
-        <table id="metrics-table">
+  <main>
+    <!-- ============ Summary ============ -->
+    <div class="tab-panel active" id="panel-summary">
+      <section>
+        <div class="provenance mirror"><span class="icon">↺</span> Rendered view — every value here is also in the <strong>Raw metrics</strong> tab.</div>
+      </section>
+      <section>
+        <h2>Kernel summary<span class="hint">click a row to inspect its Details · click a header to sort</span></h2>
+        <table id="summary-table">
           <thead>
             <tr>
-              <th class="sortable" data-mkey="name" data-type="str">Metric<span class="arrow"></span></th>
-              <th class="sortable num" data-mkey="value" data-type="num">Value<span class="arrow"></span></th>
-              <th class="sortable" data-mkey="unit" data-type="str">Unit<span class="arrow"></span></th>
+              <th class="sortable num" data-key="idx" data-type="num">#<span class="arrow"></span></th>
+              <th class="sortable" data-key="name" data-type="str">Kernel<span class="arrow"></span></th>
+              <th class="sortable num" data-key="duration_ns" data-type="num">Duration<span class="arrow"></span></th>
+              <th class="sortable" data-key="grid" data-type="str">Grid<span class="arrow"></span></th>
+              <th class="sortable" data-key="block" data-type="str">Block<span class="arrow"></span></th>
+              <th class="sortable num" data-key="occupancy_pct" data-type="num">Occupancy<span class="arrow"></span></th>
+              <th class="sortable num" data-key="sol_compute_pct" data-type="num">SOL Compute<span class="arrow"></span></th>
+              <th class="sortable num" data-key="sol_memory_pct" data-type="num">SOL Memory<span class="arrow"></span></th>
             </tr>
           </thead>
-          <tbody id="metrics-body"></tbody>
+          <tbody id="summary-body"></tbody>
         </table>
-      </div>
-    </section>
+      </section>
+    </div>
 
+    <!-- ============ Details ============ -->
+    <div class="tab-panel" id="panel-details">
+      <section>
+        <div class="kernel-picker">
+          <span class="label">Kernel</span>
+          <select id="details-kernel-select"></select>
+        </div>
+      </section>
+      <section>
+        <h2>Metrics by section<span class="hint">grouped as ncu's Details page presents them</span></h2>
+        <div class="provenance mirror"><span class="icon">↺</span> Rendered view — these metrics also appear in the <strong>Raw metrics</strong> tab.</div>
+        <div id="details-sections" style="margin-top:12px"></div>
+      </section>
+      <section>
+        <h2>Rule recommendations<span class="hint">ncu's guided-analysis advice</span></h2>
+        <div class="provenance unique"><span class="icon">✦</span> Additional content — <strong>not</strong> in the raw metric table.</div>
+        <div id="details-rules" style="margin-top:12px"></div>
+      </section>
+    </div>
+
+    <!-- ============ Source / SASS ============ -->
+    <div class="tab-panel" id="panel-source">
+      <section>
+        <div class="kernel-picker">
+          <span class="label">Kernel</span>
+          <select id="source-kernel-select"></select>
+        </div>
+        <div class="provenance unique"><span class="icon">✦</span> Additional content — disassembly &amp; source, <strong>not</strong> in the raw metric table.</div>
+      </section>
+      <section>
+        <h2>SASS<span class="hint">assembly the GPU actually executed</span></h2>
+        <div id="source-sass"></div>
+      </section>
+      <section>
+        <h2>PTX<span class="hint">virtual ISA, when collected</span></h2>
+        <div id="source-ptx"></div>
+      </section>
+      <section>
+        <h2>CUDA-C source<span class="hint">imported into the report, when collected</span></h2>
+        <div id="source-cuda"></div>
+      </section>
+    </div>
+
+    <!-- ============ Session / Device ============ -->
+    <div class="tab-panel" id="panel-session">
+      <section>
+        <h2>Device<span class="hint">GPU this report was captured on</span></h2>
+        <div class="provenance mirror"><span class="icon">↺</span> Rendered view — derived from the <code>device__attribute_*</code> metrics, also in <strong>Raw metrics</strong>.</div>
+        <div id="session-summary" style="margin-top:12px"></div>
+      </section>
+      <section>
+        <h2>Device attributes<span class="hint">every <code>device__attribute_*</code> value</span></h2>
+        <div class="metrics-controls">
+          <input type="text" id="device-filter" placeholder="Filter attributes by name…" autocomplete="off">
+          <span class="metric-count" id="device-count"></span>
+        </div>
+        <div class="metrics-scroll">
+          <table id="device-table">
+            <thead>
+              <tr>
+                <th class="sortable" data-dkey="name" data-type="str">Attribute<span class="arrow"></span></th>
+                <th class="sortable num" data-dkey="value" data-type="num">Value<span class="arrow"></span></th>
+                <th class="sortable" data-dkey="unit" data-type="str">Unit<span class="arrow"></span></th>
+              </tr>
+            </thead>
+            <tbody id="device-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ Raw metrics ============ -->
+    <div class="tab-panel" id="panel-raw">
+      <section>
+        <div class="provenance raw"><span class="icon">★</span> Complete source of truth — the full set of metrics ncu recorded for this kernel. Every other tab is a rendered view of a subset of this.</div>
+      </section>
+      <section>
+        <h2>Raw metrics<span class="hint">all collected metrics for the selected kernel</span></h2>
+        <div class="metrics-controls">
+          <select id="raw-kernel-select"></select>
+          <input type="text" id="metric-filter" placeholder="Filter metrics by name…" autocomplete="off">
+          <span class="metric-count" id="metric-count"></span>
+        </div>
+        <div class="metrics-scroll">
+          <table id="metrics-table">
+            <thead>
+              <tr>
+                <th class="sortable" data-mkey="name" data-type="str">Metric<span class="arrow"></span></th>
+                <th class="sortable num" data-mkey="value" data-type="num">Value<span class="arrow"></span></th>
+                <th class="sortable" data-mkey="unit" data-type="str">Unit<span class="arrow"></span></th>
+              </tr>
+            </thead>
+            <tbody id="metrics-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
     <section>
       <h2>Handoff<span class="hint">open the full report locally with Nsight Compute</span></h2>
       <div class="handoff-row">
@@ -122,12 +280,23 @@
         <code class="cmd" id="cmd-ncu-details">{{ ncu_details_cmd }}</code>
         <button class="copy-btn" data-copy="cmd-ncu-details">Copy</button>
       </div>
+      <div class="handoff-row">
+        <span class="label">CLI source</span>
+        <code class="cmd" id="cmd-ncu-source">{{ ncu_source_cmd }}</code>
+        <button class="copy-btn" data-copy="cmd-ncu-source">Copy</button>
+      </div>
+      <div class="handoff-row">
+        <span class="label">CLI session</span>
+        <code class="cmd" id="cmd-ncu-session">{{ ncu_session_cmd }}</code>
+        <button class="copy-btn" data-copy="cmd-ncu-session">Copy</button>
+      </div>
     </section>
-  </main>
+  </footer>
 
   <script>
     const REPORT = {{ report | tojson }};
     const kernels = REPORT.kernels;
+    const CSV_FALLBACK = REPORT.parser === 'csv';
 
     function fmtNum(v) {
       if (v === null || v === undefined) return null;
@@ -160,7 +329,50 @@
       return td;
     }
 
-    // ---- Section 1: sortable kernel summary ----
+    function emptyNote(html) {
+      const div = document.createElement('div');
+      div.className = 'empty-note';
+      div.innerHTML = html;
+      return div;
+    }
+
+    function kernelById(idx) { return kernels.find(k => k.idx === idx); }
+
+    // ---------- shared kernel selection ----------
+    let selectedIdx = kernels.length ? kernels[0].idx : null;
+
+    function populateKernelSelect(sel) {
+      kernels.forEach(k => {
+        const opt = document.createElement('option');
+        opt.value = k.idx;
+        opt.textContent = `#${k.idx} — ${k.name}`;
+        sel.appendChild(opt);
+      });
+      sel.value = String(selectedIdx);
+    }
+
+    function setSelected(idx) {
+      selectedIdx = idx;
+      ['details-kernel-select', 'source-kernel-select', 'raw-kernel-select'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (sel) sel.value = String(idx);
+      });
+      renderSummary();
+      renderDetails();
+      renderSource();
+      renderRaw();
+    }
+
+    // ---------- tabs ----------
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+    });
+    function activateTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${name}`));
+    }
+
+    // ---------- Summary ----------
     const summaryBody = document.getElementById('summary-body');
     let sortState = { key: 'idx', dir: 1 };
 
@@ -182,6 +394,7 @@
       summaryBody.innerHTML = '';
       for (const k of rows) {
         const tr = document.createElement('tr');
+        tr.className = 'clickable';
         tr.dataset.idx = k.idx;
         if (k.idx === selectedIdx) tr.classList.add('selected');
         tr.appendChild(cell(k.idx, 'num'));
@@ -192,13 +405,9 @@
         tr.appendChild(cell(fmtPct(k.occupancy_pct), 'num'));
         tr.appendChild(cell(fmtPct(k.sol_compute_pct), 'num'));
         tr.appendChild(cell(fmtPct(k.sol_memory_pct), 'num'));
-        tr.addEventListener('click', () => selectKernel(k.idx));
+        tr.addEventListener('click', () => { setSelected(k.idx); activateTab('details'); });
         summaryBody.appendChild(tr);
       }
-      updateArrows();
-    }
-
-    function updateArrows() {
       document.querySelectorAll('#summary-table th .arrow').forEach(a => a.textContent = '');
       const th = document.querySelector(`#summary-table th[data-key="${sortState.key}"]`);
       if (th) th.querySelector('.arrow').textContent = sortState.dir === 1 ? ' ▲' : ' ▼';
@@ -213,30 +422,236 @@
       });
     });
 
-    // ---- Section 2: per-kernel metric table ----
-    const kernelSelect = document.getElementById('kernel-select');
+    // ---------- Details ----------
+    function metricTable(metrics) {
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Metric</th><th class="num">Value</th><th>Unit</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      for (const m of metrics) {
+        const tr = document.createElement('tr');
+        tr.appendChild(cell(m.name));
+        tr.appendChild(cell(fmtNum(m.value), 'num'));
+        tr.appendChild(cell(m.unit || ''));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      return table;
+    }
+
+    function renderDetails() {
+      const k = kernelById(selectedIdx);
+      const secEl = document.getElementById('details-sections');
+      const ruleEl = document.getElementById('details-rules');
+      secEl.innerHTML = '';
+      ruleEl.innerHTML = '';
+      if (!k) { secEl.appendChild(emptyNote('No kernel selected.')); return; }
+
+      // sections
+      if (k.sections === null) {
+        secEl.appendChild(emptyNote(
+          CSV_FALLBACK
+            ? 'Section grouping is <strong>not available via the CSV fallback parser</strong>. See the <strong>Raw metrics</strong> tab for the complete set.'
+            : 'Section grouping is <strong>unavailable</strong> (the <code>ncu</code> binary was not found). See the <strong>Raw metrics</strong> tab for the complete set.'));
+      } else if (!k.sections.length) {
+        secEl.appendChild(emptyNote('No grouped metrics were collected in this report.'));
+      } else {
+        for (const sec of k.sections) {
+          const block = document.createElement('div');
+          block.className = 'section-block';
+          const head = document.createElement('div');
+          head.className = 'sec-head';
+          head.innerHTML = `<span class="name"></span><span class="count">${sec.metrics.length} metric${sec.metrics.length === 1 ? '' : 's'}</span>`;
+          head.querySelector('.name').textContent = sec.name;
+          block.appendChild(head);
+          block.appendChild(metricTable(sec.metrics));
+          secEl.appendChild(block);
+        }
+      }
+
+      // rules
+      if (!k.rules.length) {
+        ruleEl.appendChild(emptyNote(
+          'No rule recommendations in this report. Guided-analysis rules are populated for <code>--set</code> captures (Speed Of Light, Occupancy, …); a narrow <code>--metrics</code> capture carries none.'));
+      } else {
+        for (const r of k.rules) {
+          const card = document.createElement('div');
+          card.className = 'rule-card ' + (r.type_label || 'none');
+          const head = document.createElement('div');
+          head.className = 'rule-head';
+          const title = document.createElement('span');
+          title.className = 'rule-title';
+          title.textContent = r.title || r.name || 'Recommendation';
+          head.appendChild(title);
+          if (r.type_label) {
+            const badge = document.createElement('span');
+            badge.className = 'rule-badge';
+            badge.textContent = r.type_label;
+            head.appendChild(badge);
+          }
+          card.appendChild(head);
+          if (r.message) {
+            const msg = document.createElement('div');
+            msg.className = 'rule-msg';
+            msg.textContent = r.message;
+            card.appendChild(msg);
+          }
+          if (r.speedup_pct !== null && r.speedup_pct !== undefined) {
+            const sp = document.createElement('div');
+            sp.className = 'rule-speedup';
+            sp.textContent = `Estimated speedup: ${fmtNum(r.speedup_pct)} %`;
+            card.appendChild(sp);
+          }
+          if (r.section) {
+            const sec = document.createElement('div');
+            sec.className = 'rule-section';
+            sec.textContent = `Section: ${r.section}`;
+            card.appendChild(sec);
+          }
+          ruleEl.appendChild(card);
+        }
+      }
+    }
+
+    // ---------- Source / SASS ----------
+    function listingFromLines(lines) {
+      // lines: [{addr, text}] -> scrollable monospace listing with an address gutter
+      const wrap = document.createElement('div');
+      wrap.className = 'code-listing';
+      const pre = document.createElement('pre');
+      const frag = document.createDocumentFragment();
+      for (const ln of lines) {
+        const addr = document.createElement('span');
+        addr.className = 'addr';
+        addr.textContent = ln.addr + '  ';
+        frag.appendChild(addr);
+        frag.appendChild(document.createTextNode(ln.text + '\n'));
+      }
+      pre.appendChild(frag);
+      wrap.appendChild(pre);
+      return wrap;
+    }
+
+    function notCollectedNote(what) {
+      return emptyNote(
+        CSV_FALLBACK
+          ? `${what} is <strong>not available via the CSV fallback parser</strong> — it requires the <code>ncu_report</code> module.`
+          : `${what} was <strong>not collected in this report</strong>.`);
+    }
+
+    function renderSource() {
+      const k = kernelById(selectedIdx);
+      const sassEl = document.getElementById('source-sass');
+      const ptxEl = document.getElementById('source-ptx');
+      const cudaEl = document.getElementById('source-cuda');
+      sassEl.innerHTML = ''; ptxEl.innerHTML = ''; cudaEl.innerHTML = '';
+      if (!k) { sassEl.appendChild(emptyNote('No kernel selected.')); return; }
+
+      if (k.sass && k.sass.length) sassEl.appendChild(listingFromLines(k.sass));
+      else sassEl.appendChild(notCollectedNote('SASS disassembly'));
+
+      if (k.ptx && k.ptx.length) ptxEl.appendChild(listingFromLines(k.ptx));
+      else ptxEl.appendChild(notCollectedNote('PTX'));
+
+      if (k.cuda_sources && k.cuda_sources.length) {
+        for (const f of k.cuda_sources) {
+          const head = document.createElement('div');
+          head.className = 'src-file-head';
+          head.textContent = f.file;
+          cudaEl.appendChild(head);
+          const wrap = document.createElement('div');
+          wrap.className = 'code-listing';
+          const pre = document.createElement('pre');
+          pre.textContent = f.content;
+          wrap.appendChild(pre);
+          cudaEl.appendChild(wrap);
+        }
+      } else {
+        cudaEl.appendChild(notCollectedNote('CUDA-C source'));
+      }
+    }
+
+    // ---------- Session / Device ----------
+    let deviceSort = { key: 'name', dir: 1 };
+    const deviceFilter = document.getElementById('device-filter');
+    const deviceBody = document.getElementById('device-body');
+    const deviceCount = document.getElementById('device-count');
+
+    function renderSessionSummary() {
+      const el = document.getElementById('session-summary');
+      el.innerHTML = '';
+      const summary = REPORT.device_summary || [];
+      if (!summary.length) {
+        el.appendChild(emptyNote('Device summary was not collected in this report.'));
+        return;
+      }
+      const grid = document.createElement('div');
+      grid.className = 'kv-grid';
+      for (const item of summary) {
+        const k = document.createElement('div'); k.className = 'k'; k.textContent = item.label;
+        const v = document.createElement('div'); v.className = 'v'; v.textContent = item.value;
+        grid.appendChild(k); grid.appendChild(v);
+      }
+      el.appendChild(grid);
+    }
+
+    function renderDeviceAttrs() {
+      const attrs = REPORT.device_attributes || [];
+      deviceBody.innerHTML = '';
+      if (!attrs.length) {
+        deviceCount.textContent = '';
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 3;
+        td.appendChild(emptyNote('No <code>device__attribute_*</code> metrics in this report.'));
+        tr.appendChild(td);
+        deviceBody.appendChild(tr);
+        return;
+      }
+      const q = deviceFilter.value.trim().toLowerCase();
+      let list = attrs.filter(a => !q || a.name.toLowerCase().includes(q));
+      list = list.slice().sort((a, b) => {
+        let av = a[deviceSort.key], bv = b[deviceSort.key];
+        const th = document.querySelector(`#device-table th[data-dkey="${deviceSort.key}"]`);
+        if (th && th.dataset.type === 'num') {
+          const an = typeof av === 'number' ? av : -Infinity;
+          const bn = typeof bv === 'number' ? bv : -Infinity;
+          return (an - bn) * deviceSort.dir;
+        }
+        return String(av).localeCompare(String(bv)) * deviceSort.dir;
+      });
+      for (const a of list) {
+        const tr = document.createElement('tr');
+        tr.appendChild(cell(a.name));
+        tr.appendChild(cell(fmtNum(a.value), 'num'));
+        tr.appendChild(cell(a.unit || ''));
+        deviceBody.appendChild(tr);
+      }
+      deviceCount.textContent = `${list.length} of ${attrs.length} attributes`;
+      document.querySelectorAll('#device-table th .arrow').forEach(a => a.textContent = '');
+      const ath = document.querySelector(`#device-table th[data-dkey="${deviceSort.key}"]`);
+      if (ath) ath.querySelector('.arrow').textContent = deviceSort.dir === 1 ? ' ▲' : ' ▼';
+    }
+
+    deviceFilter.addEventListener('input', renderDeviceAttrs);
+    document.querySelectorAll('#device-table th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.dkey;
+        if (deviceSort.key === key) deviceSort.dir *= -1;
+        else deviceSort = { key, dir: 1 };
+        renderDeviceAttrs();
+      });
+    });
+
+    // ---------- Raw metrics ----------
     const metricFilter = document.getElementById('metric-filter');
     const metricsBody = document.getElementById('metrics-body');
     const metricCount = document.getElementById('metric-count');
-    let selectedIdx = kernels.length ? kernels[0].idx : null;
     let metricSort = { key: 'name', dir: 1 };
 
-    kernels.forEach(k => {
-      const opt = document.createElement('option');
-      opt.value = k.idx;
-      opt.textContent = `#${k.idx} — ${k.name}`;
-      kernelSelect.appendChild(opt);
-    });
-
-    function selectKernel(idx) {
-      selectedIdx = idx;
-      kernelSelect.value = String(idx);
-      renderSummary();
-      renderMetrics();
-    }
-
-    function renderMetrics() {
-      const k = kernels.find(x => x.idx === selectedIdx);
+    function renderRaw() {
+      const k = kernelById(selectedIdx);
       metricsBody.innerHTML = '';
       if (!k) { metricCount.textContent = ''; return; }
       const q = metricFilter.value.trim().toLowerCase();
@@ -254,7 +669,6 @@
 
       for (const m of list) {
         const tr = document.createElement('tr');
-        tr.style.cursor = 'default';
         tr.appendChild(cell(m.name));
         tr.appendChild(cell(fmtNum(m.value), 'num'));
         tr.appendChild(cell(m.unit || ''));
@@ -266,18 +680,17 @@
       if (ath) ath.querySelector('.arrow').textContent = metricSort.dir === 1 ? ' ▲' : ' ▼';
     }
 
-    kernelSelect.addEventListener('change', () => selectKernel(parseInt(kernelSelect.value, 10)));
-    metricFilter.addEventListener('input', renderMetrics);
+    metricFilter.addEventListener('input', renderRaw);
     document.querySelectorAll('#metrics-table th.sortable').forEach(th => {
       th.addEventListener('click', () => {
         const key = th.dataset.mkey;
         if (metricSort.key === key) metricSort.dir *= -1;
         else metricSort = { key, dir: 1 };
-        renderMetrics();
+        renderRaw();
       });
     });
 
-    // ---- Section 3: copy buttons ----
+    // ---------- copy buttons ----------
     document.querySelectorAll('.copy-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const text = document.getElementById(btn.dataset.copy).textContent;
@@ -292,8 +705,18 @@
       });
     });
 
+    // ---------- init ----------
+    ['details-kernel-select', 'source-kernel-select', 'raw-kernel-select'].forEach(id => {
+      const sel = document.getElementById(id);
+      populateKernelSelect(sel);
+      sel.addEventListener('change', () => setSelected(parseInt(sel.value, 10)));
+    });
     renderSummary();
-    renderMetrics();
+    renderDetails();
+    renderSource();
+    renderSessionSummary();
+    renderDeviceAttrs();
+    renderRaw();
   </script>
 {% endif %}
 </body>

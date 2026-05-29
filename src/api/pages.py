@@ -187,6 +187,8 @@ async def ncu_viewer(
           "extra_count": len(file) - 1,
           "ncu_ui_cmd": f"ncu-ui {path}",
           "ncu_details_cmd": f"ncu --import {path} --page details",
+          "ncu_source_cmd": f"ncu --import {path} --page source --print-source sass",
+          "ncu_session_cmd": f"ncu --import {path} --page session",
           "hostname": socket.gethostname(),
       })
 

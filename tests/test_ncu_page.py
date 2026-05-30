@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import pages
-from src.api.ncu_parsing import parse_ncu_report
+from src.api.ncu_parsing import _extract_rules, parse_ncu_report
 
 _SAMPLE_REPORT = Path("/data/home/chaoli/scripts/20260528_rmsnorm_ncu/out/ncu_cuda.ncu-rep")
 
@@ -98,3 +98,53 @@ def test_parser_surfaces_new_content_types() -> None:
   assert labels["Device"] == "NVIDIA B200"
   assert labels["Compute capability"] == "10.0"
   assert len(report["device_attributes"]) > 100
+
+
+def test_extract_rules_reads_swig_attribute_objects() -> None:
+  """rule_message()/speedup_estimation() return attribute objects, not dicts.
+
+  The narrow sample report carries zero rules, so this guards the --set path:
+  reading the message/speedup as attributes (not `.get(...)`) must yield a
+  populated, colour-labelled rule rather than silently dropping it.
+  """
+
+  class _Msg:
+    title = "Long Scoreboard Stalls"
+    message = "On average each warp spends cycles stalled."
+    type = 3  # warning
+
+  class _Speedup:
+    speedup = 12.5
+    type = 1
+
+  class _Rule:
+
+    def name(self) -> str:
+      return "IssueEfficiency"
+
+    def section_identifier(self) -> str:
+      return "WarpStateStats"
+
+    def has_rule_message(self) -> bool:
+      return True
+
+    def rule_message(self) -> _Msg:
+      return _Msg()
+
+    def has_speedup_estimation(self) -> bool:
+      return True
+
+    def speedup_estimation(self) -> _Speedup:
+      return _Speedup()
+
+  class _Action:
+
+    def rule_results(self) -> list[_Rule]:
+      return [_Rule()]
+
+  rules = _extract_rules(_Action())
+  assert len(rules) == 1
+  assert rules[0]["title"] == "Long Scoreboard Stalls"
+  assert rules[0]["type_label"] == "warning"
+  assert rules[0]["speedup_pct"] == 12.5
+  assert rules[0]["section"] == "WarpStateStats"

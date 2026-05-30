@@ -238,17 +238,16 @@ def _extract_rules(action) -> list[dict]:
       }
       if rule_result.has_rule_message():
         msg = rule_result.rule_message()
-        entry["title"] = str(msg.get("title", ""))
-        entry["message"] = str(msg.get("message", ""))
-        msg_type = int(msg.get("type", 0))
+        entry["title"] = str(msg.title)
+        entry["message"] = str(msg.message)
+        msg_type = int(msg.type)
         entry["type"] = msg_type
         entry["type_label"] = _MSG_TYPE_LABELS.get(msg_type, "none")
       if rule_result.has_speedup_estimation():
-        speedup = rule_result.speedup_estimation().get("speedup")
-        entry["speedup_pct"] = _clean_number(float(speedup)) if speedup is not None else None
+        entry["speedup_pct"] = _clean_number(float(rule_result.speedup_estimation().speedup))
       rules.append(entry)
-    except Exception:
-      log.warning("ncu_rule_normalize_failed")
+    except Exception as exc:
+      log.warning("ncu_rule_normalize_failed", error=str(exc))
   return rules
 
 

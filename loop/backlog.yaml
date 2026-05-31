@@ -6797,3 +6797,26 @@
   status: pending
   created: '2026-05-29T15:00:00Z'
   priority: low
+- id: '176'
+  title: Remove unused WatchTarget import and unused exception bindings flagged by
+    pyflakes
+  description: 'pyflakes reports three unused names across two files, all safe to delete
+    with no behavior change. (1) src/api/internal.py:14-22 imports WatchTarget from
+    src.core.models, but the symbol is never referenced anywhere in the module (only
+    occurrence is the import itself); drop WatchTarget from that import block.
+    (2) src/core/sessions.py:135 binds `except Exception as e:` in _backend_create_hook,
+    but the handler only calls log.exception(...) (which captures the active exception
+    on its own) and then re-raises — the `e` name is never read; change to
+    `except Exception:`. (3) src/core/sessions.py:488 binds `except Exception as e:`
+    in the thread-gc loop, but the handler only calls log.exception("thread_gc_failed",
+    thread=...) and the `e` name is never read; change to `except Exception:`. None of
+    these are swallowed-exception cases — (2) re-raises and (3) logs with a full
+    traceback via log.exception — so removing the unused bindings preserves the exact
+    logging and control flow. This is pure dead-name cleanup, not a yapf/formatting
+    fix, so it is filed rather than auto-applied.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-31T00:00:00Z'
+  priority: low

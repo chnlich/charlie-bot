@@ -6957,3 +6957,67 @@
   status: pending
   created: '2026-06-01T12:00:00Z'
   priority: low
+- id: '180'
+  title: Extract the per-kernel roofline point computation out of _collect_roofline
+  description: 'src/api/ncu_parsing.py:_collect_roofline (L202-282, 81 lines) is the
+    longest function in src/ not already covered by a pending backlog item. It is a
+    doubly-nested loop: the outer loop walks _ROOFLINE_DEFINITIONS (one precision
+    roofline each), and the inner loop (L224-263, ~40 lines) computes one chart point
+    per kernel — gather the required metric values, skip the kernel when any required
+    metric is missing (L226-228) or any peak/clock/traffic value is non-positive
+    (L236-239), sum the required and optional achieved-work metrics into
+    achieved_work_flop_per_cycle (L241-247), derive achieved FLOP/s, arithmetic
+    intensity, and the compute/memory ceilings, and append the cleaned point dict
+    (L252-263). That inner block is a self-contained, single-responsibility unit with
+    a clean name and clears the extraction bar (a ~40-line block with a nameable
+    concept, not a three-line snippet).
+
+    WHAT — Extract the inner per-kernel block into a private helper
+    _roofline_point_for_kernel(kernel: dict, definition: dict, required_metric_names:
+    list[str]) -> dict | None that returns the point dict, or None when the kernel
+    should be skipped (missing required metric or non-positive peak/clock/traffic
+    value). _collect_roofline then becomes the outer per-definition loop: build
+    required_metric_names, call the helper for each kernel, collect the non-None
+    points, and do the existing per-definition aggregation (L265-275) plus the final
+    return envelope (L277-282). After extraction _collect_roofline drops to roughly
+    the outer loop plus aggregation (well under 50 lines), and the per-kernel math
+    lives in one focused, independently readable function.
+
+    HOW — (1) Add _roofline_point_for_kernel near _collect_roofline in ncu_parsing.py.
+    Move the body of the inner `for kernel in kernels:` loop into it, converting the
+    two `continue` skip paths into `return None` and the `points.append(...)` into
+    `return {...}`. (2) Rewrite _collect_roofline''s inner loop to `point =
+    _roofline_point_for_kernel(kernel, definition, required_metric_names); if point is
+    not None: points.append(point)`. (3) Verify: yapf --in-place --recursive src/
+    produces no diff (or commit it per the yapf rule); pyflakes src/api/ncu_parsing.py
+    is clean; and parsing an existing NCU report still yields byte-identical roofline
+    JSON (the helper must preserve the exact skip conditions, the required-then-optional
+    work-metric summation order, and the _clean_number rounding). Pure structural
+    refactor with no behavior change.
+
+    NON-DUPLICATION CHECK — This scan ran `yapf --in-place --recursive src/`, which
+    produced one diff in src/api/ncu_parsing.py (dict-literal value wrapping under the
+    configured google/2-space/120-col style); per the yapf rule it was fixed in-place
+    and committed in the worktree in the same run, not filed as a backlog item. `grep
+    -rEn "TODO|FIXME|HACK|XXX" src/` returns zero matches. `pyflakes src/` reports
+    exactly four findings, all already covered by pending items: the two unused "e"
+    bindings in core/sessions.py:135 and :488 and the unused WatchTarget import in
+    api/internal.py:14 are covered by item 176, and the unused kill_tmux_session import
+    in agents/backends/tui.py:23 is covered by item 177. The >50-line function inventory
+    cross-references the standing pending/rejected set (109/125/126/127/129/132/134/
+    136/140/153/161/167/168/169/170/172/174/175/178/179 cover base.run, the two
+    spawner.py giants, both master_cc giants, run_improve_loop, _run_single_iteration,
+    _feed, pages.index, the review.py functions, antigravity_cli.run, ncu _parse_with_csv,
+    autonamer, triggers _detect_pidfd/_wait_with_pidfd/_wait_and_fire, terminal/tui
+    attach). _collect_roofline was added by the NCU roofline commit ffe3776 and was
+    explicitly named as the deferred next finding in item 179''s non-duplication note;
+    no pending item covers it, so it is filed this scan as the single strongest new
+    finding. The remaining uncovered >50-line functions (e.g. gemini_cli.translate_event,
+    worker.run, chat.send_message, master_trigger.trigger_master) are coherent single
+    flows or borderline and are not split per the one-finding-per-scan rule.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-01T18:00:00Z'
+  priority: low

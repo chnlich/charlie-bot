@@ -8,6 +8,7 @@ Nsight Compute install. If that module cannot be imported, we fall back to
 Beyond the flat per-kernel metric set the report also surfaces, when present:
   * rule recommendations (the green/yellow advice the ncu UI shows),
   * metrics grouped by their ncu Section (Speed Of Light, Memory Workload, ...),
+  * roofline chart points derived from NCU SpeedOfLight roofline metrics,
   * SASS disassembly plus PTX and CUDA-C source listings,
   * device / session attributes.
 Every one of these is optional — a narrow ``--metrics`` capture carries almost
@@ -46,6 +47,47 @@ _DEVICE_METRIC = "device__attribute_display_name"
 
 # Function entry program counters, used to walk SASS/PTX listings by PC.
 _FUNCTION_PCS_METRIC = "launch__function_pcs"
+
+# NCU's overview roofline chart definitions from SpeedOfLight_RooflineChart.
+# These names are the metric definitions Nsight Compute itself emits in
+# --set full/detailed reports; narrow --metrics captures usually lack them.
+_ROOFLINE_PEAK_SM_CLOCK = "sm__cycles_elapsed.avg.per_second"
+_ROOFLINE_ACHIEVED_SM_CLOCK = "smsp__cycles_elapsed.avg.per_second"
+_ROOFLINE_PEAK_TRAFFIC_PER_CYCLE = "dram__bytes.sum.peak_sustained"
+_ROOFLINE_ACHIEVED_TRAFFIC = "dram__bytes.sum.per_second"
+_ROOFLINE_DRAM_CLOCK = "dram__cycles_elapsed.avg.per_second"
+_ROOFLINE_PLACEHOLDER = "本报告未采集 roofline 数据 (需要 --set full/detailed)"
+
+_ROOFLINE_DEFINITIONS = [
+    {
+        "id": "fp32",
+        "label": "Single Precision Roofline",
+        "precision": "FP32",
+        "peak_work_metric": "derived__sm__sass_thread_inst_executed_op_ffma_pred_on_x2",
+        "required_achieved_work_metrics": [
+            "smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed",
+            "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed",
+            "derived__smsp__sass_thread_inst_executed_op_ffma_pred_on_x2",
+        ],
+        "optional_achieved_work_metrics": [
+            "derived__smsp__sass_thread_inst_executed_op_fadd2_pred_on_x2",
+            "derived__smsp__sass_thread_inst_executed_op_fmul2_pred_on_x2",
+            "derived__smsp__sass_thread_inst_executed_op_ffma2_pred_on_x4",
+        ],
+    },
+    {
+        "id": "fp64",
+        "label": "Double Precision Roofline",
+        "precision": "FP64",
+        "peak_work_metric": "derived__sm__sass_thread_inst_executed_op_dfma_pred_on_x2",
+        "required_achieved_work_metrics": [
+            "smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed",
+            "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed",
+            "derived__smsp__sass_thread_inst_executed_op_dfma_pred_on_x2",
+        ],
+        "optional_achieved_work_metrics": [],
+    },
+]
 
 # SASS instruction width in bytes. 128-bit (16-byte) encoding is constant across
 # every architecture Nsight Compute supports (Volta and newer), so walking PCs
@@ -135,6 +177,104 @@ def _clean_number(value):
   return value
 
 
+def _metric_lookup_from_kernel(kernel: dict) -> dict[str, object]:
+  """Return raw metric values keyed by NCU metric name for one parsed kernel."""
+  return {m["name"]: m["value"] for m in kernel["metrics"]}
+
+
+def _numeric_metric(metrics: dict[str, object], name: str) -> float | None:
+  """Return a finite numeric metric value, or None if NCU did not collect it."""
+  value = metrics.get(name)
+  if isinstance(value, (int, float)):
+    numeric = float(value)
+    if math.isfinite(numeric):
+      return numeric
+  return None
+
+
+def _collect_roofline(kernels: list[dict]) -> dict:
+  """Extract NCU SpeedOfLight roofline values from collected metrics.
+
+  This follows the metric names and derived__ definitions used by
+  SpeedOfLight_RooflineChart.section. The chart point is:
+    achieved FLOP/s = NCU achieved work per elapsed SM cycle * SMSP cycles/s
+    arithmetic intensity = achieved FLOP/s / achieved DRAM byte/s
+  and the ceilings use the matching NCU peak-work and peak-traffic metrics.
+  """
+  rooflines: list[dict] = []
+  for definition in _ROOFLINE_DEFINITIONS:
+    points: list[dict] = []
+    required_metric_names = [
+        definition["peak_work_metric"],
+        _ROOFLINE_PEAK_SM_CLOCK,
+        _ROOFLINE_ACHIEVED_SM_CLOCK,
+        _ROOFLINE_PEAK_TRAFFIC_PER_CYCLE,
+        _ROOFLINE_DRAM_CLOCK,
+        _ROOFLINE_ACHIEVED_TRAFFIC,
+        *definition["required_achieved_work_metrics"],
+    ]
+
+    for kernel in kernels:
+      metrics = _metric_lookup_from_kernel(kernel)
+      required = {name: _numeric_metric(metrics, name) for name in required_metric_names}
+      if any(value is None for value in required.values()):
+        continue
+
+      peak_compute_flop_per_cycle = required[definition["peak_work_metric"]]
+      peak_sm_clock_hz = required[_ROOFLINE_PEAK_SM_CLOCK]
+      achieved_sm_clock_hz = required[_ROOFLINE_ACHIEVED_SM_CLOCK]
+      peak_memory_byte_per_cycle = required[_ROOFLINE_PEAK_TRAFFIC_PER_CYCLE]
+      dram_clock_hz = required[_ROOFLINE_DRAM_CLOCK]
+      achieved_traffic_bytes_s = required[_ROOFLINE_ACHIEVED_TRAFFIC]
+      if peak_compute_flop_per_cycle <= 0 or peak_sm_clock_hz <= 0 or peak_memory_byte_per_cycle <= 0 or dram_clock_hz <= 0:
+        continue
+      if achieved_sm_clock_hz <= 0 or achieved_traffic_bytes_s <= 0:
+        continue
+
+      achieved_work_flop_per_cycle = 0.0
+      for name in definition["required_achieved_work_metrics"]:
+        achieved_work_flop_per_cycle += required[name]
+      for name in definition["optional_achieved_work_metrics"]:
+        value = _numeric_metric(metrics, name)
+        if value is not None:
+          achieved_work_flop_per_cycle += value
+
+      achieved_flops = achieved_work_flop_per_cycle * achieved_sm_clock_hz
+      compute_ceiling_flops = peak_compute_flop_per_cycle * peak_sm_clock_hz
+      memory_ceiling_bytes_s = peak_memory_byte_per_cycle * dram_clock_hz
+      points.append(
+          {
+              "kernel_idx": kernel["idx"],
+              "kernel_name": kernel["name"],
+              "achieved_flops": _clean_number(achieved_flops),
+              "arithmetic_intensity": _clean_number(achieved_flops / achieved_traffic_bytes_s),
+              "achieved_traffic_bytes_s": _clean_number(achieved_traffic_bytes_s),
+              "compute_ceiling_flops": _clean_number(compute_ceiling_flops),
+              "memory_ceiling_bytes_s": _clean_number(memory_ceiling_bytes_s),
+              "achieved_work_flop_per_cycle": _clean_number(achieved_work_flop_per_cycle),
+              "peak_compute_flop_per_cycle": _clean_number(peak_compute_flop_per_cycle),
+          })
+
+    if points:
+      rooflines.append(
+          {
+              "id": definition["id"],
+              "label": definition["label"],
+              "precision": definition["precision"],
+              "compute_ceiling_flops": max(p["compute_ceiling_flops"] for p in points),
+              "memory_ceiling_bytes_s": max(p["memory_ceiling_bytes_s"] for p in points),
+              "source_metrics": required_metric_names + definition["optional_achieved_work_metrics"],
+              "points": points,
+          })
+
+  return {
+      "available": bool(rooflines),
+      "message": None if rooflines else _ROOFLINE_PLACEHOLDER,
+      "source": "NCU SpeedOfLight_RooflineChart metrics",
+      "rooflines": rooflines,
+  }
+
+
 def _metric_value(action, name: str) -> tuple[object, str | None]:
   """Return (value, unit) for a metric, or (None, None) if not collected.
 
@@ -182,6 +322,13 @@ def _function_base_pcs(action) -> list[int]:
     return [metric.as_uint64(i) for i in range(metric.num_instances())]
   except Exception:
     return []
+
+
+def _object_field(obj, name: str):
+  """Read a SWIG attribute object or dict field from ncu_report."""
+  if isinstance(obj, dict):
+    return obj[name]
+  return getattr(obj, name)
 
 
 def _collect_source(action) -> dict:
@@ -238,13 +385,13 @@ def _extract_rules(action) -> list[dict]:
       }
       if rule_result.has_rule_message():
         msg = rule_result.rule_message()
-        entry["title"] = str(msg.title)
-        entry["message"] = str(msg.message)
-        msg_type = int(msg.type)
+        entry["title"] = str(_object_field(msg, "title"))
+        entry["message"] = str(_object_field(msg, "message"))
+        msg_type = int(_object_field(msg, "type"))
         entry["type"] = msg_type
         entry["type_label"] = _MSG_TYPE_LABELS.get(msg_type, "none")
       if rule_result.has_speedup_estimation():
-        entry["speedup_pct"] = _clean_number(float(rule_result.speedup_estimation().speedup))
+        entry["speedup_pct"] = _clean_number(float(_object_field(rule_result.speedup_estimation(), "speedup")))
       rules.append(entry)
     except Exception as exc:
       log.warning("ncu_rule_normalize_failed", error=str(exc))
@@ -345,6 +492,7 @@ def _parse_with_module(module, abspath: str) -> dict:
       "parser": "ncu_report",
       "device_attributes": _device_attributes(first_action),
       "device_summary": _device_summary(first_action),
+      "roofline": _collect_roofline(kernels),
   }
 
 
@@ -508,6 +656,7 @@ def _parse_with_csv(abspath: str) -> dict:
       "parser": "csv",
       "device_attributes": [],
       "device_summary": device_summary,
+      "roofline": _collect_roofline(kernels),
   }
 
 

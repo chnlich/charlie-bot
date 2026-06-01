@@ -338,6 +338,26 @@ async def thread_websocket(websocket: WebSocket, thread_id: str):
 
 
 # ---------------------------------------------------------------------------
+# WebSocket endpoint for the host-global terminal
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/terminal")
+async def terminal_websocket(websocket: WebSocket):
+  """Attach the browser to the host-global tmux terminal."""
+  if not await _check_ws_auth(websocket):
+    return
+  await websocket.accept()
+  log.info("terminal_ws_connected")
+  try:
+    from src.agents.backends.terminal import run_terminal_attachment
+
+    await run_terminal_attachment(websocket)
+  finally:
+    log.info("terminal_ws_disconnected")
+
+
+# ---------------------------------------------------------------------------
 # Static files (CSS, JS, images — NOT the SPA)
 # ---------------------------------------------------------------------------
 

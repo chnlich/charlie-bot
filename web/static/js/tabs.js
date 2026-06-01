@@ -4,11 +4,15 @@
 let _backlogLoaded = false;
 
 function switchTab(tab) {
-  const allTabs = ['chat-tex', 'chat', 'workers', 'chat-backlog'];
+  const allTabs = ['terminal', 'chat-tex', 'chat', 'workers', 'chat-backlog'];
   // chat-tex, chat, and chat-backlog all show the chat content
   const showChat = (tab === 'chat-tex' || tab === 'chat' || tab === 'chat-backlog');
   document.getElementById('tab-chat').classList.toggle('hidden', !showChat);
   document.getElementById('tab-workers').classList.toggle('hidden', tab !== 'workers');
+  const terminalTab = document.getElementById('tab-terminal');
+  if (terminalTab) {
+    terminalTab.classList.toggle('hidden', tab !== 'terminal');
+  }
 
   // LaTeX panel visible only in chat-tex
   const latexPanel = document.getElementById('latex-panel');
@@ -56,6 +60,11 @@ function switchTab(tab) {
 
   if (tab === 'workers' && typeof ensureWorkersLoadedForActiveSession === 'function') {
     ensureWorkersLoadedForActiveSession();
+  }
+
+  if (globalThis.TerminalPanel) {
+    if (tab === 'terminal') globalThis.TerminalPanel.show();
+    else globalThis.TerminalPanel.hide();
   }
 
   // Highlight active tab button

@@ -37,6 +37,14 @@ def _write_codex_rollout(codex_root: Path, native_thread_id: str, lines: list[di
   rollout_path.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
 
 
+def _codex_turn_context(model: str) -> dict:
+  return {
+      "timestamp": "2026-03-31T20:42:51.000Z",
+      "type": "turn_context",
+      "payload": {"model": model},
+  }
+
+
 def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
   usage = _extract_codex_rollout_usage_event(
       {
@@ -65,6 +73,11 @@ def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
   assert usage == {
       "context_tokens": 176028,
       "context_limit": 258400,
+      "total_token_usage": {
+          "input_tokens": 1252236,
+          "cached_input_tokens": 950016,
+          "output_tokens": 14789,
+      },
   }
 
 
@@ -97,6 +110,7 @@ async def test_resolve_session_usage_reads_live_codex_thread_id_from_chat_events
       codex_root,
       native_thread_id,
       [
+          _codex_turn_context("gpt-5.5"),
           {
               "timestamp": "2026-03-31T20:42:52.358Z",
               "type": "event_msg",
@@ -132,12 +146,11 @@ async def test_resolve_session_usage_reads_live_codex_thread_id_from_chat_events
       events=[{"type": "assistant", "message": {"content": [{"type": "text", "text": "tail only"}]}}],
   )
 
-  assert usage == {
-      "context_tokens": 179319,
-      "context_limit": 258400,
-      "total_cost_usd": 0.0,
-      "model": "",
-  }
+  assert usage is not None
+  assert usage["context_tokens"] == 179319
+  assert usage["context_limit"] == 258400
+  assert usage["total_cost_usd"] == pytest.approx(2.5835, abs=0.0001)
+  assert usage["model"] == "gpt-5.5"
 
 
 @pytest.mark.asyncio
@@ -178,6 +191,7 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
       codex_root,
       native_thread_id,
       [
+          _codex_turn_context("gpt-5.5"),
           {
               "timestamp": "2026-03-25T21:32:09.989Z",
               "type": "event_msg",
@@ -204,12 +218,117 @@ async def test_resolve_session_usage_overrides_completed_codex_context_window(
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
-  assert usage == {
-      "context_tokens": 176028,
-      "context_limit": 258400,
-      "total_cost_usd": 1.25,
-      "model": "codex-test",
-  }
+  assert usage is not None
+  assert usage["context_tokens"] == 176028
+  assert usage["context_limit"] == 258400
+  assert usage["total_cost_usd"] == pytest.approx(1.4461, abs=0.0001)
+  assert usage["model"] == "gpt-5.5"
+
+
+@pytest.mark.asyncio
+async def test_resolve_session_usage_computes_codex_cumulative_cost(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  native_thread_id = "019d9f9e-5d7a-7f44-81a8-e9cb8261a51d"
+  meta = SessionMetadata(
+      id="session-codex-cost",
+      name="Codex Cost Session",
+      backend="codex-test",
+      cc_session_id=native_thread_id,
+  )
+  _write_session(session_mgr, meta, [])
+  codex_root = tmp_path / ".codex" / "sessions"
+  monkeypatch.setattr("src.core.codex_usage._CODEX_SESSIONS_DIR", codex_root)
+  _write_codex_rollout(
+      codex_root,
+      native_thread_id,
+      [
+          _codex_turn_context("gpt-5.5"),
+          {
+              "timestamp": "2026-03-31T20:43:12.454Z",
+              "type": "event_msg",
+              "payload": {
+                  "type": "token_count",
+                  "info": {
+                      "total_token_usage": {
+                          "input_tokens": 1951892,
+                          "cached_input_tokens": 1858304,
+                          "output_tokens": 15209,
+                      },
+                      "last_token_usage": {
+                          "input_tokens": 179319,
+                          "cached_input_tokens": 176640,
+                          "output_tokens": 1732,
+                          "total_tokens": 181051,
+                      },
+                      "model_context_window": 258400,
+                  },
+              },
+          },
+      ],
+  )
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["total_cost_usd"] == pytest.approx(1.85, abs=0.01)
+  assert usage["model"] == "gpt-5.5"
+
+
+@pytest.mark.asyncio
+async def test_resolve_session_usage_unknown_codex_model_cost_is_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  native_thread_id = "019d9fb0-c3f8-72ec-9d8d-0ed32d404b30"
+  meta = SessionMetadata(
+      id="session-codex-unknown-cost",
+      name="Codex Unknown Cost Session",
+      backend="codex-test",
+      cc_session_id=native_thread_id,
+  )
+  _write_session(session_mgr, meta, [])
+  codex_root = tmp_path / ".codex" / "sessions"
+  monkeypatch.setattr("src.core.codex_usage._CODEX_SESSIONS_DIR", codex_root)
+  _write_codex_rollout(
+      codex_root,
+      native_thread_id,
+      [
+          _codex_turn_context("gpt-unknown"),
+          {
+              "timestamp": "2026-03-31T20:43:12.454Z",
+              "type": "event_msg",
+              "payload": {
+                  "type": "token_count",
+                  "info": {
+                      "total_token_usage": {
+                          "input_tokens": 1951892,
+                          "cached_input_tokens": 1858304,
+                          "output_tokens": 15209,
+                      },
+                      "last_token_usage": {
+                          "input_tokens": 179319,
+                          "cached_input_tokens": 176640,
+                          "output_tokens": 1732,
+                          "total_tokens": 181051,
+                      },
+                      "model_context_window": 258400,
+                  },
+              },
+          },
+      ],
+  )
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["total_cost_usd"] is None
+  assert usage["model"] == "gpt-unknown"
 
 
 @pytest.mark.asyncio

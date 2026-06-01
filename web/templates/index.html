@@ -37,7 +37,7 @@
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
-    let usageTotalCost = {{ session_usage.total_cost_usd if session_usage else 0 }};
+    let usageTotalCost = {{ (session_usage.total_cost_usd|tojson) if session_usage else 0 }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
     const INITIAL_SESSIONS = {{ initial_sessions|tojson }};
     const INITIAL_LOAD_ERRORS = {{ load_errors|tojson }};
@@ -173,7 +173,7 @@
             </div>
             <span id="usage-text" class="text-xs text-slate-400 whitespace-nowrap">{% if session_usage %}{{ '%dk' % (session_usage.context_tokens // 1000) }} / {{ '%dk' % (session_usage.context_limit // 1000) }}{% endif %}</span>
           </div>
-          <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap">{% if session_usage %}${{ '%.2f' % session_usage.total_cost_usd }}{% endif %}</span>
+          <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap">{% if session_usage %}{% if session_usage.total_cost_usd is none %}N/A{% else %}${{ '%.2f' % session_usage.total_cost_usd }}{% endif %}{% endif %}</span>
         </div>
         <a href="/sessions/{{ active_session.id }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">

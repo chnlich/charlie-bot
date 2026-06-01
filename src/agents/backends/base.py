@@ -78,7 +78,7 @@ def make_result_event(
     output_tokens: int = 0,
     cache_read: int = 0,
     cache_creation: int = 0,
-    cost: float = 0,
+    cost: float | None = 0,
 ) -> dict:
   """Build a CC-compatible result/usage event."""
   return {

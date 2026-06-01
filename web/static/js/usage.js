@@ -5,6 +5,10 @@ function formatTokens(n) {
   return Math.round(n / 1000) + 'k';
 }
 
+function formatUsageCostValue(cost) {
+  return cost == null ? 'N/A' : '$' + cost.toFixed(2);
+}
+
 function updateUsageDisplay(ev) {
   const usage = ev.usage || {};
   const contextTokens = (usage.input_tokens || 0)
@@ -12,13 +16,17 @@ function updateUsageDisplay(ev) {
     + (usage.cache_read_input_tokens || 0);
 
   // Accumulate cost even for zero-token results
-  usageTotalCost += (ev.total_cost_usd || 0);
+  if (ev.total_cost_usd == null || usageTotalCost == null) {
+    usageTotalCost = null;
+  } else {
+    usageTotalCost += ev.total_cost_usd;
+  }
 
   // Skip token/bar update when Claude Code emits a result with zero usage
   if (contextTokens === 0) {
     // Still update cost display
     const cost = document.getElementById('usage-cost');
-    if (cost) cost.textContent = '$' + usageTotalCost.toFixed(2);
+    if (cost) cost.textContent = formatUsageCostValue(usageTotalCost);
     return;
   }
 
@@ -43,7 +51,7 @@ function updateUsageDisplay(ev) {
     bar.className = 'h-full rounded-full transition-all duration-300 '
       + (pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500');
     text.textContent = formatTokens(contextTokens) + ' / ' + formatTokens(contextLimit);
-    cost.textContent = '$' + usageTotalCost.toFixed(2);
+    cost.textContent = formatUsageCostValue(usageTotalCost);
   }
 
 }

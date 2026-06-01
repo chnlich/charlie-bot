@@ -927,12 +927,17 @@ class SessionManager:
     last_result: dict | None = None
     last_usage_result: dict | None = None
     total_cost = 0.0
+    unknown_cost = False
 
     for ev in events:
       if ev.get("type") != ET.RESULT:
         continue
       last_result = ev
-      total_cost += ev.get("total_cost_usd", 0.0)
+      event_cost = ev.get("total_cost_usd", 0.0)
+      if event_cost is None:
+        unknown_cost = True
+      else:
+        total_cost += event_cost
       if _extract_usage_from_result(ev)[0] > 0:
         last_usage_result = ev
 
@@ -943,7 +948,7 @@ class SessionManager:
     return {
         "context_tokens": context_tokens,
         "context_limit": context_limit,
-        "total_cost_usd": round(total_cost, 4),
+        "total_cost_usd": None if unknown_cost else round(total_cost, 4),
         "model": model,
     }
 
@@ -959,7 +964,11 @@ class SessionManager:
         "total_cost_usd": 0.0,
         "model": "",
     }
-    cached["total_cost_usd"] = round(cached["total_cost_usd"] + result_event.get("total_cost_usd", 0.0), 4)
+    event_cost = result_event.get("total_cost_usd", 0.0)
+    if event_cost is None:
+      cached["total_cost_usd"] = None
+    elif cached["total_cost_usd"] is not None:
+      cached["total_cost_usd"] = round(cached["total_cost_usd"] + event_cost, 4)
     ctx, context_limit, model = _extract_usage_from_result(result_event)
     if ctx > 0:
       cached["context_tokens"] = ctx

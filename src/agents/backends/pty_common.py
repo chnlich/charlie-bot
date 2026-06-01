@@ -10,6 +10,7 @@ import pty
 import shutil
 import signal
 import struct
+import tempfile
 import termios
 
 import structlog
@@ -47,12 +48,17 @@ async def _run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
   """Run a tmux command on the isolated socket. Returns (exit_code, stderr)."""
   tmux = _tmux_binary()
   cmd = [tmux, "-L", _TMUX_SOCKET, *args]
-  proc = await asyncio.create_subprocess_exec(
-      *cmd,
-      stdout=asyncio.subprocess.DEVNULL,
-      stderr=asyncio.subprocess.PIPE,
-  )
-  _, stderr_b = await proc.communicate()
+  # tmux new-session can fork a server daemon that inherits stderr; under uvloop,
+  # communicate() waits forever for PIPE EOF, so capture stderr in a regular file.
+  with tempfile.TemporaryFile() as stderr_f:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=stderr_f,
+    )
+    await proc.wait()
+    stderr_f.seek(0)
+    stderr_b = stderr_f.read()
   stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
   rc = proc.returncode or 0
   if check and rc != 0:

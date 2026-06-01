@@ -55,6 +55,33 @@ def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch)
   assert "sess-123" in cmd
 
 
+def test_turn_completed_includes_codex_cost(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="gpt-5.5")
+
+  translated = backend.translate_event({
+      "type": "turn.completed",
+      "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20,
+      },
+  })
+
+  assert translated == [
+      {
+          "type": ET.RESULT,
+          "result": "",
+          "usage": {
+              "input_tokens": 1000,
+              "output_tokens": 20,
+              "cache_read_input_tokens": 400,
+              "cache_creation_input_tokens": 0,
+          },
+          "total_cost_usd": 0.0038,
+      }
+  ]
+
+
 def test_file_change_html_artifact_emits_file_write_and_write_tool(monkeypatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch)
   artifact_dir = tmp_path / "artifacts"

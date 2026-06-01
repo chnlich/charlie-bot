@@ -7,13 +7,14 @@ from typing import Any, Callable
 import structlog
 
 from src.core.config import CharlieBotConfig
+from src.core.codex_pricing import calculate_codex_usage_cost_usd
 
 log = structlog.get_logger()
 
 _CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 
-def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, int] | None:
+def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] | None:
   """Return context usage from a native Codex token_count event."""
   if event.get("type") != "event_msg":
     return None
@@ -26,20 +27,41 @@ def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, int] 
   context_limit = info.get("model_context_window")
   if input_tokens is None or context_limit is None:
     return None
-  return {
+  usage: dict[str, Any] = {
       # Codex reports the active prompt window in last_token_usage.input_tokens.
       # total_token_usage is cumulative for the whole session and cached_input_tokens
       # is an informational subset, not an additive context-window component.
       "context_tokens": input_tokens,
       "context_limit": context_limit,
   }
+  total_token_usage = info.get("total_token_usage")
+  if isinstance(total_token_usage, dict):
+    usage["total_token_usage"] = {
+        "input_tokens": total_token_usage.get("input_tokens", 0),
+        "cached_input_tokens": total_token_usage.get("cached_input_tokens", 0),
+        "output_tokens": total_token_usage.get("output_tokens", 0),
+    }
+  return usage
 
 
-def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, int] | None:
-  """Scan a native Codex rollout log backwards for the latest usable token_count event."""
+def _extract_codex_rollout_model_event(event: dict[str, Any]) -> str | None:
+  """Return the model from a native Codex turn_context event."""
+  if event.get("type") != "turn_context":
+    return None
+  payload = event.get("payload") or {}
+  model = payload.get("model")
+  if isinstance(model, str) and model:
+    return model
+  return None
+
+
+def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, Any] | None:
+  """Scan a native Codex rollout log backwards for latest token_count and model."""
   if not path.exists():
     return None
 
+  usage: dict[str, Any] | None = None
+  model: str | None = None
   chunk_size = 8192
   with open(path, "rb") as f:
     f.seek(0, 2)
@@ -64,8 +86,12 @@ def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, int] | None:
         except json.JSONDecodeError as e:
           log.debug("codex_rollout_parse_skip", path=str(path), error=str(e))
           continue
-        usage = _extract_codex_rollout_usage_event(event)
-        if usage is not None:
+        if usage is None:
+          usage = _extract_codex_rollout_usage_event(event)
+        if model is None:
+          model = _extract_codex_rollout_model_event(event)
+        if usage is not None and model is not None:
+          usage["model"] = model
           return usage
 
     if carry.strip():
@@ -74,9 +100,15 @@ def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, int] | None:
       except json.JSONDecodeError as e:
         log.debug("codex_rollout_parse_skip", path=str(path), error=str(e))
       else:
-        return _extract_codex_rollout_usage_event(event)
+        if usage is None:
+          usage = _extract_codex_rollout_usage_event(event)
+        if model is None:
+          model = _extract_codex_rollout_model_event(event)
 
-  return None
+  if usage is None:
+    return None
+  usage["model"] = model or ""
+  return usage
 
 
 class CodexUsageResolver:
@@ -129,8 +161,11 @@ class CodexUsageResolver:
     merged_usage = dict(base_usage or {})
     merged_usage["context_tokens"] = native_usage["context_tokens"]
     merged_usage["context_limit"] = native_usage["context_limit"]
-    merged_usage.setdefault("total_cost_usd", 0.0)
-    merged_usage.setdefault("model", "")
+    model = native_usage.get("model") or ""
+    total_token_usage = native_usage.get("total_token_usage")
+    merged_usage["total_cost_usd"] = (
+        calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None)
+    merged_usage["model"] = model
     return merged_usage
 
   @staticmethod

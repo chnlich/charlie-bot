@@ -457,7 +457,11 @@ function renderUsageFromData(usage) {
   const text = document.getElementById('usage-text');
   if (text) text.textContent = formatTokens(contextTokens) + ' / ' + formatTokens(contextLimit);
   const cost = document.getElementById('usage-cost');
-  if (cost) cost.textContent = '$' + (usage.total_cost_usd || 0).toFixed(2);
+  if (cost) cost.textContent = formatUsageCostValue(usage.total_cost_usd);
+}
+
+function formatUsageCostValue(cost) {
+  return cost == null ? 'N/A' : '$' + cost.toFixed(2);
 }
 
 function formatTriggerTimeLabel(status, fireAt) {
@@ -628,7 +632,7 @@ async function pollActiveSessionView(opts) {
     THINKING_SINCE = data.session.thinking_since || null;
     setActiveBackendId(data.active_backend);
     updateActiveBackendBadges();
-    usageTotalCost = data.usage ? (data.usage.total_cost_usd || 0) : 0;
+    usageTotalCost = data.usage ? data.usage.total_cost_usd : 0;
     renderUsageFromData(data.usage);
 
     if (!THINKING_SINCE && masterThinking) {

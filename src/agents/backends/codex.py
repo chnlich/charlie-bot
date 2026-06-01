@@ -10,6 +10,7 @@ from src.agents.backends.base import (
     AgentBackend, make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
     resolve_binary)
 from src.core import event_types as ET
+from src.core.codex_pricing import calculate_codex_usage_cost_usd
 
 log = structlog.get_logger()
 
@@ -99,11 +100,13 @@ class CodexBackend(AgentBackend):
     # --- turn.completed ---
     if ev_type == "turn.completed":
       usage = ev.get("usage", {})
+      cost = calculate_codex_usage_cost_usd(self._model, usage)
       return [
           make_result_event(
               input_tokens=usage.get("input_tokens", 0),
               output_tokens=usage.get("output_tokens", 0),
               cache_read=usage.get("cached_input_tokens", 0),
+              cost=cost,
           )
       ]
 

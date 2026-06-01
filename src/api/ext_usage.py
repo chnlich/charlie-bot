@@ -10,6 +10,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter
 
+from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.http import get_http_client
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_POLL_INTERVAL, HTTP_OAUTH_TIMEOUT
@@ -81,8 +82,14 @@ class CodexProvider:
   SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
   async def fetch(self) -> dict[str, Any] | None:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, self._fetch_sync)
+    usage, spend = await asyncio.gather(
+        asyncio.to_thread(self._fetch_sync),
+        asyncio.to_thread(_compute_codex_spend_windows, sessions_dir=self.SESSIONS_DIR),
+    )
+    if usage is None:
+      return None
+    usage["spend"] = spend
+    return usage
 
   def _fetch_sync(self) -> dict[str, Any] | None:
     jsonl_path = self._find_latest_session_file()
@@ -165,6 +172,94 @@ def _extract_latest_codex_usage(
     return _transform_codex_response(event, fetched_at=effective_fetched_at)
 
   return None
+
+
+def _parse_codex_timestamp(timestamp: str) -> datetime:
+  parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+  if parsed.tzinfo is None:
+    raise ValueError(f"Codex timestamp is missing timezone: {timestamp}")
+  return parsed.astimezone(timezone.utc)
+
+
+def _new_token_usage_bucket() -> dict[str, int]:
+  return {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "output_tokens": 0,
+  }
+
+
+def _add_token_usage(accumulator: dict[str, dict[str, int]], model: str, usage: dict[str, Any]) -> None:
+  bucket = accumulator.setdefault(model, _new_token_usage_bucket())
+  bucket["input_tokens"] += usage["input_tokens"]
+  bucket["cached_input_tokens"] += usage["cached_input_tokens"]
+  bucket["output_tokens"] += usage["output_tokens"]
+
+
+def _sum_codex_spend(accumulator: dict[str, dict[str, int]]) -> float:
+  total = 0.0
+  for model, usage in accumulator.items():
+    cost = calculate_codex_usage_cost_usd(model, usage)
+    if cost is not None:
+      total += cost
+  return total
+
+
+def _compute_codex_spend_windows(
+    *,
+    sessions_dir: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, float]:
+  """Compute rolling Codex spend by summing per-turn token usage from rollout logs."""
+  effective_now = now or datetime.now(timezone.utc)
+  if effective_now.tzinfo is None:
+    raise ValueError("now must be timezone-aware")
+  effective_now = effective_now.astimezone(timezone.utc)
+  one_day_ago = effective_now - timedelta(days=1)
+  seven_days_ago = effective_now - timedelta(days=7)
+  min_mtime = seven_days_ago.timestamp()
+  root = sessions_dir or CodexProvider.SESSIONS_DIR
+
+  last_24h_by_model: dict[str, dict[str, int]] = {}
+  last_7d_by_model: dict[str, dict[str, int]] = {}
+  if not root.exists():
+    return {"last_24h_usd": 0.0, "last_7d_usd": 0.0}
+
+  for path in root.glob("**/rollout-*.jsonl"):
+    if path.stat().st_mtime < min_mtime:
+      continue
+
+    current_model = ""
+    for line in path.read_text().splitlines():
+      if not line.strip():
+        continue
+      event = json.loads(line)
+      event_type = event.get("type")
+      payload = event.get("payload") or {}
+      if event_type == "turn_context":
+        model = payload.get("model")
+        if isinstance(model, str):
+          current_model = model
+        continue
+      if event_type != "event_msg" or payload.get("type") != "token_count":
+        continue
+
+      info = payload.get("info") or {}
+      last_usage = info.get("last_token_usage")
+      if not last_usage:
+        continue
+
+      observed_at = _parse_codex_timestamp(event["timestamp"])
+      if observed_at < seven_days_ago or observed_at > effective_now:
+        continue
+      _add_token_usage(last_7d_by_model, current_model, last_usage)
+      if observed_at >= one_day_ago:
+        _add_token_usage(last_24h_by_model, current_model, last_usage)
+
+  return {
+      "last_24h_usd": _sum_codex_spend(last_24h_by_model),
+      "last_7d_usd": _sum_codex_spend(last_7d_by_model),
+  }
 
 
 def _transform_codex_response(

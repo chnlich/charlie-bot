@@ -79,6 +79,8 @@ function loadExtUsageScript() {
     'ext-usage-codex-7d-bar',
     'ext-usage-codex-7d-pct',
     'ext-usage-codex-7d-reset',
+    'ext-usage-codex-24h-spend',
+    'ext-usage-codex-7d-spend',
   ];
   const elements = new Map(ids.map((id) => {
     const className = id === 'ext-usage-strip' || id === 'ext-usage-codex-state' ? 'hidden' : '';
@@ -153,6 +155,56 @@ test('renderExtUsage shows business/unlimited Codex state explicitly', () => {
   assert.equal(elements.get('ext-usage-codex-5h-reset').textContent, 'no 5h cap');
   assert.equal(elements.get('ext-usage-codex-7d-pct').textContent, 'plan');
   assert.equal(elements.get('ext-usage-codex-7d-reset').textContent, 'no 7d cap');
+});
+
+test('renderExtUsage formats Codex spend values', () => {
+  const { context, elements } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      codex: {
+        five_hour: {
+          utilization: 8.0,
+          resets_at: '2030-03-31T10:00:00+00:00',
+        },
+        seven_day: {
+          utilization: 2.0,
+          resets_at: '2030-04-02T10:00:00+00:00',
+        },
+        fetched_at: '2030-03-31T08:05:00+00:00',
+        provider: 'codex',
+        token_count_observed_at: '2030-03-31T08:04:00Z',
+        spend: {
+          last_24h_usd: 4.85,
+          last_7d_usd: 13.2,
+        },
+      },
+    },
+  });
+
+  assert.equal(elements.get('ext-usage-codex-24h-spend').textContent, '$4.85');
+  assert.equal(elements.get('ext-usage-codex-7d-spend').textContent, '$13.20');
+
+  context.renderExtUsage({
+    providers: {
+      codex: {
+        five_hour: {
+          utilization: 8.0,
+          resets_at: '2030-03-31T10:00:00+00:00',
+        },
+        seven_day: {
+          utilization: 2.0,
+          resets_at: '2030-04-02T10:00:00+00:00',
+        },
+        fetched_at: '2030-03-31T08:05:00+00:00',
+        provider: 'codex',
+        token_count_observed_at: '2030-03-31T08:04:00Z',
+      },
+    },
+  });
+
+  assert.equal(elements.get('ext-usage-codex-24h-spend').textContent, '\u2014');
+  assert.equal(elements.get('ext-usage-codex-7d-spend').textContent, '\u2014');
 });
 
 test('renderExtUsage clears the Codex business/unlimited state when caps return', () => {

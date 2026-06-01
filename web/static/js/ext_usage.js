@@ -76,6 +76,11 @@ function _barColor(pct) {
   return 'bg-emerald-500';
 }
 
+function _formatSpendUsd(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '\u2014';
+  return '$' + value.toFixed(2);
+}
+
 // Map provider key to DOM ID prefix: 'cc-opus' -> 'cc', 'codex' -> 'codex'
 function _providerPrefix(providerKey) {
   if (providerKey === 'cc-opus') return 'cc';
@@ -83,6 +88,14 @@ function _providerPrefix(providerKey) {
 }
 
 function _renderProvider(providerKey, prefix, data) {
+  if (providerKey === 'codex') {
+    const spend = data.spend || {};
+    const spend24hEl = document.getElementById('ext-usage-codex-24h-spend');
+    const spend7dEl = document.getElementById('ext-usage-codex-7d-spend');
+    if (spend24hEl) spend24hEl.textContent = _formatSpendUsd(spend.last_24h_usd);
+    if (spend7dEl) spend7dEl.textContent = _formatSpendUsd(spend.last_7d_usd);
+  }
+
   const rateLimitState = _providerRateLimitState(providerKey, data);
   const stateEl = document.getElementById('ext-usage-' + prefix + '-state');
   if (stateEl) {

@@ -1,7 +1,10 @@
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 
-from src.api.ext_usage import _extract_latest_codex_usage, _transform_response
+import pytest
+
+from src.api.ext_usage import _compute_codex_spend_windows, _extract_latest_codex_usage, _transform_response
 
 
 def _build_token_count_event(
@@ -156,6 +159,52 @@ def test_extract_latest_codex_usage_does_not_assume_business_state_without_metad
     "provider": "codex",
     "token_count_observed_at": "2026-03-27T18:39:35.694Z",
   }
+
+
+def test_compute_codex_spend_windows_prices_recent_turns_by_model(tmp_path) -> None:
+  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+  rollout_dir = tmp_path / "2026" / "06" / "01"
+  rollout_dir.mkdir(parents=True)
+  rollout_path = rollout_dir / "rollout-recent.jsonl"
+
+  def token_count_event(offset: timedelta, input_tokens: int, cached_input_tokens: int,
+                        output_tokens: int) -> dict:
+    return {
+      "timestamp": (now - offset).isoformat().replace("+00:00", "Z"),
+      "type": "event_msg",
+      "payload": {
+        "type": "token_count",
+        "info": {
+          "last_token_usage": {
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "output_tokens": output_tokens,
+          },
+        },
+      },
+    }
+
+  events = [
+    {
+      "type": "turn_context",
+      "payload": {"model": "gpt-5.5"},
+    },
+    token_count_event(timedelta(hours=2), 1_000_000, 100_000, 10_000),
+    token_count_event(timedelta(days=2), 2_000_000, 500_000, 20_000),
+    token_count_event(timedelta(days=8), 5_000_000, 0, 100_000),
+  ]
+  rollout_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+  os.utime(rollout_path, (now.timestamp(), now.timestamp()))
+
+  old_rollout_path = rollout_dir / "rollout-old-mtime.jsonl"
+  old_rollout_path.write_text("{not valid json\n")
+  old_mtime = (now - timedelta(days=8)).timestamp()
+  os.utime(old_rollout_path, (old_mtime, old_mtime))
+
+  spend = _compute_codex_spend_windows(sessions_dir=tmp_path, now=now)
+
+  assert spend["last_24h_usd"] == pytest.approx(4.85)
+  assert spend["last_7d_usd"] == pytest.approx(13.20)
 
 
 def test_transform_response_preserves_cc_payload_shape() -> None:

@@ -71,6 +71,8 @@ Content-Type: application/json
 }
 ```
 
+Requires the `search:docs:read` user scope. Results are returned in `data.docs_entities[]`, each with `docs_token`, `docs_type`, and `title`.
+
 ### Public Permission
 
 Use this to inspect or update the public-sharing policy for a docx document:
@@ -296,7 +298,7 @@ curl -s -X POST https://open.feishu.cn/open-apis/authen/v1/oidc/access_token \
 ```
 4. Save new tokens to config.
 
-Current scopes: `docx:document`, `docx:document:create`, `docx:document:readonly`, `docx:document:write_only`, `wiki:wiki:readonly`, `docs:permission.setting:read`, `docs:permission.setting:write_only`
+Current scopes: `auth:user.id:read`, `docx:document`, `docx:document:create`, `docx:document:readonly`, `docx:document:write_only`, `wiki:wiki:readonly`, `wiki:node:move`, `docs:permission.setting:read`, `docs:permission.setting:write_only`, `search:docs:read`
 
 ## URL Parsing
 

@@ -298,7 +298,7 @@ curl -s -X POST https://open.feishu.cn/open-apis/authen/v1/oidc/access_token \
 ```
 4. Save new tokens to config.
 
-Current scopes: `auth:user.id:read`, `docx:document`, `docx:document:create`, `docx:document:readonly`, `docx:document:write_only`, `wiki:wiki:readonly`, `wiki:node:move`, `docs:permission.setting:read`, `docs:permission.setting:write_only`, `search:docs:read`
+Current scopes depend on what your app has been granted; check your token's actual granted scopes.
 
 ## URL Parsing
 

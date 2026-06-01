@@ -183,6 +183,7 @@
           </svg>
         </a>
         <div id="tab-buttons" class="flex gap-1">
+          <button onclick="switchTab('terminal')" id="btn-terminal" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Terminal</button>
           <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
           <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
@@ -235,8 +236,9 @@
         </div>
       </div>
 
-      <!-- Tab content wrapper (chat + workers + latex panel side by side) -->
+      <!-- Tab content wrapper (terminal + chat + workers + side panels) -->
       <div class="flex-1 flex min-h-0">
+        <div id="tab-terminal" class="hidden flex-1 min-h-0 min-w-0 bg-black"></div>
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
         <!-- TUI terminal container (hidden unless backend.type === 'tui-cli') -->
@@ -532,6 +534,7 @@
   <script src="/static/js/file-upload.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/tui_session.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/terminal_panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar.js?v={{ static_asset_version|urlencode }}"></script>

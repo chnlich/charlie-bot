@@ -9,7 +9,7 @@ import structlog
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.git import git_current_branch, git_worktree_prune, git_worktree_remove
+from src.core.git import git_current_branch, git_worktree_dir_name, git_worktree_prune, git_worktree_remove
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
 from src.core.models import BackendOption, SpawnRequest, ThreadMetadata
@@ -34,8 +34,15 @@ async def finalize_review_chain(
   wt = Path(original_thread.worktree_path)
   if not wt.exists():
     return
+  if not original_thread.branch_name:
+    raise RuntimeError(f"thread {original_thread.id} has worktree_path but no branch_name")
   try:
-    removed = await git_worktree_remove(original_thread.repo_path, wt, original_thread.id)
+    removed = await git_worktree_remove(
+        original_thread.repo_path,
+        wt,
+        original_thread.id,
+        expected_residue_name=git_worktree_dir_name(original_thread.branch_name),
+    )
     if removed:
       await git_worktree_prune(original_thread.repo_path, original_thread.id)
   except Exception as e:

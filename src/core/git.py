@@ -1,6 +1,8 @@
 """Shared git helpers — subprocess operations with timeouts and error handling."""
 
 import asyncio
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -12,6 +14,11 @@ from src.core.timeouts import (
 )
 
 log = structlog.get_logger()
+
+
+def git_worktree_dir_name(branch_name: str) -> str:
+  """Return the directory name CharlieBot uses for a git worktree branch."""
+  return branch_name.replace("/", "-")
 
 
 async def git_current_branch(repo_path: Path) -> str:
@@ -165,8 +172,42 @@ async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: st
   )
 
 
-async def git_worktree_remove(repo_path: str, wt_path: Path, thread_id: str) -> bool:
-  """Remove a git worktree. Returns True on success, False on failure."""
+async def _remove_worktree_residue(
+    wt_path: Path,
+    thread_id: str,
+    *,
+    expected_residue_name: str,
+) -> None:
+  """Delete a git-detached residual worktree directory after explicit safety checks."""
+  if wt_path.name != expected_residue_name:
+    raise RuntimeError(
+        f"refusing to remove worktree residue at {wt_path}: "
+        f"directory name does not match expected {expected_residue_name}")
+  if wt_path.is_symlink():
+    raise RuntimeError(f"refusing to remove worktree residue symlink: {wt_path}")
+  if not wt_path.is_dir():
+    raise RuntimeError(f"refusing to remove non-directory worktree residue: {wt_path}")
+  if os.path.lexists(wt_path / ".git"):
+    raise RuntimeError(f"refusing to remove worktree residue with .git marker: {wt_path}")
+
+  await asyncio.to_thread(shutil.rmtree, wt_path)
+  if os.path.lexists(wt_path):
+    raise RuntimeError(f"failed to remove worktree residue: {wt_path}")
+  log.info("worktree_residue_removed", thread_id=thread_id, path=str(wt_path))
+
+
+async def git_worktree_remove(
+    repo_path: str,
+    wt_path: Path,
+    thread_id: str,
+    *,
+    expected_residue_name: str,
+) -> bool:
+  """Remove a git worktree and any safe git-detached residual directory."""
+  if os.path.lexists(wt_path) and wt_path.is_dir() and not os.path.lexists(wt_path / ".git"):
+    await _remove_worktree_residue(wt_path, thread_id, expected_residue_name=expected_residue_name)
+    return True
+
   proc = await asyncio.create_subprocess_exec(
       "git",
       "worktree",
@@ -186,6 +227,8 @@ async def git_worktree_remove(repo_path: str, wt_path: Path, thread_id: str) -> 
   if proc.returncode != 0:
     log.warning("worktree_remove_failed", thread_id=thread_id, stderr=stderr.decode().strip())
     return False
+  if os.path.lexists(wt_path):
+    await _remove_worktree_residue(wt_path, thread_id, expected_residue_name=expected_residue_name)
   log.info("worktree_removed", thread_id=thread_id, path=str(wt_path))
   return True
 

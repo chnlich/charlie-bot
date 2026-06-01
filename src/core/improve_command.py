@@ -24,6 +24,7 @@ from src.core.git import (
     git_fetch,
     git_push_branch,
     git_push_refspec,
+    git_worktree_dir_name,
     git_worktree_prune,
     git_worktree_remove,
 )
@@ -698,5 +699,10 @@ async def run_improve_loop(
     await clear_active_loop_lock(session_id, cfg)
     # Always clean up the shared worktree
     if wt_path.exists():
-      await git_worktree_remove(str(resolved_repo), wt_path, session_id)
+      await git_worktree_remove(
+          str(resolved_repo),
+          wt_path,
+          session_id,
+          expected_residue_name=git_worktree_dir_name(work_branch),
+      )
       await git_worktree_prune(str(resolved_repo), session_id)

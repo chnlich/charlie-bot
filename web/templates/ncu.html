@@ -68,6 +68,28 @@
     .empty-note { font-size: 13px; color: #94a3b8; background: #0f172a; border: 1px dashed #334155; border-radius: 6px; padding: 14px 16px; }
     .empty-note strong { color: #cbd5e1; font-weight: 600; }
 
+    /* ---- roofline ---- */
+    .roofline-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+    .roofline-controls .label { font-size: 12px; color: #94a3b8; }
+    .roofline-controls select { min-width: 260px; max-width: 100%; }
+    .roofline-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); gap: 16px; align-items: start; }
+    .roofline-chart-shell { position: relative; min-height: 520px; border: 1px solid #1e293b; border-radius: 6px; background: #0b1220; overflow: hidden; }
+    #roofline-svg { display: block; width: 100%; height: 520px; }
+    .roofline-tooltip { display: none; position: absolute; z-index: 5; max-width: 360px; pointer-events: none; background: #020617; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.45; box-shadow: 0 14px 30px rgba(0,0,0,.35); }
+    .roofline-tooltip .name { font-weight: 600; color: #f8fafc; margin-bottom: 4px; word-break: break-word; }
+    .roofline-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #94a3b8; margin-bottom: 10px; }
+    .roofline-legend .item { display: inline-flex; align-items: center; gap: 6px; }
+    .roofline-legend .swatch { width: 18px; height: 2px; display: inline-block; border-radius: 2px; }
+    .roofline-legend .compute { background: #38bdf8; }
+    .roofline-legend .memory { background: #f59e0b; }
+    .roofline-legend .point { width: 8px; height: 8px; border-radius: 50%; background: #a78bfa; }
+    .roofline-table-scroll { max-height: 520px; overflow: auto; border: 1px solid #1e293b; border-radius: 6px; }
+    .roofline-side h3 { margin-top: 0; }
+    @media (max-width: 980px) {
+      .roofline-layout { grid-template-columns: 1fr; }
+      .roofline-chart-shell, #roofline-svg { height: 460px; min-height: 460px; }
+    }
+
     /* ---- details: sections + rules ---- */
     .section-block { margin-bottom: 14px; }
     .section-block:last-child { margin-bottom: 0; }
@@ -133,6 +155,7 @@
   <div id="tabbar">
     <button class="tab-btn active" data-tab="summary">Summary</button>
     <button class="tab-btn" data-tab="details">Details</button>
+    <button class="tab-btn" data-tab="roofline">Roofline</button>
     <button class="tab-btn" data-tab="source">Source / SASS</button>
     <button class="tab-btn" data-tab="session">Session / Device</button>
     <button class="tab-btn" data-tab="raw">Raw metrics<span class="tab-tag">source of truth</span></button>
@@ -181,6 +204,17 @@
         <h2>Rule recommendations<span class="hint">ncu's guided-analysis advice</span></h2>
         <div class="provenance unique"><span class="icon">✦</span> Additional content — <strong>not</strong> in the raw metric table.</div>
         <div id="details-rules" style="margin-top:12px"></div>
+      </section>
+    </div>
+
+    <!-- ============ Roofline ============ -->
+    <div class="tab-panel" id="panel-roofline">
+      <section>
+        <div class="provenance mirror"><span class="icon">↺</span> Derived view — formulas and source metrics come from NCU's <strong>SpeedOfLight_RooflineChart</strong>; source values also appear in <strong>Raw metrics</strong>.</div>
+      </section>
+      <section>
+        <h2>Roofline<span class="hint">log-log chart: arithmetic intensity vs achieved performance</span></h2>
+        <div id="roofline-root"></div>
       </section>
     </div>
 
@@ -297,6 +331,9 @@
     const REPORT = {{ report | tojson }};
     const kernels = REPORT.kernels;
     const CSV_FALLBACK = REPORT.parser === 'csv';
+    const ROOFLINE_PLACEHOLDER = '本报告未采集 roofline 数据 (需要 --set full/detailed)';
+    const rooflineReport = REPORT.roofline || { available: false, message: ROOFLINE_PLACEHOLDER, rooflines: [] };
+    let selectedRooflineId = rooflineReport.rooflines && rooflineReport.rooflines.length ? rooflineReport.rooflines[0].id : null;
 
     function fmtNum(v) {
       if (v === null || v === undefined) return null;
@@ -315,6 +352,30 @@
     function fmtPct(v) {
       if (v === null || v === undefined) return null;
       return (typeof v === 'number' ? v.toFixed(2) : v) + ' %';
+    }
+
+    function fmtSI(v, unit) {
+      if (v === null || v === undefined) return 'N/A';
+      if (typeof v !== 'number') return String(v) + ' ' + unit;
+      const scales = [
+        [1e15, 'P'],
+        [1e12, 'T'],
+        [1e9, 'G'],
+        [1e6, 'M'],
+        [1e3, 'K'],
+      ];
+      for (const [scale, prefix] of scales) {
+        if (Math.abs(v) >= scale) return (v / scale).toLocaleString(undefined, { maximumFractionDigits: 3 }) + ' ' + prefix + unit;
+      }
+      return v.toLocaleString(undefined, { maximumFractionDigits: 3 }) + ' ' + unit;
+    }
+
+    function fmtPerf(v) { return fmtSI(v, 'FLOP/s'); }
+    function fmtBandwidth(v) { return fmtSI(v, 'B/s'); }
+    function fmtIntensity(v) {
+      if (v === null || v === undefined) return 'N/A';
+      if (typeof v !== 'number') return String(v);
+      return v.toLocaleString(undefined, { maximumFractionDigits: 4 }) + ' FLOP/byte';
     }
 
     function cell(text, cls) {
@@ -690,6 +751,222 @@
       });
     });
 
+    // ---------- Roofline ----------
+    function svgEl(tag, attrs) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+      return el;
+    }
+
+    function currentRoofline() {
+      const list = rooflineReport.rooflines || [];
+      return list.find(r => r.id === selectedRooflineId) || list[0] || null;
+    }
+
+    function powersBetween(min, max) {
+      const ticks = [];
+      const start = Math.floor(Math.log10(min));
+      const end = Math.ceil(Math.log10(max));
+      for (let e = start; e <= end; e++) ticks.push(Math.pow(10, e));
+      return ticks;
+    }
+
+    function powerDomain(values) {
+      const positive = values.filter(v => typeof v === 'number' && Number.isFinite(v) && v > 0);
+      const min = Math.min(...positive);
+      const max = Math.max(...positive);
+      let lo = Math.pow(10, Math.floor(Math.log10(min)));
+      let hi = Math.pow(10, Math.ceil(Math.log10(max)));
+      if (lo === hi) {
+        lo /= 10;
+        hi *= 10;
+      }
+      return [lo, hi];
+    }
+
+    function shortKernelLabel(point) {
+      return `K${point.kernel_idx}`;
+    }
+
+    function showRooflineTooltip(evt, tooltip, point) {
+      tooltip.innerHTML = '';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = `#${point.kernel_idx} ${point.kernel_name}`;
+      tooltip.appendChild(name);
+      const lines = [
+        `Arithmetic intensity: ${fmtIntensity(point.arithmetic_intensity)}`,
+        `Achieved: ${fmtPerf(point.achieved_flops)}`,
+        `DRAM traffic: ${fmtBandwidth(point.achieved_traffic_bytes_s)}`,
+        `Compute ceiling: ${fmtPerf(point.compute_ceiling_flops)}`,
+        `Memory ceiling: ${fmtBandwidth(point.memory_ceiling_bytes_s)}`,
+      ];
+      for (const line of lines) {
+        const div = document.createElement('div');
+        div.textContent = line;
+        tooltip.appendChild(div);
+      }
+      tooltip.style.display = 'block';
+      const shell = tooltip.parentElement.getBoundingClientRect();
+      tooltip.style.left = Math.max(8, Math.min(evt.clientX - shell.left + 12, shell.width - tooltip.offsetWidth - 8)) + 'px';
+      tooltip.style.top = Math.max(evt.clientY - shell.top - 12, 8) + 'px';
+    }
+
+    function renderRooflineChart(shell, roofline) {
+      const positivePoints = roofline.points.filter(p => p.arithmetic_intensity > 0 && p.achieved_flops > 0);
+      if (!positivePoints.length) {
+        shell.appendChild(emptyNote('Selected roofline has no positive achieved values to plot on log-log axes.'));
+        return;
+      }
+
+      const computePeak = roofline.compute_ceiling_flops;
+      const memoryPeak = roofline.memory_ceiling_bytes_s;
+      const knee = computePeak / memoryPeak;
+      const [xMin, xMax] = powerDomain(positivePoints.map(p => p.arithmetic_intensity).concat([knee / 10, knee, knee * 10]));
+      const yCandidates = positivePoints.map(p => p.achieved_flops).concat([computePeak, memoryPeak * xMin, Math.min(computePeak, memoryPeak * xMax)]);
+      const [yMin, yMax] = powerDomain(yCandidates);
+
+      const width = 900, height = 520;
+      const margin = { left: 82, right: 28, top: 24, bottom: 68 };
+      const plotW = width - margin.left - margin.right;
+      const plotH = height - margin.top - margin.bottom;
+      const lxMin = Math.log10(xMin), lxMax = Math.log10(xMax);
+      const lyMin = Math.log10(yMin), lyMax = Math.log10(yMax);
+      const x = v => margin.left + ((Math.log10(v) - lxMin) / (lxMax - lxMin)) * plotW;
+      const y = v => margin.top + (1 - (Math.log10(v) - lyMin) / (lyMax - lyMin)) * plotH;
+
+      const svg = svgEl('svg', { id: 'roofline-svg', viewBox: `0 0 ${width} ${height}`, role: 'img' });
+      svg.appendChild(svgEl('rect', { x: margin.left, y: margin.top, width: plotW, height: plotH, fill: '#0b1220', stroke: '#1e293b' }));
+
+      for (const tick of powersBetween(xMin, xMax)) {
+        const tx = x(tick);
+        svg.appendChild(svgEl('line', { x1: tx, y1: margin.top, x2: tx, y2: margin.top + plotH, stroke: '#1e293b', 'stroke-width': 1 }));
+        const label = svgEl('text', { x: tx, y: height - 38, fill: '#94a3b8', 'font-size': 11, 'text-anchor': 'middle' });
+        label.textContent = tick === 1 ? '1' : `1e${Math.round(Math.log10(tick))}`;
+        svg.appendChild(label);
+      }
+      for (const tick of powersBetween(yMin, yMax)) {
+        const ty = y(tick);
+        svg.appendChild(svgEl('line', { x1: margin.left, y1: ty, x2: margin.left + plotW, y2: ty, stroke: '#1e293b', 'stroke-width': 1 }));
+        const label = svgEl('text', { x: margin.left - 10, y: ty + 4, fill: '#94a3b8', 'font-size': 11, 'text-anchor': 'end' });
+        label.textContent = fmtSI(tick, 'FLOP/s').replace('FLOP/s', '');
+        svg.appendChild(label);
+      }
+
+      svg.appendChild(svgEl('line', { x1: margin.left, y1: margin.top + plotH, x2: margin.left + plotW, y2: margin.top + plotH, stroke: '#64748b', 'stroke-width': 1.2 }));
+      svg.appendChild(svgEl('line', { x1: margin.left, y1: margin.top, x2: margin.left, y2: margin.top + plotH, stroke: '#64748b', 'stroke-width': 1.2 }));
+
+      const xLabel = svgEl('text', { x: margin.left + plotW / 2, y: height - 12, fill: '#cbd5e1', 'font-size': 12, 'text-anchor': 'middle' });
+      xLabel.textContent = 'Arithmetic intensity [FLOP/byte]';
+      svg.appendChild(xLabel);
+      const yLabel = svgEl('text', { x: 16, y: margin.top + plotH / 2, fill: '#cbd5e1', 'font-size': 12, 'text-anchor': 'middle', transform: `rotate(-90 16 ${margin.top + plotH / 2})` });
+      yLabel.textContent = 'Performance [FLOP/s]';
+      svg.appendChild(yLabel);
+
+      svg.appendChild(svgEl('line', { x1: x(xMin), y1: y(computePeak), x2: x(xMax), y2: y(computePeak), stroke: '#38bdf8', 'stroke-width': 2.2 }));
+      const memEndX = Math.min(xMax, knee);
+      if (memEndX > xMin) {
+        svg.appendChild(svgEl('line', { x1: x(xMin), y1: y(memoryPeak * xMin), x2: x(memEndX), y2: y(memoryPeak * memEndX), stroke: '#f59e0b', 'stroke-width': 2.2 }));
+      }
+
+      const tooltip = document.createElement('div');
+      tooltip.className = 'roofline-tooltip';
+      shell.appendChild(svg);
+      shell.appendChild(tooltip);
+
+      for (const point of positivePoints) {
+        const px = x(point.arithmetic_intensity);
+        const py = y(point.achieved_flops);
+        const circle = svgEl('circle', { cx: px, cy: py, r: 5.5, fill: '#a78bfa', stroke: '#f8fafc', 'stroke-width': 1.2, tabindex: 0 });
+        const title = svgEl('title', {});
+        title.textContent = `#${point.kernel_idx} ${point.kernel_name}`;
+        circle.appendChild(title);
+        const label = svgEl('text', { x: px + 8, y: py - 8, fill: '#e9d5ff', 'font-size': 11 });
+        label.textContent = shortKernelLabel(point);
+        for (const el of [circle, label]) {
+          el.addEventListener('mousemove', evt => showRooflineTooltip(evt, tooltip, point));
+          el.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+        }
+        svg.appendChild(circle);
+        svg.appendChild(label);
+      }
+    }
+
+    function renderRooflineTable(container, roofline) {
+      const head = document.createElement('h3');
+      head.textContent = 'Kernel points';
+      container.appendChild(head);
+      const wrap = document.createElement('div');
+      wrap.className = 'roofline-table-scroll';
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>Kernel</th><th class="num">AI</th><th class="num">Achieved</th><th class="num">DRAM</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const point of roofline.points) {
+        const tr = document.createElement('tr');
+        tr.appendChild(cell(`#${point.kernel_idx} ${point.kernel_name}`, 'kernel-name'));
+        tr.appendChild(cell(fmtIntensity(point.arithmetic_intensity), 'num'));
+        tr.appendChild(cell(fmtPerf(point.achieved_flops), 'num'));
+        tr.appendChild(cell(fmtBandwidth(point.achieved_traffic_bytes_s), 'num'));
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      container.appendChild(wrap);
+    }
+
+    function renderRoofline() {
+      const root = document.getElementById('roofline-root');
+      root.innerHTML = '';
+      if (!rooflineReport.available || !rooflineReport.rooflines || !rooflineReport.rooflines.length) {
+        root.appendChild(emptyNote(rooflineReport.message || ROOFLINE_PLACEHOLDER));
+        return;
+      }
+
+      const selected = currentRoofline();
+      if (!selected) {
+        root.appendChild(emptyNote(ROOFLINE_PLACEHOLDER));
+        return;
+      }
+
+      const controls = document.createElement('div');
+      controls.className = 'roofline-controls';
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = 'Roofline';
+      controls.appendChild(label);
+      const select = document.createElement('select');
+      for (const r of rooflineReport.rooflines) {
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = `${r.label} (${r.precision})`;
+        select.appendChild(opt);
+      }
+      select.value = selected.id;
+      select.addEventListener('change', () => {
+        selectedRooflineId = select.value;
+        renderRoofline();
+      });
+      controls.appendChild(select);
+      root.appendChild(controls);
+
+      const legend = document.createElement('div');
+      legend.className = 'roofline-legend';
+      legend.innerHTML = '<span class="item"><span class="swatch compute"></span>Compute ceiling</span><span class="item"><span class="swatch memory"></span>Memory ceiling</span><span class="item"><span class="swatch point"></span>Kernel</span>';
+      root.appendChild(legend);
+
+      const layout = document.createElement('div');
+      layout.className = 'roofline-layout';
+      const shell = document.createElement('div');
+      shell.className = 'roofline-chart-shell';
+      const side = document.createElement('div');
+      side.className = 'roofline-side';
+      renderRooflineChart(shell, selected);
+      renderRooflineTable(side, selected);
+      layout.appendChild(shell);
+      layout.appendChild(side);
+      root.appendChild(layout);
+    }
+
     // ---------- copy buttons ----------
     document.querySelectorAll('.copy-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -713,6 +990,7 @@
     });
     renderSummary();
     renderDetails();
+    renderRoofline();
     renderSource();
     renderSessionSummary();
     renderDeviceAttrs();

@@ -1,12 +1,16 @@
 import asyncio
 import base64
 import json
+import os
+import shutil
+import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
 from fastapi import WebSocketDisconnect
 
-from src.agents.backends import terminal, tui
+from src.agents.backends import pty_common, terminal, tui
 from src.agents.backends.pty_common import PTY_INPUT, PTY_RESIZE
 
 
@@ -58,6 +62,62 @@ class _FakeAttachment:
 
   def close(self) -> None:
     self.closed = True
+
+
+def test_run_tmux_new_session_returns_under_uvloop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  uvloop = pytest.importorskip("uvloop")
+  tmux = shutil.which("tmux")
+  if tmux is None:
+    pytest.skip("tmux binary not available")
+
+  socket_name = f"charliebot-test-{os.getpid()}-{uuid.uuid4().hex}"
+  session_name = f"charliebot-test-{uuid.uuid4().hex}"
+  monkeypatch.setattr(pty_common, "_TMUX_SOCKET", socket_name)
+
+  async def scenario() -> None:
+    try:
+      missing_rc, missing_stderr = await pty_common._run_tmux("has-session", "-t", session_name)
+      assert missing_rc != 0
+      assert missing_stderr.strip()
+
+      rc, stderr = await asyncio.wait_for(
+          pty_common._run_tmux(
+              "new-session",
+              "-d",
+              "-s",
+              session_name,
+              "-x",
+              "80",
+              "-y",
+              "24",
+              "-c",
+              str(tmp_path),
+              "sleep 60",
+          ),
+          timeout=5.0,
+      )
+      assert rc == 0, stderr
+
+      rc, stderr = await pty_common._run_tmux("set-option", "-t", session_name, "history-limit", "50000")
+      assert rc == 0, stderr
+
+      rc, stderr = await pty_common._run_tmux("kill-session", "-t", session_name)
+      assert rc == 0, stderr
+    finally:
+      cleanup = subprocess.run(
+          [tmux, "-L", socket_name, "kill-server"],
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.PIPE,
+          text=True,
+          check=False,
+      )
+      assert cleanup.returncode in (0, 1), cleanup.stderr
+
+  with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
+    runner.run(scenario())
 
 
 @pytest.mark.asyncio

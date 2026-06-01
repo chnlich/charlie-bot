@@ -6863,3 +6863,97 @@
   status: pending
   created: '2026-06-01T00:00:00Z'
   priority: low
+- id: '179'
+  title: Extract a shared PTY-over-WebSocket attach loop helper for run_tui_attachment
+    and run_terminal_attachment
+  description: 'WHY — The new host-global web terminal handler
+    src/agents/backends/terminal.py:run_terminal_attachment (L65-135, 71 lines, added
+    by commit c80d3bd "Add host-global web terminal") is a near-verbatim copy of the
+    pre-existing per-session PTY handler src/agents/backends/tui.py:run_tui_attachment
+    (L153-238, 86 lines). The two functions share the entire PTY-over-WebSocket attach
+    lifecycle: (a) spawn-or-fail — construct PtyAttachment, call attachment.spawn(),
+    and on failure log.exception(...) plus best-effort websocket.send_json({"type":
+    PTY_EXIT, "error": str(e)}) then return (terminal.py:77-86 vs tui.py:169-178);
+    (b) create the pump task via asyncio.create_task(_pump_pty_to_ws(attachment,
+    websocket), name=...) (terminal.py:88-91 vs tui.py:180-183); (c) the receive/dispatch
+    loop — asyncio.wait_for(websocket.receive_text(), timeout=_WS_RECV_TIMEOUT) with
+    TimeoutError -> send a {"type": "ping"} keepalive, WebSocketDisconnect -> break,
+    json.loads guarded by JSONDecodeError, PTY_INPUT -> base64.b64decode(payload,
+    validate=False) then attachment.write(chunk), PTY_RESIZE -> int(cols)/int(rows)
+    parse then attachment.resize(cols, rows) (terminal.py:92-126 vs tui.py:184-216);
+    and (d) the finally cleanup — pump_task.cancel(), await with CancelledError swallow,
+    attachment.close() (terminal.py:127-135 vs tui.py:217-225). The shared block is
+    well over 50 lines, so it clears the dedup bar on the size criterion, and the
+    extracted helper has a clear single-responsibility name (drive one PTY attachment
+    over one WebSocket until disconnect) worth its own concept, so it also clears the
+    name criterion. The only real differences are the per-handler log-event prefix
+    ("tui_" vs "terminal_"), the pump-task name, and one tail-only step that is unique
+    to tui (post-loop claude.ai auto-naming, tui.py:226-237). The leading
+    ensure-session step also differs in its call shape — ensure_tmux_session(session_id,
+    sessions_dir / session_id) vs ensure_terminal_session() — and should stay in each
+    caller, since both already share the identical ensure-or-fail error-handling
+    pattern but call a different ensure function.
+
+    WHAT — Add one shared helper in src/agents/backends/pty_common.py, which already
+    hosts every primitive both handlers use (PtyAttachment, _pump_pty_to_ws, PTY_INPUT,
+    PTY_RESIZE, PTY_EXIT, _WS_RECV_TIMEOUT). Suggested signature: async def
+    run_pty_ws_attachment(attachment: PtyAttachment, websocket: WebSocket, *,
+    log_prefix: str, pump_task_name: str, on_close: Optional[Callable[[],
+    Awaitable[None]]] = None) -> None. The helper performs steps (a)-(d) above, using
+    log_prefix to build the structured-log event names and pump_task_name for the
+    create_task name, and awaits on_close() inside the finally after attachment.close()
+    when provided. Each caller keeps its own ensure-session-or-fail prelude, then
+    constructs PtyAttachment(...) and delegates to the helper. tui.py passes an
+    on_close coroutine that runs the existing maybe_auto_name_from_claude_ai_title
+    cleanup; terminal.py passes on_close=None. After this, run_terminal_attachment
+    drops to roughly the ensure prelude plus a one-line delegation (well under 50
+    lines), and run_tui_attachment drops to its ensure prelude plus delegation plus
+    the on_close definition.
+
+    HOW — (1) Add run_pty_ws_attachment to pty_common.py near _pump_pty_to_ws so the
+    WebSocket lifecycle helpers cluster together; move json / base64 imports there if
+    not already present. (2) Rewrite tui.py:run_tui_attachment to call it, folding the
+    autoname tail into an on_close coroutine. (3) Rewrite terminal.py:run_terminal_attachment
+    to call it with on_close=None. (4) Verify: yapf --in-place --recursive src/
+    produces no diff (or commit it per the yapf rule); pyflakes src/agents/backends/
+    is clean; python3 -c "from src.agents.backends.tui import run_tui_attachment; from
+    src.agents.backends.terminal import run_terminal_attachment; from
+    src.agents.backends.pty_common import run_pty_ws_attachment" smoke-imports all
+    three; and a manual end-to-end check of both a per-session TUI attach and the
+    host-global terminal attach (input echo, resize, ping keepalive, clean disconnect)
+    still works. Pure dedup refactor with no behavior change; preserve the exact
+    keepalive/disconnect/decode control flow and the tui-only autoname-on-close step.
+
+    RELATIONSHIP TO PENDING ITEMS — This supersedes pending item 161 ("Split
+    run_tui_attachment into setup-or-fail and per-message dispatch helpers"), which
+    proposed two tui-local private helpers purely to shorten that one function and was
+    filed before terminal.py existed. The right framing now is a shared cross-file
+    helper in pty_common.py covering both callers, which eliminates the duplication and
+    incidentally shortens both functions. The reviewer should implement this item and
+    close item 161 as subsumed (or reconcile the two into this one).
+
+    NON-DUPLICATION CHECK — yapf --in-place --recursive src/ this scan produced a diff
+    in src/api/ncu_parsing.py (dict-literal value wrapping under the configured google
+    /2-space/120-col/split_before_first_argument style); per the yapf rule it was fixed
+    in-place and committed in the worktree in the same run, not filed as a backlog
+    item. grep -rEn "TODO|FIXME|HACK|XXX" src/ returns zero matches. pyflakes src/
+    reports exactly three findings, all already covered by pending item 176: the unused
+    "e" binding in core/sessions.py:135, the unused "e" binding in core/sessions.py:488,
+    and the unused WatchTarget import in api/internal.py:14. The >50-line function
+    inventory cross-references the standing set of pending/rejected items
+    (125/126/127/129/132/134/135/136/137/140/141/142/144/153/161/172 plus the
+    coherent-single-flow rejections in 153/154/158/159/162-166). Two functions added by
+    recent feature commits are newly surfaced this scan: api/ncu_parsing._collect_roofline
+    (L202-282, 81 lines, NCU roofline tab commit ffe3776) has a clean inner
+    per-kernel point computation that could be extracted, and
+    backends/terminal.run_terminal_attachment (THIS ITEM). Per the one-finding-per-scan
+    rule the terminal/tui duplication is filed because the duplication framing is the
+    natural one, the shared block exceeds 50 lines, and the helper has a clear
+    single-responsibility name; the _collect_roofline length-only split is the weaker
+    finding and is deferred.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-06-01T12:00:00Z'
+  priority: low

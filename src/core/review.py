@@ -25,6 +25,7 @@ async def finalize_review_chain(
     session_id: str,
     original_thread: ThreadMetadata,
     thread_mgr: ThreadManager,
+    worktree_parent: Path,
 ) -> None:
   """Idempotently remove the worktree shared by the original worker + its reviewer(s)."""
   if not original_thread.repo_path or not original_thread.worktree_path:
@@ -41,6 +42,7 @@ async def finalize_review_chain(
         original_thread.repo_path,
         wt,
         original_thread.id,
+        allowed_parent=worktree_parent,
         expected_residue_name=git_worktree_dir_name(original_thread.branch_name),
     )
     if removed:
@@ -424,7 +426,7 @@ async def _retry_failed_reviewer(
       failed_review=thread_meta.id,
       tried=thread_meta.tried_backends,
   )
-  await finalize_review_chain(session_id, original_thread, thread_mgr)
+  await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
   return False
 
 
@@ -466,7 +468,7 @@ async def maybe_spawn_reviewer(
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
     await trigger_master(session_id, combined, cfg, session_mgr)
     if exit_code == 0 and original_thread:
-      await finalize_review_chain(session_id, original_thread, thread_mgr)
+      await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
     return
 
   # Failed/cancelled worker -> trigger master immediately

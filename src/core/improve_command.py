@@ -699,10 +699,15 @@ async def run_improve_loop(
     await clear_active_loop_lock(session_id, cfg)
     # Always clean up the shared worktree
     if wt_path.exists():
-      await git_worktree_remove(
-          str(resolved_repo),
-          wt_path,
-          session_id,
-          expected_residue_name=git_worktree_dir_name(work_branch),
-      )
-      await git_worktree_prune(str(resolved_repo), session_id)
+      try:
+        removed = await git_worktree_remove(
+            str(resolved_repo),
+            wt_path,
+            session_id,
+            allowed_parent=Path(cfg.worktree_dir),
+            expected_residue_name=git_worktree_dir_name(work_branch),
+        )
+        if removed:
+          await git_worktree_prune(str(resolved_repo), session_id)
+      except Exception as e:
+        log.warning("improve_loop_cleanup_failed", session=session_id, worktree=str(wt_path), error=str(e))

@@ -510,7 +510,7 @@ async def _maybe_override_exit_code_from_result(
   return exit_code
 
 
-async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) -> None:
+async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, worktree_parent: Path) -> None:
   """Remove the worker's worktree or temp directory after it finishes."""
   if skip_cleanup:
     return
@@ -526,6 +526,7 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) 
             thread.repo_path,
             wt,
             thread.id,
+            allowed_parent=worktree_parent,
             expected_residue_name=git_worktree_dir_name(thread.branch_name),
         )
         if not removed:
@@ -578,7 +579,7 @@ async def _finalize_worker(
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
   skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
-  await _cleanup_worker_directory(thread, skip_cleanup)
+  await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
 
   if not skip_notify:
     await _notify_completion(

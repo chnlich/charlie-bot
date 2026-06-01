@@ -7021,3 +7021,72 @@
   status: pending
   created: '2026-06-01T18:00:00Z'
   priority: low
+- id: '181'
+  title: Extract the expired-scheduled-session recycle block from trigger_master
+  description: 'src/core/master_trigger.py:trigger_master (L82-143, ~54-line body) is
+    the longest function in src/ not already covered by a pending backlog item. The
+    bulk of its weight is a self-contained block (L97-113, ~17 lines) that has nothing
+    to do with the surrounding wake-the-master flow: it detects whether a scheduled
+    session whose cached cc_session predates the most-recent Saturday 1:00 AM PT
+    boundary has expired, and if so clears cc_session_id / cc_session_started_at, saves
+    the metadata, and recycles the scheduled session. That block carries all of the
+    Pacific-time date math (weekday rollback to the last Saturday, replace to 01:00,
+    convert to UTC, compare against the cached start time) plus its own nested
+    try/except around recycle_scheduled_session. It is a clear single-responsibility
+    unit worth its own concept and a clean name, so it clears the extraction bar even
+    though it is under 50 lines on its own.
+
+    WHAT — Extract L97-113 into a private async helper
+    _maybe_recycle_expired_scheduled_session(session_meta: SessionMetadata, session_mgr:
+    SessionManager) -> None that performs the expiry detection, the cc_session clearing
+    and save, and the guarded recycle. trigger_master then calls it right after loading
+    session_meta and computing scheduled_backend, dropping the function body well under
+    50 lines and isolating the date-math-heavy logic from the master-summary assembly
+    and the run_message_with_resume_recovery call. Pure structural refactor: same
+    logging events, same ordering, same behavior.
+
+    HOW — (1) Add _maybe_recycle_expired_scheduled_session near trigger_master in
+    master_trigger.py, moving the body of the `if (session_meta.scheduled_task and
+    session_meta.cc_session_id and session_meta.cc_session_started_at):` block verbatim
+    (the ZoneInfo/timedelta date math, the cc_session clearing, save_metadata, and the
+    recycle try/except). (2) Replace the inlined block in trigger_master with a single
+    `await _maybe_recycle_expired_scheduled_session(session_meta, session_mgr)` call.
+    (3) Verify: yapf --in-place --recursive src/ produces no diff (or commit it per the
+    yapf rule); pyflakes src/core/master_trigger.py is clean; and the existing
+    scheduled-session expiry behavior is unchanged (the helper must mutate the same
+    session_meta object trigger_master continues to use afterward, so it must take and
+    mutate the passed instance rather than a copy). Do NOT fold in the separate
+    swallowed-exception fix already tracked by pending item 155 (the L142-143 except /
+    pass on the error-broadcast path) — that is a distinct error-handling finding and
+    must not be merged into this structural split.
+
+    NON-DUPLICATION CHECK — This scan ran `yapf --in-place --recursive src/`, which
+    produced one diff in src/api/ncu_parsing.py (dict-literal value wrapping under the
+    configured google/2-space/120-col style); per the yapf rule it was fixed in-place
+    and committed in the worktree in the same run, not filed as a backlog item. `grep
+    -rEn "TODO|FIXME|HACK|XXX" src/` returns zero matches. `pyflakes src/` reports
+    exactly four findings, all already covered: the unused "e" bindings in
+    core/sessions.py:135 and :488 are covered by items 160/163/176, and the unused
+    WatchTarget import in api/internal.py:14 plus the unused kill_tmux_session import in
+    agents/backends/tui.py:23 are covered by items 139/171/176 and 177. The >50-line
+    function inventory was cross-referenced against the standing pending set
+    (109/125/126/127/129/132/134/135/136/140/142/144/153/161/168/169/170/172/173/174/
+    175/178/179/180 cover the triggers pidfd/wait functions, both spawner giants and
+    _build_worker_prompt, the master_cc giants, run_improve_loop and
+    _run_single_iteration, _feed, pages.index, gemini/base/tui/terminal attach paths,
+    review.extract_review_context, autonamer, files._dir_listing_html,
+    ncu_parsing._parse_with_csv and _collect_roofline, chat.send_message). No pending
+    item covers splitting trigger_master itself — item 155 only addresses its
+    swallowed-exception broadcast path, a separate error-handling concern — so it is
+    filed this scan as the single strongest new finding. The remaining uncovered
+    >50-line functions (build_review_prompt, run_message_with_resume_recovery,
+    sessions.fork_session, sessions._populate_sidebar_state, build_session_view_data,
+    slash.execute_command, antigravity_cli.run, improve_command._wait_for_quota_recovery)
+    are coherent single flows or borderline and are not split per the
+    one-finding-per-scan rule.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-01T18:30:00Z'
+  priority: low

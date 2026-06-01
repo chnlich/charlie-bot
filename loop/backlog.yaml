@@ -7090,3 +7090,86 @@
   status: pending
   created: '2026-06-01T18:30:00Z'
   priority: low
+- id: '182'
+  title: Extract the seek-from-end tail-window raw-line reader from parse_ndjson_tail
+  description: 'src/core/ndjson.py:parse_ndjson_tail (L40-91, ~51-line body) is the
+    longest function in src/ not already covered by a pending backlog item. It mixes
+    three distinct concerns: (1) a forward full-file pass that counts total lines and
+    derives has_more/take, (2) a gnarly seek-from-end byte-windowing block (L62-82)
+    that reads the trailing 512 KiB window, splits on newlines, drops the partial
+    leading line plus any trailing empty, filters blanks, and falls back to a full
+    read when the window does not yield enough complete lines, and (3) a JSON parse
+    loop (L84-89) that decodes the selected raw lines into events. The middle block
+    is the bulk of the weight and is the only tricky part: it has a single clear
+    responsibility — "return the last N non-blank raw byte-lines of a file using a
+    bounded tail window with a full-read fallback" — which is worth its own concept
+    and a clean name, so it clears the extraction bar even though the function is just
+    over 50 lines.
+
+    WHAT — Extract L62-82 into a private helper _read_tail_raw_lines(f: BinaryIO,
+    take: int, tail_window_size: int = 512 * 1024) -> list[bytes] (or, if passing the
+    open handle is awkward, _read_tail_raw_lines(path: Path, take: int) -> list[bytes]
+    that opens its own handle) that performs the seek(0, 2)/file_size check, the
+    windowed read, the partial-leading-line and trailing-empty trimming, the blank
+    filtering, and the short-window full-read fallback, returning the final list of up
+    to *take* raw byte-lines. parse_ndjson_tail keeps the total-line count, the
+    has_more/take derivation, the call to the helper, and the JSON parse loop, dropping
+    its body well under 50 lines and isolating the byte-windowing arithmetic from the
+    count and parse phases. Pure structural refactor: identical return tuple (events,
+    total, has_more), identical window size, identical fallback behavior, same
+    ndjson_tail_parse_skip debug logging on JSONDecodeError.
+
+    HOW — (1) Add _read_tail_raw_lines above parse_ndjson_tail in core/ndjson.py,
+    moving L62-82 verbatim (the f.seek(0, 2)/file_size branch, the window split,
+    complete_lines = split_lines[1:] trailing-empty trim, the window_lines blank
+    filter, the len(window_lines) < take full-read fallback, and the final
+    window_lines[-take:] / full-read [-take:] selection). Keep the existing 512 KiB
+    constant as a default arg so the value lives in one place. (2) In parse_ndjson_tail
+    replace the inlined window block with tail_lines = _read_tail_raw_lines(f, take)
+    (passing the already-open handle keeps the single-open contract; the forward count
+    pass must run first since it leaves the cursor at EOF and the helper re-seeks
+    anyway). (3) Verify: yapf --in-place --recursive src/ produces no diff (or commit
+    it per the yapf rule); pyflakes src/core/ndjson.py is clean; and behavior is
+    unchanged on three cases — a file smaller than the window (full-read path), a file
+    larger than the window with enough complete lines in the window (window path), and
+    a file larger than the window whose last 512 KiB holds fewer than *take* complete
+    lines (full-read fallback path). Do NOT fold in the separate single-pass deque
+    rewrite idea: completed item 077 proposed a collections.deque single-pass
+    optimization, but the code has since moved to the seek-from-end windowing approach
+    (which only reads a 512 KiB tail in the common large-file case instead of the whole
+    file), so the deque rewrite would regress large-file I/O. This finding is a pure
+    readability split of the windowing logic, not a re-litigation of the read strategy.
+
+    NON-DUPLICATION CHECK — This scan ran `yapf --in-place --recursive src/`, which
+    produced one diff in src/api/ncu_parsing.py (the _ROOFLINE_DEFINITIONS dict
+    literals wrapping under the configured google/2-space/120-col/split_before_first_argument
+    style); per the yapf rule it was fixed in-place and committed in the worktree in
+    the same run, not filed as a backlog item. `grep -rEn "TODO|FIXME|HACK|XXX" src/`
+    returns zero matches. `pyflakes src/` reports exactly four findings, all already
+    covered: the unused "e" bindings in core/sessions.py:135 and :488 are covered by
+    items 160/163/176, the unused kill_tmux_session import in agents/backends/tui.py:23
+    is covered by item 177, and the unused WatchTarget import in api/internal.py:14 is
+    covered by items 139/171/176. The >50-line function inventory (33 functions) was
+    cross-referenced against the standing pending set: items 107/109/116/125/126/127/129/
+    132/134/135/136/137/140/141/142/144/153/161/166/168/169/170/172/173/174/175/178/179/
+    180/181 already cover the triggers pidfd/wait functions, both spawner giants and
+    _build_worker_prompt, the master_cc giants (run_message/_run_cc/_session_consumer),
+    run_improve_loop / _run_single_iteration, message_aggregator._feed, AgentBackend.run,
+    Worker.run, the gemini/tui/terminal attach paths, pages.index, chat.send_message,
+    review.extract_review_context, autonamer, files._dir_listing_html, ncu_parsing
+    _parse_with_csv and _collect_roofline, sessions._archive_old_chat_events_sync, and
+    trigger_master. No pending item covers parse_ndjson_tail structurally — completed
+    item 077 was a performance rewrite against a now-superseded implementation, a
+    distinct concern from this readability split — so it is filed this scan as the
+    single strongest new finding. The remaining uncovered >50-line functions
+    (slash.execute_command, improve_command._wait_for_quota_recovery,
+    master_trigger.run_message_with_resume_recovery, cli/delegate.main,
+    sessions.fork_session, antigravity_cli.run, git._resolve_worktree_start_point) are
+    coherent single flows, argparse boilerplate, or borderline, and are not split per
+    the one-finding-per-scan rule.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-01T19:30:00Z'
+  priority: low

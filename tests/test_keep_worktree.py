@@ -154,7 +154,8 @@ async def test_finalize_review_chain_skips_when_keep_worktree(
 
   monkeypatch.setattr(review, "git_worktree_remove", fail_git_worktree_remove)
 
-  await review.finalize_review_chain("session-id", original, thread_mgr=object())
+  await review.finalize_review_chain(
+      "session-id", original, thread_mgr=object(), worktree_parent=tmp_path / "worktrees")
 
   assert wt_dir.exists()
   assert (wt_dir / "slurm.sh").exists()
@@ -179,7 +180,7 @@ async def test_finalize_review_chain_removes_worktree_by_default(
       worktree_path=str(wt_dir),
   )
 
-  remove_calls: list[tuple[str, Path, str, str]] = []
+  remove_calls: list[tuple[str, Path, str, Path, str]] = []
   prune_calls: list[tuple[str, str]] = []
 
   async def fake_git_worktree_remove(
@@ -187,9 +188,10 @@ async def test_finalize_review_chain_removes_worktree_by_default(
       wt_path: Path,
       thread_id: str,
       *,
+      allowed_parent: Path,
       expected_residue_name: str,
   ) -> bool:
-    remove_calls.append((repo_path, wt_path, thread_id, expected_residue_name))
+    remove_calls.append((repo_path, wt_path, thread_id, allowed_parent, expected_residue_name))
     return True
 
   async def fake_git_worktree_prune(repo_path: str, thread_id: str) -> None:
@@ -198,11 +200,13 @@ async def test_finalize_review_chain_removes_worktree_by_default(
   monkeypatch.setattr(review, "git_worktree_remove", fake_git_worktree_remove)
   monkeypatch.setattr(review, "git_worktree_prune", fake_git_worktree_prune)
 
-  await review.finalize_review_chain("session-id", original, thread_mgr=object())
+  await review.finalize_review_chain(
+      "session-id", original, thread_mgr=object(), worktree_parent=tmp_path / "worktrees")
 
   assert len(remove_calls) == 1
   assert remove_calls[0][1] == wt_dir
-  assert remove_calls[0][3] == "charliebot-task-transient"
+  assert remove_calls[0][3] == tmp_path / "worktrees"
+  assert remove_calls[0][4] == "charliebot-task-transient"
   assert len(prune_calls) == 1
 
 

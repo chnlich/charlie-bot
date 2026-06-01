@@ -15,6 +15,8 @@ from src.core.timeouts import (
 
 log = structlog.get_logger()
 
+_WORKTREE_LOCAL_ARTIFACT_NAMES = frozenset({".pixi", ".uv-cache", ".venv", "build"})
+
 
 def git_worktree_dir_name(branch_name: str) -> str:
   """Return the directory name CharlieBot uses for a git worktree branch."""
@@ -172,22 +174,85 @@ async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: st
   )
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+  try:
+    path.relative_to(parent)
+  except ValueError:
+    return False
+  return True
+
+
+def _assert_safe_worktree_cleanup_target(
+    repo_path: str,
+    wt_path: Path,
+    *,
+    allowed_parent: Path,
+    expected_residue_name: str,
+) -> Path:
+  """Validate the worktree path before removing anything inside it."""
+  if wt_path.name != expected_residue_name:
+    raise RuntimeError(
+        f"refusing to clean worktree at {wt_path}: "
+        f"directory name does not match expected {expected_residue_name}")
+  if wt_path.is_symlink():
+    raise RuntimeError(f"refusing to clean worktree symlink: {wt_path}")
+
+  resolved_wt = wt_path.resolve()
+  resolved_allowed_parent = allowed_parent.resolve()
+  resolved_repo = Path(repo_path).resolve()
+  home = Path.home().resolve()
+  if resolved_wt in {Path("/"), home}:
+    raise RuntimeError(f"refusing to clean unsafe worktree path: {wt_path}")
+  if resolved_wt == resolved_repo:
+    raise RuntimeError(f"refusing to clean repo root as worktree: {wt_path}")
+  if resolved_wt == resolved_allowed_parent or not _is_relative_to(resolved_wt, resolved_allowed_parent):
+    raise RuntimeError(f"refusing to clean worktree outside allowed parent {resolved_allowed_parent}: {wt_path}")
+  return resolved_wt
+
+
+def _contains_git_marker(path: Path) -> bool:
+  """Return True if path contains any .git marker without following symlinks."""
+  for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+    if ".git" in filenames or ".git" in dirnames:
+      return True
+  return False
+
+
+async def _remove_local_worktree_artifacts(wt_path: Path, thread_id: str) -> None:
+  """Pre-clean known local cache/env/build artifacts inside the worktree."""
+  for dirpath, dirnames, filenames in os.walk(wt_path, topdown=True, followlinks=False):
+    if Path(dirpath) != wt_path and (".git" in filenames or ".git" in dirnames):
+      dirnames[:] = []
+      continue
+    dirnames[:] = [name for name in dirnames if name != ".git"]
+    artifact_names = [name for name in dirnames if name in _WORKTREE_LOCAL_ARTIFACT_NAMES]
+    for name in artifact_names:
+      artifact_path = Path(dirpath) / name
+      if artifact_path.is_symlink():
+        raise RuntimeError(f"refusing to remove symlinked worktree artifact: {artifact_path}")
+      await asyncio.to_thread(shutil.rmtree, artifact_path)
+      log.info("worktree_local_artifact_removed", thread_id=thread_id, path=str(artifact_path))
+    dirnames[:] = [name for name in dirnames if name not in _WORKTREE_LOCAL_ARTIFACT_NAMES]
+
+
 async def _remove_worktree_residue(
     wt_path: Path,
     thread_id: str,
     *,
+    repo_path: str,
+    allowed_parent: Path,
     expected_residue_name: str,
 ) -> None:
   """Delete a git-detached residual worktree directory after explicit safety checks."""
-  if wt_path.name != expected_residue_name:
-    raise RuntimeError(
-        f"refusing to remove worktree residue at {wt_path}: "
-        f"directory name does not match expected {expected_residue_name}")
-  if wt_path.is_symlink():
-    raise RuntimeError(f"refusing to remove worktree residue symlink: {wt_path}")
+  _assert_safe_worktree_cleanup_target(
+      repo_path,
+      wt_path,
+      allowed_parent=allowed_parent,
+      expected_residue_name=expected_residue_name,
+  )
   if not wt_path.is_dir():
     raise RuntimeError(f"refusing to remove non-directory worktree residue: {wt_path}")
-  if os.path.lexists(wt_path / ".git"):
+  if _contains_git_marker(wt_path):
     raise RuntimeError(f"refusing to remove worktree residue with .git marker: {wt_path}")
 
   await asyncio.to_thread(shutil.rmtree, wt_path)
@@ -201,12 +266,22 @@ async def git_worktree_remove(
     wt_path: Path,
     thread_id: str,
     *,
+    allowed_parent: Path,
     expected_residue_name: str,
 ) -> bool:
   """Remove a git worktree and any safe git-detached residual directory."""
-  if os.path.lexists(wt_path) and wt_path.is_dir() and not os.path.lexists(wt_path / ".git"):
-    await _remove_worktree_residue(wt_path, thread_id, expected_residue_name=expected_residue_name)
-    return True
+  _assert_safe_worktree_cleanup_target(
+      repo_path,
+      wt_path,
+      allowed_parent=allowed_parent,
+      expected_residue_name=expected_residue_name,
+  )
+  if os.path.lexists(wt_path):
+    if wt_path.is_symlink():
+      raise RuntimeError(f"refusing to remove worktree symlink: {wt_path}")
+    if not wt_path.is_dir():
+      raise RuntimeError(f"refusing to remove non-directory worktree: {wt_path}")
+    await _remove_local_worktree_artifacts(wt_path, thread_id)
 
   proc = await asyncio.create_subprocess_exec(
       "git",
@@ -228,7 +303,13 @@ async def git_worktree_remove(
     log.warning("worktree_remove_failed", thread_id=thread_id, stderr=stderr.decode().strip())
     return False
   if os.path.lexists(wt_path):
-    await _remove_worktree_residue(wt_path, thread_id, expected_residue_name=expected_residue_name)
+    await _remove_worktree_residue(
+        wt_path,
+        thread_id,
+        repo_path=repo_path,
+        allowed_parent=allowed_parent,
+        expected_residue_name=expected_residue_name,
+    )
   log.info("worktree_removed", thread_id=thread_id, path=str(wt_path))
   return True
 

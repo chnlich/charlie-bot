@@ -305,12 +305,14 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
       wt_path: Path,
       session: str,
       *,
+      allowed_parent: Path,
       expected_residue_name: str,
-  ) -> None:
-    del expected_residue_name
+  ) -> bool:
+    del allowed_parent, expected_residue_name
     del repo_path, session
     if wt_path.exists():
       wt_path.rmdir()
+    return True
 
   async def fake_git_worktree_prune(repo_path: str, session: str) -> None:
     del repo_path, session

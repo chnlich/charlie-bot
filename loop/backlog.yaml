@@ -6820,3 +6820,21 @@
   status: pending
   created: '2026-05-31T00:00:00Z'
   priority: low
+- id: '177'
+  title: Remove unused kill_tmux_session import in agents/backends/tui.py
+  description: 'pyflakes reports that src/agents/backends/tui.py imports kill_tmux_session
+    from src.agents.backends.pty_common (in the multi-name import block at L23-37,
+    specifically L35) but never references it anywhere in the module. The real callers
+    — core/sessions.py:148-149 and api/sessions.py:248-249 — already import kill_tmux_session
+    locally at their own call sites, so tui.py is not re-exporting it for anyone. Drop
+    the kill_tmux_session line from the tui.py import block. Every other name in that
+    block (PTY_EXIT, PTY_INPUT, PTY_RESIZE, PtyAttachment, _HISTORY_LIMIT, _INITIAL_COLS,
+    _INITIAL_ROWS, _WS_RECV_TIMEOUT, _pump_pty_to_ws, _run_tmux, _tmux_binary,
+    tmux_session_name) is still used, so only the single unused name is removed. Pure
+    dead-import cleanup with no behavior change.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-05-31T01:00:00Z'
+  priority: low

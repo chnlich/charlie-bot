@@ -6838,3 +6838,28 @@
   status: pending
   created: '2026-05-31T01:00:00Z'
   priority: low
+- id: '178'
+  title: Split MessageAggregator._feed into per-event-type handler methods
+  description: 'src/core/message_aggregator.py:_feed (L171-303, 132 lines) is the
+    second-longest function in the codebase. It is a dispatcher that translates one
+    raw event into stream deltas, branching by event type with early returns: USER
+    (L174-204), ASSISTANT (L206-263), TOOL_USE (L265-280), TOOL_RESULT (L282-291),
+    and a final fallthrough to _SIMPLE_HANDLERS (L293-302). The ASSISTANT branch alone
+    is ~58 lines and is a self-contained, single-responsibility block (flush buffered
+    text, special-case ExitPlanMode plan blocks, buffer tool_use blocks, accumulate
+    assistant text, emit a stream delta) — it cleanly meets the extraction bar (>50
+    lines with a clear name). Extract the ASSISTANT branch into a private
+    _feed_assistant(self, ev, idx, ev_id) -> Iterator[dict] and have _feed delegate
+    via `yield from`. Optionally also extract the USER branch into _feed_user for
+    symmetry, but the ASSISTANT split is the primary win. The TOOL_USE / TOOL_RESULT
+    branches are short (~15 and ~10 lines) and should stay inline — do not over-split.
+    This mirrors the existing _SIMPLE_HANDLERS dispatch pattern in the same module and
+    is a pure structural refactor with no behavior change; preserve the exact early-return
+    control flow and delta-emission order. Verify with the existing message_aggregator
+    tests after the change.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-01T00:00:00Z'
+  priority: low

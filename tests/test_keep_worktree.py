@@ -179,11 +179,17 @@ async def test_finalize_review_chain_removes_worktree_by_default(
       worktree_path=str(wt_dir),
   )
 
-  remove_calls: list[tuple[str, Path, str]] = []
+  remove_calls: list[tuple[str, Path, str, str]] = []
   prune_calls: list[tuple[str, str]] = []
 
-  async def fake_git_worktree_remove(repo_path: str, wt_path: Path, thread_id: str) -> bool:
-    remove_calls.append((repo_path, wt_path, thread_id))
+  async def fake_git_worktree_remove(
+      repo_path: str,
+      wt_path: Path,
+      thread_id: str,
+      *,
+      expected_residue_name: str,
+  ) -> bool:
+    remove_calls.append((repo_path, wt_path, thread_id, expected_residue_name))
     return True
 
   async def fake_git_worktree_prune(repo_path: str, thread_id: str) -> None:
@@ -196,6 +202,7 @@ async def test_finalize_review_chain_removes_worktree_by_default(
 
   assert len(remove_calls) == 1
   assert remove_calls[0][1] == wt_dir
+  assert remove_calls[0][3] == "charliebot-task-transient"
   assert len(prune_calls) == 1
 
 

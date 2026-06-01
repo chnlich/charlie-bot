@@ -16,7 +16,13 @@ from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 from src.core.ndjson import parse_ndjson_file
-from src.core.git import git_current_branch, git_create_worktree, git_worktree_prune, git_worktree_remove
+from src.core.git import (
+    git_current_branch,
+    git_create_worktree,
+    git_worktree_dir_name,
+    git_worktree_prune,
+    git_worktree_remove,
+)
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
@@ -513,8 +519,15 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool) 
   if thread.worktree_path and thread.repo_path:
     wt = Path(thread.worktree_path)
     if wt.exists():
+      if not thread.branch_name:
+        raise RuntimeError(f"thread {thread.id} has worktree_path but no branch_name")
       try:
-        removed = await git_worktree_remove(thread.repo_path, wt, thread.id)
+        removed = await git_worktree_remove(
+            thread.repo_path,
+            wt,
+            thread.id,
+            expected_residue_name=git_worktree_dir_name(thread.branch_name),
+        )
         if not removed:
           return
         await git_worktree_prune(thread.repo_path, thread.id)

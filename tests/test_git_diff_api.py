@@ -67,9 +67,12 @@ def test_diff_files_manifest(tmp_path: Path) -> None:
   assert by_path["keep.txt"]["status"] == "M"
   assert (by_path["keep.txt"]["additions"], by_path["keep.txt"]["deletions"]) == (2, 1)
   assert by_path["todelete.txt"]["status"] == "D"
-  # Rename is keyed by the new path with an 'R' status.
+  # Rename is keyed by the new path with an 'R' status and carries its pre-rename path.
   assert by_path["renamed.txt"]["status"] == "R"
+  assert by_path["renamed.txt"]["old_path"] == "torename.txt"
   assert "torename.txt" not in by_path
+  # Non-renames carry no old_path key.
+  assert "old_path" not in by_path["keep.txt"]
 
   assert data["total_files"] == len(data["files"]) == 4
   assert data["total_additions"] == sum(f["additions"] for f in data["files"])
@@ -89,6 +92,26 @@ def test_diff_file_returns_unified_diff(tmp_path: Path) -> None:
   assert data["path"] == "keep.txt"
   assert "line2 changed" in data["diff"]
   assert data["size_bytes"] == len(data["diff"].encode("utf-8"))
+
+
+def test_diff_file_rename_renders_as_rename(tmp_path: Path) -> None:
+  repo = _build_repo(tmp_path)
+  client = _build_client(tmp_path)
+
+  # Passing old_path alongside path keeps git's rename pairing intact: the diff shows the
+  # rename and only the one added line, not the whole file re-added.
+  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "renamed.txt", "old_path": "torename.txt"}
+  diff = client.get("/api/git/diff/file", params=params).json()["diff"]
+  assert "rename from torename.txt" in diff
+  assert "rename to renamed.txt" in diff
+  assert "new file" not in diff
+
+  # Without old_path git drops the pairing and the same file looks like a wholesale add.
+  readd = client.get(
+      "/api/git/diff/file",
+      params={"repo": str(repo), "base": "main", "head": "feature", "path": "renamed.txt"},
+  ).json()["diff"]
+  assert "new file" in readd
 
 
 def test_diff_file_too_large_returns_stub_and_force_loads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

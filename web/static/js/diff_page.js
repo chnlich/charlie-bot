@@ -116,7 +116,7 @@
     ui.highlightCode();
   }
 
-  async function fetchFileDiff(params, path, force) {
+  async function fetchFileDiff(params, path, force, oldPath) {
     const qs = new URLSearchParams({
       repo: params.repo,
       base: params.base,
@@ -124,6 +124,7 @@
       mode: params.mode,
       path,
     });
+    if (oldPath) qs.set('old_path', oldPath);
     if (force) qs.set('force', 'true');
     const resp = await fetch(`/api/git/diff/file?${qs.toString()}`);
     const data = await resp.json();
@@ -141,7 +142,7 @@
       '<div class="px-3 py-2 text-xs text-slate-500 flex items-center gap-2"><span class="spinner"></span>Loading…</div>';
     let data;
     try {
-      data = await fetchFileDiff(params, file.path, force);
+      data = await fetchFileDiff(params, file.path, force, file.old_path);
     } catch (e) {
       if (token !== comparisonToken) return;
       body.innerHTML = '';

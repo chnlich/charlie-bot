@@ -47,15 +47,17 @@ def _run_git_diff(repo_path: Path, args: list[str]) -> str:
   return result.stdout
 
 
-def _parse_numstat_z(output: str) -> list[tuple[int, int, str]]:
-  """Parse `git diff --numstat -z` into (additions, deletions, path) tuples.
+def _parse_numstat_z(output: str) -> list[tuple[int, int, str, str | None]]:
+  """Parse `git diff --numstat -z` into (additions, deletions, new_path, old_path) tuples.
 
-  A normal entry is one NUL-terminated `added\\tdeleted\\tpath` record. A rename/copy
-  is `added\\tdeleted\\t` (empty path) followed by two NUL tokens (old, new); the new
-  path is reported. Binary files emit `-` for the counts, reported here as 0.
+  A normal entry is one NUL-terminated `added\\tdeleted\\tpath` record (old_path None). A
+  rename/copy is `added\\tdeleted\\t` (empty path) followed by two NUL tokens (old, new);
+  both paths are reported so the per-file diff can pass both pathspecs and render the
+  rename as a rename rather than a wholesale add. Binary files emit `-` for the counts,
+  reported here as 0.
   """
   tokens = output.split("\0")
-  entries: list[tuple[int, int, str]] = []
+  entries: list[tuple[int, int, str, str | None]] = []
   i = 0
   while i < len(tokens):
     token = tokens[i]
@@ -63,15 +65,17 @@ def _parse_numstat_z(output: str) -> list[tuple[int, int, str]]:
       i += 1
       continue
     added_s, deleted_s, path = token.split("\t", 2)
+    old_path: str | None = None
     if path == "":
       # Rename/copy: the following two tokens are the old and new paths.
+      old_path = tokens[i + 1]
       path = tokens[i + 2]
       i += 3
     else:
       i += 1
     additions = 0 if added_s == "-" else int(added_s)
     deletions = 0 if deleted_s == "-" else int(deleted_s)
-    entries.append((additions, deletions, path))
+    entries.append((additions, deletions, path, old_path))
   return entries
 
 
@@ -167,13 +171,17 @@ async def diff_files(
   files: list[dict] = []
   total_additions = 0
   total_deletions = 0
-  for additions, deletions, path in _parse_numstat_z(_run_git_diff(repo_path, ["--numstat", "-z", range_spec])):
-    files.append({
+  for additions, deletions, path, old_path in _parse_numstat_z(_run_git_diff(repo_path,
+                                                                             ["--numstat", "-z", range_spec])):
+    entry: dict = {
         "path": path,
         "status": status_by_path[path],
         "additions": additions,
         "deletions": deletions,
-    })
+    }
+    if old_path is not None:
+      entry["old_path"] = old_path
+    files.append(entry)
     total_additions += additions
     total_deletions += deletions
 
@@ -195,6 +203,8 @@ async def diff_file(
     head: str = Query(..., description="Head ref"),
     mode: Literal["three-dot", "two-dot"] = Query("three-dot", description="Diff range mode"),
     path: str = Query(..., description="Repo-relative path of the file to diff"),
+    old_path: str | None = Query(
+        None, description="Pre-rename path; pass alongside path so a rename/copy renders as a rename, not a re-add"),
     force: bool = Query(False, description="Render even if the diff exceeds the per-file cap"),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
@@ -206,7 +216,10 @@ async def diff_file(
   """
   repo_path = _resolve_repo_under_workspace(repo, cfg)
   range_spec = _range_spec(base, head, mode)
-  diff_text = _run_git_diff(repo_path, [range_spec, "--", path])
+  # Restricting to a single side of a rename makes git drop the pairing and emit a
+  # wholesale add/delete; passing both endpoints keeps it a rename diff.
+  pathspec = [old_path, path] if old_path else [path]
+  diff_text = _run_git_diff(repo_path, [range_spec, "--", *pathspec])
   size_bytes = len(diff_text.encode("utf-8"))
   if not force and size_bytes > _DIFF_MAX_BYTES:
     return {"too_large": True, "size_bytes": size_bytes, "path": path}

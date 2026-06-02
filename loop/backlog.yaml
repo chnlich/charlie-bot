@@ -7173,3 +7173,91 @@
   status: pending
   created: '2026-06-01T19:30:00Z'
   priority: low
+- id: '183'
+  title: Extract a newest-first JSONL event iterator from _extract_latest_codex_rollout_usage
+  description: 'src/core/codex_usage.py:_extract_latest_codex_rollout_usage (L58-111,
+    54 lines) is the longest function in src/ not already covered by a pending backlog
+    item. It was added recently with the native Codex usage feature (commit f825189
+    extracting Codex usage resolution into core/codex_usage.py) and is not referenced
+    by any existing backlog item. The per-event field extraction is already cleanly
+    split into two helpers (_extract_codex_rollout_usage_event and
+    _extract_codex_rollout_model_event), but the function still mixes two distinct
+    concerns: (1) a gnarly seek-from-end backward byte-windowing scan (L66-78, plus the
+    trailing-carry flush at L97-106) that reads the file in 8 KiB chunks from EOF,
+    stitches lines across chunk boundaries via a carry buffer, reverses each chunk, and
+    skips JSONDecodeErrors with a debug log; and (2) the actual newest-first search loop
+    that fills usage and model and returns as soon as both are found. The byte-windowing
+    half is a clear single-responsibility unit with a clean nameable concept (iterate
+    the JSON events of a JSONL file newest-first), so it clears the extraction bar.
+
+    WHAT — Extract the backward-scan plumbing into a private generator
+    _iter_jsonl_reversed(path: Path, chunk_size: int = 8192) -> Iterator[dict[str, Any]]
+    that yields parsed JSON objects from the file in reverse (newest line first),
+    owning the seek-from-end chunked reads, the carry-buffer line stitching, the
+    trailing-carry flush, and the JSONDecodeError skip-with-debug-log.
+    _extract_latest_codex_rollout_usage then collapses to a short loop over
+    _iter_jsonl_reversed(path) that fills usage via _extract_codex_rollout_usage_event
+    and model via _extract_codex_rollout_model_event, returning as soon as both are
+    present (and falling back to usage with an empty model string if the scan ends with
+    model still None), dropping its body well under 50 lines and isolating the byte
+    arithmetic from the field-extraction policy.
+
+    HOW — (1) Add _iter_jsonl_reversed above _extract_latest_codex_rollout_usage in
+    core/codex_usage.py, moving the open/seek/chunk/carry loop verbatim and replacing
+    the inline usage/model assignment with `yield event` for each successfully parsed
+    line (keep the existing codex_rollout_parse_skip debug log on JSONDecodeError for
+    both the main loop and the trailing-carry flush). Add `from typing import Iterator`
+    (or `from collections.abc import Iterator`) consistent with the file style. (2) In
+    _extract_latest_codex_rollout_usage keep the early `if not path.exists(): return
+    None` guard, then iterate `for event in _iter_jsonl_reversed(path):`, filling usage
+    and model and short-circuiting `return usage` once both are set (with `usage["model"]
+    = model`), and after the loop apply the existing `if usage is None: return None` /
+    `usage["model"] = model or ""` tail. (3) Verify: yapf --in-place --recursive src/
+    produces no diff (or commit it per the yapf rule); pyflakes src/core/codex_usage.py
+    is clean; and behavior is unchanged on three cases — a rollout log smaller than one
+    chunk (single-read path), one larger than a chunk whose token_count and turn_context
+    events both fall in the last chunk (early-return path), and one where those events
+    sit near the start so the scan walks back through many chunks and only resolves on
+    the trailing-carry flush. Do NOT merge this with item 182 (the parse_ndjson_tail
+    window split in core/ndjson.py): the two files use different read strategies
+    (ndjson reads a single 512 KiB tail window; codex_usage walks backward chunk by
+    chunk until it finds two specific event types), so a shared helper would not fit
+    either cleanly and is rejected under the dedup rule.
+
+    NON-DUPLICATION CHECK — This scan ran `yapf --in-place --recursive src/`, which
+    produced diffs in src/api/ncu_parsing.py (the _ROOFLINE_DEFINITIONS dict literals
+    wrapping under the configured google/2-space/120-col/split_before_first_argument
+    style) and src/core/codex_pricing.py (return-expression re-wrap); per the yapf rule
+    both were fixed in-place and committed in the worktree in the same run, not filed as
+    backlog items. `grep -rEn "TODO|FIXME|HACK|XXX" src/` returns zero matches.
+    `pyflakes src/` reports exactly four findings, all already covered: the unused "e"
+    bindings in core/sessions.py:135 and :488 are covered by items 160/163/176, the
+    unused kill_tmux_session import in agents/backends/tui.py:23 is covered by item 177,
+    and the unused WatchTarget import in api/internal.py:14 is covered by items
+    139/171/176. The >50-line function inventory (42 functions) was cross-referenced
+    against the standing pending set: items
+    109/125/126/127/129/132/134/135/136/140/142/144/153/161/168/169/170/172/173/174/175/
+    178/179/180/181/182 cover the triggers pidfd/wait functions, both spawner giants and
+    _build_worker_prompt, the master_cc giants (run_message/_run_cc/_session_consumer),
+    run_improve_loop and _run_single_iteration, message_aggregator._feed, AgentBackend.run,
+    pages.index, ncu_parsing._parse_with_csv and _collect_roofline, the gemini/tui/terminal
+    attach paths, chat.send_message, review.extract_review_context, autonamer,
+    files._dir_listing_html, sessions._archive_old_chat_events_sync, triggers._wait_and_fire,
+    sessions._populate_sidebar_state, master_trigger.trigger_master, and
+    ndjson.parse_ndjson_tail. No pending item covers codex_usage.py at all — the file is
+    new since the prior scans — and _extract_latest_codex_rollout_usage is its single
+    >50-line function, so it is filed this scan as the single strongest new finding. The
+    remaining uncovered >50-line functions (worker.run, slash.execute_command,
+    improve_command._wait_for_quota_recovery, master_trigger.run_message_with_resume_recovery,
+    cli/delegate.main, sessions.fork_session, antigravity_cli.run, review.build_review_prompt,
+    message_utils.build_session_view_data, spawner._broadcast_completion, spawner.spawn_worker,
+    review.spawn_review_worker, git._resolve_worktree_start_point, git.git_worktree_remove,
+    internal.delegate_task, gemini_cli.translate_event) are coherent single flows,
+    argparse/route boilerplate, or borderline, and are not split per the
+    one-finding-per-scan rule.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-01T20:30:00Z'
+  priority: low

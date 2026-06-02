@@ -7261,3 +7261,60 @@
   status: pending
   created: '2026-06-01T20:30:00Z'
   priority: low
+- id: '184'
+  title: Split _compute_codex_spend_windows in api/ext_usage.py
+  description: 'api/ext_usage.py:_compute_codex_spend_windows (L208-262, 55 lines) mixes
+    three concerns in one body: (1) window-boundary setup (effective_now normalization,
+    one_day_ago/seven_days_ago/min_mtime, root resolution and the empty-result early
+    return), (2) the per-rollout-file scan that walks every line of each rollout-*.jsonl,
+    parses JSON, tracks the current turn_context model, and on each token_count event
+    in range calls _add_token_usage into the 7d and 24h accumulators, and (3) the final
+    _sum_codex_spend aggregation into the returned dict.
+
+    WHY — This is the single strongest new >50-line finding this scan; the function is
+    new since the prior code-health pass (it landed with commit ed94d49 "Show Codex spend
+    in ext usage strip" and is not covered by any pending item). The nested loop body
+    (the line-by-line JSONL parse plus the turn_context/token_count dispatch and the
+    in-window accumulation) is the natural unit to lift out, leaving the outer function
+    as a readable window-setup + glob-loop + aggregate skeleton.
+
+    HOW — Extract the per-file scan into a module-level helper, e.g.
+    _accumulate_rollout_spend(path, *, last_7d_by_model, last_24h_by_model, seven_days_ago,
+    one_day_ago, effective_now) that runs the existing inner loop verbatim (read_text().splitlines(),
+    skip blanks, json.loads, turn_context-updates-current_model, token_count-with-last_token_usage
+    in-range checks, the two _add_token_usage calls). Then _compute_codex_spend_windows keeps
+    only the window-boundary setup and early return, iterates root.glob("**/rollout-*.jsonl")
+    skipping files whose st_mtime < min_mtime, calls the helper per surviving path, and returns
+    the two _sum_codex_spend totals. Keep the existing fail-fast on a naive now (raise ValueError
+    when tzinfo is None) and the timezone normalization in the outer function.
+
+    VERIFY — yapf --in-place --recursive src/ produces no diff (or commit it per the yapf
+    rule); pyflakes src/api/ext_usage.py is clean; and behavior is unchanged on three cases:
+    a sessions dir that does not exist (returns {"last_24h_usd": 0.0, "last_7d_usd": 0.0}),
+    a rollout file older than 7 days (skipped by the st_mtime gate), and a rollout file with
+    token_count events split across the 24h boundary (the older events land only in the 7d
+    total, the newer ones in both).
+
+    NON-DUPLICATION CHECK — This scan ran yapf --in-place --recursive src/, which produced
+    diffs in src/api/ncu_parsing.py (the _ROOFLINE_DEFINITIONS dict literals re-wrapping under
+    the configured google/2-space/120-col/split_before_first_argument style) and
+    src/core/codex_pricing.py (return-expression re-wrap); per the yapf rule both were fixed
+    in-place and committed in the worktree this run, not filed as backlog items. grep -rEn
+    "TODO|FIXME|HACK|XXX" src/ returns zero matches. pyflakes src/ reports exactly four
+    findings, all already covered: the unused "e" bindings in core/sessions.py:135 and :488
+    by items 160/163/176, the unused kill_tmux_session import in agents/backends/tui.py:23 by
+    item 177, and the unused WatchTarget import in api/internal.py:14 by items 139/171/176.
+    The >50-line function inventory (43 functions) was cross-referenced against the standing
+    pending set; the only function uncovered by both the pending items and the item-183
+    inventory is _compute_codex_spend_windows, filed here as the single finding. The
+    inner-loop parse here is NOT merged with codex_usage._extract_latest_codex_rollout_usage
+    (item 183) or ndjson.parse_ndjson_tail (item 182): codex_usage walks backward chunk by
+    chunk and stops at the first two event types, ndjson reads a single tail window, and this
+    function reads each whole file forward and accumulates across time windows, so a shared
+    helper would not fit any of the three cleanly and is rejected under the dedup rule.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-01T21:00:00Z'
+  priority: low

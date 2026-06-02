@@ -11,7 +11,8 @@ from src.core.timeouts import SUBPROCESS_GIT_DIFF_TIMEOUT, SUBPROCESS_GIT_READ_T
 
 router = APIRouter()
 
-# Maximum diff payload size (bytes). Larger diffs are rejected with HTTP 413.
+# Per-file diff cap (bytes). A single file whose diff exceeds this is returned as
+# a content-free stub so one giant generated/lockfile/binary file can't wedge the page.
 _DIFF_MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -24,6 +25,77 @@ def _resolve_repo_under_workspace(repo: str, cfg: CharlieBotConfig) -> Path:
   if not any(repo_path.is_relative_to(root) for root in workspace_roots):
     raise HTTPException(status_code=400, detail="repo must be under configured workspace_dirs")
   return repo_path
+
+
+def _range_spec(base: str, head: str, mode: str) -> str:
+  """Build the `git diff` range expression for the requested mode."""
+  return f"{base}...{head}" if mode == "three-dot" else f"{base}..{head}"
+
+
+def _run_git_diff(repo_path: Path, args: list[str]) -> str:
+  """Run `git diff <args>` in repo_path and return stdout; raise HTTPException(500) on failure."""
+  result = subprocess.run(
+      ["git", "diff", *args],
+      cwd=repo_path,
+      capture_output=True,
+      text=True,
+      check=False,
+      timeout=SUBPROCESS_GIT_DIFF_TIMEOUT,
+  )
+  if result.returncode != 0:
+    raise HTTPException(status_code=500, detail=result.stderr.strip() or "git diff failed")
+  return result.stdout
+
+
+def _parse_numstat_z(output: str) -> list[tuple[int, int, str]]:
+  """Parse `git diff --numstat -z` into (additions, deletions, path) tuples.
+
+  A normal entry is one NUL-terminated `added\\tdeleted\\tpath` record. A rename/copy
+  is `added\\tdeleted\\t` (empty path) followed by two NUL tokens (old, new); the new
+  path is reported. Binary files emit `-` for the counts, reported here as 0.
+  """
+  tokens = output.split("\0")
+  entries: list[tuple[int, int, str]] = []
+  i = 0
+  while i < len(tokens):
+    token = tokens[i]
+    if token == "":
+      i += 1
+      continue
+    added_s, deleted_s, path = token.split("\t", 2)
+    if path == "":
+      # Rename/copy: the following two tokens are the old and new paths.
+      path = tokens[i + 2]
+      i += 3
+    else:
+      i += 1
+    additions = 0 if added_s == "-" else int(added_s)
+    deletions = 0 if deleted_s == "-" else int(deleted_s)
+    entries.append((additions, deletions, path))
+  return entries
+
+
+def _parse_name_status_z(output: str) -> dict[str, str]:
+  """Parse `git diff --name-status -z` into {path: status_letter}.
+
+  For renames/copies the status is `Rxxx`/`Cxxx` followed by old and new path tokens;
+  the new path is keyed with the leading status letter ('R'/'C').
+  """
+  tokens = output.split("\0")
+  status_by_path: dict[str, str] = {}
+  i = 0
+  while i < len(tokens):
+    status = tokens[i]
+    if status == "":
+      i += 1
+      continue
+    if status[0] in ("R", "C"):
+      status_by_path[tokens[i + 2]] = status[0]
+      i += 3
+    else:
+      status_by_path[tokens[i + 1]] = status[0]
+      i += 2
+  return status_by_path
 
 
 @router.get("/branches")
@@ -76,44 +148,66 @@ async def list_repos(cfg: CharlieBotConfig = Depends(get_config)):
   return repos
 
 
-@router.get("/diff")
-async def diff(
+@router.get("/diff/files")
+async def diff_files(
     repo: str = Query(..., description="Full path to git repo"),
     base: str = Query(..., description="Base ref"),
     head: str = Query(..., description="Head ref"),
     mode: Literal["three-dot", "two-dot"] = Query("three-dot", description="Diff range mode"),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Run `git diff base...head` (or `base..head`) and return the unified diff."""
-  repo_path = _resolve_repo_under_workspace(repo, cfg)
-  range_spec = f"{base}...{head}" if mode == "three-dot" else f"{base}..{head}"
-  result = subprocess.run(
-      ["git", "diff", range_spec],
-      cwd=repo_path,
-      capture_output=True,
-      text=True,
-      check=False,
-      timeout=SUBPROCESS_GIT_DIFF_TIMEOUT,
-  )
-  if result.returncode != 0:
-    raise HTTPException(status_code=500, detail=result.stderr.strip() or "git diff failed")
+  """Return a cheap per-file manifest (status + line counts) for the diff range.
 
-  diff_text = result.stdout
-  size_bytes = len(diff_text.encode("utf-8"))
-  if size_bytes > _DIFF_MAX_BYTES:
-    raise HTTPException(
-        status_code=413,
-        detail={
-            "message": "diff exceeds size limit",
-            "size_bytes": size_bytes,
-            "limit_bytes": _DIFF_MAX_BYTES,
-        },
-    )
+  Carries no hunk content, so it never hits any size limit even for thousands of files.
+  """
+  repo_path = _resolve_repo_under_workspace(repo, cfg)
+  range_spec = _range_spec(base, head, mode)
+  status_by_path = _parse_name_status_z(_run_git_diff(repo_path, ["--name-status", "-z", range_spec]))
+
+  files: list[dict] = []
+  total_additions = 0
+  total_deletions = 0
+  for additions, deletions, path in _parse_numstat_z(_run_git_diff(repo_path, ["--numstat", "-z", range_spec])):
+    files.append({
+        "path": path,
+        "status": status_by_path[path],
+        "additions": additions,
+        "deletions": deletions,
+    })
+    total_additions += additions
+    total_deletions += deletions
 
   return {
-      "diff": diff_text,
+      "files": files,
       "base": base,
       "head": head,
       "mode": mode,
-      "size_bytes": size_bytes,
+      "total_files": len(files),
+      "total_additions": total_additions,
+      "total_deletions": total_deletions,
   }
+
+
+@router.get("/diff/file")
+async def diff_file(
+    repo: str = Query(..., description="Full path to git repo"),
+    base: str = Query(..., description="Base ref"),
+    head: str = Query(..., description="Head ref"),
+    mode: Literal["three-dot", "two-dot"] = Query("three-dot", description="Diff range mode"),
+    path: str = Query(..., description="Repo-relative path of the file to diff"),
+    force: bool = Query(False, description="Render even if the diff exceeds the per-file cap"),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Return the unified diff for a single file.
+
+  When the file's diff exceeds the per-file cap and force is false, return a
+  {too_large, size_bytes, path} stub (HTTP 200) instead of the content so one giant
+  file can't wedge the page; the caller re-requests with force=true to load it anyway.
+  """
+  repo_path = _resolve_repo_under_workspace(repo, cfg)
+  range_spec = _range_spec(base, head, mode)
+  diff_text = _run_git_diff(repo_path, [range_spec, "--", path])
+  size_bytes = len(diff_text.encode("utf-8"))
+  if not force and size_bytes > _DIFF_MAX_BYTES:
+    return {"too_large": True, "size_bytes": size_bytes, "path": path}
+  return {"diff": diff_text, "path": path, "size_bytes": size_bytes}

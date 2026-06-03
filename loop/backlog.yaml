@@ -7318,3 +7318,46 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused dirpath binding in core/git._contains_git_marker
+  description: 'pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/ reports one new dead-name finding not covered by existing pending backlog
+    items: src/core/git.py:215 binds `dirpath` in `_contains_git_marker`, but the
+    function only checks whether ".git" appears in `filenames` or `dirnames`.
+
+    WHAT - Change the loop header from `for dirpath, dirnames, filenames in os.walk(path,
+    followlinks=False):` to `for _dirpath, dirnames, filenames in os.walk(path, followlinks=False):`
+    or otherwise avoid binding a misleading unused name while preserving the current
+    os.walk traversal and `.git` marker detection behavior.
+
+    WHY - The unused name makes readers look for path-sensitive logic that does not
+    exist in this helper. This is a pure dead-code cleanup with no behavior change:
+    `_contains_git_marker` still returns True on the first `.git` file or directory
+    marker and False otherwise.
+
+    VERIFY - Run `yapf --in-place --recursive src/` and commit any formatter diff
+    in-place per the formatter rule; run `pylint --disable=all --enable=unused-variable
+    src/core/git.py` and confirm the `dirpath` warning is gone; smoke-import with
+    `python3 -c "from src.core.git import git_worktree_remove"`.
+
+    NON-DUPLICATION CHECK - This scan ran `yapf --in-place --recursive src/`, producing
+    formatter-only diffs in src/api/ncu_parsing.py and src/core/codex_pricing.py that
+    were fixed and committed in this run rather than filed as backlog. `grep -rEn
+    "TODO|FIXME|HACK|XXX" src/ --include="*.py"` returns zero matches. `pyflakes src/`
+    reports four findings, all already covered: the unused `e` bindings in
+    core/sessions.py:135 and :488 by items 160/163/176, the unused `kill_tmux_session`
+    import in agents/backends/tui.py:23 by item 177, and the unused `WatchTarget`
+    import in api/internal.py:14 by items 139/171/176. `vulture src/ --min-confidence
+    80` reports only the Pydantic `cls` validator parameter in core/config.py:129,
+    a known false positive. `pylint --disable=all --enable=duplicate-code src/` reports
+    duplicate clusters already covered by pending items 166, 167, and 179, plus
+    short argparse / JSON parse / request-tail snippets that do not meet the dedup
+    rule. The >50-line function inventory is covered by standing pending items or
+    by previously rejected coherent-flow assessments, so the `dirpath` dead binding
+    is the single new backlog item for this scan.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-03T05:14:22Z'
+  priority: low

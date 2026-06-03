@@ -7318,3 +7318,48 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract scheduled-trigger backend resolution from run_message_with_resume_recovery
+  description: 'src/core/master_trigger.py:run_message_with_resume_recovery (L19-79,
+    61 lines) is still over the 50-line scan threshold and is not covered by the
+    existing pending long-function items. The function currently mixes two concerns:
+    resolving the effective backend option for a scheduled trigger, then executing
+    run_message with stale-resume recovery.
+
+    WHAT — Extract the backend-option setup into a private helper, e.g.
+    _resolve_trigger_backend_option(cfg, session_meta, backend_override), returning
+    the copied/overridden SessionMetadata plus the resolved BackendOption or None.
+    Keep the existing special case for codex-prefixed backend IDs and preserve the
+    current ValueError when an explicit backend_override is not configured. Then
+    run_message_with_resume_recovery can focus on the initial run_message call and
+    the stale-resume retry path.
+
+    WHY — The extraction has a clear single responsibility and should drop
+    run_message_with_resume_recovery below 50 lines without changing behavior. It is
+    stronger than the remaining borderline >50-line route/prompt/argparse functions
+    because the backend-resolution policy is a reusable named concept inside the
+    trigger module.
+
+    VERIFY — Run yapf --in-place --recursive src/ and commit any diff in the same
+    run per the formatter rule. Add or adjust focused tests if a local test seam
+    exists for scheduled trigger backend overrides; otherwise manually exercise the
+    three existing branches: no override with a configured backend, no override with
+    a codex-prefixed stale backend resolved by type, and explicit override missing
+    from cfg.backend_options raising ValueError.
+
+    SCAN NOTES — This code-health run already applied and committed the YAPF diffs
+    in src/api/ncu_parsing.py and src/core/codex_pricing.py, so no formatter backlog
+    item is filed. rg -n "TODO|FIXME|HACK|XXX" src returned no matches. uvx ruff
+    check src --select F401,F841 reports four existing diagnostics already covered
+    by pending items: unused kill_tmux_session in agents/backends/tui.py, unused
+    WatchTarget in api/internal.py, and unused e bindings in core/sessions.py at
+    lines 135 and 488. vulture reports only the known Pydantic model_validator cls
+    parameter in core/config.py, previously documented as a false positive. pylint
+    duplicate-code reports short boilerplate clones only; none exceed 50 lines or
+    justify a new shared helper under the dedup rule.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-03T07:14:23Z'
+  priority: low

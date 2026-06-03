@@ -31,14 +31,20 @@ _AUTO_INJECTED_PREFIXES = (
 )
 
 _SUMMARY_SYSTEM_PROMPT = (
-    "你是会话概括助手。基于给定的用户提问列表和最后一轮对话，用简体中文输出一个简洁的概括："
-    "先用 2-4 条要点说明“讲了什么”，再用一行说明“最后在处理”什么。"
-    "不要复述原文，不要加客套话或解释。")
+    "You are a session recap assistant. Given the user's list of asks and the last "
+    "exchange of a conversation, produce a concise recap: first a few bullet points "
+    "describing what was discussed, then one line describing what was last being worked "
+    "on. Do not restate the input verbatim, and add no pleasantries or explanations. "
+    "Write the recap in the SAME language as the conversation content you are given "
+    "below (the asks and the last exchange): a Chinese conversation gets a Chinese "
+    "recap, an English conversation gets an English recap. Do not default to any fixed "
+    "output language.")
 
 _SUMMARY_PROMPT = (
-    "用户提问（按时间顺序）：\n{asks}\n\n"
-    "最后一轮：\n用户：{last_user}\n助手：{last_assistant}\n\n"
-    "请输出概括：\n- 几条“讲了什么”要点\n- 一行“最后在处理”")
+    "User asks (in chronological order):\n{asks}\n\n"
+    "Last exchange:\nUser: {last_user}\nAssistant: {last_assistant}\n\n"
+    "Produce the recap:\n- a few bullet points for what was discussed\n"
+    "- one line for what was last being worked on")
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -146,9 +152,9 @@ async def generate_and_cache_summary(session_mgr: SessionManager, session_id: st
   asks = extract["asks"]
   last = extract["last"] or {}
   prompt = _SUMMARY_PROMPT.format(
-      asks="\n".join(f"- {ask}" for ask in asks) if asks else "（无）",
-      last_user=last.get("user") or "（无）",
-      last_assistant=last.get("assistant") or "（无）",
+      asks="\n".join(f"- {ask}" for ask in asks) if asks else "(none)",
+      last_user=last.get("user") or "(none)",
+      last_assistant=last.get("assistant") or "(none)",
   )
   summary = await _generate_name_via_claude_cli(prompt, _SUMMARY_SYSTEM_PROMPT)
   await asyncio.to_thread(_write_cache_entry, session_mgr, session_id, upto, summary)

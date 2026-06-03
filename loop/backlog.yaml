@@ -7318,3 +7318,33 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused dirpath loop variable in core/git._contains_git_marker
+  description: 'pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/ reports src/core/git.py:215: W0612 unused variable "dirpath" in
+    _contains_git_marker. The function only checks whether ".git" appears in the
+    os.walk dirnames or filenames results, so the loop path binding can be replaced
+    with "_" or otherwise removed without changing behavior.
+
+    NON-DUPLICATION CHECK - This scheduled scan also ran yapf --in-place --recursive
+    src/, which produced src/api/ncu_parsing.py and src/core/codex_pricing.py diffs
+    that were fixed in-place per the yapf rule instead of being filed. grep for
+    TODO/FIXME/HACK/XXX in src, tests, scripts, web, docs, and skills found only
+    the placeholder "code=XXX" text in skills/feishu/SKILL.md, not an actionable
+    code marker. pyflakes src/ reports four existing findings already covered by
+    pending backlog items: the unused exception bindings in core/sessions.py by
+    items 160/163/176, the unused WatchTarget import in api/internal.py by items
+    139/171/176, and the unused kill_tmux_session import in agents/backends/tui.py
+    by item 177. The cli/backup.py unused args warnings are intentional argparse
+    handler signatures and are already recorded as false positives in earlier scan
+    notes. No duplicate normalized Python block longer than 50 lines was detected.
+
+    VERIFY - Run pylint --disable=all --enable=unused-variable,unused-argument,unused-import
+    src/core/git.py and confirm the dirpath warning is gone. Run yapf --in-place
+    --recursive src/ and commit any formatter diff in the same change.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-03T15:12:47Z'
+  priority: low

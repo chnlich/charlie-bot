@@ -250,6 +250,7 @@ async def index(
             "messages": bootstrap.messages,
             "pending_draft": bootstrap.pending_draft,
             "event_count": bootstrap.total_event_count,
+            "oldest_event_index": bootstrap.oldest_event_index,
             "active_backend": active_backend,
             "active_backend_type": active_backend_opt.type if active_backend_opt else "",
             "has_more": bootstrap.has_more,

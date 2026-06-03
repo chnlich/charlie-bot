@@ -116,6 +116,7 @@ class SessionBootstrapData:
   messages: list[dict]
   pending_draft: dict | None = None
   total_event_count: int = 0
+  oldest_event_index: int = 0
   has_more: bool = False
 
 
@@ -128,6 +129,7 @@ class SessionViewData:
   usage: dict | None
   pending_draft: dict | None = None
   total_event_count: int | None = None
+  oldest_event_index: int = 0
   has_more: bool = False
 
 
@@ -160,6 +162,7 @@ async def build_session_bootstrap_data(
       messages=messages,
       pending_draft=pending_draft,
       total_event_count=session_meta.archive_offset + total_count,
+      oldest_event_index=offset,
       has_more=has_more or session_meta.archive_offset > 0,
   )
 
@@ -199,10 +202,12 @@ async def build_session_view_data(
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
     raw_events = tail_events
     total_event_count = session_meta.archive_offset + total_count
+    oldest_event_index = offset
     has_more = has_more or session_meta.archive_offset > 0
   else:
     raw_events = events_result
     total_event_count = session_meta.archive_offset + len(raw_events)
+    oldest_event_index = session_meta.archive_offset
     has_more = session_meta.archive_offset > 0
     messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
@@ -219,6 +224,7 @@ async def build_session_view_data(
       usage=usage,
       pending_draft=pending_draft,
       total_event_count=total_event_count,
+      oldest_event_index=oldest_event_index,
       has_more=has_more,
   )
 

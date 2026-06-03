@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.api.message_utils import build_session_bootstrap_data, build_session_view_data
+from src.api.sessions import get_session_events_page
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadMetadata, ThreadStatus
 from src.core.sessions import SessionManager
@@ -214,6 +216,8 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
   tail_view = await build_session_view_data(session.id, mgr, thread_mgr, tail_limit=2)
   assert tail_view.total_event_count == 8
   assert tail_view.has_more is True
+  assert full_view.oldest_event_index == 5
+  assert tail_view.oldest_event_index == 6
   assert [m["event_index"] for m in tail_view.messages] == [6, 7]
 
 
@@ -230,5 +234,25 @@ async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path
   assert bootstrap.session.id == session.id
   assert bootstrap.total_event_count == 4
   assert bootstrap.has_more is True
+  assert bootstrap.oldest_event_index == 2
   assert [m["content"] for m in bootstrap.messages] == ["e2", "e3"]
   assert [m["event_index"] for m in bootstrap.messages] == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  events = [
+      {"type": ET.TOOL_USE, "id": "tool-0", "name": "Read", "input": {"file_path": "a.txt"}},
+      {"type": ET.USER, "id": "tool-result-1", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
+      {"type": ET.ASSISTANT, "id": "assistant-2", "message": {"content": [{"type": "text", "text": "done"}]}},
+  ]
+  _append_events(mgr.get_chat_events_path(session.id), events)
+
+  page = await get_session_events_page(session.id, before=3, limit=3, session_mgr=mgr)
+
+  assert page["next_before"] == 0
+  assert len(page["messages"]) == 1
+  assert page["messages"][0]["event_index"] == 2

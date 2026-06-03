@@ -80,6 +80,22 @@ function refreshAllRoundRatingButtons() {
   });
 }
 
+function messageRenderId(msg) {
+  if (!msg || msg.id == null || msg.id === '') return '';
+  return String(msg.id);
+}
+
+function messageIdentityAttrs(msg) {
+  const id = messageRenderId(msg);
+  return id ? ' data-message-id="' + escapeChatAttr(id) + '"' : '';
+}
+
+function isRenderedMessage(msg) {
+  const id = messageRenderId(msg);
+  if (!id) return false;
+  return document.querySelector('[data-message-id="' + CSS.escape(id) + '"]') !== null;
+}
+
 async function initializeRoundRatings() {
   if (!SESSION_ID) return;
   const sessionId = SESSION_ID;
@@ -715,21 +731,22 @@ function renderMessage(msg, sessionId) {
   }
 
   if (msg.role === "user") {
-    return "<div class=\"flex justify-end\">" + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
+    return "<div class=\"flex justify-end\"" + messageIdentityAttrs(msg) + ">"
+      + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
   }
   if (msg.role === "assistant") {
     var artifactsHtml = renderHtmlArtifacts(msg.tools);
     var toolsHtml = renderToolActivity(msg.tools);
-    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + mdDiv(msg.content) + artifactsHtml + toolsHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "system") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
-    return "<div class=\"flex justify-center\"><div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
+    return "<div class=\"flex justify-center\"" + messageIdentityAttrs(msg) + "><div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
       + escapeHtml(msg.content) + "</div></div>";
   }
   if (msg.role === "task_delegated") {
-    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
       + "<div class=\"flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2\">"
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"/></svg>"
       + "Delegated</div>"
@@ -737,20 +754,20 @@ function renderMessage(msg, sessionId) {
   }
   if (msg.role === "worker_summary") {
     var escaped = escapeHtml(msg.full_content || "").replace(/"/g, "&quot;");
-    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 cursor-pointer\""
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 cursor-pointer\""
       + " data-full=\"" + escaped + "\""
       + " onclick=\"showTextModal(\x27Worker Result\x27, this.dataset.full)\">"
       + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + "</div></div>";
   }
   if (msg.role === "plan") {
-    return "<div class=\"flex justify-start\"><div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"
       + "<div class=\"flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2\">"
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4\"/></svg>"
       + "Plan</div>"
       + mdDiv(msg.content) + timeDiv() + "</div></div>";
   }
   if (msg.role === "clone_start") {
-    return "<div class=\"flex items-center gap-3 py-3 px-4\">"
+    return "<div class=\"flex items-center gap-3 py-3 px-4\"" + messageIdentityAttrs(msg) + ">"
       + "<div class=\"flex-1 border-t border-purple-500/40\"></div>"
       + "<div class=\"flex items-center gap-2 text-purple-400 text-xs\">"
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
@@ -780,7 +797,7 @@ function renderMessage(msg, sessionId) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);
       }
     }
-    return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\">"
+    return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\"" + messageIdentityAttrs(msg) + ">"
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
       + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">response complete" + timeStr + "</span>"
       + buttons

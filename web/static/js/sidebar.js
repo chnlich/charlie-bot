@@ -416,8 +416,10 @@ async function loadOlderIfNeeded(container) {
       container.prepend(newSentinel);
     }
 
-    // Build and prepend message elements
-    const tempDiv = renderMessagesToDetachedContainer(data.messages, SESSION_ID);
+    // Build and prepend message elements that are not already present. Page
+    // boundaries can re-emit a message whose aggregator id is already shown.
+    const newMessages = data.messages.filter(msg => !isRenderedMessage(msg));
+    const tempDiv = renderMessagesToDetachedContainer(newMessages, SESSION_ID);
 
     // Insert after sentinel (or at top)
     const insertRef = document.getElementById('load-more-sentinel');

@@ -648,6 +648,81 @@ test('loadOlderIfNeeded post-processes prepended messages through the shared hel
   assert.match(postProcessedHtml[0], /older \$x\$/);
 });
 
+test('loadOlderIfNeeded skips messages whose rendered id is already in the DOM', async () => {
+  const messages = createElement({scrollTop: 0});
+  messages.clientHeight = 500;
+  messages.scrollHeight = 1000;
+  const {context} = buildContext({
+    elements: new Map([
+      ['messages', messages],
+    ]),
+  });
+  let renderedMessages = null;
+  context.isRenderedMessage = (msg) => msg.id === 'assistant-event-1';
+  context.renderMessagesToDetachedContainer = (msgs) => {
+    renderedMessages = msgs;
+    return createElement();
+  };
+  context.fetch = async (url) => {
+    assert.equal(url, '/api/sessions/session-a/events?before=5&limit=200');
+    return {
+      ok: true,
+      async json() {
+        return {
+          has_more: false,
+          messages: [
+            {
+              id: 'assistant-event-1',
+              role: 'assistant',
+              content: 'already visible',
+              event_index: 3,
+            },
+            {
+              id: 'user-event-0',
+              role: 'user',
+              content: 'older ask',
+              event_index: 1,
+            },
+          ],
+        };
+      },
+    };
+  };
+
+  context.renderSessionView({
+    session: {id: 'session-a', backend: 'claude-opus-4.6', round_ratings: {}},
+    messages: [{id: 'assistant-event-1', role: 'assistant', content: 'already visible', event_index: 5}],
+    pending_draft: null,
+    event_count: 6,
+    active_backend: 'claude-opus-4.6',
+    active_backend_type: '',
+    has_more: true,
+  });
+  messages.scrollTop = 0;
+
+  await context.loadOlderIfNeeded(messages);
+
+  assert.deepEqual(renderedMessages, [{
+    id: 'user-event-0',
+    role: 'user',
+    content: 'older ask',
+    event_index: 1,
+  }]);
+});
+
+test('renderMessage stamps committed messages with stable message ids', () => {
+  const {context} = buildContext();
+
+  const html = context.renderMessage({
+    id: 'assistant-event-1',
+    role: 'assistant',
+    content: 'hello',
+    event_index: 5,
+  }, 'session-a');
+
+  assert.match(html, /data-message-id="assistant-event-1"/);
+});
+
 test('renderSessionItem shows separate delayed-trigger and scheduled indicators', () => {
   const {context} = buildContext({
     BACKEND_TYPES: {'claude-tui': 'tui-cli'},

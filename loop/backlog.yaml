@@ -7318,3 +7318,41 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Fix uncovered swallowed-exception and unused-variable scan findings
+  description: 'Scheduled code-health scan found two actionable findings not already
+    covered by the pending backlog. (1) src/agents/backends/tui.py:165 and :176 silently
+    swallow websocket.send_json failures while trying to report PTY setup errors to
+    the browser. In run_tui_attachment, keep the outer log.exception calls and return
+    semantics unchanged, but replace each inner `except Exception: pass` with an explicit
+    log.debug or log.warning that includes session_id and the failing phase
+    (ensure_tmux_session vs attachment.spawn). A small helper is acceptable only if
+    it keeps the two preflight blocks clearer. (2) pylint reports src/core/git.py:215
+    W0612 because _contains_git_marker loops as `for dirpath, dirnames, filenames`
+    but never reads dirpath. Rename that binding to `_` or another intentionally-unused
+    name while preserving the os.walk logic.
+
+    SCAN NOTES - `yapf --in-place --recursive src/` produced formatting-only diffs
+    committed separately in this run. `pyflakes src/` reports four findings already
+    covered by pending items: core/sessions.py:135 (#160/#176), core/sessions.py:488
+    (#163/#176), agents/backends/tui.py unused kill_tmux_session (#177), and
+    api/internal.py unused WatchTarget (#139/#171/#176). `pylint --disable=all
+    --enable=unused-import,unused-variable,unused-argument src` also reports already
+    tracked thread_mgr findings and argparse-required cli/backup.py args. `rg -n
+    "\b(TODO|FIXME|HACK|XXX)\b" src` returns zero matches. The AST function-length
+    scan found 43 functions over 50 lines; all are already covered by pending
+    long-function/refactor items through #184. `pylint --disable=all --enable=R0801
+    --min-similarity-lines=51 src` and the same check at 20 lines found no duplicate-code
+    findings, so there is no dedup-rule extraction candidate from this scan.
+
+    VERIFY - Run `yapf --in-place --recursive src/` and commit any formatter diff
+    in the same change; run `python -m pyflakes src/agents/backends/tui.py src/core/git.py`;
+    run `pylint --disable=all --enable=unused-variable src/core/git.py`; and manually
+    verify both PTY setup failure paths still send the same PTY_EXIT payload when
+    websocket.send_json succeeds.
+
+    '
+  category: reliability
+  status: pending
+  created: '2026-06-03T13:15:08Z'
+  priority: medium

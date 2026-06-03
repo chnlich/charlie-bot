@@ -7318,3 +7318,57 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract auto-trigger run_message helpers from run_message_with_resume_recovery
+  description: |
+    src/core/master_trigger.py:run_message_with_resume_recovery is 61 lines and mixes
+    two responsibilities: resolving the scheduled-task backend option and running the
+    stale-resume retry sequence. Inside the retry sequence, the same run_message call
+    shape appears twice with the same callbacks, skip_user_event, auto_trigger, and
+    backend_option arguments; only the SessionMetadata instance and summary differ.
+
+    WHAT - Add a small private helper in src/core/master_trigger.py, for example
+    _run_auto_trigger_message(cfg, session_meta, summary, session_mgr, backend_option),
+    that owns the shared run_message(..., skip_user_event=True, auto_trigger=True,
+    backend_option=backend_option) invocation. Also extract the backend-option lookup
+    into _resolve_trigger_backend_option(cfg, backend_id, *, backend_override) so
+    run_message_with_resume_recovery only reads as: derive run_session_meta, resolve
+    backend_option, try _run_auto_trigger_message, on stale-resume clear cc_session_id
+    and retry through the same helper.
+
+    WHY - The helper name is a clear single responsibility: run one auto-triggered
+    master message with the already-resolved backend option. This clears the dedup rule
+    even though the duplicated block is under 50 lines, because the call contract is
+    repeated and easy to drift when run_message arguments change. The backend resolver
+    is likewise a separate policy decision from stale-resume recovery and keeps the
+    retry function focused.
+
+    HOW - Keep behavior unchanged. Preserve the current Codex fallback where an
+    unconfigured codex backend id may use the first configured codex backend when no
+    explicit backend_override was supplied. Preserve the ValueError when an explicit
+    scheduled backend override is not configured. Do not change trigger_master or
+    run_message signatures.
+
+    VERIFY - Run yapf --in-place --recursive src/ and commit any diff in the same
+    change. Run python -m pyflakes src/core/master_trigger.py. Import-check the module
+    with python -c "from src.core.master_trigger import run_message_with_resume_recovery".
+
+    NON-DUPLICATION CHECK - This scheduled code-health scan ran yapf --in-place
+    --recursive src/ and committed the formatter-only diffs in src/api/ncu_parsing.py
+    and src/core/codex_pricing.py per the yapf rule. rg -n "TODO|FIXME|HACK|XXX" src/
+    returned zero matches. python -m pyflakes src/ reported four current findings, all
+    already covered by pending backlog items: the unused e bindings in
+    src/core/sessions.py:135 and :488 by items 160/163/176, the unused
+    kill_tmux_session import in src/agents/backends/tui.py:23 by item 177, and the
+    unused WatchTarget import in src/api/internal.py:14 by items 139/171/176.
+    python -m vulture src/ --min-confidence 80 reported only the known Pydantic
+    classmethod cls false positive in src/core/config.py:129. The exact duplicate scan
+    found no duplicate nonblank blocks of 51 or more lines. The long-function inventory
+    still contains many already-covered or explicitly rejected functions; this item
+    targets run_message_with_resume_recovery specifically because its repeated
+    auto-trigger run_message call has a clean helper boundary not covered by any
+    pending item.
+  category: refactoring
+  status: pending
+  created: '2026-06-03T19:13:13Z'
+  priority: low

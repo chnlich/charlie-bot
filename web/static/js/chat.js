@@ -115,6 +115,128 @@ async function rateRound(sessionId, roundId, rating) {
 }
 
 // ---------------------------------------------------------------------------
+// In-session recap (↻ 概括): zero-token extraction + opt-in cached Haiku summary
+// ---------------------------------------------------------------------------
+const RECAP_ASK_CAP = 6;
+
+function toggleRecapPanel(btn, sessionId, eventIndex) {
+  const sep = btn.closest('.separator-line');
+  if (!sep) return;
+  const next = sep.nextElementSibling;
+  if (next && next.classList.contains('recap-panel')) {
+    next.remove();
+    btn.classList.remove('text-sky-400');
+    return;
+  }
+  btn.classList.add('text-sky-400');
+  const panel = document.createElement('div');
+  panel.className = 'recap-panel mx-4 my-1 px-3 py-2 bg-slate-800/70 border border-slate-700/60 rounded-lg';
+  panel.dataset.sessionId = sessionId;
+  panel.dataset.eventIndex = eventIndex;
+  panel.innerHTML = '<div class="recap-body text-slate-500 text-xs">概括加载中…</div>';
+  sep.parentNode.insertBefore(panel, sep.nextSibling);
+  loadRecap(sessionId, eventIndex, panel);
+}
+
+async function loadRecap(sessionId, eventIndex, panel) {
+  const body = panel.querySelector('.recap-body');
+  let data;
+  try {
+    const res = await fetch('/api/sessions/' + sessionId + '/recap?upto=' + eventIndex);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  } catch (err) {
+    console.error('Load recap failed:', err);
+    body.innerHTML = '<div class="text-red-400 text-xs">概括加载失败</div>';
+    return;
+  }
+  body.classList.remove('text-slate-500', 'text-xs');
+  body.innerHTML =
+    recapSectionLabel('讲了什么')
+    + renderRecapAsks(data.asks)
+    + renderRecapLast(data.last)
+    + '<div class="recap-summary mt-2 pt-2 border-t border-slate-700/60"></div>';
+  applyRecapSummary(panel, sessionId, eventIndex, data);
+}
+
+function recapSectionLabel(text) {
+  return '<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">' + escapeHtml(text) + '</div>';
+}
+
+function renderRecapAsks(asks) {
+  if (!asks || !asks.length) return '<div class="text-slate-500 text-xs">（无）</div>';
+  const items = asks.map((ask, i) =>
+    '<li class="' + (i >= RECAP_ASK_CAP ? 'recap-ask-extra hidden' : '') + '">' + escapeHtml(ask) + '</li>'
+  ).join('');
+  let html = '<ul class="list-disc pl-5 space-y-0.5 text-xs text-slate-300">' + items + '</ul>';
+  if (asks.length > RECAP_ASK_CAP) {
+    html += '<button class="mt-1 text-[11px] text-sky-400 hover:text-sky-300" onclick="toggleRecapAsks(this)">'
+      + '展开全部 (' + asks.length + ')</button>';
+  }
+  return html;
+}
+
+function toggleRecapAsks(btn) {
+  const panel = btn.closest('.recap-panel');
+  const extras = panel.querySelectorAll('.recap-ask-extra');
+  const collapsed = extras.length && extras[0].classList.contains('hidden');
+  extras.forEach((el) => el.classList.toggle('hidden', !collapsed));
+  btn.textContent = collapsed ? '收起' : '展开全部 (' + (RECAP_ASK_CAP + extras.length) + ')';
+}
+
+function renderRecapLast(last) {
+  if (!last) return '';
+  let html = '<div class="mt-2">' + recapSectionLabel('最后在处理')
+    + '<div class="text-xs text-slate-300"><span class="text-slate-500">你：</span>' + escapeHtml(last.user) + '</div>';
+  if (last.assistant) {
+    html += '<div class="text-xs text-slate-400 mt-0.5"><span class="text-slate-500">助手：</span>'
+      + escapeHtml(last.assistant) + '</div>';
+  }
+  return html + '</div>';
+}
+
+function applyRecapSummary(panel, sessionId, eventIndex, data) {
+  const sumEl = panel.querySelector('.recap-summary');
+  if (data.summary && !data.summary_stale) {
+    sumEl.innerHTML = recapSectionLabel('概括') + recapSummaryText(data.summary);
+    return;
+  }
+  if (data.summary && data.summary_stale) {
+    sumEl.innerHTML = recapSectionLabel('概括（已过时）') + recapSummaryText(data.summary) + recapRerunButton();
+    return;
+  }
+  // No summary yet for any point up to here -> the explicit 概括 click generates one.
+  fetchRecapSummary(sessionId, eventIndex, panel);
+}
+
+function recapSummaryText(text) {
+  return '<div class="text-xs text-slate-300 whitespace-pre-wrap">' + escapeHtml(text || '') + '</div>';
+}
+
+function recapRerunButton() {
+  return '<button class="mt-1 text-[11px] text-sky-400 hover:text-sky-300" onclick="rerunRecapSummary(this)">↻ 重新概括</button>';
+}
+
+function rerunRecapSummary(btn) {
+  const panel = btn.closest('.recap-panel');
+  fetchRecapSummary(panel.dataset.sessionId, panel.dataset.eventIndex, panel);
+}
+
+async function fetchRecapSummary(sessionId, eventIndex, panel) {
+  const sumEl = panel.querySelector('.recap-summary');
+  sumEl.innerHTML = recapSectionLabel('概括') + '<div class="text-slate-500 text-xs">概括中…</div>';
+  try {
+    const res = await fetch('/api/sessions/' + sessionId + '/recap/summarize?upto=' + eventIndex, {method: 'POST'});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    sumEl.innerHTML = recapSectionLabel('概括') + recapSummaryText(data.summary);
+  } catch (err) {
+    console.error('Summarize recap failed:', err);
+    sumEl.innerHTML = recapSectionLabel('概括') + '<div class="text-red-400 text-xs">概括失败</div>' + recapRerunButton();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Send message
 // ---------------------------------------------------------------------------
 function bumpCurrentSessionToTop() {
@@ -649,7 +771,10 @@ function renderMessage(msg, sessionId) {
           + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
           + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
-          + "</button>";
+          + "</button>"
+          + "<button onclick=\"toggleRecapPanel(this, \x27" + sessionId + "\x27, " + msg.event_index + ")\""
+          + " class=\"px-1 text-[11px] leading-none text-slate-500 hover:text-sky-400\" title=\"概括：这段讲了什么、最后在处理什么\">"
+          + "↻ 概括</button>";
       }
       if (msg.id != null) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);

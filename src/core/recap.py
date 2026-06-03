@@ -1,0 +1,156 @@
+"""In-session recap: cheap pure-extraction plus an opt-in cached Haiku summary.
+
+The default path is zero-token. ``extract_recap`` scans a session's (sparse)
+user events and returns the ordered asks plus the last exchange — no LLM call.
+A concise Haiku summary is generated only on an explicit request and cached per
+``(session_id, upto)`` so reopening an unchanged divider costs nothing.
+"""
+
+import asyncio
+import json
+from pathlib import Path
+
+import structlog
+
+from src.api.message_utils import events_to_messages
+from src.core.autonamer import _generate_name_via_claude_cli
+from src.core.models import utc_now
+from src.core.sessions import SessionManager
+
+log = structlog.get_logger()
+
+_ASK_CHARS = 80
+_LAST_CHARS = 250
+
+# User messages auto-injected by the system are not real "asks". Matched by prefix
+# against the trigger banner and the fork/elone bootstrap prompts.
+_AUTO_INJECTED_PREFIXES = (
+    "[Scheduled trigger fired",
+    "This session was cloned from a previous conversation.",
+    "You're taking over a task from a previous session where user wasn't satisfied.",
+)
+
+_SUMMARY_SYSTEM_PROMPT = (
+    "你是会话概括助手。基于给定的用户提问列表和最后一轮对话，用简体中文输出一个简洁的概括："
+    "先用 2-4 条要点说明“讲了什么”，再用一行说明“最后在处理”什么。"
+    "不要复述原文，不要加客套话或解释。")
+
+_SUMMARY_PROMPT = (
+    "用户提问（按时间顺序）：\n{asks}\n\n"
+    "最后一轮：\n用户：{last_user}\n助手：{last_assistant}\n\n"
+    "请输出概括：\n- 几条“讲了什么”要点\n- 一行“最后在处理”")
+
+
+def _truncate(text: str, limit: int) -> str:
+  """Strip and clip *text* to *limit* chars, appending an ellipsis if clipped."""
+  text = (text or "").strip()
+  return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def _first_line(text: str) -> str:
+  """Return the first non-blank line of *text*."""
+  for line in (text or "").splitlines():
+    stripped = line.strip()
+    if stripped:
+      return stripped
+  return ""
+
+
+def _is_auto_injected(content: str) -> bool:
+  """True if *content* is a system-injected user message rather than a real ask."""
+  stripped = (content or "").lstrip()
+  return any(stripped.startswith(prefix) for prefix in _AUTO_INJECTED_PREFIXES)
+
+
+def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None = None) -> dict:
+  """Scan events [0, upto] and return ``{asks, last}`` via pure extraction (no LLM).
+
+  asks: ordered first-lines of genuine user messages (auto-injected ones dropped),
+        each truncated to ~80 chars.
+  last: the final genuine user message + the assistant text that followed it,
+        each truncated to ~250 chars; ``None`` if the session has no real asks.
+  """
+  count = session_mgr.get_chat_event_count_sync(session_id)
+  end = count if upto is None else min(upto + 1, count)
+  events, _ = session_mgr.load_chat_events_range(session_id, 0, end)
+  messages = events_to_messages(events)
+
+  asks: list[str] = []
+  last_user_idx: int | None = None
+  for i, msg in enumerate(messages):
+    if msg.get("role") != "user" or _is_auto_injected(msg.get("content", "")):
+      continue
+    first = _first_line(msg.get("content", ""))
+    if not first:
+      continue
+    asks.append(_truncate(first, _ASK_CHARS))
+    last_user_idx = i
+
+  last = None
+  if last_user_idx is not None:
+    assistant_text = ""
+    for msg in messages[last_user_idx + 1:]:
+      if msg.get("role") == "user":
+        break
+      if msg.get("role") == "assistant" and (msg.get("content") or "").strip():
+        assistant_text = msg["content"]
+    last = {
+        "user": _truncate(messages[last_user_idx].get("content", ""), _LAST_CHARS),
+        "assistant": _truncate(assistant_text, _LAST_CHARS),
+    }
+
+  return {"asks": asks, "last": last}
+
+
+def _cache_path(session_mgr: SessionManager, session_id: str) -> Path:
+  """Per-session recap-summary cache, sitting next to chat_events.jsonl."""
+  return session_mgr.get_chat_events_path(session_id).parent / "recap_summaries.json"
+
+
+def _load_cache(path: Path) -> dict:
+  if not path.exists():
+    return {}
+  return json.loads(path.read_text(encoding="utf-8"))
+
+
+def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: int) -> tuple[str | None, bool]:
+  """Return ``(summary, stale)`` for the divider at *upto*.
+
+  Exact cache hit -> ``(summary, False)``. No exact hit but a summary computed at
+  an earlier point exists -> ``(that_summary, True)`` since newer events are not
+  yet reflected. Otherwise ``(None, False)``.
+  """
+  cache = _load_cache(_cache_path(session_mgr, session_id))
+  exact = cache.get(str(upto))
+  if exact is not None:
+    return exact["summary"], False
+  earlier = [int(k) for k in cache if int(k) < upto]
+  if earlier:
+    return cache[str(max(earlier))]["summary"], True
+  return None, False
+
+
+def _write_cache_entry(session_mgr: SessionManager, session_id: str, upto: int, summary: str) -> None:
+  path = _cache_path(session_mgr, session_id)
+  cache = _load_cache(path)
+  cache[str(upto)] = {"summary": summary, "generated_at": utc_now().isoformat()}
+  path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def generate_and_cache_summary(session_mgr: SessionManager, session_id: str, upto: int) -> str:
+  """Generate a Haiku recap for the divider at *upto*, cache it, and return it.
+
+  Feeds the LLM ONLY the bounded extraction (asks + last), never raw events.
+  """
+  extract = await asyncio.to_thread(extract_recap, session_mgr, session_id, upto)
+  asks = extract["asks"]
+  last = extract["last"] or {}
+  prompt = _SUMMARY_PROMPT.format(
+      asks="\n".join(f"- {ask}" for ask in asks) if asks else "（无）",
+      last_user=last.get("user") or "（无）",
+      last_assistant=last.get("assistant") or "（无）",
+  )
+  summary = await _generate_name_via_claude_cli(prompt, _SUMMARY_SYSTEM_PROMPT)
+  await asyncio.to_thread(_write_cache_entry, session_mgr, session_id, upto, summary)
+  log.info("recap_summary_generated", session_id=session_id, upto=upto)
+  return summary

@@ -368,6 +368,44 @@ async def get_session_events_page(
   return {"messages": messages, "has_more": has_more}
 
 
+@router.get('/{session_id}/recap')
+async def get_session_recap(
+    session_id: str,
+    upto: int | None = None,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Pure-extraction recap (no LLM) plus any cached Haiku summary for a divider.
+
+  ``upto`` is a global event_index (default: latest). Returns ordered asks, the
+  last exchange, the cached summary (or null), and whether that summary is stale.
+  """
+  from src.core import recap
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  if upto is None:
+    count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id)
+    upto = max(0, count - 1)
+  extract = await asyncio.to_thread(recap.extract_recap, session_mgr, session_id, upto)
+  summary, stale = await asyncio.to_thread(recap.lookup_cached_summary, session_mgr, session_id, upto)
+  return {**extract, "summary": summary, "summary_stale": stale}
+
+
+@router.post('/{session_id}/recap/summarize')
+async def summarize_session_recap(
+    session_id: str,
+    upto: int,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Generate (via Haiku), cache, and return the recap summary for a divider."""
+  from src.core import recap
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  summary = await recap.generate_and_cache_summary(session_mgr, session_id, upto)
+  return {"summary": summary}
+
+
 @router.post('/{session_id}/fork', response_model=SessionMetadata)
 async def fork_session(
     session_id: str,

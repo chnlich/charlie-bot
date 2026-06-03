@@ -95,7 +95,7 @@ let switchGeneration = 0;
 let switching = false;
 // Pagination state for tail-loaded sessions
 let sessionHasMore = false;
-let sessionEarliestEventIndex = Infinity;
+let sessionOlderBeforeCursor = Infinity;
 let sessionLoadingMore = false;
 let activeSessionViewPollInterval = null;
 let activeSessionViewPollInflight = false;
@@ -168,6 +168,7 @@ function buildEmptySessionBootstrap(session) {
     messages: [],
     pending_draft: null,
     event_count: session.archive_offset || 0,
+    oldest_event_index: session.archive_offset || 0,
     active_backend: backend,
     active_backend_type: BACKEND_TYPES ? (BACKEND_TYPES[backend] || '') : '',
     has_more: false,
@@ -293,14 +294,9 @@ function renderSessionView(data) {
   }
   updateTuiHeaderControls(backendType, session.id);
 
-  // Store pagination state from tail-loaded response
+  // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;
-  sessionEarliestEventIndex = Infinity;
-  for (const m of messages) {
-    if (m.event_index != null && m.event_index < sessionEarliestEventIndex) {
-      sessionEarliestEventIndex = m.event_index;
-    }
-  }
+  sessionOlderBeforeCursor = data.oldest_event_index;
   sessionLoadingMore = false;
 
   // Update header
@@ -373,10 +369,10 @@ async function loadOlderIfNeeded(container) {
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
-  if (!Number.isFinite(sessionEarliestEventIndex)) return;
+  if (!Number.isFinite(sessionOlderBeforeCursor)) return;
 
   sessionLoadingMore = true;
-  const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionEarliestEventIndex + '&limit=200';
+  const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionOlderBeforeCursor + '&limit=200';
   const abortCtrl = new AbortController();
   const timeout = setTimeout(() => abortCtrl.abort(), 10000);
   try {
@@ -384,19 +380,15 @@ async function loadOlderIfNeeded(container) {
     clearTimeout(timeout);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
+    if (!Number.isFinite(data.next_before)) throw new Error('events page missing next_before');
 
     sessionHasMore = !!data.has_more;
 
-    // Track earliest event index from new messages
-    const prevEarliest = sessionEarliestEventIndex;
-    for (const m of data.messages) {
-      if (m.event_index != null && m.event_index < sessionEarliestEventIndex) {
-        sessionEarliestEventIndex = m.event_index;
-      }
-    }
+    const prevBeforeCursor = sessionOlderBeforeCursor;
+    sessionOlderBeforeCursor = data.next_before;
 
     // If server says has_more but we made no progress, stop to avoid infinite loop
-    if (sessionHasMore && sessionEarliestEventIndex === prevEarliest) {
+    if (sessionHasMore && sessionOlderBeforeCursor === prevBeforeCursor) {
       sessionHasMore = false;
     }
 

@@ -276,7 +276,7 @@ async def get_session_view(
   """Return data needed to render a session chat panel (SPA switch).
 
   Uses tail-loading: only the last 200 events are parsed and returned.
-  The response includes has_more so the frontend can paginate backwards.
+  The response includes has_more and oldest_event_index so the frontend can paginate backwards.
   """
   meta = await session_mgr.get_session(session_id)
   if not meta:
@@ -299,6 +299,7 @@ async def get_session_view(
       "threads": [t.model_dump(mode="json") for t in view.threads],
       "triggers": [tr.model_dump(mode="json") for tr in triggers],
       "event_count": view.total_event_count,
+      "oldest_event_index": view.oldest_event_index,
       "usage": view.usage,
       "active_backend": active_backend,
       "active_backend_type": active_backend_type,
@@ -322,6 +323,7 @@ async def get_session_bootstrap(
       "messages": bootstrap.messages,
       "pending_draft": bootstrap.pending_draft,
       "event_count": bootstrap.total_event_count,
+      "oldest_event_index": bootstrap.oldest_event_index,
       "has_more": bootstrap.has_more,
   }
   payload.update(_active_backend_payload(bootstrap.session, cfg))
@@ -357,7 +359,7 @@ async def get_session_events_page(
   """Paginate backwards through session events.
 
   Returns events with line indices [max(0, before-limit), before) and a
-  has_more flag indicating whether earlier events exist.
+  next_before cursor set to the raw start index of the served page.
   """
   meta = await session_mgr.get_session(session_id)
   if not meta:
@@ -365,7 +367,7 @@ async def get_session_events_page(
   start = max(0, before - limit)
   events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)
   messages = events_to_messages(events, event_index_offset=start)
-  return {"messages": messages, "has_more": has_more}
+  return {"messages": messages, "has_more": has_more, "next_before": start}
 
 
 @router.get('/{session_id}/recap')

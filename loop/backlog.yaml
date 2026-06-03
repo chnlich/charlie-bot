@@ -7318,3 +7318,48 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Log or re-raise pass-only exception handlers found by the code-health scan
+  description: 'WHY - The 2026-06-03 scheduled code-health scan found 15 exception
+    handlers whose entire body is `pass`. This violates the project rule that caught
+    exceptions must be logged or re-raised. This item is intentionally one grouped
+    cleanup ticket rather than one ticket per handler, because the fix pattern is the
+    same and several locations are cleanup paths.
+
+    WHAT - Replace each pass-only handler with explicit behavior. For true cleanup
+    acknowledgements, log at debug level with enough context to identify the resource
+    being cleaned up; for failures that should surface, re-raise after logging. Cover
+    these scan hits: src/agents/backends/pty_common.py:142, :148, :152; src/agents/backends/terminal.py:131;
+    src/agents/backends/tui.py:165, :176, :221; src/api/ext_usage.py:440;
+    src/cli/common.py:36; src/core/master_trigger.py:142; src/core/scheduler.py:58;
+    src/core/triggers.py:449, :461, :472, :494, :498.
+
+    HOW - Keep the existing public behavior where cancellation is intentionally awaited
+    during shutdown, but make that intent visible with a debug log. For fallback client
+    notifications (tui.py and master_trigger.py), log the failed send/persist attempt
+    instead of silently dropping it. For fd/process cleanup (pty_common.py and triggers.py),
+    include the fd or pid in the log context. For cli/common.py, log or otherwise surface
+    JSON-detail parsing failures before falling back to the request exception text.
+
+    VERIFY - Run `python -m pyflakes src` to ensure the added exception variables are
+    used, run the AST pass-only-handler scan to confirm there are no remaining exception
+    handlers with a single `pass` body, then run `yapf --in-place --recursive src/` and
+    commit any formatter diff in the same run.
+
+    NON-DUPLICATION CHECK - This scan ran `yapf --in-place --recursive src/` first and
+    committed its mechanical changes separately, so no formatter issue is filed here.
+    `rg -n "TODO|FIXME|HACK|XXX" src` returned zero matches. `pyflakes src` reported
+    only the already-tracked unused `e` bindings in core/sessions.py:135 and :488 plus
+    unused imports in agents/backends/tui.py:23 and api/internal.py:14 (pending items
+    176 and 177 cover them). `vulture src --min-confidence 80` reported only the known
+    Pydantic classmethod `cls` false positive in core/config.py:129. Exact duplicate
+    scans over 20/30/50 normalized-line windows and repeated function-body AST shapes
+    found no extraction candidate meeting the dedup rule. Existing pending long-function
+    items cover the strongest >50-line functions from this scan, so this pass-only
+    exception-handler group is the single new actionable finding.
+
+    '
+  category: error-handling
+  status: pending
+  created: '2026-06-03T11:13:30Z'
+  priority: medium

@@ -7318,3 +7318,53 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split git_worktree_remove into cleanup orchestration and git command helper
+  description: 'src/core/git.py:git_worktree_remove (L264-314, 51 lines) is just over
+    the function-length threshold and mixes two distinct responsibilities: (1) safe
+    cleanup orchestration for the worktree path, including target validation, local
+    artifact pre-cleaning, residual directory cleanup, and final success logging; and
+    (2) the raw `git worktree remove --force` subprocess call, including pipe setup,
+    timeout handling, return-code handling, and failure logging. The subprocess block
+    at L286-304 is a clear single-responsibility unit with a clean name, so extracting
+    it meets the project dedup rule without inventing a premature abstraction.
+
+    WHAT - Extract L286-304 into a private helper such as
+    _run_git_worktree_remove_command(repo_path: str, wt_path: Path, thread_id: str)
+    -> bool. The helper should preserve the exact command argv, cwd, timeout
+    (SUBPROCESS_GIT_READ_TIMEOUT_ASYNC), and log events (`worktree_remove_timeout` and
+    `worktree_remove_failed`). git_worktree_remove should then keep only the safety
+    checks, `_remove_local_worktree_artifacts`, the helper call and early return on
+    False, residual cleanup via `_remove_worktree_residue`, and final
+    `worktree_removed` log. This drops git_worktree_remove below 50 lines while
+    keeping behavior unchanged.
+
+    VERIFY - Run `yapf --in-place --recursive src/` and commit any formatter diff in
+    the same run; verify `pyflakes src/core/git.py` is clean; and smoke-test the helper
+    behavior by exercising both a successful worktree removal and a forced failure path
+    where git returns non-zero. The failure path should still return False and log
+    `worktree_remove_failed`, not raise.
+
+    NON-DUPLICATION CHECK - This 2026-06-04 scan ran `yapf --in-place --recursive
+    src/`, which produced diffs in src/api/ncu_parsing.py and src/core/codex_pricing.py;
+    those were fixed and committed in the same run per the yapf rule and are not filed
+    as backlog items. `grep -rEn "TODO|FIXME|HACK|XXX" src/` returned zero matches.
+    `pyflakes src/` reports four already-covered findings: the unused exception
+    bindings in src/core/sessions.py:135 and :488 plus the unused WatchTarget import
+    in src/api/internal.py:14 are covered by pending item 176, and the unused
+    kill_tmux_session import in src/agents/backends/tui.py:23 is covered by pending
+    item 177. `python -m vulture src --min-confidence 80` reports only
+    src/core/config.py:129 (`cls`), which prior scan notes treat as the required
+    Pydantic model-validator class argument rather than removable dead code. An exact
+    normalized duplicate-block scan found no duplicate Python blocks of 50 or more
+    lines. The longer functions currently over 50 lines are either covered by existing
+    pending items through 184, already completed/rejected in earlier scan notes, or
+    coherent single-flow/route/CLI bodies. git_worktree_remove is the smallest
+    remaining actionable split because it has a concrete helper boundary and no
+    existing pending backlog item targets it.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-04T11:13:44Z'
+  priority: low

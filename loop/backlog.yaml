@@ -7318,3 +7318,25 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove current ruff dead-code findings from src
+  description: |-
+    A 2026-06-04 code-health scan ran `uv run --with ruff ruff check --select F401,F841,F821,F823 src`
+    and found four concrete dead-code findings: `src/agents/backends/tui.py:35` imports
+    `kill_tmux_session` without using it, `src/api/internal.py:21` imports `WatchTarget`
+    without using it, and `src/core/sessions.py:135` plus `src/core/sessions.py:488`
+    bind `Exception as e` without reading `e`. Remove the unused imports and change those
+    two handlers to `except Exception:` while keeping the existing `log.exception` calls and
+    re-raise behavior unchanged.
+
+    Verification for this cleanup: rerun the same ruff command and confirm it no longer
+    reports F401/F841 findings. This scan also checked `grep -rEn "TODO|FIXME|HACK|XXX" src/`
+    with zero matches, `uv run --with vulture vulture src --min-confidence 90` with only the
+    known Pydantic `config.migrate_and_expand(cls, ...)` false positive, an AST inventory of
+    functions over 50 lines, and an AST duplicate-block scan that found no duplicate block
+    over 50 lines. Several long functions remain tracked separately, so this item is scoped
+    to the current ruff dead-code findings only.
+  category: dead-code
+  status: pending
+  created: '2026-06-04T03:15:20Z'
+  priority: low

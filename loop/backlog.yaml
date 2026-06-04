@@ -7318,3 +7318,43 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Log swallowed TUI WebSocket failures in run_tui_attachment
+  description: >-
+    The 2026-06-04 code-health scan ran yapf --in-place --recursive src/ (formatter
+    diffs were committed in this run), pyflakes src, vulture src --min-confidence 80,
+    grep for TODO/FIXME/HACK/XXX, an AST scan for functions over 50 lines, and pylint
+    duplicate-code. Existing pending items already cover the pyflakes findings:
+    core/sessions.py:135 and :488 unused exception bindings plus api/internal.py:14
+    unused WatchTarget import are covered by items 160/163/176, and
+    agents/backends/tui.py:23 unused kill_tmux_session import is covered by item 177.
+    The vulture cls finding in core/config.py:129 is the known Pydantic @classmethod
+    false positive. TODO/FIXME/HACK/XXX returned zero matches. Long-function and
+    duplication findings are covered by the standing pending set, especially item
+    179 for the shared PTY-over-WebSocket loop.
+
+    One untracked error-handling issue remains in src/agents/backends/tui.py:
+    run_tui_attachment still silently drops several WebSocket-side failures. On
+    ensure_tmux_session failure, the best-effort error send catches Exception and
+    passes at L165-166. On PtyAttachment.spawn failure, the same silent send failure
+    path exists at L176-177. The keepalive ping path catches Exception and breaks
+    without logging at L191-192. Malformed JSON input catches JSONDecodeError and
+    continues without logging at L198-199, and malformed resize dimensions catch
+    (TypeError, ValueError) and continue without logging at L213-214. This diverges
+    from the newer terminal attach loop, which logs terminal_spawn_error_send_failed,
+    terminal_ping_send_failed, terminal_ws_json_decode_failed, and
+    terminal_pty_resize_parse_failed.
+
+    Fix by adding debug-level logs to each TUI swallowed branch, including session_id
+    and error=str(e), while preserving the current control flow: failed error-send
+    branches still return from the outer failure handler, ping send failure still
+    breaks the receive loop, malformed JSON still continues, and malformed resize
+    still continues. Do not bundle this with the structural helper extraction in item
+    179 unless that item is actively being implemented in the same change; this ticket
+    is the minimal no-swallowed-exceptions fix. Verify with yapf --in-place --recursive
+    src/ (commit any formatter diff per the yapf rule), pyflakes src/agents/backends/tui.py,
+    and a smoke import of run_tui_attachment.
+  category: error-handling
+  status: pending
+  created: '2026-06-04T19:14:18Z'
+  priority: medium

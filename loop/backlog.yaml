@@ -7318,3 +7318,39 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract argparse setup from cli/delegate.main
+  description: 'src/cli/delegate.py:main (L20-73, 54 total lines / 53 body lines)
+    mixes three responsibilities: building the delegate CLI argument parser, translating
+    parsed args into the internal API payload, and posting/printing the response. Extract
+    the parser construction into a private _build_parser() -> argparse.ArgumentParser
+    helper above main, mirroring the existing pattern used for other CLI entrypoints that
+    have grown past the 50-line threshold. Then main should read as parse args, resolve
+    session id, build payload, post, print.
+
+    WHY — This is the next uncovered >50-line function after the current pending backlog
+    set. The helper has a clear single responsibility and a stable name, so it meets the
+    extraction bar without abstracting a tiny repeated snippet. This is a pure structure
+    cleanup with no behavior change: keep the same options, defaults, choices, help text,
+    payload keys, and post_internal_api("/api/internal/delegate", payload) call.
+
+    VERIFY — yapf --in-place --recursive src/ produces no diff (or commit any formatter
+    diff in the same run per the yapf rule), pyflakes src/ still reports no new findings
+    beyond the currently pending known items, and charliebot delegate --help shows the
+    same options/help content as before.
+
+    NON-DUPLICATION CHECK — This scan ran yapf --in-place --recursive src/ and committed
+    the formatter diff separately. grep -rEn "TODO|FIXME|HACK|XXX" src/ returned zero
+    matches. pyflakes src/ reported four known findings already covered by pending items
+    176 and 177: unused exception bindings in core/sessions.py:135 and :488, unused
+    WatchTarget in api/internal.py:14, and unused kill_tmux_session in
+    agents/backends/tui.py:23. vulture --min-confidence 80 reported
+    core/config.py:129 cls, which is the required Pydantic validator class parameter.
+    The exact duplicate scanner found no repeated block over 50 normalized lines, so no
+    dedup-rule item was filed.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-04T01:14:27Z'
+  priority: low

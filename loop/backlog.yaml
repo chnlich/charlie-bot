@@ -7318,3 +7318,47 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract a trigger run_message helper from run_message_with_resume_recovery
+  description: >-
+    WHAT - src/core/master_trigger.py:run_message_with_resume_recovery (L19-L79, 54
+    body lines) is still over the 50-line function guideline. The function mixes three
+    concerns: resolving the backend option for a scheduled trigger, invoking run_message
+    with the fixed trigger flags, and handling the stale-resume retry path. The two
+    run_message calls at L36-L44 and L64-L72 repeat the same trigger invocation shape
+    with only the session metadata changing, which is a clean single-responsibility
+    helper boundary: "run the master message from a trigger with the trigger-specific
+    flags and backend option".
+
+    HOW - Add a private async helper near run_message_with_resume_recovery, for example
+    _run_trigger_message(cfg, session_meta, summary, session_mgr, backend_option), that
+    wraps the existing run_message call with skip_user_event=True, auto_trigger=True,
+    session_mgr.callbacks(), and the supplied backend_option. Then replace both inline
+    run_message calls with the helper. Keep the backend-option resolution, the
+    is_resume_not_found_error gate, the warning/info log events, and the cc_session_id
+    clearing behavior in run_message_with_resume_recovery unchanged. This should drop
+    the retry function below 50 lines while making the trigger invocation contract
+    explicit.
+
+    VERIFY - Run yapf --in-place --recursive src/ and commit any formatter diff in the
+    same change. Run pyflakes src/core/master_trigger.py and the trigger/session tests
+    that cover scheduled trigger resume behavior.
+
+    NON-DUPLICATION CHECK - This scan ran yapf --in-place --recursive src/ and committed
+    the formatter-only diffs in src/api/ncu_parsing.py and src/core/codex_pricing.py;
+    no yapf finding is filed here. rg -n "TODO|FIXME|HACK|XXX" src --glob '*.py'
+    returned zero active source matches. pyflakes src/ reports four known findings that
+    are already covered by pending backlog items: unused exception bindings in
+    src/core/sessions.py:135 and :488, the unused kill_tmux_session import in
+    src/agents/backends/tui.py:23, and the unused WatchTarget import in
+    src/api/internal.py:14. vulture src/ --min-confidence 80 reports only the cls
+    argument of the Pydantic model_validator in src/core/config.py:129, a known false
+    positive because classmethod validators receive the class argument. A conservative
+    exact duplicate scan found no non-overlapping normalized source block over the
+    dedup threshold. Existing pending items already cover the larger long-function
+    findings; this item targets the next small but nameable extraction rather than
+    duplicating those.
+  category: long-function
+  status: pending
+  created: '2026-06-04T05:13:09Z'
+  priority: low

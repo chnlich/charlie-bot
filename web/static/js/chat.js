@@ -131,7 +131,7 @@ async function rateRound(sessionId, roundId, rating) {
 }
 
 // ---------------------------------------------------------------------------
-// In-session recap (↻ 概括): zero-token extraction + opt-in cached Haiku summary
+// In-session recap: zero-token extraction + opt-in cached Haiku summary
 // ---------------------------------------------------------------------------
 const RECAP_ASK_CAP = 6;
 
@@ -149,7 +149,7 @@ function toggleRecapPanel(btn, sessionId, eventIndex) {
   panel.className = 'recap-panel mx-4 my-1 px-3 py-2 bg-slate-800/70 border border-slate-700/60 rounded-lg';
   panel.dataset.sessionId = sessionId;
   panel.dataset.eventIndex = eventIndex;
-  panel.innerHTML = '<div class="recap-body text-slate-500 text-xs">概括加载中…</div>';
+  panel.innerHTML = '<div class="recap-body text-slate-500 text-xs">Loading recap…</div>';
   sep.parentNode.insertBefore(panel, sep.nextSibling);
   loadRecap(sessionId, eventIndex, panel);
 }
@@ -163,12 +163,12 @@ async function loadRecap(sessionId, eventIndex, panel) {
     data = await res.json();
   } catch (err) {
     console.error('Load recap failed:', err);
-    body.innerHTML = '<div class="text-red-400 text-xs">概括加载失败</div>';
+    body.innerHTML = '<div class="text-red-400 text-xs">Failed to load recap</div>';
     return;
   }
   body.classList.remove('text-slate-500', 'text-xs');
   body.innerHTML =
-    recapSectionLabel('讲了什么')
+    recapSectionLabel('What was discussed')
     + renderRecapAsks(data.asks)
     + renderRecapLast(data.last)
     + '<div class="recap-summary mt-2 pt-2 border-t border-slate-700/60"></div>';
@@ -180,14 +180,14 @@ function recapSectionLabel(text) {
 }
 
 function renderRecapAsks(asks) {
-  if (!asks || !asks.length) return '<div class="text-slate-500 text-xs">（无）</div>';
+  if (!asks || !asks.length) return '<div class="text-slate-500 text-xs">(none)</div>';
   const items = asks.map((ask, i) =>
     '<li class="' + (i >= RECAP_ASK_CAP ? 'recap-ask-extra hidden' : '') + '">' + escapeHtml(ask) + '</li>'
   ).join('');
   let html = '<ul class="list-disc pl-5 space-y-0.5 text-xs text-slate-300">' + items + '</ul>';
   if (asks.length > RECAP_ASK_CAP) {
     html += '<button class="mt-1 text-[11px] text-sky-400 hover:text-sky-300" onclick="toggleRecapAsks(this)">'
-      + '展开全部 (' + asks.length + ')</button>';
+      + 'Show all (' + asks.length + ')</button>';
   }
   return html;
 }
@@ -197,15 +197,15 @@ function toggleRecapAsks(btn) {
   const extras = panel.querySelectorAll('.recap-ask-extra');
   const collapsed = extras.length && extras[0].classList.contains('hidden');
   extras.forEach((el) => el.classList.toggle('hidden', !collapsed));
-  btn.textContent = collapsed ? '收起' : '展开全部 (' + (RECAP_ASK_CAP + extras.length) + ')';
+  btn.textContent = collapsed ? 'Collapse' : 'Show all (' + (RECAP_ASK_CAP + extras.length) + ')';
 }
 
 function renderRecapLast(last) {
   if (!last) return '';
-  let html = '<div class="mt-2">' + recapSectionLabel('最后在处理')
-    + '<div class="text-xs text-slate-300"><span class="text-slate-500">你：</span>' + escapeHtml(last.user) + '</div>';
+  let html = '<div class="mt-2">' + recapSectionLabel('Last working on')
+    + '<div class="text-xs text-slate-300"><span class="text-slate-500">You: </span>' + escapeHtml(last.user) + '</div>';
   if (last.assistant) {
-    html += '<div class="text-xs text-slate-400 mt-0.5"><span class="text-slate-500">助手：</span>'
+    html += '<div class="text-xs text-slate-400 mt-0.5"><span class="text-slate-500">Assistant: </span>'
       + escapeHtml(last.assistant) + '</div>';
   }
   return html + '</div>';
@@ -214,11 +214,11 @@ function renderRecapLast(last) {
 function applyRecapSummary(panel, sessionId, eventIndex, data) {
   const sumEl = panel.querySelector('.recap-summary');
   if (data.summary && !data.summary_stale) {
-    sumEl.innerHTML = recapSectionLabel('概括') + recapSummaryText(data.summary);
+    sumEl.innerHTML = recapSectionLabel('Summary') + recapSummaryText(data.summary);
     return;
   }
   if (data.summary && data.summary_stale) {
-    sumEl.innerHTML = recapSectionLabel('概括（已过时）') + recapSummaryText(data.summary) + recapRerunButton();
+    sumEl.innerHTML = recapSectionLabel('Summary (stale)') + recapSummaryText(data.summary) + recapRerunButton();
     return;
   }
   // No summary yet for any point up to here -> the explicit 概括 click generates one.
@@ -230,7 +230,7 @@ function recapSummaryText(text) {
 }
 
 function recapRerunButton() {
-  return '<button class="mt-1 text-[11px] text-sky-400 hover:text-sky-300" onclick="rerunRecapSummary(this)">↻ 重新概括</button>';
+  return '<button class="mt-1 text-[11px] text-sky-400 hover:text-sky-300" onclick="rerunRecapSummary(this)">↻ Re-summarize</button>';
 }
 
 function rerunRecapSummary(btn) {
@@ -240,15 +240,15 @@ function rerunRecapSummary(btn) {
 
 async function fetchRecapSummary(sessionId, eventIndex, panel) {
   const sumEl = panel.querySelector('.recap-summary');
-  sumEl.innerHTML = recapSectionLabel('概括') + '<div class="text-slate-500 text-xs">概括中…</div>';
+  sumEl.innerHTML = recapSectionLabel('Summary') + '<div class="text-slate-500 text-xs">Summarizing…</div>';
   try {
     const res = await fetch('/api/sessions/' + sessionId + '/recap/summarize?upto=' + eventIndex, {method: 'POST'});
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    sumEl.innerHTML = recapSectionLabel('概括') + recapSummaryText(data.summary);
+    sumEl.innerHTML = recapSectionLabel('Summary') + recapSummaryText(data.summary);
   } catch (err) {
     console.error('Summarize recap failed:', err);
-    sumEl.innerHTML = recapSectionLabel('概括') + '<div class="text-red-400 text-xs">概括失败</div>' + recapRerunButton();
+    sumEl.innerHTML = recapSectionLabel('Summary') + '<div class="text-red-400 text-xs">Failed to summarize</div>' + recapRerunButton();
   }
 }
 

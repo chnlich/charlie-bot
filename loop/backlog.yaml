@@ -7318,3 +7318,38 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused imports from test modules
+  description: 'A full-tree Ruff scan (`uvx ruff check --select F401,F841 --output-format
+    concise src server.py scripts tests`) found five actionable unused imports in tests
+    that are not covered by the existing src-focused backlog items: tests/test_backend_logging.py:5
+    imports json but never uses it; tests/test_message_attachments.py:3 imports json
+    but never uses it; tests/test_spawner_exit_override.py:9 imports Optional but never
+    uses it; and tests/test_trigger_pid_watch.py:9 imports datetime and timezone but
+    never uses either name.
+
+    WHAT - Delete those unused imports only. Do not touch the already-tracked src findings
+    from the same Ruff scan: src/agents/backends/tui.py:35 kill_tmux_session is covered
+    by item 177, src/api/internal.py:21 WatchTarget is covered by items 139/171/176,
+    and the unused `as e` bindings in src/core/sessions.py:135 and :488 are covered
+    by items 160/163/176. Do not treat the vulture pytest-fixture parameter reports as
+    dead code in this item; those parameters activate fixtures or preserve async-generator
+    shape and are not clear cleanup targets.
+
+    VERIFY - Run `uvx ruff check --select F401 tests/test_backend_logging.py
+    tests/test_message_attachments.py tests/test_spawner_exit_override.py
+    tests/test_trigger_pid_watch.py` and confirm it exits clean. A broader src scan may
+    still report the existing pending src findings until their backlog items are handled.
+
+    SCAN NOTES - `rg -n "\b(TODO|FIXME|HACK|XXX)\b" src tests scripts server.py web`
+    returned no marker hits. The strict duplication pass found no exact duplicate
+    nonblank block of 50 or more lines. The >50-line function inventory still has many
+    entries, but the active pending backlog already covers the major src targets and
+    this scan did not surface a stronger untracked long-function item than the unused
+    test imports above.
+
+    '
+  category: imports
+  status: pending
+  created: '2026-06-04T09:12:56Z'
+  priority: low

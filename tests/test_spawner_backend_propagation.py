@@ -13,7 +13,14 @@ def _build_cfg() -> CharlieBotConfig:
       charliebot_home=Path("/tmp/charliebot-test"),
       worktree_dir="/tmp/worktrees",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6", effort="max"),
+          BackendOption(
+              id="claude-opus-4.6",
+              label="Opus",
+              type="cc-claude",
+              model="claude-opus-4-6",
+              effort="max",
+              cli_binary="claude-sub",
+          ),
           BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
       ],
   )
@@ -25,6 +32,7 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   assert opt.id == "claude-opus-4.6"
   assert opt.model == "claude-opus-4-6"
   assert opt.effort == "max"
+  assert opt.cli_binary is None
 
   with pytest.raises(ValueError, match="not configured"):
     spawner.resolve_backend_option(cfg, "missing", "o3")
@@ -325,12 +333,14 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
 
 
 @pytest.mark.asyncio
-async def test_spawn_review_worker_propagates_backend_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = _build_cfg()
   captured: dict[str, Any] = {}
   saved_review_thread: dict[str, ThreadMetadata] = {}
+  repo_path = tmp_path / "repo"
+  worktree_path = tmp_path / "worktrees" / "charliebot-task-1"
+  repo_path.mkdir()
+  worktree_path.mkdir(parents=True)
 
   class FakeSessionManager:
     async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
@@ -388,8 +398,8 @@ async def test_spawn_review_worker_propagates_backend_model(
       description="Do work",
       branch_name="charliebot/task-1",
       base_branch="main",
-      repo_path="/tmp/repo",
-      worktree_path="/tmp/worktrees/charliebot-task-1",
+      repo_path=str(repo_path),
+      worktree_path=str(worktree_path),
       backend="codex-o3",
       model="o3-pro",
   )
@@ -402,16 +412,20 @@ async def test_spawn_review_worker_propagates_backend_model(
       FakeThreadManager(),
   )
 
-  assert captured["request"].repo_path == "/tmp/repo"
+  assert captured["request"].repo_path == str(repo_path)
   assert captured["request"].prompt_override is not None
   assert captured["request"].resolved_backend == "codex-o3"
   assert captured["request"].resolved_model == "o3-pro"
-  assert saved_review_thread["meta"].worktree_path == "/tmp/worktrees/charliebot-task-1"
+  assert saved_review_thread["meta"].worktree_path == str(worktree_path)
 
 
 @pytest.mark.asyncio
-async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
+async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path) -> None:
   cfg = _build_cfg()
+  repo_path = tmp_path / "repo"
+  worktree_path = tmp_path / "worktrees" / "charliebot-task-1"
+  repo_path.mkdir()
+  worktree_path.mkdir(parents=True)
 
   class FakeSessionManager:
     async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
@@ -445,8 +459,8 @@ async def test_spawn_review_worker_fails_if_backend_model_missing() -> None:
       description="Do work",
       branch_name="charliebot/task-1",
       base_branch="main",
-      repo_path="/tmp/repo",
-      worktree_path="/tmp/worktrees/charliebot-task-1",
+      repo_path=str(repo_path),
+      worktree_path=str(worktree_path),
       backend="codex-o3",
       model=None,
   )

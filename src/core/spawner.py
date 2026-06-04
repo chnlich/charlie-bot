@@ -192,7 +192,7 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str) -
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"resolved backend '{backend_id}' is not configured")
-  return option.model_copy(update={"model": model})
+  return option.model_copy(update={"model": model, "cli_binary": None})
 
 
 def _resolve_configured_backend_model(

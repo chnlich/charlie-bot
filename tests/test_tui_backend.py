@@ -87,6 +87,45 @@ async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
   assert new_session_call[-2:] == ("--resume", "session-id")
 
 
+@pytest.mark.asyncio
+async def test_ensure_tmux_session_passes_optional_claude_args(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  config_dir = tmp_path / "claude-config"
+  home_dir = tmp_path / "home"
+  working_dir = tmp_path / "session"
+  calls = []
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
+
+  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
+    calls.append(args)
+    if args[0] == "has-session":
+      return 1, ""
+    return 0, ""
+
+  monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+
+  await tui.ensure_tmux_session(
+      "session-id",
+      working_dir,
+      model="claude-opus-4-8",
+      effort="max",
+      disallowed_tools=["Monitor,CronCreate"],
+  )
+
+  new_session_call = next(args for args in calls if args[0] == "new-session")
+  assert new_session_call[-6:] == (
+      "--model",
+      "claude-opus-4-8",
+      "--effort",
+      "max",
+      "--disallowed-tools",
+      "Monitor,CronCreate",
+  )
+
+
 def test_find_existing_claude_jsonl_returns_first_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   home_dir = tmp_path / "home"
   first = home_dir / ".claude" / "projects" / "a" / "session-id.jsonl"

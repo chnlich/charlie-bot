@@ -58,9 +58,16 @@ def _claude_jsonl_busy(session_id: str, threshold_seconds: float = _BUSY_THRESHO
   return (time.time() - mtime) < threshold_seconds
 
 
-def _build_claude_argv(session_id: str, resume: bool) -> list[str]:
+def _build_claude_argv(
+    session_id: str,
+    resume: bool,
+    *,
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
+    disallowed_tools: Optional[list[str]] = None,
+) -> list[str]:
   session_arg = "--resume" if resume else "--session-id"
-  return [
+  argv = [
       "claude",
       "--settings",
       _CLAUDE_TUI_SETTINGS,
@@ -68,6 +75,13 @@ def _build_claude_argv(session_id: str, resume: bool) -> list[str]:
       session_arg,
       session_id,
   ]
+  if model:
+    argv.extend(["--model", model])
+  if effort:
+    argv.extend(["--effort", effort])
+  for tools in disallowed_tools or []:
+    argv.extend(["--disallowed-tools", tools])
+  return argv
 
 
 async def tmux_session_exists(session_id: str) -> bool:
@@ -105,6 +119,10 @@ def _ensure_claude_project_trusted(working_dir: Path) -> None:
 async def ensure_tmux_session(
     session_id: str,
     working_dir: Path,
+    *,
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
+    disallowed_tools: Optional[list[str]] = None,
 ) -> None:
   """Idempotently create the tmux session running Claude TUI in *working_dir*."""
   name = tmux_session_name(session_id)
@@ -113,7 +131,13 @@ async def ensure_tmux_session(
   if await tmux_session_exists(session_id):
     return
   resume = _find_existing_claude_jsonl(session_id) is not None
-  command_args = _build_claude_argv(session_id, resume)
+  command_args = _build_claude_argv(
+      session_id,
+      resume,
+      model=model,
+      effort=effort,
+      disallowed_tools=disallowed_tools,
+  )
   log.info("tui_claude_invocation", mode="resume" if resume else "fresh", session_id=session_id)
   rc, stderr = await _run_tmux(
       "new-session",

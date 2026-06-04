@@ -129,6 +129,7 @@ class BackendOption(BaseModel):
   type: str  # 'cc-claude' | 'cc-kimi' | 'codex' | 'gemini' | 'opencode' | 'antigravity' | 'tui-cli'
   model: Optional[str] = None
   effort: Optional[str] = None
+  cli_binary: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

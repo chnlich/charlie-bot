@@ -170,7 +170,6 @@ async function loadRecap(sessionId, eventIndex, panel) {
   body.innerHTML =
     recapSectionLabel('What was discussed')
     + renderRecapAsks(data.asks)
-    + renderRecapLast(data.last)
     + '<div class="recap-summary mt-2 pt-2 border-t border-slate-700/60"></div>';
   applyRecapSummary(panel, sessionId, eventIndex, data);
 }
@@ -198,17 +197,6 @@ function toggleRecapAsks(btn) {
   const collapsed = extras.length && extras[0].classList.contains('hidden');
   extras.forEach((el) => el.classList.toggle('hidden', !collapsed));
   btn.textContent = collapsed ? 'Collapse' : 'Show all (' + (RECAP_ASK_CAP + extras.length) + ')';
-}
-
-function renderRecapLast(last) {
-  if (!last) return '';
-  let html = '<div class="mt-2">' + recapSectionLabel('Last working on')
-    + '<div class="text-xs text-slate-300"><span class="text-slate-500">You: </span>' + escapeHtml(last.user) + '</div>';
-  if (last.assistant) {
-    html += '<div class="text-xs text-slate-400 mt-0.5"><span class="text-slate-500">Assistant: </span>'
-      + escapeHtml(last.assistant) + '</div>';
-  }
-  return html + '</div>';
 }
 
 function applyRecapSummary(panel, sessionId, eventIndex, data) {

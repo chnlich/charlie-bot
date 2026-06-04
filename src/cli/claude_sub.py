@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.agents.backends.pty_common import _TMUX_SOCKET, _tmux_binary, tmux_session_name
-from src.agents.backends.tui import _find_existing_claude_jsonl, ensure_tmux_session
+from src.agents.backends.tui import _find_existing_claude_jsonl, ensure_tmux_session, tmux_session_exists
 
 _POLL_SECONDS = 0.1
 _PROMPT_READY_TIMEOUT_SECONDS = 60.0
@@ -254,6 +254,14 @@ async def _wait_for_transcript_path(session_id: str) -> Path:
   raise RuntimeError(f"interactive claude transcript not found for session {session_id}")
 
 
+async def _validate_resume_target(session_id: str) -> None:
+  if _find_existing_claude_jsonl(session_id) is not None:
+    return
+  if await tmux_session_exists(session_id):
+    return
+  raise RuntimeError(f"resume session not found: {session_id}")
+
+
 def _emit(event: dict[str, Any]) -> None:
   sys.stdout.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
   sys.stdout.flush()
@@ -379,6 +387,8 @@ def _result_event(session_id: str, state: TurnState, turn_duration: dict[str, An
 
 async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   session_id = args.resume or str(uuid.uuid4())
+  if args.resume:
+    await _validate_resume_target(session_id)
   with contextlib.redirect_stdout(io.StringIO()):
     await ensure_tmux_session(
         session_id,

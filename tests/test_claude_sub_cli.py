@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from src.cli import claude_sub
@@ -120,3 +122,29 @@ def test_result_event_uses_aggregate_usage_from_unique_messages() -> None:
   assert event["result"] == "final"
   assert event["usage"]["input_tokens"] == 10
   assert event["usage"]["output_tokens"] == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_requires_existing_transcript_or_tmux_session(monkeypatch: pytest.MonkeyPatch) -> None:
+  ensure_called = False
+
+  async def fake_tmux_session_exists(session_id: str) -> bool:
+    return False
+
+  async def fake_ensure_tmux_session(*args, **kwargs) -> None:
+    nonlocal ensure_called
+    ensure_called = True
+
+  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: None)
+  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_tmux_session_exists)
+  monkeypatch.setattr(claude_sub, "ensure_tmux_session", fake_ensure_tmux_session)
+
+  args = claude_sub.ClaudeSubArgs(
+      output_format="stream-json",
+      prompt="hello",
+      resume="missing-session",
+  )
+  with pytest.raises(RuntimeError, match="resume session not found: missing-session"):
+    await claude_sub._stream_turn(args, asyncio.Event())
+
+  assert not ensure_called

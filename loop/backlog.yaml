@@ -7318,3 +7318,38 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused imports from test modules flagged by pyflakes
+  description: 'A full Python pyflakes scan now reports five unused imports in tests:
+    tests/test_trigger_pid_watch.py:9 imports datetime and timezone from datetime but
+    does not use either name; tests/test_spawner_exit_override.py:9 imports
+    typing.Optional but does not use it; tests/test_message_attachments.py:3 imports
+    json but does not use it; and tests/test_backend_logging.py:5 imports json but
+    builds its JSON payload strings directly. These are test-only hygiene issues, but
+    they keep `python -m pyflakes src tests` noisy and make real unused-import
+    regressions harder to spot.
+
+    WHAT - Delete the unused imports listed above without changing test behavior. This
+    should be a pure import cleanup: no fixtures, assertions, payload construction, or
+    production code should move.
+
+    VERIFY - Run `python -m pyflakes tests` and confirm these five warnings disappear.
+    Also run `python -m pyflakes src` and confirm it still reports only the four
+    already-covered source findings: the unused "e" bindings in core/sessions.py:135
+    and :488, the unused kill_tmux_session import in agents/backends/tui.py:23, and
+    the unused WatchTarget import in api/internal.py:14.
+
+    NON-DUPLICATION CHECK - This scan ran `yapf --in-place --recursive src/`, which
+    produced diffs in src/api/ncu_parsing.py and src/core/codex_pricing.py; per the
+    yapf rule those formatter changes were fixed in-place and committed, not filed as
+    backlog items. `rg -n "TODO|FIXME|HACK|XXX" src` returns zero matches.
+    `python -m vulture src --min-confidence 100` reports only the known Pydantic
+    validator `cls` false positive in src/core/config.py:129. The source pyflakes
+    findings are already covered by pending items noted in prior scans, and no existing
+    backlog item covers these test-module imports.
+
+    '
+  category: imports
+  status: pending
+  created: '2026-06-04T23:12:50Z'
+  priority: low

@@ -36,6 +36,15 @@ def test_effort_flag_absent_when_unset() -> None:
   assert "--effort" not in cmd
 
 
+def test_cli_binary_replaces_only_command_binary() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8", cli_binary="claude-sub")
+
+  cmd = backend._build_command("hi")
+
+  assert cmd[0] == "claude-sub"
+  assert cmd[1:len(BASE_COMMAND)] == BASE_COMMAND[1:]
+
+
 def test_base_command_disallows_headless_unsafe_tools() -> None:
   disallowed_index = BASE_COMMAND.index("--disallowed-tools")
   disallowed_tools = set(BASE_COMMAND[disallowed_index + 1].split(","))

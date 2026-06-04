@@ -27,10 +27,12 @@ BASE_COMMAND: list[str] = [
 class ClaudeCodeBackend(AgentBackend):
   """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
 
-  def __init__(self, *, model=None, effort=None, **kwargs):
+  def __init__(self, *, model=None, effort=None, cli_binary=None, **kwargs):
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._cmd: list[str] = list(BASE_COMMAND)
+    if cli_binary:
+      self._cmd[0] = cli_binary
     if self._model:
       self._cmd += ["--model", self._model]
     if self._effort:

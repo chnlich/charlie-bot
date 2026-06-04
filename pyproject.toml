@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 charliebot = "src.cli.main:main"
+claude-sub = "src.cli.claude_sub:main"
 
 [build-system]
 requires = ["setuptools>=80"]

@@ -790,8 +790,9 @@ function renderMessage(msg, sessionId) {
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
           + "</button>"
           + "<button onclick=\"toggleRecapPanel(this, \x27" + sessionId + "\x27, " + msg.event_index + ")\""
-          + " class=\"px-1 text-[11px] leading-none text-slate-500 hover:text-sky-400\" title=\"概括：这段讲了什么、最后在处理什么\">"
-          + "↻ 概括</button>";
+          + " class=\"p-0.5 text-slate-500 hover:text-sky-400\" title=\"Recap: what this section covered\">"
+          + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M3.75 6h16.5M3.75 12h16.5M3.75 18h10.5\"/></svg>"
+          + "</button>";
       }
       if (msg.id != null) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);

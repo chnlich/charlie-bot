@@ -7318,3 +7318,28 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused imports from test modules
+  description: 'pyflakes src tests scripts reports five unused imports in tests:
+    tests/test_trigger_pid_watch.py:9 imports datetime and timezone but never uses
+    either; tests/test_spawner_exit_override.py:9 imports Optional but never uses it;
+    tests/test_message_attachments.py:3 imports json but never uses it; and
+    tests/test_backend_logging.py:5 imports json but never uses it. Remove those
+    imports so the broader pyflakes scan is not blocked by test-only cleanup noise.
+
+    NON-DUPLICATION CHECK - This scan ran yapf --in-place --recursive src/ first;
+    it changed src/api/ncu_parsing.py and src/core/codex_pricing.py, and those
+    formatter-only edits were committed in the same run per the yapf rule. pyflakes
+    src/ still reports the four known source findings already covered by pending
+    items 139/160/163/176/177. A word-boundary marker scan for TODO, FIXME, HACK,
+    and XXX across src, tests, scripts, web, and docs returned no matches. An exact
+    duplicate-block scan found no shared block of at least 51 nonblank noncomment
+    lines across src/. The src/ functions over 50 lines remain covered by existing
+    pending long-function items or are coherent borderline flows, so this unused-test-import
+    cleanup is the single new actionable finding from this pass.
+
+    '
+  category: imports
+  status: pending
+  created: '2026-06-04T17:12:44Z'
+  priority: low

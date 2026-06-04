@@ -221,7 +221,7 @@ function applyRecapSummary(panel, sessionId, eventIndex, data) {
     sumEl.innerHTML = recapSectionLabel('Summary (stale)') + recapSummaryText(data.summary) + recapRerunButton();
     return;
   }
-  // No summary yet for any point up to here -> the explicit 概括 click generates one.
+  // No summary yet for any point up to here -> the explicit recap-button click generates one.
   fetchRecapSummary(sessionId, eventIndex, panel);
 }
 

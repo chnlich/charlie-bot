@@ -7318,3 +7318,37 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused dirpath binding in _contains_git_marker
+  description: 'WHY - The 2026-06-04 scheduled code-health scan ran `yapf --in-place
+    --recursive src/`, `pyflakes src/`, `vulture src/ --min-confidence 80`,
+    `pylint --disable=all --enable=unused-import,unused-variable,unused-argument src/`,
+    `pylint --disable=all --enable=duplicate-code src/`, `rg -n "TODO|FIXME|HACK|XXX"
+    src/`, and an AST inventory of functions over 50 lines. The only new actionable
+    finding not already covered by an existing pending item is `src/core/git.py:215`:
+    `_contains_git_marker()` loops as `for dirpath, dirnames, filenames in os.walk(...)`
+    but never reads `dirpath`. This is dead local binding noise in a safety-sensitive
+    cleanup helper.
+
+    HOW - Change the loop target to `for _, dirnames, filenames in os.walk(path,
+    followlinks=False):` or otherwise remove the unused binding without changing
+    behavior. Keep the existing `.git` marker checks exactly as-is.
+
+    VERIFY - Run `yapf --in-place --recursive src/` and `pylint --disable=all
+    --enable=unused-import,unused-variable,unused-argument src/core/git.py`.
+
+    NON-DUPLICATION CHECK - `pyflakes src/` still reports the four known findings
+    already covered by items 160/163/176, 177, and 139/171/176. `vulture
+    src/ --min-confidence 80` only reports the known `@classmethod` `cls` false
+    positive in `src/core/config.py`. `rg -n "TODO|FIXME|HACK|XXX" src/` returns
+    zero matches. `pylint` duplicate-code reports only candidates already covered
+    by pending items 165, 167, and 179 or blocks below the dedup threshold. The
+    long-function inventory repeats functions already pending, completed, or
+    previously rejected as coherent/template/argparse flows, so this unused binding
+    is the single new backlog item for this scan.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-04T15:13:21Z'
+  priority: low

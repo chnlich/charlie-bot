@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import structlog
 from pydantic import BaseModel, model_validator
@@ -85,6 +86,9 @@ class CharlieBotConfig(BaseModel):
   # Server
   server_host: str = "127.0.0.1"
   server_port: int = 8000
+  # Externally reachable CharlieBot base URL for model clients that call back
+  # into the hosted API. Internal CLIs should keep using server_base_url.
+  server_external_base_url: Optional[str] = None
 
   # Paths
   charliebot_home: Path = Path.home() / ".charliebot"
@@ -171,6 +175,18 @@ class CharlieBotConfig(BaseModel):
     """Return the local base URL for CLI-to-server internal API calls."""
     scheme = "https" if self.ssl_certfile and self.ssl_keyfile else "http"
     return f"{scheme}://localhost:{self.server_port}"
+
+  @property
+  def required_server_external_base_url(self) -> str:
+    """Return the configured externally reachable CharlieBot base URL."""
+    if not self.server_external_base_url:
+      raise ValueError("server_external_base_url not set in config")
+    parsed = urlparse(self.server_external_base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+      raise ValueError("server_external_base_url must be an absolute http(s) URL")
+    if parsed.hostname in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+      raise ValueError("server_external_base_url must be externally reachable, not localhost")
+    return self.server_external_base_url.rstrip("/")
 
   @property
   def sessions_dir(self) -> Path:

@@ -87,7 +87,7 @@ def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() ->
 
   converted = anthropic_to_openai_chat_request(payload)
 
-  assert converted["model"] == "meshy-sglang/deepseek-ai/DeepSeek-V4-Pro"
+  assert converted["model"] == "deepseek-ai/DeepSeek-V4-Pro"
   assert converted["stream"] is True
   assert converted["stream_options"] == {"include_usage": True}
   assert converted["max_tokens"] == 1024
@@ -327,3 +327,35 @@ def test_stream_translator_emits_anthropic_text_and_tool_events() -> None:
   assert events[-2][1]["delta"]["stop_reason"] == "tool_use"
   assert events[-2][1]["usage"]["input_tokens"] == 8
   assert events[-2][1]["usage"]["output_tokens"] == 3
+
+
+def test_stream_translator_does_not_passthrough_reasoning_content() -> None:
+  translator = OpenAIChatStreamToAnthropic("deepseek-v4-pro")
+
+  events = translator.start_events()
+  events += translator.events_for_chunk({
+      "choices": [{
+          "delta": {
+              "reasoning_content": "hidden reasoning",
+          },
+      }],
+  })
+  events += translator.events_for_chunk({
+      "choices": [{
+          "delta": {
+              "content": "final",
+          },
+          "finish_reason": "stop",
+      }],
+  })
+  events += translator.finish_events()
+
+  assert [name for name, _data in events] == [
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+  ]
+  assert events[2][1]["delta"] == {"type": "text_delta", "text": "final"}

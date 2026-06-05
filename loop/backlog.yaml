@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argv parsing into tokenization and option parsing
+  description: 'PURPOSE: Keep claude-sub argument parsing small enough to audit.
+
+    HOW: Extract the argv-to-option/prompt split from src/cli/claude_sub.py:parse_argv
+    into a private helper, then leave parse_argv focused on validating options and
+    building ClaudeSubArgs. Verify pyflakes on src/cli/claude_sub.py and rerun yapf.'
+  category: long-function
+  status: pending
+  created: '2026-06-05T17:12:55Z'
+  priority: low

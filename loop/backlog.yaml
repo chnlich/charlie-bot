@@ -7318,3 +7318,10 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argument parsing into helpers
+  description: "PURPOSE: Make claude-sub argument handling easier to audit by separating prompt detection from option validation.\nHOW:\n- Extract the prompt/option token split into a private helper.\n- Extract option-token parsing into a helper that returns the parsed fields.\n- Keep parse_argv responsible for validation and constructing ClaudeSubArgs.\n"
+  category: long-function
+  status: pending
+  created: '2026-06-05T11:12:07Z'
+  priority: low

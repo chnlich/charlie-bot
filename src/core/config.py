@@ -3,7 +3,6 @@
 import os
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 import structlog
 from pydantic import BaseModel, model_validator
@@ -79,6 +78,9 @@ class CharlieBotConfig(BaseModel):
   # Used by CharlieBot's hosted Anthropic proxy.
   deepseek_sglang_base_url: Optional[str] = None
   deepseek_sglang_api_key: Optional[str] = None
+  # Claude-facing Anthropic proxy base URL for DeepSeek SGLang, including
+  # /api/anthropic-proxy/deepseek-sglang. If unset, use the local proxy URL.
+  deepseek_sglang_proxy_base_url: Optional[str] = None
 
   # Authentication — shared secret; empty string disables auth
   charliebot_access_key: str = ""
@@ -86,9 +88,6 @@ class CharlieBotConfig(BaseModel):
   # Server
   server_host: str = "127.0.0.1"
   server_port: int = 8000
-  # Externally reachable CharlieBot base URL for model clients that call back
-  # into the hosted API. Internal CLIs should keep using server_base_url.
-  server_external_base_url: Optional[str] = None
 
   # Paths
   charliebot_home: Path = Path.home() / ".charliebot"
@@ -177,16 +176,11 @@ class CharlieBotConfig(BaseModel):
     return f"{scheme}://localhost:{self.server_port}"
 
   @property
-  def required_server_external_base_url(self) -> str:
-    """Return the configured externally reachable CharlieBot base URL."""
-    if not self.server_external_base_url:
-      raise ValueError("server_external_base_url not set in config")
-    parsed = urlparse(self.server_external_base_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-      raise ValueError("server_external_base_url must be an absolute http(s) URL")
-    if parsed.hostname in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-      raise ValueError("server_external_base_url must be externally reachable, not localhost")
-    return self.server_external_base_url.rstrip("/")
+  def deepseek_sglang_anthropic_proxy_base_url(self) -> str:
+    """Return the Claude-facing Anthropic proxy base URL for DeepSeek SGLang."""
+    if self.deepseek_sglang_proxy_base_url:
+      return self.deepseek_sglang_proxy_base_url.rstrip("/")
+    return f"{self.server_base_url}/api/anthropic-proxy/deepseek-sglang"
 
   @property
   def sessions_dir(self) -> Path:

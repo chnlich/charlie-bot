@@ -74,6 +74,11 @@ class CharlieBotConfig(BaseModel):
   # Kimi (Moonshot) — optional, not wired in by default
   moonshot_api_key: Optional[str] = None
 
+  # DeepSeek SGLang — OpenAI-compatible base URL, including /v1.
+  # Used by CharlieBot's hosted Anthropic proxy.
+  deepseek_sglang_base_url: Optional[str] = None
+  deepseek_sglang_api_key: Optional[str] = None
+
   # Authentication — shared secret; empty string disables auth
   charliebot_access_key: str = ""
 

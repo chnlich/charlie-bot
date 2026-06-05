@@ -95,7 +95,7 @@ _session_consumers: dict[str, asyncio.Task] = {}
 # Per-session running backend reference for external cancellation.
 _active_procs: dict[str, AgentBackend] = {}
 
-_CLAUDE_RESUME_FLAG_BACKEND_TYPES = {"cc-claude", "cc-kimi"}
+_CLAUDE_RESUME_FLAG_BACKEND_TYPES = {"cc-claude", "cc-kimi", "cc-deepseek-sglang"}
 _NATIVE_RESUME_SESSION_BACKEND_TYPES = {"codex", "gemini", "opencode"}
 
 

@@ -7318,3 +7318,16 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused dirpath binding in core/git.py
+  description: 'PURPOSE — Remove dead loop state from the worktree marker scan.
+
+    HOW — In src/core/git.py:_contains_git_marker, replace the unused dirpath binding
+    from os.walk() with an ignored name or otherwise avoid binding it. Verify pylint
+    W0612 no longer reports src/core/git.py:215, then rerun yapf.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-05T16:30:00Z'
+  priority: low

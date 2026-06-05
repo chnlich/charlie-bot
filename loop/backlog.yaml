@@ -7318,3 +7318,44 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into token partition and option parsing helpers
+  description: |
+    src/cli/claude_sub.py:parse_argv (L91-168, 78 lines) is the strongest uncovered
+    >50-line function from this code-health scan. The function mixes three separable
+    responsibilities in one body: (1) partition argv into option tokens and prompt
+    tokens, including the "--" separator and value-taking flags; (2) parse and validate
+    the supported claude-sub options; and (3) validate stream-json plus prompt presence
+    before constructing ClaudeSubArgs.
+
+    WHAT - Extract the argv partitioning block (L92-114) into a private helper such as
+    _split_option_and_prompt_tokens(argv: list[str]) -> tuple[list[str], list[str]].
+    Extract the option-token loop (L116-154) into a private helper such as
+    _parse_claude_sub_options(option_tokens: list[str]) -> tuple[Optional[str],
+    Optional[str], Optional[str], Optional[str], list[str]] or a small private dataclass
+    if that reads better. Keep parse_argv as a short orchestrator that calls both
+    helpers, performs the stream-json and missing-prompt validation, joins prompt
+    tokens, and returns ClaudeSubArgs. Preserve fail-fast ValueError behavior and do
+    not add fallback parsing.
+
+    VERIFY - Run yapf --in-place --recursive src/ and commit any formatter diff in the
+    same change; run pyflakes src/cli/claude_sub.py; and smoke-check representative
+    parsing cases: flags before a prompt, the "--" separator, a value-taking flag
+    without a value, --input-file rejection, and unsupported flag rejection.
+
+    NON-DUPLICATION CHECK - This scan ran yapf --in-place --recursive src/ and committed
+    the resulting src/api/ncu_parsing.py and src/core/codex_pricing.py formatter diff
+    separately. rg -n "TODO|FIXME|HACK|XXX" src/ returned zero matches. pyflakes src
+    reported four findings, all already covered by pending backlog items: the unused
+    exception bindings in core/sessions.py are covered by items 160/163/176, the unused
+    WatchTarget import in api/internal.py is covered by items 139/171/176, and the
+    unused kill_tmux_session import in agents/backends/tui.py is covered by item 177.
+    pylint duplicate-code with min-similarity-lines=50 and 20 reported no duplicate
+    blocks, so no duplication finding was filed. Existing pending long-function items
+    cover the larger current candidates; claude_sub.parse_argv has no matching pending
+    item and has a clean helper boundary, so this is the one new backlog item from the
+    scan.
+  category: long-function
+  status: pending
+  created: '2026-06-05T01:12:53Z'
+  priority: low

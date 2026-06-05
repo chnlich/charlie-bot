@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argv parsing into phases
+  description: |
+    PURPOSE: Split claude-sub argument parsing into clearer phases.
+
+    HOW: Extract `_split_option_and_prompt_tokens(argv)` for the option/prompt boundary.
+    Keep `parse_argv` focused on supported-flag validation and `ClaudeSubArgs` construction.
+    Verify with `yapf --in-place --recursive src/` and `pytest tests/test_claude_sub_cli.py`.
+  category: long-function
+  status: pending
+  created: '2026-06-05T05:11:26Z'
+  priority: low

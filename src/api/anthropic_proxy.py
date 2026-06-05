@@ -17,6 +17,8 @@ log = structlog.get_logger()
 
 router = APIRouter()
 
+_DEEPSEEK_SGLANG_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+
 
 def _join_openai_chat_url(base_url: str) -> str:
   if not base_url:
@@ -189,7 +191,7 @@ def anthropic_to_openai_chat_request(payload: dict) -> dict:
     raise ValueError("model is required")
 
   converted: dict[str, Any] = {
-      "model": model,
+      "model": _DEEPSEEK_SGLANG_MODEL,
       "messages": _convert_messages(messages, payload.get("system")),
       "stream": bool(payload.get("stream", False)),
   }
@@ -210,6 +212,8 @@ def anthropic_to_openai_chat_request(payload: dict) -> dict:
       converted["parallel_tool_calls"] = not bool(tool_choice["disable_parallel_tool_use"])
   if converted["stream"]:
     converted["stream_options"] = {"include_usage": True}
+  # Do not pass Anthropic thinking through yet: SGLang's reasoning_content is
+  # not an Anthropic thinking block and does not provide Anthropic signatures.
   if payload.get("thinking") is not None:
     raise ValueError("DeepSeek SGLang proxy does not support Anthropic thinking blocks")
   if payload.get("top_k") is not None:
@@ -333,20 +337,6 @@ class OpenAIChatStreamToAnthropic:
                     "delta": {
                         "type": "text_delta",
                         "text": delta["content"],
-                    },
-                },
-            ))
-      if delta.get("reasoning_content"):
-        events.extend(self._ensure_text_block())
-        events.append(
-            (
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": self._text_index,
-                    "delta": {
-                        "type": "text_delta",
-                        "text": delta["reasoning_content"],
                     },
                 },
             ))

@@ -41,7 +41,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
       raise ValueError("deepseek_sglang_base_url not set in config")
     if not cfg.charliebot_access_key:
       raise ValueError("charliebot_access_key not set in config")
-    proxy_base_url = f"{cfg.required_server_external_base_url}/api/anthropic-proxy/deepseek-sglang"
+    proxy_base_url = cfg.deepseek_sglang_anthropic_proxy_base_url
     return DeepSeekSGLangBackend(
         proxy_base_url=proxy_base_url,
         auth_token=cfg.charliebot_access_key,

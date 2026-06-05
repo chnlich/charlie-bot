@@ -56,7 +56,7 @@ def test_registry_builds_deepseek_sglang_backend() -> None:
   )
   cfg = CharlieBotConfig(
       server_port=8123,
-      server_external_base_url="https://charliebot.example",
+      deepseek_sglang_proxy_base_url="https://charliebot.example/api/anthropic-proxy/deepseek-sglang/",
       charliebot_access_key="charliebot-key",
       deepseek_sglang_base_url="http://sglang.example/v1",
   )
@@ -69,14 +69,33 @@ def test_registry_builds_deepseek_sglang_backend() -> None:
   assert prepared["ANTHROPIC_AUTH_TOKEN"] == "charliebot-key"
 
 
-def test_registry_requires_sglang_url_charliebot_auth_and_external_server_url() -> None:
+def test_registry_falls_back_to_local_proxy_url() -> None:
+  option = BackendOption(
+      id="cc-deepseek-v4-pro",
+      label="CC DeepSeek V4 Pro",
+      type="cc-deepseek-sglang",
+      model="meshy-sglang/deepseek-ai/DeepSeek-V4-Pro",
+  )
+  cfg = CharlieBotConfig(
+      server_port=8123,
+      charliebot_access_key="charliebot-key",
+      deepseek_sglang_base_url="http://sglang.example/v1",
+  )
+
+  backend = build_backend(option, cfg)
+
+  prepared = backend._prepare_env({})
+  assert prepared["ANTHROPIC_BASE_URL"] == "http://localhost:8123/api/anthropic-proxy/deepseek-sglang"
+
+
+def test_registry_requires_sglang_url_and_charliebot_auth() -> None:
   option = BackendOption(id="cc-deepseek", label="DeepSeek", type="cc-deepseek-sglang", model="deepseek")
 
   with pytest.raises(ValueError, match="deepseek_sglang_base_url"):
     build_backend(
         option,
         CharlieBotConfig(
-            server_external_base_url="https://charliebot.example",
+            deepseek_sglang_proxy_base_url="https://charliebot.example/api/anthropic-proxy/deepseek-sglang",
             charliebot_access_key="charliebot-key",
         ),
     )
@@ -84,24 +103,7 @@ def test_registry_requires_sglang_url_charliebot_auth_and_external_server_url() 
     build_backend(
         option,
         CharlieBotConfig(
-            server_external_base_url="https://charliebot.example",
-            deepseek_sglang_base_url="http://sglang.example/v1",
-        ),
-    )
-  with pytest.raises(ValueError, match="server_external_base_url"):
-    build_backend(
-        option,
-        CharlieBotConfig(
-            charliebot_access_key="charliebot-key",
-            deepseek_sglang_base_url="http://sglang.example/v1",
-        ),
-    )
-  with pytest.raises(ValueError, match="externally reachable"):
-    build_backend(
-        option,
-        CharlieBotConfig(
-            server_external_base_url="http://localhost:8123",
-            charliebot_access_key="charliebot-key",
+            deepseek_sglang_proxy_base_url="https://charliebot.example/api/anthropic-proxy/deepseek-sglang",
             deepseek_sglang_base_url="http://sglang.example/v1",
         ),
     )

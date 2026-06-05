@@ -7318,3 +7318,18 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Move review prompt template out of build_review_prompt
+  description: 'PURPOSE: Move static review-prompt text out of build_review_prompt
+    so the function stays focused on dynamic context assembly.
+
+    HOW:
+    - Add a module-level review prompt template in src/core/review.py.
+    - Keep build_review_prompt responsible for context lines, log paths, and formatting
+      the template.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-05T07:12:37Z'
+  priority: low

@@ -7318,3 +7318,51 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into option splitting and option parsing helpers
+  description: 'src/cli/claude_sub.py:parse_argv (L91-168, 78 lines) now does two
+    distinct jobs in one function: (1) split Claude-style argv into option tokens and
+    prompt tokens, including support for a literal "--" separator and flags that take
+    values; and (2) walk option_tokens to validate supported flags and populate
+    ClaudeSubArgs fields. Both jobs are single-responsibility units with clear names,
+    so this clears the extraction bar without inventing a generic argparse abstraction.
+
+    WHAT - Extract the first block (L92-114) into a private helper such as
+    _split_options_and_prompt(argv: list[str]) -> tuple[list[str], list[str]], keeping
+    the existing fail-fast ValueError when a value-taking flag has no following value.
+    Extract the second block (L116-154) into _parse_option_tokens(option_tokens:
+    list[str]) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str],
+    list[str]] or a small private dataclass if that is clearer. Then parse_argv becomes
+    the orchestration: split argv, parse options, validate output_format and prompt
+    presence, join the prompt tokens, and return ClaudeSubArgs. Keep _flag_takes_value
+    and _split_value_flag as the low-level helpers; do not replace this with argparse
+    because the current parser intentionally accepts Claude Code''s print-mode argv
+    shape where the prompt starts at the first non-option token.
+
+    VERIFY - Add focused tests if a suitable CLI parser test file exists; otherwise run
+    at least python3 -m pyflakes src/cli/claude_sub.py plus direct import checks for
+    these cases: "--output-format stream-json -- model prompt", "--output-format=stream-json
+    --model sonnet prompt text", missing prompt, unsupported flag, and a value-taking
+    flag without a value. Run yapf --in-place --recursive src/ and commit any formatter
+    diff in the same run per the yapf rule.
+
+    NON-DUPLICATION CHECK - This scan ran yapf --in-place --recursive src/ and committed
+    the formatter diff separately; formatter findings are not filed as backlog items.
+    rg -n "TODO|FIXME|HACK|XXX" src --glob "*.py" returned zero matches. pyflakes src/
+    reported four findings, all already covered by pending backlog items: unused "e"
+    bindings in core/sessions.py:135 and :488, unused kill_tmux_session in
+    agents/backends/tui.py:23, and unused WatchTarget in api/internal.py:14. vulture
+    --min-confidence 80 reported only core/config.py:137 cls, a known Pydantic
+    validator false positive. Exact normalized duplicate-block scans found zero
+    duplicated source windows at 50 or 60 lines. The >50-line function inventory was
+    cross-checked against pending items 125-184; claude_sub.parse_argv is the strongest
+    uncovered candidate with clean extraction points. Other remaining uncovered
+    borderline functions are coherent single flows, prompt/template construction, route
+    boilerplate, or already rejected by prior scan notes under the one-finding-per-scan
+    discipline.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-05T03:13:13Z'
+  priority: low

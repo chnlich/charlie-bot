@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused dirpath local in core.git
+  description: 'PURPOSE — Remove the unused local from the git worktree cleanup helper.
+
+    HOW — Replace the unused `dirpath` target in `src/core/git.py:_contains_git_marker`
+    with `_`. Verify with `pylint --disable=all --enable=unused-variable src/core/git.py`
+    and `python -m pyflakes src/core/git.py`.'
+  category: dead-code
+  status: pending
+  created: '2026-06-05T12:00:00Z'
+  priority: low

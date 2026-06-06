@@ -13,7 +13,6 @@ def _build_backend(monkeypatch, **kwargs) -> AntigravityCliBackend:
       "src.agents.backends.antigravity_cli.resolve_binary",
       lambda name, fallback: "/usr/bin/agy",
   )
-  kwargs.setdefault("model", "gemini-test-model")
   return AntigravityCliBackend(**kwargs)
 
 
@@ -32,7 +31,7 @@ async def _consume(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
 
 
 def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="gemini-test-model", extra_flags=["--sandbox"])
+  backend = _build_backend(monkeypatch, extra_flags=["--sandbox"])
 
   cmd = backend._build_command("--dash-prefixed prompt")
 
@@ -44,6 +43,7 @@ def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
       "--dangerously-skip-permissions",
       "--sandbox",
   ]
+  assert "--model" not in cmd
 
 
 def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
@@ -79,7 +79,7 @@ def test_resume_session_id_fails_fast(monkeypatch) -> None:
   )
 
   with pytest.raises(ValueError, match="does not support stable session resume"):
-    AntigravityCliBackend(model="gemini-test-model", resume_session_id="session-123")
+    AntigravityCliBackend(resume_session_id="session-123")
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ printf 'final answer: %s\\n' "$prompt"
       lambda name, fallback: str(fake_agy),
   )
   log_dir = tmp_path / "logs"
-  backend = AntigravityCliBackend(model="gemini-test-model", log_dir=log_dir)
+  backend = AntigravityCliBackend(log_dir=log_dir)
 
   events = await _consume(backend, tmp_path)
 
@@ -148,7 +148,7 @@ exit 7
       "src.agents.backends.antigravity_cli.resolve_binary",
       lambda name, fallback: str(fake_agy),
   )
-  backend = AntigravityCliBackend(model="gemini-test-model")
+  backend = AntigravityCliBackend()
 
   events = await _consume(backend, tmp_path)
 
@@ -182,10 +182,11 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
       "src.agents.backends.antigravity_cli.resolve_binary",
       lambda name, fallback: "/usr/bin/agy",
   )
-  option = BackendOption(id="agy-gemini", label="Antigravity", type="antigravity", model="gemini-test-model")
+  option = BackendOption(id="agy", label="Antigravity", type="antigravity")
   backend = build_backend(option, CharlieBotConfig(), extra_flags=["--sandbox"])
 
   assert isinstance(backend, AntigravityCliBackend)
+  assert backend._model is None
   assert backend._build_command("hi") == [
       "/usr/bin/agy",
       "--print=hi",

@@ -13,6 +13,15 @@ from src.agents.backends.opencode import OpenCodeBackend
 from src.agents.backends.tui import TuiBackend
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
+from src.core.models import backend_type_requires_model
+
+
+def _require_model(option: BackendOption) -> str:
+  if not backend_type_requires_model(option.type):
+    raise ValueError(f"backend '{option.id}' does not require a model")
+  if not option.model:
+    raise ValueError(f"backend '{option.id}' has no default model")
+  return option.model
 
 
 def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -> AgentBackend:
@@ -31,12 +40,14 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
     ValueError: If the backend type is unknown or required config is missing.
   """
   if option.type == "cc-claude":
-    return ClaudeCodeBackend(model=option.model, effort=option.effort, cli_binary=option.cli_binary, **kwargs)
+    return ClaudeCodeBackend(model=_require_model(option), effort=option.effort, cli_binary=option.cli_binary, **kwargs)
   elif option.type == "cc-kimi":
+    model = _require_model(option)
     if not cfg.moonshot_api_key:
       raise ValueError("moonshot_api_key not set in config")
-    return KimiBackend(api_key=cfg.moonshot_api_key, model=option.model, **kwargs)
+    return KimiBackend(api_key=cfg.moonshot_api_key, model=model, **kwargs)
   elif option.type == "cc-deepseek-sglang":
+    model = _require_model(option)
     if not cfg.deepseek_sglang_base_url:
       raise ValueError("deepseek_sglang_base_url not set in config")
     if not cfg.charliebot_access_key:
@@ -45,17 +56,17 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
     return DeepSeekSGLangBackend(
         proxy_base_url=proxy_base_url,
         auth_token=cfg.charliebot_access_key,
-        model=option.model,
+        model=model,
         **kwargs,
     )
   elif option.type == "codex":
-    return CodexBackend(model=option.model, **kwargs)
+    return CodexBackend(model=_require_model(option), **kwargs)
   elif option.type == "gemini":
-    return GeminiCliBackend(model=option.model, **kwargs)
+    return GeminiCliBackend(model=_require_model(option), **kwargs)
   elif option.type == "opencode":
-    return OpenCodeBackend(model=option.model, **kwargs)
+    return OpenCodeBackend(model=_require_model(option), **kwargs)
   elif option.type == "antigravity":
-    return AntigravityCliBackend(model=option.model, **kwargs)
+    return AntigravityCliBackend(**kwargs)
   elif option.type == "tui-cli":
     return TuiBackend(**kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

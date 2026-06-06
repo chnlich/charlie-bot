@@ -14,7 +14,15 @@ from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
-from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
+from src.core.models import (
+    BackendOption,
+    SessionMetadata,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
+    backend_type_allows_missing_model,
+)
 from src.core.ndjson import parse_ndjson_file
 from src.core.git import (
     git_current_branch,
@@ -183,16 +191,23 @@ def _build_worker_event(
   return event
 
 
-def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str) -> BackendOption:
+def _resolve_routing_model(option: BackendOption, model: Optional[str], *, source: str) -> Optional[str]:
+  if backend_type_allows_missing_model(option.type):
+    return None
+  if not model:
+    raise ValueError(f"{source} model is required")
+  return model
+
+
+def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: Optional[str]) -> BackendOption:
   """Resolve a runtime backend option from explicit backend/model values."""
   if not backend_id:
     raise ValueError("resolved backend is required")
-  if not model:
-    raise ValueError("resolved model is required")
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"resolved backend '{backend_id}' is not configured")
-  return option.model_copy(update={"model": model, "cli_binary": None})
+  resolved_model = _resolve_routing_model(option, model, source="resolved")
+  return option.model_copy(update={"model": resolved_model, "cli_binary": None})
 
 
 def _resolve_configured_backend_model(
@@ -200,13 +215,15 @@ def _resolve_configured_backend_model(
     backend_id: str,
     *,
     source: str,
-) -> tuple[str, str]:
+) -> tuple[str, Optional[str]]:
   """Resolve a configured backend option id to its default backend+model pair."""
   if not backend_id:
     raise ValueError(f"{source} backend is required")
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"{source} backend '{backend_id}' is not in backend_options")
+  if backend_type_allows_missing_model(option.type):
+    return option.id, None
   if not option.model:
     raise ValueError(f"{source} backend '{backend_id}' has no default model")
   return option.id, option.model
@@ -216,7 +233,7 @@ def _resolve_session_backend_with_fallback(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
     session_id: str,
-) -> tuple[str, str]:
+) -> tuple[str, Optional[str]]:
   """Resolve backend+model from a session's default, falling back on stale metadata.
 
   When session_meta.backend is absent or no longer present in cfg.backend_options (e.g. after a
@@ -235,6 +252,8 @@ def _resolve_session_backend_with_fallback(
         session_id=session_id,
     )
     option = fallback
+  if backend_type_allows_missing_model(option.type):
+    return option.id, None
   if not option.model:
     raise ValueError(f"session backend '{option.id}' has no default model")
   return option.id, option.model
@@ -244,7 +263,7 @@ async def resolve_session_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-) -> tuple[str, str]:
+) -> tuple[str, Optional[str]]:
   """Resolve backend+model from the session default, with graceful fallback on stale metadata."""
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
@@ -257,7 +276,7 @@ async def resolve_requested_subagent_backend_model(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     requested_backend: Optional[str] = None,
-) -> tuple[str, str]:
+) -> tuple[str, Optional[str]]:
   """Resolve backend+model from an explicit configured backend or the session default.
 
   Explicit `requested_backend` stays strict (typo in user input must fail). Session-default
@@ -271,13 +290,18 @@ async def resolve_requested_subagent_backend_model(
   return _resolve_session_backend_with_fallback(cfg, session_meta, session_id)
 
 
-def _require_thread_backend_model(thread: ThreadMetadata) -> tuple[str, str]:
+def _require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, Optional[str]]:
   """Return backend+model from thread metadata or raise."""
   if not thread.backend:
     raise ValueError(f"thread '{thread.id}' missing backend metadata")
-  if not thread.model:
-    raise ValueError(f"thread '{thread.id}' missing model metadata")
-  return thread.backend, thread.model
+  if thread.model:
+    return thread.backend, thread.model
+  option = cfg.get_backend_option(thread.backend)
+  if option is None:
+    raise ValueError(f"thread '{thread.id}' backend '{thread.backend}' is not in backend_options")
+  if backend_type_allows_missing_model(option.type):
+    return thread.backend, None
+  raise ValueError(f"thread '{thread.id}' missing model metadata")
 
 
 async def _create_worktree_and_process(

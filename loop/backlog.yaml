@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into option partitioning and parsing helpers
+  description: |-
+    PURPOSE: Split claude_sub.parse_argv so option handling is easier to scan and maintain.
+    HOW:
+    - Extract argv partitioning into _split_option_and_prompt_tokens().
+    - Extract option-token parsing into _parse_option_tokens() that returns the parsed fields.
+    - Keep the existing fail-fast ValueError behavior and verify pyflakes stays clean for src/cli/claude_sub.py.
+  category: long-function
+  status: pending
+  created: '2026-06-06T23:12:32Z'
+  priority: low

@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Rename unused dirpath binding in core/git._contains_git_marker
+  description: 'PURPOSE — Remove the unused os.walk dirpath binding in core/git._contains_git_marker.
+
+    HOW — Rename the loop variable to `_dirpath` or `_`, then verify with `pyflakes src/core/git.py`
+    and `pylint --disable=all --enable=unused-variable src/core/git.py`.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-06T07:12:07Z'
+  priority: low

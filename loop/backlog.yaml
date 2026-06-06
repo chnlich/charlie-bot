@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract remaining built-in slash handlers from execute_command
+  description: |-
+    PURPOSE: Shorten slash command dispatch by moving the remaining built-in handlers out of execute_command.
+    HOW:
+    - Add private _handle_help_command and _handle_stop_improve_command helpers in src/api/slash.py.
+    - Keep execute_command as the dispatcher and verify with YAPF plus pyflakes for src/api/slash.py.
+  category: long-function
+  status: pending
+  created: '2026-06-06T13:12:39Z'
+  priority: low

@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract Claude-compatible model env override helper
+  description: |
+    PURPOSE: Keep Claude-compatible proxy model environment overrides in one place.
+    HOW:
+    - Add a private helper in src/agents/backends/claude_code.py or a small shared backend module that returns the ANTHROPIC_MODEL, default model, and subagent model overrides for a model string.
+    - Use it from DeepSeekSGLangBackend._prepare_env and KimiBackend._prepare_env while keeping each backend's base URL and auth token handling local.
+  category: duplication
+  status: pending
+  created: '2026-06-06T09:13:05Z'
+  priority: low

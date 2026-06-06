@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Rename unused config validator receiver
+  description: 'PURPOSE — Remove the dead `cls` binding reported by vulture in core/config.py.
+
+    HOW — Rename the unused classmethod receiver to `_cls` in CharlieBotConfig.migrate_and_expand,
+    then rerun vulture and pyflakes for src/core/config.py.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-06T19:13:51Z'
+  priority: low

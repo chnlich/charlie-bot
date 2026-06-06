@@ -13,12 +13,9 @@ from src.agents.backends.opencode import OpenCodeBackend
 from src.agents.backends.tui import TuiBackend
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
-from src.core.models import backend_type_requires_model
 
 
 def _require_model(option: BackendOption) -> str:
-  if not backend_type_requires_model(option.type):
-    raise ValueError(f"backend '{option.id}' does not require a model")
   if not option.model:
     raise ValueError(f"backend '{option.id}' has no default model")
   return option.model

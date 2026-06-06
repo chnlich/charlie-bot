@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into tokenization and option parsing helpers
+  description: |
+    PURPOSE: Reduce `claude_sub.parse_argv` by separating CLI token splitting from flag value parsing.
+    HOW:
+    - Extract a helper that converts argv into option tokens and prompt tokens, preserving the current `--` separator and first non-flag prompt behavior.
+    - Extract a helper that parses option tokens into output_format, model, effort, resume, and disallowed_tools.
+    - Keep the existing fail-fast errors and stream-json prompt validation in parse_argv.
+  category: long-function
+  status: pending
+  created: '2026-06-06T11:12:54Z'
+  priority: low

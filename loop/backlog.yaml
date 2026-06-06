@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split event shaping out of build_session_view_data
+  description: |
+    PURPOSE: Separate event shaping from session view orchestration so build_session_view_data is easier to read.
+    HOW:
+    - Extract a private helper in src/api/message_utils.py that converts either the tail-load or full-load result into the shared raw_events/messages/pending_draft/count fields.
+    - Keep build_session_view_data focused on launching the parallel loads, validating metadata, resolving usage, marking read, and constructing SessionViewData.
+    - Verify with yapf --in-place --recursive src/ and the session view tests.
+  category: long-function
+  status: pending
+  created: '2026-06-06T01:12:54Z'
+  priority: low

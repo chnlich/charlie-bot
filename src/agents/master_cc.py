@@ -13,7 +13,7 @@ from src.agents.backends.base import AgentBackend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
-from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
+from src.core.models import BackendOption, SessionCallbacks, SessionMetadata, backend_type_allows_missing_model
 from src.core.streaming import handle_compact_boundary, streaming_manager
 
 log = structlog.get_logger()
@@ -22,7 +22,7 @@ log = structlog.get_logger()
 class _RunTimingTracker:
   """Tracks monotonic timing milestones during a single _run_cc execution."""
 
-  def __init__(self, session_id: str, backend_type: str, model: str) -> None:
+  def __init__(self, session_id: str, backend_type: str, model: Optional[str]) -> None:
     self._session_id = session_id
     self._backend_type = backend_type
     self._model = model
@@ -237,6 +237,8 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 
   from src.agents.backends.registry import build_backend
   option = item.backend_option or cfg.backend_options[0]
+  if backend_type_allows_missing_model(option.type) and option.model is not None:
+    option = option.model_copy(update={"model": None})
 
   extra_flags, resume_session_id = _route_resume_session(option.type, session_meta.cc_session_id)
   resume_session = bool(extra_flags or resume_session_id)

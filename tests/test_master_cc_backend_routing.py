@@ -58,14 +58,14 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          models.BackendOption(id="agy-gemini", label="Antigravity", type="antigravity", model="gemini-test-model"),
+          models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
       ],
   )
   session_meta = models.SessionMetadata(
       id="session-id",
       name="Antigravity",
       cc_session_id="existing-session-id",
-      backend="agy-gemini",
+      backend="agy",
   )
   backend_option = cfg.backend_options[0]
   captures: dict[str, object] = {}
@@ -94,6 +94,7 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
   cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
 
   assert captures["option"] is backend_option
+  assert backend_option.model is None
   backend_kwargs = captures["kwargs"]
   assert isinstance(backend_kwargs, dict)
   assert backend_kwargs["extra_flags"] is None

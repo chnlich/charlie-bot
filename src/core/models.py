@@ -132,6 +132,26 @@ class BackendOption(BaseModel):
   cli_binary: Optional[str] = None
 
 
+MODEL_REQUIRED_BACKEND_TYPES = frozenset(
+    {
+        "cc-claude",
+        "cc-kimi",
+        "cc-deepseek-sglang",
+        "codex",
+        "gemini",
+        "opencode",
+    })
+MODEL_OPTIONAL_ROUTING_BACKEND_TYPES = frozenset({"antigravity"})
+
+
+def backend_type_requires_model(backend_type: str) -> bool:
+  return backend_type in MODEL_REQUIRED_BACKEND_TYPES
+
+
+def backend_type_allows_missing_model(backend_type: str) -> bool:
+  return backend_type in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES
+
+
 # ---------------------------------------------------------------------------
 # Session Models
 # ---------------------------------------------------------------------------
@@ -323,7 +343,7 @@ class SpawnRequest:
   context: Optional[str] = None
   prompt_override: Optional[str] = None
   resolved_backend: str = ""
-  resolved_model: str = ""
+  resolved_model: Optional[str] = None
   base_branch: Optional[str] = None
   branch_name_override: Optional[str] = None
   loop_dir: Optional[str] = None

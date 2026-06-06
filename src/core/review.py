@@ -12,7 +12,7 @@ from src.core.config import CharlieBotConfig
 from src.core.git import git_current_branch, git_worktree_dir_name, git_worktree_prune, git_worktree_remove
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
-from src.core.models import BackendOption, SpawnRequest, ThreadMetadata
+from src.core.models import BackendOption, SpawnRequest, ThreadMetadata, backend_type_allows_missing_model
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -219,11 +219,13 @@ def validate_review_prerequisites(
 def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> BackendOption:
   """Resolve a model_preference entry to its BackendOption with default model.
 
-  Raises ValueError if the option_id is not in backend_options or has no model.
+  Raises ValueError if the option_id is not in backend_options or requires but lacks a model.
   """
   option = cfg.get_backend_option(option_id)
   if option is None:
     raise ValueError(f"model_preference entry '{option_id}' not in backend_options")
+  if backend_type_allows_missing_model(option.type):
+    return option.model_copy(update={"model": None})
   if not option.model:
     raise ValueError(f"model_preference entry '{option_id}' has no default model")
   return option
@@ -232,9 +234,9 @@ def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> Backend
 def select_reviewer_backend(
     cfg: CharlieBotConfig,
     worker_backend: str,
-    worker_model: str,
+    worker_model: Optional[str],
     tried_backends: list[str],
-) -> Optional[tuple[str, str, list[str]]]:
+) -> Optional[tuple[str, Optional[str], list[str]]]:
   """Select a reviewer backend via model_preference, skipping already-tried backends.
 
   Returns (resolved_backend, resolved_model, updated_tried_backends) or None if exhausted.
@@ -281,7 +283,7 @@ class ReviewSpawnContext:
   wt_path: str
   base_branch: str
   resolved_backend: str
-  resolved_model: str
+  resolved_model: Optional[str]
   tried_backends: list[str]
 
 
@@ -311,7 +313,7 @@ async def _resolve_review_spawn_context(
   repo_path, branch_name, wt_path = prerequisites
 
   base_branch = original_thread.base_branch or await git_current_branch(repo_path)
-  worker_backend, worker_model = _require_thread_backend_model(original_thread)
+  worker_backend, worker_model = _require_thread_backend_model(original_thread, cfg)
 
   backend_result = select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)
   if backend_result is None:

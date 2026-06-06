@@ -41,6 +41,39 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
     spawner.resolve_backend_option(cfg, "codex-o3", "")
 
 
+def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-test"),
+      worktree_dir="/tmp/worktrees",
+      backend_options=[
+          BackendOption(id="agy", label="Antigravity", type="antigravity"),
+      ],
+  )
+
+  opt = spawner.resolve_backend_option(cfg, "agy", None)
+
+  assert opt.id == "agy"
+  assert opt.model is None
+  assert opt.cli_binary is None
+
+
+@pytest.mark.parametrize(
+    "backend_type",
+    ["cc-claude", "cc-kimi", "cc-deepseek-sglang", "codex", "gemini", "opencode"],
+)
+def test_resolve_backend_option_rejects_missing_model_for_model_required_backends(backend_type: str) -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-test"),
+      worktree_dir="/tmp/worktrees",
+      backend_options=[
+          BackendOption(id=backend_type, label=backend_type, type=backend_type),
+      ],
+  )
+
+  with pytest.raises(ValueError, match="model is required"):
+    spawner.resolve_backend_option(cfg, backend_type, None)
+
+
 def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
   prompt = spawner._build_worker_prompt(
       description="Improve the CLI",
@@ -115,6 +148,7 @@ async def test_resolve_requested_subagent_backend_model_uses_requested_backend()
   cfg = _build_cfg()
 
   class FakeSessionManager:
+
     async def get_session(self, session_id: str) -> SessionMetadata:
       assert session_id == "session-id"
       return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
@@ -131,6 +165,7 @@ async def test_resolve_requested_subagent_backend_model_defaults_to_session_back
   cfg = _build_cfg()
 
   class FakeSessionManager:
+
     async def get_session(self, session_id: str) -> SessionMetadata:
       assert session_id == "session-id"
       return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
@@ -139,6 +174,28 @@ async def test_resolve_requested_subagent_backend_model_defaults_to_session_back
 
   assert backend == "claude-opus-4.6"
   assert model == "claude-opus-4-6"
+
+
+@pytest.mark.asyncio
+async def test_resolve_requested_subagent_backend_model_allows_antigravity_missing_model() -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-test"),
+      worktree_dir="/tmp/worktrees",
+      backend_options=[
+          BackendOption(id="agy", label="Antigravity", type="antigravity"),
+      ],
+  )
+
+  class FakeSessionManager:
+
+    async def get_session(self, session_id: str) -> SessionMetadata:
+      assert session_id == "session-id"
+      return SessionMetadata(id=session_id, name="Test", backend="agy")
+
+  backend, model = await spawner.resolve_requested_subagent_backend_model("session-id", cfg, FakeSessionManager())
+
+  assert backend == "agy"
+  assert model is None
 
 
 @pytest.mark.asyncio
@@ -161,6 +218,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   captures: dict[str, Any] = {}
 
   class FakeSessionManager:
+
     async def get_session(self, session_id: str) -> Any:
       return SessionMetadata(id=session_id, name="Test Session")
 
@@ -169,7 +227,9 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
 
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures["broadcast_event"] = event
+
   class FakeThreadManager:
+
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
 
@@ -203,6 +263,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     }
 
   class FakeWorker:
+
     def __init__(
         self,
         thread_metadata: ThreadMetadata,
@@ -286,6 +347,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
   captures: dict[str, Any] = {}
 
   class FakeThreadManager:
+
     async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
       del session_id, thread_id
       return thread
@@ -343,10 +405,12 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
   worktree_path.mkdir(parents=True)
 
   class FakeSessionManager:
+
     async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
   class FakeThreadManager:
+
     async def create_thread(
         self,
         session_meta: SessionMetadata,
@@ -383,9 +447,12 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
     if coro.cr_frame is not None:
       captured.update(coro.cr_frame.f_locals)
     coro.close()
+
     class DummyTask:
+
       def add_done_callback(self, cb: Any) -> None:
         pass
+
     return DummyTask()
 
   monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
@@ -428,10 +495,12 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
   worktree_path.mkdir(parents=True)
 
   class FakeSessionManager:
+
     async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
   class FakeThreadManager:
+
     async def create_thread(
         self,
         session_meta: SessionMetadata,
@@ -477,6 +546,66 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_create_repoless_worker_propagates_antigravity_missing_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          BackendOption(id="agy", label="Antigravity", type="antigravity"),
+      ],
+  )
+  thread = ThreadMetadata(
+      id="thread-1",
+      session_id="session-id",
+      description="Prompt task",
+  )
+  captures: dict[str, Any] = {}
+
+  class FakeThreadManager:
+
+    async def save_metadata(self, meta: ThreadMetadata) -> None:
+      captures["saved_thread"] = meta
+
+    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
+      return tmp_path / "events.jsonl"
+
+  class FakeWorker:
+
+    def __init__(
+        self,
+        thread_metadata: ThreadMetadata,
+        working_dir: Path,
+        events_log_path: Path,
+        task_description: str,
+        worker_cfg: CharlieBotConfig,
+        backend_option: Optional[BackendOption] = None,
+        extra_env: Optional[dict[str, str]] = None,
+        on_spawned: Optional[callable] = None,
+        instructions_content: Optional[str] = None,
+    ) -> None:
+      captures["backend_option"] = backend_option
+
+  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+
+  await spawner._create_repoless_process(
+      "session-id",
+      thread,
+      "Prompt task",
+      cfg,
+      FakeThreadManager(),
+      SpawnRequest(resolved_backend="agy"),
+  )
+
+  assert thread.backend == "agy"
+  assert thread.model is None
+  assert captures["backend_option"].id == "agy"
+  assert captures["backend_option"].model is None
+
+
+@pytest.mark.asyncio
 async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
@@ -495,6 +624,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
   captures: dict[str, Any] = {}
 
   class FakeSessionManager:
+
     async def get_session(self, session_id: str) -> Any:
       return SessionMetadata(id=session_id, name="Test Session")
 
@@ -505,6 +635,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       captures["broadcast_event"] = event
 
   class FakeThreadManager:
+
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
 
@@ -526,6 +657,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       captures["exit_code"] = exit_code
 
   class FakeWorker:
+
     def __init__(
         self,
         thread_metadata: ThreadMetadata,

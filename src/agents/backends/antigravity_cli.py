@@ -19,9 +19,7 @@ _PRINT_TIMEOUT = "24h"
 class AntigravityCliBackend(AgentBackend):
   """Runs `agy --print` and emits the completed stdout as one assistant event."""
 
-  def __init__(self, *, model: str, **kwargs):
-    if not model:
-      raise ValueError("antigravity backend requires backend_options[].model for CharlieBot routing metadata")
+  def __init__(self, *, model: Optional[str] = None, **kwargs):
     if kwargs.get("resume_session_id"):
       raise ValueError("antigravity backend does not support stable session resume")
     super().__init__(model=model, **kwargs)

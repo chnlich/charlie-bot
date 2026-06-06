@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into token splitting and option parsing
+  description: |
+    PURPOSE: Keep claude-sub argument parsing readable by separating token splitting from option decoding.
+    HOW:
+    - Extract a helper that splits argv into option_tokens and prompt_tokens, preserving "--" and value-taking flag behavior.
+    - Keep parse_argv focused on validating supported flags and building ClaudeSubArgs.
+  category: long-function
+  status: pending
+  created: '2026-06-06T21:12:44Z'
+  priority: low

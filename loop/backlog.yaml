@@ -7318,3 +7318,12 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argv parsing phases
+  description: |-
+    PURPOSE: Make claude-sub argument parsing easier to audit and extend.
+    HOW: Extract argv partitioning and option-token interpretation into small helpers, leaving parse_argv to validate required values and build ClaudeSubArgs.
+  category: long-function
+  status: pending
+  created: '2026-06-07T03:12:54Z'
+  priority: low

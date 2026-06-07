@@ -7318,3 +7318,18 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split parse_argv in cli/claude_sub.py
+  description: 'PURPOSE — Split cli/claude_sub.py:parse_argv so option-token extraction
+    and flag application are independently readable.
+
+    HOW — Extract argv splitting into a helper that returns option tokens and prompt
+    tokens, then extract the option-token loop into a helper that builds ClaudeSubArgs
+    fields. Keep the existing fail-fast ValueError behavior and final stream-json/prompt
+    validation in parse_argv.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-06T12:00:00Z'
+  priority: low

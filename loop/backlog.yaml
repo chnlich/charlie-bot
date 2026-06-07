@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract quota-reset wait handling from _wait_for_quota_recovery
+  description: 'PURPOSE: Isolate quota reset parsing and wait-event emission from
+    the quota recovery polling loop. HOW: Extract a helper that parses resets_at,
+    emits the quota_waiting event, sleeps with the existing poll-interval cap, and
+    returns whether it handled the wait. Keep fallback polling in _wait_for_quota_recovery.'
+  category: long-function
+  status: pending
+  created: '2026-06-07T07:13:32Z'
+  priority: low

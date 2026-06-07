@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused imports from test modules
+  description: |-
+    PURPOSE: Remove unused test imports so health scans stay signal-focused.
+    HOW:
+    - Delete unused `json` imports in tests/test_backend_logging.py and tests/test_message_attachments.py.
+    - Delete unused `Optional` and `datetime/timezone` imports in tests/test_spawner_exit_override.py and tests/test_trigger_pid_watch.py.
+    - Run the touched tests and YAPF.
+  category: imports
+  status: pending
+  created: '2026-06-07T11:13:06Z'
+  priority: low

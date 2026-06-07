@@ -7318,3 +7318,23 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split Gemini event translation by event type
+  description: 'PURPOSE: Make Gemini stream event translation easier to maintain by
+    moving event-specific branches out of the 65-line translate_event body.
+
+    HOW:
+
+    - Add a private _flush_text_buffer method and small helpers for tool_result and
+    result events.
+
+    - Keep translate_event as event-type dispatch that calls helpers and preserves
+    current buffering semantics.
+
+    - Verify with yapf --in-place --recursive src/ and pyflakes src/agents/backends/gemini_cli.py.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-07T13:12:17Z'
+  priority: low

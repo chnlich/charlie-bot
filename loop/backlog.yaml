@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused dirpath loop variable in core/git.py
+  description: 'PURPOSE: Remove a dead local variable from the git cleanup safety scan.
+
+    HOW: In src/core/git.py:_contains_git_marker, replace the unused dirpath target
+    from os.walk(...) with `_`. Verify with pylint unused-variable on src/core/git.py
+    and yapf --in-place --recursive src/.'
+  category: dead-code
+  status: pending
+  created: '2026-06-07T05:11:51Z'
+  priority: low

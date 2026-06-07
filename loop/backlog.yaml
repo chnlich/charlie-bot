@@ -7318,3 +7318,17 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into smaller parser steps
+  description: 'PURPOSE: Make the claude-sub argument parser easier to read and maintain.
+
+    HOW:
+    - Extract argv option/prompt splitting into a small helper.
+    - Extract option-token parsing into a focused helper.
+    - Preserve the existing ValueError behavior and verify with pyflakes plus yapf.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-07T19:11:58Z'
+  priority: low

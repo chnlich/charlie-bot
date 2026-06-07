@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused imports from test modules
+  description: |
+    PURPOSE - Keep test modules free of dead imports.
+    HOW -
+    - Drop datetime/timezone from tests/test_trigger_pid_watch.py and Optional from tests/test_spawner_exit_override.py.
+    - Drop json from tests/test_message_attachments.py and tests/test_backend_logging.py.
+    - Verify with python -m pyflakes on those four files.
+  category: imports
+  status: pending
+  created: '2026-06-07T21:13:47Z'
+  priority: low

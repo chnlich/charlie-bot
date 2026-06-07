@@ -9,7 +9,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig
+from src.core.config import CharlieBotConfig
+from src.core.master_trigger import is_resume_not_found_error
 from src.core.master_trigger import trigger_master
 from src.core.models import BackendOption
 from src.core.models import SessionCallbacks
@@ -172,8 +173,8 @@ async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_scheduled_task_backend_override_routes_auto_trigger(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Scheduled task auto-triggers should run on the task backend when configured."""
+async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Scheduled task auto-triggers should keep using the completed worker's session backend."""
   cfg = _build_cfg()
   session_id = "session-4"
   meta = SessionMetadata(
@@ -191,25 +192,21 @@ async def test_scheduled_task_backend_override_routes_auto_trigger(monkeypatch: 
     call_session_backends.append(args[1].backend)
     call_summaries.append(args[2])
     call_backend_options.append(kwargs["backend_option"])
-    return "codex-master-id"
+    return "claude-master-id"
 
-  monkeypatch.setattr(
-      "src.core.master_trigger.get_scheduled_tasks",
-      lambda: [ScheduledTaskConfig(
-          name="nightly",
-          cron="0 2 * * *",
-          prompt="run nightly",
-          backend="codex-o3",
-      )],
-  )
   monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
-  assert call_session_backends == ["codex-o3"]
-  assert [option.id for option in call_backend_options] == ["codex-o3"]
-  assert [option.model for option in call_backend_options] == ["o3"]
+  assert call_session_backends == ["claude-opus-4.6"]
+  assert [option.id for option in call_backend_options] == ["claude-opus-4.6"]
+  assert [option.model for option in call_backend_options] == ["claude-opus-4-6"]
   assert call_summaries[0].startswith("[Auto-triggered scheduled task result for 'nightly']")
-  assert session_mgr.persisted_cc_session_ids == ["codex-master-id"]
+  assert session_mgr.persisted_cc_session_ids == ["claude-master-id"]
   assert session_mgr._meta is not None
-  assert session_mgr._meta.cc_session_id == "codex-master-id"
+  assert session_mgr._meta.cc_session_id == "claude-master-id"
+
+
+def test_codex_no_rollout_found_resume_error_is_stale() -> None:
+  assert is_resume_not_found_error(RuntimeError("Codex resume failed for thread abc123: no rollout found"))
+  assert is_resume_not_found_error(RuntimeError("thread abc123 no rollout found"))

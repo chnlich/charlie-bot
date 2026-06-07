@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into tokenization and option parsing helpers
+  description: |-
+    PURPOSE - Keep the claude-sub command-line parser small enough to audit at a glance.
+    HOW - Extract one helper that splits argv into option_tokens and prompt_tokens.
+    Extract one helper that parses option_tokens into output_format/model/effort/resume/disallowed_tools.
+    Leave parse_argv responsible only for validation and ClaudeSubArgs construction.
+  category: long-function
+  status: pending
+  created: '2026-06-07T15:12:43Z'
+  priority: low

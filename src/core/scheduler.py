@@ -14,7 +14,7 @@ from src.core import event_types as ET
 from src.core.backup import BACKUP_DIR, apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.improvement_loop import determine_action
-from src.core.models import CreateSessionRequest, SessionMetadata, SpawnRequest, TaskType, parse_utc_datetime
+from src.core.models import SessionMetadata, SpawnRequest, TaskType, parse_utc_datetime
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
@@ -37,6 +37,17 @@ async def _backup_handler() -> str:
 TASK_HANDLERS: dict[str, callable] = {
     'backup': _backup_handler,
 }
+
+
+def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig) -> str:
+  """Return the backend id a scheduled task should use."""
+  if task_cfg.backend:
+    if cfg.get_backend_option(task_cfg.backend) is None:
+      raise ValueError(f"scheduled task backend '{task_cfg.backend}' is not in backend_options")
+    return task_cfg.backend
+  if not cfg.backend_options:
+    raise ValueError("scheduled task backend resolution requires a configured backend_options entry")
+  return cfg.backend_options[0].id
 
 
 class Scheduler:
@@ -92,20 +103,20 @@ class Scheduler:
 
     # Cache all sessions once to avoid O(N) list_sessions() calls per tick.
     all_sessions = await session_mgr.list_sessions(include_running_status=False)
-    session_cache: dict[str, SessionMetadata] = {}
+    session_cache: dict[str, list[SessionMetadata]] = {}
     for s in all_sessions:
-      if s.scheduled_task and s.scheduled_task not in session_cache:
-        session_cache[s.scheduled_task] = s
+      if s.scheduled_task:
+        session_cache.setdefault(s.scheduled_task, []).append(s)
 
     for task_cfg in tasks:
       if task_cfg.enabled:
-        await self._get_or_create_session(task_cfg.name, session_mgr, session_cache)
+        await self._get_or_create_session(task_cfg, cfg, session_mgr, session_cache)
 
     for task_cfg in tasks:
       if not task_cfg.enabled:
         continue
       try:
-        await self._maybe_run(task_cfg, session_mgr, session_cache)
+        await self._maybe_run(task_cfg, session_mgr, session_cache, cfg)
       except Exception as e:
         log.error("scheduler_task_error", task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
 
@@ -113,12 +124,16 @@ class Scheduler:
       self,
       task_cfg: ScheduledTaskConfig,
       session_mgr: SessionManager,
-      session_cache: dict[str, SessionMetadata],
+      session_cache: dict[str, list[SessionMetadata]],
+      cfg: Optional[CharlieBotConfig] = None,
   ) -> None:
+    cfg = cfg or self._cfg
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
 
-    session = await self._get_or_create_session(task_cfg.name, session_mgr, session_cache)
+    session = await self._get_or_create_session(task_cfg, cfg, session_mgr, session_cache)
+    if session is None:
+      return
 
     # Detect cron expression change — reset last_scheduled_run to now and skip tick
     if session.last_scheduled_cron is not None and session.last_scheduled_cron != task_cfg.cron:
@@ -156,7 +171,9 @@ class Scheduler:
     """Shared preamble: reload config, get/create session, persist bookkeeping fields."""
     cfg = self._reload_config()
     session_mgr = SessionManager(cfg)
-    session = await self._get_or_create_session(task_cfg.name, session_mgr)
+    session = await self._get_or_create_session(task_cfg, cfg, session_mgr)
+    if session is None:
+      raise RuntimeError(f"scheduled task '{task_cfg.name}' session is busy during backend rotation")
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     session.last_scheduled_run = now.isoformat()
@@ -263,9 +280,10 @@ class Scheduler:
     """Create thread, spawn worker, broadcast task_delegated, and return result dict."""
     thread_mgr = ThreadManager(cfg)
     thread = await thread_mgr.create_thread(session, description, require_review=require_review)
+    effective_backend = effective_scheduled_task_backend(task_cfg, cfg)
 
     resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-        session.id, cfg, session_mgr, requested_backend=task_cfg.backend)
+        session.id, cfg, session_mgr, requested_backend=effective_backend)
 
     create_logged_task(
         spawn_worker(
@@ -305,31 +323,23 @@ class Scheduler:
 
   async def _get_or_create_session(
       self,
-      task_name: str,
+      task_cfg: ScheduledTaskConfig,
+      cfg: CharlieBotConfig,
       session_mgr: SessionManager,
-      session_cache: Optional[dict[str, SessionMetadata]] = None,
-  ) -> SessionMetadata:
-    """Return the existing dedicated session for task_name, or create one.
+      session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
+  ) -> Optional[SessionMetadata]:
+    """Return the active dedicated session for task/backend, rotating if needed.
 
     When session_cache is provided, uses it instead of scanning the sessions
     directory. Newly created sessions are added to the cache.
     """
-    if session_cache is not None:
-      cached = session_cache.get(task_name)
-      if cached is not None:
-        return cached
-    else:
-      sessions = await session_mgr.list_sessions(include_running_status=False)
-      for s in sessions:
-        if s.scheduled_task == task_name:
-          return s
-
-    meta = await session_mgr.create_session(
-        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name))
-    log.info("scheduled_session_created", task=task_name, session=meta.id)
-    if session_cache is not None:
-      session_cache[task_name] = meta
-    return meta
+    effective_backend = effective_scheduled_task_backend(task_cfg, cfg)
+    return await session_mgr.ensure_scheduled_session_backend(
+        task_cfg.name,
+        effective_backend,
+        session_cache=session_cache,
+        skip_if_busy=True,
+    )
 
   # ---------------------------------------------------------------------------
   # Config reload
@@ -338,7 +348,8 @@ class Scheduler:
   def _reload_config(self) -> CharlieBotConfig:
     """Re-read config.yaml from disk so new tasks are picked up dynamically."""
     try:
-      return load_config()
+      self._cfg = load_config()
+      return self._cfg
     except Exception as e:
       log.warning("scheduler_config_reload_failed", error=str(e))
       return self._cfg

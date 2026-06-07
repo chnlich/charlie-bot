@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Clean up current code-health scan findings
+  description: |
+    PURPOSE: Remove current scan findings that add maintenance noise.
+    HOW:
+    - Delete unused imports in src/agents/backends/tui.py and src/api/internal.py.
+    - Remove or rename the unused exception bindings in src/core/sessions.py.
+    - Split only the highest-value >50-line functions when the extracted helper has a clear single responsibility.
+  category: maintainability
+  status: pending
+  created: '2026-06-07T23:12:01Z'
+  priority: low

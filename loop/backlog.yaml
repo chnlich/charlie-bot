@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract event-window preparation from build_session_view_data
+  description: |-
+    PURPOSE — Keep build_session_view_data focused on composing the session view data.
+    HOW — Add a private helper that returns raw_events, messages, pending_draft, total_event_count, oldest_event_index, and has_more for both the full-history and tail_limit paths.
+    Have build_session_view_data gather events/session/thread data, call the helper, resolve usage, mark the session read, and return SessionViewData.
+  category: long-function
+  status: pending
+  created: '2026-06-07T17:11:56Z'
+  priority: low

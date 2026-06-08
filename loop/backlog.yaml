@@ -7318,3 +7318,16 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Reuse _run_git_cmd inside git_worktree_remove
+  description: 'PURPOSE: Bring `git_worktree_remove` under the function-length threshold
+    by reusing the existing git subprocess helper.
+
+    HOW: Replace the inline `git worktree remove --force` subprocess block with `_run_git_cmd`.
+    Keep the current warning logs, boolean return contract, and residue cleanup path unchanged.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-08T11:13:29Z'
+  priority: low

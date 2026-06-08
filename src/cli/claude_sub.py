@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import io
 import json
+import re
 import signal
 import sys
 import time
@@ -27,6 +28,22 @@ _PROMPT_READY_TIMEOUT_SECONDS = 60.0
 _TRANSCRIPT_PATH_TIMEOUT_SECONDS = 60.0
 _BRACKETED_PASTE_START = b"\x1b[200~"
 _BRACKETED_PASTE_END = b"\x1b[201~"
+
+# Turn-level stall guard. The TUI writes no transcript records while it does long
+# autonomous work (tool execution, extended thinking) *and* while it sits blocked on
+# an interactive menu it cannot answer. Only the latter must abort, so once the
+# transcript has been quiet for _STALL_PROBE_SECONDS we inspect the pane for a
+# blocking menu rather than killing on inactivity alone. _TURN_HARD_CAP_SECONDS is a
+# generous last-resort backstop for any block that does not render as such a menu.
+_STALL_PROBE_SECONDS = 30.0
+_PANE_PROBE_INTERVAL_SECONDS = 5.0
+_MENU_CONFIRM_PROBES = 2
+_TURN_HARD_CAP_SECONDS = 7200.0
+
+# Selection cursor (❯) sitting on a numbered option, as rendered by AskUserQuestion
+# / plan-approval / permission menus. The idle input prompt also starts with ❯ but
+# is never followed by a digit, so requiring a number distinguishes a blocking menu.
+_MENU_OPTION_RE = re.compile(r"❯\s*\d")
 
 
 @dataclass(frozen=True)
@@ -221,6 +238,15 @@ def _pane_has_prompt(pane_text: str) -> bool:
   return False
 
 
+def _pane_has_interactive_menu(pane_text: str) -> bool:
+  """Return True if the pane is blocked on an 'Enter to select' menu.
+
+  Such menus (AskUserQuestion / plan-approval / permission) render the selection
+  cursor on a numbered option; the model has no way to answer them headlessly.
+  """
+  return any(_MENU_OPTION_RE.search(line) for line in pane_text.splitlines())
+
+
 async def _wait_for_prompt(session_id: str) -> None:
   deadline = time.monotonic() + _PROMPT_READY_TIMEOUT_SECONDS
   while time.monotonic() < deadline:
@@ -408,13 +434,21 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   jsonl_path = existing_jsonl or await _wait_for_transcript_path(session_id)
   tail = TranscriptTail(jsonl_path, offset)
   state = TurnState()
+  turn_start = time.monotonic()
+  last_activity = turn_start
+  last_probe = turn_start
+  menu_probes = 0
   try:
     while True:
       if stop_event.is_set():
         await _interrupt_turn(session_id)
         raise RuntimeError("terminated")
 
-      for record in tail.read_records():
+      records = tail.read_records()
+      if records:
+        last_activity = time.monotonic()
+        menu_probes = 0
+      for record in records:
         if record.get("type") == "assistant" and isinstance(record.get("message"), dict):
           state.observe_assistant(record["message"])
 
@@ -425,6 +459,22 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
         if record.get("type") == "system" and record.get("subtype") == "turn_duration" and state.saw_assistant:
           _emit(_result_event(session_id, state, record))
           return
+
+      now = time.monotonic()
+      if now - last_activity >= _STALL_PROBE_SECONDS and now - last_probe >= _PANE_PROBE_INTERVAL_SECONDS:
+        last_probe = now
+        if _pane_has_interactive_menu(await _capture_pane(session_id)):
+          menu_probes += 1
+          if menu_probes >= _MENU_CONFIRM_PROBES:
+            await _interrupt_turn(session_id)
+            raise RuntimeError(
+                "interactive TUI menu detected (AskUserQuestion / plan-approval); claude-sub cannot answer it")
+        else:
+          menu_probes = 0
+
+      if now - turn_start >= _TURN_HARD_CAP_SECONDS:
+        await _interrupt_turn(session_id)
+        raise RuntimeError(f"turn exceeded {_TURN_HARD_CAP_SECONDS:.0f}s without completing")
 
       await asyncio.sleep(_POLL_SECONDS)
   finally:

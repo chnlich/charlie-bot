@@ -7,6 +7,25 @@ import pytest
 from src.agents.backends import tui
 
 
+def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
+  argv = tui._build_claude_argv(
+      "session-id",
+      resume=False,
+      disallowed_tools=["Monitor,CronCreate", "AskUserQuestion,ExitPlanMode"],
+  )
+
+  # The launched `claude` reliably honors one comma-joined flag, not repeated ones.
+  assert argv.count("--disallowed-tools") == 1
+  idx = argv.index("--disallowed-tools")
+  assert argv[idx + 1] == "Monitor,CronCreate,AskUserQuestion,ExitPlanMode"
+
+
+def test_build_claude_argv_omits_disallowed_flag_when_empty() -> None:
+  argv = tui._build_claude_argv("session-id", resume=False, disallowed_tools=[])
+
+  assert "--disallowed-tools" not in argv
+
+
 def test_ensure_claude_project_trusted_marks_session_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   config_dir = tmp_path / "claude-config"
   working_dir = tmp_path / "session"

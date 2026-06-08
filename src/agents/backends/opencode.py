@@ -146,6 +146,7 @@ class OpenCodeBackend(AgentBackend):
           await self._wait_for_server_connected(sse_events)
           await self._send_prompt(client, self._session_id, prompt)
 
+          turn_finished = False
           async for event in sse_events:
             properties = event.get("properties", {})
             if properties.get("sessionID") != self._session_id:
@@ -157,11 +158,15 @@ class OpenCodeBackend(AgentBackend):
 
             if event_type == "session.error":
               self._failed = True
+              turn_finished = True
               break
 
             if event_type == "session.idle":
               yield self._make_accumulated_result()
+              turn_finished = True
               break
+          if not turn_finished:
+            raise RuntimeError("OpenCode SSE stream closed before session.idle")
     except Exception as e:
       self._failed = True
       log.exception("opencode_backend_failed", error=str(e))

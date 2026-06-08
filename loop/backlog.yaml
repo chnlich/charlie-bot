@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused dirpath binding in core/git.py
+  description: 'PURPOSE — Remove an unused local variable from the git-marker scan.
+
+    HOW — In src/core/git.py:_contains_git_marker, change the os.walk loop to bind the unused path component
+    as `_`. Verify with pylint for unused-variable/import/argument checks and pyflakes src.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-08T07:13:01Z'
+  priority: low

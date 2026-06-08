@@ -40,6 +40,7 @@ class OpenCodeBackend(AgentBackend):
     self._session_id: str | None = None
     self._stdout_task: asyncio.Task | None = None
     self._message_roles: dict[str, str] = {}
+    self._pending_parts: dict[str, list[dict]] = {}
     self._last_part_text: dict[str, str] = {}
     self._tool_use_emitted: set[str] = set()
     self._tool_result_emitted: set[str] = set()
@@ -180,6 +181,7 @@ class OpenCodeBackend(AgentBackend):
     self._session_id = None
     self._stdout_task = None
     self._message_roles.clear()
+    self._pending_parts.clear()
     self._last_part_text.clear()
     self._tool_use_emitted.clear()
     self._tool_result_emitted.clear()
@@ -285,7 +287,12 @@ class OpenCodeBackend(AgentBackend):
       if line.startswith("data:"):
         data_lines.append(line[len("data:"):].lstrip())
         continue
-      raise RuntimeError(f"Unexpected OpenCode SSE line: {line}")
+      if line.startswith(":"):
+        continue
+      if ":" in line:
+        log.debug("opencode_sse_field_ignored", field=line.split(":", 1)[0])
+        continue
+      log.debug("opencode_sse_line_ignored", line=line)
     if data_lines:
       yield json.loads("\n".join(data_lines))
 
@@ -296,13 +303,20 @@ class OpenCodeBackend(AgentBackend):
     if ev_type == "message.updated":
       info = properties["info"]
       self._message_roles[info["id"]] = info["role"]
-      return []
+      pending_parts = self._pending_parts.pop(info["id"], [])
+      if info["role"] != "assistant":
+        return []
+      translated: list[dict] = []
+      for part in pending_parts:
+        translated.extend(self._translate_part(part))
+      return translated
 
     if ev_type == "message.part.updated":
       part = properties["part"]
       role = self._message_roles.get(part["messageID"])
       if role is None:
-        raise RuntimeError(f"OpenCode part arrived before message role: {part['messageID']}")
+        self._pending_parts.setdefault(part["messageID"], []).append(part)
+        return []
       if role != "assistant":
         return []
       return self._translate_part(part)
@@ -311,6 +325,13 @@ class OpenCodeBackend(AgentBackend):
       return [make_error_event(self._format_session_error(ev))]
 
     if ev_type == "session.idle":
+      if self._pending_parts:
+        log.warning(
+            "opencode_pending_parts_discarded",
+            message_ids=list(self._pending_parts),
+            count=sum(len(parts) for parts in self._pending_parts.values()),
+        )
+        self._pending_parts.clear()
       return []
 
     if ev_type in _IGNORED_SSE_EVENT_TYPES:

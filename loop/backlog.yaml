@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused dirpath binding in core/git._contains_git_marker
+  description: 'PURPOSE — Remove a dead local from the git marker scan.
+
+    HOW — In src/core/git.py:_contains_git_marker, rename the unused os.walk dirpath binding to `_`.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-08T05:13:32Z'
+  priority: low

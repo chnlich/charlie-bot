@@ -30,7 +30,7 @@ import sys
 
 import requests
 
-from src.cli.common import resolve_session_id
+from src.cli.common import internal_api_auth_headers, resolve_session_id
 from src.core.config import get_config
 from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
 
@@ -116,6 +116,7 @@ def main() -> None:
     resp = requests.post(
         f"{cfg.server_base_url}/api/internal/schedule-trigger",
         json=payload,
+        headers=internal_api_auth_headers(cfg),
         timeout=HTTP_INTERNAL_API_TIMEOUT,
         verify=False,
     )

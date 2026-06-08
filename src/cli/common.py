@@ -12,8 +12,20 @@ from typing import Any
 
 import requests
 
-from src.core.config import get_config
+from src.core.config import CharlieBotConfig, get_config
 from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
+
+
+def internal_api_auth_headers(cfg: CharlieBotConfig) -> dict[str, str]:
+  """Authorization header for internal-API calls.
+
+  Returns a Bearer header when ``charliebot_access_key`` is configured so the
+  internal CLIs authenticate against the auth middleware; returns no header when
+  the key is empty (the middleware is a no-op in that case).
+  """
+  if cfg.charliebot_access_key:
+    return {"Authorization": f"Bearer {cfg.charliebot_access_key}"}
+  return {}
 
 
 def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -25,7 +37,11 @@ def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
   cfg = get_config()
   try:
     resp = requests.post(
-        f"{cfg.server_base_url}{endpoint}", json=payload, timeout=HTTP_INTERNAL_API_TIMEOUT, verify=False)
+        f"{cfg.server_base_url}{endpoint}",
+        json=payload,
+        headers=internal_api_auth_headers(cfg),
+        timeout=HTTP_INTERNAL_API_TIMEOUT,
+        verify=False)
     resp.raise_for_status()
     return resp.json()
   except requests.RequestException as e:

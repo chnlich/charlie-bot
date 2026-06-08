@@ -23,18 +23,33 @@ function hideAuthOverlay() {
   if (el) el.style.display = 'none';
 }
 
+// Mirror the localStorage key into a cookie so top-level browser navigations
+// (which carry no Authorization header) authenticate. localStorage stays the
+// source of truth for the fetch wrapper / WS; the cookie only serves navigations.
+// SameSite=Strict closes the CSRF surface cookie auth would otherwise open;
+// Secure is appropriate since the server is reached only over HTTPS (Tailscale).
+function writeAccessCookie(key) {
+  document.cookie = 'charliebot_access_key=' + key + '; path=/; SameSite=Strict; Secure';
+}
+
 function submitAccessKey() {
   const input = document.getElementById('auth-key-input');
   const key = (input && input.value || '').trim();
   if (!key) return;
   localStorage.setItem('charliebot_access_key', key);
+  writeAccessCookie(key);
   // Reload so all connections use the new key. If invalid, 401 will re-show the overlay.
   hideAuthOverlay();
   location.reload();
 }
 
 function initAuth() {
-  if (typeof AUTH_ENABLED !== 'undefined' && AUTH_ENABLED && !localStorage.getItem('charliebot_access_key')) {
+  if (typeof AUTH_ENABLED === 'undefined' || !AUTH_ENABLED) return;
+  const key = localStorage.getItem('charliebot_access_key');
+  if (key) {
+    // Already-authenticated users get the cookie automatically so navigations start passing.
+    writeAccessCookie(key);
+  } else {
     showAuthOverlay();
   }
 }

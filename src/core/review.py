@@ -26,15 +26,20 @@ async def finalize_review_chain(
     original_thread: ThreadMetadata,
     thread_mgr: ThreadManager,
     worktree_parent: Path,
-) -> None:
-  """Idempotently remove the worktree shared by the original worker + its reviewer(s)."""
+) -> Optional[str]:
+  """Idempotently remove the worktree shared by the original worker + its reviewer(s).
+
+  Runs only on the review success path. Returns an error message when the cleanup
+  fails so the caller (which holds session_mgr) can broadcast it; returns None on
+  success or when there is nothing to clean.
+  """
   if not original_thread.repo_path or not original_thread.worktree_path:
-    return
+    return None
   if original_thread.keep_worktree:
-    return
+    return None
   wt = Path(original_thread.worktree_path)
   if not wt.exists():
-    return
+    return None
   if not original_thread.branch_name:
     raise RuntimeError(f"thread {original_thread.id} has worktree_path but no branch_name")
   try:
@@ -45,10 +50,20 @@ async def finalize_review_chain(
         allowed_parent=worktree_parent,
         expected_residue_name=git_worktree_dir_name(original_thread.branch_name),
     )
-    if removed:
-      await git_worktree_prune(original_thread.repo_path, original_thread.id)
   except Exception as e:
-    log.warning("review_chain_cleanup_failed", session=session_id, thread_id=original_thread.id, error=str(e))
+    log.error(
+        "review_chain_cleanup_failed",
+        session=session_id,
+        thread_id=original_thread.id,
+        worktree=str(wt),
+        error=str(e),
+        exc_info=True)
+    return f"Review worktree cleanup failed for {wt}: {e}"
+  if not removed:
+    log.error("review_chain_cleanup_remove_failed", session=session_id, thread_id=original_thread.id, worktree=str(wt))
+    return f"Review worktree cleanup failed for {wt}: git worktree remove reported failure"
+  await git_worktree_prune(original_thread.repo_path, original_thread.id)
+  return None
 
 
 def build_review_prompt(
@@ -422,13 +437,15 @@ async def _retry_failed_reviewer(
         tried=thread_meta.tried_backends,
     )
     return True
+  # Reviewer failed and all backends are exhausted: keep the shared worktree so the
+  # failed review's state survives for debugging. The startup quarantine sweep reclaims
+  # it later once it ages out.
   log.info(
       "reviewer_retries_exhausted",
       session=session_id,
       failed_review=thread_meta.id,
       tried=thread_meta.tried_backends,
   )
-  await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
   return False
 
 
@@ -470,7 +487,9 @@ async def maybe_spawn_reviewer(
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
     await trigger_master(session_id, combined, cfg, session_mgr)
     if exit_code == 0 and original_thread:
-      await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
+      cleanup_error = await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
+      if cleanup_error:
+        await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
     return
 
   # Failed/cancelled worker -> trigger master immediately

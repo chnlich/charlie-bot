@@ -534,10 +534,14 @@ async def _maybe_override_exit_code_from_result(
   return exit_code
 
 
-async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, worktree_parent: Path) -> None:
-  """Remove the worker's worktree or temp directory after it finishes."""
+async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, worktree_parent: Path) -> Optional[str]:
+  """Remove the worker's worktree after a successful run.
+
+  Returns an error message when the (success-path) cleanup fails so the caller can
+  surface it; returns None on success or when there is nothing to clean.
+  """
   if skip_cleanup:
-    return
+    return None
 
   # Git worktree removal for repo-based workers.
   if thread.worktree_path and thread.repo_path:
@@ -553,21 +557,30 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, 
             allowed_parent=worktree_parent,
             expected_residue_name=git_worktree_dir_name(thread.branch_name),
         )
-        if not removed:
-          return
-        await git_worktree_prune(thread.repo_path, thread.id)
       except Exception as wt_err:
-        log.warning("worktree_cleanup_error", thread_id=thread.id, error=str(wt_err))
-    return
+        log.error("worktree_cleanup_error", thread_id=thread.id, worktree=str(wt), error=str(wt_err), exc_info=True)
+        return f"Worktree cleanup failed for {wt}: {wt_err}"
+      if not removed:
+        log.error("worktree_cleanup_remove_failed", thread_id=thread.id, worktree=str(wt))
+        return f"Worktree cleanup failed for {wt}: git worktree remove reported failure"
+      await git_worktree_prune(thread.repo_path, thread.id)
+  return None
 
 
 def _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) -> bool:
-  """Decide whether the worker's worktree must survive past this exit (reviewer chain, keep_worktree pin, improve-loop shared worktree, or explicit skip_cleanup)."""
+  """Decide whether the worker's worktree must survive past this exit.
+
+  Survives for: keep_worktree pin, explicit skip_cleanup, reviewer chain, a non-zero
+  exit (failures keep their worktree so the debug state is not destroyed), or the
+  reviewer-handoff handled on the zero-exit success path.
+  """
   if thread.keep_worktree:
     return True
   if thread.skip_cleanup:
     return True
   if thread.review_of:
+    return True
+  if exit_code != 0:
     return True
   can_spawn_reviewer = all([thread.repo_path, thread.branch_name, thread.worktree_path])
   return exit_code == 0 and thread.require_review and not thread.review_of and can_spawn_reviewer
@@ -603,7 +616,9 @@ async def _finalize_worker(
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
   skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
-  await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
+  cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
+  if cleanup_error:
+    await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
 
   if not skip_notify:
     await _notify_completion(

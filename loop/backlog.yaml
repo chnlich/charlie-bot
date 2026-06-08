@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub.parse_argv into tokenization and option parsing helpers
+  description: |
+    PURPOSE: Split claude_sub.parse_argv so option tokenization and option parsing are easier to maintain.
+    HOW:
+    - Extract option/prompt tokenization into _split_cli_prompt_tokens(argv).
+    - Extract supported flag handling into _parse_claude_sub_options(option_tokens).
+    - Keep current fail-fast ValueError behavior and stream-json requirement unchanged.
+  category: long-function
+  status: pending
+  created: '2026-06-08T01:13:05Z'
+  priority: low

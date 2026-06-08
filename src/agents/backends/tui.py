@@ -79,8 +79,10 @@ def _build_claude_argv(
     argv.extend(["--model", model])
   if effort:
     argv.extend(["--effort", effort])
-  for tools in disallowed_tools or []:
-    argv.extend(["--disallowed-tools", tools])
+  # Collapse every incoming entry into one comma-joined value: the launched `claude`
+  # reliably honors a single --disallowed-tools flag, not repeated ones.
+  if disallowed_tools:
+    argv.extend(["--disallowed-tools", ",".join(disallowed_tools)])
   return argv
 
 

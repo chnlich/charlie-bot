@@ -23,6 +23,11 @@ BASE_COMMAND: list[str] = [
     "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList",
 ]
 
+# Subscription mode (cli_binary='claude-sub') drives an interactive `claude` TUI in
+# tmux and cannot answer arrow-key menus. Additionally disallow the tools that raise
+# such menus so the model emits plain-text choices instead of deadlocking the session.
+SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
+
 
 class ClaudeCodeBackend(AgentBackend):
   """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
@@ -33,6 +38,8 @@ class ClaudeCodeBackend(AgentBackend):
     self._cmd: list[str] = list(BASE_COMMAND)
     if cli_binary:
       self._cmd[0] = cli_binary
+      if cli_binary == "claude-sub":
+        self._cmd += ["--disallowed-tools", SUBSCRIPTION_DISALLOWED_TOOLS]
     if self._model:
       self._cmd += ["--model", self._model]
     if self._effort:

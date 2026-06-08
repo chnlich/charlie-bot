@@ -57,3 +57,30 @@ def test_base_command_disallows_headless_unsafe_tools() -> None:
   }
 
   assert required_tools <= disallowed_tools
+
+
+def _disallowed_tool_values(cmd: list[str]) -> set[str]:
+  tools: set[str] = set()
+  for i, token in enumerate(cmd):
+    if token == "--disallowed-tools":
+      tools.update(cmd[i + 1].split(","))
+  return tools
+
+
+def test_subscription_backend_disallows_interactive_menu_tools() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8", cli_binary="claude-sub")
+
+  tools = _disallowed_tool_values(backend._build_command("hi"))
+
+  assert {"AskUserQuestion", "ExitPlanMode"} <= tools
+  assert "Monitor" in tools  # base headless-unsafe tools still disallowed
+
+
+def test_api_backend_does_not_disallow_interactive_menu_tools() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8")
+
+  tools = _disallowed_tool_values(backend._build_command("hi"))
+
+  assert "AskUserQuestion" not in tools
+  assert "ExitPlanMode" not in tools
+  assert "Monitor" in tools

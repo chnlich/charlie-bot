@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Deduplicate child-session scaffolding in SessionManager
+  description: 'PURPOSE — Remove the repeated child-session metadata and subdirectory scaffolding from fork_session and elone_session.
+
+    HOW — Add a private helper that builds SessionMetadata from a parent and creates the standard data/threads subdirs. Call it from fork_session with "C" and elone_session with "E"; keep each caller''s event-copy, empty-history, metadata-save, and parent-archive behavior in place.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-06-08T21:14:44Z'
+  priority: low

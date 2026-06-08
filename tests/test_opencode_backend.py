@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from src.agents.backends.opencode import OpenCodeBackend
 
 
@@ -10,6 +12,142 @@ def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
       lambda name, fallback: "/usr/bin/opencode",
   )
   return OpenCodeBackend(**kwargs)
+
+
+class _FakeSseResponse:
+
+  def __init__(self, lines: list[str]) -> None:
+    self._lines = lines
+
+  async def aiter_lines(self):
+    for line in self._lines:
+      yield line
+
+
+@pytest.mark.asyncio
+async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+  response = _FakeSseResponse(
+      [
+          ": keepalive",
+          "event: message.updated",
+          "id: event-1",
+          "retry: 1000",
+          "data: {\"type\": \"server.connected\"}",
+          "",
+          ": another keepalive",
+          "event: session.idle",
+          "x-extra: ignored",
+          "data: {\"type\": \"session.idle\",",
+          "data: \"properties\": {\"sessionID\": \"session-1\"}}",
+          "",
+      ])
+
+  events = [event async for event in backend._iter_sse_events(response)]
+
+  assert events == [
+      {
+          "type": "server.connected"
+      },
+      {
+          "type": "session.idle",
+          "properties": {
+              "sessionID": "session-1"
+          }
+      },
+  ]
+
+
+def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  assert backend._translate_sse_event(
+      {
+          "type": "message.part.updated",
+          "properties": {
+              "part": {
+                  "messageID": "message-1",
+                  "id": "part-1",
+                  "type": "text",
+                  "text": "Hello",
+              }
+          },
+      }) == []
+  assert backend._translate_sse_event(
+      {
+          "type": "message.part.updated",
+          "properties": {
+              "part": {
+                  "messageID": "message-1",
+                  "id": "part-1",
+                  "type": "text",
+                  "text": "Hello world",
+              }
+          },
+      }) == []
+
+  translated = backend._translate_sse_event(
+      {
+          "type": "message.updated",
+          "properties": {
+              "info": {
+                  "id": "message-1",
+                  "role": "assistant",
+              }
+          },
+      })
+
+  assert translated == [
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "Hello"
+              }]
+          }
+      },
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": " world"
+              }]
+          }
+      },
+  ]
+
+
+def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  assert backend._translate_sse_event(
+      {
+          "type": "message.part.updated",
+          "properties": {
+              "part": {
+                  "messageID": "message-1",
+                  "id": "part-1",
+                  "type": "text",
+                  "text": "Hello",
+              }
+          },
+      }) == []
+
+  translated = backend._translate_sse_event(
+      {
+          "type": "message.updated",
+          "properties": {
+              "info": {
+                  "id": "message-1",
+                  "role": "user",
+              }
+          },
+      })
+
+  assert translated == []
+  assert backend._pending_parts == {}
 
 
 def test_prepare_cwd_writes_project_opencode_json(monkeypatch, tmp_path: Path) -> None:

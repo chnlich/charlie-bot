@@ -7318,3 +7318,12 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argument parsing helpers
+  description: |-
+    PURPOSE: Keep claude-sub option parsing readable by separating token splitting from option validation.
+    HOW: Extract a helper for the `--` and first-prompt-token split, extract a helper for supported-flag validation, then keep parse_argv focused on final validation and ClaudeSubArgs construction.
+  category: long-function
+  status: pending
+  created: '2026-06-08T03:12:04Z'
+  priority: low

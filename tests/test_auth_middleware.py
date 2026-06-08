@@ -13,7 +13,7 @@ from src.api.auth import AuthMiddleware
 
 def _request(
     method: str = "GET",
-    path: str = "/perfetto",
+    path: str = "/api/chat",
     headers: dict[str, str] | None = None,
     cookies: dict[str, str] | None = None,
 ) -> Request:
@@ -108,3 +108,29 @@ async def test_public_path_passes_without_credential(monkeypatch: pytest.MonkeyP
   mw = _middleware(monkeypatch, key="secret")
   resp = await mw.dispatch(_request(path="/api/auth/status", headers={"accept": "text/html"}), _call_next)
   assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/perfetto", "/ncu"])
+async def test_viewer_pages_public_without_credential(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+  # The read-only viewer shells are reachable without any Bearer or cookie.
+  mw = _middleware(monkeypatch, key="secret")
+  resp = await mw.dispatch(_request(path=path, headers={"accept": "text/html"}), _call_next)
+  assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_viewer_pages_match_exact_path_only(monkeypatch: pytest.MonkeyPatch) -> None:
+  # Exact-path matching: query strings are excluded from request.url.path so
+  # "/perfetto?trace=..." resolves to "/perfetto", but sibling paths stay gated.
+  mw = _middleware(monkeypatch, key="secret")
+  resp = await mw.dispatch(_request(path="/perfetto/secret", headers={"accept": "application/json"}), _call_next)
+  assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_gated_route_still_requires_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+  # A representative gated route must remain 401 without a credential.
+  mw = _middleware(monkeypatch, key="secret")
+  resp = await mw.dispatch(_request(path="/api/sessions", headers={"accept": "application/json"}), _call_next)
+  assert resp.status_code == 401

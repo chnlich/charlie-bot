@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split parse_argv in cli/claude_sub.py
+  description: |-
+    PURPOSE: Make claude-sub argument parsing easier to review and extend.
+    HOW:
+    - Extract argv splitting into a helper that returns option_tokens and prompt_tokens.
+    - Extract option flag parsing into a helper that returns output_format, model, effort, resume, and disallowed_tools.
+    - Keep validation in parse_argv and run yapf plus pyflakes on the touched file.
+  category: long-function
+  status: pending
+  created: '2026-06-08T23:12:39Z'
+  priority: low

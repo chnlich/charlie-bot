@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub parse_argv into tokenization and option decoding helpers
+  description: |
+    PURPOSE: Split the claude-sub argument parser so token collection and option decoding are isolated.
+    HOW:
+    - Extract option/prompt token collection from parse_argv into a small helper.
+    - Extract option decoding into a helper that returns the parsed fields.
+    - Preserve existing ValueError behavior and rerun yapf plus pyflakes for src/cli/claude_sub.py.
+  category: long-function
+  status: pending
+  created: '2026-06-08T17:14:30Z'
+  priority: low

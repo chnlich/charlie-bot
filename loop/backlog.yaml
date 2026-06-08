@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split parse_argv in cli/claude_sub.py
+  description: |
+    PURPOSE: Make the claude-sub CLI parser easier to read by separating argv tokenization from option interpretation.
+    HOW: Extract the initial argv scan into a helper such as _split_argv_tokens(argv).
+    Keep parse_argv responsible for supported-flag validation and returning ClaudeSubArgs.
+  category: long-function
+  status: pending
+  created: '2026-06-08T13:12:54Z'
+  priority: low

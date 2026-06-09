@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Clean test-suite static-analysis noise
+  description: |-
+    PURPOSE: Keep test code from hiding real unused-name findings.
+    HOW: Remove unused imports reported by pyflakes in the affected test files.
+    Replace or remove intentionally unused locals and unsatisfiable branches reported by vulture after confirming each test still asserts the same behavior.
+  category: code-health
+  status: pending
+  created: '2026-06-09T21:12:26Z'
+  priority: low

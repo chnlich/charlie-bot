@@ -151,6 +151,8 @@ class AgentBackend(ABC):
     self._stderr_tail = bytearray()
     self.exit_code: int = -1
     self.stderr_text: str = ""
+    # Set when terminate() is called — deliberate user stop or shutdown.
+    self.terminated: bool = False
     self.hang_diagnostics: Optional[dict] = None
 
   def _effective_prompt(self, prompt: str) -> str:
@@ -383,6 +385,7 @@ class AgentBackend(ABC):
 
   async def terminate(self) -> None:
     """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""
+    self.terminated = True
     if self._proc is None or self._proc.returncode is not None:
       return
     await self._graceful_shutdown(5.0, timeout_log_event="backend_terminate_timeout")

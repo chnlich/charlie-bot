@@ -269,6 +269,38 @@ async def test_sweep_skips_missing_and_unparseable_completed_at(
 
 
 @pytest.mark.asyncio
+async def test_sweep_survives_non_string_completed_at_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _cfg(tmp_path)
+  parent = Path(cfg.worktree_dir)
+  malformed = _make_worktree(parent, "charliebot-task-number-ts")
+  old = _make_worktree(parent, "charliebot-task-valid")
+  quarantined = _install_recording_quarantine(monkeypatch)
+
+  await init_module._quarantine_stale_failed_worktrees(
+      cfg,
+      [
+          _thread(
+              thread_id="number-ts",
+              status="failed",
+              worktree_path=malformed,
+              branch_name="charliebot/task-number-ts",
+              completed_at=123),
+          _thread(
+              thread_id="valid",
+              status="failed",
+              worktree_path=old,
+              branch_name="charliebot/task-valid",
+              age_days=20.0),
+      ],
+  )
+
+  assert quarantined == [str(old)]
+  assert malformed.exists()
+  assert not old.exists()
+
+
+@pytest.mark.asyncio
 async def test_sweep_skips_when_running_thread_references_worktree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _cfg(tmp_path)

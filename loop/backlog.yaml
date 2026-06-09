@@ -7318,3 +7318,17 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into startup and turn-stream helpers
+  description: 'PURPOSE: Reduce OpenCodeBackend.run to a readable orchestration loop.
+
+    HOW: Extract process startup and log task setup into a private server-start helper.
+    Extract the health, session creation, SSE prompt send, and idle/error turn loop into
+    a private turn-stream helper. Keep yielded events, error logging, and cleanup behavior
+    unchanged.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-09T11:12:35Z'
+  priority: low

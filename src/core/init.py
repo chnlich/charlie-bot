@@ -173,42 +173,46 @@ async def _quarantine_stale_failed_worktrees(cfg, threads: list[dict]) -> None:
   cutoff = timedelta(days=FAILED_WORKTREE_QUARANTINE_DAYS)
   swept: set[str] = set()
   for meta in threads:
-    if meta.get("status") != "failed" or meta.get("keep_worktree"):
-      continue
-    repo_path = meta.get("repo_path")
-    worktree_path = meta.get("worktree_path")
-    branch_name = meta.get("branch_name")
-    if not (repo_path and worktree_path and branch_name) or worktree_path in swept:
-      continue
-    completed_at = meta.get("completed_at")
-    if not completed_at:
-      continue
     try:
-      completed_dt = parse_utc_datetime(completed_at)
-    except (ValueError, TypeError):
-      log.warning("quarantine_skip_unparseable_completed_at", thread=meta.get("id"), completed_at=completed_at)
+      if meta.get("status") != "failed" or meta.get("keep_worktree"):
+        continue
+      repo_path = meta.get("repo_path")
+      worktree_path = meta.get("worktree_path")
+      branch_name = meta.get("branch_name")
+      if not (repo_path and worktree_path and branch_name) or worktree_path in swept:
+        continue
+      completed_at = meta.get("completed_at")
+      if not completed_at:
+        continue
+      try:
+        completed_dt = parse_utc_datetime(completed_at)
+      except (ValueError, TypeError):
+        log.warning("quarantine_skip_unparseable_completed_at", thread=meta.get("id"), completed_at=completed_at)
+        continue
+      if now - completed_dt < cutoff:
+        continue
+      wt = Path(worktree_path)
+      if not wt.exists():
+        continue
+      if worktree_path in active_worktrees:
+        log.warning("quarantine_skip_active_worktree", thread=meta.get("id"), worktree=worktree_path)
+        continue
+      swept.add(worktree_path)
+      try:
+        await git_quarantine_worktree(
+            repo_path,
+            wt,
+            meta.get("id") or wt.name,
+            allowed_parent=worktree_parent,
+            expected_residue_name=git_worktree_dir_name(branch_name),
+            trash_dir=trash_path,
+        )
+      except Exception as e:
+        log.error(
+            "quarantine_worktree_failed", thread=meta.get("id"), worktree=worktree_path, error=str(e), exc_info=True)
+    except Exception:
+      log.exception("quarantine_thread_sweep_failed", thread=meta.get("id"))
       continue
-    if now - completed_dt < cutoff:
-      continue
-    wt = Path(worktree_path)
-    if not wt.exists():
-      continue
-    if worktree_path in active_worktrees:
-      log.warning("quarantine_skip_active_worktree", thread=meta.get("id"), worktree=worktree_path)
-      continue
-    swept.add(worktree_path)
-    try:
-      await git_quarantine_worktree(
-          repo_path,
-          wt,
-          meta.get("id") or wt.name,
-          allowed_parent=worktree_parent,
-          expected_residue_name=git_worktree_dir_name(branch_name),
-          trash_dir=trash_path,
-      )
-    except Exception as e:
-      log.error(
-          "quarantine_worktree_failed", thread=meta.get("id"), worktree=worktree_path, error=str(e), exc_info=True)
 
   if trash_path.exists():
     total = dir_size_bytes(trash_path)

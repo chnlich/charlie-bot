@@ -299,7 +299,7 @@ test('bumpCurrentSessionToTop moves flat sidebar sessions to the top-level front
   assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
 });
 
-test('applyCompactMode folds older completed turns and keeps latest completed turn expanded', () => {
+test('applyCompactMode folds all completed turns and leaves live turn expanded', () => {
   const root = new FakeElement('DIV');
   const {context} = loadChatContext({
     getElementById() {
@@ -320,6 +320,10 @@ test('applyCompactMode folds older completed turns and keeps latest completed tu
     messageElement('system', 's2'),
     messageElement('assistant', 'a4'),
     messageElement('separator', 'sep2'),
+    messageElement('user', 'u3'),
+    messageElement('assistant', 'a5'),
+    messageElement('system', 's3'),
+    messageElement('assistant', 'a6'),
   ].forEach((el) => root.appendChild(el));
 
   context.applyCompactMode(root);
@@ -334,21 +338,27 @@ test('applyCompactMode folds older completed turns and keeps latest completed tu
     'separator',
     'user',
     'turn-fold-bar',
-    'turn-fold-content space-y-3',
+    'turn-fold-content space-y-3 hidden',
     'assistant',
     'separator',
+    'user',
+    'assistant',
+    'system',
+    'assistant',
   ]);
   assert.equal(root.querySelectorAll('.turn-fold-bar').length, 2);
   assert.deepEqual(root.children[2].children.map((child) => child.dataset.messageId), ['a1', 's1']);
   assert.equal(root.children[2].classList.contains('hidden'), true);
   assert.deepEqual(root.children[9].children.map((child) => child.dataset.messageId), ['a3', 's2']);
-  assert.equal(root.children[9].classList.contains('hidden'), false);
+  assert.equal(root.children[9].classList.contains('hidden'), true);
+  assert.deepEqual(root.children.slice(12).map((child) => child.dataset.messageId), ['u3', 'a5', 's3', 'a6']);
 
   context.applyCompactMode(root);
 
   assert.equal(root.querySelectorAll('.turn-fold-bar').length, 2);
   assert.deepEqual(root.children[2].children.map((child) => child.dataset.messageId), ['a1', 's1']);
   assert.deepEqual(root.children[9].children.map((child) => child.dataset.messageId), ['a3', 's2']);
+  assert.deepEqual(root.children.slice(12).map((child) => child.dataset.messageId), ['u3', 'a5', 's3', 'a6']);
 });
 
 test('turn fold bar toggles its single intermediate span', () => {
@@ -370,16 +380,16 @@ test('turn fold bar toggles its single intermediate span', () => {
   const bar = root.querySelector('.turn-fold-bar');
   const content = root.querySelector('.turn-fold-content');
 
-  assert.equal(content.classList.contains('hidden'), false);
-  assert.equal(bar.getAttribute('aria-expanded'), 'true');
+  assert.equal(content.classList.contains('hidden'), true);
+  assert.equal(bar.getAttribute('aria-expanded'), 'false');
 
   context.toggleTurnFold(bar);
 
-  assert.equal(content.classList.contains('hidden'), true);
-  assert.equal(bar.getAttribute('aria-expanded'), 'false');
+  assert.equal(content.classList.contains('hidden'), false);
+  assert.equal(bar.getAttribute('aria-expanded'), 'true');
 });
 
-test('top-bar compact action collapses the latest completed turn after expand all', () => {
+test('top-bar compact action expands and collapses all completed turns', () => {
   const root = new FakeElement('DIV');
   const compactButton = new FakeElement('BUTTON');
   const {context} = loadChatContext({
@@ -395,19 +405,29 @@ test('top-bar compact action collapses the latest completed turn after expand al
     messageElement('assistant', 'a1'),
     messageElement('assistant', 'a2'),
     messageElement('separator', 'sep1'),
+    messageElement('user', 'u2'),
+    messageElement('assistant', 'a3'),
+    messageElement('assistant', 'a4'),
+    messageElement('separator', 'sep2'),
   ].forEach((el) => root.appendChild(el));
 
   context.applyCompactMode(root);
-  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), false);
+  assert.equal(root.querySelectorAll('.turn-fold-content').length, 2);
+  assert.equal(root.querySelectorAll('.turn-fold-content').every((content) => content.classList.contains('hidden')), true);
   assert.equal(compactButton.textContent, 'Expand all');
+  assert.equal(compactButton.getAttribute('title'), 'Expand collapsed turns');
 
   context.toggleCompactMode();
-  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), false);
+  assert.equal(root.querySelectorAll('.turn-fold-content').length, 2);
+  assert.equal(root.querySelectorAll('.turn-fold-content').every((content) => !content.classList.contains('hidden')), true);
   assert.equal(compactButton.textContent, 'Compact');
+  assert.equal(compactButton.getAttribute('title'), 'Collapse completed turns');
 
   context.toggleCompactMode();
-  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), true);
+  assert.equal(root.querySelectorAll('.turn-fold-content').length, 2);
+  assert.equal(root.querySelectorAll('.turn-fold-content').every((content) => content.classList.contains('hidden')), true);
   assert.equal(compactButton.textContent, 'Expand all');
+  assert.equal(compactButton.getAttribute('title'), 'Expand collapsed turns');
 });
 
 test('applyCompactMode waits for a paginated turn head before folding a leading partial turn', () => {
@@ -435,4 +455,5 @@ test('applyCompactMode waits for a paginated turn head before folding a leading 
 
   assert.equal(root.querySelectorAll('.turn-fold-bar').length, 1);
   assert.deepEqual(root.querySelector('.turn-fold-content').children.map((child) => child.dataset.messageId), ['a1', 's1']);
+  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), true);
 });

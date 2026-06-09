@@ -30,6 +30,15 @@
 .prose-msg table { border-collapse: collapse; margin: 0.5rem 0; width: 100%; }
 .prose-msg th, .prose-msg td { border: 1px solid #475569; padding: 0.375rem 0.75rem; text-align: left; }
 .prose-msg th { background: #1e293b; font-weight: 600; }
+.turn-fold-bar {
+  display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+  width: 100%; padding: 0.35rem 0.75rem; border: 1px solid rgba(100, 116, 139, 0.35);
+  border-radius: 0.5rem; background: rgba(15, 23, 42, 0.35); color: #94a3b8;
+  font-size: 0.75rem; transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.turn-fold-bar:hover { background: rgba(30, 41, 59, 0.7); border-color: rgba(148, 163, 184, 0.45); color: #cbd5e1; }
+.turn-fold-chevron { width: 0.875rem; height: 0.875rem; transition: transform 0.15s; }
+.turn-fold-bar[aria-expanded="true"] .turn-fold-chevron { transform: rotate(180deg); }
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
 .tui-status-dot { background: #475569; }

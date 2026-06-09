@@ -130,6 +130,7 @@ class BackendOption(BaseModel):
   model: Optional[str] = None
   effort: Optional[str] = None
   cli_binary: Optional[str] = None
+  codex_home: Optional[str] = None  # codex backend only: per-account $CODEX_HOME
 
 
 MODEL_REQUIRED_BACKEND_TYPES = frozenset(

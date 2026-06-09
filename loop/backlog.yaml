@@ -7318,3 +7318,12 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop unused cls parameter from CharlieBotConfig validator
+  description: |
+    PURPOSE — Remove the remaining vulture dead-code finding in the config validator.
+    HOW — Rename the unused classmethod receiver in `CharlieBotConfig.migrate_and_expand` to `_cls`.
+  category: dead-code
+  status: pending
+  created: '2026-06-09T17:12:00Z'
+  priority: low

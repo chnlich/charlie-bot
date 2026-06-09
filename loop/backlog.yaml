@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into startup and turn-driving helpers
+  description: |
+    PURPOSE: Make OpenCodeBackend.run easier to maintain.
+    HOW:
+    - Extract the server-process startup steps into a private helper that prepares cwd/env, spawns opencode, starts log tasks, and returns the server URL.
+    - Extract the health/session/SSE prompt loop into a private helper so run only coordinates reset, error handling, and cleanup.
+  category: long-function
+  status: pending
+  created: '2026-06-09T03:13:18Z'
+  priority: low

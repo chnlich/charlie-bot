@@ -7318,3 +7318,12 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub argument parsing
+  description: |-
+    PURPOSE: Keep claude_sub argument parsing small enough to audit safely.
+    HOW: Extract prompt/option token splitting from parse_argv, then parse supported flags in a separate helper that returns the parsed option fields. Keep the existing fail-fast errors and stream-json requirement unchanged.
+  category: long-function
+  status: pending
+  created: '2026-06-09T19:12:13Z'
+  priority: low

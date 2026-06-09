@@ -6,7 +6,7 @@ function shouldAutoScroll(container, threshold = 150) {
 }
 
 let activeRoundRatings = {};
-let compactMode = 'review';
+let compactMode = 'compact';
 
 function setActiveRoundRatings(roundRatings) {
   activeRoundRatings = roundRatings || {};
@@ -804,16 +804,14 @@ function applyCompactMode(root) {
 
   resetTurnFolds(root);
   const turns = collectCompletedTurns(root);
-  turns.forEach((turn, index) => {
-    installTurnFold(root, turn, shouldCollapseTurn(index, turns.length));
+  turns.forEach(turn => {
+    installTurnFold(root, turn, shouldCollapseTurn());
   });
   updateCompactModeButton();
 }
 
-function shouldCollapseTurn(index, turnCount) {
-  if (compactMode === 'expanded') return false;
-  if (compactMode === 'compact') return true;
-  return index !== turnCount - 1;
+function shouldCollapseTurn() {
+  return compactMode !== 'expanded';
 }
 
 function toggleTurnFold(btn) {

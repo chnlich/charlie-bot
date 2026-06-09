@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract OpenCode SSE turn handling from OpenCodeBackend.run
+  description: |-
+    PURPOSE: Shorten OpenCodeBackend.run by moving SSE turn handling into a focused helper.
+    HOW:
+    - Extract the /event stream loop into a private async generator that yields translated events and the final accumulated result.
+    - Keep process startup, health check, session creation, and cleanup in run.
+    - Verify yapf --in-place --recursive src/ and pyflakes src/agents/backends/opencode.py.
+  category: long-function
+  status: pending
+  created: '2026-06-09T23:12:52Z'
+  priority: low

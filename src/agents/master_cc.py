@@ -287,7 +287,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
     exit_code = backend.exit_code
     if backend.stderr_text:
       log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text)
-      if exit_code != 0:
+      if exit_code != 0 and not backend.terminated:
         error_msg = backend.stderr_text[:500]
 
   except asyncio.CancelledError:

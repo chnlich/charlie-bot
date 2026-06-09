@@ -7318,3 +7318,16 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Make stale worktree quarantine fail fast
+  description: |-
+    PURPOSE: Surface stale worktree quarantine failures instead of hiding them inside a long best-effort sweep.
+
+    HOW:
+    - Split stale failed-worktree candidate filtering out of _quarantine_stale_failed_worktrees.
+    - Log quarantine failures once, then re-raise real file-operation errors instead of continuing the sweep.
+    - Update worktree quarantine tests that currently expect best-effort recovery.
+  category: error-handling
+  status: pending
+  created: '2026-06-09T09:12:50Z'
+  priority: medium

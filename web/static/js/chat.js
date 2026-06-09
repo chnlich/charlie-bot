@@ -6,6 +6,7 @@ function shouldAutoScroll(container, threshold = 150) {
 }
 
 let activeRoundRatings = {};
+let compactMode = 'review';
 
 function setActiveRoundRatings(roundRatings) {
   activeRoundRatings = roundRatings || {};
@@ -87,7 +88,9 @@ function messageRenderId(msg) {
 
 function messageIdentityAttrs(msg) {
   const id = messageRenderId(msg);
-  return id ? ' data-message-id="' + escapeChatAttr(id) + '"' : '';
+  let attrs = id ? ' data-message-id="' + escapeChatAttr(id) + '"' : '';
+  if (msg && msg.role) attrs += ' data-message-role="' + escapeChatAttr(msg.role) + '"';
+  return attrs;
 }
 
 function isRenderedMessage(msg) {
@@ -681,12 +684,168 @@ function renderToolActivity(tools) {
     + '</div>';
 }
 
+function renderedMessageId(el) {
+  return el && el.dataset ? (el.dataset.messageId || '') : '';
+}
+
+function renderedMessageRole(el) {
+  return el && el.dataset ? (el.dataset.messageRole || '') : '';
+}
+
+function isStableRenderedMessage(el) {
+  return Boolean(renderedMessageId(el) && renderedMessageRole(el));
+}
+
+function resetTurnFolds(root) {
+  Array.from(root.querySelectorAll('.turn-fold-content')).forEach(content => {
+    const parent = content.parentNode;
+    while (content.firstElementChild) {
+      parent.insertBefore(content.firstElementChild, content);
+    }
+    content.remove();
+  });
+  Array.from(root.querySelectorAll('.turn-fold-bar')).forEach(bar => bar.remove());
+}
+
+function collectCompletedTurns(root) {
+  const turns = [];
+  let turnStart = null;
+
+  Array.from(root.children).forEach(el => {
+    if (!isStableRenderedMessage(el)) return;
+    const role = renderedMessageRole(el);
+    if (role === 'user') {
+      turnStart = el;
+      return;
+    }
+    if (role === 'separator') {
+      if (turnStart) turns.push({start: turnStart, separator: el});
+      turnStart = null;
+    }
+  });
+
+  return turns;
+}
+
+function findTurnConclusion(turn) {
+  let el = turn.separator.previousElementSibling;
+  while (el && el !== turn.start) {
+    if (isStableRenderedMessage(el) && renderedMessageRole(el) === 'assistant') return el;
+    el = el.previousElementSibling;
+  }
+  return null;
+}
+
+function collectIntermediateTurnMessages(turn, conclusion) {
+  const messages = [];
+  let el = turn.start.nextElementSibling;
+  while (el && el !== conclusion) {
+    if (isStableRenderedMessage(el)) messages.push(el);
+    el = el.nextElementSibling;
+  }
+  return messages;
+}
+
+function turnFoldKey(turn, conclusion) {
+  return [
+    renderedMessageId(turn.start),
+    renderedMessageId(conclusion),
+    renderedMessageId(turn.separator),
+  ].join('|');
+}
+
+function turnFoldLabel(count) {
+  return count + ' step' + (count === 1 ? '' : 's');
+}
+
+function setTurnFoldBarExpanded(btn, expanded) {
+  btn.setAttribute('aria-expanded', String(expanded));
+  btn.setAttribute('title', expanded ? 'Collapse steps' : 'Expand steps');
+}
+
+function buildTurnFoldBar(turnKey, count, expanded) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'turn-fold-bar';
+  btn.dataset.turnFoldKey = turnKey;
+  btn.dataset.turnFoldCount = String(count);
+  btn.onclick = function() { toggleTurnFold(this); };
+  btn.innerHTML = '<span class="turn-fold-label">' + turnFoldLabel(count) + '</span>'
+    + '<svg class="turn-fold-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+    + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+  setTurnFoldBarExpanded(btn, expanded);
+  return btn;
+}
+
+function installTurnFold(root, turn, collapsed) {
+  const conclusion = findTurnConclusion(turn);
+  if (!conclusion) return;
+
+  const messages = collectIntermediateTurnMessages(turn, conclusion);
+  if (!messages.length) return;
+
+  const content = document.createElement('div');
+  content.className = 'turn-fold-content space-y-3';
+  content.dataset.turnFoldKey = turnFoldKey(turn, conclusion);
+  content.classList.toggle('hidden', collapsed);
+
+  const bar = buildTurnFoldBar(content.dataset.turnFoldKey, messages.length, !collapsed);
+  const ref = messages[0];
+  root.insertBefore(bar, ref);
+  root.insertBefore(content, ref);
+  messages.forEach(el => content.appendChild(el));
+}
+
+function applyCompactMode(root) {
+  if (!root) {
+    updateCompactModeButton();
+    return;
+  }
+
+  resetTurnFolds(root);
+  const turns = collectCompletedTurns(root);
+  turns.forEach((turn, index) => {
+    installTurnFold(root, turn, shouldCollapseTurn(index, turns.length));
+  });
+  updateCompactModeButton();
+}
+
+function shouldCollapseTurn(index, turnCount) {
+  if (compactMode === 'expanded') return false;
+  if (compactMode === 'compact') return true;
+  return index !== turnCount - 1;
+}
+
+function toggleTurnFold(btn) {
+  const content = btn.nextElementSibling;
+  if (!content || !content.classList.contains('turn-fold-content')) {
+    throw new Error('Turn fold content missing');
+  }
+  const collapsed = content.classList.toggle('hidden');
+  setTurnFoldBarExpanded(btn, !collapsed);
+}
+
+function updateCompactModeButton() {
+  const btn = document.getElementById('compact-mode-toggle');
+  if (!btn) return;
+  const expanded = compactMode === 'expanded';
+  btn.textContent = expanded ? 'Compact' : 'Expand all';
+  btn.setAttribute('title', expanded ? 'Collapse completed turns' : 'Expand collapsed turns');
+  btn.setAttribute('aria-pressed', String(!expanded));
+}
+
+function toggleCompactMode() {
+  compactMode = compactMode === 'expanded' ? 'compact' : 'expanded';
+  applyCompactMode(document.getElementById('messages'));
+}
+
 function renderMessagesIntoContainer(container, messages, sessionId) {
   const streamEl = document.getElementById('streaming-msg');
   const streamHtml = streamEl ? streamEl.outerHTML : '';
   const parts = (messages || []).map(msg => renderMessage(msg, sessionId));
   container.innerHTML = parts.join('') + streamHtml;
   postProcessRenderedMessages(container);
+  applyCompactMode(container);
 }
 
 function postProcessRenderedMessages(root) {

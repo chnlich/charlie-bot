@@ -420,6 +420,8 @@ async function loadOlderIfNeeded(container) {
       else container.prepend(tempDiv.lastChild);
     }
 
+    applyCompactMode(container);
+
     // Preserve scroll position
     container.scrollTop = container.scrollHeight - prevHeight;
   } catch (err) {

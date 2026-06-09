@@ -25,6 +25,24 @@ class FakeClassList {
   contains(className) {
     return this._classes.has(className);
   }
+
+  toggle(className, force) {
+    if (force === undefined) {
+      if (this._classes.has(className)) {
+        this._classes.delete(className);
+        return false;
+      }
+      this._classes.add(className);
+      return true;
+    }
+    if (force) this._classes.add(className);
+    else this._classes.delete(className);
+    return !!force;
+  }
+
+  toString() {
+    return Array.from(this._classes).join(' ');
+  }
 }
 
 class FakeElement {
@@ -32,10 +50,23 @@ class FakeElement {
     this.tagName = String(tagName).toUpperCase();
     this.id = id;
     this.dataset = {};
+    this.attributes = new Map();
     this.textContent = '';
     this.parentElement = null;
+    this.parentNode = null;
     this.children = [];
     this.classList = new FakeClassList(className);
+    this._className = className;
+    this.innerHTML = '';
+  }
+
+  get className() {
+    return this.classList.toString();
+  }
+
+  set className(value) {
+    this._className = String(value || '');
+    this.classList = new FakeClassList(this._className);
   }
 
   appendChild(child) {
@@ -43,6 +74,7 @@ class FakeElement {
       child.parentElement.removeChild(child);
     }
     child.parentElement = this;
+    child.parentNode = this;
     this.children.push(child);
     return child;
   }
@@ -54,6 +86,7 @@ class FakeElement {
     }
     this.children.splice(index, 1);
     child.parentElement = null;
+    child.parentNode = null;
     return child;
   }
 
@@ -62,6 +95,7 @@ class FakeElement {
       child.parentElement.removeChild(child);
     }
     child.parentElement = this;
+    child.parentNode = this;
     if (!referenceChild) {
       this.children.push(child);
       return child;
@@ -74,8 +108,30 @@ class FakeElement {
     return child;
   }
 
+  remove() {
+    if (this.parentElement) this.parentElement.removeChild(this);
+  }
+
   get firstElementChild() {
     return this.children[0] || null;
+  }
+
+  get firstChild() {
+    return this.children[0] || null;
+  }
+
+  get nextElementSibling() {
+    if (!this.parentElement) return null;
+    const siblings = this.parentElement.children;
+    const index = siblings.indexOf(this);
+    return index === -1 ? null : (siblings[index + 1] || null);
+  }
+
+  get previousElementSibling() {
+    if (!this.parentElement) return null;
+    const siblings = this.parentElement.children;
+    const index = siblings.indexOf(this);
+    return index <= 0 ? null : siblings[index - 1];
   }
 
   querySelector(selector) {
@@ -93,6 +149,19 @@ class FakeElement {
     return null;
   }
 
+  querySelectorAll(selector) {
+    if (!selector.startsWith('.')) {
+      throw new Error(`Unsupported selector: ${selector}`);
+    }
+    const className = selector.slice(1);
+    const matches = [];
+    for (const child of this.children) {
+      if (child.classList.contains(className)) matches.push(child);
+      matches.push(...child.querySelectorAll(selector));
+    }
+    return matches;
+  }
+
   closest(selector) {
     if (!selector.startsWith('.')) {
       throw new Error(`Unsupported selector: ${selector}`);
@@ -106,6 +175,14 @@ class FakeElement {
       current = current.parentElement;
     }
     return null;
+  }
+
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
+  }
+
+  getAttribute(name) {
+    return this.attributes.get(name) || null;
   }
 }
 
@@ -125,15 +202,7 @@ function loadChatContext(document) {
     document: {
       addEventListener() {},
       createElement() {
-        let text = '';
-        return {
-          set textContent(value) {
-            text = String(value);
-          },
-          get innerHTML() {
-            return text;
-          },
-        };
+        return new FakeElement();
       },
       ...document,
     },
@@ -150,6 +219,17 @@ function loadChatContext(document) {
   vm.createContext(context);
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   return {context, nowIso};
+}
+
+function messageElement(role, id) {
+  const el = new FakeElement('DIV');
+  el.dataset.messageRole = role;
+  el.dataset.messageId = id;
+  return el;
+}
+
+function childRoles(root) {
+  return root.children.map((child) => child.dataset.messageRole || child.className);
 }
 
 test('bumpCurrentSessionToTop keeps grouped sessions inside their current group', () => {
@@ -217,4 +297,142 @@ test('bumpCurrentSessionToTop moves flat sidebar sessions to the top-level front
   ]);
   assert.equal(current.querySelector('.session-time').dataset.time, nowIso);
   assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
+});
+
+test('applyCompactMode folds older completed turns and keeps latest completed turn expanded', () => {
+  const root = new FakeElement('DIV');
+  const {context} = loadChatContext({
+    getElementById() {
+      return null;
+    },
+  });
+
+  [
+    messageElement('user', 'u1'),
+    messageElement('assistant', 'a1'),
+    messageElement('system', 's1'),
+    messageElement('assistant', 'a2'),
+    messageElement('worker_summary', 'w1'),
+    messageElement('plan', 'p1'),
+    messageElement('separator', 'sep1'),
+    messageElement('user', 'u2'),
+    messageElement('assistant', 'a3'),
+    messageElement('system', 's2'),
+    messageElement('assistant', 'a4'),
+    messageElement('separator', 'sep2'),
+  ].forEach((el) => root.appendChild(el));
+
+  context.applyCompactMode(root);
+
+  assert.deepEqual(childRoles(root), [
+    'user',
+    'turn-fold-bar',
+    'turn-fold-content space-y-3 hidden',
+    'assistant',
+    'worker_summary',
+    'plan',
+    'separator',
+    'user',
+    'turn-fold-bar',
+    'turn-fold-content space-y-3',
+    'assistant',
+    'separator',
+  ]);
+  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 2);
+  assert.deepEqual(root.children[2].children.map((child) => child.dataset.messageId), ['a1', 's1']);
+  assert.equal(root.children[2].classList.contains('hidden'), true);
+  assert.deepEqual(root.children[9].children.map((child) => child.dataset.messageId), ['a3', 's2']);
+  assert.equal(root.children[9].classList.contains('hidden'), false);
+
+  context.applyCompactMode(root);
+
+  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 2);
+  assert.deepEqual(root.children[2].children.map((child) => child.dataset.messageId), ['a1', 's1']);
+  assert.deepEqual(root.children[9].children.map((child) => child.dataset.messageId), ['a3', 's2']);
+});
+
+test('turn fold bar toggles its single intermediate span', () => {
+  const root = new FakeElement('DIV');
+  const {context} = loadChatContext({
+    getElementById() {
+      return null;
+    },
+  });
+
+  [
+    messageElement('user', 'u1'),
+    messageElement('assistant', 'a1'),
+    messageElement('assistant', 'a2'),
+    messageElement('separator', 'sep1'),
+  ].forEach((el) => root.appendChild(el));
+
+  context.applyCompactMode(root);
+  const bar = root.querySelector('.turn-fold-bar');
+  const content = root.querySelector('.turn-fold-content');
+
+  assert.equal(content.classList.contains('hidden'), false);
+  assert.equal(bar.getAttribute('aria-expanded'), 'true');
+
+  context.toggleTurnFold(bar);
+
+  assert.equal(content.classList.contains('hidden'), true);
+  assert.equal(bar.getAttribute('aria-expanded'), 'false');
+});
+
+test('top-bar compact action collapses the latest completed turn after expand all', () => {
+  const root = new FakeElement('DIV');
+  const compactButton = new FakeElement('BUTTON');
+  const {context} = loadChatContext({
+    getElementById(id) {
+      if (id === 'messages') return root;
+      if (id === 'compact-mode-toggle') return compactButton;
+      return null;
+    },
+  });
+
+  [
+    messageElement('user', 'u1'),
+    messageElement('assistant', 'a1'),
+    messageElement('assistant', 'a2'),
+    messageElement('separator', 'sep1'),
+  ].forEach((el) => root.appendChild(el));
+
+  context.applyCompactMode(root);
+  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), false);
+  assert.equal(compactButton.textContent, 'Expand all');
+
+  context.toggleCompactMode();
+  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), false);
+  assert.equal(compactButton.textContent, 'Compact');
+
+  context.toggleCompactMode();
+  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), true);
+  assert.equal(compactButton.textContent, 'Expand all');
+});
+
+test('applyCompactMode waits for a paginated turn head before folding a leading partial turn', () => {
+  const root = new FakeElement('DIV');
+  const {context} = loadChatContext({
+    getElementById() {
+      return null;
+    },
+  });
+
+  const firstAssistant = messageElement('assistant', 'a1');
+  [
+    firstAssistant,
+    messageElement('system', 's1'),
+    messageElement('assistant', 'a2'),
+    messageElement('separator', 'sep1'),
+  ].forEach((el) => root.appendChild(el));
+
+  context.applyCompactMode(root);
+
+  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 0);
+
+  root.insertBefore(messageElement('user', 'u1'), firstAssistant);
+  context.applyCompactMode(root);
+
+  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 1);
+  assert.deepEqual(root.querySelector('.turn-fold-content').children.map((child) => child.dataset.messageId), ['a1', 's1']);
 });

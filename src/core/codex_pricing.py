@@ -27,7 +27,5 @@ def calculate_codex_usage_cost_usd(model: str | None, usage: Mapping[str, Any]) 
   output_tokens = usage.get("output_tokens", 0)
   input_rate, cached_input_rate, output_rate = rates
   return (
-      (input_tokens - cached_input_tokens) * input_rate
-      + cached_input_tokens * cached_input_rate
-      + output_tokens * output_rate
-  ) / 1_000_000
+      (input_tokens - cached_input_tokens) * input_rate + cached_input_tokens * cached_input_rate +
+      output_tokens * output_rate) / 1_000_000

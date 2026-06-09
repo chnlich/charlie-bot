@@ -57,7 +57,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         **kwargs,
     )
   elif option.type == "codex":
-    return CodexBackend(model=_require_model(option), **kwargs)
+    return CodexBackend(model=_require_model(option), codex_home=option.codex_home, **kwargs)
   elif option.type == "gemini":
     return GeminiCliBackend(model=_require_model(option), **kwargs)
   elif option.type == "opencode":

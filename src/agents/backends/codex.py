@@ -23,11 +23,12 @@ _HTML_ARTIFACT_RE = re.compile(r"(^|/)artifacts/[^/]+\.html$")
 class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, *, model: str, **kwargs):
+  def __init__(self, *, model: str, codex_home: str | None = None, **kwargs):
     if not model:
       raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
     super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
+    self._codex_home = str(Path(codex_home).expanduser()) if codex_home else None
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
     # Track the last rendered todo snapshot to suppress duplicate started/completed payloads.
@@ -83,6 +84,8 @@ class CodexBackend(AgentBackend):
     current_path = codex_env.get("PATH", "")
     if local_bin not in current_path.split(":"):
       codex_env["PATH"] = f"{local_bin}:{current_path}"
+    if self._codex_home:
+      codex_env['CODEX_HOME'] = self._codex_home
     return codex_env
 
   def translate_event(self, ev: dict) -> list[dict]:

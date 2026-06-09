@@ -7318,3 +7318,17 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Drop the unused dirpath binding in core/git.py
+  description: 'PURPOSE — Remove a dead local binding from the git worktree marker
+    scan.
+
+    HOW — In src/core/git.py, change the os.walk loop in _contains_git_marker to
+    bind the unused first tuple element as `_`. Verify pylint unused-variable on
+    src/core/git.py is clean.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-09T07:13:31Z'
+  priority: low

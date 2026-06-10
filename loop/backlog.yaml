@@ -7318,3 +7318,16 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argument parsing into token split and option parse phases
+  description: |
+    PURPOSE: Keep claude-sub argument parsing small enough to audit without changing its accepted CLI shape.
+
+    HOW:
+    - Extract a helper that separates option tokens from prompt tokens.
+    - Let parse_argv validate supported flags and build ClaudeSubArgs.
+    - Preserve existing error messages and run tests/test_claude_sub_cli.py.
+  category: long-function
+  status: pending
+  created: '2026-06-10T05:11:59Z'
+  priority: low

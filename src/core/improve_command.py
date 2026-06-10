@@ -292,7 +292,7 @@ async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: ThreadMa
   for ev in reversed(events):
     if ev.get('type') == 'rate_limit_event':
       rli = ev.get('rate_limit_info', {})
-      if rli.get('overageStatus') == 'rejected':
+      if rli.get('overageStatus') == 'rejected' or rli.get('status') == 'rejected':
         return True
     text = ev.get('result', '') or ''
     if 'quota exhausted' in text.lower():

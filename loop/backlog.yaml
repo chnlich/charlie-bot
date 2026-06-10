@@ -7318,3 +7318,18 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into server setup and turn streaming helpers
+  description: 'PURPOSE: Reduce the 65-line OpenCodeBackend.run orchestration method
+    into clearer lifecycle phases.
+
+    HOW: Extract subprocess startup and log-task wiring into a helper that prepares
+    the server URL. Move session creation and the SSE turn loop into a generator helper
+    that yields the existing translated events unchanged. Leave exception logging
+    and cleanup in run(), then verify with pyflakes and the function-length scan.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-10T11:13:04Z'
+  priority: low

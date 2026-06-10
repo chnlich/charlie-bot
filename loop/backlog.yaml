@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run HTTP/SSE lifecycle into helper
+  description: |
+    PURPOSE — Make OpenCodeBackend.run easier to read by moving the HTTP/SSE prompt lifecycle out of the subprocess startup wrapper.
+    HOW — Extract a private async generator that owns health check, session creation, event stream setup, prompt send, event translation, and idle/error termination.
+    Then have run start the server, initialize log streaming, and yield from that helper before cleanup.
+  category: long-function
+  status: pending
+  created: '2026-06-10T07:15:59Z'
+  priority: low

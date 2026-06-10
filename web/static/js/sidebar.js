@@ -104,6 +104,9 @@ let sessionActionModalState = null;
 let workersLoadedForSession = null;
 let workersLoadInflightForSession = null;
 let lazySessionDataTimer = null;
+const GROUP_SESSION_PREVIEW_LIMIT = 5;
+const SESSION_GROUP_LIMIT_STORAGE_KEY = 'session-group-list-expanded';
+const CRON_GROUP_LIMIT_STORAGE_KEY = 'cron-group-list-expanded';
 
 function getDefaultBackendId() {
   const backendIds = Object.keys(BACKEND_OPTIONS || {});
@@ -1400,6 +1403,84 @@ function escapeHtmlAttr(str) {
   return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function loadGroupLimitState(storageKey) {
+  const raw = localStorage.getItem(storageKey);
+  return raw ? JSON.parse(raw) : {};
+}
+
+function isGroupLimitExpanded(storageKey, key) {
+  return loadGroupLimitState(storageKey)[key] === true;
+}
+
+function setGroupLimitExpanded(storageKey, key, expanded) {
+  const state = loadGroupLimitState(storageKey);
+  state[key] = expanded;
+  localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+function shouldLimitHideSession(session, index, expanded) {
+  if (expanded) return false;
+  if (index < GROUP_SESSION_PREVIEW_LIMIT) return false;
+  return session.id !== SESSION_ID;
+}
+
+function isOverGroupLimitExtra(session, index) {
+  return index >= GROUP_SESSION_PREVIEW_LIMIT && session.id !== SESSION_ID;
+}
+
+function groupLimitItemOptions(kind, key, session, index, expanded) {
+  if (!isOverGroupLimitExtra(session, index)) return {};
+  const safeKey = escapeHtmlAttr(key);
+  const hiddenClass = shouldLimitHideSession(session, index, expanded) ? ' hidden' : '';
+  return {
+    extraClass: `${kind}-group-limit-extra${hiddenClass}`,
+    extraAttrs: `data-${kind}-group-limit-extra="${safeKey}"`,
+  };
+}
+
+function renderGroupLimitToggle(kind, key, totalCount, expanded) {
+  if (totalCount <= GROUP_SESSION_PREVIEW_LIMIT) return '';
+  const safeKey = escapeHtmlAttr(key);
+  const label = expanded ? 'Show less' : 'Show all';
+  const dataAttr = kind === 'session' ? 'sgroup-limit-toggle-key' : 'cron-limit-toggle-key';
+  const handler = kind === 'session' ? 'toggleSessionGroupLimit' : 'toggleCronGroupLimit';
+  return `<button type="button"
+          class="${kind}-group-limit-toggle w-full text-left px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300 hover:bg-slate-700/30 rounded-lg transition-colors"
+          data-${dataAttr}="${safeKey}"
+          aria-expanded="${expanded ? 'true' : 'false'}"
+          onclick="event.stopPropagation(); ${handler}(this.dataset.${kind === 'session' ? 'sgroupLimitToggleKey' : 'cronLimitToggleKey'})">${label}</button>`;
+}
+
+function updateGroupLimitDom(kind, key, expanded) {
+  const extraSelector = `.${kind}-group-limit-extra`;
+  const toggleSelector = `.${kind}-group-limit-toggle`;
+  const extraDatasetKey = `${kind}GroupLimitExtra`;
+  const toggleDatasetKey = kind === 'session' ? 'sgroupLimitToggleKey' : 'cronLimitToggleKey';
+  document.querySelectorAll(extraSelector).forEach(el => {
+    if (el.dataset[extraDatasetKey] === key) {
+      el.classList.toggle('hidden', !expanded);
+    }
+  });
+  document.querySelectorAll(toggleSelector).forEach(btn => {
+    if (btn.dataset[toggleDatasetKey] === key) {
+      btn.textContent = expanded ? 'Show less' : 'Show all';
+      btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    }
+  });
+}
+
+function toggleSessionGroupLimit(key) {
+  const expanded = !isGroupLimitExpanded(SESSION_GROUP_LIMIT_STORAGE_KEY, key);
+  setGroupLimitExpanded(SESSION_GROUP_LIMIT_STORAGE_KEY, key, expanded);
+  updateGroupLimitDom('session', key, expanded);
+}
+
+function toggleCronGroupLimit(key) {
+  const expanded = !isGroupLimitExpanded(CRON_GROUP_LIMIT_STORAGE_KEY, key);
+  setGroupLimitExpanded(CRON_GROUP_LIMIT_STORAGE_KEY, key, expanded);
+  updateGroupLimitDom('cron', key, expanded);
+}
+
 async function showGroupSelector(sessionId, currentGroup) {
   // Fetch existing groups
   let groups = [];
@@ -1498,7 +1579,7 @@ async function setSessionGroup(sessionId, group) {
 // ---------------------------------------------------------------------------
 // Grouped scheduled task rendering
 // ---------------------------------------------------------------------------
-function renderScheduledSessionItem(s) {
+function renderScheduledSessionItem(s, options = {}) {
   const isActive = SESSION_ID === s.id;
   const indicatorState = getSessionIndicatorState(s);
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
@@ -1525,11 +1606,13 @@ function renderScheduledSessionItem(s) {
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
     </button>
     ${gearBtn}`;
+  const extraClass = options.extraClass ? ' ' + options.extraClass : '';
+  const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
   return `<a href="/?session=${s.id}&filter=scheduled"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
      ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
-     id="session-${s.id}">
+     id="session-${s.id}"${extraAttrs}>
     <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
     <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
@@ -1567,6 +1650,7 @@ function renderGroupedScheduledList(sessions) {
   // Load collapsed state from localStorage (collapsed by default)
   let collapsedState = {};
   try { collapsedState = JSON.parse(localStorage.getItem('cron-group-collapsed') || '{}'); } catch (e) {}
+  const limitState = loadGroupLimitState(CRON_GROUP_LIMIT_STORAGE_KEY);
 
   let html = '';
   for (const key of sortedKeys) {
@@ -1575,6 +1659,7 @@ function renderGroupedScheduledList(sessions) {
     const enabledCount = groupSessions.filter(s => s.schedule_enabled !== false).length;
     const totalCount = groupSessions.length;
     const isCollapsed = collapsedState[key] !== false; // collapsed by default
+    const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtml(key);
 
@@ -1588,7 +1673,11 @@ function renderGroupedScheduledList(sessions) {
         <span class="text-xs text-slate-500 ml-auto">${enabledCount}/${totalCount} enabled</span>
       </div>
       <div class="cron-group-items ${isCollapsed ? 'hidden' : ''}" data-group-items="${safeKey}">
-        ${groupSessions.map(s => renderScheduledSessionItem(s)).join('')}
+        ${groupSessions.map((s, index) => renderScheduledSessionItem(
+          s,
+          groupLimitItemOptions('cron', key, s, index, isLimitExpanded)
+        )).join('')}
+        ${renderGroupLimitToggle('cron', key, groupSessions.length, isLimitExpanded)}
       </div>
     </div>`;
   }
@@ -1640,12 +1729,14 @@ function renderGroupedSessionList(sessions, filter) {
   // Load collapsed state from localStorage (expanded by default)
   let collapsedState = {};
   try { collapsedState = JSON.parse(localStorage.getItem('session-group-collapsed') || '{}'); } catch (e) {}
+  const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
 
   let html = '';
   for (const key of sortedKeys) {
     const label = key || '(No group)';
     const groupSessions = groups[key];
     const isCollapsed = collapsedState[key] === true; // expanded by default
+    const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
 
@@ -1673,7 +1764,12 @@ function renderGroupedSessionList(sessions, filter) {
         <span class="text-xs text-slate-500 ml-auto">${groupSessions.length}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
-        ${groupSessions.map(s => renderSessionItem(s, filter)).join('')}
+        ${groupSessions.map((s, index) => renderSessionItem(
+          s,
+          filter,
+          groupLimitItemOptions('session', key, s, index, isLimitExpanded)
+        )).join('')}
+        ${renderGroupLimitToggle('session', key, groupSessions.length, isLimitExpanded)}
       </div>
     </div>`;
   }
@@ -1724,7 +1820,7 @@ async function deleteGroup(groupName) {
   switchSidebarFilter(currentFilter);
 }
 
-function renderSessionItem(s, filter) {
+function renderSessionItem(s, filter, options = {}) {
   const starSvg = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
   const isActive = SESSION_ID === s.id;
   const indicatorState = getSessionIndicatorState(s);
@@ -1783,11 +1879,13 @@ function renderSessionItem(s, filter) {
       </button>
       ${gearBtn}`;
   }
+  const extraClass = options.extraClass ? ' ' + options.extraClass : '';
+  const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
   return `<a href="/?session=${s.id}&filter=${filter}"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
      ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
-     id="session-${s.id}">
+     id="session-${s.id}"${extraAttrs}>
     <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
     <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>

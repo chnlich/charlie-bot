@@ -7318,3 +7318,12 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub _stream_turn into setup and polling helpers
+  description: |-
+    PURPOSE: Separate claude_sub turn setup from transcript polling so the stream loop is easier to maintain.
+    HOW: Extract session setup and transcript-tail initialization into a small helper. Move the transcript polling/probe loop into a helper that returns after emitting the result event. Keep timeout, interrupt, and emitted event behavior unchanged; verify with tests/test_claude_sub_cli.py.
+  category: long-function
+  status: pending
+  created: '2026-06-10T21:12:38Z'
+  priority: low

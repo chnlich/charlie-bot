@@ -1,5 +1,6 @@
 """Tests for the iterative improve loop orchestrator."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,13 +12,14 @@ from src.core.improve_command import (
     ImproveState,
     clear_active_loop_lock,
     find_running_loop,
+    is_quota_failure,
     load_loop_state,
     next_loop_id,
     reserve_loop_state,
     save_loop_state,
     stop_improve_loop,
 )
-from src.core.models import SpawnRequest
+from src.core.models import SpawnRequest, ThreadStatus
 
 
 def _make_cfg(tmp_path: Path):
@@ -242,6 +244,64 @@ async def test_stop_completed_loop_returns_false(tmp_path: Path):
   save_loop_state(session_id, _make_state(1, status="completed"), cfg)
 
   assert await stop_improve_loop(session_id, cfg) is False
+
+
+def _make_failed_thread_mgr(tmp_path: Path, events: list[dict]):
+  """Build a thread manager whose thread is FAILED and whose events log contains the given events."""
+  events_path = tmp_path / "events.jsonl"
+  events_path.write_text("\n".join(json.dumps(ev) for ev in events) + "\n")
+
+  class FakeThreadManager:
+    async def get_thread(self, session: str, thread_id: str):
+      del session, thread_id
+      return MagicMock(status=ThreadStatus.FAILED)
+
+    async def get_events_log_path(self, session: str, thread_id: str) -> Path:
+      del session, thread_id
+      return events_path
+
+  return FakeThreadManager()
+
+
+@pytest.mark.asyncio
+async def test_is_quota_failure_detects_overage_rejected(tmp_path: Path):
+  """overageStatus == 'rejected' is treated as quota exhaustion (legacy shape)."""
+  thread_mgr = _make_failed_thread_mgr(
+      tmp_path,
+      [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "rejected"}}],
+  )
+  assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
+
+
+@pytest.mark.asyncio
+async def test_is_quota_failure_detects_top_level_status_rejected(tmp_path: Path):
+  """Top-level status == 'rejected' counts even when overageStatus is 'allowed'."""
+  thread_mgr = _make_failed_thread_mgr(
+      tmp_path,
+      [{
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+              "status": "rejected",
+              "resetsAt": 1781119800,
+              "rateLimitType": "five_hour",
+              "overageStatus": "allowed",
+              "overageResetsAt": 1782864000,
+              "isUsingOverage": True,
+              "overageInUse": True,
+          },
+      }],
+  )
+  assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
+
+
+@pytest.mark.asyncio
+async def test_is_quota_failure_ignores_allowed_rate_limit_event(tmp_path: Path):
+  """A fully allowed rate_limit_event is not a quota failure."""
+  thread_mgr = _make_failed_thread_mgr(
+      tmp_path,
+      [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "allowed"}}],
+  )
+  assert await is_quota_failure("sess", "thread-1", thread_mgr) is False
 
 
 @pytest.mark.asyncio

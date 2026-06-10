@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub turn streaming loop
+  description: "PURPOSE: Make claude-sub turn streaming easier to maintain by separating transcript processing from stall detection.\n\
+    HOW:\n\
+    - Extract a helper that reads transcript records, updates TurnState, emits converted events, and returns when turn_duration completes the turn.\n\
+    - Keep prompt setup, timeout checks, and interactive-menu probing in _stream_turn.\n"
+  category: long-function
+  status: pending
+  created: '2026-06-10T13:12:49Z'
+  priority: low

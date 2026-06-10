@@ -38,9 +38,14 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "quota exceeded",
     "insufficient quota",
     "over quota",
-    "rate limit",
-    "rate-limit",
+    "rate limit exceeded",
+    "rate limit reached",
+    "rate limit rejected",
+    "rate-limit exceeded",
+    "rate-limit reached",
+    "rate-limit rejected",
     "rate_limited",
+    "rate_limit_error",
     "rate limited",
     "too many requests",
     "resource_exhausted",
@@ -307,7 +312,7 @@ async def reserve_loop_state(
 
 def _event_text(event: dict) -> str:
   parts: list[str] = []
-  for key in ("message", "content", "result", "error"):
+  for key in ("message", "content", "result", "error", "api_error_status"):
     value = event.get(key)
     if value is None:
       continue
@@ -325,13 +330,20 @@ def _event_text(event: dict) -> str:
 
 def _quota_blocker_reason(events: list[dict]) -> Optional[str]:
   for ev in reversed(events):
-    if ev.get('type') == 'rate_limit_event':
+    event_type = ev.get('type')
+    if event_type == 'rate_limit_event':
       rli = ev.get('rate_limit_info', {})
       status = str(rli.get('status', '')).lower()
       overage_status = str(rli.get('overageStatus', '')).lower()
       if status == 'rejected' or overage_status == 'rejected':
         rate_type = rli.get('rateLimitType') or 'rate limit'
         return f"rate-limit rejection ({rate_type})"
+
+    if event_type not in (ET.ERROR, ET.ASSISTANT_ERROR, ET.RESULT):
+      continue
+    if (event_type == ET.RESULT and ev.get('is_error') is not True and ev.get('api_error_status') is None and
+        'error' not in str(ev.get('subtype', '')).lower()):
+      continue
 
     text = _event_text(ev).lower()
     for pattern in _QUOTA_BLOCKER_TEXT_PATTERNS:

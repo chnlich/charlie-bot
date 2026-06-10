@@ -317,6 +317,19 @@ async def test_is_quota_failure_detects_top_level_status_rejected(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_is_quota_failure_detects_out_of_tokens_error(tmp_path: Path):
+  """Provider token exhaustion text on a failed worker stops improve loops."""
+  thread_mgr = _make_failed_thread_mgr(
+      tmp_path,
+      [{
+          "type": "error",
+          "content": "Provider rejected the request: out of tokens for this model.",
+      }],
+  )
+  assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
+
+
+@pytest.mark.asyncio
 async def test_is_quota_failure_ignores_allowed_rate_limit_event(tmp_path: Path):
   """A fully allowed rate_limit_event is not a quota failure."""
   thread_mgr = _make_failed_thread_mgr(
@@ -489,7 +502,7 @@ async def test_run_improve_loop_keeps_non_quota_worker_failures_unchanged(
       {
           "thread-1": [{
               "type": "error",
-              "content": "unit tests failed"
+              "content": "unit tests failed in the rate limit feature"
           }],
           "thread-2": [{
               "type": "result",

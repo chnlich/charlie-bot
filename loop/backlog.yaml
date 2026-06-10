@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove dead dirpath binding in core git marker scan
+  description: 'PURPOSE — Remove an unused os.walk loop variable from _contains_git_marker.
+
+    HOW — In src/core/git.py:_contains_git_marker, change the os.walk unpack so the
+    unused dirpath binding is explicitly discarded while preserving the existing .git
+    marker check. Verify with pylint unused-variable on src/core/git.py and yapf diff
+    on the file.'
+  category: dead-code
+  status: pending
+  created: '2026-06-10T15:13:21Z'
+  priority: low

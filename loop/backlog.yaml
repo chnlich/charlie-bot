@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract shared Claude model env helper for Anthropic-compatible backends
+  description: 'PURPOSE: Keep Anthropic-compatible Claude Code backends from duplicating
+    the model override env map. HOW: Add a helper in claude_code.py, e.g. claude_model_env(model),
+    that returns ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL, and CLAUDE_CODE_SUBAGENT_MODEL. Use it from KimiBackend._prepare_env
+    and DeepSeekSGLangBackend._prepare_env while preserving each backend''s base URL and auth token entries.'
+  category: duplication
+  status: pending
+  created: '2026-06-10T01:12:47Z'
+  priority: low

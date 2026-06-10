@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused imports reported by pyflakes in tests
+  description: |-
+    PURPOSE — Remove unused imports from tests so pyflakes noise does not hide real regressions.
+
+    HOW — Delete datetime/timezone from tests/test_trigger_pid_watch.py, Optional from tests/test_spawner_exit_override.py, and json from tests/test_message_attachments.py and tests/test_backend_logging.py.
+  category: imports
+  status: pending
+  created: '2026-06-10T03:12:28Z'
+  priority: low

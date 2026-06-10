@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,27 +51,30 @@ def _make_state(loop_id: int, **overrides: object) -> ImproveState:
   return ImproveState(**payload)
 
 
-def test_save_and_load_loop_state(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_save_and_load_loop_state(tmp_path: Path):
   """State round-trips through per-loop storage."""
   cfg = _make_cfg(tmp_path)
   session_id = "test-session"
 
   state = _make_state(1)
-  save_loop_state(session_id, state, cfg)
+  await save_loop_state(session_id, state, cfg)
 
-  loaded = load_loop_state(session_id, 1, cfg)
+  loaded = await load_loop_state(session_id, 1, cfg)
   assert loaded is not None
   assert loaded.model_dump() == state.model_dump()
   assert (cfg.sessions_dir / session_id / "loops" / "1" / "state.json").exists()
 
 
-def test_load_missing_loop_state(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_missing_loop_state(tmp_path: Path):
   """Missing state file returns None."""
   cfg = _make_cfg(tmp_path)
-  assert load_loop_state("nonexistent", 1, cfg) is None
+  assert await load_loop_state("nonexistent", 1, cfg) is None
 
 
-def test_load_corrupted_loop_state_raises(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_load_corrupted_loop_state_raises(tmp_path: Path):
   """Corrupted state files fail fast."""
   cfg = _make_cfg(tmp_path)
   session_id = "corrupt-session"
@@ -79,17 +83,18 @@ def test_load_corrupted_loop_state_raises(tmp_path: Path):
   state_path.write_text("not valid json{{{")
 
   with pytest.raises(ValueError):
-    load_loop_state(session_id, 1, cfg)
+    await load_loop_state(session_id, 1, cfg)
 
 
-def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
   """ImproveState persists the expanded per-loop fields."""
   cfg = _make_cfg(tmp_path)
   session_id = "serialization-session"
   state = _make_state(7, iterations_completed=2, merge_back=True)
-  save_loop_state(session_id, state, cfg)
+  await save_loop_state(session_id, state, cfg)
 
-  loaded = load_loop_state(session_id, 7, cfg)
+  loaded = await load_loop_state(session_id, 7, cfg)
   assert loaded is not None
   assert set(loaded.model_dump().keys()) == {
       "loop_id",
@@ -107,13 +112,15 @@ def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
   }
 
 
-def test_next_loop_id_returns_1_when_loops_dir_missing(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_next_loop_id_returns_1_when_loops_dir_missing(tmp_path: Path):
   """Sessions with no loops directory start at loop 1."""
   cfg = _make_cfg(tmp_path)
-  assert next_loop_id("new-session", cfg) == 1
+  assert await next_loop_id("new-session", cfg) == 1
 
 
-def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path):
   """next_loop_id ignores non-numeric entries and increments the max loop id."""
   cfg = _make_cfg(tmp_path)
   loops_dir = cfg.sessions_dir / "test-session" / "loops"
@@ -122,13 +129,14 @@ def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path):
   (loops_dir / "alpha").mkdir(parents=True, exist_ok=True)
   (loops_dir / "note.txt").write_text("ignore me")
 
-  assert next_loop_id("test-session", cfg) == 4
+  assert await next_loop_id("test-session", cfg) == 4
 
 
-def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_path: Path):
   """Loop reservation happens before background execution begins."""
   cfg = _make_cfg(tmp_path)
-  state = reserve_loop_state(
+  state = await reserve_loop_state(
       "reserved-session",
       "optimize",
       4,
@@ -141,75 +149,79 @@ def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_path: Pat
       resolved_model="o3",
   )
 
-  loaded = load_loop_state("reserved-session", state.loop_id, cfg)
+  loaded = await load_loop_state("reserved-session", state.loop_id, cfg)
   assert loaded is not None
   assert loaded.model_dump() == state.model_dump()
-  assert (
-      cfg.sessions_dir / "reserved-session" / "loops" / "active.lock"
-  ).read_text().strip() == str(state.loop_id)
+  assert (cfg.sessions_dir / "reserved-session" / "loops" / "active.lock").read_text().strip() == str(state.loop_id)
 
 
-def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_path: Path):
   """Concurrent loop starts fail before they can schedule background work."""
   cfg = _make_cfg(tmp_path)
-  first = reserve_loop_state("reserved-session", "optimize", 2, "improve/test", "/tmp/repo", cfg)
+  first = await reserve_loop_state("reserved-session", "optimize", 2, "improve/test", "/tmp/repo", cfg)
 
   with pytest.raises(ImproveLoopAlreadyRunningError, match=f"Loop {first.loop_id} is already running"):
-    reserve_loop_state("reserved-session", "optimize", 2, "improve/other", "/tmp/repo", cfg)
+    await reserve_loop_state("reserved-session", "optimize", 2, "improve/other", "/tmp/repo", cfg)
 
 
-def test_second_loop_starts_after_first_completes(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_second_loop_starts_after_first_completes(tmp_path: Path):
   """After loop 1 finishes and the lock is cleared, loop 2 reserves successfully."""
   cfg = _make_cfg(tmp_path)
   session_id = "sequential-session"
 
   # Loop 1 reserves
-  first = reserve_loop_state(session_id, "goal-1", 3, "improve/first", "/tmp/repo", cfg)
+  first = await reserve_loop_state(session_id, "goal-1", 3, "improve/first", "/tmp/repo", cfg)
   assert first.loop_id == 1
 
   # Concurrent attempt blocked
   with pytest.raises(ImproveLoopAlreadyRunningError):
-    reserve_loop_state(session_id, "goal-2", 3, "improve/second", "/tmp/repo", cfg)
+    await reserve_loop_state(session_id, "goal-2", 3, "improve/second", "/tmp/repo", cfg)
 
   # Simulate loop 1 completing: mark completed + clear lock
   first.status = "completed"
   first.iterations_completed = 3
-  save_loop_state(session_id, first, cfg)
-  clear_active_loop_lock(session_id, cfg)
+  await save_loop_state(session_id, first, cfg)
+  await clear_active_loop_lock(session_id, cfg)
 
   # Loop 2 now succeeds
-  second = reserve_loop_state(session_id, "goal-2", 5, "improve/second", "/tmp/repo", cfg)
+  second = await reserve_loop_state(session_id, "goal-2", 5, "improve/second", "/tmp/repo", cfg)
   assert second.loop_id == 2
   assert second.status == "running"
 
   # Both loops coexist on disk
-  assert load_loop_state(session_id, 1, cfg).status == "completed"
-  assert load_loop_state(session_id, 2, cfg).status == "running"
+  first_loaded = await load_loop_state(session_id, 1, cfg)
+  second_loaded = await load_loop_state(session_id, 2, cfg)
+  assert first_loaded is not None and first_loaded.status == "completed"
+  assert second_loaded is not None and second_loaded.status == "running"
   assert (cfg.sessions_dir / session_id / "loops" / "1" / "state.json").exists()
   assert (cfg.sessions_dir / session_id / "loops" / "2" / "state.json").exists()
 
 
-def test_find_running_loop_returns_first_running_loop(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_find_running_loop_returns_first_running_loop(tmp_path: Path):
   """The earliest running loop is returned when multiple loops exist."""
   cfg = _make_cfg(tmp_path)
   session_id = "running-session"
-  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
-  save_loop_state(session_id, _make_state(2, status="running"), cfg)
-  save_loop_state(session_id, _make_state(5, status="running"), cfg)
+  await save_loop_state(session_id, _make_state(1, status="completed"), cfg)
+  await save_loop_state(session_id, _make_state(2, status="running"), cfg)
+  await save_loop_state(session_id, _make_state(5, status="running"), cfg)
 
-  running = find_running_loop(session_id, cfg)
+  running = await find_running_loop(session_id, cfg)
   assert running is not None
   assert running.loop_id == 2
 
 
-def test_find_running_loop_returns_none_when_absent(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_find_running_loop_returns_none_when_absent(tmp_path: Path):
   """find_running_loop handles sessions with no active loop."""
   cfg = _make_cfg(tmp_path)
   session_id = "idle-session"
-  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
+  await save_loop_state(session_id, _make_state(1, status="completed"), cfg)
 
-  assert find_running_loop(session_id, cfg) is None
-  assert find_running_loop("missing-session", cfg) is None
+  assert await find_running_loop(session_id, cfg) is None
+  assert await find_running_loop("missing-session", cfg) is None
 
 
 @pytest.mark.asyncio
@@ -217,16 +229,16 @@ async def test_stop_active_loop_updates_running_loop_state(tmp_path: Path):
   """Stopping an active loop marks only the running loop as stopped."""
   cfg = _make_cfg(tmp_path)
   session_id = "stop-session"
-  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
-  save_loop_state(session_id, _make_state(2, status="running"), cfg)
+  await save_loop_state(session_id, _make_state(1, status="completed"), cfg)
+  await save_loop_state(session_id, _make_state(2, status="running"), cfg)
 
   result = await stop_improve_loop(session_id, cfg)
   assert result is True
 
-  stopped = load_loop_state(session_id, 2, cfg)
+  stopped = await load_loop_state(session_id, 2, cfg)
   assert stopped is not None
   assert stopped.status == "stopped"
-  assert find_running_loop(session_id, cfg) is None
+  assert await find_running_loop(session_id, cfg) is None
 
 
 @pytest.mark.asyncio
@@ -241,7 +253,7 @@ async def test_stop_completed_loop_returns_false(tmp_path: Path):
   """Completed loops are not treated as active."""
   cfg = _make_cfg(tmp_path)
   session_id = "done-session"
-  save_loop_state(session_id, _make_state(1, status="completed"), cfg)
+  await save_loop_state(session_id, _make_state(1, status="completed"), cfg)
 
   assert await stop_improve_loop(session_id, cfg) is False
 
@@ -252,6 +264,7 @@ def _make_failed_thread_mgr(tmp_path: Path, events: list[dict]):
   events_path.write_text("\n".join(json.dumps(ev) for ev in events) + "\n")
 
   class FakeThreadManager:
+
     async def get_thread(self, session: str, thread_id: str):
       del session, thread_id
       return MagicMock(status=ThreadStatus.FAILED)
@@ -268,7 +281,13 @@ async def test_is_quota_failure_detects_overage_rejected(tmp_path: Path):
   """overageStatus == 'rejected' is treated as quota exhaustion (legacy shape)."""
   thread_mgr = _make_failed_thread_mgr(
       tmp_path,
-      [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "rejected"}}],
+      [{
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+              "status": "allowed",
+              "overageStatus": "rejected"
+          }
+      }],
   )
   assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
 
@@ -278,18 +297,21 @@ async def test_is_quota_failure_detects_top_level_status_rejected(tmp_path: Path
   """Top-level status == 'rejected' counts even when overageStatus is 'allowed'."""
   thread_mgr = _make_failed_thread_mgr(
       tmp_path,
-      [{
-          "type": "rate_limit_event",
-          "rate_limit_info": {
-              "status": "rejected",
-              "resetsAt": 1781119800,
-              "rateLimitType": "five_hour",
-              "overageStatus": "allowed",
-              "overageResetsAt": 1782864000,
-              "isUsingOverage": True,
-              "overageInUse": True,
-          },
-      }],
+      [
+          {
+              "type": "rate_limit_event",
+              "rate_limit_info":
+                  {
+                      "status": "rejected",
+                      "resetsAt": 1781119800,
+                      "rateLimitType": "five_hour",
+                      "overageStatus": "allowed",
+                      "overageResetsAt": 1782864000,
+                      "isUsingOverage": True,
+                      "overageInUse": True,
+                  },
+          }
+      ],
   )
   assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
 
@@ -299,9 +321,213 @@ async def test_is_quota_failure_ignores_allowed_rate_limit_event(tmp_path: Path)
   """A fully allowed rate_limit_event is not a quota failure."""
   thread_mgr = _make_failed_thread_mgr(
       tmp_path,
-      [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "allowed"}}],
+      [{
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+              "status": "allowed",
+              "overageStatus": "allowed"
+          }
+      }],
   )
   assert await is_quota_failure("sess", "thread-1", thread_mgr) is False
+
+
+class _FakeImproveSessionManager:
+
+  def __init__(self) -> None:
+    self.persisted_events: list[dict] = []
+
+  async def get_session(self, session: str):
+    return MagicMock(id=session, name="Improve", backend="codex-o3")
+
+  async def persist_and_broadcast(self, session: str, event: dict) -> None:
+    del session
+    self.persisted_events.append(event)
+
+
+class _FakeImproveThreadManager:
+
+  def __init__(
+      self, tmp_path: Path, events_by_thread: dict[str, list[dict]], statuses: dict[str, ThreadStatus]) -> None:
+    self._tmp_path = tmp_path
+    self._events_by_thread = events_by_thread
+    self._statuses = statuses
+    self._threads: dict[str, Any] = {}
+
+  async def create_thread(self, meta, description: str, require_review: bool = False):
+    del meta, require_review
+    thread_id = f"thread-{len(self._threads) + 1}"
+    events_path = self._tmp_path / f"{thread_id}.jsonl"
+    events = self._events_by_thread[thread_id]
+    events_path.write_text("\n".join(json.dumps(ev) for ev in events) + "\n")
+    thread = MagicMock(id=thread_id, description=description, branch_name=None, status=None)
+    self._threads[thread_id] = thread
+    return thread
+
+  async def get_thread(self, session: str, thread_id: str):
+    del session
+    thread = self._threads[thread_id]
+    thread.status = self._statuses[thread_id]
+    return thread
+
+  async def get_events_log_path(self, session: str, thread_id: str) -> Path:
+    del session
+    return self._tmp_path / f"{thread_id}.jsonl"
+
+
+def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnRequest], list[dict]]:
+  spawn_requests: list[SpawnRequest] = []
+  triggered_payloads: list[dict] = []
+
+  async def fake_spawn_worker(*args, **kwargs) -> None:
+    request = kwargs["request"]
+    assert isinstance(request, SpawnRequest)
+    spawn_requests.append(request)
+
+  async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
+    del session, _cfg, _session_mgr
+    triggered_payloads.append(json.loads(summary))
+
+  async def fake_git_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:
+    del repo_path, remote, branch
+    return True, ""
+
+  async def fake_git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> None:
+    del repo_path, base_branch, branch_name
+    wt_path.mkdir(parents=True, exist_ok=True)
+
+  async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
+    del repo_path, branch_name
+    return True, ""
+
+  async def fake_git_worktree_remove(
+      repo_path: str,
+      wt_path: Path,
+      session: str,
+      *,
+      allowed_parent: Path,
+      expected_residue_name: str,
+  ) -> bool:
+    del repo_path, session, allowed_parent, expected_residue_name
+    if wt_path.exists():
+      wt_path.rmdir()
+    return True
+
+  async def fake_git_worktree_prune(repo_path: str, session: str) -> None:
+    del repo_path, session
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(improve_command, "trigger_master", fake_trigger_master)
+  monkeypatch.setattr(improve_command, "git_fetch", fake_git_fetch)
+  monkeypatch.setattr(improve_command, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
+  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
+  monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
+  return spawn_requests, triggered_payloads
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_stops_on_quota_blocker_without_incrementing_iteration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {
+          "thread-1":
+              [{
+                  "type": "rate_limit_event",
+                  "rate_limit_info": {
+                      "status": "rejected",
+                      "rateLimitType": "five_hour",
+                  },
+              }],
+      },
+      {"thread-1": ThreadStatus.FAILED},
+  )
+  spawn_requests, triggered_payloads = _patch_improve_loop_io(monkeypatch)
+
+  await improve_command.run_improve_loop(
+      session_id="quota-session",
+      repo_path="/tmp/repo",
+      iterations=3,
+      goal="optimize",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(spawn_requests) == 1
+  state = await load_loop_state("quota-session", 1, cfg)
+  assert state is not None
+  assert state.status == "failed"
+  assert state.iterations_completed == 0
+  assert not (cfg.sessions_dir / "quota-session" / "loops" / "1" / "iter_0001.md").exists()
+  assert not (cfg.sessions_dir / "quota-session" / "loops" / "active.lock").exists()
+
+  failed_payloads = [event for event in session_mgr.persisted_events if event.get("type") == "improve_failed"]
+  assert len(failed_payloads) == 1
+  assert failed_payloads[0]["blocked_iteration"] == 1
+  assert "rate-limit rejection" in failed_payloads[0]["reason"]
+  assert failed_payloads[0]["iterations_completed"] == 0
+  assert "No further iterations were spawned" in failed_payloads[0]["summary"]
+  assert triggered_payloads[-1]["type"] == "improve_failed"
+  assert "wait, switch backend, or relaunch" in triggered_payloads[-1]["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_keeps_non_quota_worker_failures_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {
+          "thread-1": [{
+              "type": "error",
+              "content": "unit tests failed"
+          }],
+          "thread-2": [{
+              "type": "result",
+              "result": "second iteration completed"
+          }],
+      },
+      {
+          "thread-1": ThreadStatus.FAILED,
+          "thread-2": ThreadStatus.COMPLETED,
+      },
+  )
+  spawn_requests, triggered_payloads = _patch_improve_loop_io(monkeypatch)
+
+  await improve_command.run_improve_loop(
+      session_id="ordinary-failure-session",
+      repo_path="/tmp/repo",
+      iterations=2,
+      goal="optimize",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(spawn_requests) == 2
+  state = await load_loop_state("ordinary-failure-session", 1, cfg)
+  assert state is not None
+  assert state.status == "completed"
+  assert state.iterations_completed == 2
+  iteration_statuses = [
+      event["status"] for event in session_mgr.persisted_events if event.get("type") == "improve_iteration_completed"
+  ]
+  assert iteration_statuses == ["failed", "completed"]
+  assert any(event.get("type") == "improve_completed" for event in session_mgr.persisted_events)
+  assert triggered_payloads[-1]["type"] == "improve_completed"
 
 
 @pytest.mark.asyncio
@@ -313,6 +539,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   persisted_events: list[dict] = []
 
   class FakeSessionManager:
+
     async def get_session(self, session: str):
       return MagicMock(id=session, name="Pinned", backend="claude-opus-4.6")
 
@@ -321,6 +548,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
       persisted_events.append(event)
 
   class FakeThreadManager:
+
     async def create_thread(self, meta, description: str, require_review: bool = False):
       del meta, require_review
       thread_id = f"thread-{len(thread_store) + 1}"
@@ -400,13 +628,15 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
       resolved_model="o3",
   )
 
-  assert [(req.resolved_backend, req.resolved_model) for req in spawn_requests] == [("codex-o3", "o3"), ("codex-o3", "o3")]
+  assert [(req.resolved_backend, req.resolved_model) for req in spawn_requests] == [
+      ("codex-o3", "o3"), ("codex-o3", "o3")
+  ]
   assert [req.loop_dir for req in spawn_requests] == [
       str(cfg.sessions_dir / session_id / "loops" / "1"),
       str(cfg.sessions_dir / session_id / "loops" / "1"),
   ]
 
-  state = load_loop_state(session_id, 1, cfg)
+  state = await load_loop_state(session_id, 1, cfg)
   assert state is not None
   assert state.status == "completed"
   assert state.iterations_completed == 2

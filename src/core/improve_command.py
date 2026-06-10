@@ -15,7 +15,6 @@ if TYPE_CHECKING:
   from src.core.sessions import SessionManager
   from src.core.threads import ThreadManager
 
-from src.api.ext_usage import CcOpusProvider
 from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -29,13 +28,29 @@ from src.core.git import (
     git_worktree_remove,
 )
 from src.core.master_trigger import trigger_master
-from src.core.models import SpawnRequest, TaskType, ThreadStatus, parse_utc_datetime, utc_now
+from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
 from src.core.tasks import create_logged_task
-from src.core.timeouts import IMPROVE_QUOTA_POLL_INTERVAL
 
 log = structlog.get_logger()
 
-_QUOTA_POLL_INTERVAL = IMPROVE_QUOTA_POLL_INTERVAL
+_QUOTA_BLOCKER_TEXT_PATTERNS = (
+    "quota exhausted",
+    "quota exceeded",
+    "insufficient quota",
+    "over quota",
+    "rate limit",
+    "rate-limit",
+    "rate_limited",
+    "rate limited",
+    "too many requests",
+    "resource_exhausted",
+    "429",
+    "out of token",
+    "out-of-token",
+    "out of tokens",
+    "insufficient tokens",
+    "tokens exhausted",
+)
 
 # ---------------------------------------------------------------------------
 # State models
@@ -66,6 +81,16 @@ class ImproveLoopAlreadyRunningError(RuntimeError):
       super().__init__("An improve loop is already running for this session. Use /stop-improve first.")
       return
     super().__init__(f"Loop {loop_id} is already running for this session. Use /stop-improve first.")
+
+
+class _ImproveLoopBlockedError(RuntimeError):
+  """Raised when an improve-loop worker hit a provider quota/token/rate-limit blocker."""
+
+  def __init__(self, iteration: int, reason: str, summary: str) -> None:
+    self.iteration = iteration
+    self.reason = reason
+    self.summary = summary
+    super().__init__(f"Improve loop blocked on iteration {iteration}: {reason}")
 
 
 # ---------------------------------------------------------------------------
@@ -276,12 +301,47 @@ async def reserve_loop_state(
 
 
 # ---------------------------------------------------------------------------
-# Quota-aware retry helpers
+# Quota/token/rate-limit blocker helpers
 # ---------------------------------------------------------------------------
 
 
+def _event_text(event: dict) -> str:
+  parts: list[str] = []
+  for key in ("message", "content", "result", "error"):
+    value = event.get(key)
+    if value is None:
+      continue
+    if key == "message" and isinstance(value, dict):
+      text = extract_text_from_message(value)
+      if text:
+        parts.append(text)
+      continue
+    if isinstance(value, (dict, list)):
+      parts.append(json.dumps(value, default=str))
+    else:
+      parts.append(str(value))
+  return "\n".join(parts)
+
+
+def _quota_blocker_reason(events: list[dict]) -> Optional[str]:
+  for ev in reversed(events):
+    if ev.get('type') == 'rate_limit_event':
+      rli = ev.get('rate_limit_info', {})
+      status = str(rli.get('status', '')).lower()
+      overage_status = str(rli.get('overageStatus', '')).lower()
+      if status == 'rejected' or overage_status == 'rejected':
+        rate_type = rli.get('rateLimitType') or 'rate limit'
+        return f"rate-limit rejection ({rate_type})"
+
+    text = _event_text(ev).lower()
+    for pattern in _QUOTA_BLOCKER_TEXT_PATTERNS:
+      if pattern in text:
+        return f"provider quota/token/rate-limit rejection ({pattern})"
+  return None
+
+
 async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> bool:
-  """Check if a failed thread was due to quota exhaustion."""
+  """Check if a failed thread was due to provider quota/token/rate-limit rejection."""
   from src.core.ndjson import parse_ndjson_file
 
   thread = await thread_mgr.get_thread(session_id, thread_id)
@@ -289,78 +349,7 @@ async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: ThreadMa
     return False
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
   events = await asyncio.to_thread(parse_ndjson_file, events_path)
-  for ev in reversed(events):
-    if ev.get('type') == 'rate_limit_event':
-      rli = ev.get('rate_limit_info', {})
-      if rli.get('overageStatus') == 'rejected' or rli.get('status') == 'rejected':
-        return True
-    text = ev.get('result', '') or ''
-    if 'quota exhausted' in text.lower():
-      return True
-  return False
-
-
-async def _wait_for_quota_recovery(
-    session_id: str,
-    loop_id: int,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-) -> bool:
-  """Wait for API quota to recover. Returns True if recovered, False if stopped by user."""
-  provider = CcOpusProvider()
-
-  while True:
-    # Check stop signal
-    state = await require_loop_state(session_id, loop_id, cfg)
-    if state.status == "stopped":
-      return False
-
-    usage = None
-    try:
-      usage = await provider.fetch()
-    except Exception:
-      log.warning("quota_recovery_fetch_failed", session=session_id, exc_info=True)
-
-    if usage is not None:
-      five_hour = usage.get("five_hour", {})
-      utilization = five_hour.get("utilization", 0.0)
-      if utilization < 0.8:
-        log.info("quota_recovered", session=session_id, utilization=utilization)
-        return True
-
-      resets_at_str = five_hour.get("resets_at", "")
-      if resets_at_str:
-        try:
-          resets_at = parse_utc_datetime(resets_at_str)
-          now = utc_now()
-          wait_seconds = (resets_at - now).total_seconds() + 60  # 60s buffer
-          if wait_seconds > 0:
-            msg = f"Quota exhausted, waiting until {resets_at_str} (+60s buffer)..."
-            log.info("quota_waiting", session=session_id, resets_at=resets_at_str, wait_seconds=wait_seconds)
-            await session_mgr.persist_and_broadcast(
-                session_id, {
-                    "type": ET.IMPROVE_ITERATION_COMPLETED,
-                    "status": "quota_waiting",
-                    "summary": msg
-                })
-            wait_seconds = min(wait_seconds, _QUOTA_POLL_INTERVAL)  # cap individual sleeps to check stop signal
-            await asyncio.sleep(wait_seconds)
-            continue
-        except (ValueError, TypeError):
-          log.warning("quota_recovery_parse_resets_at_failed", resets_at=resets_at_str)
-      log.info("quota_polling_fallback", session=session_id)
-    else:
-      log.info("quota_polling_no_usage_data", session=session_id)
-
-    # Fallback: either usage API unavailable, or high utilization with no usable resets_at.
-    msg = "Quota exhausted, retrying in 10 minutes..."
-    await session_mgr.persist_and_broadcast(
-        session_id, {
-            "type": ET.IMPROVE_ITERATION_COMPLETED,
-            "status": "quota_waiting",
-            "summary": msg
-        })
-    await asyncio.sleep(_QUOTA_POLL_INTERVAL)
+  return _quota_blocker_reason(events) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +375,7 @@ async def _run_single_iteration(
     previous_summaries: list[str],
     base_branch: Optional[str],
 ) -> Optional[str]:
-  """Run a single iteration of the improve loop, with quota-failure retry.
+  """Run a single iteration of the improve loop.
 
   Returns the iteration summary on success, None if stopped by user.
   Appends the summary to previous_summaries on success.
@@ -394,100 +383,95 @@ async def _run_single_iteration(
   from src.core.ndjson import parse_ndjson_file
   from src.core.spawner import spawn_worker
 
-  while True:  # Retry loop for quota failures
-    # Check if stopped
-    state = await require_loop_state(session_id, loop_id, cfg)
-    if state.status == "stopped":
-      log.info("improve_loop_stopped", session=session_id, iteration=i)
-      return None
+  # Check if stopped
+  state = await require_loop_state(session_id, loop_id, cfg)
+  if state.status == "stopped":
+    log.info("improve_loop_stopped", session=session_id, iteration=i)
+    return None
 
-    # Build iteration description
-    desc_parts = [f"Iterative improvement — iteration {i}/{iterations}", f"Goal: {goal}"]
-    description = "\n".join(desc_parts)
+  # Build iteration description
+  desc_parts = [f"Iterative improvement — iteration {i}/{iterations}", f"Goal: {goal}"]
+  description = "\n".join(desc_parts)
 
-    # Get session metadata
-    meta = await session_mgr.get_session(session_id)
-    if not meta:
-      log.error("improve_loop_session_missing", session=session_id)
-      return None
+  # Get session metadata
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    log.error("improve_loop_session_missing", session=session_id)
+    return None
 
-    # Create thread and spawn worker
-    thread = await thread_mgr.create_thread(meta, description, require_review=False)
-    await spawn_worker(
-        session_id,
-        description,
-        thread.id,
-        cfg,
-        session_mgr,
-        thread_mgr,
-        request=SpawnRequest(
-            repo_path=repo_path,
-            resolved_backend=resolved_backend,
-            resolved_model=resolved_model,
-            base_branch=base_branch,
-            branch_name_override=work_branch,
-            worktree_path_override=str(wt_path),
-            skip_cleanup=True,
-            skip_notify=True,
-            loop_dir=str(loop_dir),
-            iteration_number=i,
-            is_continuation=(i > 1),
-            task_type=TaskType.IMPLEMENT,
-        ),
-    )
+  # Create thread and spawn worker
+  thread = await thread_mgr.create_thread(meta, description, require_review=False)
+  await spawn_worker(
+      session_id,
+      description,
+      thread.id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      request=SpawnRequest(
+          repo_path=repo_path,
+          resolved_backend=resolved_backend,
+          resolved_model=resolved_model,
+          base_branch=base_branch,
+          branch_name_override=work_branch,
+          worktree_path_override=str(wt_path),
+          skip_cleanup=True,
+          skip_notify=True,
+          loop_dir=str(loop_dir),
+          iteration_number=i,
+          is_continuation=(i > 1),
+          task_type=TaskType.IMPLEMENT,
+      ),
+  )
 
-    # Check for quota failure
-    if await is_quota_failure(session_id, thread.id, thread_mgr):
-      log.warning("improve_iteration_quota_failure", session=session_id, iteration=i)
-      recovered = await _wait_for_quota_recovery(session_id, loop_id, cfg, session_mgr)
-      if not recovered:
-        log.info("improve_loop_stopped_during_quota_wait", session=session_id, iteration=i)
-        return None
-      # Retry the same iteration — do NOT increment i or append summary
-      continue
+  # Successful (or non-quota failure) — extract summary and proceed
+  thread_meta = await thread_mgr.get_thread(session_id, thread.id)
+  status = thread_meta.status.value if thread_meta else "unknown"
+  events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
+  events = await asyncio.to_thread(parse_ndjson_file, events_path)
+  if thread_meta and thread_meta.status == ThreadStatus.FAILED:
+    blocker_reason = _quota_blocker_reason(events)
+    if blocker_reason:
+      summary = _extract_iteration_summary(events, i, status)
+      log.warning("improve_iteration_blocked", session=session_id, iteration=i, reason=blocker_reason)
+      raise _ImproveLoopBlockedError(i, blocker_reason, summary)
+  summary = _extract_iteration_summary(events, i, status)
+  previous_summaries.append(summary)
 
-    # Successful (or non-quota failure) — extract summary and proceed
-    thread_meta = await thread_mgr.get_thread(session_id, thread.id)
-    status = thread_meta.status.value if thread_meta else "unknown"
-    events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
-    events = await asyncio.to_thread(parse_ndjson_file, events_path)
-    summary = _extract_iteration_summary(events, i, status)
-    previous_summaries.append(summary)
+  # Write fallback report if the worker didn't write one
+  report_path = loop_dir / f'iter_{i:04d}.md'
+  if not await asyncio.to_thread(report_path.exists):
+    await asyncio.to_thread(report_path.write_text, summary)
 
-    # Write fallback report if the worker didn't write one
-    report_path = loop_dir / f'iter_{i:04d}.md'
-    if not await asyncio.to_thread(report_path.exists):
-      await asyncio.to_thread(report_path.write_text, summary)
+  log.info("improve_iteration_completed", session=session_id, iteration=i, status=status)
 
-    log.info("improve_iteration_completed", session=session_id, iteration=i, status=status)
+  # Broadcast progress event
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": ET.IMPROVE_ITERATION_COMPLETED,
+          "iteration": i,
+          "total_iterations": iterations,
+          "status": status,
+          "summary": summary[:200],
+      })
 
-    # Broadcast progress event
-    await session_mgr.persist_and_broadcast(
-        session_id, {
-            "type": ET.IMPROVE_ITERATION_COMPLETED,
-            "iteration": i,
-            "total_iterations": iterations,
-            "status": status,
-            "summary": summary[:200],
-        })
+  # Trigger master after each iteration so it sees progress
+  iter_trigger_payload = {
+      'type': ET.IMPROVE_ITERATION_COMPLETED,
+      'goal': goal,
+      'iteration': i,
+      'total_iterations': iterations,
+      'status': status,
+      'summary': summary[:200],
+      'work_branch': work_branch,
+      'instructions': "Report iteration progress with commit identifier and link. Briefly assess and recommend.",
+  }
+  create_logged_task(
+      trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr),
+      name=f"improve-iter-trigger-{session_id[:8]}-{i}",
+  )
 
-    # Trigger master after each iteration so it sees progress
-    iter_trigger_payload = {
-        'type': ET.IMPROVE_ITERATION_COMPLETED,
-        'goal': goal,
-        'iteration': i,
-        'total_iterations': iterations,
-        'status': status,
-        'summary': summary[:200],
-        'work_branch': work_branch,
-        'instructions': "Report iteration progress with commit identifier and link. Briefly assess and recommend.",
-    }
-    create_logged_task(
-        trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr),
-        name=f"improve-iter-trigger-{session_id[:8]}-{i}",
-    )
-
-    return summary
+  return summary
 
 
 # ---------------------------------------------------------------------------
@@ -618,26 +602,32 @@ async def run_improve_loop(
     await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     return
 
+  blocked_error: Optional[_ImproveLoopBlockedError] = None
+
   try:
     for i in range(1, iterations + 1):
-      summary = await _run_single_iteration(
-          i,
-          iterations,
-          goal,
-          session_id,
-          loop_id,
-          repo_path,
-          work_branch,
-          wt_path,
-          loop_dir,
-          cfg,
-          session_mgr,
-          thread_mgr,
-          resolved_backend,
-          resolved_model,
-          previous_summaries,
-          base_branch,
-      )
+      try:
+        summary = await _run_single_iteration(
+            i,
+            iterations,
+            goal,
+            session_id,
+            loop_id,
+            repo_path,
+            work_branch,
+            wt_path,
+            loop_dir,
+            cfg,
+            session_mgr,
+            thread_mgr,
+            resolved_backend,
+            resolved_model,
+            previous_summaries,
+            base_branch,
+        )
+      except _ImproveLoopBlockedError as exc:
+        blocked_error = exc
+        break
       if summary is None:
         break  # Stopped by user or session missing
       state = await require_loop_state(session_id, loop_id, cfg)
@@ -648,33 +638,53 @@ async def run_improve_loop(
     state = await require_loop_state(session_id, loop_id, cfg)
     stopped_by_user = state.status == 'stopped'
 
-    if stopped_by_user:
+    if blocked_error:
+      payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
+      payload['blocked_iteration'] = blocked_error.iteration
+      payload['reason'] = blocked_error.reason
+      payload['blocked_summary'] = blocked_error.summary[:500]
+      payload['summary'] = (
+          f"Improve loop blocked on iteration {blocked_error.iteration}: {blocked_error.reason}. "
+          "No further iterations were spawned; decide whether to wait, switch backend, or relaunch.")
+    elif stopped_by_user:
       payload = _build_summary_payload(ET.IMPROVE_STOPPED, goal, previous_summaries)
       payload['reason'] = 'Stopped by user'
     else:
       payload = _build_summary_payload(ET.IMPROVE_COMPLETED, goal, previous_summaries)
 
-    state.status = 'stopped' if stopped_by_user else 'completed'
+    if blocked_error:
+      state.status = 'failed'
+    else:
+      state.status = 'stopped' if stopped_by_user else 'completed'
     await save_loop_state(session_id, state, cfg)
 
     payload['work_branch'] = work_branch
     payload['base_branch'] = base_branch
+    if blocked_error:
+      payload['worktree_path'] = str(wt_path)
 
-    merge_result = await _land_work_branch_after_loop(
-        resolved_repo,
-        work_branch,
-        base_branch,
-        merge_back,
-        stopped_by_user,
-        previous_summaries,
-        session_id,
-    )
-    if merge_result is not None:
-      payload['merge_result'] = merge_result
+    if not blocked_error:
+      merge_result = await _land_work_branch_after_loop(
+          resolved_repo,
+          work_branch,
+          base_branch,
+          merge_back,
+          stopped_by_user,
+          previous_summaries,
+          session_id,
+      )
+      if merge_result is not None:
+        payload['merge_result'] = merge_result
 
     await session_mgr.persist_and_broadcast(session_id, payload)
-    instructions = "Report final state and summarize what changed across iterations."
-    if payload.get('merge_result', {}).get('merged') is False:
+    if blocked_error:
+      instructions = (
+          "Report that the improve loop is blocked by provider quota/token/rate-limit rejection. "
+          "Do not spawn another iteration worker automatically; ask the user to decide whether to wait, "
+          "switch backend, or relaunch.")
+    else:
+      instructions = "Report final state and summarize what changed across iterations."
+    if not blocked_error and payload.get('merge_result', {}).get('merged') is False:
       instructions += (
           " The fast-forward landing onto base_branch failed (origin/base_branch advanced"
           " during the loop). The work branch has been pushed to origin — decide how to land it"

@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split the claude-sub turn streaming loop
+  description: |
+    PURPOSE: Keep claude-sub turn streaming readable by separating transcript event handling from stale-menu probing.
+    HOW:
+    - Extract the record-processing block in `src/cli/claude_sub.py:_stream_turn` into a helper that updates `TurnState`, emits converted events, and reports when the turn-duration result event finishes the turn.
+    - Extract the stale-pane menu probe into a helper that owns the `last_probe` and `menu_probes` updates and raises the existing blocking-menu error after the current confirmation threshold.
+    - Keep `_stream_turn` as the setup, tail-read loop, timeout check, sleep, and tail cleanup, then run the existing `tests/test_claude_sub_cli.py` coverage.
+  category: long-function
+  status: pending
+  created: '2026-06-10T19:13:06Z'
+  priority: low

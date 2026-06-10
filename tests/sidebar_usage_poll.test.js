@@ -140,6 +140,7 @@ function buildContext(overrides = {}) {
   const clears = [];
   const alerts = [];
   const elements = overrides.elements || new Map();
+  const localStorageData = new Map(Object.entries(overrides.localStorageItems || {}));
 
   const context = {
     SESSION_ID: 'session-a',
@@ -157,9 +158,9 @@ function buildContext(overrides = {}) {
     pendingUserMsg: false,
     uploadedFiles: [],
     localStorage: {
-      getItem: () => null,
-      setItem: () => {},
-      removeItem: () => {},
+      getItem: (key) => localStorageData.has(key) ? localStorageData.get(key) : null,
+      setItem: (key, value) => { localStorageData.set(key, String(value)); },
+      removeItem: (key) => { localStorageData.delete(key); },
     },
     location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
     history: {pushState: () => {}},
@@ -284,7 +285,7 @@ function buildContext(overrides = {}) {
   vm.createContext(context);
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
-  return {context, fetchCalls, fetchRequests, intervals, timeouts, clears, alerts, elements};
+  return {context, fetchCalls, fetchRequests, intervals, timeouts, clears, alerts, elements, localStorageData};
 }
 
 function buildSessionActionElements() {
@@ -312,6 +313,12 @@ function makeSession(id, name, overrides = {}) {
     backend: 'claude-opus-4.6',
     ...overrides,
   };
+}
+
+function sessionAnchorOpenTag(html, id) {
+  const match = html.match(new RegExp(`<a\\b[^>]*id="session-${id}"[^>]*>`));
+  if (!match) throw new Error(`Missing rendered session anchor for ${id}`);
+  return match[0];
 }
 
 test('pollActiveSessionView refreshes usage from the lazy usage endpoint', async () => {
@@ -514,6 +521,141 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
   assert.match(nav.innerHTML, /id="pending-trigger-session-a"/);
   assert.match(nav.innerHTML, /id="star-session-a"/);
   assert.equal(filterAll.classList.contains('bg-blue-600/20'), true);
+});
+
+test('renderSessionList limits each grouped session section to five visible sessions', () => {
+  const nav = createElement();
+  const {context} = buildContext({
+    elements: new Map([['session-list', nav]]),
+  });
+  const workSessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const personalSessions = Array.from({length: 6}, (_, idx) =>
+    makeSession(`personal-${idx + 1}`, `Personal ${idx + 1}`, {group: 'Personal'}));
+
+  context.renderSessionList([...workSessions, ...personalSessions], 'all');
+
+  assert.match(nav.innerHTML, /Work/);
+  assert.match(nav.innerHTML, /Personal/);
+  assert.equal((nav.innerHTML.match(/session-group-limit-toggle/g) || []).length, 2);
+  assert.match(nav.innerHTML, />Show all<\/button>/);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
+  assert.match(nav.innerHTML, /renameGroup\(this\.dataset\.groupName\)/);
+  assert.match(nav.innerHTML, /deleteGroup\(this\.dataset\.groupName\)/);
+});
+
+test('toggleSessionGroupLimit persists and updates only the selected group', () => {
+  const workExtra = createElement({
+    className: 'session-group-limit-extra hidden',
+    dataset: {sessionGroupLimitExtra: 'Work'},
+  });
+  const personalExtra = createElement({
+    className: 'session-group-limit-extra hidden',
+    dataset: {sessionGroupLimitExtra: 'Personal'},
+  });
+  const workToggle = createElement({
+    className: 'session-group-limit-toggle',
+    dataset: {sgroupLimitToggleKey: 'Work'},
+    textContent: 'Show all',
+  });
+  const personalToggle = createElement({
+    className: 'session-group-limit-toggle',
+    dataset: {sgroupLimitToggleKey: 'Personal'},
+    textContent: 'Show all',
+  });
+  const {context, localStorageData} = buildContext({
+    localStorageItems: {
+      'session-group-list-expanded': JSON.stringify({Personal: false}),
+    },
+    querySelectorAll: (selector) => {
+      if (selector === '.session-group-limit-extra') return [workExtra, personalExtra];
+      if (selector === '.session-group-limit-toggle') return [workToggle, personalToggle];
+      return [];
+    },
+  });
+
+  context.toggleSessionGroupLimit('Work');
+
+  assert.deepEqual(JSON.parse(localStorageData.get('session-group-list-expanded')), {
+    Personal: false,
+    Work: true,
+  });
+  assert.equal(workExtra.classList.contains('hidden'), false);
+  assert.equal(personalExtra.classList.contains('hidden'), true);
+  assert.equal(workToggle.textContent, 'Show less');
+  assert.equal(workToggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(personalToggle.textContent, 'Show all');
+
+  context.toggleSessionGroupLimit('Work');
+
+  assert.deepEqual(JSON.parse(localStorageData.get('session-group-list-expanded')), {
+    Personal: false,
+    Work: false,
+  });
+  assert.equal(workExtra.classList.contains('hidden'), true);
+  assert.equal(workToggle.textContent, 'Show all');
+  assert.equal(workToggle.getAttribute('aria-expanded'), 'false');
+});
+
+test('renderSessionList keeps active grouped session visible outside the first five', () => {
+  const nav = createElement();
+  const {context} = buildContext({
+    elements: new Map([['session-list', nav]]),
+  });
+  context.SESSION_ID = 'work-7';
+  const sessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+
+  context.renderSessionList(sessions, 'all');
+
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra'), false);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('bg-blue-600/20 text-blue-300'), true);
+});
+
+test('renderSessionList leaves search results flat and untrimmed', () => {
+  const nav = createElement();
+  const {context} = buildContext({
+    elements: new Map([['session-list', nav]]),
+  });
+  const sessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`search-${idx + 1}`, `Search ${idx + 1}`, {group: 'Work'}));
+
+  context.renderSessionList(sessions, 'search');
+
+  assert.doesNotMatch(nav.innerHTML, /class="session-group group"/);
+  assert.doesNotMatch(nav.innerHTML, /session-group-limit-toggle/);
+  assert.doesNotMatch(nav.innerHTML, /session-group-limit-extra/);
+  assert.match(nav.innerHTML, /id="session-search-7"/);
+});
+
+test('renderGroupedScheduledList limits project groups to five visible sessions', () => {
+  const nav = createElement();
+  const {context} = buildContext({
+    localStorageItems: {
+      'cron-group-collapsed': JSON.stringify({Nightly: false}),
+    },
+    elements: new Map([['session-list', nav]]),
+  });
+  const sessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`scheduled-${idx + 1}`, `Scheduled ${idx + 1}`, {
+      schedule_project: 'Nightly',
+      scheduled_task: 'nightly',
+      schedule_enabled: true,
+      schedule_cron: '0 2 * * *',
+      schedule_timezone: 'UTC',
+    }));
+
+  context.renderSessionList(sessions, 'scheduled');
+
+  assert.match(nav.innerHTML, /Nightly/);
+  assert.match(nav.innerHTML, /cron-group-limit-toggle/);
+  assert.match(nav.innerHTML, />Show all<\/button>/);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'scheduled-5').includes('cron-group-limit-extra'), false);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'scheduled-6').includes('cron-group-limit-extra hidden'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'scheduled-7').includes('cron-group-limit-extra hidden'), true);
 });
 
 test('switchSession preserves worker icon until authoritative status returns', async () => {

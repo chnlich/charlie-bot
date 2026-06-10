@@ -2,7 +2,7 @@
 name: skill-management
 description: >
   CharlieBot skill directory layout, sync rules, and CLI tool mappings.
-  Use when creating, installing, or syncing skills across Claude Code, Codex, and Gemini CLI.
+  Use when creating, installing, or syncing skills across Claude Code, Codex, Gemini, OpenCode, and Antigravity.
 ---
 
 # Skill Management
@@ -21,13 +21,18 @@ description: >
 | **Claude Code** | `~/.claude/skills/<name>/SKILL.md` | Proprietary | Also reads `.claude/skills/` at project level |
 | **Codex CLI** | `~/.agents/skills/<name>/SKILL.md` | Agent Skills (open standard) | `.system/` in `~/.codex/skills/` is Codex built-in; user skills go in `~/.agents/skills/` |
 | **Gemini CLI** | `~/.gemini/skills/<name>/SKILL.md` OR `~/.agents/skills/<name>/SKILL.md` | Agent Skills (open standard) | `~/.agents/skills/` takes precedence over `~/.gemini/skills/` |
+| **OpenCode** | scans `~/.claude/` and `~/.agents/` | reuses both standards | No dedicated target — auto-discovers Claude Code + Agent Skills. Disable via `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` |
+| **Antigravity (`agy`)** | `~/.gemini/antigravity-cli/skills/<name>/SKILL.md` | Agent Skills (open standard) | Global customizations root (also scans `~/.gemini/skills/`); does NOT read `~/.claude`/`~/.agents` |
 
 ### Deduplication
 
-Codex and Gemini both read `~/.agents/skills/`, so syncing to **two** targets covers all three CLIs:
+Three sync targets cover all five CLIs:
 
 1. `~/.claude/skills/` — Claude Code
-2. `~/.agents/skills/` — Codex + Gemini (shared)
+2. `~/.agents/skills/` — Codex + Gemini (shared open standard)
+3. `~/.gemini/antigravity-cli/skills/` — Antigravity (`agy`)
+
+OpenCode needs **no** target: it auto-scans `~/.claude/` and `~/.agents/`, both already populated above.
 
 ## Sync Rules
 
@@ -50,7 +55,7 @@ Additional host-specific blocklist patterns (real names, internal project names,
 
 ## File Name Convention
 
-All three CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file.
+All CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file.
 
 ## Updating Existing Skills
 

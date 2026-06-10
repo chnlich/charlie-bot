@@ -12,6 +12,7 @@ HOST_SKILLS="$HOME/.charliebot/skills"
 TARGETS=(
   "$HOME/.claude/skills"
   "$HOME/.agents/skills"
+  "$HOME/.gemini/antigravity-cli/skills"  # Antigravity CLI (agy) global skills root
 )
 
 # --- Flags ---

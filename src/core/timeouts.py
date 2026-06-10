@@ -70,6 +70,3 @@ SLASH_COMMAND_DEFAULT_TIMEOUT = 10  # seconds — overridable per-command in YAM
 
 # Background poller for external usage data (Claude Code / Codex quotas).
 EXT_USAGE_POLL_INTERVAL = 10 * 60  # 600 seconds (10 minutes)
-
-# Fallback quota-check interval when the usage API is unavailable during /improve.
-IMPROVE_QUOTA_POLL_INTERVAL = 10 * 60  # 600 seconds (10 minutes)

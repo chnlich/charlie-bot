@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into startup and turn-stream helpers
+  description: |-
+    PURPOSE: Keep OpenCodeBackend.run focused on orchestration by moving server startup and SSE turn handling into named helpers.
+    HOW:
+    - Extract subprocess startup, server URL reading, and stdout/stderr log setup into a private helper.
+    - Extract HTTP session creation and SSE event processing into a private helper that yields translated events and the accumulated result.
+    - Verify yapf, pyflakes on src/agents/backends/opencode.py, and an import smoke test.
+  category: long-function
+  status: pending
+  created: '2026-06-10T17:12:39Z'
+  priority: low

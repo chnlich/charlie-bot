@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Clean remaining full-tree static-analysis findings
+  description: |
+    PURPOSE: Reduce low-noise maintenance debt from current static-analysis scans.
+    HOW:
+    - Remove unused imports and variables in tests flagged by pyflakes and 100%-confidence vulture findings.
+    - Simplify confirmed unsatisfiable test branches without changing behavior.
+    - Keep existing source cleanup tickets separate; do not duplicate pending source-only work.
+  category: maintainability
+  status: pending
+  created: '2026-06-11T13:13:43Z'
+  priority: low

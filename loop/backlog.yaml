@@ -7318,3 +7318,17 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused dirpath binding in core.git _contains_git_marker
+  description: 'PURPOSE: Remove a dead local binding from the git worktree cleanup
+    scanner.
+
+    HOW:
+    - Change the os.walk loop to unpack the unused first value as `_`.
+    - Verify pyflakes and pylint no longer report this finding.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-11T09:14:11Z'
+  priority: low

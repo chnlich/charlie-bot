@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run server orchestration
+  description: |-
+    PURPOSE: Split OpenCodeBackend.run so server startup and SSE turn streaming are separate readable units.
+    HOW:
+    - Extract the serve startup, health check, and session creation path into a private helper.
+    - Extract the prompt send plus session-scoped SSE loop into a private async event generator.
+    - Keep the current error-event yield, failure flag behavior, and cleanup ordering unchanged.
+  category: long-function
+  status: pending
+  created: '2026-06-11T17:12:29Z'
+  priority: low

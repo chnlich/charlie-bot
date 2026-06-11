@@ -37,8 +37,7 @@ You have these built-in features. If unsure how one works, **read the source cod
 | Feature | What it does | Source |
 |---------|-------------|--------|
 | Delegation | One-shot task → worker → auto-review → merge | `spawner.py` |
-| `/improve [N] <goal>` | Iterative improvement loop — workers autonomously change→run→verify→repeat | `improve_command.py` |
-| `/stop-improve` | Stop active improve loop after current iteration | `improve_command.py` |
+| `/stop-improve` | Stop active improve loop after current iteration | `src/api/slash.py` |
 | Delayed triggers | Schedule a one-shot wake-up after N seconds | `schedule_trigger.py` |
 | Slash commands | Built-in + custom YAML-defined commands | `slash_commands.py` |
 | `/run <task>` | Manually trigger a scheduled cron task | `scheduler.py` |
@@ -79,7 +78,8 @@ Pass `--keep-worktree 1` instead when the worker launches a long-running externa
 ## Improve Loop
 
 ```bash
-charliebot improve --repo <repo> --base-branch <base> --iterations N --goal '<goal>' --work-branch '<branch>'
+# Write the goal to a file first, then pass it with --goal-file.
+charliebot improve --repo <repo> --base-branch <base> --iterations N --goal-file <path> --work-branch '<branch>'
 ```
 
 Iterative change→run→verify loop; workers are fully autonomous (human on the loop, not in the loop). You can initiate from natural language — the user does NOT need to type `/improve`.
@@ -88,9 +88,16 @@ Iterative change→run→verify loop; workers are fully autonomous (human on the
 
 - Use improve when the task needs iteration/convergence ("make it better until X", tuning, repeated test-fix). Use one-shot delegation when there's a discrete deliverable.
 - **Goal prompt: what, not how.** Specify outcome + constraints, NOT methods.
+- **Goal lives in a file.** Write the goal prompt to a file (e.g. in the session dir) and pass it with `--goal-file`; the CLI rejects a missing or empty file.
 - All iterations commit to a single work branch in a shared worktree. Use descriptive names (e.g. `improve/optimize-step-time`); include Linear ticket when relevant (e.g. `XYZ-123/owner/20260402/optimize-step-time`).
 - Add `--merge-back` to ff-merge the work branch into base_branch after the loop.
 - The CLI returns immediately. You'll receive a summary when iterations complete — do NOT wait or poll.
+
+### Steering a running loop
+
+- The launch response includes `loop_id` and `goal_path` (`loops/{id}/goal.md`). This file is the **live goal**: every iteration re-reads it, so editing it steers the remaining iterations.
+- After launch, report the `goal_path` to the user as the editable live goal.
+- **Never edit `goal.md` yourself.** A mid-loop goal change requires explicit user confirmation; the user edits the file (or asks you to, after confirming).
 
 ### Take-off confirmation
 

@@ -1,16 +1,16 @@
 ---
 name: improve-goal
-description: How to write effective improve loop goal prompts — for the master CC agent that constructs the --goal argument.
+description: How to write effective improve loop goal prompts — for the master CC agent that writes the --goal-file content.
 version: 1.0.0
 ---
 
 # Improve Loop — Goal Prompt Construction
 
-This skill is for the **master CC** (orchestrator). It guides construction of the `--goal` argument passed to `charliebot improve`. Workers do NOT need this skill — they read `improve-worker` instead.
+This skill is for the **master CC** (orchestrator). It guides construction of the goal prompt written to the file passed via `--goal-file` to `charliebot improve` (the file content becomes the live, per-iteration goal). Workers do NOT need this skill — they read `improve-worker` instead.
 
 ## Goal Prompt Rules
 
-When writing the `--goal` for an improve loop:
+When writing the `--goal-file` content for an improve loop:
 
 1. **Start with skills to read** — first line should be `Read skills: improve-worker, <domain-skill>, <infra-skill>, ...`. List all relevant skills explicitly. Always include `improve-worker`. Workers won't know which skills exist unless told.
 2. **Order goals by importance** — list goals from most important to least important, numbered (1), (2), (3)... Workers may not reach later goals if earlier ones consume all iterations.

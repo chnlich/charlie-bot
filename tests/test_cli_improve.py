@@ -19,11 +19,14 @@ def _mock_config(tmp_path: Path):
 
 
 def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-  """main() posts to /api/internal/improve and returns immediately."""
+  """main() reads --goal-file and posts its content to /api/internal/improve."""
   cfg = _mock_config(tmp_path)
   cfg.sessions_dir = tmp_path / "fake_sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(tmp_path)
+
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("optimize")
 
   resp_mock = MagicMock()
   resp_mock.json.return_value = {"status": "started", "session_id": "s1", "iterations": 2}
@@ -43,8 +46,8 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
           "codex-o3",
           "--iterations",
           "2",
-          "--goal",
-          "optimize",
+          "--goal-file",
+          str(goal_file),
       ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
@@ -70,8 +73,13 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(tmp_path)
 
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
+
   import requests as req_lib
-  with patch("sys.argv", ["improve", "--session", "s1", "--repo", "/tmp/repo", "--base-branch", "main", "--goal", "fix"]), \
+  with patch(
+      "sys.argv",
+      ["improve", "--session", "s1", "--repo", "/tmp/repo", "--base-branch", "main", "--goal-file", str(goal_file)]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", side_effect=req_lib.RequestException("conn error")):
     with pytest.raises(SystemExit) as exc_info:
@@ -92,6 +100,8 @@ def _setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str
 
 def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
   resp_mock = MagicMock()
   resp_mock.json.return_value = {"status": "started"}
   resp_mock.raise_for_status = MagicMock()
@@ -104,8 +114,8 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
           "/tmp/repo",
           "--base-branch",
           "main",
-          "--goal",
-          "fix",
+          "--goal-file",
+          str(goal_file),
       ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
@@ -117,6 +127,8 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
   resp_mock = MagicMock()
   resp_mock.json.return_value = {"status": "started"}
   resp_mock.raise_for_status = MagicMock()
@@ -131,8 +143,8 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
           "/tmp/repo",
           "--base-branch",
           "main",
-          "--goal",
-          "fix",
+          "--goal-file",
+          str(goal_file),
       ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
@@ -145,6 +157,8 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_session_mismatch_with_cwd_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
 
   with patch(
       "sys.argv",
@@ -156,8 +170,8 @@ def test_session_mismatch_with_cwd_rejected(
           "/tmp/repo",
           "--base-branch",
           "main",
-          "--goal",
-          "fix",
+          "--goal-file",
+          str(goal_file),
       ]), \
        patch("src.cli.common.get_config", return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
@@ -178,6 +192,9 @@ def test_no_session_outside_session_dir(
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(tmp_path)
 
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
+
   with patch(
       "sys.argv",
       [
@@ -186,8 +203,8 @@ def test_no_session_outside_session_dir(
           "/tmp/repo",
           "--base-branch",
           "main",
-          "--goal",
-          "fix",
+          "--goal-file",
+          str(goal_file),
       ]), \
        patch("src.cli.common.get_config", return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
@@ -196,6 +213,47 @@ def test_no_session_outside_session_dir(
   assert exc_info.value.code == 2
   err = capsys.readouterr().err
   assert "session dir" in err or "--session required" in err
+
+
+def test_main_rejects_missing_goal_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """A nonexistent --goal-file exits non-zero before any request is made."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  missing = tmp_path / "nope.md"
+
+  with patch(
+      "sys.argv",
+      ["improve", "--repo", "/tmp/repo", "--base-branch", "main", "--goal-file", str(missing)]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "goal-file" in err and "not found" in err
+
+
+def test_main_rejects_empty_goal_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """A whitespace-only --goal-file exits non-zero before any request is made."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  empty = tmp_path / "empty.md"
+  empty.write_text("   \n")
+
+  with patch(
+      "sys.argv",
+      ["improve", "--repo", "/tmp/repo", "--base-branch", "main", "--goal-file", str(empty)]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "empty" in err
 
 
 # ---------------------------------------------------------------------------

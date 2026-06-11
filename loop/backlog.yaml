@@ -7318,3 +7318,19 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split scheduled session backend rotation in core/sessions.py
+  description: 'PURPOSE: Keep scheduled-session backend rotation readable by separating
+    lookup, busy policy, creation, and metadata carryover.
+
+    HOW: Extract a helper for the no-existing-session creation path and another helper
+    for archive/create/metadata carryover/cache update during backend rotation. Keep the
+    fail-fast busy-session error in ensure_scheduled_session_backend, with skip_if_busy
+    only returning None after logging the existing warning. Verify with pyflakes
+    src/core/sessions.py and yapf --in-place --recursive src/.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-11T15:12:48Z'
+  priority: low

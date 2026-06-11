@@ -7318,3 +7318,12 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into setup and SSE-flow helpers
+  description: |
+    PURPOSE: Split OpenCodeBackend.run so server setup, SSE prompt flow, and cleanup are separate readable steps.
+    HOW: Extract server startup/readiness into one helper and the SSE connect/send/wait loop into another, preserving the existing yielded session_id, translated events, accumulated result, error logging, and cleanup behavior.
+  category: long-function
+  status: pending
+  created: '2026-06-11T07:12:25Z'
+  priority: low

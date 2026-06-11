@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub parse_argv into parser helpers
+  description: |-
+    PURPOSE: Make claude_sub argument parsing readable by separating token splitting from option validation.
+    HOW:
+    - Extract the argv-to-option/prompt token split into a private helper.
+    - Extract option token parsing into a helper that returns the parsed option fields.
+    - Keep validation errors and the ClaudeSubArgs return shape unchanged; verify with pyflakes and focused parser cases.
+  category: long-function
+  status: pending
+  created: '2026-06-11T21:11:59Z'
+  priority: low

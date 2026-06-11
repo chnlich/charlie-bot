@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argv parsing into focused helpers
+  description: |-
+    PURPOSE — Split the 78-line `parse_argv` so argv tokenization and option interpretation can be reviewed separately.
+    HOW — Add a helper for separating option tokens from prompt tokens, including `--` handling.
+    HOW — Add a helper for interpreting option tokens, leaving `parse_argv` to validate and build `ClaudeSubArgs`.
+  category: long-function
+  status: pending
+  created: '2026-06-11T05:12:11Z'
+  priority: low

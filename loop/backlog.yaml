@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argv parsing into tokenization and option parsing
+  description: |-
+    PURPOSE: Make claude-sub argument parsing easier to verify and extend.
+    HOW: Extract `_split_option_and_prompt_tokens(argv)` and `_parse_option_tokens(option_tokens)` from `parse_argv`.
+    Keep `parse_argv` responsible for validating the prompt and returning `ClaudeSubArgs`.
+    Verify with `pytest tests/test_claude_sub_cli.py` and `yapf --diff --recursive src/`.
+  category: long-function
+  status: pending
+  created: '2026-06-11T03:11:56Z'
+  priority: low

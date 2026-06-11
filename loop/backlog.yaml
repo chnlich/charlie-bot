@@ -7318,3 +7318,23 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split stale failed worktree quarantine scan into helpers
+  description: 'PURPOSE: Make startup worktree quarantine easier to read and safer
+    to change.
+
+    HOW:
+
+    - Extract an eligibility helper for failed-thread metadata checks and active-worktree
+    rejection.
+
+    - Extract the quarantine attempt and error logging block into a small async helper.
+
+    - Keep the final trash-size log in _quarantine_stale_failed_worktrees and verify
+    with yapf plus pyflakes on src/core/init.py.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-11T02:58:20Z'
+  priority: low

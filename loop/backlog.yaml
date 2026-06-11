@@ -7318,3 +7318,18 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run server and SSE flow
+  description: 'PURPOSE: Split OpenCodeBackend.run so server lifecycle setup and SSE
+    turn streaming are not mixed in one method.
+
+    HOW: Extract one helper for starting the OpenCode server and wiring stdout/stderr
+    logs. Extract one helper for the session event stream that sends the prompt, translates
+    events, and preserves the existing session.idle failure. Keep exception logging and
+    cleanup behavior unchanged.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-11T23:11:33Z'
+  priority: low

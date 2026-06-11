@@ -115,6 +115,28 @@ def _loop_state_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Pa
   return _loops_dir(session_id, cfg) / str(loop_id) / "state.json"
 
 
+def _goal_file_path(loop_dir: Path) -> Path:
+  return loop_dir / "goal.md"
+
+
+def loop_goal_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Path:
+  """Path to the live goal file for a loop (the editable per-iteration goal)."""
+  return _goal_file_path(_loops_dir(session_id, cfg) / str(loop_id))
+
+
+async def read_loop_goal(loop_dir: Path) -> str:
+  """Read the live goal for a loop, failing loudly if goal.md is missing.
+
+  The goal file is re-read at the start of every iteration so the user can steer
+  a running loop by editing it. A missing file mid-loop is a hard failure — there
+  is deliberately no fallback to the state.json startup snapshot.
+  """
+  goal_path = _goal_file_path(loop_dir)
+  if not await asyncio.to_thread(goal_path.exists):
+    raise RuntimeError(f"improve loop goal file missing: {goal_path}")
+  return await asyncio.to_thread(goal_path.read_text)
+
+
 def _next_loop_id_sync(loops_dir: Path) -> int:
   if not loops_dir.exists():
     return 1
@@ -282,7 +304,10 @@ async def reserve_loop_state(
     raise ImproveLoopAlreadyRunningError(running.loop_id if running else None) from exc
 
   try:
-    loop_id, _ = await _reserve_loop_dir(session_id, cfg)
+    loop_id, loop_dir = await _reserve_loop_dir(session_id, cfg)
+    # Write the live goal exactly once at reservation. Iterations re-read this
+    # file; state.json's goal stays as the startup snapshot for display/summary.
+    await asyncio.to_thread(_goal_file_path(loop_dir).write_text, goal)
     state = ImproveState(
         loop_id=loop_id,
         goal=goal,
@@ -372,7 +397,6 @@ async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: ThreadMa
 async def _run_single_iteration(
     i: int,
     iterations: int,
-    goal: str,
     session_id: str,
     loop_id: int,
     repo_path: str,
@@ -400,6 +424,11 @@ async def _run_single_iteration(
   if state.status == "stopped":
     log.info("improve_loop_stopped", session=session_id, iteration=i)
     return None
+
+  # Re-read the live goal so mid-loop edits to goal.md steer this iteration.
+  # A missing goal.md fails the loop loudly (read_loop_goal raises) — there is no
+  # fallback to the state.json startup snapshot.
+  goal = await read_loop_goal(loop_dir)
 
   # Build iteration description
   desc_parts = [f"Iterative improvement — iteration {i}/{iterations}", f"Goal: {goal}"]
@@ -584,6 +613,11 @@ async def run_improve_loop(
   loop_dir = cfg.sessions_dir / session_id / 'loops' / str(loop_id)
   await asyncio.to_thread(loop_dir.mkdir, parents=True, exist_ok=True)
 
+  # Read the live goal written at reservation. The resume path (loop_id given)
+  # reads it too so an edit made before a restart takes effect. state.json's goal
+  # field stays the startup snapshot used only for display/summary payloads.
+  goal = await read_loop_goal(loop_dir)
+
   log.info(
       "improve_loop_backend_pinned",
       session=session_id,
@@ -622,7 +656,6 @@ async def run_improve_loop(
         summary = await _run_single_iteration(
             i,
             iterations,
-            goal,
             session_id,
             loop_id,
             repo_path,

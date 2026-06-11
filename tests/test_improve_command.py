@@ -15,7 +15,9 @@ from src.core.improve_command import (
     find_running_loop,
     is_quota_failure,
     load_loop_state,
+    loop_goal_path,
     next_loop_id,
+    read_loop_goal,
     reserve_loop_state,
     save_loop_state,
     stop_improve_loop,
@@ -660,3 +662,137 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   assert (cfg.sessions_dir / session_id / "loops" / "1" / "iter_0002.md").exists()
   assert not (cfg.sessions_dir / session_id / "loops" / "active.lock").exists()
   assert any(event.get("type") == "improve_completed" for event in persisted_events)
+
+
+# ---------------------------------------------------------------------------
+# Live goal file (per-iteration re-read)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reserve_loop_state_writes_goal_file(tmp_path: Path) -> None:
+  """The live goal is written to loops/{id}/goal.md exactly once at reservation."""
+  cfg = _make_cfg(tmp_path)
+  state = await reserve_loop_state("goal-session", "make it faster", 3, "improve/test", "/tmp/repo", cfg)
+
+  goal_path = loop_goal_path("goal-session", state.loop_id, cfg)
+  assert goal_path == cfg.sessions_dir / "goal-session" / "loops" / str(state.loop_id) / "goal.md"
+  assert goal_path.read_text() == "make it faster"
+  # state.json keeps the startup snapshot.
+  loaded = await load_loop_state("goal-session", state.loop_id, cfg)
+  assert loaded is not None and loaded.goal == "make it faster"
+
+
+@pytest.mark.asyncio
+async def test_read_loop_goal_raises_when_missing(tmp_path: Path) -> None:
+  """A missing goal.md is a hard failure — no fallback to a snapshot."""
+  loop_dir = tmp_path / "loops" / "1"
+  loop_dir.mkdir(parents=True)
+  with pytest.raises(RuntimeError, match="goal file missing"):
+    await read_loop_goal(loop_dir)
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Editing goal.md mid-loop steers iteration N>1's worker prompt."""
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {
+          "thread-1": [{
+              "type": "result",
+              "result": "iter1 done"
+          }],
+          "thread-2": [{
+              "type": "result",
+              "result": "iter2 done"
+          }],
+      },
+      {
+          "thread-1": ThreadStatus.COMPLETED,
+          "thread-2": ThreadStatus.COMPLETED
+      },
+  )
+  _patch_improve_loop_io(monkeypatch)
+
+  descriptions: list[str] = []
+
+  async def capturing_spawn_worker(*args, **kwargs) -> None:
+    descriptions.append(args[1])
+    request = kwargs["request"]
+    assert isinstance(request, SpawnRequest)
+    if request.iteration_number == 1:
+      # Simulate the user editing the live goal between iterations.
+      (Path(request.loop_dir) / "goal.md").write_text("edited goal")
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
+
+  await improve_command.run_improve_loop(
+      session_id="edit-session",
+      repo_path="/tmp/repo",
+      iterations=2,
+      goal="original goal",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(descriptions) == 2
+  assert "Goal: original goal" in descriptions[0]
+  assert "Goal: edited goal" in descriptions[1]
+  # state.json's goal field stays the startup snapshot.
+  state = await load_loop_state("edit-session", 1, cfg)
+  assert state is not None
+  assert state.goal == "original goal"
+  assert state.iterations_completed == 2
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_fails_when_goal_file_missing_mid_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A goal.md removed mid-loop fails the loop loudly instead of falling back."""
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {"thread-1": [{
+          "type": "result",
+          "result": "iter1 done"
+      }]},
+      {"thread-1": ThreadStatus.COMPLETED},
+  )
+  _patch_improve_loop_io(monkeypatch)
+
+  async def deleting_spawn_worker(*args, **kwargs) -> None:
+    del args
+    request = kwargs["request"]
+    assert isinstance(request, SpawnRequest)
+    if request.iteration_number == 1:
+      (Path(request.loop_dir) / "goal.md").unlink()
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", deleting_spawn_worker)
+
+  await improve_command.run_improve_loop(
+      session_id="missing-goal-session",
+      repo_path="/tmp/repo",
+      iterations=2,
+      goal="original goal",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  state = await load_loop_state("missing-goal-session", 1, cfg)
+  assert state is not None
+  assert state.status == "failed"
+  assert state.iterations_completed == 1
+  assert not (cfg.sessions_dir / "missing-goal-session" / "loops" / "active.lock").exists()

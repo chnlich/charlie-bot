@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
-from src.core.improve_command import ImproveLoopAlreadyRunningError, reserve_loop_state, run_improve_loop
+from src.core.improve_command import (
+    ImproveLoopAlreadyRunningError,
+    loop_goal_path,
+    reserve_loop_state,
+    run_improve_loop,
+)
 from src.core.models import (
     DelegateRequest,
     ImproveRequest,
@@ -161,7 +166,13 @@ async def start_improve_loop(
 
   log.info("improve_loop_started", session=req.session_id, iterations=req.iterations, goal=req.goal)
 
-  return {"status": "started", "session_id": req.session_id, "iterations": req.iterations}
+  return {
+      "status": "started",
+      "session_id": req.session_id,
+      "iterations": req.iterations,
+      "loop_id": state.loop_id,
+      "goal_path": str(loop_goal_path(req.session_id, state.loop_id, cfg)),
+  }
 
 
 @router.post("/schedule-trigger")

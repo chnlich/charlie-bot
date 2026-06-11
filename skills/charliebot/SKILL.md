@@ -168,7 +168,7 @@ Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered re
 
 | Feature | Source file |
 |---------|------------|
-| /improve loop | `improve_command.py` |
+| Improve loop | `improve_command.py` |
 | Spawner + review | `spawner.py` |
 | Slash commands | `slash_commands.py` |
 | Backlog state machine | `improvement_loop.py` |

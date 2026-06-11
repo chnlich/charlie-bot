@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run turn handling
+  description: |-
+    PURPOSE: Split OpenCodeBackend.run so process startup and SSE turn handling are separate.
+    HOW:
+    - Extract the /event stream, prompt send, and session.idle/session.error loop into a private async generator.
+    - Keep process launch, health check, session selection, and cleanup in run().
+    - Verify with yapf --in-place --recursive src/ and pyflakes src/agents/backends/opencode.py.
+  category: long-function
+  status: pending
+  created: '2026-06-11T19:12:45Z'
+  priority: low

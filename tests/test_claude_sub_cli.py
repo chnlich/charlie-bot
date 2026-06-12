@@ -116,6 +116,26 @@ def test_pane_shows_unsubmitted_prompt_ignores_busy_turn_pane() -> None:
   assert not claude_sub._pane_shows_unsubmitted_prompt(pane, "Fix the race in claude_sub")
 
 
+def test_pane_shows_unsubmitted_prompt_ignores_echoed_prompt_above_empty_input_box() -> None:
+  prompt = "Fix the recurring prompt-submit race in src/cli/claude_sub.py.\nDetails follow on later lines."
+  pane = ("some earlier scrollback\n"
+          "❯ Fix the recurring prompt-submit race in src/cli/claude_sub.py. Details\n"
+          "  follow on later lines.\n"
+          "✶ Running… (esc to interrupt)\n"
+          "❯ \n")
+
+  assert not claude_sub._pane_shows_unsubmitted_prompt(pane, prompt)
+
+
+def test_pane_shows_unsubmitted_prompt_detects_repeated_prompt_in_input_box() -> None:
+  prompt = "take off"
+  pane = ("❯ take off\n"
+          "⏺ Took off.\n"
+          "❯ take off\n")
+
+  assert claude_sub._pane_shows_unsubmitted_prompt(pane, prompt)
+
+
 @pytest.mark.asyncio
 async def test_send_prompt_resends_enter_until_submitted(monkeypatch: pytest.MonkeyPatch) -> None:
   enters = 0

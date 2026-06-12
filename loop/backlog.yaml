@@ -7318,3 +7318,17 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into named phases
+  description: 'PURPOSE — Reduce the 65-line OpenCodeBackend.run method into smaller
+    named phases.
+
+    HOW — Extract server startup, health check, and session selection into one helper.
+    Extract the SSE prompt/translation loop into another helper while preserving the
+    existing cleanup path and emitted events.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-12T01:12:29Z'
+  priority: low

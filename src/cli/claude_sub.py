@@ -271,15 +271,19 @@ def _pane_shows_unsubmitted_prompt(pane_text: str, prompt: str) -> bool:
   Unsubmitted input renders as a ❯ line followed by the pasted text. Prompts can be
   long/multi-line and the pane wraps, so only a short prefix of the prompt's first
   line is compared. An idle empty prompt line ("❯ ") never matches.
+
+  After a successful submit the TUI echoes the submitted message in the scrollback
+  with the same "❯ " prefix, so only the LAST ❯ line — the actual input box — is
+  compared; the echo above it must not count as unsubmitted.
   """
   stripped_prompt = prompt.strip()
   if not stripped_prompt:
     return False
   prefix = stripped_prompt.splitlines()[0][:_SUBMIT_VERIFY_PREFIX_CHARS]
-  for line in pane_text.splitlines():
+  for line in reversed(pane_text.splitlines()):
     stripped = line.lstrip()
-    if stripped.startswith("❯") and stripped[1:].lstrip().startswith(prefix):
-      return True
+    if stripped.startswith("❯"):
+      return stripped[1:].lstrip().startswith(prefix)
   return False
 
 

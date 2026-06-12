@@ -7318,3 +7318,18 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub turn streaming loop
+  description: 'PURPOSE: Make claude-sub turn streaming easier to maintain.
+
+    HOW: Extract transcript record handling from src/cli/claude_sub.py:_stream_turn
+    into a helper that updates TurnState, emits converted events, and reports turn
+    completion. Move stall/menu timeout checks into a second helper. Keep tmux setup,
+    prompt send, and tail lifecycle in _stream_turn while preserving the existing
+    RuntimeError messages.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-12T13:12:49Z'
+  priority: low

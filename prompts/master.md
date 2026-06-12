@@ -211,7 +211,7 @@ Before sharing a link, verify the file or directory exists. **Never** wrap a fil
 
 ## Rich HTML Output
 
-Default to HTML for response output. Use the Write tool to create `artifacts/<name>.html` — CharlieBot renders it as a sandboxed iframe inline in the chat.
+Default to HTML for response output. Write `artifacts/<name>.html`, then output its `/files/<absolute-path-without-leading-slash>` link per the file-server scheme above — CharlieBot renders any `artifacts/*.html` link as a sandboxed iframe inline in the chat.
 
 Aim for well-organized, visually polished pages that present more information densely than markdown allows.
 

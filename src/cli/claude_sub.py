@@ -43,16 +43,27 @@ _TURN_HARD_CAP_SECONDS = 7200.0
 # Selection cursor (❯) sitting on a numbered option, as rendered by AskUserQuestion
 # / plan-approval / permission menus. The idle input prompt also starts with ❯ but
 # is never followed by a digit, so requiring a number distinguishes a blocking menu.
+# Must only ever run on dim-stripped real content: ghost suggestions render dim and
+# may start with a digit.
 _MENU_OPTION_RE = re.compile(r"❯\s*\d")
+
+# SGR sequence (CSI ... m); group 1 holds the parameter list that toggles dim.
+_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
+# Any other CSI sequence, stripped without affecting dim state.
+_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 # The TUI sometimes drops the Enter sent right after a paste (seen at TUI startup and
 # under multi-second input redraw lag), leaving the prompt unsubmitted in the input
-# box. After each Enter we verify the input box cleared and re-send if not; waits are
-# generous because the observed input lag is multi-second.
-_SUBMIT_VERIFY_PREFIX_CHARS = 24
+# box. Submission is verified by emptiness transitions of the input box's real
+# (non-dim) content — never by matching prompt text, because multi-line pastes render
+# only as a "[Pasted text #N +M lines]" placeholder. After each Enter we verify the
+# box cleared and re-send only while it is verified non-empty; waits are generous
+# because observed cold-start input lag exceeds 60s.
 _SUBMIT_VERIFY_WAIT_SECONDS = 1.0
 _SUBMIT_RETRY_WAIT_SECONDS = 5.0
 _SUBMIT_MAX_ENTER_ATTEMPTS = 4
+_PASTE_RENDER_TIMEOUT_SECONDS = 120.0
+_CLEAR_INPUT_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -239,6 +250,61 @@ async def _capture_pane(session_id: str) -> str:
   return output.decode("utf-8", errors="replace")
 
 
+async def _capture_pane_escapes(session_id: str) -> str:
+  """Capture the pane with escape sequences (-e) so dim styling survives for ghost detection."""
+  output = await _run_tmux_bytes("capture-pane", "-p", "-e", "-t", tmux_session_name(session_id), capture=True)
+  return output.decode("utf-8", errors="replace")
+
+
+def _strip_dim_text(line: str) -> str:
+  """Return only the characters of `line` rendered with SGR dim OFF, with escape codes removed.
+
+  Ghost suggestions and idle hints in the claude TUI input box render SGR dim and are
+  indistinguishable from real input in a plain capture, so real content must be computed
+  from an escape-preserving capture. Dim toggles: \\x1b[2m on; \\x1b[22m off; \\x1b[0m
+  (or a bare \\x1b[m reset) off. Other SGR parameters do not affect dim.
+  """
+  out: list[str] = []
+  dim = False
+  i = 0
+  while i < len(line):
+    if line[i] == "\x1b":
+      sgr = _SGR_RE.match(line, i)
+      if sgr is not None:
+        for param in (sgr.group(1) or "0").split(";"):
+          if param in ("", "0", "22"):
+            dim = False
+          elif param == "2":
+            dim = True
+        i = sgr.end()
+        continue
+      csi = _CSI_RE.match(line, i)
+      i = csi.end() if csi is not None else i + 1
+      continue
+    if not dim:
+      out.append(line[i])
+    i += 1
+  return "".join(out)
+
+
+def _input_box_content(pane_text: str) -> Optional[str]:
+  """Real (non-dim) content of the TUI input box, or None if no ❯ line is visible.
+
+  `pane_text` must come from an escape-preserving capture. The input box is the LAST
+  ❯-prefixed line: after a submit the TUI echoes the submitted message in the
+  scrollback with the same ❯ prefix, so earlier ❯ lines must not count. Ghost
+  suggestions and idle hints render dim and are stripped, so a box showing only ghost
+  text reads as empty; a multi-line paste renders as a non-dim
+  "[Pasted text #N +M lines]" placeholder and reads as non-empty.
+  """
+  content: Optional[str] = None
+  for line in pane_text.splitlines():
+    real = _strip_dim_text(line).lstrip()
+    if real.startswith("❯"):
+      content = real[1:].strip()
+  return content
+
+
 def _pane_has_prompt(pane_text: str) -> bool:
   nonempty_lines = [line for line in pane_text.splitlines() if line.strip()]
   for line in nonempty_lines[-6:]:
@@ -252,8 +318,11 @@ def _pane_has_interactive_menu(pane_text: str) -> bool:
 
   Such menus (AskUserQuestion / plan-approval / permission) render the selection
   cursor on a numbered option; the model has no way to answer them headlessly.
+  `pane_text` must come from an escape-preserving capture: a dim ghost suggestion
+  starting with a digit would otherwise match, so the menu pattern only runs on
+  dim-stripped real content.
   """
-  return any(_MENU_OPTION_RE.search(line) for line in pane_text.splitlines())
+  return any(_MENU_OPTION_RE.search(_strip_dim_text(line)) for line in pane_text.splitlines())
 
 
 async def _wait_for_prompt(session_id: str) -> None:
@@ -265,43 +334,67 @@ async def _wait_for_prompt(session_id: str) -> None:
   raise RuntimeError(f"interactive claude prompt did not become ready for session {session_id}")
 
 
-def _pane_shows_unsubmitted_prompt(pane_text: str, prompt: str) -> bool:
-  """Return True if the pasted prompt is still sitting unsubmitted in the input box.
+async def _wait_input_box_empty(session_id: str, timeout: float) -> Optional[str]:
+  """Poll until the input box's real content reads empty.
 
-  Unsubmitted input renders as a ❯ line followed by the pasted text. Prompts can be
-  long/multi-line and the pane wraps, so only a short prefix of the prompt's first
-  line is compared. An idle empty prompt line ("❯ ") never matches.
-
-  After a successful submit the TUI echoes the submitted message in the scrollback
-  with the same "❯ " prefix, so only the LAST ❯ line — the actual input box — is
-  compared; the echo above it must not count as unsubmitted.
+  Returns None once empty, or the content still present at timeout — the caller's
+  verified-non-empty witness for retrying or failing loud.
   """
-  stripped_prompt = prompt.strip()
-  if not stripped_prompt:
-    return False
-  prefix = stripped_prompt.splitlines()[0][:_SUBMIT_VERIFY_PREFIX_CHARS]
-  for line in reversed(pane_text.splitlines()):
-    stripped = line.lstrip()
-    if stripped.startswith("❯"):
-      return stripped[1:].lstrip().startswith(prefix)
-  return False
+  deadline = time.monotonic() + timeout
+  while True:
+    content = _input_box_content(await _capture_pane_escapes(session_id))
+    if not content:
+      return None
+    if time.monotonic() >= deadline:
+      return content
+    await asyncio.sleep(_POLL_SECONDS)
 
 
 async def _send_prompt(session_id: str, prompt: str) -> None:
+  """Paste the prompt and verify submission by emptiness transitions of the input box.
+
+  Prompt text is never matched: a multi-line paste renders only as a
+  "[Pasted text #N +M lines]" placeholder, so prefix matching cannot see it. Instead:
+  clear any stale real content before pasting (kills the prompt-concatenation hazard),
+  wait for the paste to render as non-empty real content, then send Enter and poll for
+  the box to empty — re-sending Enter only while the box is verified non-empty so
+  stray Enters never reach an empty/ghost box.
+  """
+  target = tmux_session_name(session_id)
+
+  stale = _input_box_content(await _capture_pane_escapes(session_id))
+  if stale:
+    await _run_tmux_bytes("send-keys", "-t", target, "C-e")
+    await _run_tmux_bytes("send-keys", "-t", target, "C-u")
+    leftover = await _wait_input_box_empty(session_id, _CLEAR_INPUT_TIMEOUT_SECONDS)
+    if leftover:
+      raise RuntimeError(
+          f"claude TUI input box held stale content that C-e/C-u did not clear within "
+          f"{_CLEAR_INPUT_TIMEOUT_SECONDS:.0f}s for session {session_id}: {leftover!r}")
+
   buffer_name = f"claude-sub-{session_id[:8]}-{uuid.uuid4().hex[:8]}"
   payload = _BRACKETED_PASTE_START + prompt.encode("utf-8") + _BRACKETED_PASTE_END
-  target = tmux_session_name(session_id)
   await _run_tmux_bytes("load-buffer", "-b", buffer_name, "-", stdin=payload)
   await _run_tmux_bytes("paste-buffer", "-d", "-b", buffer_name, "-t", target)
-  await asyncio.sleep(0.2)
+
+  deadline = time.monotonic() + _PASTE_RENDER_TIMEOUT_SECONDS
+  while not _input_box_content(await _capture_pane_escapes(session_id)):
+    if time.monotonic() >= deadline:
+      raise RuntimeError(
+          f"pasted prompt did not render in the claude TUI input box within "
+          f"{_PASTE_RENDER_TIMEOUT_SECONDS:.0f}s for session {session_id}")
+    await asyncio.sleep(_POLL_SECONDS)
+
+  content: Optional[str] = None
   for attempt in range(_SUBMIT_MAX_ENTER_ATTEMPTS):
     await _run_tmux_bytes("send-keys", "-t", target, "Enter")
-    await asyncio.sleep(_SUBMIT_VERIFY_WAIT_SECONDS if attempt == 0 else _SUBMIT_RETRY_WAIT_SECONDS)
-    if not _pane_shows_unsubmitted_prompt(await _capture_pane(session_id), prompt):
+    content = await _wait_input_box_empty(
+        session_id, _SUBMIT_VERIFY_WAIT_SECONDS if attempt == 0 else _SUBMIT_RETRY_WAIT_SECONDS)
+    if content is None:
       return
   raise RuntimeError(
-      f"claude TUI input box still shows the prompt unsubmitted after {_SUBMIT_MAX_ENTER_ATTEMPTS} Enter attempts "
-      f"for session {session_id}")
+      f"claude TUI input box still holds unsubmitted content after {_SUBMIT_MAX_ENTER_ATTEMPTS} Enter attempts "
+      f"for session {session_id}: {content!r}")
 
 
 async def _interrupt_turn(session_id: str) -> None:
@@ -501,7 +594,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
       now = time.monotonic()
       if now - last_activity >= _STALL_PROBE_SECONDS and now - last_probe >= _PANE_PROBE_INTERVAL_SECONDS:
         last_probe = now
-        if _pane_has_interactive_menu(await _capture_pane(session_id)):
+        if _pane_has_interactive_menu(await _capture_pane_escapes(session_id)):
           menu_probes += 1
           if menu_probes >= _MENU_CONFIRM_PROBES:
             await _interrupt_turn(session_id)

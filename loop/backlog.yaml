@@ -7318,3 +7318,16 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused OpenCodeBackend._translate_tool wrapper
+  description: 'PURPOSE: Remove a dead OpenCode translate-event wrapper that no caller uses.
+
+    HOW: Delete OpenCodeBackend._translate_tool from src/agents/backends/opencode.py.
+    Verify python -m pyflakes src/agents/backends/opencode.py and yapf --in-place
+    --recursive src/ produce no new diff.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-12T05:13:00Z'
+  priority: low

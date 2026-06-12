@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argument tokenization out of parse_argv
+  description: 'PURPOSE — Make claude-sub argument parsing easier to maintain by separating token splitting from option validation.
+
+    HOW — Extract a helper that returns option_tokens and prompt_tokens while preserving the existing "--" handling and value-taking flag behavior. Keep parse_argv focused on validating supported flags and constructing ClaudeSubArgs. Verify with yapf --in-place --recursive src/ and pyflakes src/cli/claude_sub.py.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-12T15:13:00Z'
+  priority: low

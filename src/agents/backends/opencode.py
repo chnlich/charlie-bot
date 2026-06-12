@@ -87,6 +87,7 @@ class OpenCodeBackend(AgentBackend):
                                   "list": allow_all,
                                   "write": allow_all,
                                   "skill": allow_all,
+                                  "task": {"*": "deny"},
                               }
                       }
               }

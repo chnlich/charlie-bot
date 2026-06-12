@@ -160,8 +160,9 @@ def test_prepare_cwd_writes_project_opencode_json(monkeypatch, tmp_path: Path) -
 
   data = json.loads(project_config.read_text(encoding="utf-8"))
   permission = data["agent"]["build"]["permission"]
-  assert permission["glob"] == {"*": "allow"}
-  assert permission["external_directory"] == {"*": "allow"}
+  for tool in ("external_directory", "read", "edit", "bash", "glob", "grep", "list", "write", "skill"):
+    assert permission[tool] == {"*": "allow"}
+  assert permission["task"] == {"*": "deny"}
 
 
 def test_prepare_cwd_migrates_legacy_config_json(monkeypatch, tmp_path: Path) -> None:

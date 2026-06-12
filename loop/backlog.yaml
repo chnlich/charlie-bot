@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into focused helpers
+  description: |-
+    PURPOSE: Keep the OpenCode backend runner small by separating server lifecycle setup from one-turn SSE handling.
+    HOW:
+    - Extract server startup, URL discovery, and log-mirroring setup into a private helper.
+    - Extract session creation, prompt dispatch, SSE translation, and idle/error termination into a private one-turn helper.
+    - Verify with yapf over src and a direct import of src.agents.backends.opencode.OpenCodeBackend.
+  category: long-function
+  status: pending
+  created: '2026-06-12T09:13:17Z'
+  priority: low

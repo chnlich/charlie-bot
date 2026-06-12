@@ -165,6 +165,7 @@ async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = De
 async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
   """List sessions with a scheduled task, newest first."""
   sessions = await session_mgr.list_sessions(
+      status=SessionStatus.ACTIVE,
       scheduled=True,
       include_running_status=True,
       include_pending_trigger_status=True,

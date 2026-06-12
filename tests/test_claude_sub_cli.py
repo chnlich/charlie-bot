@@ -109,6 +109,14 @@ def test_pane_has_interactive_menu_ignores_digit_leading_dim_ghost_suggestion() 
   assert not claude_sub._pane_has_interactive_menu(_FIXTURE_GHOST_SUGGESTION)
 
 
+def test_strip_dim_text_ignores_extended_color_arguments() -> None:
+  # Live panes emit extended-color SGR (e.g. \x1b[48;5;22m diff backgrounds): the color
+  # arguments are not attributes, so the 22 in 48;5;22 must not read as SGR 22 (dim off),
+  # nor the 2 in a 38;5;2 foreground as SGR 2 (dim on).
+  assert claude_sub._strip_dim_text("\x1b[38;5;2m❯ real text\x1b[0m") == "❯ real text"
+  assert claude_sub._strip_dim_text("\x1b[2mghost\x1b[48;5;22m still ghost\x1b[0m real") == " real"
+
+
 def test_input_box_content_reads_dim_hint_and_ghost_as_empty() -> None:
   assert claude_sub._input_box_content(_FIXTURE_IDLE_HINT) == ""
   assert claude_sub._input_box_content(_FIXTURE_GHOST_SUGGESTION) == ""

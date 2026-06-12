@@ -367,16 +367,10 @@ function toolInputSummary(tool) {
 }
 
 // ---------------------------------------------------------------------------
-// HTML artifact rendering — inline sandboxed iframes for Write tool calls
-// targeting artifacts/*.html.
+// HTML artifact rendering — inline sandboxed iframes for linked artifacts/*.html.
 // ---------------------------------------------------------------------------
-function isHtmlArtifactTool(tool) {
-  if (!tool || tool.name !== 'Write') return false;
-  var input = tool.input || {};
-  var fp = input.file_path || '';
-  if (!fp || !tool.output) return false;
-  return /(^|\/)artifacts\/[^/]+\.html$/.test(fp);
-}
+var HTML_ARTIFACT_LINK_RE = /(^|\/)artifacts\/[^/]+\.html$/;
+var htmlArtifactFetchCache = new Map();
 
 function basename(path) {
   var parts = String(path || '').split('/');
@@ -437,13 +431,13 @@ function saveHtmlArtifactSavedSize(filePath, size) {
   } catch (e) {}
 }
 
-function renderHtmlArtifact(tool) {
-  var filePath = (tool.input && tool.input.file_path) || '';
-  var rawHtml = (tool.input && tool.input.content) || '';
+function buildHtmlArtifactCard(opts) {
+  var filePath = opts.filePath || opts.absPath || '';
+  var absPath = opts.absPath || resolveArtifactAbsolutePath(filePath);
+  var rawHtml = opts.html || '';
   var frameId = 'hf-' + Math.random().toString(36).slice(2);
   var withScript = injectResizeScript(rawHtml, frameId);
   var srcdoc = escapeForSrcdoc(withScript);
-  var absPath = resolveArtifactAbsolutePath(filePath);
   var openUrl = '/files' + absPath;
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
   var savedSize = loadHtmlArtifactSavedSize(filePath);
@@ -458,7 +452,7 @@ function renderHtmlArtifact(tool) {
     + 'background:white;display:block;';
   var manualHeightAttr = (savedSize && savedSize.height) ? ' data-manual-height="1"' : '';
   var filePathAttr = ' data-file-path="' + escapeHtml(filePath) + '"';
-  return '<div class="html-artifact">'
+  return '<div class="html-artifact" data-artifact-path="' + escapeHtml(absPath) + '">'
     + '<div class="html-artifact-toolbar" style="' + widthStyle + '">'
     + '<span class="filename">' + escapeHtml(basename(filePath)) + '</span>'
     + '<button type="button" onclick="expandHtmlArtifact(this)">Expand</button>'
@@ -480,6 +474,120 @@ function renderHtmlArtifact(tool) {
     + '<div class="html-artifact-source"><pre><code class="hljs language-html">'
     + sourceHighlighted + '</code></pre></div>'
     + '</div>';
+}
+
+function resolveHtmlArtifactLink(anchor) {
+  var href = anchor.getAttribute('href') || '';
+  if (!href) return null;
+  var url;
+  try {
+    url = new URL(href, window.location.href);
+  } catch (e) {
+    console.warn('Invalid HTML artifact link', href, e);
+    return null;
+  }
+  var pathname = url.pathname || '';
+  if (!HTML_ARTIFACT_LINK_RE.test(pathname)) return null;
+  if (pathname.indexOf('/files/') !== 0) return null;
+  var encodedAbsPath = pathname.slice('/files/'.length);
+  var absPath;
+  try {
+    absPath = '/' + decodeURIComponent(encodedAbsPath);
+  } catch (e) {
+    console.warn('Invalid HTML artifact file path', pathname, e);
+    return null;
+  }
+  return {fetchUrl: pathname, absPath: absPath};
+}
+
+function fetchHtmlArtifact(absPath, fetchUrl) {
+  if (!htmlArtifactFetchCache.has(absPath)) {
+    var promise = fetch(fetchUrl).then(function(resp) {
+      if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status + ' fetching ' + fetchUrl);
+      }
+      return resp.text();
+    }).catch(function(e) {
+      htmlArtifactFetchCache.delete(absPath);
+      throw e;
+    });
+    htmlArtifactFetchCache.set(absPath, promise);
+  }
+  return htmlArtifactFetchCache.get(absPath);
+}
+
+function findEmbeddedHtmlArtifactCard(prose, absPath) {
+  var el = prose.nextElementSibling;
+  while (el) {
+    if (el.classList.contains('html-artifact') && el.dataset.artifactPath === absPath) {
+      return el;
+    }
+    el = el.nextElementSibling;
+  }
+  return null;
+}
+
+function insertHtmlArtifactCard(prose, card, ordinal) {
+  var parent = prose.parentNode;
+  if (!parent) return;
+  card.dataset.artifactOrdinal = String(ordinal);
+  var before = prose.nextSibling;
+  while (before && before.nodeType === Node.ELEMENT_NODE && before.classList.contains('html-artifact')) {
+    var existingOrdinal = Number(before.dataset.artifactOrdinal || 0);
+    if (existingOrdinal > ordinal) break;
+    before = before.nextSibling;
+  }
+  parent.insertBefore(card, before);
+}
+
+function embedLinkedHtmlArtifacts(root) {
+  root.querySelectorAll('.prose-msg').forEach(function(prose) {
+    if (prose.id === 'streaming-msg' || prose.closest('#streaming-msg')) return;
+    var links = [];
+    var seen = new Set();
+    Array.from(prose.querySelectorAll('a[href]')).forEach(function(anchor) {
+      if (anchor.dataset.embedded === '1') return;
+      var resolved = resolveHtmlArtifactLink(anchor);
+      if (!resolved) return;
+      if (seen.has(resolved.absPath)) return;
+      seen.add(resolved.absPath);
+      links.push({
+        anchor: anchor,
+        absPath: resolved.absPath,
+        fetchUrl: resolved.fetchUrl,
+      });
+    });
+    links.forEach(function(link, ordinal) {
+      if (findEmbeddedHtmlArtifactCard(prose, link.absPath)) {
+        link.anchor.dataset.embedded = '1';
+        return;
+      }
+      fetchHtmlArtifact(link.absPath, link.fetchUrl).then(function(html) {
+        if (!link.anchor.isConnected) return;
+        if (link.anchor.dataset.embedded === '1') return;
+        var currentProse = link.anchor.closest('.prose-msg');
+        if (!currentProse || currentProse.closest('#streaming-msg')) return;
+        if (findEmbeddedHtmlArtifactCard(currentProse, link.absPath)) {
+          link.anchor.dataset.embedded = '1';
+          return;
+        }
+        var template = document.createElement('template');
+        template.innerHTML = buildHtmlArtifactCard({
+          absPath: link.absPath,
+          filePath: link.absPath,
+          html: html,
+        });
+        var card = template.content.firstElementChild;
+        if (!card) {
+          throw new Error('HTML artifact card render produced no element');
+        }
+        insertHtmlArtifactCard(currentProse, card, ordinal);
+        link.anchor.dataset.embedded = '1';
+      }).catch(function(e) {
+        console.warn('Failed to render linked HTML artifact', link.fetchUrl, e);
+      });
+    });
+  });
 }
 
 function toggleHtmlArtifactSource(btn) {
@@ -603,17 +711,6 @@ function expandHtmlArtifact(btn) {
   document.body.appendChild(overlay);
 }
 
-function renderHtmlArtifacts(tools) {
-  if (!Array.isArray(tools) || !tools.length) return '';
-  var out = '';
-  for (var i = 0; i < tools.length; i++) {
-    if (isHtmlArtifactTool(tools[i])) {
-      out += renderHtmlArtifact(tools[i]);
-    }
-  }
-  return out;
-}
-
 function installHtmlArtifactListener() {
   if (window.__htmlArtifactListenerInstalled) return;
   window.__htmlArtifactListenerInstalled = true;
@@ -663,13 +760,10 @@ function renderToolActivity(tools) {
     }
     var borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
     var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
-    var renderedHint = isHtmlArtifactTool(tool)
-      ? ' <span class="text-xs text-slate-500 italic">(rendered above)</span>'
-      : '';
     return '<div class="' + borderCls + 'py-1.5">'
       + '<div class="flex items-center gap-2">'
       + '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">' + escapeHtml(tool.name || '') + '</span>'
-      + '<span class="text-xs text-slate-400 ' + truncCls + 'flex-1 min-w-0">' + summaryHtml + renderedHint + '</span>'
+      + '<span class="text-xs text-slate-400 ' + truncCls + 'flex-1 min-w-0">' + summaryHtml + '</span>'
       + '</div>'
       + outputHtml
       + '</div>';
@@ -848,6 +942,7 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
 
 function postProcessRenderedMessages(root) {
   root.querySelectorAll('.prose-msg').forEach(renderChatMath);
+  embedLinkedHtmlArtifacts(root);
   root.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
     el.textContent = formatBubbleTime(el.dataset.ts);
   });
@@ -880,10 +975,9 @@ function renderMessage(msg, sessionId) {
       + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
   }
   if (msg.role === "assistant") {
-    var artifactsHtml = renderHtmlArtifacts(msg.tools);
     var toolsHtml = renderToolActivity(msg.tools);
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
-      + mdDiv(msg.content) + artifactsHtml + toolsHtml + timeDiv() + "</div></div>";
+      + mdDiv(msg.content) + toolsHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "system") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";

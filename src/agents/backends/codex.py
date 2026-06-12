@@ -1,7 +1,6 @@
 """CodexBackend — AgentBackend wrapping the `codex exec --json` CLI."""
 
 import json
-import re
 from pathlib import Path
 
 import structlog
@@ -17,7 +16,6 @@ log = structlog.get_logger()
 # model_reasoning_effort="xhigh" is the only working value.
 # Other values are silently ignored by the Codex CLI. Do not make configurable.
 _MODEL_REASONING_EFFORT_CONFIG = 'model_reasoning_effort="xhigh"'
-_HTML_ARTIFACT_RE = re.compile(r"(^|/)artifacts/[^/]+\.html$")
 
 
 class CodexBackend(AgentBackend):
@@ -216,15 +214,6 @@ class CodexBackend(AgentBackend):
         continue
       path = change["path"]
       events.append({"type": ET.FILE_WRITE, "path": path})
-      if not _HTML_ARTIFACT_RE.search(path):
-        continue
-      try:
-        content = Path(path).read_text(encoding="utf-8")
-      except Exception as e:
-        log.warning("codex_html_artifact_read_failed", path=path, error=str(e), exc_info=True)
-        continue
-      events.append(make_tool_use_event("Write", {"file_path": path, "content": content}))
-      events.append(make_tool_result_event("Write", "ok"))
     return events
 
   def _handle_mcp_tool_call(self, ev: dict) -> list[dict]:

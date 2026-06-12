@@ -45,6 +45,15 @@ _TURN_HARD_CAP_SECONDS = 7200.0
 # is never followed by a digit, so requiring a number distinguishes a blocking menu.
 _MENU_OPTION_RE = re.compile(r"❯\s*\d")
 
+# The TUI sometimes drops the Enter sent right after a paste (seen at TUI startup and
+# under multi-second input redraw lag), leaving the prompt unsubmitted in the input
+# box. After each Enter we verify the input box cleared and re-send if not; waits are
+# generous because the observed input lag is multi-second.
+_SUBMIT_VERIFY_PREFIX_CHARS = 24
+_SUBMIT_VERIFY_WAIT_SECONDS = 1.0
+_SUBMIT_RETRY_WAIT_SECONDS = 5.0
+_SUBMIT_MAX_ENTER_ATTEMPTS = 4
+
 
 @dataclass(frozen=True)
 class ClaudeSubArgs:
@@ -256,6 +265,24 @@ async def _wait_for_prompt(session_id: str) -> None:
   raise RuntimeError(f"interactive claude prompt did not become ready for session {session_id}")
 
 
+def _pane_shows_unsubmitted_prompt(pane_text: str, prompt: str) -> bool:
+  """Return True if the pasted prompt is still sitting unsubmitted in the input box.
+
+  Unsubmitted input renders as a ❯ line followed by the pasted text. Prompts can be
+  long/multi-line and the pane wraps, so only a short prefix of the prompt's first
+  line is compared. An idle empty prompt line ("❯ ") never matches.
+  """
+  stripped_prompt = prompt.strip()
+  if not stripped_prompt:
+    return False
+  prefix = stripped_prompt.splitlines()[0][:_SUBMIT_VERIFY_PREFIX_CHARS]
+  for line in pane_text.splitlines():
+    stripped = line.lstrip()
+    if stripped.startswith("❯") and stripped[1:].lstrip().startswith(prefix):
+      return True
+  return False
+
+
 async def _send_prompt(session_id: str, prompt: str) -> None:
   buffer_name = f"claude-sub-{session_id[:8]}-{uuid.uuid4().hex[:8]}"
   payload = _BRACKETED_PASTE_START + prompt.encode("utf-8") + _BRACKETED_PASTE_END
@@ -263,7 +290,14 @@ async def _send_prompt(session_id: str, prompt: str) -> None:
   await _run_tmux_bytes("load-buffer", "-b", buffer_name, "-", stdin=payload)
   await _run_tmux_bytes("paste-buffer", "-d", "-b", buffer_name, "-t", target)
   await asyncio.sleep(0.2)
-  await _run_tmux_bytes("send-keys", "-t", target, "Enter")
+  for attempt in range(_SUBMIT_MAX_ENTER_ATTEMPTS):
+    await _run_tmux_bytes("send-keys", "-t", target, "Enter")
+    await asyncio.sleep(_SUBMIT_VERIFY_WAIT_SECONDS if attempt == 0 else _SUBMIT_RETRY_WAIT_SECONDS)
+    if not _pane_shows_unsubmitted_prompt(await _capture_pane(session_id), prompt):
+      return
+  raise RuntimeError(
+      f"claude TUI input box still shows the prompt unsubmitted after {_SUBMIT_MAX_ENTER_ATTEMPTS} Enter attempts "
+      f"for session {session_id}")
 
 
 async def _interrupt_turn(session_id: str) -> None:

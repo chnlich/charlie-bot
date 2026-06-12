@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into startup and turn-execution helpers
+  description: |
+    PURPOSE: Split OpenCodeBackend.run so server startup and SSE turn execution are maintained separately.
+
+    HOW: Extract one helper for cwd/env preparation, process spawn, log stream tasks, and server URL discovery. Extract another helper for health check, session creation, prompt send, SSE translation, and idle/error completion while keeping the existing failure logging and cleanup in run.
+  category: long-function
+  status: pending
+  created: '2026-06-12T17:12:52Z'
+  priority: low

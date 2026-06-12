@@ -271,11 +271,20 @@ def _strip_dim_text(line: str) -> str:
     if line[i] == "\x1b":
       sgr = _SGR_RE.match(line, i)
       if sgr is not None:
-        for param in (sgr.group(1) or "0").split(";"):
+        params = (sgr.group(1) or "0").split(";")
+        j = 0
+        while j < len(params):
+          param = params[j]
           if param in ("", "0", "22"):
             dim = False
           elif param == "2":
             dim = True
+          elif param in ("38", "48", "58"):
+            # Extended color (38;5;n / 38;2;r;g;b): the arguments are color components,
+            # not attributes — live panes emit e.g. 48;5;22, whose 22 must not read as
+            # dim-off (nor a 38;5;2 foreground as dim-on).
+            j += 2 if j + 1 < len(params) and params[j + 1] == "5" else 4
+          j += 1
         i = sgr.end()
         continue
       csi = _CSI_RE.match(line, i)

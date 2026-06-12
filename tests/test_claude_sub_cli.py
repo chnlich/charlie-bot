@@ -91,6 +91,83 @@ def test_pane_has_interactive_menu_ignores_prompt_and_output() -> None:
   assert not claude_sub._pane_has_interactive_menu(numbered_text)
 
 
+def test_pane_shows_unsubmitted_prompt_detects_pasted_text() -> None:
+  prompt = "Fix the recurring prompt-submit race in src/cli/claude_sub.py.\nDetails follow on later lines."
+  pane = ("some earlier scrollback\n"
+          "❯ Fix the recurring prompt-submit race in src/cli/claude_sub.py. Details\n"
+          "  follow on later lines.\n")
+
+  assert claude_sub._pane_shows_unsubmitted_prompt(pane, prompt)
+
+
+def test_pane_shows_unsubmitted_prompt_ignores_idle_empty_prompt() -> None:
+  idle = "✶ Welcome\n❯ \n"
+  placeholder = "❯ Try \"edit a file\"\n"
+
+  assert not claude_sub._pane_shows_unsubmitted_prompt(idle, "Fix the race")
+  assert not claude_sub._pane_shows_unsubmitted_prompt(placeholder, "Fix the race")
+
+
+def test_pane_shows_unsubmitted_prompt_ignores_busy_turn_pane() -> None:
+  pane = ("> Fix the race in claude_sub\n"
+          "✶ Running… (esc to interrupt)\n"
+          "❯ \n")
+
+  assert not claude_sub._pane_shows_unsubmitted_prompt(pane, "Fix the race in claude_sub")
+
+
+@pytest.mark.asyncio
+async def test_send_prompt_resends_enter_until_submitted(monkeypatch: pytest.MonkeyPatch) -> None:
+  enters = 0
+
+  async def fake_run_tmux_bytes(*args, stdin=None, capture=False) -> bytes:
+    nonlocal enters
+    if args[0] == "send-keys":
+      enters += 1
+    return b""
+
+  panes = iter([
+      "❯ Fix the race\n",  # first Enter dropped: prompt still in the input box
+      "> Fix the race\n✶ Running…\n❯ \n",  # second Enter landed
+  ])
+
+  async def fake_capture(session_id: str) -> str:
+    return next(panes)
+
+  monkeypatch.setattr(claude_sub, "_run_tmux_bytes", fake_run_tmux_bytes)
+  monkeypatch.setattr(claude_sub, "_capture_pane", fake_capture)
+  monkeypatch.setattr(claude_sub, "_SUBMIT_VERIFY_WAIT_SECONDS", 0.0)
+  monkeypatch.setattr(claude_sub, "_SUBMIT_RETRY_WAIT_SECONDS", 0.0)
+
+  await claude_sub._send_prompt("session-id", "Fix the race")
+
+  assert enters == 2
+
+
+@pytest.mark.asyncio
+async def test_send_prompt_raises_when_enter_never_lands(monkeypatch: pytest.MonkeyPatch) -> None:
+  enters = 0
+
+  async def fake_run_tmux_bytes(*args, stdin=None, capture=False) -> bytes:
+    nonlocal enters
+    if args[0] == "send-keys":
+      enters += 1
+    return b""
+
+  async def fake_capture(session_id: str) -> str:
+    return "❯ Fix the race\n"
+
+  monkeypatch.setattr(claude_sub, "_run_tmux_bytes", fake_run_tmux_bytes)
+  monkeypatch.setattr(claude_sub, "_capture_pane", fake_capture)
+  monkeypatch.setattr(claude_sub, "_SUBMIT_VERIFY_WAIT_SECONDS", 0.0)
+  monkeypatch.setattr(claude_sub, "_SUBMIT_RETRY_WAIT_SECONDS", 0.0)
+
+  with pytest.raises(RuntimeError, match="unsubmitted"):
+    await claude_sub._send_prompt("session-id", "Fix the race")
+
+  assert enters == claude_sub._SUBMIT_MAX_ENTER_ATTEMPTS
+
+
 def test_convert_record_suppresses_typed_user_prompt() -> None:
   event = claude_sub._convert_record(
       {

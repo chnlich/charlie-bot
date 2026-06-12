@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split stale failed-worktree quarantine into selection and action helpers
+  description: |-
+    PURPOSE: Make stale failed-worktree startup cleanup easier to audit without changing behavior.
+    HOW:
+    - Extract candidate filtering from src/core/init.py:_quarantine_stale_failed_worktrees into a helper that returns the validated worktree data or None.
+    - Extract the quarantine call plus error logging into a small helper, leaving the outer loop as iteration and trash-size reporting.
+    - Preserve the existing log messages and best-effort behavior.
+  category: long-function
+  status: pending
+  created: '2026-06-12T07:12:25Z'
+  priority: low

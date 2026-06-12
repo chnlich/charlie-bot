@@ -7318,3 +7318,16 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude_sub._stream_turn into setup and polling helpers
+  description: |-
+    PURPOSE: Split claude_sub._stream_turn so turn setup, transcript polling, and timeout/menu probes are separate responsibilities.
+
+    HOW:
+    - Extract setup/resume and transcript-tail initialization into a helper.
+    - Extract stall-menu and hard-cap checks from the polling loop into a named helper.
+    - Keep event emission behavior unchanged and verify with targeted claude_sub tests or a py_compile smoke check.
+  category: long-function
+  status: pending
+  created: '2026-06-12T21:11:57Z'
+  priority: low

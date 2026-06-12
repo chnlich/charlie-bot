@@ -7318,3 +7318,12 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Remove unused OpenCode tool translation shim
+  description: |
+    PURPOSE: Remove the unused OpenCode tool-translation shim left after the translate-event refactor.
+    HOW: Delete `OpenCodeBackend._translate_tool()` from `src/agents/backends/opencode.py`; keep callers using `_translate_tool_part()` directly; verify `pyflakes src/agents/backends/opencode.py` is clean.
+  category: dead-code
+  status: pending
+  created: '2026-06-12T03:12:25Z'
+  priority: low

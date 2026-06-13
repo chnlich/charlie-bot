@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Include OpenCodeBackend.run in shared backend spawn/log setup
+  description: |-
+    PURPOSE — Fold OpenCodeBackend.run's subprocess startup and log setup into the shared backend helper so the custom server loop is easier to maintain.
+
+    HOW — Extend the backend spawn/log helper from item 167 to cover OpenCodeBackend.run, or implement it there first if still pending. Keep the OpenCode-specific server health, session creation, prompt send, SSE loop, and cleanup in opencode.py. Verify with yapf and pyflakes for src/agents/backends/.
+  category: duplication
+  status: pending
+  created: '2026-06-13T05:12:23Z'
+  priority: low

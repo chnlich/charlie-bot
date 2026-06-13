@@ -119,6 +119,13 @@ class CharlieBotConfig(BaseModel):
   backend_options: list[BackendOption] = [
       BackendOption(
           id="claude-opus-4.8", label="CC \u00b7 Opus 4.8", type="cc-claude", model="claude-opus-4-8", effort="max"),
+      BackendOption(
+          id="claude-opus-4.8-fast",
+          label="CC \u00b7 Opus 4.8 Fast",
+          type="cc-claude",
+          model="claude-opus-4-8",
+          effort="medium",
+          fast_mode=True),
       BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
   ]
 

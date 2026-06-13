@@ -131,6 +131,7 @@ class BackendOption(BaseModel):
   effort: Optional[str] = None
   cli_binary: Optional[str] = None
   codex_home: Optional[str] = None  # codex backend only: per-account $CODEX_HOME
+  fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
 
 
 MODEL_REQUIRED_BACKEND_TYPES = frozenset(

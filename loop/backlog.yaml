@@ -7318,3 +7318,13 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Fix yapf formatting drift in codex_pricing.py, opencode.py, and ncu_parsing.py
+  description: Three source files have drifted from the project yapf style and fail
+    `yapf --diff --recursive src/`. Run `yapf -i` on src/core/codex_pricing.py, src/agents/backends/opencode.py,
+    and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
+    no remaining diff.
+  category: formatting
+  status: pending
+  created: '2026-06-13T16:42:10Z'
+  priority: low

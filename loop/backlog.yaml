@@ -7318,3 +7318,15 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Extract OpenCode SSE turn loop from OpenCodeBackend.run
+  description: |-
+    PURPOSE: Keep OpenCodeBackend.run focused on server lifecycle orchestration.
+    HOW:
+    - Move health/session setup plus the SSE prompt/idle loop into a private helper that yields translated events.
+    - Leave process startup, log streaming, error handling, and cleanup in run().
+    - Verify with pyflakes and a targeted import or compile check.
+  category: long-function
+  status: pending
+  created: '2026-06-13T11:12:53Z'
+  priority: low

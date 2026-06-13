@@ -7318,3 +7318,18 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run turn loop into a helper
+  description: 'PURPOSE — Keep OpenCodeBackend.run focused on orchestration by moving
+    the SSE turn loop into a helper.
+
+    HOW — Extract the `client.stream("GET", "/event", timeout=None)` block into a
+    private helper that yields translated events. Preserve session filtering, session.error
+    failure handling, session.idle result emission, and the closed-before-idle RuntimeError.
+    Verify with `yapf --in-place --recursive src/` and `pyflakes src/agents/backends/opencode.py`.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-13T09:11:58Z'
+  priority: low

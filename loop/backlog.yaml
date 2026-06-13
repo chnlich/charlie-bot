@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into server lifecycle helpers
+  description: |-
+    PURPOSE: Keep the OpenCode backend run loop small enough to audit.
+    HOW: Extract subprocess startup and server URL discovery into a _start_server() helper.
+    Move HTTP session setup, SSE connection, prompt send, and idle/error turn handling into a _run_session() helper.
+    Leave run() responsible only for state reset, delegation, error reporting, and cleanup.
+  category: long-function
+  status: pending
+  created: '2026-06-13T13:11:38Z'
+  priority: low

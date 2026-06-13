@@ -7318,3 +7318,18 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split claude-sub argv tokenization out of parse_argv
+  description: 'PURPOSE: Make claude-sub argument parsing easier to audit.
+
+    HOW: Extract the initial argv scan in src/cli/claude_sub.py:128-151 into
+    _split_option_and_prompt_tokens(argv) -> tuple[list[str], list[str]]. Leave
+    parse_argv responsible for interpreting supported flags and building ClaudeSubArgs.
+    Verify with yapf --in-place --recursive src/ and targeted parser coverage or
+    py_compile.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-13T03:12:43Z'
+  priority: low

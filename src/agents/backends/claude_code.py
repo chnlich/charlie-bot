@@ -32,9 +32,10 @@ SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
 class ClaudeCodeBackend(AgentBackend):
   """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
 
-  def __init__(self, *, model=None, effort=None, cli_binary=None, **kwargs):
+  def __init__(self, *, model=None, effort=None, cli_binary=None, fast_mode=False, **kwargs):
     super().__init__(model=model, **kwargs)
     self._effort = effort
+    self._fast_mode = fast_mode
     self._cmd: list[str] = list(BASE_COMMAND)
     if cli_binary:
       self._cmd[0] = cli_binary
@@ -44,6 +45,8 @@ class ClaudeCodeBackend(AgentBackend):
       self._cmd += ["--model", self._model]
     if self._effort:
       self._cmd += ["--effort", self._effort]
+    if self._fast_mode:
+      self._cmd += ["--settings", '{"fastMode":true}']
     if self._extra_flags:
       self._cmd += self._extra_flags
 

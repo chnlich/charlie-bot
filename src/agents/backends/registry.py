@@ -37,7 +37,12 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
     ValueError: If the backend type is unknown or required config is missing.
   """
   if option.type == "cc-claude":
-    return ClaudeCodeBackend(model=_require_model(option), effort=option.effort, cli_binary=option.cli_binary, **kwargs)
+    return ClaudeCodeBackend(
+        model=_require_model(option),
+        effort=option.effort,
+        cli_binary=option.cli_binary,
+        fast_mode=option.fast_mode,
+        **kwargs)
   elif option.type == "cc-kimi":
     model = _require_model(option)
     if not cfg.moonshot_api_key:

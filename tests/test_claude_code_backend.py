@@ -84,3 +84,16 @@ def test_api_backend_does_not_disallow_interactive_menu_tools() -> None:
   assert "AskUserQuestion" not in tools
   assert "ExitPlanMode" not in tools
   assert "Monitor" in tools
+
+
+def test_fast_mode_appends_settings_flag() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8", fast_mode=True)
+  cmd = backend._build_command("hi")
+  settings_index = cmd.index("--settings")
+  assert cmd[settings_index + 1] == '{"fastMode":true}'
+
+
+def test_fast_mode_absent_when_unset() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8")
+  cmd = backend._build_command("hi")
+  assert "--settings" not in cmd

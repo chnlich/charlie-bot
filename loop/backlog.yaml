@@ -7318,3 +7318,14 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into server lifecycle helpers
+  description: |-
+    PURPOSE: Keep OpenCodeBackend.run focused on orchestration instead of embedding the OpenCode server startup and SSE turn loop.
+    HOW: Extract subprocess startup, stderr task creation, server URL reading, and stdout mirroring into a server-start helper.
+    Extract HTTP client session setup plus prompt/idle SSE streaming into a turn-streaming helper.
+    Keep failure logging, error-event emission, and cleanup in run(), then verify with yapf and pyflakes on opencode.py.
+  category: long-function
+  status: pending
+  created: '2026-06-13T07:13:10Z'
+  priority: low

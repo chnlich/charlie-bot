@@ -7318,3 +7318,16 @@
   status: pending
   created: '2026-06-01T21:00:00Z'
   priority: low
+- id: '185'
+  title: Split OpenCodeBackend.run into startup and SSE-turn helpers
+  description: |
+    PURPOSE — Reduce OpenCodeBackend.run by splitting server startup from the SSE turn loop.
+
+    HOW —
+    - Extract _start_server(...) for cwd prep, subprocess launch, log tasks, server URL, and session setup.
+    - Extract _run_sse_turn(...) for wait-for-connected, prompt send, event translation, and idle/error termination.
+    - Keep the existing cleanup finally block and failure logging in run.
+  category: long-function
+  status: pending
+  created: '2026-06-13T01:13:50Z'
+  priority: low

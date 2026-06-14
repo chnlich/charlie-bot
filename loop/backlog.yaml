@@ -7325,6 +7325,19 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: '`yapf --in-place --recursive src/` reformatted the three listed files,
+    and `yapf --diff --recursive src/` now exits clean.'
+- id: '186'
+  title: Split OpenCodeBackend.run into startup and SSE turn helpers
+  description: 'PURPOSE: Make the OpenCode backend run loop easier to maintain.
+
+    HOW: Extract the HTTP/SSE prompt-turn block from src/agents/backends/opencode.py:142-173
+    into a private helper. Keep run() responsible for process startup, log tasks, server URL
+    discovery, error emission, and cleanup.'
+  category: long-function
+  status: pending
+  created: '2026-06-14T13:13:19Z'
   priority: low

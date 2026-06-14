@@ -7328,3 +7328,16 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Drop the unused dirpath binding in core/git._contains_git_marker
+  description: 'PURPOSE — Remove a dead local variable from git marker scanning.
+
+    HOW — In src/core/git.py:_contains_git_marker, replace `dirpath` with `_` in
+    the os.walk tuple and keep the existing dirnames/filenames checks unchanged.
+    Verify pylint no longer reports W0612 for src/core/git.py.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-14T17:12:34Z'
+  priority: low

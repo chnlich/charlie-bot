@@ -7328,3 +7328,24 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split OpenCodeBackend.run into server setup and turn streaming helpers
+  description: 'PURPOSE: Make OpenCodeBackend.run easier to review by separating process
+    startup from SSE turn handling.
+
+    HOW:
+
+    - Extract server startup into a helper that prepares cwd/env, starts the subprocess,
+    hooks on_spawn, log streams, and stores server_url.
+
+    - Extract session/SSE turn handling into a helper that checks health, creates or
+    resumes the session, sends the prompt, yields translated events, and raises if
+    the stream ends before session.idle.
+
+    - Verify `yapf --diff --recursive src/` and `pyflakes src/agents/backends/opencode.py`.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-15T13:12:59Z'
+  priority: low

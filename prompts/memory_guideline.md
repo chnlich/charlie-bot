@@ -1,10 +1,10 @@
 # Memory Writing Guidelines
 
-MEMORY is a small, stable, attributable working context. It should preserve durable context, not session transcripts or local history.
+MEMORY is a small, stable, attributable working context. It preserves durable user preferences, facts, and master-agent guidance, not transcripts, incident narratives, or project documentation.
 
-- Put user preferences and durable facts in `MEMORY.md`.
+- Put user preferences, durable facts, and cross-session master guidance in `MEMORY.md`.
 - Put incident post-mortems and resolved lessons in `LESSONS.md`.
-- Put worker-executable procedures and project-specific guidance in skills.
+- Put worker-executable procedures, project-specific guidance, and correct repo/tool usage in skills.
 - Put host-specific facts in `MEMORY.host.md`.
 
 Keep `MEMORY.md` organized by topic. When context changes, revise the relevant section in place instead of appending chronological notes.

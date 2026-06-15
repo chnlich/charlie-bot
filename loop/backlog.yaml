@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Include OpenCodeBackend.run in the shared spawn/log helper extraction
+  description: 'PURPOSE — Keep backend subprocess spawning and log mirroring in one
+    shared implementation. HOW — When implementing pending item #167, include src/agents/backends/opencode.py:run
+    in the same AgentBackend helper extraction. Move OpenCode''s create_subprocess_exec/on_spawn/stderr-task
+    setup into the helper while keeping its server URL, stdout streaming, SSE, and
+    cleanup flow local.'
+  category: duplication
+  status: pending
+  created: '2026-06-15T23:13:04Z'
+  priority: low

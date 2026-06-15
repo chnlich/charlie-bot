@@ -93,6 +93,8 @@ def test_pane_has_interactive_menu_ignores_prompt_and_output() -> None:
   idle_prompt = "❯ Try \"edit a file\""
   working = "✶ Running… (esc to interrupt)\n❯ "
   numbered_text = "Plan:\n1. first step\n2. second step"
+  numbered_prompt = "1. bf16 dtype-aware parity\n2. capture the exact failure"
+  numbered_prompt_echo_only = "❯ 1. bf16 dtype-aware parity\n  2. capture the exact failure"
   numbered_prompt_echo = (
       "❯ 1. Inspect the current failure\n"
       "  2. Patch the narrowest fix\n"
@@ -101,6 +103,7 @@ def test_pane_has_interactive_menu_ignores_prompt_and_output() -> None:
   assert not claude_sub._pane_has_interactive_menu(idle_prompt)
   assert not claude_sub._pane_has_interactive_menu(working)
   assert not claude_sub._pane_has_interactive_menu(numbered_text)
+  assert not claude_sub._pane_has_interactive_menu(numbered_prompt_echo_only, numbered_prompt)
   assert not claude_sub._pane_has_interactive_menu(numbered_prompt_echo)
 
 
@@ -112,7 +115,8 @@ def test_pane_has_interactive_menu_detects_current_menu_after_numbered_prompt_ec
       "❯ 1. Yes, and auto-accept edits\n"
       "  2. No, keep planning\n")
 
-  assert claude_sub._pane_has_interactive_menu(pane)
+  assert claude_sub._pane_has_interactive_menu(
+      pane, "1. Inspect the current failure\n2. Patch the narrowest fix")
 
 
 def test_pane_has_interactive_menu_ignores_digit_leading_dim_ghost_suggestion() -> None:

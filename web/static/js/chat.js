@@ -476,8 +476,13 @@ function buildHtmlArtifactCard(opts) {
     + '</div>';
 }
 
-function resolveHtmlArtifactLink(anchor) {
-  var href = anchor.getAttribute('href') || '';
+function resolveHtmlArtifactLink(source) {
+  var href = '';
+  if (typeof source === 'string') {
+    href = source;
+  } else if (source && source.getAttribute) {
+    href = source.getAttribute('href') || '';
+  }
   if (!href) return null;
   var url;
   try {
@@ -498,6 +503,22 @@ function resolveHtmlArtifactLink(anchor) {
     return null;
   }
   return {fetchUrl: pathname, absPath: absPath};
+}
+
+var HTML_ARTIFACT_CODE_RE = /(?:https?:\/\/[^\s]+?)?\/files\/[^\s]*\/artifacts\/[^/\s]+\.html/g;
+
+function findArtifactLinkInCode(code) {
+  var text = code.textContent || '';
+  if (!text) return null;
+  var resolved = resolveHtmlArtifactLink(text);
+  if (resolved) return resolved;
+  var matches = text.match(HTML_ARTIFACT_CODE_RE);
+  if (!matches) return null;
+  for (var i = 0; i < matches.length; i++) {
+    resolved = resolveHtmlArtifactLink(matches[i]);
+    if (resolved) return resolved;
+  }
+  return null;
 }
 
 function fetchHtmlArtifact(absPath, fetchUrl) {
@@ -552,23 +573,35 @@ function embedLinkedHtmlArtifacts(root) {
       if (seen.has(resolved.absPath)) return;
       seen.add(resolved.absPath);
       links.push({
-        anchor: anchor,
+        el: anchor,
+        absPath: resolved.absPath,
+        fetchUrl: resolved.fetchUrl,
+      });
+    });
+    Array.from(prose.querySelectorAll('code')).forEach(function(code) {
+      if (code.dataset.embedded === '1') return;
+      var resolved = findArtifactLinkInCode(code);
+      if (!resolved) return;
+      if (seen.has(resolved.absPath)) return;
+      seen.add(resolved.absPath);
+      links.push({
+        el: code,
         absPath: resolved.absPath,
         fetchUrl: resolved.fetchUrl,
       });
     });
     links.forEach(function(link, ordinal) {
       if (findEmbeddedHtmlArtifactCard(prose, link.absPath)) {
-        link.anchor.dataset.embedded = '1';
+        link.el.dataset.embedded = '1';
         return;
       }
       fetchHtmlArtifact(link.absPath, link.fetchUrl).then(function(html) {
-        if (!link.anchor.isConnected) return;
-        if (link.anchor.dataset.embedded === '1') return;
-        var currentProse = link.anchor.closest('.prose-msg');
+        if (!link.el.isConnected) return;
+        if (link.el.dataset.embedded === '1') return;
+        var currentProse = link.el.closest('.prose-msg');
         if (!currentProse || currentProse.closest('#streaming-msg')) return;
         if (findEmbeddedHtmlArtifactCard(currentProse, link.absPath)) {
-          link.anchor.dataset.embedded = '1';
+          link.el.dataset.embedded = '1';
           return;
         }
         var template = document.createElement('template');
@@ -582,7 +615,7 @@ function embedLinkedHtmlArtifacts(root) {
           throw new Error('HTML artifact card render produced no element');
         }
         insertHtmlArtifactCard(currentProse, card, ordinal);
-        link.anchor.dataset.embedded = '1';
+        link.el.dataset.embedded = '1';
       }).catch(function(e) {
         console.warn('Failed to render linked HTML artifact', link.fetchUrl, e);
       });

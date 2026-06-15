@@ -71,7 +71,11 @@ function loadChatScript() {
     console: {error: () => {}},
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
-    window: {addEventListener() {}},
+    window: {
+      addEventListener() {},
+      location: {href: 'https://example.com/sessions/test-session'},
+    },
+    URL: globalThis.URL,
     document: {
       addEventListener() {},
       createElement() {
@@ -291,4 +295,47 @@ test('executeSlashCommand blocks submission while uploads are still in flight', 
   assert.equal(fetchCalls, 0);
   assert.equal(context.pendingUserMsg, false);
   assert.deepEqual(toasts, [{message: 'Please wait for uploads to finish', isError: true}]);
+});
+
+test('resolveHtmlArtifactLink accepts raw URL strings and anchor elements', () => {
+  const context = loadChatScript();
+
+  const pathHref = '/files/%2Ftmp%2Freport/artifacts/plot.html';
+  const fullHref = 'https://example.com/files/%2Ftmp%2Freport/artifacts/plot.html';
+
+  const pathResult = context.resolveHtmlArtifactLink(pathHref);
+  assert.equal(pathResult.absPath, '//tmp/report/artifacts/plot.html');
+  assert.equal(pathResult.fetchUrl, '/files/%2Ftmp%2Freport/artifacts/plot.html');
+
+  const fullResult = context.resolveHtmlArtifactLink(fullHref);
+  assert.equal(fullResult.absPath, '//tmp/report/artifacts/plot.html');
+  assert.equal(fullResult.fetchUrl, '/files/%2Ftmp%2Freport/artifacts/plot.html');
+
+  const anchor = {
+    getAttribute(name) {
+      return name === 'href' ? pathHref : null;
+    },
+  };
+  const anchorResult = context.resolveHtmlArtifactLink(anchor);
+  assert.equal(anchorResult.absPath, '//tmp/report/artifacts/plot.html');
+
+  assert.equal(context.resolveHtmlArtifactLink('/files/report/artifacts/plot.txt'), null);
+  assert.equal(context.resolveHtmlArtifactLink('/other/path/artifacts/plot.html'), null);
+  assert.equal(context.resolveHtmlArtifactLink('not a url'), null);
+});
+
+test('findArtifactLinkInCode extracts artifact URLs from inline code text', () => {
+  const context = loadChatScript();
+  function code(text) {
+    return {textContent: text};
+  }
+
+  const pathResult = context.findArtifactLinkInCode(code('/files/%2Ftmp%2Freport/artifacts/plot.html'));
+  assert.equal(pathResult.absPath, '//tmp/report/artifacts/plot.html');
+
+  const fullResult = context.findArtifactLinkInCode(code('See https://example.com/files/%2Ftmp%2Freport/artifacts/plot.html here'));
+  assert.equal(fullResult.absPath, '//tmp/report/artifacts/plot.html');
+
+  assert.equal(context.findArtifactLinkInCode(code('just some code')), null);
+  assert.equal(context.findArtifactLinkInCode(code('https://example.com/files/report/artifacts/plot.txt')), null);
 });

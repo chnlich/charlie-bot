@@ -45,7 +45,8 @@ _TURN_HARD_CAP_SECONDS = 7200.0
 # is never followed by a digit, so requiring a number distinguishes a blocking menu.
 # Must only ever run on dim-stripped real content: ghost suggestions render dim and
 # may start with a digit. Submitted prompts are echoed into scrollback with the same
-# cursor prefix, so menu detection must check only the current cursor line.
+# cursor prefix, so menu detection checks only the current cursor line and ignores a
+# line matching the submitted prompt.
 _MENU_OPTION_RE = re.compile(r"❯\s*\d")
 
 # SGR sequence (CSI ... m); group 1 holds the parameter list that toggles dim.
@@ -323,7 +324,15 @@ def _pane_has_prompt(pane_text: str) -> bool:
   return False
 
 
-def _pane_has_interactive_menu(pane_text: str) -> bool:
+def _first_nonempty_normalized_line(text: str) -> Optional[str]:
+  for line in text.splitlines():
+    normalized = " ".join(line.split())
+    if normalized:
+      return normalized
+  return None
+
+
+def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] = None) -> bool:
   """Return True if the pane is blocked on an 'Enter to select' menu.
 
   Such menus (AskUserQuestion / plan-approval / permission) render the selection
@@ -332,14 +341,23 @@ def _pane_has_interactive_menu(pane_text: str) -> bool:
   starting with a digit would otherwise match, so the menu pattern only runs on
   dim-stripped real content. Submitted prompts are echoed into scrollback with the
   same cursor, so only the last visible real cursor line represents the active
-  control.
+  control, and a cursor line matching the submitted prompt's first non-empty line is
+  not a menu.
   """
+  submitted_first_line = (
+      _first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
   cursor_line: Optional[str] = None
   for line in pane_text.splitlines():
     real = _strip_dim_text(line)
     if "❯" in real:
       cursor_line = real
-  return cursor_line is not None and _MENU_OPTION_RE.search(cursor_line) is not None
+  if cursor_line is None or _MENU_OPTION_RE.search(cursor_line) is None:
+    return False
+  if submitted_first_line is not None:
+    candidate = " ".join(cursor_line.partition("❯")[2].split())
+    if candidate == submitted_first_line:
+      return False
+  return True
 
 
 async def _wait_for_prompt(session_id: str) -> None:
@@ -611,7 +629,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
       now = time.monotonic()
       if now - last_activity >= _STALL_PROBE_SECONDS and now - last_probe >= _PANE_PROBE_INTERVAL_SECONDS:
         last_probe = now
-        if _pane_has_interactive_menu(await _capture_pane_escapes(session_id)):
+        if _pane_has_interactive_menu(await _capture_pane_escapes(session_id), args.prompt):
           menu_probes += 1
           if menu_probes >= _MENU_CONFIRM_PROBES:
             await _interrupt_turn(session_id)

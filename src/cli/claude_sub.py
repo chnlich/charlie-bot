@@ -44,7 +44,8 @@ _TURN_HARD_CAP_SECONDS = 7200.0
 # / plan-approval / permission menus. The idle input prompt also starts with ❯ but
 # is never followed by a digit, so requiring a number distinguishes a blocking menu.
 # Must only ever run on dim-stripped real content: ghost suggestions render dim and
-# may start with a digit.
+# may start with a digit. Submitted prompts are echoed into scrollback with the same
+# cursor prefix, so menu detection must check only the current cursor line.
 _MENU_OPTION_RE = re.compile(r"❯\s*\d")
 
 # SGR sequence (CSI ... m); group 1 holds the parameter list that toggles dim.
@@ -329,9 +330,16 @@ def _pane_has_interactive_menu(pane_text: str) -> bool:
   cursor on a numbered option; the model has no way to answer them headlessly.
   `pane_text` must come from an escape-preserving capture: a dim ghost suggestion
   starting with a digit would otherwise match, so the menu pattern only runs on
-  dim-stripped real content.
+  dim-stripped real content. Submitted prompts are echoed into scrollback with the
+  same cursor, so only the last visible real cursor line represents the active
+  control.
   """
-  return any(_MENU_OPTION_RE.search(_strip_dim_text(line)) for line in pane_text.splitlines())
+  cursor_line: Optional[str] = None
+  for line in pane_text.splitlines():
+    real = _strip_dim_text(line)
+    if "❯" in real:
+      cursor_line = real
+  return cursor_line is not None and _MENU_OPTION_RE.search(cursor_line) is not None
 
 
 async def _wait_for_prompt(session_id: str) -> None:

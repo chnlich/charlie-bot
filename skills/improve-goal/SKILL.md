@@ -17,6 +17,10 @@ When writing the `--goal-file` content for an improve loop:
 3. **State goals, not methods** — say "close the performance gap" not "try fusing kernel X with Y". Workers decide their own approach.
 4. **Include reference numbers** — current performance, target, gap size. Workers need context to judge whether their changes matter.
 5. **"Zero progress is acceptable"** — always include this. Prevents workers from shipping bad changes just to report something.
+6. **Point at existing working scripts** — if a benchmark/training script
+   already exists and works, say "base your work on `<path>`, do not write
+   from scratch". Otherwise workers reinvent the wrapper and re-hit known
+   pitfalls.
 
 ## Master Discipline During Loop Execution
 

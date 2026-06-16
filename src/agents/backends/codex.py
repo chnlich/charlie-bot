@@ -29,6 +29,8 @@ class CodexBackend(AgentBackend):
     self._codex_home = str(Path(codex_home).expanduser()) if codex_home else None
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
+    # Track accumulated reasoning text per item_id for delta computation.
+    self._last_reasoning_text: dict[str, str] = {}
     # Track the last rendered todo snapshot to suppress duplicate started/completed payloads.
     self._last_todo_text: dict[str, str] = {}
 
@@ -73,6 +75,7 @@ class CodexBackend(AgentBackend):
     cmd.extend(["--", effective_prompt])
 
     self._last_agent_text.clear()
+    self._last_reasoning_text.clear()
     self._last_todo_text.clear()
     return cmd
 
@@ -187,7 +190,13 @@ class CodexBackend(AgentBackend):
           text += part.get("text", "")
     if not text:
       return []
-    return [{"type": ET.THINKING, "content": text}]
+    item_id = item.get("id", "")
+    prev = self._last_reasoning_text.get(item_id, "")
+    delta = text[len(prev):]
+    self._last_reasoning_text[item_id] = text
+    if not delta:
+      return []
+    return [{"type": ET.THINKING, "content": delta}]
 
   def _handle_command_execution(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})

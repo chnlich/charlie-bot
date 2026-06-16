@@ -176,7 +176,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     _commitMessage(ev.message || {});
   } else if (t === 'stream') {
     const draft = ev.message || {};
-    if (catchupDone && draft.content) showStreaming(draft.content);
+    if (catchupDone && (draft.content || draft.thinking)) showStreaming(draft);
   } else if (t === 'master_done') {
     if (!ev.still_thinking) {
       stopThinking({preserveSessionIndicator: true});

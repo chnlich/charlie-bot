@@ -30,6 +30,18 @@ def extract_text_from_message(msg: dict | None) -> str:
   return "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
 
 
+def extract_thinking_from_message(msg: dict | None) -> str:
+  """Join thinking content blocks of a CC assistant message.
+
+  Signatures are intentionally discarded; only the human-readable ``thinking``
+  field is returned.
+  """
+  blocks = (msg or {}).get("content") or []
+  if not isinstance(blocks, list):
+    return ""
+  return "".join(b.get("thinking", "") for b in blocks if isinstance(b, dict) and b.get("type") == "thinking")
+
+
 def extract_tool_result_text(block: dict) -> str:
   """Return the renderable text of a CC ``tool_result`` block; ``content`` is either a plain string or a list of typed parts where only ``{"type": "text"}`` parts contribute."""
   raw = block.get("content", "")
@@ -98,11 +110,6 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "content": ev.get("parent_session_name", "Unknown session"),
             "parent_session_id": ev.get("parent_session_id", ""),
         },
-    ET.THINKING:
-        lambda ev: {
-            "role": "thinking",
-            "content": ev.get("content", ""),
-        },
 }
 
 
@@ -113,6 +120,7 @@ class MessageAggregator:
     self._idx_offset = event_index_offset
     self._processed = 0
     self._assistant_buf = ""
+    self._thinking_buf = ""
     self._last_assistant_ts: str | None = None
     self._last_event_idx = 0
     self._last_event_id: str | None = None
@@ -141,7 +149,7 @@ class MessageAggregator:
 
   def pending_draft_message(self) -> dict | None:
     """Snapshot the current draft. Returns None if there's nothing buffered."""
-    if not self._assistant_buf and not self._tools_buf:
+    if not self._assistant_buf and not self._tools_buf and not self._thinking_buf:
       return None
     msg: dict = {
         "role": "assistant",
@@ -152,6 +160,8 @@ class MessageAggregator:
     }
     if self._tools_buf:
       msg["tools"] = [dict(t) for t in self._tools_buf]
+    if self._thinking_buf:
+      msg["thinking"] = self._thinking_buf
     return msg
 
   # ---------------------------------------------------------------------------
@@ -162,6 +172,7 @@ class MessageAggregator:
     msg = self.pending_draft_message()
     if msg is not None:
       self._assistant_buf = ""
+      self._thinking_buf = ""
       self._last_assistant_ts = None
       self._last_event_id = None
       self._tools_buf = []
@@ -254,12 +265,19 @@ class MessageAggregator:
                   'is_error': False,
               })
 
+      thinking_snapshot = extract_thinking_from_message(msg)
+      if thinking_snapshot:
+        if self._thinking_buf and thinking_snapshot.startswith(self._thinking_buf):
+          self._thinking_buf = thinking_snapshot
+        else:
+          self._thinking_buf = thinking_snapshot
+
       text = extract_text_from_message(msg)
       if text and self._assistant_buf:
         yield from self._flush_to_message_delta()
         self._last_assistant_ts = ev.get("timestamp")
       self._assistant_buf += text
-      if self._assistant_buf or self._tools_buf:
+      if self._assistant_buf or self._tools_buf or self._thinking_buf:
         self._last_event_id = ev_id
 
       delta = self._stream_delta()
@@ -290,6 +308,18 @@ class MessageAggregator:
       self._tools_buf[-1]['output'] = ev.get('content', '')
       self._tools_buf[-1]['is_error'] = bool(ev.get('is_error', False))
       self._last_event_idx = idx
+      delta = self._stream_delta()
+      if delta is not None:
+        yield delta
+      return
+
+    if t == ET.THINKING:
+      self._last_event_idx = idx
+      self._thinking_buf += str(ev.get("content", ""))
+      if self._last_assistant_ts is None:
+        self._last_assistant_ts = ev.get("timestamp")
+      if self._assistant_buf or self._tools_buf or self._thinking_buf:
+        self._last_event_id = ev_id
       delta = self._stream_delta()
       if delta is not None:
         yield delta

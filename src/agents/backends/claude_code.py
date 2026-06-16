@@ -5,7 +5,6 @@ from pathlib import Path
 import structlog
 
 from src.agents.backends.base import AgentBackend
-from src.core import event_types as ET
 
 log = structlog.get_logger()
 
@@ -61,29 +60,3 @@ class ClaudeCodeBackend(AgentBackend):
 
   def _build_command(self, prompt: str) -> list[str]:
     return self._cmd + ["--", prompt]
-
-  def translate_event(self, event: dict) -> list[dict]:
-    """Pass Claude Code stream-json events through and surface thinking blocks.
-
-    Claude Code emits extended thinking as assistant message content blocks of
-    type ``thinking`` (``{"type": "thinking", "thinking": "..."}``). These
-    blocks are invisible to text extraction, so we translate them into
-    standalone ``thinking`` events that the UI can render.
-    """
-    results: list[dict] = []
-    results.append(event)
-    if event.get("type") != ET.ASSISTANT:
-      return results
-    msg = event.get("message") or {}
-    blocks = msg.get("content") or []
-    if not isinstance(blocks, list):
-      return results
-    for block in blocks:
-      if not isinstance(block, dict):
-        continue
-      if block.get("type") != "thinking":
-        continue
-      thinking_text = block.get("thinking") or block.get("text", "")
-      if thinking_text:
-        results.append({"type": ET.THINKING, "content": str(thinking_text)})
-    return results

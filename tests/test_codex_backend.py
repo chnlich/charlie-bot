@@ -381,3 +381,36 @@ def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None
           }],
       },
   }]
+
+
+def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  first = backend.translate_event({
+      "type": "item.updated",
+      "item": {
+          "id": "reason-1",
+          "type": "reasoning",
+          "text": "Plan",
+      },
+  })
+  second = backend.translate_event({
+      "type": "item.updated",
+      "item": {
+          "id": "reason-1",
+          "type": "reasoning",
+          "text": "Plan in action",
+      },
+  })
+  duplicate = backend.translate_event({
+      "type": "item.updated",
+      "item": {
+          "id": "reason-1",
+          "type": "reasoning",
+          "text": "Plan in action",
+      },
+  })
+
+  assert first == [{"type": ET.THINKING, "content": "Plan"}]
+  assert second == [{"type": ET.THINKING, "content": " in action"}]
+  assert duplicate == []

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from src.agents.backends.opencode import OpenCodeBackend
+from src.core import event_types as ET
 
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
@@ -245,5 +246,53 @@ def test_translate_tool_error_emits_tool_result(monkeypatch) -> None:
           "type": "tool_result",
           "tool_use_id": "call-1",
           "content": "The user rejected permission to use this specific tool call.",
+      },
+  ]
+
+
+def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  assert backend._translate_sse_event({
+      "type": "message.part.updated",
+      "properties": {
+          "part": {
+              "messageID": "message-1",
+              "id": "part-r",
+              "type": "reasoning",
+              "text": "I need",
+          }
+      },
+  }) == []
+  assert backend._translate_sse_event({
+      "type": "message.part.updated",
+      "properties": {
+          "part": {
+              "messageID": "message-1",
+              "id": "part-r",
+              "type": "reasoning",
+              "text": "I need to think",
+          }
+      },
+  }) == []
+
+  translated = backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {
+          "info": {
+              "id": "message-1",
+              "role": "assistant",
+          }
+      },
+  })
+
+  assert translated == [
+      {
+          "type": ET.THINKING,
+          "content": "I need"
+      },
+      {
+          "type": ET.THINKING,
+          "content": " to think"
       },
   ]

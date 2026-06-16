@@ -76,31 +76,18 @@ def test_translate_event_mappings(monkeypatch) -> None:
 
   assert backend.translate_event({"type": "init", "session_id": "sid"}) == [{"session_id": "sid"}]
   assert backend.translate_event({"type": "message", "role": "user", "content": "ignored"}) == []
-  assert backend.translate_event({
-      "type": "message",
-      "role": "assistant",
-      "content": "hello"
-  }) == [{
+  assert backend.translate_event({"type": "message", "role": "assistant", "content": "hello"}) == [{
       "type": "assistant",
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": "hello"
-          }]
-      },
+      "message": {"content": [{"type": "text", "text": "hello"}]},
   }]
   assert backend.translate_event({
       "type": "tool_use",
       "tool_name": "Bash",
-      "parameters": {
-          "command": "pwd"
-      },
+      "parameters": {"command": "pwd"},
   }) == [{
       "type": "tool_use",
       "name": "Bash",
-      "input": {
-          "command": "pwd"
-      },
+      "input": {"command": "pwd"},
   }]
   assert backend.translate_event({
       "type": "tool_result",
@@ -112,10 +99,7 @@ def test_translate_event_mappings(monkeypatch) -> None:
       "tool_name": "Bash",
       "content": "/tmp",
   }]
-  assert backend.translate_event({
-      "type": "error",
-      "message": "boom"
-  }) == [{
+  assert backend.translate_event({"type": "error", "message": "boom"}) == [{
       "type": "error",
       "message": "boom",
       "content": "boom",
@@ -127,67 +111,40 @@ def test_translate_event_mappings(monkeypatch) -> None:
           "output_tokens": 5,
           "cached": 3,
       },
-  }) == [
-      {
-          "type": "result",
-          "result": "",
-          "usage":
-              {
-                  "input_tokens": 10,
-                  "output_tokens": 5,
-                  "cache_read_input_tokens": 3,
-                  "cache_creation_input_tokens": 0,
-              },
-          "total_cost_usd": 0,
-      }
-  ]
-
-
-def test_translate_event_thinking(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch)
-
-  assert backend.translate_event({
-      "type": "thinking",
-      "content": "planning..."
   }) == [{
-      "type": "thinking",
-      "content": "planning...",
+      "type": "result",
+      "result": "",
+      "usage": {
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "cache_read_input_tokens": 3,
+          "cache_creation_input_tokens": 0,
+      },
+      "total_cost_usd": 0,
   }]
-  assert backend.translate_event({
-      "type": "thought",
-      "content": "analysis"
-  }) == [{
-      "type": "thinking",
-      "content": "analysis",
-  }]
-  assert backend.translate_event({"type": "thinking"}) == []
 
 
 def test_translate_event_tool_result_error_and_unknown(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert backend.translate_event(
-      {
-          "type": "tool_result",
-          "status": "error",
-          "tool_id": "Bash",
-          "error": {
-              "message": "permission denied"
-          },
-      }) == [{
-          "type": "tool_result",
-          "tool_name": "Bash",
-          "content": "permission denied",
-      }]
-  assert backend.translate_event(
-      {
-          "type": "tool_result",
-          "status": "error",
-          "tool_id": "Bash",
-          "error": "generic failure",
-      }) == [{
-          "type": "tool_result",
-          "tool_name": "Bash",
-          "content": "generic failure",
-      }]
+  assert backend.translate_event({
+      "type": "tool_result",
+      "status": "error",
+      "tool_id": "Bash",
+      "error": {"message": "permission denied"},
+  }) == [{
+      "type": "tool_result",
+      "tool_name": "Bash",
+      "content": "permission denied",
+  }]
+  assert backend.translate_event({
+      "type": "tool_result",
+      "status": "error",
+      "tool_id": "Bash",
+      "error": "generic failure",
+  }) == [{
+      "type": "tool_result",
+      "tool_name": "Bash",
+      "content": "generic failure",
+  }]
   assert backend.translate_event({"type": "unhandled"}) == []

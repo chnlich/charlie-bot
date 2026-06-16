@@ -5,43 +5,57 @@ from src.core.message_aggregator import MessageAggregator
 
 def test_user_event_emits_a_user_message_delta() -> None:
   agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": "user",
-      "content": "hello",
-      "timestamp": "2026-04-29T00:00:00Z",
-      "is_voice": False,
-  }))
-  assert deltas == [{
-      "type": "message",
-      "message": {
-          "role": "user",
+  deltas = list(
+      agg.feed({
+          "type": "user",
           "content": "hello",
-          "uploaded_files": [],
-          "is_voice": False,
-          "event_index": 0,
-          "id": "legacy:0",
           "timestamp": "2026-04-29T00:00:00Z",
-      },
-  }]
+          "is_voice": False,
+      }))
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "user",
+                  "content": "hello",
+                  "uploaded_files": [],
+                  "is_voice": False,
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "2026-04-29T00:00:00Z",
+              },
+      }
+  ]
 
 
 def test_assistant_text_event_emits_a_stream_delta() -> None:
   agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": "assistant",
-      "message": {"content": [{"type": "text", "text": "Hello "}]},
-      "timestamp": "2026-04-29T00:00:00Z",
-  }))
-  assert deltas == [{
-      "type": "stream",
-      "message": {
-          "role": "assistant",
-          "content": "Hello ",
-          "event_index": 0,
-          "id": "legacy:0",
-          "timestamp": "2026-04-29T00:00:00Z",
-      },
-  }]
+  deltas = list(
+      agg.feed(
+          {
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "text",
+                      "text": "Hello "
+                  }]
+              },
+              "timestamp": "2026-04-29T00:00:00Z",
+          }))
+  assert deltas == [
+      {
+          "type": "stream",
+          "message":
+              {
+                  "role": "assistant",
+                  "content": "Hello ",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "2026-04-29T00:00:00Z",
+              },
+      }
+  ]
   assert agg.pending_draft_message() == deltas[0]["message"]
 
 
@@ -63,13 +77,14 @@ def test_assistant_text_then_master_done_commits_message() -> None:
       },
       {
           "type": "message",
-          "message": {
-              "role": "separator",
-              "thinking_seconds": 3,
-              "event_index": 1,
-              "id": "legacy:1",
-              "timestamp": "t2",
-          },
+          "message":
+              {
+                  "role": "separator",
+                  "thinking_seconds": 3,
+                  "event_index": 1,
+                  "id": "legacy:1",
+                  "timestamp": "t2",
+              },
       },
   ]
   assert agg.pending_draft_message() is None
@@ -80,41 +95,66 @@ def test_master_done_with_still_thinking_skips_separator() -> None:
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
   deltas = list(agg.feed({"type": "master_done", "still_thinking": True, "timestamp": "t2"}))
   # Pending assistant draft commits, but no separator is emitted.
-  assert deltas == [{
-      "type": "message",
-      "message": {
-          "role": "assistant",
-          "content": "Hi",
-          "event_index": 0,
-          "id": "legacy:0",
-          "timestamp": "t1",
-      },
-  }]
+  assert deltas == [
+      {
+          "type": "message",
+          "message": {
+              "role": "assistant",
+              "content": "Hi",
+              "event_index": 0,
+              "id": "legacy:0",
+              "timestamp": "t1",
+          },
+      }
+  ]
 
 
 def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:
   agg = MessageAggregator()
-  list(agg.feed({
-      "type": "assistant",
-      "message": {
-          "content": [
-              {"type": "text", "text": "Running"},
-              {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
-          ],
-      },
-      "timestamp": "t1",
-  }))
+  list(
+      agg.feed(
+          {
+              "type": "assistant",
+              "message":
+                  {
+                      "content":
+                          [
+                              {
+                                  "type": "text",
+                                  "text": "Running"
+                              },
+                              {
+                                  "type": "tool_use",
+                                  "name": "Bash",
+                                  "input": {
+                                      "command": "ls"
+                                  }
+                              },
+                          ],
+                  },
+              "timestamp": "t1",
+          }))
   # Internal CC tool_result event arrives as a user event with `message` only.
-  list(agg.feed({
-      "type": "user",
-      "message": {"content": [{"type": "tool_result", "content": "file1\nfile2", "is_error": False}]},
-  }))
+  list(
+      agg.feed(
+          {
+              "type": "user",
+              "message": {
+                  "content": [{
+                      "type": "tool_result",
+                      "content": "file1\nfile2",
+                      "is_error": False
+                  }]
+              },
+          }))
   draft = agg.pending_draft_message()
   assert draft is not None
   assert draft["content"] == "Running"
   assert draft["tools"] == [{
       "name": "Bash",
-      "input": {"command": "ls"},
+      "input": {
+          "command": "ls"
+      },
       "output": "file1\nfile2",
       "is_error": False,
   }]
@@ -122,35 +162,64 @@ def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:
 
 def test_exit_plan_mode_emits_plan_message_with_explicit_text() -> None:
   agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": "assistant",
-      "message": {
-          "content": [
-              {"type": "tool_use", "name": "ExitPlanMode", "input": {"plan": "Step 1\nStep 2"}},
-          ],
-      },
-      "timestamp": "t1",
-  }))
-  assert deltas == [{
-      "type": "message",
-      "message": {
-          "role": "plan",
-          "content": "Step 1\nStep 2",
-          "event_index": 0,
-          "id": "legacy:0",
-          "timestamp": "t1",
-      },
-  }]
+  deltas = list(
+      agg.feed(
+          {
+              "type": "assistant",
+              "message":
+                  {
+                      "content": [{
+                          "type": "tool_use",
+                          "name": "ExitPlanMode",
+                          "input": {
+                              "plan": "Step 1\nStep 2"
+                          }
+                      },],
+                  },
+              "timestamp": "t1",
+          }))
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "plan",
+                  "content": "Step 1\nStep 2",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t1",
+              },
+      }
+  ]
 
 
 def test_exit_plan_mode_without_explicit_plan_promotes_buffer() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Plan body"}]}, "timestamp": "t1"}))
-  deltas = list(agg.feed({
-      "type": "assistant",
-      "message": {"content": [{"type": "tool_use", "name": "ExitPlanMode", "input": {}}]},
-      "timestamp": "t2",
-  }))
+  list(
+      agg.feed(
+          {
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "text",
+                      "text": "Plan body"
+                  }]
+              },
+              "timestamp": "t1"
+          }))
+  deltas = list(
+      agg.feed(
+          {
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "tool_use",
+                      "name": "ExitPlanMode",
+                      "input": {}
+                  }]
+              },
+              "timestamp": "t2",
+          }))
   # Buffered assistant text is repromoted as a plan message; no second
   # `message` for the assistant draft is emitted.
   assert deltas[0] == {
@@ -168,7 +237,17 @@ def test_exit_plan_mode_without_explicit_plan_promotes_buffer() -> None:
 def test_consecutive_assistant_text_events_split_into_separate_bubbles() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "First"}]}, "timestamp": "t1"}))
-  deltas = list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Second"}]}, "timestamp": "t2"}))
+  deltas = list(
+      agg.feed({
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "Second"
+              }]
+          },
+          "timestamp": "t2"
+      }))
   # First bubble is committed before the second buffer starts; matches the
   # legacy events_to_messages flushing rule.
   commit = deltas[0]
@@ -200,8 +279,25 @@ def test_consecutive_assistant_text_events_split_into_separate_bubbles() -> None
 
 def test_handler_result_flushes_draft_and_emits_system_message() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Working"}]}, "timestamp": "t1"}))
-  deltas = list(agg.feed({"type": "handler_result", "task": "Lint", "message": "All clean", "status": "ok", "timestamp": "t2"}))
+  list(
+      agg.feed({
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "Working"
+              }]
+          },
+          "timestamp": "t1"
+      }))
+  deltas = list(
+      agg.feed({
+          "type": "handler_result",
+          "task": "Lint",
+          "message": "All clean",
+          "status": "ok",
+          "timestamp": "t2"
+      }))
   assert [d["message"]["role"] for d in deltas] == ["assistant", "system"]
   assert deltas[1]["message"]["content"] == "✓ Lint: All clean"
 
@@ -210,16 +306,18 @@ def test_flush_pending_emits_dangling_draft() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "tail"}]}, "timestamp": "t"}))
   flushed = list(agg.flush_pending())
-  assert flushed == [{
-      "type": "message",
-      "message": {
-          "role": "assistant",
-          "content": "tail",
-          "event_index": 0,
-          "id": "legacy:0",
-          "timestamp": "t",
-      },
-  }]
+  assert flushed == [
+      {
+          "type": "message",
+          "message": {
+              "role": "assistant",
+              "content": "tail",
+              "event_index": 0,
+              "id": "legacy:0",
+              "timestamp": "t",
+          },
+      }
+  ]
   assert agg.pending_draft_message() is None
   assert list(agg.flush_pending()) == []
 
@@ -246,3 +344,32 @@ def test_event_id_is_propagated_when_present() -> None:
   agg = MessageAggregator()
   deltas = list(agg.feed({"id": "event-uuid", "type": "user", "content": "hi", "timestamp": "t"}))
   assert deltas[0]["message"]["id"] == "event-uuid"
+
+
+def test_thinking_event_emits_thinking_message() -> None:
+  agg = MessageAggregator()
+  deltas = list(agg.feed({"type": "thinking", "content": "analyzing...", "timestamp": "t"}))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "thinking",
+                  "content": "analyzing...",
+                  "timestamp": "t",
+                  "event_index": 0,
+                  "id": "legacy:0",
+              },
+      }
+  ]
+
+
+def test_thinking_event_flushes_pending_assistant_draft() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+  deltas = list(agg.feed({"type": "thinking", "content": "planning", "timestamp": "t2"}))
+
+  assert [d["message"]["role"] for d in deltas] == ["assistant", "thinking"]
+  assert deltas[0]["message"]["content"] == "Hi"
+  assert deltas[1]["message"]["content"] == "planning"

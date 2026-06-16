@@ -98,6 +98,11 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "content": ev.get("parent_session_name", "Unknown session"),
             "parent_session_id": ev.get("parent_session_id", ""),
         },
+    ET.THINKING:
+        lambda ev: {
+            "role": "thinking",
+            "content": ev.get("content", ""),
+        },
 }
 
 

@@ -72,6 +72,7 @@ Pass `--keep-worktree 1` instead when the worker launches a long-running externa
 - **Do NOT delegate**: answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
 - **Never include revert/keep-only-report decision rules in delegate prompts** — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit.
 - Be specific (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success (for `implement`), rebases, and merges `--ff-only`. You receive a summary on merge.
+- **Merge-back failover.** Delegation lands automatically — the reviewer rebases the work branch onto the latest base and ff-pushes. If the base moved so it can't fast-forward, it returns failed with the work branch and its worktree kept. Then rebase and push from that kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user, or delegate the resolution.
 
 ---
 

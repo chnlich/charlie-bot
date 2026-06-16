@@ -97,3 +97,80 @@ def test_fast_mode_absent_when_unset() -> None:
   backend = ClaudeCodeBackend(model="claude-opus-4-8")
   cmd = backend._build_command("hi")
   assert "--settings" not in cmd
+
+
+def test_translate_event_passes_through_non_assistant() -> None:
+  backend = ClaudeCodeBackend()
+  event = {"type": "system", "subtype": "api_retry"}
+
+  assert backend.translate_event(event) == [event]
+
+
+def test_translate_event_extracts_thinking_blocks() -> None:
+  backend = ClaudeCodeBackend()
+  event = {
+      "type": "assistant",
+      "message":
+          {
+              "content":
+                  [
+                      {
+                          "type": "thinking",
+                          "thinking": "Step one",
+                          "signature": "sig1"
+                      },
+                      {
+                          "type": "text",
+                          "text": "Hello"
+                      },
+                      {
+                          "type": "thinking",
+                          "thinking": "Step two",
+                          "signature": "sig2"
+                      },
+                  ]
+          },
+  }
+
+  assert backend.translate_event(event) == [
+      event,
+      {
+          "type": "thinking",
+          "content": "Step one"
+      },
+      {
+          "type": "thinking",
+          "content": "Step two"
+      },
+  ]
+
+
+def test_translate_event_ignores_empty_thinking_blocks() -> None:
+  backend = ClaudeCodeBackend()
+  event = {
+      "type": "assistant",
+      "message":
+          {
+              "content":
+                  [
+                      {
+                          "type": "thinking",
+                          "thinking": "",
+                          "signature": "sig1"
+                      },
+                      {
+                          "type": "thinking",
+                          "signature": "sig2"
+                      },
+                  ]
+          },
+  }
+
+  assert backend.translate_event(event) == [event]
+
+
+def test_translate_event_tolerates_non_list_content() -> None:
+  backend = ClaudeCodeBackend()
+  event = {"type": "assistant", "message": {"content": "plain text"}}
+
+  assert backend.translate_event(event) == [event]

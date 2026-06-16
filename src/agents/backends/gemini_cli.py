@@ -7,6 +7,7 @@ import structlog
 from src.agents.backends.base import (
     AgentBackend, make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
     resolve_binary)
+from src.core import event_types as ET
 
 log = structlog.get_logger()
 
@@ -52,6 +53,13 @@ class GeminiCliBackend(AgentBackend):
     # --- init ---
     if ev_type == "init":
       return [{"session_id": ev.get("session_id", "")}]
+
+    # --- thinking / thought ---
+    if ev_type in ("thinking", "thought"):
+      content = ev.get("content", "")
+      if content:
+        return [{"type": ET.THINKING, "content": str(content)}]
+      return []
 
     # --- message ---
     if ev_type == "message":

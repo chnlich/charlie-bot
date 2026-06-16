@@ -1031,6 +1031,13 @@ function renderMessage(msg, sessionId) {
       + " onclick=\"showTextModal(\x27Worker Result\x27, this.dataset.full)\">"
       + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + "</div></div>";
   }
+  if (msg.role === "thinking") {
+    var thinkId = 'think-' + Math.random().toString(36).slice(2);
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-800/60 border border-slate-700/40 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
+      + "<button onclick=\"const el=document.getElementById(\x27" + thinkId + "\x27);el.style.display=el.style.display===\x27none\x27?\x27block\x27:\x27none\x27\" class=\"text-xs text-slate-500 hover:text-slate-400 italic\">Thinking…</button>"
+      + "<div id=\"" + thinkId + "\" style=\"display:none\" class=\"mt-1 text-xs text-slate-500 whitespace-pre-wrap\">" + escapeHtml(String(msg.content || '')) + "</div>"
+      + timeDiv() + "</div></div>";
+  }
   if (msg.role === "plan") {
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"
       + "<div class=\"flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2\">"

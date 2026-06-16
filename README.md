@@ -15,7 +15,7 @@ A Python-based orchestration system that coordinates multiple Claude Code worker
 - **Voice Input** — Push-to-talk recording with Gemini transcription supporting Chinese, English, and mixed input
 - **Skills System** — Shared and host-specific skill knowledge files, auto-loaded by context relevance
 - **Memory and Knowledge** — Persistent user preferences (MEMORY.md), host facts (MEMORY.host.md), and per-project skill docs
-- **Session Operations** — Fork, elone (fork + re-run first message), archive, star, rate, search, and rewind
+- **Session Operations** — Fork, elone (fork + re-run first message), archive, star, rate, and search
 - **File Uploads** — Attach files to sessions for agent access
 - **Backup** — Compressed archive backups with tiered retention policy
 - **Code Server Integration** — Self-hosted VS Code Web (code-server) for browser-based code browsing with full IDE features

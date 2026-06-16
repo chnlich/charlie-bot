@@ -186,9 +186,8 @@ class SessionMetadata(BaseModel):
   schedule_timezone: Optional[str] = None
   schedule_project: Optional[str] = None
   schedule_allow_failure: Optional[bool] = None
-  # Rewind fields
-  parent_session_id: Optional[str] = None  # original session this was rewound from
-  rewind_summary: Optional[str] = None  # context summary from parent session
+  # Parent session for clone/elone-derived sessions
+  parent_session_id: Optional[str] = None
   # Rating
   rating: Optional[SessionRating] = None
   # Key is the round event id (UUID generated at event write time, or

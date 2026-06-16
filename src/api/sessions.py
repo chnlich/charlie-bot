@@ -431,16 +431,16 @@ async def fork_session(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  # Build bootstrap prompt so the clone reads its own events and orients itself
+  # Build bootstrap prompt from the clone's already-truncated event copy.
+  from src.core.recap import build_recap_context
   clone_events_path = session_mgr.get_chat_events_path(meta.id)
+  recap_context = await asyncio.to_thread(build_recap_context, session_mgr, meta.id)
   bootstrap_prompt = (
       "This session was cloned from a previous conversation.\n\n"
-      f"Your events file: {clone_events_path}\n\n"
-      "Please:\n"
-      "1. Read the events file\n"
-      "2. Focus on the last 2-3 exchanges to understand the current context\n"
-      "3. Summarize the context briefly\n"
-      "4. Wait for the user to tell you what to do next")
+      "Below is your reconstructed recent context (older turns condensed, the last 2 turns in full).\n\n"
+      f"{recap_context}\n\n"
+      "Summarize the current state briefly and wait for the user to tell you what to do next.\n\n"
+      f"Session JSONL path: {clone_events_path}")
 
   from src.api.chat import run_and_finalize
   from src.core.tasks import create_logged_task
@@ -463,19 +463,23 @@ async def elone_session(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  # Build bootstrap prompt
+  # Build bootstrap prompt from the bounded parent history up to the takeover point.
+  from src.core.recap import build_recap_context
   parent_events_path = session_mgr.get_chat_events_path(session_id)
+  recap_context = await asyncio.to_thread(build_recap_context, session_mgr, session_id, upto=body.event_index)
   bootstrap_prompt = (
       "You're taking over a task from a previous session where user wasn't satisfied.\n"
       "Usually the dissatisfaction is with the last assistant response before the takeover point.\n\n"
       f"Parent session: {session_id}\n"
-      f"Events file: {parent_events_path} (read up to line {body.event_index})\n\n"
+      "Below is the reconstructed recent context up to the takeover point "
+      "(older turns condensed, the last 2 turns in full).\n\n"
+      f"{recap_context}\n\n"
       "Your mission:\n"
-      "1. Read the parent conversation\n"
-      "2. Identify what the user was trying to achieve\n"
-      "3. Analyze what went wrong with the previous approach\n"
-      "4. State your critique concisely\n"
-      "5. Propose a better approach and ask the user to confirm before proceeding")
+      "1. Identify what the user was trying to achieve\n"
+      "2. Analyze what went wrong with the previous approach\n"
+      "3. State your critique concisely\n"
+      "4. Propose a better approach and ask the user to confirm before proceeding\n\n"
+      f"Parent JSONL path: {parent_events_path}")
 
   # Write synthetic user event and auto-start the assistant
   from src.api.chat import run_and_finalize

@@ -334,8 +334,8 @@ function renderSessionView(data) {
 
   // Initialize streaming preview from pending draft (in-progress assistant
   // response carried over from a tail-loaded session).
-  if (data.pending_draft && data.pending_draft.content) {
-    showStreaming(data.pending_draft.content);
+  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) {
+    showStreaming(data.pending_draft);
   } else {
     hideStreaming();
   }

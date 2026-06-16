@@ -346,30 +346,82 @@ def test_event_id_is_propagated_when_present() -> None:
   assert deltas[0]["message"]["id"] == "event-uuid"
 
 
-def test_thinking_event_emits_thinking_message() -> None:
-  agg = MessageAggregator()
-  deltas = list(agg.feed({"type": "thinking", "content": "analyzing...", "timestamp": "t"}))
-
-  assert deltas == [
-      {
-          "type": "message",
-          "message":
-              {
-                  "role": "thinking",
-                  "content": "analyzing...",
-                  "timestamp": "t",
-                  "event_index": 0,
-                  "id": "legacy:0",
-              },
-      }
-  ]
-
-
-def test_thinking_event_flushes_pending_assistant_draft() -> None:
+def test_thinking_delta_appends_to_assistant_draft() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
   deltas = list(agg.feed({"type": "thinking", "content": "planning", "timestamp": "t2"}))
 
-  assert [d["message"]["role"] for d in deltas] == ["assistant", "thinking"]
+  assert [d["type"] for d in deltas] == ["stream"]
+  assert deltas[0]["message"]["role"] == "assistant"
   assert deltas[0]["message"]["content"] == "Hi"
-  assert deltas[1]["message"]["content"] == "planning"
+  assert deltas[0]["message"]["thinking"] == "planning"
+  assert agg.pending_draft_message() == deltas[0]["message"]
+
+
+def test_cc_assistant_thinking_block_attaches_to_draft() -> None:
+  agg = MessageAggregator()
+  deltas = list(
+      agg.feed({
+          "type": "assistant",
+          "message": {
+              "content": [
+                  {
+                      "type": "thinking",
+                      "thinking": "Step one",
+                      "signature": "sig1"
+                  },
+                  {
+                      "type": "text",
+                      "text": "Hello"
+                  },
+              ]
+          },
+          "timestamp": "t1",
+      }))
+
+  assert deltas == [
+      {
+          "type": "stream",
+          "message": {
+              "role": "assistant",
+              "content": "Hello",
+              "thinking": "Step one",
+              "event_index": 0,
+              "id": "legacy:0",
+              "timestamp": "t1",
+          },
+      }
+  ]
+  assert "signature" not in deltas[0]["message"]
+
+
+def test_cc_thinking_snapshot_is_cumulative() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "Step"}]}, "timestamp": "t1"}))
+  deltas = list(
+      agg.feed({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "Step two"}]}, "timestamp": "t2"}))
+
+  assert deltas[0]["type"] == "stream"
+  assert deltas[0]["message"]["thinking"] == "Step two"
+  assert deltas[0]["message"]["content"] == ""
+
+
+def test_thinking_is_flushed_with_assistant_draft() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+  list(agg.feed({"type": "thinking", "content": "planning", "timestamp": "t2"}))
+  deltas = list(agg.feed({"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"}))
+
+  assert deltas[0]["message"]["role"] == "assistant"
+  assert deltas[0]["message"]["content"] == "Hi"
+  assert deltas[0]["message"]["thinking"] == "planning"
+  assert deltas[1]["message"]["role"] == "separator"
+
+
+def test_thinking_event_alone_creates_assistant_draft() -> None:
+  agg = MessageAggregator()
+  deltas = list(agg.feed({"type": "thinking", "content": "reasoning", "timestamp": "t"}))
+
+  assert deltas[0]["message"]["role"] == "assistant"
+  assert deltas[0]["message"]["content"] == ""
+  assert deltas[0]["message"]["thinking"] == "reasoning"

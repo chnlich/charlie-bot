@@ -141,17 +141,6 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
     if mf.exists():
       parts.append(mf.read_text(encoding="utf-8"))
 
-  # 4. Rewind summary
-  if session_meta.rewind_summary:
-    parts.append(
-        f"""# Session Rewind Context
-
-This session was rewound from a previous conversation (parent session: {session_meta.parent_session_id}). Here is the conversation summary up to the rewind point:
-
-{session_meta.rewind_summary}
-
-Continue from this context. The user wants to take a different direction from this point.""")
-
   return "\n\n".join(parts)
 
 

@@ -46,6 +46,8 @@ _SUMMARY_PROMPT = (
     "Produce the recap:\n- a few bullet points for what was discussed\n"
     "- one line for what was last being worked on")
 
+_CONDENSED_CHARS = 1000
+
 
 def _truncate(text: str, limit: int) -> str:
   """Strip and clip *text* to *limit* chars, appending an ellipsis if clipped."""
@@ -66,6 +68,152 @@ def _is_auto_injected(content: str) -> bool:
   """True if *content* is a system-injected user message rather than a real ask."""
   stripped = (content or "").lstrip()
   return any(stripped.startswith(prefix) for prefix in _AUTO_INJECTED_PREFIXES)
+
+
+def _message_text(msg: dict) -> str:
+  """Return the display text for a message, preferring full_content when present."""
+  full_content = msg.get("full_content")
+  if isinstance(full_content, str) and full_content:
+    return full_content
+  content = msg.get("content", "")
+  return content if isinstance(content, str) else str(content)
+
+
+def _split_rounds(messages: list[dict]) -> list[list[dict]]:
+  """Group messages into rounds opened by genuine user asks."""
+  rounds: list[list[dict]] = []
+  current: list[dict] | None = None
+  for msg in messages:
+    role = msg.get("role")
+    text = _message_text(msg)
+    if role == "user" and not _is_auto_injected(text):
+      if current is not None:
+        rounds.append(current)
+      current = [msg]
+    elif current is not None:
+      current.append(msg)
+  if current is not None:
+    rounds.append(current)
+  return rounds
+
+
+def _format_tool_value(value) -> str:
+  if isinstance(value, (dict, list)):
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+  return "" if value is None else str(value)
+
+
+def _truncate_to_cap(text: str, limit: int) -> str:
+  text = (text or "").strip()
+  return text if len(text) <= limit else _truncate(text, limit - 1)
+
+
+def _render_condensed_round(round_messages: list[dict], round_number: int) -> list[str]:
+  lines = [f"### Round {round_number} (condensed)"]
+  user_text = _message_text(round_messages[0])
+  if user_text:
+    lines.append(f"User: {_truncate(user_text, _CONDENSED_CHARS)}")
+
+  assistant_text = ""
+  conclusions: list[tuple[str, str]] = []
+  for msg in round_messages[1:]:
+    role = msg.get("role")
+    text = _message_text(msg)
+    if role == "assistant" and text.strip():
+      assistant_text = text
+    elif role == "worker_summary" and text.strip():
+      conclusions.append(("Worker summary", text))
+    elif role == "task_delegated" and text.strip():
+      conclusions.append(("Task delegated", text))
+
+  if assistant_text:
+    lines.append(f"Assistant: {_truncate(assistant_text, _CONDENSED_CHARS)}")
+  for label, text in conclusions:
+    clipped = _truncate(text, _CONDENSED_CHARS)
+    if label == "Task delegated" and clipped.startswith("Task delegated:"):
+      lines.append(clipped)
+    else:
+      lines.append(f"{label}: {clipped}")
+  return lines
+
+
+def _render_full_message(msg: dict, tool_output_cap: int) -> list[str]:
+  role = msg.get("role")
+  text = _message_text(msg)
+  if role == "user":
+    if _is_auto_injected(text):
+      return []
+    return ["**User**", text]
+  if role == "assistant":
+    lines: list[str] = []
+    if text.strip():
+      lines.extend(["**Assistant**", text])
+    for tool in msg.get("tools") or []:
+      name = tool.get("name", "")
+      status = " error" if tool.get("is_error") else ""
+      lines.append(f"**Tool: {name}{status}**")
+      lines.append("Input:")
+      lines.append("```json")
+      lines.append(_format_tool_value(tool.get("input", {})))
+      lines.append("```")
+      lines.append("Output:")
+      lines.append("```text")
+      lines.append(_truncate_to_cap(str(tool.get("output", "")), tool_output_cap))
+      lines.append("```")
+    return lines
+  if role == "worker_summary" and text.strip():
+    return ["**Worker summary**", text]
+  if role == "task_delegated" and text.strip():
+    return ["**Task delegated**", text]
+  if role == "system" and text.strip():
+    return ["**System**", text]
+  return []
+
+
+def _render_full_round(round_messages: list[dict], round_number: int, tool_output_cap: int) -> list[str]:
+  lines = [f"### Round {round_number} (full)"]
+  for msg in round_messages:
+    rendered = _render_full_message(msg, tool_output_cap)
+    if rendered:
+      lines.extend(rendered)
+  return lines
+
+
+def build_recap_context(
+    session_mgr: SessionManager,
+    session_id: str,
+    upto: int | None = None,
+    full_rounds: int = 2,
+    tool_output_cap: int = 4000,
+) -> str:
+  """Build a deterministic two-tier recent-context transcript for bootstraps."""
+  count = session_mgr.get_chat_event_count_sync(session_id)
+  end = count if upto is None else min(upto + 1, count)
+  events, _ = session_mgr.load_chat_events_range(session_id, 0, end)
+  messages = events_to_messages(events)
+  rounds = _split_rounds(messages)
+
+  if not rounds:
+    return "No genuine user turns were found before the takeover point."
+
+  full_start = max(len(rounds) - full_rounds, 0) if full_rounds > 0 else len(rounds)
+  condensed = rounds[:full_start]
+  full = rounds[full_start:]
+
+  lines = [
+      "# Reconstructed Recent Context",
+      "",
+      f"Older turns are condensed; the last {len(full)} turn(s) are shown in full.",
+  ]
+  if condensed:
+    lines.extend(["", "## Older Turns (Condensed)"])
+    for idx, round_messages in enumerate(condensed, start=1):
+      lines.extend(["", *_render_condensed_round(round_messages, idx)])
+  if full:
+    lines.extend(["", "## Recent Turns (Full Fidelity)"])
+    for idx, round_messages in enumerate(full, start=len(condensed) + 1):
+      lines.extend(["", *_render_full_round(round_messages, idx, tool_output_cap)])
+  return "\n".join(lines)
 
 
 def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None = None) -> dict:

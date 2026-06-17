@@ -72,7 +72,7 @@ def main() -> None:
       "--session",
       required=False,
       default=None,
-      help="Session ID (optional; auto-derived from cwd or CHARLIEBOT_SESSION_ID)")
+      help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument("--host", required=True, help="Remote host (ssh target)")
   parser.add_argument("--cwd", required=True, help="Working directory on the remote host")
   parser.add_argument("--cmd", required=True, help="Command to execute on the remote host")

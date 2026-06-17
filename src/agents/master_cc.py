@@ -169,9 +169,9 @@ def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
   """Build the environment for the master backend subprocess."""
   env = {**os.environ}
   env.pop("CLAUDECODE", None)
+  env.pop("CHARLIEBOT_SESSION_ID", None)
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
   env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-  env["CHARLIEBOT_SESSION_ID"] = session_id
 
   venv_bin = cfg.charlie_bot_repo / ".venv" / "bin"
   if venv_bin.is_dir():

@@ -29,7 +29,7 @@ class _FakeBackend:
     yield backend_base.make_result_event()
 
 
-def test_build_master_env_injects_session_and_prepends_repo_venv(
+def test_build_master_env_removes_session_env_and_prepends_repo_venv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -40,10 +40,11 @@ def test_build_master_env_injects_session_and_prepends_repo_venv(
 
   monkeypatch.setenv("PATH", "/usr/bin")
   monkeypatch.setenv("CLAUDECODE", "1")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
 
   env = master_cc._build_master_env(cfg, "session-id")
 
-  assert env["CHARLIEBOT_SESSION_ID"] == "session-id"
+  assert "CHARLIEBOT_SESSION_ID" not in env
   assert env["GIT_CEILING_DIRECTORIES"] == str(tmp_path / "home")
   assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
   assert env["PATH"].split(os.pathsep)[:2] == [str(venv_bin), "/usr/bin"]

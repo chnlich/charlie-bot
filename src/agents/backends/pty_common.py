@@ -44,6 +44,12 @@ def tmux_session_name(session_id: str) -> str:
   return f"charliebot-{session_id}"
 
 
+def _tmux_client_env() -> dict[str, str]:
+  env = {**os.environ}
+  env.pop("CHARLIEBOT_SESSION_ID", None)
+  return env
+
+
 async def _run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
   """Run a tmux command on the isolated socket. Returns (exit_code, stderr)."""
   tmux = _tmux_binary()
@@ -55,6 +61,7 @@ async def _run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
         *cmd,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=stderr_f,
+        env=_tmux_client_env(),
     )
     await proc.wait()
     stderr_f.seek(0)
@@ -105,7 +112,7 @@ class PtyAttachment:
       # Child process — exec tmux attach.
       os.environ.setdefault("TERM", "xterm-256color")
       try:
-        os.execv(tmux, [tmux, "-L", _TMUX_SOCKET, "attach", "-t", name])
+        os.execve(tmux, [tmux, "-L", _TMUX_SOCKET, "attach", "-t", name], _tmux_client_env())
       except Exception as e:  # noqa: BLE001 — last-ditch report before _exit
         os.write(2, f"tmux exec failed: {e}\n".encode())
         os._exit(1)

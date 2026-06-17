@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from src.agents.backends.pty_common import _TMUX_SOCKET, _tmux_binary, tmux_session_name
+from src.agents.backends.pty_common import _TMUX_SOCKET, _tmux_binary, _tmux_client_env, tmux_session_name
 from src.agents.backends.tui import _find_existing_claude_jsonl, ensure_tmux_session, tmux_session_exists
 
 _POLL_SECONDS = 0.1
@@ -239,6 +239,7 @@ async def _run_tmux_bytes(*args: str, stdin: bytes | None = None, capture: bool 
       stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
       stdout=asyncio.subprocess.PIPE if capture else asyncio.subprocess.DEVNULL,
       stderr=asyncio.subprocess.PIPE,
+      env=_tmux_client_env(),
   )
   stdout, stderr = await proc.communicate(stdin)
   if proc.returncode != 0:

@@ -7328,3 +7328,19 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude_sub.parse_argv into tokenization and option parsing helpers
+  description: 'PURPOSE: Reduce the 78-line claude-sub argument parser by separating
+    token collection from option interpretation.
+
+    HOW:
+    - Extract `_split_argv_tokens(argv)` for `--` handling and prompt-token detection.
+    - Extract `_parse_option_tokens(option_tokens)` for supported flag validation
+    and field assignment.
+    - Preserve the current `ValueError` messages and stream-json requirement.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-17T23:12:37Z'
+  priority: low

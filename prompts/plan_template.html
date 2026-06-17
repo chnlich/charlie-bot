@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharlieBot Plan Template</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --bd:#2d3340;
+    --tx:#e6edf3; --mut:#9aa7b5; --acc:#58a6ff; --grn:#3fb950; --amb:#d29922; --red:#f85149; --vio:#bc8cff;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#04140a;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#04101f;font-size:12px;font-weight:700;align-items:center;justify-content:center}
+  h2 .nb{background:var(--vio)}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  .step{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--acc);border-radius:8px;padding:14px 16px;margin:12px 0}
+  .step.b{border-left-color:var(--vio)}
+  .step .hd{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .step .ttl{font-weight:600;font-size:14px}
+  .step .loc{font-family:var(--mono);font-size:11.5px;color:var(--mut)}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .checklist{list-style:none;padding-left:0}
+  .checklist li{display:flex;gap:8px;align-items:flex-start;background:var(--panel);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin:7px 0}
+  .check{display:inline-flex;width:18px;height:18px;border-radius:5px;border:1px solid var(--bd);align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:0 0 auto;margin-top:1px;color:var(--mut)}
+  .check.done{border-color:rgba(63,185,80,.65);background:rgba(63,185,80,.12);color:#9ff0b5}
+  .check.todo{border-color:rgba(210,153,34,.65);background:rgba(210,153,34,.10);color:#ffd58a}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#ffd9a0}
+  pre{background:#0a0e14;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#cdd9e5;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#ffd9a0}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #2c4a6b;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#cfe2f7}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#5b4720;border-left-color:var(--amb);color:#f2dfb5}
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .box{background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px 15px}
+  .box h4{margin:0 0 8px;font-size:13px}
+  .box.ok h4{color:var(--grn)}
+  .box.no h4{color:var(--mut)}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.n{border-color:var(--grn);color:#9ff0b5}
+  .flow .ar{color:var(--mut)}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  @media(max-width:760px){body{padding:18px}.twocol{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Plan Title<span class="status">PLAN</span></h1>
+    <p class="sub">One-sentence summary of the plan, decision, or delegation shape.</p>
+    <div class="meta">
+      <span class="mtag">repo · path/to/repo</span>
+      <span class="mtag">scope · concise label</span>
+      <span class="mtag">deps · none</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- PLAN CONTENT: fill <main> using the block kit below. Keep content in semantic blocks so inline comments can anchor to useful units. -->
+    <!--
+      BLOCK KIT
+      - section.plan-section wraps each major plan section.
+      - h2 with span.n gives a compact section marker; use span.nb for the alternate accent.
+      - p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks.
+      - div.callout highlights a note; add .warn for an amber warning.
+      - div.twocol > div.box creates a two-column comparison; .ok and .no color box headings.
+      - ul.checklist > li with span.check.done/todo gives checklist rows.
+      - div.meta > span.mtag gives small metadata chips near the top of a plan.
+      - div.step is for an implementation step; add .b for the alternate accent.
+      - div.flow with span.b and span.ar documents a pipeline or sequence.
+    -->
+
+    <section class="plan-section">
+      <h2><span class="n">1</span> Objective</h2>
+      <p>State the outcome in concrete terms. Keep each paragraph focused; inline comments attach to individual paragraphs, list items, headings, table cells, or sections.</p>
+      <div class="callout"><p><b>Callout:</b> Use this for constraints, decisions, risk notes, or reviewer guidance that should stand apart from the main flow.</p></div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n nb">2</span> Approach</h2>
+      <div class="step b">
+        <div class="hd">
+          <span class="ttl">Implementation step title</span>
+          <span class="loc">path/or/module.ext</span>
+        </div>
+        <ul>
+          <li>Describe the first concrete change.</li>
+          <li>Describe the second concrete change, with <code>inline code</code> when useful.</li>
+        </ul>
+      </div>
+      <pre>command-or-code-example --flag value</pre>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">3</span> Tradeoffs</h2>
+      <div class="twocol">
+        <div class="box ok">
+          <h4>In Scope</h4>
+          <ul>
+            <li>Work that must be done for this plan.</li>
+            <li>Verification that belongs in this pass.</li>
+          </ul>
+        </div>
+        <div class="box no">
+          <h4>Out of Scope</h4>
+          <ul>
+            <li>Follow-up work intentionally left for later.</li>
+            <li>Ideas that should not be implemented in this change.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">4</span> Checklist</h2>
+      <ul class="checklist">
+        <li><span class="check done">✓</span><span>Template copied with the <code>&lt;head&gt;</code> and <code>&lt;style&gt;</code> intact.</span></li>
+        <li><span class="check todo">•</span><span>Plan-specific content replaces the sample sections inside <code>&lt;main&gt;</code>.</span></li>
+      </ul>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">5</span> File Plan</h2>
+      <table>
+        <tr><th>File</th><th>Change</th><th>Reason</th></tr>
+        <tr><td class="f">path/to/file</td><td class="edit">EDIT</td><td>Why this file owns the behavior.</td></tr>
+        <tr><td class="f">path/to/new_file</td><td class="new">NEW</td><td>Why a new file is justified.</td></tr>
+      </table>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">6</span> Flow</h2>
+      <div class="flow">
+        <span class="b">input</span><span class="ar">→</span>
+        <span class="b n">transform</span><span class="ar">→</span>
+        <span class="b">output</span>
+      </div>
+    </section>
+
+    <div class="foot">
+      Footer notes are useful for residual risk, manual verification, or the exact handoff expected after implementation.
+    </div>
+  </main>
+</div>
+</body>
+</html>

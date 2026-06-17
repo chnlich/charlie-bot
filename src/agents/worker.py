@@ -119,11 +119,14 @@ class Worker:
       await streaming_manager.broadcast(self._thread.id, diag_event)
 
     if self._backend.stderr_text:
+      stderr_event_type = ET.ERROR if exit_code != 0 else ET.SYSTEM
       stderr_event = {
-          "type": ET.ERROR,
+          "type": stderr_event_type,
           "content": self._backend.stderr_text,
           "timestamp": datetime.now(timezone.utc).isoformat(),
       }
+      if stderr_event_type == ET.SYSTEM:
+        stderr_event["subtype"] = "stderr"
       await append_ndjson(self._events_log, stderr_event)
       await streaming_manager.broadcast(self._thread.id, stderr_event)
       log.warning("worker_stderr", thread=self._thread.id, stderr=self._backend.stderr_text[:500])

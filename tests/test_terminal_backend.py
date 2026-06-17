@@ -64,6 +64,31 @@ class _FakeAttachment:
     self.closed = True
 
 
+@pytest.mark.asyncio
+async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
+  captured: dict[str, dict[str, str]] = {}
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
+  monkeypatch.setattr(pty_common, "_tmux_binary", lambda: "/usr/bin/tmux")
+
+  class FakeProcess:
+    returncode = 0
+
+    async def wait(self) -> None:
+      return None
+
+  async def fake_create_subprocess_exec(*args, **kwargs):
+    captured["env"] = kwargs["env"]
+    return FakeProcess()
+
+  monkeypatch.setattr(pty_common.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+  rc, stderr = await pty_common._run_tmux("has-session", "-t", "charliebot-session")
+
+  assert rc == 0
+  assert stderr == ""
+  assert "CHARLIEBOT_SESSION_ID" not in captured["env"]
+
+
 def test_run_tmux_new_session_returns_under_uvloop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

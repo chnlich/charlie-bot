@@ -107,6 +107,30 @@ def test_pane_has_interactive_menu_ignores_prompt_and_output() -> None:
   assert not claude_sub._pane_has_interactive_menu(numbered_prompt_echo)
 
 
+@pytest.mark.asyncio
+async def test_run_tmux_bytes_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
+  captured: dict[str, dict[str, str]] = {}
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
+  monkeypatch.setattr(claude_sub, "_tmux_binary", lambda: "/usr/bin/tmux")
+
+  class FakeProcess:
+    returncode = 0
+
+    async def communicate(self, stdin):
+      return b"pane", b""
+
+  async def fake_create_subprocess_exec(*args, **kwargs):
+    captured["env"] = kwargs["env"]
+    return FakeProcess()
+
+  monkeypatch.setattr(claude_sub.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+  output = await claude_sub._run_tmux_bytes("capture-pane", "-p", capture=True)
+
+  assert output == b"pane"
+  assert "CHARLIEBOT_SESSION_ID" not in captured["env"]
+
+
 def test_pane_has_interactive_menu_detects_current_menu_after_numbered_prompt_echo() -> None:
   pane = (
       "❯ 1. Inspect the current failure\n"

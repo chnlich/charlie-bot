@@ -292,7 +292,7 @@ def test_success_path_derives_session_from_cwd(
   assert meta["remote_pid"] == 24680
 
 
-def test_success_path_derives_session_from_env(
+def test_session_env_is_not_a_remote_launch_session_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -303,8 +303,6 @@ def test_success_path_derives_session_from_env(
   monkeypatch.chdir(tmp_path)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session)
 
-  fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="13579\n", stderr="")
-
   with patch("sys.argv", [
       "remote_launch",
       "--host", "remote.example.com",
@@ -312,10 +310,11 @@ def test_success_path_derives_session_from_env(
       "--cmd", "echo hi",
   ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.remote_launch.get_config", return_value=cfg), \
-       patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
-    main()
+       patch("src.cli.remote_launch.subprocess.run") as mock_run:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
 
-  meta = json.loads(capsys.readouterr().out.strip())
-  assert meta["session_id"] == session
-  assert meta["remote_pid"] == 13579
+  assert exc_info.value.code == 2
+  mock_run.assert_not_called()
+  error = json.loads(capsys.readouterr().err)["error"]
+  assert "--session required" in error

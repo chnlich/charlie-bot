@@ -58,7 +58,7 @@ charliebot delegate \
   --task-type implement
 ```
 
-Do NOT pass `--session` in normal master use. Session identity is supplied by cwd (`~/.charliebot/sessions/{session_id}`) and `CHARLIEBOT_SESSION_ID`; a mismatch with an explicit `--session` is rejected. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
+Do NOT pass `--session` in normal master use. Session identity is supplied by cwd (`~/.charliebot/sessions/{session_id}`); a mismatch with an explicit `--session` is rejected. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
 
 Pass `--keep-worktree 1` instead when the worker launches a long-running external job (e.g. a SLURM submission) whose WorkDir lives in the worktree.
 

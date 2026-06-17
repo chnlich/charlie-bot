@@ -1,7 +1,7 @@
 """CLI script for master CC to schedule a delayed trigger.
 
 Called by the master Claude Code instance via its run_command tool. ``--session``
-is optional; auto-derived from cwd/env in normal master use.
+is optional; auto-derived from cwd in normal master use.
 
   charliebot schedule-trigger \
     --max-wait 3600 \
@@ -66,7 +66,7 @@ def _build_parser() -> argparse.ArgumentParser:
       "--session",
       required=False,
       default=None,
-      help="Session ID (optional; auto-derived from cwd or CHARLIEBOT_SESSION_ID)")
+      help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument(
       "--max-wait",
       required=True,

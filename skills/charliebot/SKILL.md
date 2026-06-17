@@ -82,7 +82,7 @@ Better practice — choose one of:
   4. Yield only after the busy-wait confirms the job is doing the right thing.
   5. On wake (trigger fired): `ssh H cat /tmp/charliebot_runs/<launch_id>/sentinel` for exit code; pull log if needed; `ssh H rm -rf /tmp/charliebot_runs/<launch_id>` to clean up remote staging.
 
-  In normal master usage, do not pass `--session`; cwd/env supplies it and mismatches are rejected. Existing explicit `--session` still works for old callers.
+  In normal master usage, do not pass `--session`; cwd supplies it and mismatches with an explicit `--session` are rejected. Existing explicit `--session` still works for old callers.
 
   Constraints: wrapped cmd must run in foreground (no detached `&` inside `--cmd`). For parallel jobs, call `charliebot remote-launch` N times. The wrapper log captures stdout/stderr only — if the cmd internally redirects output to its own log path (e.g. `/storage/...`), that file is the source of truth and the wrapper log will be near-empty. For sub-2-minute commands, just `ssh host 'cmd'` synchronously instead — the launch+trigger overhead is not worth it.
 

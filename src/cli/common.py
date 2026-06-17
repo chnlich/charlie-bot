@@ -5,7 +5,6 @@ entry point, including consistent error-detail extraction on 4xx/5xx responses.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -59,11 +58,10 @@ def resolve_session_id(arg_session: str | None) -> str:
   """Resolve the session id to use for a CLI invocation.
 
   Master CC always cd's into ~/.charliebot/sessions/{session_id} before
-  running these CLIs, and master subprocesses also receive
-  CHARLIEBOT_SESSION_ID. We use those facts to (a) auto-derive the session
-  id when --session is omitted, and (b) reject mismatches across explicit,
-  cwd-derived, and env-derived sources — which catches stale copied session
-  ids before they can mutate the wrong session.
+  running these CLIs. We use that fact to (a) auto-derive the session id
+  when --session is omitted, and (b) reject mismatches across explicit and
+  cwd-derived sources — which catches stale copied session ids before they
+  can mutate the wrong session.
   """
   cwd = Path.cwd().resolve()
   sessions_dir = get_config().sessions_dir.resolve()
@@ -72,9 +70,6 @@ def resolve_session_id(arg_session: str | None) -> str:
     sources["--session"] = arg_session
   if cwd.parent == sessions_dir:
     sources["cwd"] = cwd.name
-  env_session = os.environ.get("CHARLIEBOT_SESSION_ID")
-  if env_session is not None:
-    sources["CHARLIEBOT_SESSION_ID"] = env_session
 
   if not sources:
     print(

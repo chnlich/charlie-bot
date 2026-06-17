@@ -2,7 +2,7 @@
 
 Called by the master Claude Code instance via its run_command tool:
 
-  # --session is optional; auto-derived from cwd/env in normal master use.
+  # --session is optional; auto-derived from cwd in normal master use.
   charliebot delegate \
     --repo /path/to/repo \
     --base-branch main \
@@ -23,7 +23,7 @@ def main() -> None:
       "--session",
       required=False,
       default=None,
-      help="Session ID (optional; auto-derived from cwd or CHARLIEBOT_SESSION_ID)")
+      help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
   parser.add_argument("--description", required=True, help="Task description")
   parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")

@@ -344,8 +344,7 @@ def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] =
   control, and a cursor line matching the submitted prompt's first non-empty line is
   not a menu.
   """
-  submitted_first_line = (
-      _first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
+  submitted_first_line = (_first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
   cursor_line: Optional[str] = None
   for line in pane_text.splitlines():
     real = _strip_dim_text(line)

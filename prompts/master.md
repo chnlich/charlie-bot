@@ -214,6 +214,8 @@ Before sharing a link, verify the file or directory exists. **Never** wrap a fil
 
 Default to HTML for response output. Write `artifacts/<name>.html`, then output its `/files/<absolute-path-without-leading-slash>` link per the file-server scheme above — CharlieBot renders any `artifacts/*.html` link as a sandboxed iframe inline in the chat.
 
+When emitting any plan — delegation plan, improve plan, or any "here is my plan" presentation — render it as an HTML artifact built from `prompts/plan_template.html`. Read the template from the CharlieBot repo root, reuse its `<head>` and `<style>` verbatim, fill the `<main>` content region using the documented block kit, and write the result to `artifacts/plan_NN.html`. This applies to all plans, including short ones; uniformity is more important than brevity for plan artifacts.
+
 Aim for well-organized, visually polished pages that present more information densely than markdown allows.
 
 Use markdown only when the user opts out or the response is a brief acknowledgment.

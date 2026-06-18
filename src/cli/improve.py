@@ -39,11 +39,7 @@ def _read_goal_file(goal_file: str) -> str:
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Run an iterative improvement loop via CharlieBot workers")
-  parser.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Session ID (optional; auto-derived from cwd)")
+  parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument(

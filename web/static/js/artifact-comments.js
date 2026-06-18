@@ -4,10 +4,16 @@ try { framed = window.parent !== window.self; } catch (e) { framed = true; }
 if (!framed) {
   (function() {
     var GLOBAL_PREFIX = '__cbc';
-    var BLOCK_SELECTOR = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,dd,section';
+    var HIDE_DELAY_MS = 300;
+    var TRIGGER_SIZE = 34;
+    var AUTH_MESSAGE = 'log in to comment';
+    var BLOCK_SELECTOR = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,dd';
+    var SECTION_SELECTOR = 'section';
+    var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this plan?'}];
     var sessionId = extractSessionIdFromPath(window.location.pathname);
     var artifactPath = artifactPathFromPath(window.location.pathname);
     var hovered = null;
+    var hideTimer = null;
     var trigger = null;
     var popover = null;
     var toast = null;
@@ -16,6 +22,7 @@ if (!framed) {
 
     installStyles();
     installListeners();
+    installShortcuts();
 
     function extractSessionIdFromPath(pathname) {
       var normalized = String(pathname || '').replace(/%2F/gi, '/');
@@ -33,7 +40,7 @@ if (!framed) {
       var style = document.createElement('style');
       style.textContent =
         '.' + GLOBAL_PREFIX + '-hover{outline:2px solid rgba(88,166,255,.95)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.16)!important}' +
-        '.' + GLOBAL_PREFIX + '-trigger{position:fixed;z-index:2147483646;width:28px;height:28px;border-radius:999px;border:1px solid rgba(88,166,255,.75);background:#0d1117;color:#e6edf3;display:none;align-items:center;justify-content:center;font-size:15px;line-height:1;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;padding:0}' +
+        '.' + GLOBAL_PREFIX + '-trigger{position:fixed;z-index:2147483646;width:34px;height:34px;border-radius:999px;border:1px solid rgba(88,166,255,.75);background:#0d1117;color:#e6edf3;display:none;align-items:center;justify-content:center;font-size:16px;line-height:1;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;padding:0}' +
         '.' + GLOBAL_PREFIX + '-trigger:hover{background:#1c2230;border-color:#58a6ff}' +
         '.' + GLOBAL_PREFIX + '-popover{position:fixed;z-index:2147483647;width:min(300px,calc(100vw - 16px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
         '.' + GLOBAL_PREFIX + '-popover textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:7px 8px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
@@ -44,21 +51,41 @@ if (!framed) {
         '.' + GLOBAL_PREFIX + '-add{background:#238636!important;border-color:#2ea043!important;color:#fff!important}' +
         '.' + GLOBAL_PREFIX + '-error{display:none;margin-top:8px;color:#ffb4ab;font-size:12px}' +
         '.' + GLOBAL_PREFIX + '-toast{position:fixed;z-index:2147483647;max-width:min(360px,calc(100vw - 16px));left:50%;bottom:18px;transform:translateX(-50%);background:#1f6f3a;color:#dfffe5;border:1px solid rgba(63,185,80,.65);border-radius:999px;padding:7px 12px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
-        '.' + GLOBAL_PREFIX + '-toast-error{background:#5f2120;color:#ffe2df;border-color:rgba(248,81,73,.7);border-radius:8px}';
+        '.' + GLOBAL_PREFIX + '-toast-error{background:#5f2120;color:#ffe2df;border-color:rgba(248,81,73,.7);border-radius:8px}' +
+        '.' + GLOBAL_PREFIX + '-shortcuts{position:fixed;right:14px;bottom:64px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:6px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+        '.' + GLOBAL_PREFIX + '-shortcut{border:1px solid #2ea043;border-radius:7px;padding:7px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35);cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-shortcut:hover:not(:disabled){background:#2ea043}' +
+        '.' + GLOBAL_PREFIX + '-shortcut:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
+        '.' + GLOBAL_PREFIX + '-shortcut-reason{max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}';
       document.head.appendChild(style);
     }
 
     function installListeners() {
       document.addEventListener('mouseover', function(event) {
-        if (popover || isCommentUi(event.target)) return;
+        if (isCommentUi(event.target)) {
+          cancelHide();
+          return;
+        }
+        if (popover) return;
         var block = findBlock(event.target);
-        if (block) setHovered(block);
+        if (block) {
+          cancelHide();
+          setHovered(block);
+        }
       });
       document.addEventListener('mouseout', function(event) {
         if (popover) return;
         var related = event.relatedTarget;
-        if (isCommentUi(related)) return;
-        if (hovered && (!related || !hovered.contains(related))) clearHover();
+        if (isCommentUi(related)) {
+          cancelHide();
+          return;
+        }
+        if (hovered && (!related || !hovered.contains(related))) scheduleHide();
+      });
+      document.addEventListener('click', function(event) {
+        if (isCommentUi(event.target) || isInteractiveElement(event.target) || hasActiveTextSelection()) return;
+        var block = findBlock(event.target);
+        if (block) openPopover(block);
       });
       document.addEventListener('mousemove', function() {
         if (hovered && !popover) positionTrigger(hovered);
@@ -85,10 +112,25 @@ if (!framed) {
       ));
     }
 
+    function isInteractiveElement(target) {
+      return Boolean(target && target.closest && target.closest('a,button,input,textarea,select,label'));
+    }
+
+    function hasActiveTextSelection() {
+      var selection = window.getSelection && window.getSelection();
+      return Boolean(selection && !selection.isCollapsed);
+    }
+
     function findBlock(target) {
       var el = target && target.closest ? target.closest(BLOCK_SELECTOR) : null;
       while (el && !isTextBearing(el)) {
         el = el.parentElement && el.parentElement.closest ? el.parentElement.closest(BLOCK_SELECTOR) : null;
+      }
+      if (el) return el;
+
+      el = target && target.closest ? target.closest(SECTION_SELECTOR) : null;
+      while (el && !isTextBearing(el)) {
+        el = el.parentElement && el.parentElement.closest ? el.parentElement.closest(SECTION_SELECTOR) : null;
       }
       return el;
     }
@@ -110,6 +152,10 @@ if (!framed) {
         event.stopPropagation();
         if (hovered) openPopover(hovered);
       });
+      trigger.addEventListener('mouseenter', cancelHide);
+      trigger.addEventListener('mouseleave', function() {
+        if (!popover) scheduleHide();
+      });
       document.body.appendChild(trigger);
       return trigger;
     }
@@ -117,12 +163,13 @@ if (!framed) {
     function positionTrigger(block) {
       var btn = ensureTrigger();
       var rect = block.getBoundingClientRect();
-      btn.style.left = Math.max(8, Math.min(rect.right - 28, window.innerWidth - 36)) + 'px';
-      btn.style.top = Math.max(8, Math.min(rect.top + 4, window.innerHeight - 36)) + 'px';
+      btn.style.left = Math.max(8, Math.min(rect.right - TRIGGER_SIZE, window.innerWidth - TRIGGER_SIZE - 8)) + 'px';
+      btn.style.top = Math.max(8, Math.min(rect.top + 4, window.innerHeight - TRIGGER_SIZE - 8)) + 'px';
       btn.style.display = 'flex';
     }
 
     function setHovered(block) {
+      cancelHide();
       if (hovered === block) {
         positionTrigger(block);
         return;
@@ -133,7 +180,22 @@ if (!framed) {
       positionTrigger(block);
     }
 
+    function scheduleHide() {
+      cancelHide();
+      hideTimer = window.setTimeout(function() {
+        hideTimer = null;
+        clearHover();
+      }, HIDE_DELAY_MS);
+    }
+
+    function cancelHide() {
+      if (!hideTimer) return;
+      window.clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+
     function clearHover() {
+      cancelHide();
       if (hovered) hovered.classList.remove(GLOBAL_PREFIX + '-hover');
       hovered = null;
       if (trigger) trigger.style.display = 'none';
@@ -214,8 +276,47 @@ if (!framed) {
         '\u21B3 ' + comment;
     }
 
+    function buildShortcutMessage(shortcut) {
+      return '[Plan \u00B7 ' + artifactPath + ']\n' + shortcut.prompt;
+    }
+
+    function installShortcuts() {
+      var container = document.createElement('div');
+      container.className = GLOBAL_PREFIX + '-shortcuts';
+
+      for (var i = 0; i < SHORTCUTS.length; i++) {
+        (function(shortcut) {
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = GLOBAL_PREFIX + '-shortcut';
+          button.textContent = shortcut.label;
+          button.title = shortcut.prompt;
+          button.setAttribute('aria-label', shortcut.prompt);
+          if (!sessionId) {
+            button.disabled = true;
+          } else {
+            button.addEventListener('click', function() {
+              sendShortcut(shortcut, button);
+            });
+          }
+          container.appendChild(button);
+        })(SHORTCUTS[i]);
+      }
+
+      if (!sessionId) {
+        var reason = document.createElement('div');
+        reason.className = GLOBAL_PREFIX + '-shortcut-reason';
+        reason.textContent = 'Cannot parse session id from this artifact URL.';
+        container.appendChild(reason);
+      }
+
+      document.body.appendChild(container);
+    }
+
     function openPopover(block) {
+      cancelHide();
       closePopover();
+      if (hovered && hovered !== block) clearHover();
       if (trigger) trigger.style.display = 'none';
       hovered = block;
       hovered.classList.add(GLOBAL_PREFIX + '-hover');
@@ -242,6 +343,7 @@ if (!framed) {
       node.appendChild(error);
       node.appendChild(actions);
       node.addEventListener('mousedown', function(event) { event.stopPropagation(); });
+      node.addEventListener('mouseenter', cancelHide);
       cancelBtn.addEventListener('click', function() {
         closePopover();
         clearHover();
@@ -262,6 +364,37 @@ if (!framed) {
       textarea.focus();
     }
 
+    async function postChatMessage(content) {
+      var response = await fetch('/api/chat/' + encodeURIComponent(sessionId) + '/message', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({content: content, uploaded_files: []}),
+      });
+      if (response.status === 401) {
+        throw new Error(AUTH_MESSAGE);
+      }
+      if (!response.ok) {
+        throw new Error('Comment post failed: HTTP ' + response.status);
+      }
+    }
+
+    async function sendShortcut(shortcut, button) {
+      var label = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Sending';
+      try {
+        await postChatMessage(buildShortcutMessage(shortcut));
+        showToast('Sent to chat', false);
+      } catch (err) {
+        console.error('Artifact shortcut failed:', err);
+        showToast(err.message, true);
+      } finally {
+        button.disabled = false;
+        button.textContent = label;
+      }
+    }
+
     async function submitComment(node, addBtn, block, textarea) {
       var comment = textarea.value.trim();
       if (!comment) {
@@ -271,20 +404,7 @@ if (!framed) {
       addBtn.disabled = true;
       addBtn.textContent = 'Sending';
       try {
-        var response = await fetch('/api/chat/' + encodeURIComponent(sessionId) + '/message', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          credentials: 'same-origin',
-          body: JSON.stringify({content: buildMessage(block, comment), uploaded_files: []}),
-        });
-        if (response.status === 401) {
-          setPopoverError(node, 'log in to CharlieBot to comment');
-          showToast('log in to CharlieBot to comment', true);
-          return;
-        }
-        if (!response.ok) {
-          throw new Error('Comment post failed: HTTP ' + response.status);
-        }
+        await postChatMessage(buildMessage(block, comment));
         closePopover();
         clearHover();
         showToast('Comment sent to chat', false);

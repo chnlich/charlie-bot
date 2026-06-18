@@ -755,8 +755,11 @@ function installHtmlArtifactListener() {
     if (!frame) return;
     // Stop auto-fitting height once the user has manually resized the frame.
     if (frame.dataset.manualHeight === '1') return;
+    var container = document.getElementById('messages');
+    var wasAtBottom = container ? shouldAutoScroll(container) : false;
     var cap = Math.floor(window.innerHeight * 0.8);
     frame.style.height = Math.min(Number(data.height) + 2, cap) + 'px';
+    if (wasAtBottom && container) container.scrollTop = container.scrollHeight;
   });
 }
 installHtmlArtifactListener();

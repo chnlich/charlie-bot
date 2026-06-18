@@ -7325,6 +7325,21 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Resolved by running `yapf --in-place --recursive src/` in this code-health
+    run.
+- id: '186'
+  title: Split OpenCodeBackend.run into startup and turn-loop helpers
+  description: |
+    PURPOSE: Keep OpenCodeBackend.run readable by separating server startup from the SSE turn loop.
+
+    HOW:
+    - Extract _start_server_process(...) for cwd prep, subprocess spawn, log tasks, and server URL discovery.
+    - Extract _drive_session_turn(...) as an async generator for health check, session creation/resume, prompt send, and session.idle/error handling.
+    - Run yapf and the opencode backend tests.
+  category: long-function
+  status: pending
+  created: '2026-06-18T03:12:38Z'
   priority: low

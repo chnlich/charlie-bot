@@ -148,6 +148,7 @@ class AgentBackend(ABC):
     self._log_dir = log_dir
     self._proc: Optional[asyncio.subprocess.Process] = None
     self._stderr_task: Optional[asyncio.Task] = None
+    self._stdin_task: Optional[asyncio.Task] = None
     self._stderr_tail = bytearray()
     self.exit_code: int = -1
     self.stderr_text: str = ""
@@ -176,6 +177,10 @@ class AgentBackend(ABC):
     """Hook to modify the environment before subprocess spawn. Identity default."""
     return env
 
+  def _stdin_prompt(self, prompt: str) -> str | None:
+    """Return prompt text to send on stdin, or None to keep prompt transport in argv."""
+    return None
+
   def translate_event(self, event: dict) -> list[dict]:
     """Translate a raw backend NDJSON event into CC-compatible event dict(s).
 
@@ -203,18 +208,21 @@ class AgentBackend(ABC):
     """
     await asyncio.to_thread(self._prepare_cwd, cwd)
     cmd = self._build_command(prompt)
+    stdin_prompt = self._stdin_prompt(prompt)
     final_env = self._prepare_env(env)
 
     self._proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=final_env,
         limit=self._buffer_limit,
         start_new_session=True,
     )
+    if stdin_prompt is not None:
+      self._stdin_task = asyncio.create_task(self._write_stdin_prompt(stdin_prompt))
     if self._on_spawn is not None:
       await self._on_spawn(self._proc.pid)
 
@@ -315,6 +323,17 @@ class AgentBackend(ABC):
 
     await self._drain_and_cleanup(_CLEANUP_TIMEOUT)
 
+  async def _write_stdin_prompt(self, prompt: str) -> None:
+    """Write prompt to subprocess stdin while stdout is being drained."""
+    assert self._proc is not None and self._proc.stdin is not None
+    stdin = self._proc.stdin
+    try:
+      stdin.write(prompt.encode("utf-8"))
+      await stdin.drain()
+    finally:
+      stdin.close()
+      await stdin.wait_closed()
+
   async def _graceful_shutdown(
       self,
       timeout: float,
@@ -357,6 +376,22 @@ class AgentBackend(ABC):
   async def _drain_and_cleanup(self, timeout: float) -> None:
     """Wait for stderr-streamer + process exit; capture diagnostics + escalate to kill on hang."""
     assert self._proc is not None
+    stdin_error: Exception | None = None
+    if self._stdin_task is not None:
+      try:
+        await asyncio.wait_for(asyncio.shield(self._stdin_task), timeout=timeout)
+      except asyncio.TimeoutError as e:
+        stdin_error = e
+        log.warning("backend_stdin_write_timeout", pid=self._proc.pid, timeout=timeout)
+        self._stdin_task.cancel()
+        try:
+          await self._stdin_task
+        except asyncio.CancelledError:
+          log.debug("backend_stdin_write_cancelled", pid=self._proc.pid)
+        except Exception as cancel_error:
+          stdin_error = cancel_error
+      except Exception as e:
+        stdin_error = e
     if self._stderr_task is not None:
       try:
         await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=timeout)
@@ -382,6 +417,8 @@ class AgentBackend(ABC):
         log.warning("backend_stderr_stream_cancel_failed", pid=self._proc.pid, error=str(e))
     self.exit_code = self._proc.returncode or 0
     self.stderr_text = bytes(self._stderr_tail).decode("utf-8", errors="replace").strip()
+    if stdin_error is not None:
+      raise stdin_error
 
   async def terminate(self) -> None:
     """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""

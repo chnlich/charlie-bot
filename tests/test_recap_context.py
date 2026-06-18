@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.core import event_types as ET
-from src.core.recap import build_recap_context
+from src.core.recap import RECAP_CONTEXT_BUDGET_BYTES, build_recap_context
 
 
 class FakeSessionManager:
@@ -163,3 +163,55 @@ def test_recap_context_auto_injected_users_and_clone_start_are_not_rounds() -> N
   assert "Scheduled trigger fired" not in context
   assert "Parent Session" not in context
   assert "Another Parent" not in context
+
+
+def test_recap_context_respects_byte_budget_and_retains_latest_round() -> None:
+  events: list[dict] = []
+  for idx in range(20):
+    events.extend([
+        user(f"old ask {idx} " + "A" * 1000),
+        assistant(f"old answer {idx} " + "B" * 1000),
+        master_done(),
+    ])
+  events.extend([
+      user("latest ask sentinel"),
+      assistant("latest answer sentinel " + "Z" * RECAP_CONTEXT_BUDGET_BYTES),
+  ])
+
+  context = build_recap_context(
+      FakeSessionManager(events),
+      "session",
+      full_rounds=5,
+      total_budget_bytes=4096,
+  )
+
+  assert len(context.encode("utf-8")) <= 4096
+  assert "### Round 21 (full)" in context
+  assert "latest ask sentinel" in context
+  assert "latest answer sentinel" in context
+
+
+def test_recap_context_demotes_older_full_round_when_full_block_exceeds_budget() -> None:
+  events = [
+      user("old ask"),
+      assistant("old answer"),
+      master_done(),
+      user("oversized middle ask"),
+      assistant("oversized middle answer " + "X" * 5000),
+      master_done(),
+      user("latest ask"),
+      assistant("latest answer"),
+  ]
+
+  context = build_recap_context(
+      FakeSessionManager(events),
+      "session",
+      full_rounds=3,
+      total_budget_bytes=1800,
+  )
+
+  assert len(context.encode("utf-8")) <= 1800
+  assert "### Round 3 (full)" in context
+  assert "latest ask" in context
+  assert "### Round 2 (condensed)" in context
+  assert "oversized middle ask" in context

@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split OpenCodeBackend.run into setup and SSE loop helpers
+  description: |-
+    PURPOSE: Keep OpenCodeBackend.run focused on orchestration instead of mixing server setup, session creation, SSE handling, and finalization.
+    HOW:
+    - Extract server startup and session initialization into a private helper.
+    - Extract the SSE turn loop into a private async generator that yields translated events and termination events.
+    - Preserve existing error logging and cleanup behavior, then verify pyflakes and the OpenCode backend tests.
+  category: long-function
+  status: pending
+  created: '2026-06-18T21:12:52Z'
+  priority: low

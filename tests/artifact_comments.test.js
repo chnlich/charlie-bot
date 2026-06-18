@@ -121,3 +121,42 @@ test('buildBatchMessage combines pending comments into one numbered message', ()
   assert.ok(message.includes('\u21B3 Looks risky'), 'first comment marker');
   assert.ok(message.includes('\u21B3 Add a step'), 'second comment marker');
 });
+
+test('buildBatchMessage preserves newline quote and comment content', () => {
+  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(artifactPath);
+  const buildBatchMessage = window.__cbcBuildBatchMessage;
+  const entries = [
+    {
+      quote: 'Checklist bullet\nRun fenced and gate hung.',
+      context: 'Risks',
+      comment: 'Comment on checklist row',
+    },
+    {
+      quote: 'Second quoted block text',
+      context: 'Plan',
+      comment: 'First line\nsecond line',
+    },
+  ];
+
+  const message = buildBatchMessage(entries);
+
+  assert.equal(
+    message,
+    [
+      '[Artifact comments \u00B7 ' + artifactPath + '] (2)',
+      '',
+      '1. \u25B8 Risks \u203A "Checklist bullet',
+      '   Run fenced and gate hung."',
+      '   \u21B3 Comment on checklist row',
+      '',
+      '2. \u25B8 Plan \u203A "Second quoted block text"',
+      '   \u21B3 First line',
+      '   second line',
+    ].join('\n')
+  );
+  assert.equal(
+    message.split('\n').filter((line) => line.trimStart().startsWith('\u21B3 ')).length,
+    entries.length
+  );
+});

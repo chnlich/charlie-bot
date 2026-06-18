@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Clean full-tree pyflakes warnings in tests
+  description: |-
+    PURPOSE: Keep full-tree pyflakes scans focused on real regressions.
+    HOW:
+    - Remove unused imports in test_backend_logging.py, test_message_attachments.py, test_spawner_exit_override.py, and test_trigger_pid_watch.py.
+    - Convert unused pidfd_open_available test parameters to an explicit pytest fixture marker.
+  category: dead-code
+  status: pending
+  created: '2026-06-18T05:13:15Z'
+  priority: low

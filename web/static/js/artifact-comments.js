@@ -17,12 +17,21 @@ if (!framed) {
     var trigger = null;
     var popover = null;
     var toast = null;
+    var pending = [];
+    var tray = null;
+    var trayHeader = null;
+    var trayList = null;
+    var traySendBtn = null;
+    var trayClearBtn = null;
+    var trayReason = null;
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
+    window.__cbcBuildBatchMessage = buildBatchMessage;
 
     installStyles();
     installListeners();
     installShortcuts();
+    installBatchTray();
 
     function extractSessionIdFromPath(pathname) {
       var normalized = String(pathname || '').replace(/%2F/gi, '/');
@@ -56,7 +65,23 @@ if (!framed) {
         '.' + GLOBAL_PREFIX + '-shortcut{border:1px solid #2ea043;border-radius:7px;padding:7px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35);cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-shortcut:hover:not(:disabled){background:#2ea043}' +
         '.' + GLOBAL_PREFIX + '-shortcut:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
-        '.' + GLOBAL_PREFIX + '-shortcut-reason{max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}';
+        '.' + GLOBAL_PREFIX + '-shortcut-reason{max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
+        '.' + GLOBAL_PREFIX + '-marked{outline:2px solid rgba(88,166,255,.45)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.08)!important}' +
+        '.' + GLOBAL_PREFIX + '-tray{position:fixed;right:14px;bottom:110px;z-index:2147483646;width:min(300px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
+        '.' + GLOBAL_PREFIX + '-tray-header{font-weight:600;font-size:12px;color:#8b949e}' +
+        '.' + GLOBAL_PREFIX + '-tray-list{max-height:200px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
+        '.' + GLOBAL_PREFIX + '-tray-item{position:relative;background:#0d1117;border:1px solid #2d3340;border-radius:6px;padding:7px 28px 7px 8px}' +
+        '.' + GLOBAL_PREFIX + '-tray-item-quote{color:#8b949e;font-size:11px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+        '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+        '.' + GLOBAL_PREFIX + '-tray-remove{position:absolute;top:4px;right:4px;width:18px;height:18px;border:none;border-radius:4px;background:transparent;color:#8b949e;font:14px/1 -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}' +
+        '.' + GLOBAL_PREFIX + '-tray-remove:hover{background:#21262d;color:#e6edf3}' +
+        '.' + GLOBAL_PREFIX + '-tray-reason{background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;font-size:11px;line-height:1.3}' +
+        '.' + GLOBAL_PREFIX + '-tray-actions{display:flex;justify-content:flex-end;gap:7px}' +
+        '.' + GLOBAL_PREFIX + '-tray-send{border:1px solid #2ea043;border-radius:6px;padding:5px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-tray-send:hover:not(:disabled){background:#2ea043}' +
+        '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
+        '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}';
       document.head.appendChild(style);
     }
 
@@ -108,7 +133,7 @@ if (!framed) {
 
     function isCommentUi(target) {
       return Boolean(target && target.closest && target.closest(
-        '.' + GLOBAL_PREFIX + '-trigger,.' + GLOBAL_PREFIX + '-popover,.' + GLOBAL_PREFIX + '-toast'
+        '.' + GLOBAL_PREFIX + '-trigger,.' + GLOBAL_PREFIX + '-popover,.' + GLOBAL_PREFIX + '-toast,.' + GLOBAL_PREFIX + '-tray'
       ));
     }
 
@@ -265,15 +290,26 @@ if (!framed) {
       }, 2200);
     }
 
-    function buildMessage(block, comment) {
-      var blockText = textFor(block, 400);
-      var context = contextFor(block);
+    function buildCommentEntry(quote, context, comment) {
       var quoteLine = context
-        ? '\u25B8 ' + context + ' \u203A "' + blockText + '"'
-        : '\u25B8 "' + blockText + '"';
-      return '[Artifact comment \u00B7 ' + artifactPath + ']\n' +
-        quoteLine + '\n' +
+        ? '\u25B8 ' + context + ' \u203A "' + quote + '"'
+        : '\u25B8 "' + quote + '"';
+      return quoteLine + '\n' +
         '\u21B3 ' + comment;
+    }
+
+    function buildBatchMessage(entries) {
+      var lines = [];
+      lines.push('[Artifact comments \u00B7 ' + artifactPath + '] (' + entries.length + ')');
+      lines.push('');
+      for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i];
+        var entryLines = buildCommentEntry(entry.quote, entry.context, entry.comment).split('\n');
+        lines.push((i + 1) + '. ' + entryLines[0]);
+        lines.push('   ' + entryLines[1]);
+        if (i < entries.length - 1) lines.push('');
+      }
+      return lines.join('\n');
     }
 
     function buildShortcutMessage(shortcut) {
@@ -354,7 +390,7 @@ if (!framed) {
         setPopoverError(node, 'Cannot parse session id from this artifact URL.');
       } else {
         addBtn.addEventListener('click', function() {
-          submitComment(node, addBtn, block, textarea);
+          submitComment(block, textarea);
         });
       }
 
@@ -395,28 +431,166 @@ if (!framed) {
       }
     }
 
-    async function submitComment(node, addBtn, block, textarea) {
+    function submitComment(block, textarea) {
       var comment = textarea.value.trim();
       if (!comment) {
         textarea.focus();
         return;
       }
-      addBtn.disabled = true;
-      addBtn.textContent = 'Sending';
-      try {
-        await postChatMessage(buildMessage(block, comment));
-        closePopover();
-        clearHover();
-        showToast('Comment sent to chat', false);
-      } catch (err) {
-        console.error('Artifact comment failed:', err);
-        setPopoverError(node, err.message);
-        showToast(err.message, true);
-      } finally {
-        if (popover === node) {
-          addBtn.disabled = false;
-          addBtn.textContent = 'Add';
+      pending.push({
+        el: block,
+        quote: textFor(block, 400),
+        context: contextFor(block),
+        comment: comment,
+      });
+      block.classList.add(GLOBAL_PREFIX + '-marked');
+      closePopover();
+      clearHover();
+      refreshTray();
+    }
+
+    function installBatchTray() {
+      var container = document.createElement('div');
+      container.className = GLOBAL_PREFIX + '-tray';
+
+      var header = document.createElement('div');
+      header.className = GLOBAL_PREFIX + '-tray-header';
+      header.textContent = 'Pending comments (0)';
+      container.appendChild(header);
+
+      var list = document.createElement('div');
+      list.className = GLOBAL_PREFIX + '-tray-list';
+      container.appendChild(list);
+
+      var reason = document.createElement('div');
+      reason.className = GLOBAL_PREFIX + '-tray-reason';
+      reason.textContent = 'Cannot parse session id from this artifact URL.';
+      container.appendChild(reason);
+
+      var actions = document.createElement('div');
+      actions.className = GLOBAL_PREFIX + '-tray-actions';
+      var clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.textContent = 'Clear';
+      clearBtn.className = GLOBAL_PREFIX + '-tray-clear';
+      clearBtn.addEventListener('click', clearAll);
+      var sendBtn = document.createElement('button');
+      sendBtn.type = 'button';
+      sendBtn.textContent = 'Send';
+      sendBtn.className = GLOBAL_PREFIX + '-tray-send';
+      sendBtn.addEventListener('click', sendBatch);
+      actions.appendChild(clearBtn);
+      actions.appendChild(sendBtn);
+      container.appendChild(actions);
+
+      document.body.appendChild(container);
+      tray = container;
+      trayHeader = header;
+      trayList = list;
+      traySendBtn = sendBtn;
+      trayClearBtn = clearBtn;
+      trayReason = reason;
+
+      refreshTray();
+    }
+
+    function buildTrayItem(idx, entry) {
+      var item = document.createElement('div');
+      item.className = GLOBAL_PREFIX + '-tray-item';
+
+      var quote = document.createElement('div');
+      quote.className = GLOBAL_PREFIX + '-tray-item-quote';
+      quote.textContent = '\u201C' + entry.quote + '\u201D';
+
+      var comment = document.createElement('div');
+      comment.className = GLOBAL_PREFIX + '-tray-item-comment';
+      comment.textContent = entry.comment;
+
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = GLOBAL_PREFIX + '-tray-remove';
+      remove.textContent = '\u00D7';
+      remove.title = 'Remove this comment';
+      remove.setAttribute('aria-label', 'Remove this comment');
+      remove.addEventListener('click', function() {
+        removeEntry(idx);
+      });
+
+      item.appendChild(remove);
+      item.appendChild(quote);
+      item.appendChild(comment);
+      return item;
+    }
+
+    function refreshTray() {
+      if (!tray) return;
+      trayHeader.textContent = 'Pending comments (' + pending.length + ')';
+      trayList.innerHTML = '';
+      for (var i = 0; i < pending.length; i++) {
+        trayList.appendChild(buildTrayItem(i, pending[i]));
+      }
+      traySendBtn.textContent = 'Send ' + pending.length;
+      tray.style.display = pending.length > 0 ? 'flex' : 'none';
+      if (!sessionId) {
+        traySendBtn.disabled = true;
+        trayReason.style.display = 'block';
+      } else {
+        traySendBtn.disabled = false;
+        trayReason.style.display = 'none';
+      }
+    }
+
+    function removeEntry(idx) {
+      if (idx < 0 || idx >= pending.length) return;
+      var removed = pending.splice(idx, 1)[0];
+      var stillMarked = false;
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].el === removed.el) { stillMarked = true; break; }
+      }
+      if (!stillMarked) removed.el.classList.remove(GLOBAL_PREFIX + '-marked');
+      refreshTray();
+    }
+
+    function clearAll() {
+      for (var i = 0; i < pending.length; i++) {
+        pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+      }
+      pending = [];
+      refreshTray();
+    }
+
+    async function sendBatch() {
+      if (!sessionId || pending.length === 0) return;
+      var count = pending.length;
+      var ordered = pending.slice();
+      ordered.sort(function(a, b) {
+        if (!a.el || !b.el || typeof a.el.compareDocumentPosition !== 'function' || typeof b.el.compareDocumentPosition !== 'function') return 0;
+        try {
+          var mask = a.el.compareDocumentPosition(b.el);
+          if (mask & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+          if (mask & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+          return 0;
+        } catch (e) {
+          return 0;
         }
+      });
+      var sendBtn = traySendBtn;
+      var prevLabel = sendBtn.textContent;
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending';
+      try {
+        await postChatMessage(buildBatchMessage(ordered));
+        for (var i = 0; i < pending.length; i++) {
+          pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+        }
+        pending = [];
+        refreshTray();
+        showToast(count + ' comments sent to chat', false);
+      } catch (err) {
+        console.error('Batch comment send failed:', err);
+        showToast(err.message, true);
+        sendBtn.disabled = false;
+        sendBtn.textContent = prevLabel;
       }
     }
 

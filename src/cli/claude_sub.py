@@ -1,8 +1,8 @@
 """Subscription-backed drop-in for `claude -p --output-format stream-json`.
 
-The command accepts the argv shape emitted by ClaudeCodeBackend, drives an
-interactive Claude TUI in tmux, and mirrors the TUI transcript JSONL back as
-Claude Code stream-json events.
+The command accepts the flags emitted by ClaudeCodeBackend, reads the prompt
+from stdin, drives an interactive Claude TUI in tmux, and mirrors the TUI
+transcript JSONL back as Claude Code stream-json events.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import signal
 import sys
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -71,7 +71,7 @@ _CLEAR_INPUT_TIMEOUT_SECONDS = 120.0
 @dataclass(frozen=True)
 class ClaudeSubArgs:
   output_format: str
-  prompt: str
+  prompt: str = ""
   model: Optional[str] = None
   effort: Optional[str] = None
   resume: Optional[str] = None
@@ -131,26 +131,10 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
   if "--" in argv:
     sep = argv.index("--")
     option_tokens = argv[:sep]
-    prompt_tokens = argv[sep + 1:]
+    if argv[sep + 1:]:
+      raise ValueError("claude-sub reads the prompt from stdin; positional prompt tokens are not supported")
   else:
-    option_tokens = []
-    prompt_tokens = []
-    i = 0
-    while i < len(argv):
-      token = argv[i]
-      if token.startswith("-"):
-        option_tokens.append(token)
-        if _flag_takes_value(token):
-          if "=" not in token:
-            if i + 1 >= len(argv):
-              raise ValueError(f"{token} requires a value")
-            option_tokens.append(argv[i + 1])
-            i += 2
-            continue
-        i += 1
-        continue
-      prompt_tokens = argv[i:]
-      break
+    option_tokens = argv
 
   output_format: Optional[str] = None
   model: Optional[str] = None
@@ -194,31 +178,13 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
 
   if output_format != "stream-json":
     raise ValueError("claude-sub only supports --output-format stream-json")
-  if not prompt_tokens:
-    raise ValueError("missing prompt")
-  prompt = prompt_tokens[0] if len(prompt_tokens) == 1 else " ".join(prompt_tokens)
   return ClaudeSubArgs(
       output_format=output_format,
-      prompt=prompt,
       model=model,
       effort=effort,
       resume=resume,
       disallowed_tools=disallowed_tools,
   )
-
-
-def _flag_takes_value(token: str) -> bool:
-  name = token.split("=", 1)[0]
-  return name in {
-      "--output-format",
-      "--model",
-      "--effort",
-      "--resume",
-      "-r",
-      "--disallowed-tools",
-      "--disallowedTools",
-      "--input-file",
-  }
 
 
 def _split_value_flag(token: str) -> Optional[tuple[str, str]]:
@@ -655,6 +621,7 @@ async def _run(args: ClaudeSubArgs) -> None:
 def main(argv: Optional[list[str]] = None) -> int:
   try:
     args = parse_argv(sys.argv[1:] if argv is None else argv)
+    args = replace(args, prompt=sys.stdin.read())
     asyncio.run(_run(args))
     return 0
   except Exception as e:

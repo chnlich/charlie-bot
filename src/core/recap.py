@@ -47,6 +47,7 @@ _SUMMARY_PROMPT = (
     "- one line for what was last being worked on")
 
 _CONDENSED_CHARS = 1000
+RECAP_CONTEXT_BUDGET_BYTES = 64 * 1024
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -106,6 +107,28 @@ def _format_tool_value(value) -> str:
 def _truncate_to_cap(text: str, limit: int) -> str:
   text = (text or "").strip()
   return text if len(text) <= limit else _truncate(text, limit - 1)
+
+
+def _utf8_len(text: str) -> int:
+  return len(text.encode("utf-8"))
+
+
+def _truncate_to_bytes(text: str, limit: int) -> str:
+  if limit <= 0:
+    return ""
+  encoded = text.encode("utf-8")
+  if len(encoded) <= limit:
+    return text
+  suffix = "…"
+  suffix_bytes = suffix.encode("utf-8")
+  if limit <= len(suffix_bytes):
+    return encoded[:limit].decode("utf-8", errors="ignore")
+  clipped = encoded[:limit - len(suffix_bytes)].decode("utf-8", errors="ignore").rstrip()
+  return clipped + suffix
+
+
+def _join_round_lines(lines: list[str]) -> str:
+  return "\n".join(lines)
 
 
 def _render_condensed_round(round_messages: list[dict], round_number: int) -> list[str]:
@@ -185,6 +208,7 @@ def build_recap_context(
     upto: int | None = None,
     full_rounds: int = 2,
     tool_output_cap: int = 4000,
+    total_budget_bytes: int = RECAP_CONTEXT_BUDGET_BYTES,
 ) -> str:
   """Build a deterministic two-tier recent-context transcript for bootstraps."""
   count = session_mgr.get_chat_event_count_sync(session_id)
@@ -197,23 +221,50 @@ def build_recap_context(
     return "No genuine user turns were found before the takeover point."
 
   full_start = max(len(rounds) - full_rounds, 0) if full_rounds > 0 else len(rounds)
-  condensed = rounds[:full_start]
-  full = rounds[full_start:]
-
-  lines = [
+  header = _join_round_lines([
       "# Reconstructed Recent Context",
       "",
-      f"Older turns are condensed; the last {len(full)} turn(s) are shown in full.",
-  ]
-  if condensed:
-    lines.extend(["", "## Older Turns (Condensed)"])
-    for idx, round_messages in enumerate(condensed, start=1):
-      lines.extend(["", *_render_condensed_round(round_messages, idx)])
-  if full:
-    lines.extend(["", "## Recent Turns (Full Fidelity)"])
-    for idx, round_messages in enumerate(full, start=len(condensed) + 1):
-      lines.extend(["", *_render_full_round(round_messages, idx, tool_output_cap)])
-  return "\n".join(lines)
+      "Newest turns are shown first. Recent turns are shown in full when they fit; older turns are condensed.",
+  ])
+  parts: list[str] = []
+  used_bytes = 0
+
+  def append_block(block: str, *, truncate: bool = False) -> bool:
+    nonlocal used_bytes
+    separator = "\n\n" if parts else ""
+    remaining = total_budget_bytes - used_bytes - _utf8_len(separator)
+    if remaining <= 0:
+      return False
+    block_bytes = _utf8_len(block)
+    if block_bytes > remaining:
+      if not truncate:
+        return False
+      block = _truncate_to_bytes(block, remaining)
+      if not block:
+        return False
+      block_bytes = _utf8_len(block)
+    parts.append(separator + block)
+    used_bytes += _utf8_len(separator) + block_bytes
+    return True
+
+  append_block(header, truncate=True)
+  for round_index in range(len(rounds) - 1, -1, -1):
+    round_number = round_index + 1
+    round_messages = rounds[round_index]
+    prefer_full = round_index >= full_start
+    if prefer_full:
+      full_block = _join_round_lines(_render_full_round(round_messages, round_number, tool_output_cap))
+      if append_block(full_block, truncate=round_index == len(rounds) - 1):
+        continue
+      condensed_block = _join_round_lines(_render_condensed_round(round_messages, round_number))
+      if not append_block(condensed_block):
+        break
+      continue
+
+    condensed_block = _join_round_lines(_render_condensed_round(round_messages, round_number))
+    if not append_block(condensed_block):
+      break
+  return "".join(parts)
 
 
 def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None = None) -> dict:

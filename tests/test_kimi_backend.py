@@ -24,7 +24,8 @@ def test_build_command_does_not_pass_model_flag() -> None:
   cmd = backend._build_command("hello")
 
   assert "--model" not in cmd
-  assert cmd[-2:] == ["--", "hello"]
+  assert "hello" not in cmd
+  assert backend._stdin_prompt("hello") == "hello"
 
 
 def test_prepare_env_values_are_subprocess_safe() -> None:

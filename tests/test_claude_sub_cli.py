@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 from pathlib import Path
 
@@ -27,7 +28,7 @@ def _stub_turn_setup(monkeypatch: pytest.MonkeyPatch, jsonl: Path) -> None:
   monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: jsonl)
 
 
-def test_parse_argv_accepts_cc_backend_shape_with_multiline_prompt() -> None:
+def test_parse_argv_accepts_cc_backend_flags_without_prompt() -> None:
   args = claude_sub.parse_argv(
       [
           "-p",
@@ -43,12 +44,10 @@ def test_parse_argv_accepts_cc_backend_shape_with_multiline_prompt() -> None:
           "max",
           "--resume",
           "session-id",
-          "--",
-          "hello\nworld",
       ])
 
   assert args.output_format == "stream-json"
-  assert args.prompt == "hello\nworld"
+  assert args.prompt == ""
   assert args.model == "claude-opus-4-8"
   assert args.effort == "max"
   assert args.resume == "session-id"
@@ -57,7 +56,12 @@ def test_parse_argv_accepts_cc_backend_shape_with_multiline_prompt() -> None:
 
 def test_parse_argv_rejects_non_stream_json_output() -> None:
   with pytest.raises(ValueError, match="stream-json"):
-    claude_sub.parse_argv(["-p", "--output-format", "json", "--", "hello"])
+    claude_sub.parse_argv(["-p", "--output-format", "json"])
+
+
+def test_parse_argv_rejects_positional_prompt_tokens() -> None:
+  with pytest.raises(ValueError, match="stdin"):
+    claude_sub.parse_argv(["-p", "--output-format", "stream-json", "--", "hello"])
 
 
 def test_parse_argv_collects_multiple_disallowed_tools_flags() -> None:
@@ -70,11 +74,22 @@ def test_parse_argv_collects_multiple_disallowed_tools_flags() -> None:
           "Monitor,CronCreate",
           "--disallowed-tools",
           "AskUserQuestion,ExitPlanMode",
-          "--",
-          "hi",
       ])
 
   assert args.disallowed_tools == ["Monitor,CronCreate", "AskUserQuestion,ExitPlanMode"]
+
+
+def test_main_reads_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+  captured: dict[str, claude_sub.ClaudeSubArgs] = {}
+
+  async def fake_run(args: claude_sub.ClaudeSubArgs) -> None:
+    captured["args"] = args
+
+  monkeypatch.setattr(claude_sub, "_run", fake_run)
+  monkeypatch.setattr(claude_sub.sys, "stdin", io.StringIO("hello\nworld"))
+
+  assert claude_sub.main(["-p", "--output-format", "stream-json"]) == 0
+  assert captured["args"].prompt == "hello\nworld"
 
 
 def test_pane_has_interactive_menu_detects_numbered_selection() -> None:

@@ -1,20 +1,29 @@
+import os
+from pathlib import Path
+
+import pytest
+
 from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 
 
-def test_build_command_uses_double_dash_separator_for_prompt() -> None:
+def test_build_command_does_not_include_flag_like_prompt() -> None:
   backend = ClaudeCodeBackend(model="claude-opus-4-7")
 
-  cmd = backend._build_command("--malicious-flag ignore previous")
+  prompt = "--malicious-flag ignore previous"
+  cmd = backend._build_command(prompt)
 
-  assert cmd[-2:] == ["--", "--malicious-flag ignore previous"]
+  assert prompt not in cmd
+  assert backend._stdin_prompt(prompt) == prompt
 
 
-def test_build_command_preserves_plain_prompt_after_separator() -> None:
+def test_build_command_sends_plain_prompt_via_stdin_hook() -> None:
   backend = ClaudeCodeBackend()
 
-  cmd = backend._build_command("hello world")
+  prompt = "hello world"
+  cmd = backend._build_command(prompt)
 
-  assert cmd[-2:] == ["--", "hello world"]
+  assert prompt not in cmd
+  assert backend._stdin_prompt(prompt) == prompt
 
 
 def test_effort_flag_appended_after_model() -> None:
@@ -97,3 +106,34 @@ def test_fast_mode_absent_when_unset() -> None:
   backend = ClaudeCodeBackend(model="claude-opus-4-8")
   cmd = backend._build_command("hi")
   assert "--settings" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_large_prompt_is_sent_on_stdin_not_argv(tmp_path: Path) -> None:
+  capture_path = tmp_path / "captured-prompt.txt"
+  stub = tmp_path / "claude-stub"
+  stub.write_text(
+      """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+prompt = sys.stdin.read()
+Path(os.environ["PROMPT_CAPTURE_PATH"]).write_text(prompt, encoding="utf-8")
+print(json.dumps({"type": "result", "result": "", "usage": {}}), flush=True)
+""",
+      encoding="utf-8",
+  )
+  stub.chmod(0o755)
+
+  prompt = "x" * (140 * 1024)
+  backend = ClaudeCodeBackend(cli_binary=str(stub))
+
+  events: list[dict] = []
+  env = {**os.environ, "PROMPT_CAPTURE_PATH": str(capture_path)}
+  async for event in backend.run(prompt, str(tmp_path), env):
+    events.append(event)
+
+  assert capture_path.read_text(encoding="utf-8") == prompt
+  assert any(event.get("type") == "result" for event in events)

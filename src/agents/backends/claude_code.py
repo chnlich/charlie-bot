@@ -59,4 +59,7 @@ class ClaudeCodeBackend(AgentBackend):
     log.debug("claude_code_wrote_claude_md", path=str(claude_md))
 
   def _build_command(self, prompt: str) -> list[str]:
-    return self._cmd + ["--", prompt]
+    return list(self._cmd)
+
+  def _stdin_prompt(self, prompt: str) -> str | None:
+    return prompt

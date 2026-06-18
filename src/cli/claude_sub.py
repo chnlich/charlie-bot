@@ -318,11 +318,7 @@ def _input_box_content(pane_text: str) -> Optional[str]:
 
 
 def _pane_has_prompt(pane_text: str) -> bool:
-  nonempty_lines = [line for line in pane_text.splitlines() if line.strip()]
-  for line in nonempty_lines[-6:]:
-    if line.lstrip().startswith("\u276f"):
-      return True
-  return False
+  return _input_box_content(pane_text) is not None
 
 
 def _first_nonempty_normalized_line(text: str) -> Optional[str]:
@@ -364,7 +360,7 @@ def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] =
 async def _wait_for_prompt(session_id: str) -> None:
   deadline = time.monotonic() + _PROMPT_READY_TIMEOUT_SECONDS
   while time.monotonic() < deadline:
-    if _pane_has_prompt(await _capture_pane(session_id)):
+    if _pane_has_prompt(await _capture_pane_escapes(session_id)):
       return
     await asyncio.sleep(_POLL_SECONDS)
   raise RuntimeError(f"interactive claude prompt did not become ready for session {session_id}")

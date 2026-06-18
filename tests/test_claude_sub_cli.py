@@ -183,6 +183,28 @@ def test_input_box_content_returns_none_without_prompt_line() -> None:
   assert claude_sub._input_box_content("✶ Running… (esc to interrupt)\n") is None
 
 
+def test_pane_has_prompt_detects_tall_composer_input_box() -> None:
+  pane = """─────────────────────────────────────────
+❯ [Artifact comments · /files/.../plan_comment_fix.html] (4)
+  1. ▸ 2 Fix — web/static/js/artifact-comments.js › "2
+     Fix —
+  2. ▸ 2 Fix — ... › "Use cleanText(block, 400) ..."
+     ↳ B
+  3. ▸ 2 Fix — ... › "buildBatchMessage numbers the first line ..."
+     ↳ C
+  4. ▸ In scope › "Robust multi-line handling in the message builder."
+     ↳ D
+─────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+"""
+
+  assert claude_sub._pane_has_prompt(pane)
+
+
+def test_pane_has_prompt_returns_false_without_input_box() -> None:
+  assert not claude_sub._pane_has_prompt("✶ Booting Claude…\n  Loading session\n")
+
+
 def _stub_send_prompt_tmux(monkeypatch: pytest.MonkeyPatch, captures) -> list[str]:
   """Stub tmux for _send_prompt tests: zero waits, scripted -e pane captures.
 

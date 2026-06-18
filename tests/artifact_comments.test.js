@@ -94,6 +94,30 @@ test('artifact comments script stays inert inside frames', () => {
   );
 
   assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
+  assert.equal(window.__cbcBuildBatchMessage, undefined);
   assert.equal(head.children.length, 0);
   assert.equal(listeners.length, 0);
+});
+
+test('buildBatchMessage combines pending comments into one numbered message', () => {
+  const {window} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+
+  const buildBatchMessage = window.__cbcBuildBatchMessage;
+  assert.equal(typeof buildBatchMessage, 'function');
+
+  const entries = [
+    {quote: 'First quoted block text', context: 'Risks', comment: 'Looks risky'},
+    {quote: 'Second quoted block text', context: 'Plan', comment: 'Add a step'},
+  ];
+
+  const message = buildBatchMessage(entries);
+
+  assert.ok(message.includes('[Artifact comments \u00B7 '), 'header prefix');
+  assert.ok(message.includes('] (2)'), 'header count');
+  assert.ok(message.includes('1. \u25B8 Risks \u203A "First quoted block text"'), 'first numbered entry');
+  assert.ok(message.includes('2. \u25B8 Plan \u203A "Second quoted block text"'), 'second numbered entry');
+  assert.ok(message.includes('\u21B3 Looks risky'), 'first comment marker');
+  assert.ok(message.includes('\u21B3 Add a step'), 'second comment marker');
 });

@@ -294,8 +294,7 @@ if (!framed) {
       var quoteLine = context
         ? '\u25B8 ' + context + ' \u203A "' + quote + '"'
         : '\u25B8 "' + quote + '"';
-      return quoteLine + '\n' +
-        '\u21B3 ' + comment;
+      return quoteLine.split('\n').concat(('\u21B3 ' + comment).split('\n'));
     }
 
     function buildBatchMessage(entries) {
@@ -304,9 +303,11 @@ if (!framed) {
       lines.push('');
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
-        var entryLines = buildCommentEntry(entry.quote, entry.context, entry.comment).split('\n');
+        var entryLines = buildCommentEntry(entry.quote, entry.context, entry.comment);
         lines.push((i + 1) + '. ' + entryLines[0]);
-        lines.push('   ' + entryLines[1]);
+        for (var j = 1; j < entryLines.length; j++) {
+          lines.push('   ' + entryLines[j]);
+        }
         if (i < entries.length - 1) lines.push('');
       }
       return lines.join('\n');
@@ -439,7 +440,7 @@ if (!framed) {
       }
       pending.push({
         el: block,
-        quote: textFor(block, 400),
+        quote: cleanText(block, 400),
         context: contextFor(block),
         comment: comment,
       });

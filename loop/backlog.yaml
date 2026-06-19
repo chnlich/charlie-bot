@@ -7328,3 +7328,16 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Drop unused dirpath binding in core/git.py
+  description: 'PURPOSE: Remove the unused `dirpath` binding in `core/git._contains_git_marker`
+    so unused-variable checks stay focused on actionable code.
+
+    HOW: Rename the unused tuple target to `_` in the `os.walk` loop. Verify `pylint
+    --disable=all --enable=unused-variable src/core/git.py` and `yapf --diff src/core/git.py`.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-19T03:13:15Z'
+  priority: low

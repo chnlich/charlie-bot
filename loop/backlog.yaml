@@ -7328,3 +7328,16 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split stale failed worktree quarantine sweep
+  description: 'PURPOSE: Keep startup recovery focused by separating stale-worktree
+    eligibility from quarantine execution.
+
+    HOW: Extract a helper that returns quarantine candidate data from thread metadata.
+    Keep git_quarantine_worktree execution and trash-size logging in _quarantine_stale_failed_worktrees.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-19T23:12:46Z'
+  priority: low

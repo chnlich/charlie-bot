@@ -7325,6 +7325,20 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Resolved by running `yapf --in-place --recursive src/` in this code-health run.
+- id: '186'
+  title: Split OpenCodeBackend.run turn handling
+  description: |-
+    PURPOSE: Keep OpenCodeBackend.run focused on process lifecycle while OpenCode turn handling lives in a named helper.
+
+    HOW:
+    - Extract the health-check, session setup, SSE loop, prompt send, and translated-event yield logic into a helper such as _run_opencode_turn().
+    - Leave subprocess spawn, log streaming, error logging, and cleanup in run().
+    - Verify `pyflakes src/agents/backends/opencode.py` and `yapf --in-place --recursive src/`.
+  category: long-function
+  status: pending
+  created: '2026-06-19T01:11:57Z'
   priority: low

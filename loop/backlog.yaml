@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Rename unused Config validator class parameter
+  description: |-
+    PURPOSE: Remove the unused classmethod parameter flagged by vulture in Config.migrate_and_expand.
+    HOW:
+    - Rename cls to _cls in src/core/config.py's migrate_and_expand validator, or convert the validator if Pydantic supports the same behavior without a classmethod receiver.
+    - Verify python -m vulture src/ --min-confidence 80 no longer reports this item and python -m pyflakes src/core/config.py remains clean.
+  category: dead-code
+  status: pending
+  created: '2026-06-19T19:12:12Z'
+  priority: low

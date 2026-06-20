@@ -133,6 +133,7 @@
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+    wireTerminalClipboard(term);
     term.focus();
 
     term.onData(sendInput);

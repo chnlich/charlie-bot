@@ -62,11 +62,7 @@ def _parse_watch_target(raw: str) -> dict:
 
 def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description="Schedule a delayed trigger for a CharlieBot session")
-  parser.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Session ID (optional; auto-derived from cwd)")
+  parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument(
       "--max-wait",
       required=True,

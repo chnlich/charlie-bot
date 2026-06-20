@@ -7325,6 +7325,22 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Resolved by the 2026-06-20 YAPF commit; `yapf --diff --recursive src/`
+    is clean.
+- id: '186'
+  title: Rename unused migrate_and_expand classmethod parameter
+  description: 'PURPOSE: Remove the unused classmethod parameter flagged by vulture
+    in CharlieBotConfig.migrate_and_expand.
+
+    HOW: Rename `cls` to `_cls` in `src/core/config.py:migrate_and_expand`, or convert
+    the validator to a staticmethod if Pydantic accepts it. Verify `uvx vulture src
+    --min-confidence 80` no longer reports this symbol and YAPF remains clean.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-20T17:12:49Z'
   priority: low

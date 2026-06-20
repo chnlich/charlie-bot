@@ -7325,6 +7325,19 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Fixed by running `yapf --in-place --recursive src/` in commit e571afe.
+- id: '186'
+  title: Extract stale worktree quarantine eligibility helper
+  description: |
+    PURPOSE: Keep stale failed-worktree quarantine readable by separating eligibility checks from the move loop.
+    HOW:
+    - Add a private helper that evaluates one failed-thread metadata dict and returns the quarantine inputs or None.
+    - Leave _quarantine_stale_failed_worktrees responsible for active-worktree setup, invoking git_quarantine_worktree, failure logging, and trash-size logging.
+    - Verify with yapf --in-place --recursive src/ and the code-health scans.
+  category: long-function
+  status: pending
+  created: '2026-06-20T09:12:32Z'
   priority: low

@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split recap context budget appending out of build_recap_context
+  description: 'PURPOSE — Make recap context assembly easier to maintain by separating byte-budget appending from round selection.
+
+    HOW — Add a small helper or builder in src/core/recap.py that owns parts, used_bytes,
+    separator handling, and truncation. Keep build_recap_context focused on loading events,
+    splitting rounds, and choosing full versus condensed rendering. Verify pyflakes
+    src/core/recap.py and yapf --in-place --recursive src/ stay clean.'
+  category: long-function
+  status: pending
+  created: '2026-06-20T13:11:43Z'
+  priority: low

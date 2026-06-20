@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Clean test lint noise and oversized tests
+  description: |
+    PURPOSE: Reduce test-suite maintenance noise from unused symbols and overlong test bodies.
+    HOW:
+    - Remove unused imports and fixture/local variables reported by ruff and vulture in tests.
+    - Split only the largest tests with clear scenario boundaries, starting with anthropic proxy and spawner propagation coverage.
+    - Leave source-side unused-symbol and long-function cleanup to the existing pending backlog items.
+  category: maintainability
+  status: pending
+  created: '2026-06-20T19:13:18Z'
+  priority: low

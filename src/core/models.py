@@ -126,11 +126,12 @@ class PendingTrigger(BaseModel):
 class BackendOption(BaseModel):
   id: str
   label: str
-  type: str  # 'cc-claude' | 'cc-kimi' | 'cc-deepseek-sglang' | 'codex' | 'gemini' | 'opencode' | 'antigravity' | 'tui-cli'
+  type: str  # 'cc-claude' | 'cc-kimi' | 'cc-deepseek-sglang' | 'codex' | 'charlie-code' | 'gemini' | 'opencode' | 'antigravity' | 'tui-cli'
   model: Optional[str] = None
   effort: Optional[str] = None
   cli_binary: Optional[str] = None
   codex_home: Optional[str] = None  # codex backend only: per-account $CODEX_HOME
+  api_base: Optional[str] = None  # charlie-code backend only: OpenAI-compatible base URL
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
 
 
@@ -140,6 +141,7 @@ MODEL_REQUIRED_BACKEND_TYPES = frozenset(
         "cc-kimi",
         "cc-deepseek-sglang",
         "codex",
+        "charlie-code",
         "gemini",
         "opencode",
     })

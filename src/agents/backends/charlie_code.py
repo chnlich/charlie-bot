@@ -1,0 +1,71 @@
+"""CharlieCodeBackend — AgentBackend wrapping the `charlie-code --json` CLI."""
+
+from pathlib import Path
+
+import structlog
+
+from src.agents.backends.base import (
+    AgentBackend, make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
+    resolve_binary)
+
+log = structlog.get_logger()
+
+
+class CharlieCodeBackend(AgentBackend):
+  """Runs a `charlie-code --json` subprocess and translates NDJSON events to CC-compatible format."""
+
+  def __init__(self, *, model: str, api_base: str | None = None, **kwargs):
+    super().__init__(model=model, **kwargs)
+    self._api_base = api_base
+    if not self._api_base:
+      raise ValueError("charlie-code backend requires api_base (set backend_options[].api_base in config.yaml)")
+    self._bin = resolve_binary("charlie-code", str(Path.home() / ".local" / "bin"))
+
+  def _prepare_env(self, env: dict) -> dict:
+    charlie_code_env = {**env}
+    local_bin = str(Path.home() / ".local" / "bin")
+    current_path = charlie_code_env.get("PATH", "")
+    if local_bin not in current_path.split(":"):
+      charlie_code_env["PATH"] = f"{local_bin}:{current_path}"
+    return charlie_code_env
+
+  def _build_command(self, prompt: str) -> list[str]:
+    cmd = [self._bin, "--json", "--model", self._model]
+    if self._api_base:
+      cmd += ["--api-base", self._api_base]
+    cmd += self._extra_flags
+    cmd += ["--", self._effective_prompt(prompt)]
+    return cmd
+
+  def translate_event(self, event: dict) -> list[dict]:
+    """Translate a single charlie-code NDJSON event into CC-compatible event(s)."""
+    event_type = event.get("type")
+
+    if event_type == "thought":
+      return [make_text_event(event["text"])]
+
+    if event_type == "command":
+      translated = make_tool_use_event("Bash", {"command": event["command"]})
+      translated["id"] = event["id"]
+      return [translated]
+
+    if event_type == "observation":
+      translated = make_tool_result_event("Bash", event.get("output", ""))
+      translated["tool_use_id"] = event["id"]
+      return [translated]
+
+    if event_type == "result":
+      usage = event.get("usage", {})
+      return [
+          make_result_event(
+              input_tokens=usage.get("input_tokens", 0),
+              output_tokens=usage.get("output_tokens", 0),
+              cost=None,
+          )
+      ]
+
+    if event_type == "error":
+      return [make_error_event(event.get("message", ""))]
+
+    log.debug("charlie_code_unknown_event", event_type=event_type)
+    return []

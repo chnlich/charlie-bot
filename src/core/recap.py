@@ -221,11 +221,12 @@ def build_recap_context(
     return "No genuine user turns were found before the takeover point."
 
   full_start = max(len(rounds) - full_rounds, 0) if full_rounds > 0 else len(rounds)
-  header = _join_round_lines([
-      "# Reconstructed Recent Context",
-      "",
-      "Newest turns are shown first. Recent turns are shown in full when they fit; older turns are condensed.",
-  ])
+  header = _join_round_lines(
+      [
+          "# Reconstructed Recent Context",
+          "",
+          "Newest turns are shown first. Recent turns are shown in full when they fit; older turns are condensed.",
+      ])
   parts: list[str] = []
   used_bytes = 0
 

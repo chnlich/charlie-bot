@@ -17,8 +17,9 @@ from src.api.deps import get_session_manager, get_thread_manager, set_trigger_ma
 from src.core import event_types as ET
 from src.core.config import get_config
 from src.core.http import close_http_client
-from src.core.init import init_charliebot_home
+from src.core.init import init_charliebot_home, run_crash_recovery
 from src.core.message_aggregator import MessageAggregator
+from src.core.models import utc_now
 from src.core.scheduler import Scheduler
 from src.core.streaming import streaming_manager
 from src.core.triggers import TriggerManager
@@ -86,14 +87,37 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> 
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
+async def _run_crash_recovery(cfg, boot_time) -> None:
+  """Background startup recovery; logs completion and never swallows failures.
+
+  Wraps init.run_crash_recovery so an exception surfaces loudly instead of
+  vanishing into the event loop, and reports the recovered count + elapsed time
+  once the deferred scan finishes.
+  """
+  started = utc_now()
+  try:
+    recovered = await run_crash_recovery(cfg, boot_time)
+    elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
+    log.info("crash_recovery_done", count=recovered, elapsed_ms=elapsed_ms)
+  except Exception:
+    log.exception("crash_recovery_failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Application lifespan: startup and shutdown tasks."""
   cfg = get_config()
+  boot_time = utc_now()
 
-  # Ensure home directory structure exists
+  # Ensure home directory structure exists (fast, mandatory part of startup).
   await init_charliebot_home()
   log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
+
+  # Crash recovery / worktree quarantine / stale-thinking cleanup scans every
+  # thread's metadata (O(history)). Run it off the critical path so the server
+  # reaches readiness immediately; boot_time guards against killing a worker
+  # spawned during the recovery window.
+  app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time))
 
   scheduler = Scheduler(cfg)
   app.state.scheduler = scheduler
@@ -107,6 +131,7 @@ async def lifespan(app: FastAPI):
 
   await ext_usage.start_poller()
 
+  log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
   yield
 
   await ext_usage.stop_poller()

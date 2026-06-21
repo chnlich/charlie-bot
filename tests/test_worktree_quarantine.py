@@ -368,7 +368,7 @@ async def test_sweep_never_raises_when_helper_fails(tmp_path: Path, monkeypatch:
 
 
 # ---------------------------------------------------------------------------
-# _recover_orphaned_threads integration (recovery + sweep in one walk)
+# _recover_orphaned_threads + run_crash_recovery (boot_time guard + sweep)
 # ---------------------------------------------------------------------------
 
 
@@ -383,7 +383,7 @@ def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pa
 
 
 @pytest.mark.asyncio
-async def test_recover_orphaned_threads_recovers_and_sweeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import json
 
   cfg = _cfg(tmp_path)
@@ -406,13 +406,79 @@ async def test_recover_orphaned_threads_recovers_and_sweeps(tmp_path: Path, monk
       _thread(
           thread_id="aged", status="failed", worktree_path=old_wt, branch_name="charliebot/task-aged", age_days=20.0))
 
-  await init_module._recover_orphaned_threads(cfg)
+  # boot_time in the future: the no-started_at running thread falls back to its
+  # (just-created) dir ctime, which predates boot_time, so it is recovered.
+  recovered = await init_module.run_crash_recovery(cfg, utc_now() + timedelta(hours=1))
 
+  assert recovered == 1
   # Running thread recovered to failed; its just-stamped completed_at keeps it out of the sweep.
-  recovered = json.loads(running_meta.read_text(encoding="utf-8"))
-  assert recovered["status"] == "failed"
-  assert recovered["exit_code"] == -1
+  meta = json.loads(running_meta.read_text(encoding="utf-8"))
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
   assert running_wt.exists()
   # The aged failed worktree was quarantined.
   assert quarantined == [str(old_wt)]
   assert not old_wt.exists()
+
+
+def test_recover_skips_post_boot_running_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A worker spawned during the recovery window (started_at > boot_time) is spared."""
+  import json
+
+  cfg = _cfg(tmp_path)
+  killed: list[int] = []
+  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+  boot_time = utc_now()
+  meta_path = _write_thread_meta(
+      cfg, "s1", {
+          "id": "post-boot",
+          "status": "running",
+          "pid": 4242,
+          "started_at": (boot_time + timedelta(seconds=30)).isoformat(),
+      })
+
+  recovered, _ = init_module._recover_orphaned_threads(cfg, boot_time)
+
+  assert recovered == 0
+  assert killed == []
+  assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "running"
+
+
+def test_recover_kills_pre_boot_running_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A thread started before boot is orphaned: its PID is killed and it is marked failed."""
+  import json
+
+  cfg = _cfg(tmp_path)
+  killed: list[int] = []
+  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+  boot_time = utc_now()
+  meta_path = _write_thread_meta(
+      cfg, "s1", {
+          "id": "pre-boot",
+          "status": "running",
+          "pid": 4242,
+          "started_at": (boot_time - timedelta(minutes=5)).isoformat(),
+      })
+
+  recovered, _ = init_module._recover_orphaned_threads(cfg, boot_time)
+
+  assert recovered == 1
+  assert killed == [4242]
+  meta = json.loads(meta_path.read_text(encoding="utf-8"))
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
+
+
+def test_recover_missing_started_at_falls_back_to_ctime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Without started_at, the thread dir ctime decides; an old dir (pre-boot) is recovered."""
+  import json
+
+  cfg = _cfg(tmp_path)
+  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: None)
+  # Thread dir created now; boot_time in the future => dir ctime < boot_time => recover.
+  meta_path = _write_thread_meta(cfg, "s1", {"id": "no-start", "status": "running", "pid": None})
+
+  recovered, _ = init_module._recover_orphaned_threads(cfg, utc_now() + timedelta(hours=1))
+
+  assert recovered == 1
+  assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "failed"

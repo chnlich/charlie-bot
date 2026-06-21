@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import os
 import signal
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
 import yaml
@@ -25,6 +27,58 @@ FAILED_WORKTREE_QUARANTINE_DAYS = 7
 
 # Thread statuses that mean the worker is done; anything else still owns its worktree.
 _TERMINAL_THREAD_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+# Only threads whose metadata.json was modified within this window are read+parsed
+# by the orphan-recovery scan and the live "has running task" badge. A running
+# thread's metadata.json is written when it starts and is NOT rewritten while it
+# runs, so a live thread is always recent; reading every thread's metadata cold to
+# find status=="running" is a full-history Lustre scan (~18s over ~1174 files on a
+# network FS) where a scandir+stat-then-read is ~15x cheaper. This is semantically
+# correct, not a heuristic: a metadata that is old yet still says "running" is a
+# crashed orphan, not a live task. 30 days is generous on both ends — it covers any
+# realistic server downtime before recovery runs and any realistic long-running task
+# for the badge — and it fully covers the 7-day FAILED_WORKTREE_QUARANTINE_DAYS band
+# the recovery sweep consumes (a failed thread's metadata mtime == its completed_at
+# write time), so no quarantine-eligible thread is ever skipped.
+RUNNING_SCAN_WINDOW = timedelta(days=30)
+
+
+def iter_recent_thread_metas(
+    threads_dir: Path,
+    now: datetime,
+    log_event: str,
+    window: timedelta = RUNNING_SCAN_WINDOW,
+) -> Iterator[tuple[Path, Path, dict]]:
+  """Yield ``(thread_dir, meta_path, meta)`` for threads modified within *window*.
+
+  Cheap-first: ``os.scandir`` the threads dir and ``stat`` each ``metadata.json``,
+  only ``load_json_meta`` (read + parse) the ones whose mtime is at least
+  ``now - window``. Threads whose metadata is older than the window are skipped
+  with zero content reads, as are dirs with missing/unreadable metadata. Shared by
+  ``_recover_orphaned_threads`` (init) and ``_has_running_tasks`` (sessions) so the
+  stat-before-read scan stays identical at both sites.
+  """
+  if not threads_dir.is_dir():
+    return
+  cutoff = (now - window).timestamp()
+  with os.scandir(threads_dir) as entries:
+    for entry in entries:
+      if not entry.is_dir():
+        continue
+      meta_path = Path(entry.path) / "metadata.json"
+      try:
+        mtime = meta_path.stat().st_mtime
+      except FileNotFoundError:
+        continue  # thread dir without metadata.json (mid-creation) — nothing to read
+      except OSError as e:
+        log.debug(log_event, path=str(meta_path), error=str(e))
+        continue
+      if mtime < cutoff:
+        continue
+      meta = load_json_meta(meta_path, log_event)
+      if meta is None:
+        continue
+      yield Path(entry.path), meta_path, meta
 
 
 def _default_config_yaml() -> dict:
@@ -120,7 +174,7 @@ async def run_crash_recovery(cfg, boot_time: datetime) -> int:
 
 
 def _recover_orphaned_threads(cfg, boot_time: datetime) -> tuple[int, list[dict]]:
-  """Mark pre-boot 'running' threads as 'failed' and collect all thread metadata.
+  """Mark pre-boot 'running' threads as 'failed' and collect in-window thread metadata.
 
   On server startup, no thread should be running — they are always spawned by
   the spawner. A 'running' thread whose start predates *boot_time* is orphaned
@@ -128,23 +182,28 @@ def _recover_orphaned_threads(cfg, boot_time: datetime) -> tuple[int, list[dict]
   lingering worker process and mark it failed. The boot_time guard spares a
   worker spawned during the recovery window (its started_at is always post-boot).
 
+  Only threads whose ``metadata.json`` mtime falls within ``RUNNING_SCAN_WINDOW``
+  are read+parsed (via ``iter_recent_thread_metas``); older thread dirs are skipped
+  entirely — neither read nor appended to the returned list. This is sound because a
+  live thread's metadata is always recent, and the 30-day read window fully covers
+  the 7-day quarantine band consumed by ``_quarantine_stale_failed_worktrees`` (a
+  failed thread's metadata mtime equals its ``completed_at`` write time). A worktree
+  from a thread completed more than the window ago and still on disk is only possible
+  if the server never restarted for > window days — accepted and negligible; no extra
+  machinery handles it.
+
   Crash-orphaned worktrees are kept (not deleted) so their in-progress state is
-  available for debugging. Returns the recovered count plus every thread's
-  metadata dict, which feeds the quarantine sweep.
+  available for debugging. Returns the recovered count plus the in-window thread
+  metadata dicts, which feed the quarantine sweep.
   """
   if not cfg.sessions_dir.exists():
     return 0, []
   recovered = 0
   threads: list[dict] = []
+  now = utc_now()
   for session_dir in cfg.sessions_dir.iterdir():
     threads_dir = session_dir / "threads"
-    if not threads_dir.is_dir():
-      continue
-    for thread_dir in threads_dir.iterdir():
-      meta_path = thread_dir / "metadata.json"
-      meta = load_json_meta(meta_path, "thread_meta_unreadable")
-      if meta is None:
-        continue
+    for thread_dir, meta_path, meta in iter_recent_thread_metas(threads_dir, now, "thread_meta_unreadable"):
       if meta.get("status") == "running" and _started_before_boot(meta, thread_dir, boot_time):
         # Kill orphaned worker process if still alive, then mark failed.
         pid = meta.get("pid")
@@ -195,6 +254,11 @@ async def _quarantine_stale_failed_worktrees(cfg, threads: list[dict]) -> None:
     - the worktree path still exists (idempotent across restarts);
     - no non-terminal (idle/running) thread still references the same worktree_path.
   Results are deduped by worktree_path so a shared worker+reviewer tree moves once.
+
+  *threads* holds only metadata within ``RUNNING_SCAN_WINDOW`` (30 days), which by
+  construction covers the full 7-day ``FAILED_WORKTREE_QUARANTINE_DAYS`` band: a
+  failed thread's metadata mtime equals its ``completed_at``, so every quarantine
+  candidate (completed_at 7–30 days ago) is in the list the recovery scan produced.
   """
   worktree_parent = Path(cfg.worktree_dir)
   trash_path = trash_dir(cfg.worktree_dir)
@@ -251,7 +315,9 @@ async def _quarantine_stale_failed_worktrees(cfg, threads: list[dict]) -> None:
       continue
 
   if trash_path.exists():
-    total = dir_size_bytes(trash_path)
+    # dir_size_bytes walks ~18.5k trash entries; run it off the event loop so the
+    # synchronous os.walk does not block live request serving during recovery.
+    total = await asyncio.to_thread(dir_size_bytes, trash_path)
     log.info("worktree_trash_size", path=str(trash_path), bytes=total, human=format_size(total))
 
 

@@ -15,6 +15,7 @@ import structlog
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.init import iter_recent_thread_metas
 from src.core.json_utils import load_json_meta
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import (
@@ -1134,16 +1135,20 @@ class SessionManager:
     return meta
 
   async def _has_running_tasks(self, session_id: str) -> bool:
-    """Check if a session has any threads with status 'running'."""
+    """Check if a session has any thread currently marked 'running'.
 
-    def _check():
+    A running thread's metadata.json is recent by definition (written at start,
+    never rewritten while it runs), so only threads whose metadata mtime is within
+    RUNNING_SCAN_WINDOW are read+parsed; older thread dirs are dropped after a cheap
+    scandir+stat with zero content reads, and a session whose only threads are old
+    returns False without reading any metadata. Runs its filesystem work in a thread
+    to keep the event loop responsive (called per-session by the sidebar/status polls).
+    """
+
+    def _check() -> bool:
       threads_dir = self._session_dir(session_id) / "threads"
-      if not threads_dir.exists():
-        return False
-      for thread_dir in threads_dir.iterdir():
-        meta = load_json_meta(thread_dir / "metadata.json", "thread_meta_read_failed")
-        if meta is None:
-          continue
+      now = utc_now()
+      for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, now, "thread_meta_read_failed"):
         if meta.get("status") == "running":
           return True
       return False

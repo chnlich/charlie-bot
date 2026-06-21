@@ -482,3 +482,107 @@ def test_recover_missing_started_at_falls_back_to_ctime(tmp_path: Path, monkeypa
 
   assert recovered == 1
   assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# RUNNING_SCAN_WINDOW: stat-before-read gating
+# ---------------------------------------------------------------------------
+
+
+def _spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+  """Record every path init.iter_recent_thread_metas actually reads+parses."""
+  read_paths: list[Path] = []
+  real_load = init_module.load_json_meta
+
+  def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
+    read_paths.append(Path(path))
+    return real_load(path, log_event, **kwargs)
+
+  monkeypatch.setattr(init_module, "load_json_meta", spy)
+  return read_paths
+
+
+def _age_metadata_mtime(meta_path: Path, days: float) -> None:
+  """Backdate a metadata.json's mtime by *days*, mimicking when it was last written."""
+  import os
+
+  ts = (utc_now() - timedelta(days=days)).timestamp()
+  os.utime(meta_path, (ts, ts))
+
+
+def test_recover_skips_out_of_window_running_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A 'running' thread whose metadata mtime is outside the window is skipped unread.
+
+  Recovery must read only recently-modified thread metadata. A thread that still
+  says 'running' but whose metadata.json has not been touched for longer than
+  RUNNING_SCAN_WINDOW is a crashed orphan whose dir was abandoned; it is neither
+  read nor recovered, while a recent pre-boot orphan beside it still is.
+  """
+  import json
+
+  cfg = _cfg(tmp_path)
+  killed: list[int] = []
+  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+  read_paths = _spy_on_load_json_meta(monkeypatch)
+
+  boot_time = utc_now()
+  recent_path = _write_thread_meta(
+      cfg, "s1", {
+          "id": "recent-running",
+          "status": "running",
+          "pid": 4242,
+          "started_at": (boot_time - timedelta(minutes=5)).isoformat(),
+      })
+  stale_path = _write_thread_meta(
+      cfg, "s1", {
+          "id": "stale-running",
+          "status": "running",
+          "pid": 9999,
+          "started_at": (boot_time - timedelta(days=200)).isoformat(),
+      })
+  _age_metadata_mtime(stale_path, init_module.RUNNING_SCAN_WINDOW.days + 5)
+
+  recovered, threads = init_module._recover_orphaned_threads(cfg, boot_time)
+
+  # Only the recent orphan is read, signaled, recovered, and returned.
+  assert recovered == 1
+  assert killed == [4242]
+  assert recent_path in read_paths
+  assert stale_path not in read_paths
+  assert [m["id"] for m in threads] == ["recent-running"]
+  assert json.loads(recent_path.read_text(encoding="utf-8"))["status"] == "failed"
+  assert json.loads(stale_path.read_text(encoding="utf-8"))["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_recover_window_covers_quarantine_band_and_skips_older(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The 30-day read window covers the 7-day quarantine band; older threads drop out.
+
+  Drives the full crash-recovery path with three failed threads whose metadata mtime
+  equals their completed_at (the realistic case):
+    - 20 days: in window -> read -> in the 7-30d band -> quarantined;
+    - 3 days:  in window -> read -> too recent (<7d) -> kept;
+    - 40 days: outside window -> never read -> worktree kept (accepted negligible
+      edge, only reachable if the server stayed up longer than the window).
+  """
+  cfg = _cfg(tmp_path)
+  parent = Path(cfg.worktree_dir)
+  band_wt = _make_worktree(parent, "charliebot-task-band")
+  recent_wt = _make_worktree(parent, "charliebot-task-recent")
+  ancient_wt = _make_worktree(parent, "charliebot-task-ancient")
+  quarantined = _install_recording_quarantine(monkeypatch)
+
+  for tid, wt, age in (("band", band_wt, 20.0), ("recent", recent_wt, 3.0), ("ancient", ancient_wt, 40.0)):
+    meta_path = _write_thread_meta(
+        cfg, "s1",
+        _thread(
+            thread_id=tid, status="failed", worktree_path=wt, branch_name=f"charliebot/task-{tid}", age_days=age))
+    _age_metadata_mtime(meta_path, age)
+
+  await init_module.run_crash_recovery(cfg, utc_now())
+
+  assert quarantined == [str(band_wt)]
+  assert not band_wt.exists()
+  assert recent_wt.exists()
+  assert ancient_wt.exists()

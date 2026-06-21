@@ -1,8 +1,9 @@
 """Initialize ~/.charliebot/ directory structure on first run."""
 
+import asyncio
 import json
 import signal
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import yaml
 from pathlib import Path
@@ -91,12 +92,6 @@ async def init_charliebot_home() -> None:
     with open(cfg.config_file, "w") as f:
       yaml.dump(_default_config_yaml(), f, default_flow_style=False, sort_keys=False)
 
-  # Recover orphaned threads from previous server crash/restart and sweep stale
-  # failed worktrees into the quarantine trash.
-  await _recover_orphaned_threads(cfg)
-  # Clear stale thinking_since from sessions left over from a crash
-  _clear_stale_thinking(cfg)
-
 
 def _seed_if_missing(path: Path, content: str) -> None:
   """Write content to path only if the file does not already exist."""
@@ -104,20 +99,41 @@ def _seed_if_missing(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-async def _recover_orphaned_threads(cfg) -> None:
-  """Mark threads stuck in 'running' as 'failed', then quarantine stale failed worktrees.
+async def run_crash_recovery(cfg, boot_time: datetime) -> int:
+  """Recover orphaned threads, quarantine stale worktrees, and clear stale thinking.
 
-  On server startup, no thread should be running — they are always spawned
-  by the spawner. Any 'running' thread is orphaned from a previous server
-  lifecycle (crash, reload, or restart). Kill any lingering worker processes.
+  This is the deferrable part of startup: the server lifespan launches it as a
+  background task so readiness is not delayed by the O(history) per-thread
+  metadata scan. The two synchronous scans run via ``asyncio.to_thread`` so they
+  never block the event loop while live requests are served; the async git
+  quarantine calls are awaited normally.
+
+  *boot_time* is captured at lifespan start. Only threads started before it are
+  treated as orphaned, so a worker spawned during the recovery window is spared.
+
+  Returns the number of orphaned threads recovered.
+  """
+  recovered, threads = await asyncio.to_thread(_recover_orphaned_threads, cfg, boot_time)
+  await _quarantine_stale_failed_worktrees(cfg, threads)
+  await asyncio.to_thread(_clear_stale_thinking, cfg)
+  return recovered
+
+
+def _recover_orphaned_threads(cfg, boot_time: datetime) -> tuple[int, list[dict]]:
+  """Mark pre-boot 'running' threads as 'failed' and collect all thread metadata.
+
+  On server startup, no thread should be running — they are always spawned by
+  the spawner. A 'running' thread whose start predates *boot_time* is orphaned
+  from a previous server lifecycle (crash, reload, or restart); kill any
+  lingering worker process and mark it failed. The boot_time guard spares a
+  worker spawned during the recovery window (its started_at is always post-boot).
 
   Crash-orphaned worktrees are kept (not deleted) so their in-progress state is
-  available for debugging. The same walk feeds a quarantine sweep that, once a
-  failed thread's worktree has aged past FAILED_WORKTREE_QUARANTINE_DAYS, moves it
-  into <worktree_dir>/.trash/ to bound disk growth without hard-deleting anything.
+  available for debugging. Returns the recovered count plus every thread's
+  metadata dict, which feeds the quarantine sweep.
   """
   if not cfg.sessions_dir.exists():
-    return
+    return 0, []
   recovered = 0
   threads: list[dict] = []
   for session_dir in cfg.sessions_dir.iterdir():
@@ -129,7 +145,7 @@ async def _recover_orphaned_threads(cfg) -> None:
       meta = load_json_meta(meta_path, "thread_meta_unreadable")
       if meta is None:
         continue
-      if meta.get("status") == "running":
+      if meta.get("status") == "running" and _started_before_boot(meta, thread_dir, boot_time):
         # Kill orphaned worker process if still alive, then mark failed.
         pid = meta.get("pid")
         if pid:
@@ -144,8 +160,28 @@ async def _recover_orphaned_threads(cfg) -> None:
 
   if recovered:
     log.info("orphaned_thread_recovery_done", count=recovered)
+  return recovered, threads
 
-  await _quarantine_stale_failed_worktrees(cfg, threads)
+
+def _started_before_boot(meta: dict, thread_dir: Path, boot_time: datetime) -> bool:
+  """Return True if a running thread was started before this server boot.
+
+  A genuine post-boot worker always carries a fresh started_at, so anything
+  earlier than *boot_time* is orphaned. When started_at is missing or
+  unparseable, fall back to the thread directory's ctime; if even that is
+  unavailable, treat the thread as pre-boot and recover it (errs safe).
+  """
+  started_at = meta.get("started_at")
+  if started_at:
+    try:
+      return parse_utc_datetime(started_at) < boot_time
+    except (ValueError, TypeError):
+      log.warning("recover_unparseable_started_at", thread=meta.get("id"), started_at=started_at)
+  try:
+    ctime = datetime.fromtimestamp(thread_dir.stat().st_ctime, tz=timezone.utc)
+  except OSError:
+    return True
+  return ctime < boot_time
 
 
 async def _quarantine_stale_failed_worktrees(cfg, threads: list[dict]) -> None:

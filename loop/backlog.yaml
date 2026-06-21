@@ -7328,3 +7328,13 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split stale failed-worktree quarantine candidate selection
+  description: |
+    PURPOSE: Separate stale failed-worktree candidate selection from quarantine execution.
+    HOW: Extract a helper that validates failed-thread metadata, handles completed_at parsing, skips active worktrees, and yields deduped quarantine candidates.
+    Keep _quarantine_stale_failed_worktrees focused on calling git_quarantine_worktree and logging trash size; verify yapf and pyflakes for src/core/init.py.
+  category: long-function
+  status: pending
+  created: '2026-06-21T13:13:29Z'
+  priority: low

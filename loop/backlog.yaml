@@ -7328,3 +7328,17 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Extract OpenCode turn streaming from OpenCodeBackend.run
+  description: 'PURPOSE: Make OpenCodeBackend.run easier to read by separating server
+    setup from SSE turn execution.
+
+    HOW: Add a private helper that checks health, creates or resumes the session,
+    sends the prompt, yields translated SSE events, and returns after session.idle.
+    Keep process startup, log streaming, error handling, and cleanup in run.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-21T19:12:29Z'
+  priority: low

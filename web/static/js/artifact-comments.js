@@ -9,7 +9,7 @@ if (!framed) {
     var AUTH_MESSAGE = 'log in to comment';
     var BLOCK_SELECTOR = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,dd';
     var SECTION_SELECTOR = 'section';
-    var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this plan?'}];
+    var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this?'}];
     var sessionId = extractSessionIdFromPath(window.location.pathname);
     var artifactPath = artifactPathFromPath(window.location.pathname);
     var hovered = null;
@@ -314,7 +314,7 @@ if (!framed) {
     }
 
     function buildShortcutMessage(shortcut) {
-      return '[Plan \u00B7 ' + artifactPath + ']\n' + shortcut.prompt;
+      return '[Artifact \u00B7 ' + artifactPath + ']\n' + shortcut.prompt;
     }
 
     function installShortcuts() {

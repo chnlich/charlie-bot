@@ -3,6 +3,7 @@
 import asyncio
 import html
 import mimetypes
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -13,6 +14,21 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 log = structlog.get_logger()
 router = APIRouter()
+
+# Standalone artifact pages live at sessions/<id>/artifacts/<name>.html. Matching the
+# resolved path (not a plan_ prefix) means every artifact HTML gets the review UI.
+_ARTIFACT_PATH_RE = re.compile(r"/sessions/[^/]+/artifacts/")
+_ARTIFACT_SCRIPT_TAG = "<script src=/static/js/artifact-comments.js></script>"
+
+
+def _inject_artifact_ui(html_text: str) -> str:
+  """Insert the artifact-comments script before the last </body> (idempotent)."""
+  if "artifact-comments.js" in html_text:
+    return html_text
+  idx = html_text.rfind("</body>")
+  if idx == -1:
+    return html_text + "\n" + _ARTIFACT_SCRIPT_TAG + "\n"
+  return html_text[:idx] + _ARTIFACT_SCRIPT_TAG + "\n" + html_text[idx:]
 
 
 def _human_size(size: int) -> str:
@@ -98,6 +114,12 @@ async def serve_file(path: str):
     url_prefix = f"/files/{path}" if path else "/files"
     listing = await asyncio.to_thread(_dir_listing_html, fs_path, url_prefix)
     return HTMLResponse(listing)
+
+  # Standalone artifact HTML gets the review UI injected here — the single chokepoint
+  # that serves every artifact page — regardless of how the artifact was authored.
+  if fs_path.suffix.lower() == ".html" and _ARTIFACT_PATH_RE.search(fs_path.as_posix()):
+    html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
+    return HTMLResponse(_inject_artifact_ui(html_text), media_type="text/html")
 
   # Serve the file with auto-detected MIME type
   media_type, _ = mimetypes.guess_type(str(fs_path))

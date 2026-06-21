@@ -7325,6 +7325,19 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Resolved by the 2026-06-21 scheduled YAPF pass; `yapf --diff --recursive
+    src/` now reports no diff.
+- id: '186'
+  title: Drop unused dirpath binding in git.py
+  description: |-
+    PURPOSE: Remove a dead local binding from the worktree cleanup path.
+    HOW:
+    - In `src/core/git.py:_contains_git_marker`, replace the unused `dirpath` loop target with `_`.
+    - Verify with `pylint --disable=all --enable=unused-variable src/core/git.py`.
+  category: dead-code
+  status: pending
+  created: '2026-06-21T17:12:44Z'
   priority: low

@@ -7325,6 +7325,18 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Fixed by the 2026-06-21 YAPF formatting commit; `yapf --diff --recursive src/` is clean.
+- id: '186'
+  title: Split claude-sub turn streaming into smaller helpers
+  description: |-
+    PURPOSE: Keep claude-sub turn streaming below the long-function threshold by separating transcript draining from stall probing.
+    HOW:
+    - Extract record draining into `_drain_transcript_records(...)` that updates `TurnState`, emits converted events, and returns when a turn-duration result is seen.
+    - Extract interactive-menu stall probing into `_probe_interactive_menu(...)` so `_stream_turn` keeps setup, loop timing, and cleanup.
+  category: long-function
+  status: pending
+  created: '2026-06-21T07:12:37Z'
   priority: low

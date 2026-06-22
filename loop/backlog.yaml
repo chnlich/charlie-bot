@@ -7328,3 +7328,24 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude-sub turn streaming loop
+  description: 'PURPOSE: Split src/cli/claude_sub.py:_stream_turn so transcript processing
+    and stall probing are not mixed in one long async loop.
+
+    HOW:
+
+    - Extract transcript record handling into a small helper that updates TurnState
+    and emits converted events.
+
+    - Extract stall/menu/hard-cap checks into a helper that owns the probe counters
+    and raises the same errors.
+
+    - Keep emitted events and RuntimeError messages unchanged, then run yapf and pyflakes
+    for the touched file.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-22T15:12:08Z'
+  priority: low

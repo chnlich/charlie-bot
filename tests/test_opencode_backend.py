@@ -151,35 +151,14 @@ def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) 
   assert backend._pending_parts == {}
 
 
-def test_prepare_cwd_writes_project_opencode_json(monkeypatch, tmp_path: Path) -> None:
+def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  backend._prepare_cwd(str(tmp_path))
+  env = backend._prepare_env({"PATH": "/usr/bin"})
 
-  project_config = tmp_path / ".opencode" / "opencode.json"
-  assert project_config.exists()
-
-  data = json.loads(project_config.read_text(encoding="utf-8"))
-  permission = data["agent"]["build"]["permission"]
-  for tool in ("external_directory", "read", "edit", "bash", "glob", "grep", "list", "write", "skill"):
-    assert permission[tool] == {"*": "allow"}
-  assert permission["task"] == {"*": "deny"}
-
-
-def test_prepare_cwd_migrates_legacy_config_json(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-  legacy_dir = tmp_path / ".opencode"
-  legacy_dir.mkdir()
-  legacy_config = legacy_dir / "config.json"
-  legacy_payload = {"agent": {"build": {"permission": {"glob": {"*": "allow"}}}}}
-  legacy_config.write_text(json.dumps(legacy_payload), encoding="utf-8")
-
-  backend._prepare_cwd(str(tmp_path))
-
-  project_config = legacy_dir / "opencode.json"
-  assert project_config.exists()
-  assert json.loads(project_config.read_text(encoding="utf-8")) == legacy_payload
-  assert json.loads(legacy_config.read_text(encoding="utf-8")) == legacy_payload
+  data = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+  assert data["default_agent"] == "charliebot"
+  assert data["agent"]["charliebot"]["permission"] == {"*": "allow"}
 
 
 def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:

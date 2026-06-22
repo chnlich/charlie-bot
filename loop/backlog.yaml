@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split stale worktree quarantine into candidate and execution phases
+  description: |-
+    PURPOSE: Make stale failed-worktree quarantine easier to reason about.
+    HOW:
+    - Extract a candidate-selection helper from core/init.py:_quarantine_stale_failed_worktrees for metadata filtering, active-worktree checks, date parsing, and swept de-duplication.
+    - Keep _quarantine_stale_failed_worktrees focused on invoking git_quarantine_worktree and reporting trash size, preserving existing logging and behavior.
+  category: long-function
+  status: pending
+  created: '2026-06-22T13:13:08Z'
+  priority: low

@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Log swallowed TUI WebSocket handler exceptions
+  description: |-
+    PURPOSE: Make TUI WebSocket error handling surface every swallowed exception.
+    HOW:
+    - Replace best-effort `websocket.send_json` swallow blocks with debug logs that include `session_id`.
+    - Log ping-send, JSON decode, and resize-parse failures before breaking or continuing.
+    - Keep normal `asyncio.CancelledError` cancellation handling unchanged.
+  category: error-handling
+  status: pending
+  created: '2026-06-22T23:12:23Z'
+  priority: medium

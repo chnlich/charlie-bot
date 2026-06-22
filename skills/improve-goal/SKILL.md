@@ -15,12 +15,13 @@ When writing the `--goal-file` content for an improve loop:
 1. **Start with skills to read** — first line should be `Read skills: improve-worker, <domain-skill>, <infra-skill>, ...`. List all relevant skills explicitly. Always include `improve-worker`. Workers won't know which skills exist unless told.
 2. **Order goals by importance** — list goals from most important to least important, numbered (1), (2), (3)... Workers may not reach later goals if earlier ones consume all iterations.
 3. **State goals, not methods** — say "close the performance gap" not "try fusing kernel X with Y". Workers decide their own approach.
-4. **Include reference numbers** — current performance, target, gap size. Workers need context to judge whether their changes matter.
+4. **Include reference numbers** — target and rough gap size, so workers can judge whether a change matters. Don't paste a precise measured baseline: the A/B protocol re-measures it every iteration, so a hard-coded number just goes stale.
 5. **"Zero progress is acceptable"** — always include this. Prevents workers from shipping bad changes just to report something.
 6. **Point at existing working scripts** — if a benchmark/training script
    already exists and works, say "base your work on `<path>`, do not write
    from scratch". Otherwise workers reinvent the wrapper and re-hit known
    pitfalls.
+7. **Keep it lean** — don't re-list prior attempts; the loop already feeds each iteration's work report back, so past tries are visible there. Cut anything the worker re-derives. A shorter goal re-reads better every iteration.
 
 ## Master Discipline During Loop Execution
 

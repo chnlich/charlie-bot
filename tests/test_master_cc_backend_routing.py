@@ -51,6 +51,13 @@ def test_build_master_env_removes_session_env_and_prepends_repo_venv(
   assert "CLAUDECODE" not in env
 
 
+def test_route_resume_session_uses_native_resume_id_for_charlie_code() -> None:
+  assert master_cc._route_resume_session("charlie-code", "existing-session-id") == (
+      [],
+      "existing-session-id",
+  )
+
+
 @pytest.mark.asyncio
 async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
     tmp_path: Path,

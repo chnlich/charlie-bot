@@ -52,50 +52,12 @@ class OpenCodeBackend(AgentBackend):
     self._failed = False
 
   def _prepare_cwd(self, cwd: str) -> None:
-    """Write permissive project config so tool calls aren't auto-denied in non-interactive mode."""
+    """Write AGENTS.md instruction file when provided."""
     if self._instructions_content:
       agents_md = os.path.join(cwd, 'AGENTS.md')
       with open(agents_md, 'w', encoding='utf-8') as f:
         f.write(self._instructions_content)
       log.debug('opencode_wrote_agents_md', path=agents_md)
-
-    config_dir = os.path.join(cwd, ".opencode")
-    config_path = os.path.join(config_dir, "opencode.json")
-    legacy_config_path = os.path.join(config_dir, "config.json")
-    if os.path.exists(config_path):
-      return
-    os.makedirs(config_dir, exist_ok=True)
-    if os.path.exists(legacy_config_path):
-      with open(legacy_config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-      config_source = "legacy_config_json"
-    else:
-      allow_all = {"*": "allow"}
-      config = {
-          "agent":
-              {
-                  "build":
-                      {
-                          "permission":
-                              {
-                                  "external_directory": allow_all,
-                                  "read": allow_all,
-                                  "edit": allow_all,
-                                  "bash": allow_all,
-                                  "glob": allow_all,
-                                  "grep": allow_all,
-                                  "list": allow_all,
-                                  "write": allow_all,
-                                  "skill": allow_all,
-                                  "task": {"*": "deny"},
-                              }
-                      }
-              }
-      }
-      config_source = "generated"
-    with open(config_path, "w") as f:
-      json.dump(config, f, indent=2)
-    log.debug("opencode_config_written", path=config_path, source=config_source)
 
   def _build_command(self, prompt: str) -> list[str]:
     del prompt
@@ -109,6 +71,15 @@ class OpenCodeBackend(AgentBackend):
     current_path = oc_env.get("PATH", "")
     if opencode_bin_dir not in current_path.split(":"):
       oc_env["PATH"] = f"{opencode_bin_dir}:{current_path}"
+    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps({
+        "default_agent": "charliebot",
+        "agent": {
+            "charliebot": {
+                "mode": "primary",
+                "permission": {"*": "allow"},
+            }
+        },
+    })
     return oc_env
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:

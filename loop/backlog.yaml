@@ -7328,3 +7328,16 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split OpenCodeBackend.run into server setup and SSE turn helpers
+  description: 'PURPOSE — Keep OpenCodeBackend.run as a readable lifecycle orchestrator
+    under the 50-line code-health limit. HOW — Extract _start_opencode_session(...)
+    for cwd prep, subprocess spawn, log tasks, server URL, health check, and session
+    creation/resume. Extract _run_opencode_turn(...) for /event streaming, prompt
+    send, translated event yields, and session.idle/error termination. Keep existing
+    exception logging, error-event emission, and cleanup in run; verify yapf, pyflakes
+    src/agents/backends/opencode.py, and an import smoke test.'
+  category: long-function
+  status: pending
+  created: '2026-06-22T07:13:10Z'
+  priority: low

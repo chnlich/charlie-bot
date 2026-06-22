@@ -88,7 +88,7 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
   )
 
   assert "Treat them as advisory evidence and hints only." in prompt
-  assert "may inform your judgment, but they must not dictate your plan for this iteration." in prompt
+  assert "must not dictate your plan for this iteration" not in prompt
   assert "### What Changed" in prompt
   assert "### Evidence" in prompt
   assert "### Advisory Notes" in prompt

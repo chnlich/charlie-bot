@@ -64,6 +64,49 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
   assert payload["backend"] == "codex-o3"
   assert payload["iterations"] == 2
   assert payload["goal"] == "optimize"
+  assert "plan" not in payload
+
+
+def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+  """main() reads optional --plan-file and includes it in the improve payload."""
+  cfg = _mock_config(tmp_path)
+  cfg.sessions_dir = tmp_path / "fake_sessions"
+  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.chdir(tmp_path)
+
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("optimize")
+  plan_file = tmp_path / "plan.md"
+  plan_file.write_text("1. largest lever")
+
+  resp_mock = MagicMock()
+  resp_mock.json.return_value = {"status": "started", "session_id": "s1", "iterations": 2}
+  resp_mock.raise_for_status = MagicMock()
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--session",
+          "s1",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--iterations",
+          "2",
+          "--goal-file",
+          str(goal_file),
+          "--plan-file",
+          str(plan_file),
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["goal"] == "optimize"
+  assert payload["plan"] == "1. largest lever"
 
 
 def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -256,6 +299,71 @@ def test_main_rejects_empty_goal_file(
   assert "empty" in err
 
 
+def test_main_rejects_missing_plan_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """A nonexistent --plan-file exits non-zero before any request is made."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
+  missing = tmp_path / "nope-plan.md"
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--goal-file",
+          str(goal_file),
+          "--plan-file",
+          str(missing),
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "plan-file" in err and "not found" in err
+
+
+def test_main_rejects_empty_plan_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """A whitespace-only --plan-file exits non-zero before any request is made."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
+  empty = tmp_path / "empty-plan.md"
+  empty.write_text("   \n")
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--goal-file",
+          str(goal_file),
+          "--plan-file",
+          str(empty),
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "plan-file" in err and "empty" in err
+
+
 # ---------------------------------------------------------------------------
 # Tests for the /api/internal/improve endpoint
 # ---------------------------------------------------------------------------
@@ -275,7 +383,7 @@ def test_improve_request_rejects_branch_prefix():
 
 
 @pytest.mark.asyncio
-async def test_improve_endpoint_creates_background_task():
+async def test_improve_endpoint_creates_background_task(tmp_path: Path):
   """POST /api/internal/improve returns immediately and creates a background task."""
   from src.api.internal import start_improve_loop
   from src.core.models import ImproveRequest
@@ -287,6 +395,7 @@ async def test_improve_endpoint_creates_background_task():
       backend="codex-o3",
       iterations=3,
       goal="optimize",
+      plan="1. largest lever",
   )
 
   session_mgr = AsyncMock()
@@ -314,6 +423,9 @@ async def test_improve_endpoint_creates_background_task():
     coro.close()
     return object()
 
+  cfg = MagicMock()
+  cfg.sessions_dir = tmp_path / "sessions"
+
   with patch("src.api.internal.get_config") as mock_cfg, \
        patch("src.api.internal._check_takeoff_gate", return_value=None), \
        patch(
@@ -321,17 +433,20 @@ async def test_improve_endpoint_creates_background_task():
            side_effect=fake_resolve_requested_subagent_backend_model), \
        patch(
            "src.api.internal.reserve_loop_state",
-           return_value=MagicMock(loop_id=11)), \
+           return_value=MagicMock(loop_id=11)) as mock_reserve, \
        patch("src.api.internal.create_logged_task", side_effect=fake_create_logged_task) as mock_create_task:
-    mock_cfg.return_value = MagicMock()
+    mock_cfg.return_value = cfg
     result = await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert result["status"] == "started"
   assert result["session_id"] == "s1"
   assert result["iterations"] == 3
+  assert result["plan_path"] == str(tmp_path / "sessions" / "s1" / "loops" / "11" / "plan.md")
   assert captured["resolved_backend"] == "codex-o3"
   assert captured["resolved_model"] == "o3"
   assert captured["loop_id"] == 11
+  assert captured["plan"] == "1. largest lever"
+  assert mock_reserve.call_args.kwargs["plan"] == "1. largest lever"
   mock_create_task.assert_called_once()
 
 

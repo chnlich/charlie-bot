@@ -306,6 +306,7 @@ class ImproveRequest(BaseModel):
   backend: Optional[str] = None
   iterations: int = 3
   goal: str
+  plan: Optional[str] = None
   work_branch: Optional[str] = None
   merge_back: bool = False
 

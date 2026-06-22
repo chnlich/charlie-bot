@@ -112,6 +112,14 @@ def test_translate_thought_and_unknown(monkeypatch) -> None:
   assert backend.translate_event({"type": "future-event"}) == []
 
 
+def test_translate_session_event(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  assert backend.translate_event({"type": "session", "session_id": "session-X"}) == [{
+      "session_id": "session-X"
+  }]
+
+
 def test_build_command_uses_json_model_api_base_separator_and_effective_prompt(monkeypatch) -> None:
   backend = _build_backend(
       monkeypatch,
@@ -137,6 +145,47 @@ def test_build_command_uses_json_model_api_base_separator_and_effective_prompt(m
       "--",
       expected_prompt,
   ]
+  assert "--resume" not in cmd
+
+
+def test_build_command_includes_resume_before_task_separator(monkeypatch) -> None:
+  backend = _build_backend(
+      monkeypatch,
+      model="charlie-code-test-model",
+      api_base="http://test.local/v1",
+      resume_session_id="session-123",
+  )
+
+  cmd = backend._build_command("continue")
+
+  assert cmd == [
+      "/usr/bin/charlie-code",
+      "--json",
+      "--model",
+      "charlie-code-test-model",
+      "--api-base",
+      "http://test.local/v1",
+      "--resume",
+      "session-123",
+      "--",
+      "continue",
+  ]
+
+
+def test_effective_prompt_wraps_instructions_only_for_fresh_sessions(monkeypatch) -> None:
+  fresh_backend = _build_backend(monkeypatch, instructions_content="Use concise answers.")
+  resume_backend = _build_backend(
+      monkeypatch,
+      instructions_content="Use concise answers.",
+      resume_session_id="session-123",
+  )
+
+  assert fresh_backend._effective_prompt("Hello") == (
+      "<system-instructions>\n"
+      "Use concise answers.\n"
+      "</system-instructions>\n\n"
+      "Hello")
+  assert resume_backend._effective_prompt("Hello") == "Hello"
 
 
 def test_api_base_required(monkeypatch) -> None:

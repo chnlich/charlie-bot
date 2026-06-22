@@ -33,13 +33,23 @@ class CharlieCodeBackend(AgentBackend):
     cmd = [self._bin, "--json", "--model", self._model]
     if self._api_base:
       cmd += ["--api-base", self._api_base]
+    if self._resume_session_id:
+      cmd += ["--resume", self._resume_session_id]
     cmd += self._extra_flags
     cmd += ["--", self._effective_prompt(prompt)]
     return cmd
 
+  def _effective_prompt(self, prompt: str) -> str:
+    if self._resume_session_id:
+      return prompt
+    return super()._effective_prompt(prompt)
+
   def translate_event(self, event: dict) -> list[dict]:
     """Translate a single charlie-code NDJSON event into CC-compatible event(s)."""
     event_type = event.get("type")
+
+    if event_type == "session":
+      return [{"session_id": event["session_id"]}]
 
     if event_type == "thought":
       return [make_text_event(event["text"])]

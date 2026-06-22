@@ -16,8 +16,10 @@ from src.core.improve_command import (
     is_quota_failure,
     load_loop_state,
     loop_goal_path,
+    loop_plan_path,
     next_loop_id,
     read_loop_goal,
+    read_loop_plan,
     reserve_loop_state,
     save_loop_state,
     stop_improve_loop,
@@ -684,12 +686,39 @@ async def test_reserve_loop_state_writes_goal_file(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reserve_loop_state_writes_optional_plan_file(tmp_path: Path) -> None:
+  """plan.md is written only when the caller provides plan content."""
+  cfg = _make_cfg(tmp_path)
+  state = await reserve_loop_state(
+      "plan-session",
+      "make it faster",
+      3,
+      "improve/test",
+      "/tmp/repo",
+      cfg,
+      plan="1. measure bottleneck",
+  )
+
+  plan_path = loop_plan_path("plan-session", state.loop_id, cfg)
+  assert plan_path == cfg.sessions_dir / "plan-session" / "loops" / str(state.loop_id) / "plan.md"
+  assert plan_path.read_text() == "1. measure bottleneck"
+
+
+@pytest.mark.asyncio
 async def test_read_loop_goal_raises_when_missing(tmp_path: Path) -> None:
   """A missing goal.md is a hard failure — no fallback to a snapshot."""
   loop_dir = tmp_path / "loops" / "1"
   loop_dir.mkdir(parents=True)
   with pytest.raises(RuntimeError, match="goal file missing"):
     await read_loop_goal(loop_dir)
+
+
+@pytest.mark.asyncio
+async def test_read_loop_plan_returns_none_when_missing(tmp_path: Path) -> None:
+  """A missing plan.md means the loop is using thin-goal behavior."""
+  loop_dir = tmp_path / "loops" / "1"
+  loop_dir.mkdir(parents=True)
+  assert await read_loop_plan(loop_dir) is None
 
 
 @pytest.mark.asyncio
@@ -750,6 +779,198 @@ async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeyp
   assert state is not None
   assert state.goal == "original goal"
   assert state.iterations_completed == 2
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_injects_previous_summaries_in_next_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Iteration N>1 sees summaries collected from earlier iterations."""
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {
+          "thread-1": [{
+              "type": "result",
+              "result": "iter1 measured auth bottleneck"
+          }],
+          "thread-2": [{
+              "type": "result",
+              "result": "iter2 done"
+          }],
+      },
+      {
+          "thread-1": ThreadStatus.COMPLETED,
+          "thread-2": ThreadStatus.COMPLETED
+      },
+  )
+  _patch_improve_loop_io(monkeypatch)
+
+  descriptions: list[str] = []
+
+  async def capturing_spawn_worker(*args, **kwargs) -> None:
+    del kwargs
+    descriptions.append(args[1])
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
+
+  await improve_command.run_improve_loop(
+      session_id="summary-session",
+      repo_path="/tmp/repo",
+      iterations=2,
+      goal="original goal",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(descriptions) == 2
+  assert "Previous iteration summaries:" not in descriptions[0]
+  assert "Previous iteration summaries:\niter1 measured auth bottleneck" in descriptions[1]
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_injects_plan_when_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Workers see plan.md content when the loop was launched with a plan."""
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {"thread-1": [{
+          "type": "result",
+          "result": "iter1 done"
+      }]},
+      {"thread-1": ThreadStatus.COMPLETED},
+  )
+  _patch_improve_loop_io(monkeypatch)
+
+  descriptions: list[str] = []
+
+  async def capturing_spawn_worker(*args, **kwargs) -> None:
+    del kwargs
+    descriptions.append(args[1])
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
+
+  await improve_command.run_improve_loop(
+      session_id="plan-injection-session",
+      repo_path="/tmp/repo",
+      iterations=1,
+      goal="original goal",
+      plan="1. fix largest measured bottleneck",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(descriptions) == 1
+  assert "Plan:\n1. fix largest measured bottleneck" in descriptions[0]
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_works_without_plan_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Omitting plan.md preserves the original thin-goal loop behavior."""
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {"thread-1": [{
+          "type": "result",
+          "result": "iter1 done"
+      }]},
+      {"thread-1": ThreadStatus.COMPLETED},
+  )
+  _patch_improve_loop_io(monkeypatch)
+
+  descriptions: list[str] = []
+
+  async def capturing_spawn_worker(*args, **kwargs) -> None:
+    del kwargs
+    descriptions.append(args[1])
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
+
+  await improve_command.run_improve_loop(
+      session_id="no-plan-session",
+      repo_path="/tmp/repo",
+      iterations=1,
+      goal="original goal",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(descriptions) == 1
+  assert "Goal: original goal" in descriptions[0]
+  assert "Plan:" not in descriptions[0]
+  assert await read_loop_plan(cfg.sessions_dir / "no-plan-session" / "loops" / "1") is None
+
+
+@pytest.mark.asyncio
+async def test_run_improve_loop_rereads_edited_plan_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Editing plan.md mid-loop steers iteration N>1's worker prompt."""
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {
+          "thread-1": [{
+              "type": "result",
+              "result": "iter1 done"
+          }],
+          "thread-2": [{
+              "type": "result",
+              "result": "iter2 done"
+          }],
+      },
+      {
+          "thread-1": ThreadStatus.COMPLETED,
+          "thread-2": ThreadStatus.COMPLETED
+      },
+  )
+  _patch_improve_loop_io(monkeypatch)
+
+  descriptions: list[str] = []
+
+  async def capturing_spawn_worker(*args, **kwargs) -> None:
+    descriptions.append(args[1])
+    request = kwargs["request"]
+    assert isinstance(request, SpawnRequest)
+    if request.iteration_number == 1:
+      (Path(request.loop_dir) / "plan.md").write_text("2. edited lever")
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
+
+  await improve_command.run_improve_loop(
+      session_id="edit-plan-session",
+      repo_path="/tmp/repo",
+      iterations=2,
+      goal="original goal",
+      plan="1. initial lever",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(descriptions) == 2
+  assert "Plan:\n1. initial lever" in descriptions[0]
+  assert "Plan:\n2. edited lever" in descriptions[1]
 
 
 @pytest.mark.asyncio

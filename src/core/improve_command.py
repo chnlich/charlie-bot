@@ -119,9 +119,18 @@ def _goal_file_path(loop_dir: Path) -> Path:
   return loop_dir / "goal.md"
 
 
+def _plan_file_path(loop_dir: Path) -> Path:
+  return loop_dir / "plan.md"
+
+
 def loop_goal_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Path:
   """Path to the live goal file for a loop (the editable per-iteration goal)."""
   return _goal_file_path(_loops_dir(session_id, cfg) / str(loop_id))
+
+
+def loop_plan_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Path:
+  """Path to the optional live plan file for a loop."""
+  return _plan_file_path(_loops_dir(session_id, cfg) / str(loop_id))
 
 
 async def read_loop_goal(loop_dir: Path) -> str:
@@ -135,6 +144,14 @@ async def read_loop_goal(loop_dir: Path) -> str:
   if not await asyncio.to_thread(goal_path.exists):
     raise RuntimeError(f"improve loop goal file missing: {goal_path}")
   return await asyncio.to_thread(goal_path.read_text)
+
+
+async def read_loop_plan(loop_dir: Path) -> Optional[str]:
+  """Read the optional live plan for a loop, returning None when absent."""
+  plan_path = _plan_file_path(loop_dir)
+  if not await asyncio.to_thread(plan_path.exists):
+    return None
+  return await asyncio.to_thread(plan_path.read_text)
 
 
 def _next_loop_id_sync(loops_dir: Path) -> int:
@@ -287,6 +304,7 @@ async def reserve_loop_state(
     repo_path: str,
     cfg: CharlieBotConfig,
     *,
+    plan: Optional[str] = None,
     base_branch: Optional[str] = None,
     merge_back: bool = False,
     resolved_backend: str = "",
@@ -308,6 +326,8 @@ async def reserve_loop_state(
     # Write the live goal exactly once at reservation. Iterations re-read this
     # file; state.json's goal stays as the startup snapshot for display/summary.
     await asyncio.to_thread(_goal_file_path(loop_dir).write_text, goal)
+    if plan is not None:
+      await asyncio.to_thread(_plan_file_path(loop_dir).write_text, plan)
     state = ImproveState(
         loop_id=loop_id,
         goal=goal,
@@ -429,9 +449,14 @@ async def _run_single_iteration(
   # A missing goal.md fails the loop loudly (read_loop_goal raises) — there is no
   # fallback to the state.json startup snapshot.
   goal = await read_loop_goal(loop_dir)
+  plan = await read_loop_plan(loop_dir)
 
   # Build iteration description
   desc_parts = [f"Iterative improvement — iteration {i}/{iterations}", f"Goal: {goal}"]
+  if plan is not None:
+    desc_parts.append(f"Plan:\n{plan}")
+  if previous_summaries:
+    desc_parts.append("Previous iteration summaries:\n" + "\n\n".join(previous_summaries))
   description = "\n".join(desc_parts)
 
   # Get session metadata
@@ -577,6 +602,7 @@ async def run_improve_loop(
     resolved_backend: str = "",
     resolved_model: str = "",
     loop_id: Optional[int] = None,
+    plan: Optional[str] = None,
 ) -> None:
   """Run the iterative improvement loop as a server-side async task.
 
@@ -596,6 +622,7 @@ async def run_improve_loop(
         work_branch,
         str(resolved_repo),
         cfg,
+        plan=plan,
         base_branch=base_branch,
         merge_back=merge_back,
         resolved_backend=resolved_backend,

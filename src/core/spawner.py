@@ -120,7 +120,6 @@ def _build_worker_prompt(
         f"\n\n## Iteration Reports\n"
         f"Previous iteration reports are in: {loop_dir}/\n"
         f"Review any existing iter_*.md files there before starting work. Treat them as advisory evidence and hints only.\n"
-        f"Previous iteration reports may inform your judgment, but they must not dictate your plan for this iteration.\n\n"
         f"When you finish, write your report to: {loop_dir}/iter_{iteration_number:04d}.md\n"
         f"Use this format:\n"
         f"```\n"

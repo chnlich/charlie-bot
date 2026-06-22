@@ -27,6 +27,16 @@ When writing the `--goal-file` content for an improve loop:
 
 Once the loop is running, do not repeatedly propose stop when iterations look unproductive. The user authorized the iteration count at take-off and will say "stop" if they want to stop. If a failure pattern emerges, diagnose it once and continue reporting iter-by-iter without re-proposing stop.
 
+## Planner / Executor Separation
+
+For large "elephant" improvements, split planning from execution:
+
+- **Planner**: Optional pre-loop delegation orchestrated by the master. Use a separate `script-run` task to profile the repo, identify prioritized levers by impact/headroom, and write acceptance criteria for each lever. The deliverable is `plan.md`, passed to the loop with `--plan-file`. The planner may use a different backend/model through `delegate --backend <id>`.
+- **Executor**: Improve loop iterations read `goal.md`, optional `plan.md`, and previous iteration summaries. Each worker decides how to implement the current highest-priority incomplete lever, not what to tackle. Ordering comes from `plan.md`.
+- **Elephants first**: Order levers by impact/headroom, not ease. Multi-iteration levers are expected and normal.
+- **Plan is optional**: Small tasks can skip the planner and omit `--plan-file`, preserving the original thin-goal behavior.
+- **Re-steering**: Both `goal.md` and `plan.md` are re-read each iteration. The user can edit either mid-loop to steer subsequent workers.
+
 ## What Makes a Good Goal Prompt
 
 1. **Context** — gives current state and target so workers understand where they stand

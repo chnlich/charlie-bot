@@ -85,9 +85,13 @@ class CodexProvider:
     usage, spend = await asyncio.gather(
         asyncio.to_thread(self._fetch_sync),
         asyncio.to_thread(_compute_codex_spend_windows, sessions_dir=self.SESSIONS_DIR),
+        return_exceptions=True,
     )
-    if usage is None:
+    if isinstance(usage, Exception) or usage is None:
       return None
+    if isinstance(spend, Exception):
+      log.error("ext_usage_codex_spend_failed", error=str(spend))
+      spend = None
     usage["spend"] = spend
     return usage
 
@@ -174,7 +178,9 @@ def _extract_latest_codex_usage(
   return None
 
 
-def _parse_codex_timestamp(timestamp: str) -> datetime:
+def _parse_codex_timestamp(timestamp: Any) -> datetime:
+  if not isinstance(timestamp, str):
+    raise ValueError(f"expected string timestamp, got {type(timestamp).__name__}")
   parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
   if parsed.tzinfo is None:
     raise ValueError(f"Codex timestamp is missing timezone: {timestamp}")
@@ -235,55 +241,62 @@ def _compute_codex_spend_windows(
     return {"last_24h_usd": 0.0, "last_7d_usd": 0.0}
 
   for path in root.glob("**/rollout-*.jsonl"):
-    if path.stat().st_mtime < min_mtime:
+    try:
+      if path.stat().st_mtime < min_mtime:
+        continue
+    except OSError as e:
+      log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
       continue
 
     current_model = ""
-    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
-      line = line.strip()
-      if not line:
-        continue
-      try:
-        event = json.loads(line)
-        if not isinstance(event, dict):
-          raise ValueError(f"expected JSON object, got {type(event).__name__}")
-        event_type = event.get("type")
-        payload = event.get("payload") or {}
-        if not isinstance(payload, dict):
-          raise ValueError(f"payload must be an object, got {type(payload).__name__}")
-        if event_type == "turn_context":
-          model = payload.get("model")
-          if isinstance(model, str):
-            current_model = model
+    try:
+      for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        line = line.strip()
+        if not line:
           continue
-        if event_type != "event_msg" or payload.get("type") != "token_count":
-          continue
+        try:
+          event = json.loads(line)
+          if not isinstance(event, dict):
+            raise ValueError(f"expected JSON object, got {type(event).__name__}")
+          event_type = event.get("type")
+          payload = event.get("payload") or {}
+          if not isinstance(payload, dict):
+            raise ValueError(f"payload must be an object, got {type(payload).__name__}")
+          if event_type == "turn_context":
+            model = payload.get("model")
+            if isinstance(model, str):
+              current_model = model
+            continue
+          if event_type != "event_msg" or payload.get("type") != "token_count":
+            continue
 
-        info = payload.get("info") or {}
-        if not isinstance(info, dict):
-          raise ValueError(f"info must be an object, got {type(info).__name__}")
-        last_usage = info.get("last_token_usage")
-        if not last_usage:
-          continue
-        if not isinstance(last_usage, dict):
-          raise ValueError(f"last_token_usage must be an object, got {type(last_usage).__name__}")
-        token_usage = {
-            "input_tokens": last_usage["input_tokens"],
-            "cached_input_tokens": last_usage["cached_input_tokens"],
-            "output_tokens": last_usage["output_tokens"],
-        }
-        for key, value in token_usage.items():
-          if not isinstance(value, int):
-            raise ValueError(f"{key} must be an int, got {type(value).__name__}")
+          info = payload.get("info") or {}
+          if not isinstance(info, dict):
+            raise ValueError(f"info must be an object, got {type(info).__name__}")
+          last_usage = info.get("last_token_usage")
+          if not last_usage:
+            continue
+          if not isinstance(last_usage, dict):
+            raise ValueError(f"last_token_usage must be an object, got {type(last_usage).__name__}")
+          token_usage = {
+              "input_tokens": last_usage["input_tokens"],
+              "cached_input_tokens": last_usage["cached_input_tokens"],
+              "output_tokens": last_usage["output_tokens"],
+          }
+          for key, value in token_usage.items():
+            if not isinstance(value, int):
+              raise ValueError(f"{key} must be an int, got {type(value).__name__}")
 
-        observed_at = _parse_codex_timestamp(event["timestamp"])
-        if observed_at < seven_days_ago or observed_at > effective_now:
-          continue
-        _add_token_usage(last_7d_by_model, current_model, token_usage)
-        if observed_at >= one_day_ago:
-          _add_token_usage(last_24h_by_model, current_model, token_usage)
-      except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-        _log_codex_spend_row_skip(path, line_number, e)
+          observed_at = _parse_codex_timestamp(event["timestamp"])
+          if observed_at < seven_days_ago or observed_at > effective_now:
+            continue
+          _add_token_usage(last_7d_by_model, current_model, token_usage)
+          if observed_at >= one_day_ago:
+            _add_token_usage(last_24h_by_model, current_model, token_usage)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+          _log_codex_spend_row_skip(path, line_number, e)
+    except OSError as e:
+      log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
 
   return {
       "last_24h_usd": _sum_codex_spend(last_24h_by_model),

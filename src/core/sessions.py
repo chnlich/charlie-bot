@@ -311,50 +311,9 @@ class SessionManager:
       parent_id: str,
       event_index: int | None = None,
       backend: str | None = None,
-  ) -> Optional[SessionMetadata]:
-    """Create a new session by cloning an existing one.
-
-    If event_index is set, only events [0..event_index] (inclusive) are copied.
-    Otherwise all events are copied (full clone).
-    """
-    parent = await self.get_session(parent_id)
-    if not parent:
-      return None
-
-    parent_events_path = self._chat_events_path(parent_id)
-    if not parent_events_path.exists():
-      return None
-    lines_text = await asyncio.to_thread(parent_events_path.read_text, encoding='utf-8')
-    lines = lines_text.splitlines()
-
-    if event_index is not None:
-      lines = lines[:event_index + 1]
-
-    # Create the new session, inheriting the parent backend unless overridden.
-    meta = SessionMetadata(
-        name=f'C{parent.name}',
-        parent_session_id=parent_id,
-        backend=backend or parent.backend,
-        group=parent.group,
-    )
-    session_dir = self._session_dir(meta.id)
-    for subdir in ['data', 'threads']:
-      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
-
-    # Copy chat events to new session
-    events_path = self._chat_events_path(meta.id)
-    await asyncio.to_thread(events_path.write_text, '\n'.join(lines) + '\n', encoding='utf-8')
-
-    # Append clone_start banner event
-    clone_event = {
-        "type": ET.CLONE_START,
-        "parent_session_id": parent_id,
-        "parent_session_name": parent.name,
-        "timestamp": utc_now().isoformat(),
-    }
-    await append_ndjson(events_path, clone_event)
-
-    await self._save_metadata(meta)
+  ) -> SessionMetadata:
+    """Create a new session with parent events stored as a reference file."""
+    meta = await self._spawn_with_reference(parent_id, event_index, backend, "C")
 
     log.info(
         'session_cloned',
@@ -370,28 +329,9 @@ class SessionManager:
       parent_id: str,
       event_index: int,
       backend: str | None = None,
-  ) -> Optional[SessionMetadata]:
-    """Create an Elon-e session: empty history, archive + thumbs-down the parent."""
-    parent = await self.get_session(parent_id)
-    if not parent:
-      return None
-
-    # Create new session with empty history
-    meta = SessionMetadata(
-        name=f'E{parent.name}',
-        parent_session_id=parent_id,
-        backend=backend or parent.backend,
-        group=parent.group,
-    )
-    session_dir = self._session_dir(meta.id)
-    for subdir in ['data', 'threads']:
-      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
-
-    # Create empty chat_events.jsonl
-    events_path = self._chat_events_path(meta.id)
-    await asyncio.to_thread(events_path.write_text, '', encoding='utf-8')
-
-    await self._save_metadata(meta)
+  ) -> SessionMetadata:
+    """Create an Elon-e session: reference handoff, archive + thumbs-down parent."""
+    meta = await self._spawn_with_reference(parent_id, event_index, backend, "E")
 
     # Auto-archive and thumbs-down the parent (re-read under lock so concurrent
     # mutations to the parent aren't clobbered).
@@ -414,6 +354,64 @@ class SessionManager:
         backend=meta.backend,
     )
     return meta
+
+  async def _spawn_with_reference(
+      self,
+      parent_id: str,
+      event_index: int | None,
+      backend: str | None,
+      name_prefix: str,
+  ) -> SessionMetadata:
+    """Create a child session whose parent history lives in data/parent_reference.jsonl."""
+    parent = await self.get_session(parent_id)
+    if not parent:
+      raise FileNotFoundError(f"parent session not found: {parent_id}")
+
+    count = await asyncio.to_thread(self.get_chat_event_count_sync, parent_id, parent)
+    if event_index is None:
+      end = count
+    else:
+      if event_index < 0 or event_index >= count:
+        raise ValueError(f"event_index {event_index} out of range for parent session {parent_id} with {count} events")
+      end = event_index + 1
+
+    events, _ = await asyncio.to_thread(self.load_chat_events_range, parent_id, 0, end)
+    if len(events) != end:
+      raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
+
+    meta = SessionMetadata(
+        name=f'{name_prefix}{parent.name}',
+        parent_session_id=parent_id,
+        backend=backend or parent.backend,
+        group=parent.group,
+    )
+    session_dir = self._session_dir(meta.id)
+    for subdir in ['data', 'threads']:
+      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    reference_path = session_dir / 'data' / 'parent_reference.jsonl'
+    await asyncio.to_thread(self._write_reference_events_sync, reference_path, events)
+
+    events_path = self._chat_events_path(meta.id)
+    await asyncio.to_thread(events_path.write_text, '', encoding='utf-8')
+    clone_event = {
+        "type": ET.CLONE_START,
+        "parent_session_id": parent_id,
+        "parent_session_name": parent.name,
+        "timestamp": utc_now().isoformat(),
+    }
+    await append_ndjson(events_path, clone_event)
+    await self._save_metadata(meta)
+    return meta
+
+  @staticmethod
+  def _write_reference_events_sync(path: Path, events: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+      for event in events:
+        f.write(json.dumps(event) + "\n")
+    os.replace(tmp_path, path)
 
   def get_chat_events_path(self, session_id: str) -> Path:
     """Return the absolute path to a session's chat_events.jsonl."""

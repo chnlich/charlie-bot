@@ -22,9 +22,7 @@ _ARTIFACT_SCRIPT_TAG = "<script src=/static/js/artifact-comments.js></script>"
 
 
 def _inject_artifact_ui(html_text: str) -> str:
-  """Insert the artifact-comments script before the last </body> (idempotent)."""
-  if "artifact-comments.js" in html_text:
-    return html_text
+  """Insert the artifact-comments script before the last </body>, or append without one."""
   idx = html_text.rfind("</body>")
   if idx == -1:
     return html_text + "\n" + _ARTIFACT_SCRIPT_TAG + "\n"

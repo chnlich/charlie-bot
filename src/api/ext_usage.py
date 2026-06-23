@@ -205,6 +205,15 @@ def _sum_codex_spend(accumulator: dict[str, dict[str, int]]) -> float:
   return total
 
 
+def _log_codex_spend_row_skip(path: Path, line_number: int, error: Exception | str) -> None:
+  log.warning(
+      "ext_usage_codex_spend_row_skipped",
+      path=str(path),
+      line_number=line_number,
+      error=str(error),
+  )
+
+
 def _compute_codex_spend_windows(
     *,
     sessions_dir: Path | None = None,
@@ -230,31 +239,51 @@ def _compute_codex_spend_windows(
       continue
 
     current_model = ""
-    for line in path.read_text().splitlines():
-      if not line.strip():
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+      line = line.strip()
+      if not line:
         continue
-      event = json.loads(line)
-      event_type = event.get("type")
-      payload = event.get("payload") or {}
-      if event_type == "turn_context":
-        model = payload.get("model")
-        if isinstance(model, str):
-          current_model = model
-        continue
-      if event_type != "event_msg" or payload.get("type") != "token_count":
-        continue
+      try:
+        event = json.loads(line)
+        if not isinstance(event, dict):
+          raise ValueError(f"expected JSON object, got {type(event).__name__}")
+        event_type = event.get("type")
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+          raise ValueError(f"payload must be an object, got {type(payload).__name__}")
+        if event_type == "turn_context":
+          model = payload.get("model")
+          if isinstance(model, str):
+            current_model = model
+          continue
+        if event_type != "event_msg" or payload.get("type") != "token_count":
+          continue
 
-      info = payload.get("info") or {}
-      last_usage = info.get("last_token_usage")
-      if not last_usage:
-        continue
+        info = payload.get("info") or {}
+        if not isinstance(info, dict):
+          raise ValueError(f"info must be an object, got {type(info).__name__}")
+        last_usage = info.get("last_token_usage")
+        if not last_usage:
+          continue
+        if not isinstance(last_usage, dict):
+          raise ValueError(f"last_token_usage must be an object, got {type(last_usage).__name__}")
+        token_usage = {
+            "input_tokens": last_usage["input_tokens"],
+            "cached_input_tokens": last_usage["cached_input_tokens"],
+            "output_tokens": last_usage["output_tokens"],
+        }
+        for key, value in token_usage.items():
+          if not isinstance(value, int):
+            raise ValueError(f"{key} must be an int, got {type(value).__name__}")
 
-      observed_at = _parse_codex_timestamp(event["timestamp"])
-      if observed_at < seven_days_ago or observed_at > effective_now:
-        continue
-      _add_token_usage(last_7d_by_model, current_model, last_usage)
-      if observed_at >= one_day_ago:
-        _add_token_usage(last_24h_by_model, current_model, last_usage)
+        observed_at = _parse_codex_timestamp(event["timestamp"])
+        if observed_at < seven_days_ago or observed_at > effective_now:
+          continue
+        _add_token_usage(last_7d_by_model, current_model, token_usage)
+        if observed_at >= one_day_ago:
+          _add_token_usage(last_24h_by_model, current_model, token_usage)
+      except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        _log_codex_spend_row_skip(path, line_number, e)
 
   return {
       "last_24h_usd": _sum_codex_spend(last_24h_by_model),

@@ -11,6 +11,7 @@ import pytest
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionStatus
+from src.core.recap import extract_recap
 from src.core.sessions import SessionManager
 
 
@@ -142,3 +143,44 @@ async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> No
   assert updated_parent is not None
   assert updated_parent.status == SessionStatus.ACTIVE
   assert updated_parent.rating is None
+
+
+@pytest.mark.asyncio
+async def test_reference_bootstraps_are_not_divider_recap_asks(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="Child"), backend="claude-opus-4.6")
+  _append_events(
+      mgr.get_chat_events_path(session.id),
+      [
+          {
+              "type": "user",
+              "content": "This session continues a prior conversation.\n\nbootstrap",
+          },
+          {
+              "type": "user",
+              "content": "You're taking over because the user wasn't satisfied with the previous session. bootstrap",
+          },
+          {
+              "type": "user",
+              "content": "real ask",
+          },
+          {
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "text",
+                      "text": "real answer",
+                  }]
+              },
+          },
+      ],
+  )
+
+  recap = extract_recap(mgr, session.id)
+
+  assert recap["asks"] == ["real ask"]
+  assert recap["last"] == {
+      "user": "real ask",
+      "assistant": "real answer",
+  }

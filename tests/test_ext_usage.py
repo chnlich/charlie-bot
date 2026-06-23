@@ -1,10 +1,10 @@
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from src.api.ext_usage import _compute_codex_spend_windows, _extract_latest_codex_usage, _transform_response
+from src.api.ext_usage import CodexProvider, _compute_codex_spend_windows, _extract_latest_codex_usage, _transform_response
 
 
 def _build_token_count_event(
@@ -205,6 +205,46 @@ def test_compute_codex_spend_windows_prices_recent_turns_by_model(tmp_path) -> N
 
   assert spend["last_24h_usd"] == pytest.approx(4.85)
   assert spend["last_7d_usd"] == pytest.approx(13.20)
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_malformed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+  provider = CodexProvider()
+  monkeypatch.setattr(provider, "SESSIONS_DIR", tmp_path)
+  today = date.today()
+  now = datetime.now(timezone.utc)
+  rollout_dir = tmp_path / f"{today.year:04d}" / f"{today.month:02d}" / f"{today.day:02d}"
+  rollout_dir.mkdir(parents=True)
+
+  stale_rollout_path = rollout_dir / "rollout-stale.jsonl"
+  stale_rollout_path.write_text("{not valid json\n")
+  stale_mtime = now.timestamp() - 60
+  os.utime(stale_rollout_path, (stale_mtime, stale_mtime))
+
+  live_rollout_path = rollout_dir / "rollout-live.jsonl"
+  live_rollout_path.write_text(
+      json.dumps(_build_token_count_event(
+          timestamp=now.isoformat().replace("+00:00", "Z"),
+          primary_used_percent=8.0,
+          primary_resets_at=int(now.timestamp()) + 3600,
+          secondary_used_percent=2.0,
+          secondary_resets_at=int(now.timestamp()) + 86400,
+      )) + "\n"
+  )
+  os.utime(live_rollout_path, (now.timestamp(), now.timestamp()))
+
+  usage = await provider.fetch()
+
+  assert usage is not None
+  assert usage["five_hour"]["utilization"] == 8.0
+  assert usage["seven_day"]["utilization"] == 2.0
+  assert usage["spend"] == {
+      "last_24h_usd": 0.0,
+      "last_7d_usd": 0.0,
+  }
 
 
 def test_transform_response_preserves_cc_payload_shape() -> None:

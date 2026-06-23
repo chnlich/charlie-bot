@@ -7325,6 +7325,24 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Fixed by running `yapf --in-place --recursive src/`; `yapf --diff
+    --recursive src/` now reports no diff.
+- id: '186'
+  title: Share Anthropic-compatible backend env construction
+  description: 'PURPOSE: Keep Anthropic-compatible backend environment variables consistent
+    across DeepSeek SGLang and Kimi.
+
+    HOW: Add a small helper in the Claude Code backend layer that builds the shared
+    `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, default model
+    aliases, and `CLAUDE_CODE_SUBAGENT_MODEL` mapping from base URL, token, and model.
+    Use it from `src/agents/backends/deepseek_sglang.py` and `src/agents/backends/kimi.py`;
+    keep backend-specific validation and base URL selection local.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-06-23T13:12:56Z'
   priority: low

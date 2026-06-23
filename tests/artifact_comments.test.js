@@ -13,6 +13,10 @@ function makeElement() {
   return {
     style: {},
     children: [],
+    childNodes: [],
+    nodeType: 1,
+    parentElement: null,
+    display: 'block',
     classList: {add() {}, remove() {}},
     appendChild(child) {
       this.children.push(child);
@@ -26,6 +30,21 @@ function makeElement() {
   };
 }
 
+function makeTextNode(text) {
+  return {nodeType: 3, textContent: text};
+}
+
+// Build a block element that directly owns `text`, with optional child elements.
+function makeBlock(text, {display = 'block', childNodes = []} = {}) {
+  const el = makeElement();
+  el.display = display;
+  el.childNodes = text ? [makeTextNode(text), ...childNodes] : childNodes.slice();
+  for (const child of el.childNodes) {
+    if (child.nodeType === 1) child.parentElement = el;
+  }
+  return el;
+}
+
 function loadArtifactCommentsScript(pathname, framed = false) {
   const listeners = [];
   const window = {
@@ -36,6 +55,9 @@ function loadArtifactCommentsScript(pathname, framed = false) {
       listeners.push({target: 'window', type, handler, options});
     },
     setTimeout() {},
+    getComputedStyle(el) {
+      return {display: el.display || 'block'};
+    },
   };
   window.self = window;
   window.parent = framed ? {} : window;
@@ -95,6 +117,7 @@ test('artifact comments script stays inert inside frames', () => {
 
   assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
   assert.equal(window.__cbcBuildBatchMessage, undefined);
+  assert.equal(window.__cbcFindBlock, undefined);
   assert.equal(head.children.length, 0);
   assert.equal(listeners.length, 0);
 });
@@ -159,4 +182,55 @@ test('buildBatchMessage preserves newline quote and comment content', () => {
     message.split('\n').filter((line) => line.trimStart().startsWith('\u21B3 ')).length,
     entries.length
   );
+});
+
+function loadFindBlock() {
+  const {window} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+  assert.equal(typeof window.__cbcFindBlock, 'function');
+  return window.__cbcFindBlock;
+}
+
+test('findBlock returns a block div that owns its own text', () => {
+  const findBlock = loadFindBlock();
+  const block = makeBlock('Hello world');
+  assert.equal(findBlock(block), block);
+});
+
+test('findBlock skips a pure wrapper whose direct children are only blocks + whitespace', () => {
+  const findBlock = loadFindBlock();
+  const inner = makeBlock('Inner text');
+  const wrapper = makeBlock('', {childNodes: [makeTextNode('\n  '), inner, makeTextNode('\n')]});
+  const owner = makeBlock('Owner text', {childNodes: [wrapper]});
+
+  // Hovering the wrapper itself: it owns no text, so the climb continues to the owner.
+  assert.equal(findBlock(wrapper), owner);
+});
+
+test('findBlock climbs from an inline span that owns text to the nearest owning block', () => {
+  const findBlock = loadFindBlock();
+  const span = makeBlock('inline fragment', {display: 'inline'});
+  const block = makeBlock('Block text', {childNodes: [span]});
+
+  assert.equal(findBlock(span), block);
+});
+
+test('findBlock keeps a td commentable even when it contains a display:block child (regression)', () => {
+  const findBlock = loadFindBlock();
+  const small = makeBlock('note', {display: 'block'});
+  const td = makeBlock('KR text', {display: 'table-cell', childNodes: [small]});
+
+  assert.equal(findBlock(td), td);
+  // The display:block <small> owns its own text, so it is independently commentable.
+  assert.equal(findBlock(small), small);
+});
+
+test('findBlock still returns pre and li blocks that own text', () => {
+  const findBlock = loadFindBlock();
+  const pre = makeBlock('code line');
+  const li = makeBlock('list item');
+
+  assert.equal(findBlock(pre), pre);
+  assert.equal(findBlock(li), li);
 });

@@ -7,7 +7,6 @@ if (!framed) {
     var HIDE_DELAY_MS = 300;
     var TRIGGER_SIZE = 34;
     var AUTH_MESSAGE = 'log in to comment';
-    var BLOCK_SELECTOR = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,td,dd';
     var SECTION_SELECTOR = 'section';
     var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this?'}];
     var sessionId = extractSessionIdFromPath(window.location.pathname);
@@ -27,6 +26,7 @@ if (!framed) {
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
     window.__cbcBuildBatchMessage = buildBatchMessage;
+    window.__cbcFindBlock = findBlock;
 
     installStyles();
     installListeners();
@@ -146,12 +146,30 @@ if (!framed) {
       return Boolean(selection && !selection.isCollapsed);
     }
 
-    function findBlock(target) {
-      var el = target && target.closest ? target.closest(BLOCK_SELECTOR) : null;
-      while (el && !isTextBearing(el)) {
-        el = el.parentElement && el.parentElement.closest ? el.parentElement.closest(BLOCK_SELECTOR) : null;
+    function isBlockLevel(el) {
+      var display = window.getComputedStyle(el).display;
+      return display !== 'none' && display !== 'contents' && display.indexOf('inline') !== 0;
+    }
+
+    function hasOwnText(el) {
+      var nodes = el.childNodes;
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        if (node.nodeType === 3 && /\S/.test(node.textContent)) return true;
       }
-      if (el) return el;
+      return false;
+    }
+
+    function isCommentableBlock(el) {
+      return el.nodeType === 1 && isBlockLevel(el) && hasOwnText(el);
+    }
+
+    function findBlock(target) {
+      var el = target;
+      while (el && el !== document.body) {
+        if (isCommentableBlock(el)) return el;
+        el = el.parentElement;
+      }
 
       el = target && target.closest ? target.closest(SECTION_SELECTOR) : null;
       while (el && !isTextBearing(el)) {

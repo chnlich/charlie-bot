@@ -7328,3 +7328,13 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split OpenCodeBackend.run into process bootstrap and SSE turn handling
+  description: |-
+    PURPOSE: Keep the OpenCode backend run path readable by separating process startup from per-turn SSE handling.
+    HOW: Extract a private _run_sse_turn(client, prompt) async generator that performs health check, session creation/resume, prompt send, SSE iteration, idle result emission, and premature-stream RuntimeError.
+    Leave run responsible for reset, cwd/env/process/log setup, top-level error event emission, and cleanup.
+  category: long-function
+  status: pending
+  created: '2026-06-23T21:13:20Z'
+  priority: low

@@ -27,7 +27,9 @@ _LAST_CHARS = 250
 _AUTO_INJECTED_PREFIXES = (
     "[Scheduled trigger fired",
     "This session was cloned from a previous conversation.",
+    "This session continues a prior conversation.",
     "You're taking over a task from a previous session where user wasn't satisfied.",
+    "You're taking over because the user wasn't satisfied with the previous session.",
 )
 
 _SUMMARY_SYSTEM_PROMPT = (

@@ -614,8 +614,11 @@ function embedLinkedHtmlArtifacts(root) {
         if (!card) {
           throw new Error('HTML artifact card render produced no element');
         }
+        var mc = document.getElementById('messages');
+        var atBottom = mc ? shouldAutoScroll(mc) : false;
         insertHtmlArtifactCard(currentProse, card, ordinal);
         link.el.dataset.embedded = '1';
+        if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
       }).catch(function(e) {
         console.warn('Failed to render linked HTML artifact', link.fetchUrl, e);
       });

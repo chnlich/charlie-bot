@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -37,28 +38,56 @@ async def _seed_parent(session_mgr: SessionManager, *, backend: str = "claude-op
   events_path = session_mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(
-      "\n".join([
-          json.dumps({"type": "user", "content": "hello"}),
-          json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "world"}]}}),
-      ]) + "\n",
+      "\n".join(
+          [
+              json.dumps({
+                  "type": "user",
+                  "content": "hello"
+              }),
+              json.dumps({
+                  "type": "assistant",
+                  "message": {
+                      "content": [{
+                          "type": "text",
+                          "text": "world"
+                      }]
+                  }
+              }),
+          ]) + "\n",
       encoding="utf-8",
   )
   return parent.id
 
 
-def _stub_elone_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
-  async def fake_run_and_finalize(*args, **kwargs) -> None:
-    return None
+def _capture_bootstrap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+  calls: list[dict[str, Any]] = []
+
+  def fake_run_and_finalize(cfg, meta, content, session_mgr, **kwargs):
+    calls.append({"meta": meta, "content": content, "kwargs": kwargs})
+
+    async def noop() -> None:
+      return None
+
+    return noop()
 
   def fake_create_logged_task(coro) -> None:
     coro.close()
 
   monkeypatch.setattr("src.api.chat.run_and_finalize", fake_run_and_finalize)
   monkeypatch.setattr("src.core.tasks.create_logged_task", fake_create_logged_task)
+  return calls
+
+
+def _stub_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
+  _capture_bootstrap(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_fork_route_inherits_parent_backend_when_backend_omitted(tmp_path: Path) -> None:
+async def test_fork_route_inherits_parent_backend_when_backend_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  _stub_bootstrap(monkeypatch)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
@@ -71,7 +100,8 @@ async def test_fork_route_inherits_parent_backend_when_backend_omitted(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_fork_route_resolves_codex_family_override(tmp_path: Path) -> None:
+async def test_fork_route_resolves_codex_family_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _stub_bootstrap(monkeypatch)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
@@ -79,7 +109,10 @@ async def test_fork_route_resolves_codex_family_override(tmp_path: Path) -> None
   with _build_client(cfg, session_mgr) as client:
     response = client.post(
         f"/api/sessions/{parent_id}/fork",
-        json={"event_index": 1, "backend": "codex-future"},
+        json={
+            "event_index": 1,
+            "backend": "codex-future"
+        },
     )
 
   assert response.status_code == 200
@@ -88,7 +121,7 @@ async def test_fork_route_resolves_codex_family_override(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_elone_route_accepts_valid_backend_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _stub_elone_bootstrap(monkeypatch)
+  _stub_bootstrap(monkeypatch)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
@@ -96,7 +129,10 @@ async def test_elone_route_accepts_valid_backend_override(tmp_path: Path, monkey
   with _build_client(cfg, session_mgr) as client:
     response = client.post(
         f"/api/sessions/{parent_id}/elone",
-        json={"event_index": 1, "backend": "codex-o3"},
+        json={
+            "event_index": 1,
+            "backend": "codex-o3"
+        },
     )
 
   assert response.status_code == 200
@@ -108,7 +144,7 @@ async def test_elone_route_falls_back_to_parent_backend_for_invalid_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  _stub_elone_bootstrap(monkeypatch)
+  _stub_bootstrap(monkeypatch)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="codex-o3")
@@ -116,8 +152,55 @@ async def test_elone_route_falls_back_to_parent_backend_for_invalid_override(
   with _build_client(cfg, session_mgr) as client:
     response = client.post(
         f"/api/sessions/{parent_id}/elone",
-        json={"event_index": 1, "backend": "missing-backend"},
+        json={
+            "event_index": 1,
+            "backend": "missing-backend"
+        },
     )
 
   assert response.status_code == 200
   assert response.json()["backend"] == "codex-o3"
+
+
+@pytest.mark.asyncio
+async def test_fork_route_bootstrap_points_at_reference_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  calls = _capture_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(f"/api/sessions/{parent_id}/fork", json={"event_index": 0})
+
+  assert response.status_code == 200
+  child_id = response.json()["id"]
+  reference_path = session_mgr.get_chat_events_path(child_id).parent / "parent_reference.jsonl"
+  assert len(calls) == 1
+  prompt = calls[0]["content"]
+  assert str(reference_path) in prompt
+  assert "chronological" in prompt
+  assert "newest entries at the end" in prompt
+  assert "reconstructed recent context" not in prompt
+  assert "recap" not in prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_elone_route_bootstrap_points_at_reference_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  calls = _capture_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(f"/api/sessions/{parent_id}/elone", json={"event_index": 1})
+
+  assert response.status_code == 200
+  child_id = response.json()["id"]
+  reference_path = session_mgr.get_chat_events_path(child_id).parent / "parent_reference.jsonl"
+  assert len(calls) == 1
+  prompt = calls[0]["content"]
+  assert str(reference_path) in prompt
+  assert "wasn't satisfied" in prompt
+  assert "Confirm with the user before acting." in prompt
+  assert "reconstructed recent context" not in prompt
+  assert "recap" not in prompt.lower()

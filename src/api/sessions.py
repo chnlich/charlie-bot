@@ -423,24 +423,24 @@ async def fork_session(
       cfg,
       fallback_backend=parent.backend,
   )
-  meta = await session_mgr.fork_session(
-      session_id,
-      event_index=body.event_index if body else None,
-      backend=backend,
-  )
-  if not meta:
+  try:
+    meta = await session_mgr.fork_session(
+        session_id,
+        event_index=body.event_index if body else None,
+        backend=backend,
+    )
+  except FileNotFoundError:
     raise HTTPException(status_code=404, detail="Session not found")
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e))
 
-  # Build bootstrap prompt from the clone's already-truncated event copy.
-  from src.core.recap import build_recap_context
-  clone_events_path = session_mgr.get_chat_events_path(meta.id)
-  recap_context = await asyncio.to_thread(build_recap_context, session_mgr, meta.id)
+  reference_path = session_mgr.get_chat_events_path(meta.id).parent / "parent_reference.jsonl"
   bootstrap_prompt = (
-      "This session was cloned from a previous conversation.\n\n"
-      "Below is your reconstructed recent context (older turns condensed, the last 2 turns in full).\n\n"
-      f"{recap_context}\n\n"
-      "Summarize the current state briefly and wait for the user to tell you what to do next.\n\n"
-      f"Session JSONL path: {clone_events_path}")
+      "This session continues a prior conversation.\n\n"
+      f"The full prior conversation up to the takeover point is in {reference_path}. "
+      "Entries are chronological, with newest entries at the end. The file may be large, so it does not "
+      "need to be read in full; read what is needed to reconstruct the current state.\n\n"
+      "Get oriented from that reference, summarize where things stand, and wait for the user's next instruction.")
 
   from src.api.chat import run_and_finalize
   from src.core.tasks import create_logged_task
@@ -459,27 +459,22 @@ async def elone_session(
 ):
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
-  meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
-  if not meta:
+  try:
+    meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
+  except FileNotFoundError:
     raise HTTPException(status_code=404, detail="Session not found")
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e))
 
-  # Build bootstrap prompt from the bounded parent history up to the takeover point.
-  from src.core.recap import build_recap_context
-  parent_events_path = session_mgr.get_chat_events_path(session_id)
-  recap_context = await asyncio.to_thread(build_recap_context, session_mgr, session_id, upto=body.event_index)
+  reference_path = session_mgr.get_chat_events_path(meta.id).parent / "parent_reference.jsonl"
   bootstrap_prompt = (
-      "You're taking over a task from a previous session where user wasn't satisfied.\n"
-      "Usually the dissatisfaction is with the last assistant response before the takeover point.\n\n"
-      f"Parent session: {session_id}\n"
-      "Below is the reconstructed recent context up to the takeover point "
-      "(older turns condensed, the last 2 turns in full).\n\n"
-      f"{recap_context}\n\n"
-      "Your mission:\n"
-      "1. Identify what the user was trying to achieve\n"
-      "2. Analyze what went wrong with the previous approach\n"
-      "3. State your critique concisely\n"
-      "4. Propose a better approach and ask the user to confirm before proceeding\n\n"
-      f"Parent JSONL path: {parent_events_path}")
+      "You're taking over because the user wasn't satisfied with the previous session. "
+      "The dissatisfaction is usually with the most recent exchange before the takeover point.\n\n"
+      f"The full prior conversation up to the takeover point is in {reference_path}. "
+      "Entries are chronological, with newest entries at the end. The file may be large, so it does not "
+      "need to be read in full; read what is needed to reconstruct the current state.\n\n"
+      "Understand what the user wanted and where it went wrong, then give your read and a better approach. "
+      "Confirm with the user before acting.")
 
   # Write synthetic user event and auto-start the assistant
   from src.api.chat import run_and_finalize

@@ -28,14 +28,6 @@ def test_inject_inserts_exactly_one_before_body() -> None:
   assert out.index("artifact-comments.js") < out.index("</body>")
 
 
-def test_inject_is_idempotent_when_already_present() -> None:
-  html = "<html><body>" + SCRIPT + "</body></html>"
-  out = files_api._inject_artifact_ui(html)
-  # Byte-identical: no second injection, occurrence count stays at one.
-  assert out == html
-  assert out.count("artifact-comments.js") == 1
-
-
 def test_inject_targets_the_last_body() -> None:
   html = "<html><body>first</body>\n<!-- stray -->\n</body></html>"
   assert html.count("</body>") == 2

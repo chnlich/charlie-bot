@@ -7328,3 +7328,13 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Remove unused imports from test modules
+  description: |
+    PURPOSE — Keep test files free of unused imports flagged by Ruff.
+    HOW — Remove unused imports from tests/test_backend_logging.py, tests/test_message_attachments.py, tests/test_spawner_exit_override.py, and tests/test_trigger_pid_watch.py.
+    HOW — Verify with `uvx ruff check tests --select F401`.
+  category: imports
+  status: pending
+  created: '2026-06-23T01:12:12Z'
+  priority: low

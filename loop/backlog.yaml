@@ -7325,6 +7325,23 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Resolved by the 2026-06-23 code-health YAPF run.
+- id: '186'
+  title: Split OpenCodeBackend.run into setup and SSE streaming helpers
+  description: 'PURPOSE: Keep OpenCodeBackend.run focused on orchestration.
+
+    HOW: Extract process/server bootstrap into a helper that prepares cwd/env, launches
+    the subprocess, starts log streaming, and reads the server URL. Extract the
+    session SSE loop into a helper that checks health, creates or resumes the session,
+    sends the prompt, filters events by session id, yields translated events, and raises
+    if the stream closes before session.idle. Verify with yapf --diff src/agents/backends/opencode.py
+    and pyflakes src/agents/backends/opencode.py.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-23T07:12:26Z'
   priority: low

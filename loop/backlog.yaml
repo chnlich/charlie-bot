@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Remove unused exception bindings in sessions.py
+  description: |-
+    PURPOSE: Remove two dead exception bindings from sessions.py.
+    HOW:
+    - Change `except Exception as e` to `except Exception` in `_backend_create_hook` and `_gc_old_threads_sync`.
+    - Keep the existing `log.exception` calls and re-raise behavior unchanged.
+  category: dead-code
+  status: pending
+  created: '2026-06-24T12:00:00Z'
+  priority: low

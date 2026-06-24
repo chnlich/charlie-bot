@@ -12,6 +12,7 @@
   const modeSelect = document.getElementById('mode-select');
   const formatSelect = document.getElementById('format-select');
   const form = document.getElementById('diff-form');
+  const openCodeServerButton = document.getElementById('open-codeserver');
   const statusEl = document.getElementById('status');
   const loadingEl = document.getElementById('loading');
   const errorEl = document.getElementById('error');
@@ -39,6 +40,10 @@
   }
   function clearError() { errorEl.classList.add('hidden'); errorEl.textContent = ''; }
   function clearOutput() { outputEl.innerHTML = ''; emptyEl.classList.add('hidden'); }
+  function responseDetail(data, status) {
+    const detail = (data && (data.detail?.message || data.detail)) || `HTTP ${status}`;
+    return typeof detail === 'string' ? detail : JSON.stringify(detail);
+  }
 
   function readQuery() {
     const p = new URLSearchParams(location.search);
@@ -129,8 +134,7 @@
     const resp = await fetch(`/api/git/diff/file?${qs.toString()}`);
     const data = await resp.json();
     if (!resp.ok) {
-      const detail = (data && (data.detail?.message || data.detail)) || `HTTP ${resp.status}`;
-      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      throw new Error(responseDetail(data, resp.status));
     }
     return data;
   }
@@ -264,8 +268,7 @@
     if (token !== comparisonToken) return;
 
     if (!resp.ok) {
-      const detail = (data && (data.detail?.message || data.detail)) || `HTTP ${resp.status}`;
-      setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      setError(responseDetail(data, resp.status));
       return;
     }
 
@@ -304,6 +307,48 @@
     writeQuery(params);
     compare(params);
   });
+
+  async function openCodeServer() {
+    clearError();
+    const repo = repoInput.value.trim();
+    if (!repo) {
+      setError('repo is required to open code-server');
+      return;
+    }
+    statusEl.textContent = 'preparing code-server…';
+
+    let resp;
+    try {
+      resp = await fetch(`/api/code-server/open?folder=${encodeURIComponent(repo)}`);
+    } catch (e) {
+      statusEl.textContent = '';
+      setError(`Network error: ${e.message}`);
+      return;
+    }
+
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch (e) {
+      statusEl.textContent = '';
+      setError(`Server returned non-JSON response (HTTP ${resp.status})`);
+      return;
+    }
+
+    if (!resp.ok) {
+      setError(responseDetail(data, resp.status));
+      statusEl.textContent = '';
+      return;
+    }
+
+    const url = `${location.protocol}//${location.hostname}:${data.port}/?folder=${encodeURIComponent(data.folder)}`;
+    window.open(url, '_blank');
+    statusEl.textContent = '';
+  }
+
+  if (openCodeServerButton) {
+    openCodeServerButton.addEventListener('click', openCodeServer);
+  }
 
   repoInput.addEventListener('change', () => {
     loadBranches(repoInput.value.trim());

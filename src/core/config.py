@@ -98,6 +98,10 @@ class CharlieBotConfig(BaseModel):
   # Root directory for worker worktrees
   worktree_dir: str = "~/worktrees"
 
+  # code-server integration
+  code_server_config: str = "configs/code-server.yaml"
+  code_server_bin: Optional[str] = None
+
   # Backlog panel
   backlog_repos: list[BacklogRepoConfig] = []
   backlog_repo: Optional[str] = None  # deprecated, migrated to backlog_repos
@@ -210,6 +214,27 @@ class CharlieBotConfig(BaseModel):
   def charlie_bot_repo(self) -> Path:
     """Root of the charlie-bot repository (derived from package location)."""
     return Path(__file__).resolve().parents[2]
+
+  @property
+  def code_server_config_path(self) -> Path:
+    path = Path(self.code_server_config).expanduser()
+    if path.is_absolute():
+      return path
+    return self.charlie_bot_repo / path
+
+  @property
+  def code_server_listen_port(self) -> int:
+    data = load_yaml(self.code_server_config_path, default={})
+    if not isinstance(data, dict):
+      raise ValueError(f"code-server config must be a YAML mapping: {self.code_server_config_path}")
+    bind_addr = data.get("bind-addr")
+    if not isinstance(bind_addr, str) or ":" not in bind_addr:
+      raise ValueError(f"code-server config must define bind-addr: {self.code_server_config_path}")
+    port_text = bind_addr.rsplit(":", 1)[1]
+    try:
+      return int(port_text)
+    except ValueError as exc:
+      raise ValueError(f"code-server bind-addr port must be an integer: {bind_addr}") from exc
 
   @property
   def config_file(self) -> Path:

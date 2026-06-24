@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from src.api.code_server import is_code_server_available
 from src.api.deps import get_session_manager, get_thread_manager
 from src.api.ncu_parsing import NcuParseError, parse_ncu_report
 from src.api.message_utils import build_session_bootstrap_data
@@ -194,9 +195,15 @@ async def ncu_viewer(
 
 
 @router.get("/diff", response_class=HTMLResponse)
-async def diff_viewer(request: Request):
+async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_config)):
   """Render the GitHub-style diff viewer page."""
-  return templates.TemplateResponse(request, "diff.html", context={"hostname": socket.gethostname()})
+  return templates.TemplateResponse(
+      request,
+      "diff.html",
+      context={
+          "hostname": socket.gethostname(),
+          "code_server_enabled": is_code_server_available(cfg),
+      })
 
 
 @router.get("/", response_class=HTMLResponse)

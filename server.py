@@ -11,7 +11,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
-from src.api import anthropic_proxy, backlog, chat, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
+from src.api import anthropic_proxy, backlog, chat, code_server, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
 from src.core import event_types as ET
@@ -165,6 +165,7 @@ app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
 app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
 app.include_router(git.router, prefix="/api/git", tags=["git"])
+app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
 app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
 

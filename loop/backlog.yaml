@@ -7330,9 +7330,9 @@
   priority: low
 - id: '186'
   title: Remove unused OpenCode tool wrapper
-  description: 'PURPOSE — Remove the unused OpenCodeBackend._translate_tool wrapper.
+  description: 'PURPOSE: Remove the unused OpenCodeBackend._translate_tool wrapper.
 
-    HOW — Delete _translate_tool from src/agents/backends/opencode.py, keep callers
+    HOW: Delete _translate_tool from src/agents/backends/opencode.py, keep callers
     using _translate_tool_part directly, then verify pyflakes on the file and run
     yapf --in-place --recursive src/.
 

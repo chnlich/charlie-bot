@@ -107,6 +107,10 @@ let lazySessionDataTimer = null;
 const GROUP_SESSION_PREVIEW_LIMIT = 5;
 const SESSION_GROUP_LIMIT_STORAGE_KEY = 'session-group-list-expanded';
 const CRON_GROUP_LIMIT_STORAGE_KEY = 'cron-group-list-expanded';
+const groupLimitState = {
+  [SESSION_GROUP_LIMIT_STORAGE_KEY]: {},
+  [CRON_GROUP_LIMIT_STORAGE_KEY]: {},
+};
 
 function getDefaultBackendId() {
   const backendIds = Object.keys(BACKEND_OPTIONS || {});
@@ -1305,6 +1309,7 @@ function setSidebarFilterPill(filter) {
 }
 
 function switchSidebarFilter(filter) {
+  resetGroupLimitState();
   setSidebarFilterPill(filter);
   // Fetch sessions for this filter
   const url = sidebarFilterUrls[filter];
@@ -1404,8 +1409,7 @@ function escapeHtmlAttr(str) {
 }
 
 function loadGroupLimitState(storageKey) {
-  const raw = localStorage.getItem(storageKey);
-  return raw ? JSON.parse(raw) : {};
+  return groupLimitState[storageKey];
 }
 
 function isGroupLimitExpanded(storageKey, key) {
@@ -1415,7 +1419,11 @@ function isGroupLimitExpanded(storageKey, key) {
 function setGroupLimitExpanded(storageKey, key, expanded) {
   const state = loadGroupLimitState(storageKey);
   state[key] = expanded;
-  localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+function resetGroupLimitState() {
+  groupLimitState[SESSION_GROUP_LIMIT_STORAGE_KEY] = {};
+  groupLimitState[CRON_GROUP_LIMIT_STORAGE_KEY] = {};
 }
 
 function shouldLimitHideSession(session, index, expanded) {

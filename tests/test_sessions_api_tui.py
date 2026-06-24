@@ -81,6 +81,7 @@ async def test_archive_tui_session_does_not_kill_tmux(
     killed.append(session_id)
 
   monkeypatch.setattr("src.agents.backends.tui.kill_tmux_session", fake_kill_tmux_session)
+  await session_mgr.save_chat_event(meta.id, {"type": "user", "content": "hello"})
 
   with _build_client(cfg, session_mgr) as client:
     response = client.delete(f"/api/sessions/{meta.id}")

@@ -490,7 +490,16 @@ async def get_session(meta: SessionMetadata = Depends(require_session)):
 
 
 @router.delete("/{session_id}", response_model=SessionMetadata)
-async def archive_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+async def archive_session(
+    session_id: str,
+    meta: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
+  if event_count == 0:
+    await session_mgr.delete_session_permanently(session_id)
+    return meta
+
   meta = await session_mgr.archive_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")

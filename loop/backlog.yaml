@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Remove unused dirpath binding in git marker scan
+  description: |-
+    PURPOSE: Remove an unused local binding from worktree git-marker scanning.
+    HOW:
+    - Change _contains_git_marker's os.walk target from dirpath to _.
+    - Verify pylint unused-variable on src/core/git.py and pyflakes on src.
+  category: dead-code
+  status: pending
+  created: '2026-06-25T13:12:50Z'
+  priority: low

@@ -126,22 +126,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // ---------------------------------------------------------------------------
 function handleInputKey(e) {
   if (handleSlashPopupKey(e)) return;
-  if (e.key === 'Enter' && !e.shiftKey && platform.enterSendsMessage) {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    if (uploadsInFlight > 0) {
-      showToast('Please wait for uploads to finish', true);
-      return;
-    }
-    const input = document.getElementById('msg-input');
-    const val = input ? input.value.trim() : '';
-    if (val.startsWith('/')) {
-      const spaceIdx = val.indexOf(' ');
-      const name = spaceIdx === -1 ? val.slice(1) : val.slice(1, spaceIdx);
-      const args = spaceIdx === -1 ? '' : val.slice(spaceIdx + 1).trim();
-      executeSlashCommand(name, args);
-    } else {
-      sendMessage();
-    }
+    sendMessage();
   }
 }
 

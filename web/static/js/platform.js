@@ -53,9 +53,6 @@ const platform = (function() {
     /** true when hardware is touch-capable */
     get isTouch() { return isTouchDevice; },
 
-    /** Desktop: Enter sends. Mobile/cover: Enter inserts newline. */
-    get enterSendsMessage() { return _currentMode === 'desktop'; },
-
     /** 'overlay' on mobile/cover, 'pinned' on desktop */
     get sidebarMode() { return _currentMode === 'desktop' ? 'pinned' : 'overlay'; },
 

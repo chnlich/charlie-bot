@@ -72,7 +72,9 @@ if (!framed) {
         '.' + GLOBAL_PREFIX + '-tray-list{max-height:200px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
         '.' + GLOBAL_PREFIX + '-tray-item{position:relative;background:#0d1117;border:1px solid #2d3340;border-radius:6px;padding:7px 28px 7px 8px}' +
         '.' + GLOBAL_PREFIX + '-tray-item-quote{color:#8b949e;font-size:11px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-        '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+        '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-tray-edit{box-sizing:border-box;width:100%;min-height:58px;resize:vertical;margin-top:3px;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:6px 7px;font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
+        '.' + GLOBAL_PREFIX + '-tray-edit:focus{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.18)}' +
         '.' + GLOBAL_PREFIX + '-tray-remove{position:absolute;top:4px;right:4px;width:18px;height:18px;border:none;border-radius:4px;background:transparent;color:#8b949e;font:14px/1 -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}' +
         '.' + GLOBAL_PREFIX + '-tray-remove:hover{background:#21262d;color:#e6edf3}' +
         '.' + GLOBAL_PREFIX + '-tray-reason{background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;font-size:11px;line-height:1.3}' +
@@ -309,6 +311,9 @@ if (!framed) {
     }
 
     function buildCommentEntry(quote, context, comment) {
+      if (quote === '') {
+        return ('\u25B8 ' + context).split('\n').concat(('\u21B3 ' + comment).split('\n'));
+      }
       var quoteLine = context
         ? '\u25B8 ' + context + ' \u203A "' + quote + '"'
         : '\u25B8 "' + quote + '"';
@@ -331,10 +336,6 @@ if (!framed) {
       return lines.join('\n');
     }
 
-    function buildShortcutMessage(shortcut) {
-      return '[Artifact \u00B7 ' + artifactPath + ']\n' + shortcut.prompt;
-    }
-
     function installShortcuts() {
       var container = document.createElement('div');
       container.className = GLOBAL_PREFIX + '-shortcuts';
@@ -351,7 +352,7 @@ if (!framed) {
             button.disabled = true;
           } else {
             button.addEventListener('click', function() {
-              sendShortcut(shortcut, button);
+              addShortcutComment(shortcut);
             });
           }
           container.appendChild(button);
@@ -368,6 +369,20 @@ if (!framed) {
       document.body.appendChild(container);
     }
 
+    function addShortcutComment(shortcut) {
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].kind === 'improve') return;
+      }
+      pending.push({
+        kind: 'improve',
+        el: null,
+        quote: '',
+        context: shortcut.label,
+        comment: shortcut.prompt,
+      });
+      refreshTray();
+    }
+
     function openPopover(block) {
       cancelHide();
       closePopover();
@@ -379,7 +394,7 @@ if (!framed) {
       var node = document.createElement('div');
       node.className = GLOBAL_PREFIX + '-popover';
       var textarea = document.createElement('textarea');
-      textarea.placeholder = 'Add a comment';
+      textarea.placeholder = 'Add a comment (Ctrl+Enter)';
       var error = document.createElement('div');
       error.className = GLOBAL_PREFIX + '-error';
       var actions = document.createElement('div');
@@ -399,6 +414,12 @@ if (!framed) {
       node.appendChild(actions);
       node.addEventListener('mousedown', function(event) { event.stopPropagation(); });
       node.addEventListener('mouseenter', cancelHide);
+      textarea.addEventListener('keydown', function(event) {
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !addBtn.disabled) {
+          event.preventDefault();
+          submitComment(block, textarea);
+        }
+      });
       cancelBtn.addEventListener('click', function() {
         closePopover();
         clearHover();
@@ -434,22 +455,6 @@ if (!framed) {
       }
     }
 
-    async function sendShortcut(shortcut, button) {
-      var label = button.textContent;
-      button.disabled = true;
-      button.textContent = 'Sending';
-      try {
-        await postChatMessage(buildShortcutMessage(shortcut));
-        showToast('Sent to chat', false);
-      } catch (err) {
-        console.error('Artifact shortcut failed:', err);
-        showToast(err.message, true);
-      } finally {
-        button.disabled = false;
-        button.textContent = label;
-      }
-    }
-
     function submitComment(block, textarea) {
       var comment = textarea.value.trim();
       if (!comment) {
@@ -457,6 +462,7 @@ if (!framed) {
         return;
       }
       pending.push({
+        kind: 'block',
         el: block,
         quote: cleanText(block, 400),
         context: contextFor(block),
@@ -519,11 +525,14 @@ if (!framed) {
 
       var quote = document.createElement('div');
       quote.className = GLOBAL_PREFIX + '-tray-item-quote';
-      quote.textContent = '\u201C' + entry.quote + '\u201D';
+      quote.textContent = entry.quote === '' ? entry.context : '\u201C' + entry.quote + '\u201D';
 
       var comment = document.createElement('div');
       comment.className = GLOBAL_PREFIX + '-tray-item-comment';
       comment.textContent = entry.comment;
+      comment.addEventListener('click', function() {
+        editTrayComment(idx, comment);
+      });
 
       var remove = document.createElement('button');
       remove.type = 'button';
@@ -539,6 +548,47 @@ if (!framed) {
       item.appendChild(quote);
       item.appendChild(comment);
       return item;
+    }
+
+    function editTrayComment(idx, commentNode) {
+      var textarea = document.createElement('textarea');
+      textarea.className = GLOBAL_PREFIX + '-tray-edit';
+      textarea.value = pending[idx].comment;
+      var done = false;
+
+      function cancel() {
+        if (done) return;
+        done = true;
+        refreshTray();
+      }
+
+      function save() {
+        if (done) return;
+        var next = textarea.value.trim();
+        if (!next) {
+          cancel();
+          return;
+        }
+        done = true;
+        pending[idx].comment = next;
+        refreshTray();
+      }
+
+      textarea.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancel();
+          return;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+          event.preventDefault();
+          save();
+        }
+      });
+      textarea.addEventListener('blur', save);
+      commentNode.parentNode.replaceChild(textarea, commentNode);
+      textarea.focus();
+      textarea.select();
     }
 
     function refreshTray() {
@@ -562,17 +612,19 @@ if (!framed) {
     function removeEntry(idx) {
       if (idx < 0 || idx >= pending.length) return;
       var removed = pending.splice(idx, 1)[0];
-      var stillMarked = false;
-      for (var i = 0; i < pending.length; i++) {
-        if (pending[i].el === removed.el) { stillMarked = true; break; }
+      if (removed.kind === 'block') {
+        var stillMarked = false;
+        for (var i = 0; i < pending.length; i++) {
+          if (pending[i].kind === 'block' && pending[i].el === removed.el) { stillMarked = true; break; }
+        }
+        if (!stillMarked) removed.el.classList.remove(GLOBAL_PREFIX + '-marked');
       }
-      if (!stillMarked) removed.el.classList.remove(GLOBAL_PREFIX + '-marked');
       refreshTray();
     }
 
     function clearAll() {
       for (var i = 0; i < pending.length; i++) {
-        pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+        if (pending[i].kind === 'block') pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
       }
       pending = [];
       refreshTray();
@@ -583,15 +635,13 @@ if (!framed) {
       var count = pending.length;
       var ordered = pending.slice();
       ordered.sort(function(a, b) {
-        if (!a.el || !b.el || typeof a.el.compareDocumentPosition !== 'function' || typeof b.el.compareDocumentPosition !== 'function') return 0;
-        try {
-          var mask = a.el.compareDocumentPosition(b.el);
-          if (mask & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-          if (mask & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-          return 0;
-        } catch (e) {
-          return 0;
-        }
+        if (a.kind === 'improve' && b.kind === 'block') return -1;
+        if (a.kind === 'block' && b.kind === 'improve') return 1;
+        if (a.kind === 'improve' && b.kind === 'improve') return 0;
+        var mask = a.el.compareDocumentPosition(b.el);
+        if (mask & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (mask & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
       });
       var sendBtn = traySendBtn;
       var prevLabel = sendBtn.textContent;
@@ -600,7 +650,7 @@ if (!framed) {
       try {
         await postChatMessage(buildBatchMessage(ordered));
         for (var i = 0; i < pending.length; i++) {
-          pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+          if (pending[i].kind === 'block') pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
         }
         pending = [];
         refreshTray();

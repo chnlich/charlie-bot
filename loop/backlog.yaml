@@ -7325,6 +7325,19 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
   priority: low
+  done_reason: Resolved by running `yapf --in-place --recursive src/`; `yapf --diff
+    --recursive src/` is clean.
+- id: '186'
+  title: Split stale failed-worktree quarantine into focused helpers
+  description: |-
+    PURPOSE — Make stale failed-worktree cleanup easier to audit and keep worktree file-operation failures visible.
+    HOW — Extract candidate filtering and dedupe from `_quarantine_stale_failed_worktrees` into a helper that returns quarantine work items.
+    Move the `git_quarantine_worktree(...)` call into a small helper that logs context and re-raises unexpected failures.
+    Leave trash-size logging in the orchestration function.
+  category: long-function
+  status: pending
+  created: '2026-06-25T07:13:14Z'
+  priority: medium

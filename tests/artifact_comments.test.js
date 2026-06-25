@@ -184,6 +184,32 @@ test('buildBatchMessage preserves newline quote and comment content', () => {
   );
 });
 
+test('buildBatchMessage renders no-quote Improve entries with context only', () => {
+  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(artifactPath);
+  const buildBatchMessage = window.__cbcBuildBatchMessage;
+  const entries = [
+    {
+      kind: 'improve',
+      quote: '',
+      context: 'Improve',
+      comment: 'Think from scratch, how to improve this?',
+    },
+  ];
+
+  const message = buildBatchMessage(entries);
+
+  assert.equal(
+    message,
+    [
+      '[Artifact comments \u00B7 ' + artifactPath + '] (1)',
+      '',
+      '1. \u25B8 Improve',
+      '   \u21B3 Think from scratch, how to improve this?',
+    ].join('\n')
+  );
+});
+
 function loadFindBlock() {
   const {window} = loadArtifactCommentsScript(
     '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'

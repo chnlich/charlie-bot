@@ -7328,3 +7328,13 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Rename unused config validator class parameter
+  description: |-
+    PURPOSE: Remove the unused classmethod parameter noise from CharlieBotConfig.migrate_and_expand.
+
+    HOW: Rename the validator parameter from `cls` to `_cls`, then rerun `vulture src/core/config.py --min-confidence 80`.
+  category: dead-code
+  status: pending
+  created: '2026-06-25T11:11:44Z'
+  priority: low

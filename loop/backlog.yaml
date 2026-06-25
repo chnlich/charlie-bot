@@ -7328,3 +7328,17 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split OpenCodeBackend.run into launch and SSE turn helpers
+  description: 'PURPOSE — Reduce OpenCodeBackend.run to a small orchestration method.
+
+    HOW — Extract a launch helper that prepares the cwd, starts opencode serve, wires log streaming,
+    and reads the server URL. Extract an SSE-turn helper that creates or resumes the session,
+    sends the prompt, translates matching events, and preserves the existing session.idle failure.
+    Keep error logging and cleanup ownership in run.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-25T01:15:16Z'
+  priority: low

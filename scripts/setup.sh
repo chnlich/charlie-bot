@@ -39,6 +39,25 @@ else
   "$SCRIPT_DIR/sync-skills.sh"
 fi
 
+# Seed the host config without overwriting local secrets.
+echo "==> Seeding config"
+CONFIG_DIR="$HOME/.charliebot"
+CONFIG_FILE="$CONFIG_DIR/config.yaml"
+CONFIG_TEMPLATE="$REPO_ROOT/configs/config.example.yaml"
+if [[ -e "$CONFIG_FILE" ]]; then
+  echo "  Exists, not overwriting: $CONFIG_FILE"
+else
+  if (( DRY_RUN )); then
+    echo "  [dry-run] mkdir -p $CONFIG_DIR"
+    echo "  [dry-run] cp $CONFIG_TEMPLATE $CONFIG_FILE"
+  else
+    mkdir -p "$CONFIG_DIR"
+    cp "$CONFIG_TEMPLATE" "$CONFIG_FILE"
+    echo "  Seeded $CONFIG_FILE"
+  fi
+fi
+echo "  Reminder: fill in secret keys gemini_api_key and charliebot_access_key before first start."
+
 # Smoke-check the Claude Code backend command for headless-unsafe tools.
 echo "==> Checking Claude Code backend tools"
 python - <<'PY'

@@ -69,7 +69,7 @@ class CharlieBotConfig(BaseModel):
   gemini_api_key: str = ""
   # Gemini API model for autonamer / audio transcription
   # (NOT the CLI backend model — that lives in backend_options[].model)
-  gemini_model: str = "gemini-3.1-pro-preview"
+  gemini_model: str = "gemini-flash-latest"
 
   # Kimi (Moonshot) — optional, not wired in by default
   moonshot_api_key: Optional[str] = None
@@ -87,7 +87,7 @@ class CharlieBotConfig(BaseModel):
 
   # Server
   server_host: str = "127.0.0.1"
-  server_port: int = 8000
+  server_port: int = 18498
 
   # Paths
   charliebot_home: Path = Path.home() / ".charliebot"

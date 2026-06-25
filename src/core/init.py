@@ -85,7 +85,7 @@ def _default_config_yaml() -> dict:
   """Build the default config dict with placeholder values."""
   return {
       "gemini_api_key": "",
-      "gemini_model": "gemini-3.1-pro-preview",
+      "gemini_model": "gemini-flash-latest",
       "workspace_dirs": ["~/workspace"],
       "worktree_dir": "~/worktrees",
   }
@@ -141,10 +141,14 @@ async def init_charliebot_home() -> None:
   _seed_if_missing(cfg.memory_host_file, DEFAULT_MEMORY_HOST)
   _seed_if_missing(cfg.charliebot_home / 'slash_commands.yaml', DEFAULT_SLASH_COMMANDS)
 
-  # Seed config.yaml with placeholders if missing
+  # Seed config.yaml from the committed template if missing
   if not cfg.config_file.exists():
-    with open(cfg.config_file, "w") as f:
-      yaml.dump(_default_config_yaml(), f, default_flow_style=False, sort_keys=False)
+    template = cfg.charlie_bot_repo / "configs" / "config.example.yaml"
+    if template.exists():
+      cfg.config_file.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+    else:
+      with open(cfg.config_file, "w") as f:
+        yaml.dump(_default_config_yaml(), f, default_flow_style=False, sort_keys=False)
 
 
 def _seed_if_missing(path: Path, content: str) -> None:

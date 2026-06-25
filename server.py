@@ -401,16 +401,11 @@ if __name__ == "__main__":
   import uvicorn
 
   cfg = get_config()
-  ssl_kwargs = {}
-  if cfg.ssl_certfile and cfg.ssl_keyfile:
-    ssl_kwargs['ssl_certfile'] = cfg.ssl_certfile
-    ssl_kwargs['ssl_keyfile'] = cfg.ssl_keyfile
   uvicorn.run(
     "server:app",
-    host=cfg.server_host,
+    host="127.0.0.1",
     port=cfg.server_port,
     reload=False,
     log_level="info",
     timeout_graceful_shutdown=5,
-    **ssl_kwargs,
   )

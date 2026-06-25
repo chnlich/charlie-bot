@@ -86,7 +86,6 @@ class CharlieBotConfig(BaseModel):
   charliebot_access_key: str = ""
 
   # Server
-  server_host: str = "127.0.0.1"
   server_port: int = 18498
 
   # Paths
@@ -106,10 +105,6 @@ class CharlieBotConfig(BaseModel):
   backlog_repos: list[BacklogRepoConfig] = []
   backlog_repo: Optional[str] = None  # deprecated, migrated to backlog_repos
   backlog_label: str = 'Project Backlog'  # deprecated, used during migration
-
-  # SSL
-  ssl_certfile: Optional[str] = None
-  ssl_keyfile: Optional[str] = None
 
   # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
   subprocess_buffer_limit_mb: int = 1024
@@ -158,10 +153,6 @@ class CharlieBotConfig(BaseModel):
     values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
     wd = values.get("worktree_dir", "~/worktrees")
     values["worktree_dir"] = os.path.expanduser(wd)
-    if values.get("ssl_certfile"):
-      values["ssl_certfile"] = os.path.expanduser(values["ssl_certfile"])
-    if values.get("ssl_keyfile"):
-      values["ssl_keyfile"] = os.path.expanduser(values["ssl_keyfile"])
     # Migrate old backlog_repo (singular) → backlog_repos list
     if values.get("backlog_repo") and not values.get("backlog_repos"):
       label = values.pop("backlog_label", "Backlog")
@@ -183,8 +174,7 @@ class CharlieBotConfig(BaseModel):
   @property
   def server_base_url(self) -> str:
     """Return the local base URL for CLI-to-server internal API calls."""
-    scheme = "https" if self.ssl_certfile and self.ssl_keyfile else "http"
-    return f"{scheme}://localhost:{self.server_port}"
+    return f"http://localhost:{self.server_port}"
 
   @property
   def deepseek_sglang_anthropic_proxy_base_url(self) -> str:

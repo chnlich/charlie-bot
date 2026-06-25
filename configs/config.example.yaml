@@ -13,9 +13,6 @@ gemini_api_key: ""
 
 # --- Server ---
 
-# Bind address. 127.0.0.1 = localhost only; expose remotely with `tailscale serve`.
-server_host: 127.0.0.1
-
 # Bind port.
 server_port: 18498
 

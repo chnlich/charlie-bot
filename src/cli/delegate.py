@@ -19,11 +19,7 @@ from src.cli.common import post_internal_api, resolve_session_id
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
-  parser.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Session ID (optional; auto-derived from cwd)")
+  parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
   parser.add_argument("--description", required=True, help="Task description")
   parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")

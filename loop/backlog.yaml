@@ -7325,6 +7325,20 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Fixed by commit 520c4c8 with `yapf --in-place --recursive src/`;
+    verified with `yapf --diff --recursive src/`.
+- id: '186'
+  title: Remove unused imports from test modules
+  description: |-
+    PURPOSE: Keep test code free of dead imports so pyflakes output highlights new issues.
+    HOW:
+    - Remove unused datetime/timezone imports from tests/test_trigger_pid_watch.py and Optional from tests/test_spawner_exit_override.py.
+    - Remove unused json imports from tests/test_message_attachments.py and tests/test_backend_logging.py.
+    - Verify with pyflakes on those test files.
+  category: imports
+  status: pending
+  created: '2026-06-25T15:12:27Z'
   priority: low

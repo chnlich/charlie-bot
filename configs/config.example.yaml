@@ -1,0 +1,59 @@
+# CharlieBot config template.
+# setup.sh copies this to ~/.charliebot/config.yaml when that file does not exist.
+# Every field below is uncommented and set to its default. Edit per host, fill in
+# secrets, and never commit your filled-in config.yaml.
+
+# --- LLM (Gemini API: session autoname + audio transcription; NOT the CLI backend model) ---
+
+# Gemini API model. "gemini-flash-latest" always tracks the newest Flash release.
+gemini_model: gemini-flash-latest
+
+# Gemini API key. Secret. Required for voice transcription and session autoname.
+gemini_api_key: ""
+
+# --- Server ---
+
+# Bind address. 127.0.0.1 = localhost only; expose remotely with `tailscale serve`.
+server_host: 127.0.0.1
+
+# Bind port.
+server_port: 18498
+
+# Web UI access token. Secret. Set this if the server is reachable beyond localhost.
+charliebot_access_key: ""
+
+# --- Paths ---
+
+# Directories scanned for git repos.
+workspace_dirs: ["~/workspace"]
+
+# Root directory for worker worktrees.
+worktree_dir: ~/worktrees
+
+# --- Backends ---
+
+# Reviewer backend preference: list of backend_options ids. Empty = reviewer uses the worker's backend.
+model_preference: []
+
+# Backends available for model switching. Editing this list REPLACES the default;
+# keep the entries you want. Codex reasoning effort is always xhigh (hardcoded).
+backend_options:
+  - {id: claude-opus-4.8, label: "CC · Opus 4.8", type: cc-claude, model: claude-opus-4-8, effort: max}
+  - {id: codex-gpt-5.5,  label: "Codex · GPT-5.5", type: codex, model: gpt-5.5}
+  - {id: claude-tui,     label: "Claude TUI", type: tui-cli}
+
+# --- Backlog panel ---
+
+# Repos shown in the backlog panel, each {label, path}.
+backlog_repos: []
+
+# --- Voice ---
+
+# Custom vocabulary hints for transcription.
+voice_custom_words: []
+
+# --- Optional credentials (add per host when used) ---
+# Other backend / notification secrets: moonshot_api_key, deepseek_sglang_api_key,
+# deepseek_sglang_base_url, telegram_bot_token, telegram_chat_id.
+# Skill integration tokens (github / linear / slack / feishu / google) are omitted
+# for now, pending a cleanup of which keys are still used.

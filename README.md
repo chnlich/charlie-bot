@@ -2,6 +2,10 @@
 
 A Python-based orchestration system that coordinates multiple Claude Code worker instances to complete complex tasks via a responsive Web UI.
 
+## Setup
+
+Run `./scripts/setup.sh` on a new host. It seeds `~/.charliebot/config.yaml` from `configs/config.example.yaml` when the config is missing. Fill in secrets such as `gemini_api_key` and `charliebot_access_key` before the first start.
+
 ## Features
 
 - **Multi-Agent Orchestration** — Master agent coordinates Worker and Reviewer agents across pluggable backends (Claude Code, Codex, Kimi, Gemini CLI, OpenCode, Antigravity CLI)

@@ -7328,3 +7328,18 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude_sub turn menu probing out of _stream_turn
+  description: 'PURPOSE — Keep claude-sub turn orchestration readable by moving stall/menu
+    probing out of `_stream_turn`.
+
+    HOW — Extract the `_STALL_PROBE_SECONDS` pane-probe block into a focused helper
+    that returns the updated menu-probe count. Leave transcript tailing, event emission,
+    and hard-cap handling in `_stream_turn`. Verify with `yapf --diff src/cli/claude_sub.py`
+    and the claude-sub tests.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-26T01:13:03Z'
+  priority: low

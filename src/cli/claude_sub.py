@@ -339,8 +339,7 @@ def _first_nonempty_normalized_line(text: str) -> Optional[str]:
 
 
 def _menu_state_matches_submitted_prompt(state: PaneInputState, submitted_prompt: Optional[str]) -> bool:
-  submitted_first_line = (
-      _first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
+  submitted_first_line = (_first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
   if submitted_first_line is None:
     return False
   candidate = " ".join(state.content.partition("❯")[2].split())
@@ -370,12 +369,13 @@ def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] =
 
 
 def _emit_tui_menu_dismissed(emit: Any) -> None:
-  emit({
-      "type": "system",
-      "subtype": "tui_menu_dismissed",
-      "content": _TUI_MENU_DISMISSED_WARNING,
-      "uuid": str(uuid.uuid4()),
-  })
+  emit(
+      {
+          "type": "system",
+          "subtype": "tui_menu_dismissed",
+          "content": _TUI_MENU_DISMISSED_WARNING,
+          "uuid": str(uuid.uuid4()),
+      })
 
 
 async def _dismiss_pre_prompt_menu(session_id: str, emit: Any, dismissed: int) -> int:

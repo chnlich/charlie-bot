@@ -78,6 +78,7 @@
     <!-- PLAN CONTENT: fill <main> using the block kit below. Keep content in semantic blocks so inline comments can anchor to useful units. -->
     <!--
       BLOCK KIT
+      - The FIRST section is the Problem: state what the plan solves, written top-down from high-level context to the concrete cause or location. Let depth follow the plan complexity (a sentence for trivial changes, several layers for complex ones).
       - section.plan-section wraps each major plan section.
       - h2 with span.n gives a compact section marker; use span.nb for the alternate accent.
       - p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks.
@@ -90,8 +91,10 @@
     -->
 
     <section class="plan-section">
-      <h2><span class="n">1</span> Objective</h2>
-      <p>State the outcome in concrete terms. Keep each paragraph focused; inline comments attach to individual paragraphs, list items, headings, table cells, or sections.</p>
+      <h2><span class="n">1</span> Problem</h2>
+      <p>Open with the broadest framing of why this work matters: the situation and what is at stake.</p>
+      <p>Narrow to the specific gap: what is broken, missing, or costly today.</p>
+      <p>Land on the concrete cause or location the change touches (file, function, line). Let the depth follow the plan: a trivial change needs a sentence, a complex one drills down several layers.</p>
       <div class="callout"><p><b>Callout:</b> Use this for constraints, decisions, risk notes, or reviewer guidance that should stand apart from the main flow.</p></div>
     </section>
 

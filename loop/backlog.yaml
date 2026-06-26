@@ -7328,3 +7328,22 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Extract shared Anthropic-compatible Claude env helper
+  description: 'PURPOSE: Keep Claude Code Anthropic-compatible provider environment
+    injection in one place.
+
+    HOW:
+
+    - Add a helper in `src/agents/backends/claude_code.py` that builds the shared
+    `ANTHROPIC_*` model override environment from base URL, auth token, and model.
+
+    - Use it from `DeepSeekSGLangBackend._prepare_env` and `KimiBackend._prepare_env`,
+    keeping provider-specific validation and constants local.
+
+    - Verify `python -m pyflakes src/agents/backends/` and `yapf --diff src/agents/backends/`
+    are clean.'
+  category: duplication
+  status: pending
+  created: '2026-06-26T11:13:50Z'
+  priority: low

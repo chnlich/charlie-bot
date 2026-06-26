@@ -14,6 +14,12 @@ _FIXTURE_IDLE_HINT = '\x1b[39m❯ \x1b[2mTry "how do I log an error?"\x1b[0m'
 _FIXTURE_GHOST_SUGGESTION = "\x1b[39m❯ \x1b[2m3D latent 我打算用 sparse voxel，变长的\x1b[0m"
 _FIXTURE_PASTE_PLACEHOLDER = "\x1b[39m❯ [Pasted text #1 +5 lines]"
 _FIXTURE_LITERAL_PASTE = "\x1b[39m❯ short literal paste"
+_FIXTURE_STARTUP_MENU = """\
+\x1b[?25l╭────────────────────────────────────────────╮
+│ Claude Code can help with this repository.   │
+│ ❯ 1. Yes, try it                             │
+│   2. No, keep using the terminal             │
+╰────────────────────────────────────────────╯"""
 
 
 def _stub_turn_setup(monkeypatch: pytest.MonkeyPatch, jsonl: Path) -> None:
@@ -102,6 +108,34 @@ def test_pane_has_interactive_menu_detects_numbered_selection() -> None:
 
   assert claude_sub._pane_has_interactive_menu(plan_menu)
   assert claude_sub._pane_has_interactive_menu(permission_menu)
+
+
+def test_classify_pane_input_detects_fullscreen_startup_menu() -> None:
+  state = claude_sub._classify_pane_input(_FIXTURE_STARTUP_MENU)
+
+  assert state.kind == claude_sub.PaneInputKind.MENU
+  assert "Yes, try it" in state.content
+
+
+def test_classify_pane_input_detects_empty_prompt() -> None:
+  state = claude_sub._classify_pane_input(_FIXTURE_IDLE_HINT)
+
+  assert state == claude_sub.PaneInputState(claude_sub.PaneInputKind.PROMPT, "")
+
+
+def test_classify_pane_input_detects_multiline_paste_placeholder() -> None:
+  state = claude_sub._classify_pane_input(_FIXTURE_PASTE_PLACEHOLDER)
+
+  assert state == claude_sub.PaneInputState(
+      claude_sub.PaneInputKind.PROMPT, "[Pasted text #1 +5 lines]")
+
+
+def test_classify_pane_input_uses_last_cursor_line_over_scrollback_echo() -> None:
+  pane = _FIXTURE_STARTUP_MENU + "\n" + _FIXTURE_IDLE_HINT
+
+  state = claude_sub._classify_pane_input(pane)
+
+  assert state == claude_sub.PaneInputState(claude_sub.PaneInputKind.PROMPT, "")
 
 
 def test_pane_has_interactive_menu_ignores_prompt_and_output() -> None:
@@ -243,6 +277,7 @@ def _stub_send_prompt_tmux(monkeypatch: pytest.MonkeyPatch, captures) -> list[st
   monkeypatch.setattr(claude_sub, "_SUBMIT_RETRY_WAIT_SECONDS", 0.0)
   monkeypatch.setattr(claude_sub, "_PASTE_RENDER_TIMEOUT_SECONDS", 0.0)
   monkeypatch.setattr(claude_sub, "_CLEAR_INPUT_TIMEOUT_SECONDS", 0.0)
+  monkeypatch.setattr(claude_sub, "_POLL_SECONDS", 0.0)
   return keys
 
 
@@ -310,6 +345,25 @@ async def test_send_prompt_clears_stale_input_before_pasting(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_send_prompt_dismisses_startup_menu_before_pasting(monkeypatch: pytest.MonkeyPatch) -> None:
+  events: list[dict] = []
+  keys = _stub_send_prompt_tmux(
+      monkeypatch,
+      [
+          _FIXTURE_STARTUP_MENU,  # pre-send check sees a startup menu, not stale input
+          _FIXTURE_STARTUP_MENU,  # bounded cancel path sends Escape
+          _FIXTURE_IDLE_HINT,  # menu dismissed; real prompt is ready
+          _FIXTURE_PASTE_PLACEHOLDER,  # paste rendered
+          _FIXTURE_IDLE_HINT,  # Enter landed
+      ])
+
+  await claude_sub._send_prompt("session-id", "Fix the race\nwith details on later lines", events.append)
+
+  assert keys == ["Escape", "Enter"]
+  assert [event["subtype"] for event in events] == ["tui_menu_dismissed"]
+
+
+@pytest.mark.asyncio
 async def test_send_prompt_raises_when_stale_input_never_clears(monkeypatch: pytest.MonkeyPatch) -> None:
   keys = _stub_send_prompt_tmux(monkeypatch, _forever([], _FIXTURE_LITERAL_PASTE))
 
@@ -327,6 +381,58 @@ async def test_send_prompt_raises_when_paste_never_renders(monkeypatch: pytest.M
     await claude_sub._send_prompt("session-id", "Fix the race")
 
   assert keys == []  # no Enter ever sent toward an empty box
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prompt_dismisses_startup_menu_and_emits_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+  captures = iter([_FIXTURE_STARTUP_MENU, _FIXTURE_IDLE_HINT])
+  keys: list[str] = []
+  events: list[dict] = []
+
+  async def fake_capture(session_id: str) -> str:
+    return next(captures)
+
+  async def fake_run_tmux_bytes(*args, stdin=None, capture=False) -> bytes:
+    if args[0] == "send-keys":
+      keys.append(args[-1])
+    return b""
+
+  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
+  monkeypatch.setattr(claude_sub, "_run_tmux_bytes", fake_run_tmux_bytes)
+  monkeypatch.setattr(claude_sub, "_POLL_SECONDS", 0.0)
+
+  await claude_sub._wait_for_prompt("session-id", events.append)
+
+  assert keys == ["Escape"]
+  assert len(events) == 1
+  assert events[0]["type"] == "system"
+  assert events[0]["subtype"] == "tui_menu_dismissed"
+  assert events[0]["content"] == claude_sub._TUI_MENU_DISMISSED_WARNING
+  assert events[0]["uuid"]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prompt_fails_loud_after_startup_menu_dismiss_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+  keys: list[str] = []
+
+  async def fake_capture(session_id: str) -> str:
+    return _FIXTURE_STARTUP_MENU
+
+  async def fake_run_tmux_bytes(*args, stdin=None, capture=False) -> bytes:
+    if args[0] == "send-keys":
+      keys.append(args[-1])
+    return b""
+
+  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
+  monkeypatch.setattr(claude_sub, "_run_tmux_bytes", fake_run_tmux_bytes)
+  monkeypatch.setattr(claude_sub, "_PRE_PROMPT_MENU_MAX_DISMISS", 2)
+  monkeypatch.setattr(claude_sub, "_POLL_SECONDS", 0.0)
+
+  with pytest.raises(RuntimeError, match="startup menu.*before the first prompt") as exc_info:
+    await claude_sub._wait_for_prompt("session-id", lambda event: None)
+
+  assert keys == ["Escape", "Escape"]
+  assert "120" not in str(exc_info.value)
 
 
 def test_convert_record_suppresses_typed_user_prompt() -> None:
@@ -439,6 +545,68 @@ async def test_resume_requires_existing_transcript_or_tmux_session(monkeypatch: 
     await claude_sub._stream_turn(args, asyncio.Event())
 
   assert not ensure_called
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_emits_init_before_prompt_wait_warning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                                 capsys: pytest.CaptureFixture[str]) -> None:
+  jsonl = tmp_path / "session.jsonl"
+  records = [
+      {
+          "type": "assistant",
+          "message": {
+              "id": "msg-a",
+              "content": [{
+                  "type": "text",
+                  "text": "done",
+              }],
+          },
+      },
+      {
+          "type": "system",
+          "subtype": "turn_duration",
+          "durationMs": 5,
+      },
+  ]
+  jsonl.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+  async def fake_ensure_tmux_session(*args, **kwargs) -> None:
+    print("tmux startup noise")
+
+  async def fake_wait_for_prompt(session_id: str, emit) -> None:
+    emit({
+        "type": "system",
+        "subtype": "tui_menu_dismissed",
+        "content": claude_sub._TUI_MENU_DISMISSED_WARNING,
+        "uuid": "warning-id",
+    })
+
+  async def fake_send_prompt(session_id: str, prompt: str, emit=None) -> None:
+    return None
+
+  async def fake_wait_transcript(session_id: str) -> Path:
+    return jsonl
+
+  monkeypatch.setattr(claude_sub, "ensure_tmux_session", fake_ensure_tmux_session)
+  monkeypatch.setattr(claude_sub, "_wait_for_prompt", fake_wait_for_prompt)
+  monkeypatch.setattr(claude_sub, "_send_prompt", fake_send_prompt)
+  monkeypatch.setattr(claude_sub, "_wait_for_transcript_path", fake_wait_transcript)
+  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: None)
+
+  args = claude_sub.ClaudeSubArgs(output_format="stream-json", prompt="hi")
+  await claude_sub._stream_turn(args, asyncio.Event())
+
+  output = capsys.readouterr().out
+  assert "tmux startup noise" not in output
+  events = [json.loads(line) for line in output.splitlines()]
+  assert events[0]["type"] == "system"
+  assert events[0]["subtype"] == "init"
+  assert events[1] == {
+      "type": "system",
+      "subtype": "tui_menu_dismissed",
+      "content": claude_sub._TUI_MENU_DISMISSED_WARNING,
+      "uuid": "warning-id",
+  }
 
 
 @pytest.mark.asyncio

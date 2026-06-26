@@ -23,7 +23,7 @@ class KimiBackend(ClaudeCodeBackend):
 
   def _prepare_env(self, env: dict) -> dict:
     return {
-        **env,
+        **super()._prepare_env(env),
         "ANTHROPIC_BASE_URL": _MOONSHOT_BASE_URL,
         "ANTHROPIC_AUTH_TOKEN": self._api_key,
         "ANTHROPIC_MODEL": self._env_model,

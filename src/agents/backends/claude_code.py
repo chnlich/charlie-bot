@@ -1,5 +1,6 @@
 """ClaudeCodeBackend — concrete AgentBackend wrapping the Claude Code CLI."""
 
+import os
 from pathlib import Path
 
 import structlog
@@ -27,6 +28,19 @@ BASE_COMMAND: list[str] = [
 # tmux and cannot answer arrow-key menus. Additionally disallow the tools that raise
 # such menus so the model emits plain-text choices instead of deadlocking the session.
 SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
+
+HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+}
+HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",)
+
+
+def headless_claude_env() -> dict[str, str]:
+  env = dict(HEADLESS_CLAUDE_INVARIANT_ENV)
+  for name in HEADLESS_CLAUDE_FORWARDED_ENV_NAMES:
+    if name in os.environ:
+      env[name] = os.environ[name]
+  return env
 
 
 class ClaudeCodeBackend(AgentBackend):
@@ -59,6 +73,9 @@ class ClaudeCodeBackend(AgentBackend):
     claude_md = Path(cwd) / "CLAUDE.md"
     claude_md.write_text(self._instructions_content, encoding="utf-8")
     log.debug("claude_code_wrote_claude_md", path=str(claude_md))
+
+  def _prepare_env(self, env: dict) -> dict:
+    return {**env, **headless_claude_env()}
 
   def _build_command(self, prompt: str) -> list[str]:
     return list(self._cmd)

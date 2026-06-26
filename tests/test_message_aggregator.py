@@ -302,6 +302,39 @@ def test_handler_result_flushes_draft_and_emits_system_message() -> None:
   assert deltas[1]["message"]["content"] == "✓ Lint: All clean"
 
 
+def test_tui_menu_dismissed_system_event_emits_system_message() -> None:
+  agg = MessageAggregator()
+  deltas = list(
+      agg.feed({
+          "type": "system",
+          "subtype": "tui_menu_dismissed",
+          "content": "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
+          "timestamp": "t",
+      }))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "system",
+                  "content": "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t",
+              },
+      }
+  ]
+
+
+def test_init_system_event_is_ignored() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}, "timestamp": "t1"}))
+
+  assert list(agg.feed({"type": "system", "subtype": "init", "timestamp": "t2"})) == []
+  assert agg.pending_draft_message()["content"] == "draft"
+
+
 def test_flush_pending_emits_dangling_draft() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "tail"}]}, "timestamp": "t"}))

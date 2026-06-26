@@ -17,6 +17,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field, replace
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,8 +46,7 @@ _TURN_HARD_CAP_SECONDS = 7200.0
 # is never followed by a digit, so requiring a number distinguishes a blocking menu.
 # Must only ever run on dim-stripped real content: ghost suggestions render dim and
 # may start with a digit. Submitted prompts are echoed into scrollback with the same
-# cursor prefix, so menu detection checks only the current cursor line and ignores a
-# line matching the submitted prompt.
+# cursor prefix, so classification checks only the last visible real cursor line.
 _MENU_OPTION_RE = re.compile(r"❯\s*\d")
 
 # SGR sequence (CSI ... m); group 1 holds the parameter list that toggles dim.
@@ -66,6 +66,20 @@ _SUBMIT_RETRY_WAIT_SECONDS = 5.0
 _SUBMIT_MAX_ENTER_ATTEMPTS = 4
 _PASTE_RENDER_TIMEOUT_SECONDS = 120.0
 _CLEAR_INPUT_TIMEOUT_SECONDS = 120.0
+_PRE_PROMPT_MENU_MAX_DISMISS = 3
+_TUI_MENU_DISMISSED_WARNING = "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt."
+
+
+class PaneInputKind(IntEnum):
+  UNKNOWN = 0
+  PROMPT = 1
+  MENU = 2
+
+
+@dataclass(frozen=True)
+class PaneInputState:
+  kind: PaneInputKind
+  content: str = ""
 
 
 @dataclass(frozen=True)
@@ -265,8 +279,8 @@ def _strip_dim_text(line: str) -> str:
   return "".join(out)
 
 
-def _input_box_content(pane_text: str) -> Optional[str]:
-  """Real (non-dim) content of the TUI input box, or None if no ❯ line is visible.
+def _classify_pane_input(pane_text: str) -> PaneInputState:
+  """Classify the active TUI cursor line from escape-preserving pane text.
 
   `pane_text` must come from an escape-preserving capture. The input box is the LAST
   ❯-prefixed line: after a submit the TUI echoes the submitted message in the
@@ -275,16 +289,31 @@ def _input_box_content(pane_text: str) -> Optional[str]:
   text reads as empty; a multi-line paste renders as a non-dim
   "[Pasted text #N +M lines]" placeholder and reads as non-empty.
   """
-  content: Optional[str] = None
+  cursor_line: Optional[str] = None
   for line in pane_text.splitlines():
-    real = _strip_dim_text(line).lstrip()
-    if real.startswith("❯"):
-      content = real[1:].strip()
-  return content
+    real = _strip_dim_text(line)
+    if "❯" in real:
+      cursor_line = real
+  if cursor_line is None:
+    return PaneInputState(PaneInputKind.UNKNOWN)
+  if _MENU_OPTION_RE.search(cursor_line) is not None:
+    return PaneInputState(PaneInputKind.MENU, cursor_line.strip())
+  return PaneInputState(PaneInputKind.PROMPT, cursor_line.partition("❯")[2].strip())
+
+
+def _input_box_content(pane_text: str) -> Optional[str]:
+  state = _classify_pane_input(pane_text)
+  if state.kind == PaneInputKind.PROMPT:
+    return state.content
+  if state.kind == PaneInputKind.UNKNOWN:
+    return None
+  if state.kind == PaneInputKind.MENU:
+    return None
+  raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
 
 
 def _pane_has_prompt(pane_text: str) -> bool:
-  return _input_box_content(pane_text) is not None
+  return _classify_pane_input(pane_text).kind == PaneInputKind.PROMPT
 
 
 def _first_nonempty_normalized_line(text: str) -> Optional[str]:
@@ -309,27 +338,60 @@ def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] =
   """
   submitted_first_line = (
       _first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
-  cursor_line: Optional[str] = None
-  for line in pane_text.splitlines():
-    real = _strip_dim_text(line)
-    if "❯" in real:
-      cursor_line = real
-  if cursor_line is None or _MENU_OPTION_RE.search(cursor_line) is None:
+  state = _classify_pane_input(pane_text)
+  if state.kind == PaneInputKind.MENU:
+    if submitted_first_line is not None:
+      candidate = " ".join(state.content.partition("❯")[2].split())
+      if candidate == submitted_first_line:
+        return False
+    return True
+  if state.kind == PaneInputKind.PROMPT:
     return False
-  if submitted_first_line is not None:
-    candidate = " ".join(cursor_line.partition("❯")[2].split())
-    if candidate == submitted_first_line:
-      return False
-  return True
+  if state.kind == PaneInputKind.UNKNOWN:
+    return False
+  raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
 
 
-async def _wait_for_prompt(session_id: str) -> None:
+def _emit_tui_menu_dismissed(emit: Any) -> None:
+  emit({
+      "type": "system",
+      "subtype": "tui_menu_dismissed",
+      "content": _TUI_MENU_DISMISSED_WARNING,
+      "uuid": str(uuid.uuid4()),
+  })
+
+
+async def _dismiss_pre_prompt_menu(session_id: str, emit: Any, dismissed: int) -> int:
+  if dismissed >= _PRE_PROMPT_MENU_MAX_DISMISS:
+    raise RuntimeError(
+        f"Claude TUI startup menu remained before the first prompt after "
+        f"{_PRE_PROMPT_MENU_MAX_DISMISS} Escape dismissals for session {session_id}")
+  await _run_tmux_bytes("send-keys", "-t", tmux_session_name(session_id), "Escape")
+  _emit_tui_menu_dismissed(emit)
+  return dismissed + 1
+
+
+async def _wait_for_prompt_state(session_id: str, emit: Any) -> PaneInputState:
   deadline = time.monotonic() + _PROMPT_READY_TIMEOUT_SECONDS
+  dismissed = 0
   while time.monotonic() < deadline:
-    if _pane_has_prompt(await _capture_pane_escapes(session_id)):
-      return
+    state = _classify_pane_input(await _capture_pane_escapes(session_id))
+    if state.kind == PaneInputKind.PROMPT:
+      return state
+    if state.kind == PaneInputKind.MENU:
+      dismissed = await _dismiss_pre_prompt_menu(session_id, emit, dismissed)
+    elif state.kind == PaneInputKind.UNKNOWN:
+      pass
+    else:
+      raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
     await asyncio.sleep(_POLL_SECONDS)
   raise RuntimeError(f"interactive claude prompt did not become ready for session {session_id}")
+
+
+async def _wait_for_prompt(session_id: str, emit: Any | None = None) -> None:
+  if emit is None:
+    emit = _emit
+  await _wait_for_prompt_state(session_id, emit)
 
 
 async def _wait_input_box_empty(session_id: str, timeout: float) -> Optional[str]:
@@ -340,15 +402,22 @@ async def _wait_input_box_empty(session_id: str, timeout: float) -> Optional[str
   """
   deadline = time.monotonic() + timeout
   while True:
-    content = _input_box_content(await _capture_pane_escapes(session_id))
-    if not content:
+    state = _classify_pane_input(await _capture_pane_escapes(session_id))
+    if state.kind == PaneInputKind.PROMPT:
+      if not state.content:
+        return None
+      if time.monotonic() >= deadline:
+        return state.content
+    elif state.kind == PaneInputKind.MENU:
+      raise RuntimeError(f"Claude TUI startup menu appeared while clearing input for session {session_id}")
+    elif state.kind == PaneInputKind.UNKNOWN:
       return None
-    if time.monotonic() >= deadline:
-      return content
+    else:
+      raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
     await asyncio.sleep(_POLL_SECONDS)
 
 
-async def _send_prompt(session_id: str, prompt: str) -> None:
+async def _send_prompt(session_id: str, prompt: str, emit: Any | None = None) -> None:
   """Paste the prompt and verify submission by emptiness transitions of the input box.
 
   Prompt text is never matched: a multi-line paste renders only as a
@@ -358,9 +427,21 @@ async def _send_prompt(session_id: str, prompt: str) -> None:
   the box to empty — re-sending Enter only while the box is verified non-empty so
   stray Enters never reach an empty/ghost box.
   """
+  if emit is None:
+    emit = _emit
   target = tmux_session_name(session_id)
 
-  stale = _input_box_content(await _capture_pane_escapes(session_id))
+  state = _classify_pane_input(await _capture_pane_escapes(session_id))
+  if state.kind == PaneInputKind.MENU:
+    state = await _wait_for_prompt_state(session_id, emit)
+  elif state.kind == PaneInputKind.UNKNOWN:
+    raise RuntimeError(f"Claude TUI prompt was not visible before sending prompt for session {session_id}")
+  elif state.kind == PaneInputKind.PROMPT:
+    pass
+  else:
+    raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
+
+  stale = state.content
   if stale:
     await _run_tmux_bytes("send-keys", "-t", target, "C-e")
     await _run_tmux_bytes("send-keys", "-t", target, "C-u")
@@ -376,7 +457,17 @@ async def _send_prompt(session_id: str, prompt: str) -> None:
   await _run_tmux_bytes("paste-buffer", "-d", "-b", buffer_name, "-t", target)
 
   deadline = time.monotonic() + _PASTE_RENDER_TIMEOUT_SECONDS
-  while not _input_box_content(await _capture_pane_escapes(session_id)):
+  while True:
+    state = _classify_pane_input(await _capture_pane_escapes(session_id))
+    if state.kind == PaneInputKind.PROMPT:
+      if state.content:
+        break
+    elif state.kind == PaneInputKind.MENU:
+      raise RuntimeError(f"Claude TUI startup menu appeared while waiting for pasted prompt for session {session_id}")
+    elif state.kind == PaneInputKind.UNKNOWN:
+      pass
+    else:
+      raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
     if time.monotonic() >= deadline:
       raise RuntimeError(
           f"pasted prompt did not render in the claude TUI input box within "
@@ -552,13 +643,13 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
         effort=args.effort,
         disallowed_tools=args.disallowed_tools,
     )
-    await _wait_for_prompt(session_id)
 
+  _emit(_init_event(args, session_id))
+  await _wait_for_prompt(session_id, _emit)
   existing_jsonl = _find_existing_claude_jsonl(session_id)
   offset = existing_jsonl.stat().st_size if existing_jsonl is not None else 0
 
-  _emit(_init_event(args, session_id))
-  await _send_prompt(session_id, args.prompt)
+  await _send_prompt(session_id, args.prompt, _emit)
 
   jsonl_path = existing_jsonl or await _wait_for_transcript_path(session_id)
   tail = TranscriptTail(jsonl_path, offset)
@@ -592,14 +683,19 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
       now = time.monotonic()
       if now - last_activity >= _STALL_PROBE_SECONDS and now - last_probe >= _PANE_PROBE_INTERVAL_SECONDS:
         last_probe = now
-        if _pane_has_interactive_menu(await _capture_pane_escapes(session_id), args.prompt):
+        pane_state = _classify_pane_input(await _capture_pane_escapes(session_id))
+        if pane_state.kind == PaneInputKind.MENU:
           menu_probes += 1
           if menu_probes >= _MENU_CONFIRM_PROBES:
             await _interrupt_turn(session_id)
             raise RuntimeError(
                 "interactive TUI menu detected (AskUserQuestion / plan-approval); claude-sub cannot answer it")
-        else:
+        elif pane_state.kind == PaneInputKind.PROMPT:
           menu_probes = 0
+        elif pane_state.kind == PaneInputKind.UNKNOWN:
+          menu_probes = 0
+        else:
+          raise AssertionError(f"unhandled pane input kind: {pane_state.kind!r}")
 
       if now - turn_start >= _TURN_HARD_CAP_SECONDS:
         await _interrupt_turn(session_id)

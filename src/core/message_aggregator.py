@@ -69,7 +69,16 @@ def _context_compacted_msg(ev: dict) -> dict:
   return {'role': 'system', 'content': msg}
 
 
-# Dispatch table for event types that follow the flush-then-append pattern.
+def _system_msg(ev: dict) -> dict | None:
+  if ev.get("subtype") != "tui_menu_dismissed":
+    return None
+  return {
+      "role": "system",
+      "content": ev.get("content", ""),
+  }
+
+
+# Dispatch table for event types that usually follow the flush-then-append pattern.
 # Each handler returns a message dict (role + content + any extras) or None to
 # skip the event.  The aggregator adds event_index and a default timestamp.
 _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
@@ -104,6 +113,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _handler_result_msg,
     ET.CONTEXT_COMPACTED:
         _context_compacted_msg,
+    ET.SYSTEM:
+        _system_msg,
     ET.CLONE_START:
         lambda ev: {
             "role": "clone_start",
@@ -327,6 +338,16 @@ class MessageAggregator:
 
     handler = _SIMPLE_HANDLERS.get(t)
     if handler is None:
+      return
+    if t == ET.SYSTEM:
+      result = handler(ev)
+      if result is None:
+        return
+      yield from self._flush_to_message_delta()
+      result.setdefault('timestamp', ev.get('timestamp'))
+      result['event_index'] = idx
+      result['id'] = ev_id
+      yield {"type": "message", "message": result}
       return
     yield from self._flush_to_message_delta()
     result = handler(ev)

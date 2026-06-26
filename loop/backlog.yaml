@@ -7325,6 +7325,24 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Fixed by the scheduled code-health run; `yapf --diff --recursive src/`
+    now reports no diff.
+- id: '186'
+  title: Split claude_sub turn streaming into smaller helpers
+  description: 'PURPOSE — Keep the claude-sub turn driver small enough to audit while
+    preserving its fail-fast TUI handling.
+
+    HOW — Extract the transcript tail processing and stall/menu probe loop from
+    `_stream_turn` into a private helper. Keep `_stream_turn` responsible for session
+    setup, init emission, prompt readiness, prompt submission, and transcript selection.
+    Verify with `yapf --in-place --recursive src/`, `pyflakes src/cli/claude_sub.py`,
+    and the claude_sub tests.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-26T23:12:09Z'
   priority: low

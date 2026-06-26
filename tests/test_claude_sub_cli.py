@@ -638,6 +638,40 @@ async def test_stream_turn_aborts_on_blocking_menu(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_stream_turn_does_not_abort_on_numbered_prompt_echo(monkeypatch: pytest.MonkeyPatch,
+                                                                  tmp_path: Path) -> None:
+  jsonl = tmp_path / "session.jsonl"
+  jsonl.write_text("", encoding="utf-8")  # no records ever -> transcript stays quiet
+  _stub_turn_setup(monkeypatch, jsonl)
+
+  capture_called = False
+
+  async def fake_interrupt(session_id: str) -> None:
+    return None
+
+  async def fake_capture(session_id: str) -> str:
+    nonlocal capture_called
+    capture_called = True
+    return "❯ 1. Inspect the current failure\n  2. Patch the narrowest fix"
+
+  monkeypatch.setattr(claude_sub, "_interrupt_turn", fake_interrupt)
+  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
+  monkeypatch.setattr(claude_sub, "_STALL_PROBE_SECONDS", 0.0)
+  monkeypatch.setattr(claude_sub, "_PANE_PROBE_INTERVAL_SECONDS", 0.0)
+  monkeypatch.setattr(claude_sub, "_MENU_CONFIRM_PROBES", 1)
+  monkeypatch.setattr(claude_sub, "_TURN_HARD_CAP_SECONDS", 0.0)
+
+  args = claude_sub.ClaudeSubArgs(
+      output_format="stream-json",
+      prompt="1. Inspect the current failure\n2. Patch the narrowest fix",
+  )
+  with pytest.raises(RuntimeError, match="turn exceeded"):
+    await claude_sub._stream_turn(args, asyncio.Event())
+
+  assert capture_called
+
+
+@pytest.mark.asyncio
 async def test_stream_turn_completes_without_aborting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   jsonl = tmp_path / "session.jsonl"
   records = [

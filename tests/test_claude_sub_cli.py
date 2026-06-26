@@ -14,6 +14,7 @@ _FIXTURE_IDLE_HINT = '\x1b[39m❯ \x1b[2mTry "how do I log an error?"\x1b[0m'
 _FIXTURE_GHOST_SUGGESTION = "\x1b[39m❯ \x1b[2m3D latent 我打算用 sparse voxel，变长的\x1b[0m"
 _FIXTURE_PASTE_PLACEHOLDER = "\x1b[39m❯ [Pasted text #1 +5 lines]"
 _FIXTURE_LITERAL_PASTE = "\x1b[39m❯ short literal paste"
+_FIXTURE_DIGIT_LEADING_LITERAL_PASTE = "\x1b[39m❯ 1. Inspect the current failure"
 _FIXTURE_STARTUP_MENU = """\
 \x1b[?25l╭────────────────────────────────────────────╮
 │ Claude Code can help with this repository.   │
@@ -302,6 +303,22 @@ async def test_send_prompt_resends_enter_until_input_box_empties(monkeypatch: py
       ])
 
   await claude_sub._send_prompt("session-id", "Fix the race\nwith details on later lines")
+
+  assert keys == ["Enter", "Enter"]
+
+
+@pytest.mark.asyncio
+async def test_send_prompt_submits_digit_leading_literal_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+  keys = _stub_send_prompt_tmux(
+      monkeypatch,
+      [
+          _FIXTURE_IDLE_HINT,  # pre-paste: empty
+          _FIXTURE_DIGIT_LEADING_LITERAL_PASTE,  # paste rendered literally, not as a menu
+          _FIXTURE_DIGIT_LEADING_LITERAL_PASTE,  # first Enter dropped: retry while still non-empty
+          _FIXTURE_IDLE_HINT,  # second Enter landed
+      ])
+
+  await claude_sub._send_prompt("session-id", "1. Inspect the current failure")
 
   assert keys == ["Enter", "Enter"]
 

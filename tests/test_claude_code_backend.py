@@ -116,6 +116,35 @@ def test_claude_session_id_appends_session_flag() -> None:
   assert "--no-session-persistence" not in cmd
 
 
+def test_prepare_env_skips_absent_forwarded_var(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.delenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", raising=False)
+  backend = ClaudeCodeBackend()
+
+  env = backend._prepare_env({})
+
+  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+  assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in env
+
+
+def test_prepare_env_forwards_allowlisted_host_var(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "forwarded-test-value")
+  backend = ClaudeCodeBackend()
+
+  env = backend._prepare_env({})
+
+  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+  assert env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "forwarded-test-value"
+
+
+def test_prepare_env_applies_headless_policy_over_incoming_env(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.delenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", raising=False)
+  backend = ClaudeCodeBackend()
+
+  env = backend._prepare_env({"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "0"})
+
+  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
 @pytest.mark.asyncio
 async def test_large_prompt_is_sent_on_stdin_not_argv(tmp_path: Path) -> None:
   capture_path = tmp_path / "captured-prompt.txt"

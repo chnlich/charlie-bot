@@ -436,8 +436,59 @@ async def test_resume_requires_existing_transcript_or_tmux_session(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_stream_turn_emits_init_before_prompt_wait_warning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-                                                                 capsys: pytest.CaptureFixture[str]) -> None:
+async def test_stream_turn_injects_headless_env_into_tmux(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  jsonl = tmp_path / "session.jsonl"
+  records = [
+      {
+          "type": "assistant",
+          "message": {
+              "id": "msg-a",
+              "content": [{
+                  "type": "text",
+                  "text": "done",
+              }],
+          },
+      },
+      {
+          "type": "system",
+          "subtype": "turn_duration",
+          "durationMs": 5,
+      },
+  ]
+  jsonl.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+  injected_env = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+  captured_kwargs: dict[str, object] = {}
+
+  async def fake_ensure_tmux_session(*args, **kwargs) -> None:
+    captured_kwargs.update(kwargs)
+
+  async def fake_wait_for_prompt(session_id: str, emit) -> None:
+    return None
+
+  async def fake_send_prompt(session_id: str, prompt: str, emit=None) -> None:
+    return None
+
+  async def fake_wait_transcript(session_id: str) -> Path:
+    return jsonl
+
+  monkeypatch.setattr(claude_sub, "headless_claude_env", lambda: injected_env)
+  monkeypatch.setattr(claude_sub, "ensure_tmux_session", fake_ensure_tmux_session)
+  monkeypatch.setattr(claude_sub, "_wait_for_prompt", fake_wait_for_prompt)
+  monkeypatch.setattr(claude_sub, "_send_prompt", fake_send_prompt)
+  monkeypatch.setattr(claude_sub, "_wait_for_transcript_path", fake_wait_transcript)
+  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: None)
+
+  await claude_sub._stream_turn(claude_sub.ClaudeSubArgs(output_format="stream-json", prompt="hi"), asyncio.Event())
+
+  assert captured_kwargs["inject_env"] == injected_env
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_emits_init_before_prompt_wait_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   jsonl = tmp_path / "session.jsonl"
   records = [
       {
@@ -462,12 +513,13 @@ async def test_stream_turn_emits_init_before_prompt_wait_warning(monkeypatch: py
     print("tmux startup noise")
 
   async def fake_wait_for_prompt(session_id: str, emit) -> None:
-    emit({
-        "type": "system",
-        "subtype": "tui_menu_dismissed",
-        "content": claude_sub._TUI_MENU_DISMISSED_WARNING,
-        "uuid": "warning-id",
-    })
+    emit(
+        {
+            "type": "system",
+            "subtype": "tui_menu_dismissed",
+            "content": claude_sub._TUI_MENU_DISMISSED_WARNING,
+            "uuid": "warning-id",
+        })
 
   async def fake_send_prompt(session_id: str, prompt: str, emit=None) -> None:
     return None
@@ -526,8 +578,8 @@ async def test_stream_turn_aborts_on_blocking_menu(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_stream_turn_does_not_abort_on_numbered_prompt_echo(monkeypatch: pytest.MonkeyPatch,
-                                                                  tmp_path: Path) -> None:
+async def test_stream_turn_does_not_abort_on_numbered_prompt_echo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   jsonl = tmp_path / "session.jsonl"
   jsonl.write_text("", encoding="utf-8")  # no records ever -> transcript stays quiet
   _stub_turn_setup(monkeypatch, jsonl)

@@ -125,6 +125,7 @@ async def ensure_tmux_session(
     model: Optional[str] = None,
     effort: Optional[str] = None,
     disallowed_tools: Optional[list[str]] = None,
+    inject_env: Optional[dict[str, str]] = None,
 ) -> None:
   """Idempotently create the tmux session running Claude TUI in *working_dir*."""
   name = tmux_session_name(session_id)
@@ -140,6 +141,10 @@ async def ensure_tmux_session(
       effort=effort,
       disallowed_tools=disallowed_tools,
   )
+  tmux_env_args: list[str] = []
+  if inject_env is not None:
+    for key, value in inject_env.items():
+      tmux_env_args.extend(["-e", f"{key}={value}"])
   log.info("tui_claude_invocation", mode="resume" if resume else "fresh", session_id=session_id)
   rc, stderr = await _run_tmux(
       "new-session",
@@ -152,6 +157,7 @@ async def ensure_tmux_session(
       str(_INITIAL_ROWS),
       "-c",
       str(working_dir),
+      *tmux_env_args,
       *command_args,
   )
   if rc != 0:

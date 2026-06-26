@@ -63,6 +63,7 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
   await tui.ensure_tmux_session("session-id", working_dir)
 
   new_session_call = next(args for args in calls if args[0] == "new-session")
+  assert "-e" not in new_session_call
   assert new_session_call[-6:] == (
       "claude",
       "--settings",
@@ -142,6 +143,45 @@ async def test_ensure_tmux_session_passes_optional_claude_args(
       "max",
       "--disallowed-tools",
       "Monitor,CronCreate",
+  )
+
+
+@pytest.mark.asyncio
+async def test_ensure_tmux_session_injects_new_session_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  config_dir = tmp_path / "claude-config"
+  home_dir = tmp_path / "home"
+  working_dir = tmp_path / "session"
+  calls = []
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
+
+  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
+    calls.append(args)
+    if args[0] == "has-session":
+      return 1, ""
+    return 0, ""
+
+  monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+
+  await tui.ensure_tmux_session(
+      "session-id",
+      working_dir,
+      inject_env={
+          "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "forwarded-test-value",
+      },
+  )
+
+  new_session_call = next(args for args in calls if args[0] == "new-session")
+  command_index = new_session_call.index("claude")
+  assert new_session_call[command_index - 4:command_index] == (
+      "-e",
+      "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1",
+      "-e",
+      "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=forwarded-test-value",
   )
 
 

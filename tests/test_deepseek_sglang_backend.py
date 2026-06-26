@@ -16,6 +16,7 @@ def test_prepare_env_sets_charliebot_proxy_endpoint_and_model() -> None:
   prepared = backend._prepare_env({"PATH": "/usr/bin"})
 
   assert prepared["PATH"] == "/usr/bin"
+  assert prepared["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
   assert prepared["ANTHROPIC_BASE_URL"] == "http://localhost:8000/api/anthropic-proxy/deepseek-sglang"
   assert prepared["ANTHROPIC_AUTH_TOKEN"] == "charliebot-key"
   assert prepared["ANTHROPIC_MODEL"] == "meshy-sglang/deepseek-ai/DeepSeek-V4-Pro"

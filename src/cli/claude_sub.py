@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
+from src.agents.backends.claude_code import headless_claude_env
 from src.agents.backends.pty_common import _TMUX_SOCKET, _tmux_binary, _tmux_client_env, tmux_session_name
 from src.agents.backends.tui import _find_existing_claude_jsonl, ensure_tmux_session, tmux_session_exists
 from src.cli import claude_tui_state
@@ -530,6 +531,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
         model=args.model,
         effort=args.effort,
         disallowed_tools=args.disallowed_tools,
+        inject_env=headless_claude_env(),
     )
 
   _emit(_init_event(args, session_id))

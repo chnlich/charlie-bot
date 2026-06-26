@@ -9,6 +9,7 @@ def test_prepare_env_sets_moonshot_endpoint_and_model() -> None:
   prepared = backend._prepare_env({"PATH": "/usr/bin"})
 
   assert prepared["PATH"] == "/usr/bin"
+  assert prepared["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
   assert prepared["ANTHROPIC_BASE_URL"] == "https://api.moonshot.cn/anthropic"
   assert prepared["ANTHROPIC_AUTH_TOKEN"] == "moonshot-test-key"
   assert prepared["ANTHROPIC_MODEL"] == "kimi-k2.5"

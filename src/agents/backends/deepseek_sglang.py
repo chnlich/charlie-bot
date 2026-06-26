@@ -20,7 +20,7 @@ class DeepSeekSGLangBackend(ClaudeCodeBackend):
 
   def _prepare_env(self, env: dict) -> dict:
     return {
-        **env,
+        **super()._prepare_env(env),
         "ANTHROPIC_BASE_URL": self._proxy_base_url,
         "ANTHROPIC_AUTH_TOKEN": self._auth_token,
         "ANTHROPIC_MODEL": self._env_model,

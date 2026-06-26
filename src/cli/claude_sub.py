@@ -11,18 +11,26 @@ import asyncio
 import contextlib
 import io
 import json
-import re
 import signal
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field, replace
-from enum import IntEnum
 from pathlib import Path
 from typing import Any, Optional
 
 from src.agents.backends.pty_common import _TMUX_SOCKET, _tmux_binary, _tmux_client_env, tmux_session_name
 from src.agents.backends.tui import _find_existing_claude_jsonl, ensure_tmux_session, tmux_session_exists
+from src.cli.claude_sub_pane import PaneInputContext
+from src.cli.claude_sub_pane import PaneInputKind
+from src.cli.claude_sub_pane import PaneInputState
+from src.cli.claude_sub_pane import classify_pane_input as _classify_pane_input
+from src.cli.claude_sub_pane import first_nonempty_normalized_line as _first_nonempty_normalized_line
+from src.cli.claude_sub_pane import input_box_content as _input_box_content
+from src.cli.claude_sub_pane import menu_state_matches_prompt as _menu_state_matches_submitted_prompt
+from src.cli.claude_sub_pane import pane_has_interactive_menu as _pane_has_interactive_menu
+from src.cli.claude_sub_pane import pane_has_prompt as _pane_has_prompt
+from src.cli.claude_sub_pane import strip_dim_text as _strip_dim_text
 
 _POLL_SECONDS = 0.1
 _PROMPT_READY_TIMEOUT_SECONDS = 60.0
@@ -41,19 +49,6 @@ _PANE_PROBE_INTERVAL_SECONDS = 5.0
 _MENU_CONFIRM_PROBES = 2
 _TURN_HARD_CAP_SECONDS = 7200.0
 
-# Selection cursor (❯) sitting on a numbered option, as rendered by AskUserQuestion
-# / plan-approval / permission menus. The idle input prompt also starts with ❯ but
-# is never followed by a digit, so requiring a number distinguishes a blocking menu.
-# Must only ever run on dim-stripped real content: ghost suggestions render dim and
-# may start with a digit. Submitted prompts are echoed into scrollback with the same
-# cursor prefix, so classification checks only the last visible real cursor line.
-_MENU_OPTION_RE = re.compile(r"❯\s*\d")
-
-# SGR sequence (CSI ... m); group 1 holds the parameter list that toggles dim.
-_SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
-# Any other CSI sequence, stripped without affecting dim state.
-_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
 # The TUI sometimes drops the Enter sent right after a paste (seen at TUI startup and
 # under multi-second input redraw lag), leaving the prompt unsubmitted in the input
 # box. Submission is verified by emptiness transitions of the input box's real
@@ -68,18 +63,6 @@ _PASTE_RENDER_TIMEOUT_SECONDS = 120.0
 _CLEAR_INPUT_TIMEOUT_SECONDS = 120.0
 _PRE_PROMPT_MENU_MAX_DISMISS = 3
 _TUI_MENU_DISMISSED_WARNING = "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt."
-
-
-class PaneInputKind(IntEnum):
-  UNKNOWN = 0
-  PROMPT = 1
-  MENU = 2
-
-
-@dataclass(frozen=True)
-class PaneInputState:
-  kind: PaneInputKind
-  content: str = ""
 
 
 @dataclass(frozen=True)
@@ -253,122 +236,6 @@ async def _capture_pane_escapes(session_id: str) -> str:
   return output.decode("utf-8", errors="replace")
 
 
-def _strip_dim_text(line: str) -> str:
-  """Return only the characters of `line` rendered with SGR dim OFF, with escape codes removed.
-
-  Ghost suggestions and idle hints in the claude TUI input box render SGR dim and are
-  indistinguishable from real input in a plain capture, so real content must be computed
-  from an escape-preserving capture. Dim toggles: \\x1b[2m on; \\x1b[22m off; \\x1b[0m
-  (or a bare \\x1b[m reset) off. Other SGR parameters do not affect dim.
-  """
-  out: list[str] = []
-  dim = False
-  i = 0
-  while i < len(line):
-    if line[i] == "\x1b":
-      sgr = _SGR_RE.match(line, i)
-      if sgr is not None:
-        params = (sgr.group(1) or "0").split(";")
-        j = 0
-        while j < len(params):
-          param = params[j]
-          if param in ("", "0", "22"):
-            dim = False
-          elif param == "2":
-            dim = True
-          elif param in ("38", "48", "58"):
-            # Extended color (38;5;n / 38;2;r;g;b): the arguments are color components,
-            # not attributes — live panes emit e.g. 48;5;22, whose 22 must not read as
-            # dim-off (nor a 38;5;2 foreground as dim-on).
-            j += 2 if j + 1 < len(params) and params[j + 1] == "5" else 4
-          j += 1
-        i = sgr.end()
-        continue
-      csi = _CSI_RE.match(line, i)
-      i = csi.end() if csi is not None else i + 1
-      continue
-    if not dim:
-      out.append(line[i])
-    i += 1
-  return "".join(out)
-
-
-def _classify_pane_input(pane_text: str) -> PaneInputState:
-  """Classify the active TUI cursor line from escape-preserving pane text.
-
-  `pane_text` must come from an escape-preserving capture. The input box is the LAST
-  ❯-prefixed line: after a submit the TUI echoes the submitted message in the
-  scrollback with the same ❯ prefix, so earlier ❯ lines must not count. Ghost
-  suggestions and idle hints render dim and are stripped, so a box showing only ghost
-  text reads as empty; a multi-line paste renders as a non-dim
-  "[Pasted text #N +M lines]" placeholder and reads as non-empty.
-  """
-  cursor_line: Optional[str] = None
-  for line in pane_text.splitlines():
-    real = _strip_dim_text(line)
-    if "❯" in real:
-      cursor_line = real
-  if cursor_line is None:
-    return PaneInputState(PaneInputKind.UNKNOWN)
-  if _MENU_OPTION_RE.search(cursor_line) is not None:
-    return PaneInputState(PaneInputKind.MENU, cursor_line.strip())
-  return PaneInputState(PaneInputKind.PROMPT, cursor_line.partition("❯")[2].strip())
-
-
-def _input_box_content(pane_text: str) -> Optional[str]:
-  state = _classify_pane_input(pane_text)
-  if state.kind == PaneInputKind.PROMPT:
-    return state.content
-  if state.kind == PaneInputKind.UNKNOWN:
-    return None
-  if state.kind == PaneInputKind.MENU:
-    return None
-  raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
-
-
-def _pane_has_prompt(pane_text: str) -> bool:
-  return _classify_pane_input(pane_text).kind == PaneInputKind.PROMPT
-
-
-def _first_nonempty_normalized_line(text: str) -> Optional[str]:
-  for line in text.splitlines():
-    normalized = " ".join(line.split())
-    if normalized:
-      return normalized
-  return None
-
-
-def _menu_state_matches_submitted_prompt(state: PaneInputState, submitted_prompt: Optional[str]) -> bool:
-  submitted_first_line = (
-      _first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
-  if submitted_first_line is None:
-    return False
-  candidate = " ".join(state.content.partition("❯")[2].split())
-  return candidate == submitted_first_line
-
-
-def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] = None) -> bool:
-  """Return True if the pane is blocked on an 'Enter to select' menu.
-
-  Such menus (AskUserQuestion / plan-approval / permission) render the selection
-  cursor on a numbered option; the model has no way to answer them headlessly.
-  `pane_text` must come from an escape-preserving capture: a dim ghost suggestion
-  starting with a digit would otherwise match, so the menu pattern only runs on
-  dim-stripped real content. Submitted prompts are echoed into scrollback with the
-  same cursor, so only the last visible real cursor line represents the active
-  control, and a cursor line matching the submitted prompt's first non-empty line is
-  not a menu.
-  """
-  state = _classify_pane_input(pane_text)
-  if state.kind == PaneInputKind.MENU:
-    return not _menu_state_matches_submitted_prompt(state, submitted_prompt)
-  if state.kind == PaneInputKind.PROMPT:
-    return False
-  if state.kind == PaneInputKind.UNKNOWN:
-    return False
-  raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
-
-
 def _emit_tui_menu_dismissed(emit: Any) -> None:
   emit({
       "type": "system",
@@ -411,15 +278,21 @@ async def _wait_for_prompt(session_id: str, emit: Any | None = None) -> None:
   await _wait_for_prompt_state(session_id, emit)
 
 
-async def _wait_input_box_empty(session_id: str, timeout: float) -> Optional[str]:
+async def _wait_input_box_empty(
+    session_id: str,
+    timeout: float,
+    pane_context: PaneInputContext | None = None,
+) -> Optional[str]:
   """Poll until the input box's real content reads empty.
 
   Returns None once empty, or the content still present at timeout — the caller's
   verified-non-empty witness for retrying or failing loud.
   """
+  if pane_context is None:
+    pane_context = PaneInputContext()
   deadline = time.monotonic() + timeout
   while True:
-    state = _classify_pane_input(await _capture_pane_escapes(session_id))
+    state = pane_context.classify(await _capture_pane_escapes(session_id))
     if state.kind == PaneInputKind.PROMPT:
       if not state.content:
         return None
@@ -447,6 +320,7 @@ async def _send_prompt(session_id: str, prompt: str, emit: Any | None = None) ->
   if emit is None:
     emit = _emit
   target = tmux_session_name(session_id)
+  prompt_pane_context = PaneInputContext(prompt)
 
   state = _classify_pane_input(await _capture_pane_escapes(session_id))
   if state.kind == PaneInputKind.MENU:
@@ -475,7 +349,7 @@ async def _send_prompt(session_id: str, prompt: str, emit: Any | None = None) ->
 
   deadline = time.monotonic() + _PASTE_RENDER_TIMEOUT_SECONDS
   while True:
-    state = _classify_pane_input(await _capture_pane_escapes(session_id))
+    state = prompt_pane_context.classify(await _capture_pane_escapes(session_id))
     if state.kind == PaneInputKind.PROMPT:
       if state.content:
         break
@@ -495,7 +369,10 @@ async def _send_prompt(session_id: str, prompt: str, emit: Any | None = None) ->
   for attempt in range(_SUBMIT_MAX_ENTER_ATTEMPTS):
     await _run_tmux_bytes("send-keys", "-t", target, "Enter")
     content = await _wait_input_box_empty(
-        session_id, _SUBMIT_VERIFY_WAIT_SECONDS if attempt == 0 else _SUBMIT_RETRY_WAIT_SECONDS)
+        session_id,
+        _SUBMIT_VERIFY_WAIT_SECONDS if attempt == 0 else _SUBMIT_RETRY_WAIT_SECONDS,
+        prompt_pane_context,
+    )
     if content is None:
       return
   raise RuntimeError(
@@ -675,6 +552,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   last_activity = turn_start
   last_probe = turn_start
   menu_probes = 0
+  turn_pane_context = PaneInputContext(args.prompt)
   try:
     while True:
       if stop_event.is_set():
@@ -700,16 +578,13 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
       now = time.monotonic()
       if now - last_activity >= _STALL_PROBE_SECONDS and now - last_probe >= _PANE_PROBE_INTERVAL_SECONDS:
         last_probe = now
-        pane_state = _classify_pane_input(await _capture_pane_escapes(session_id))
+        pane_state = turn_pane_context.classify(await _capture_pane_escapes(session_id))
         if pane_state.kind == PaneInputKind.MENU:
-          if _menu_state_matches_submitted_prompt(pane_state, args.prompt):
-            menu_probes = 0
-          else:
-            menu_probes += 1
-            if menu_probes >= _MENU_CONFIRM_PROBES:
-              await _interrupt_turn(session_id)
-              raise RuntimeError(
-                  "interactive TUI menu detected (AskUserQuestion / plan-approval); claude-sub cannot answer it")
+          menu_probes += 1
+          if menu_probes >= _MENU_CONFIRM_PROBES:
+            await _interrupt_turn(session_id)
+            raise RuntimeError(
+                "interactive TUI menu detected (AskUserQuestion / plan-approval); claude-sub cannot answer it")
         elif pane_state.kind == PaneInputKind.PROMPT:
           menu_probes = 0
         elif pane_state.kind == PaneInputKind.UNKNOWN:

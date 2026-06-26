@@ -7325,6 +7325,19 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Fixed by running `yapf --in-place --recursive src/` in the 2026-06-26
+    code-health scan.
+- id: '186'
+  title: Split OpenCodeBackend.run into process setup and session turn handling
+  description: |
+    PURPOSE: Keep OpenCodeBackend.run as orchestration instead of mixing process setup, server setup, and SSE turn handling.
+    HOW: Extract the HTTP/session/SSE portion after `_read_server_url` into `_run_session_turn(client, prompt)`.
+    The helper should create or resume the session, yield the session id, wait for server connection, send the prompt, translate events, and raise if the stream closes before `session.idle`.
+    Keep process launch, log-stream tasks, failure logging, and cleanup in `run`.
+  category: long-function
+  status: pending
+  created: '2026-06-26T13:12:37Z'
   priority: low

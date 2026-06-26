@@ -48,6 +48,8 @@ def test_parse_argv_accepts_cc_backend_flags_without_prompt() -> None:
           "claude-opus-4-8",
           "--effort",
           "max",
+          "--session-id",
+          "fresh-session-id",
           "--resume",
           "session-id",
       ])
@@ -56,6 +58,7 @@ def test_parse_argv_accepts_cc_backend_flags_without_prompt() -> None:
   assert args.prompt == ""
   assert args.model == "claude-opus-4-8"
   assert args.effort == "max"
+  assert args.session_id == "fresh-session-id"
   assert args.resume == "session-id"
   assert args.disallowed_tools == ["Monitor,CronCreate"]
 

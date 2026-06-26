@@ -108,6 +108,14 @@ def test_fast_mode_absent_when_unset() -> None:
   assert "--settings" not in cmd
 
 
+def test_claude_session_id_appends_session_flag() -> None:
+  backend = ClaudeCodeBackend(model="claude-opus-4-8", claude_session_id="session-123")
+  cmd = backend._build_command("hi")
+  session_index = cmd.index("--session-id")
+  assert cmd[session_index + 1] == "session-123"
+  assert "--no-session-persistence" not in cmd
+
+
 @pytest.mark.asyncio
 async def test_large_prompt_is_sent_on_stdin_not_argv(tmp_path: Path) -> None:
   capture_path = tmp_path / "captured-prompt.txt"

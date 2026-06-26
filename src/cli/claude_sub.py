@@ -88,6 +88,7 @@ class ClaudeSubArgs:
   prompt: str = ""
   model: Optional[str] = None
   effort: Optional[str] = None
+  session_id: Optional[str] = None
   resume: Optional[str] = None
   disallowed_tools: list[str] = field(default_factory=list)
 
@@ -153,6 +154,7 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
   output_format: Optional[str] = None
   model: Optional[str] = None
   effort: Optional[str] = None
+  session_id: Optional[str] = None
   resume: Optional[str] = None
   disallowed_tools: list[str] = []
 
@@ -165,7 +167,8 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
       continue
     if token == "--input-file" or token.startswith("--input-file="):
       raise ValueError("claude-sub does not support --input-file")
-    if token in ("--output-format", "--model", "--effort", "--resume", "-r", "--disallowed-tools", "--disallowedTools"):
+    if token in ("--output-format", "--model", "--effort", "--session-id", "--resume", "-r", "--disallowed-tools",
+                 "--disallowedTools"):
       if i + 1 >= len(option_tokens):
         raise ValueError(f"{token} requires a value")
       value = option_tokens[i + 1]
@@ -183,6 +186,8 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
       model = value
     elif token == "--effort":
       effort = value
+    elif token == "--session-id":
+      session_id = value
     elif token in ("--resume", "-r"):
       resume = value
     elif token in ("--disallowed-tools", "--disallowedTools"):
@@ -196,13 +201,22 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
       output_format=output_format,
       model=model,
       effort=effort,
+      session_id=session_id,
       resume=resume,
       disallowed_tools=disallowed_tools,
   )
 
 
 def _split_value_flag(token: str) -> Optional[tuple[str, str]]:
-  for name in ("--output-format", "--model", "--effort", "--resume", "--disallowed-tools", "--disallowedTools"):
+  for name in (
+      "--output-format",
+      "--model",
+      "--effort",
+      "--session-id",
+      "--resume",
+      "--disallowed-tools",
+      "--disallowedTools",
+  ):
     prefix = f"{name}="
     if token.startswith(prefix):
       return name, token[len(prefix):]
@@ -635,7 +649,7 @@ def _result_event(session_id: str, state: TurnState, turn_duration: dict[str, An
 
 
 async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
-  session_id = args.resume or str(uuid.uuid4())
+  session_id = args.resume or args.session_id or str(uuid.uuid4())
   if args.resume:
     await _validate_resume_target(session_id)
   with contextlib.redirect_stdout(io.StringIO()):

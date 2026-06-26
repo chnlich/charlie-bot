@@ -1,8 +1,10 @@
 """Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
 import asyncio
+import shlex
 import time
 import traceback
+import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -11,7 +13,7 @@ from typing import Optional
 import structlog
 
 from src.api.message_utils import extract_text_from_message
-from src.agents.backends.claude_code import BASE_COMMAND
+from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
 from src.core.models import (
@@ -206,7 +208,7 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: Option
   if option is None:
     raise ValueError(f"resolved backend '{backend_id}' is not configured")
   resolved_model = _resolve_routing_model(option, model, source="resolved")
-  return option.model_copy(update={"model": resolved_model, "cli_binary": None})
+  return option.model_copy(update={"model": resolved_model})
 
 
 def _resolve_configured_backend_model(
@@ -301,6 +303,25 @@ def _require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig)
   if backend_type_allows_missing_model(option.type):
     return thread.backend, None
   raise ValueError(f"thread '{thread.id}' missing model metadata")
+
+
+def _prepare_thread_backend_metadata(
+    thread: ThreadMetadata,
+    backend_option: BackendOption,
+    description: str,
+) -> None:
+  if backend_option.type != "cc-claude":
+    return
+  if thread.claude_session_id is None:
+    thread.claude_session_id = str(uuid.uuid4())
+  backend = ClaudeCodeBackend(
+      model=backend_option.model,
+      effort=backend_option.effort,
+      cli_binary=backend_option.cli_binary,
+      fast_mode=backend_option.fast_mode,
+      claude_session_id=thread.claude_session_id,
+  )
+  thread.cli_command = shlex.join(backend._build_command(description) + [description])
 
 
 async def _create_worktree_and_process(
@@ -406,6 +427,7 @@ async def _create_worktree_and_process(
   backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
   thread.backend = backend_option.id
   thread.model = backend_option.model
+  _prepare_thread_backend_metadata(thread, backend_option, description)
   await thread_mgr.save_metadata(thread)
 
   # Build Worker
@@ -443,6 +465,7 @@ async def _create_repoless_process(
   backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
   thread.backend = backend_option.id
   thread.model = backend_option.model
+  _prepare_thread_backend_metadata(thread, backend_option, description)
   await thread_mgr.save_metadata(thread)
 
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
@@ -469,7 +492,8 @@ async def _stream_worker_events(
 
   Returns (exit_code, quota_exhausted, error_message).
   """
-  thread.cli_command = " ".join(BASE_COMMAND + [description])
+  if thread.cli_command is None:
+    thread.cli_command = " ".join(BASE_COMMAND + [description])
   thread.status = ThreadStatus.RUNNING
   thread.started_at = datetime.now(timezone.utc)
   await thread_mgr.save_metadata(thread)

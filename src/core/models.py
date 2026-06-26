@@ -82,6 +82,7 @@ class ThreadMetadata(BaseModel):
   pid: Optional[int] = None
   exit_code: Optional[int] = None
   cli_command: Optional[str] = None
+  claude_session_id: Optional[str] = None
   branch_name: Optional[str] = None
   base_branch: Optional[str] = None
   repo_path: Optional[str] = None

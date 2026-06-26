@@ -60,7 +60,7 @@ echo "  Reminder: fill in secret keys gemini_api_key and charliebot_access_key b
 
 # Smoke-check the Claude Code backend command for headless-unsafe tools.
 echo "==> Checking Claude Code backend tools"
-python - <<'PY'
+uv run python - <<'PY'
 from src.agents.backends.claude_code import BASE_COMMAND
 
 required = ["Monitor", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList"]

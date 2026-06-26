@@ -324,6 +324,15 @@ def _first_nonempty_normalized_line(text: str) -> Optional[str]:
   return None
 
 
+def _menu_state_matches_submitted_prompt(state: PaneInputState, submitted_prompt: Optional[str]) -> bool:
+  submitted_first_line = (
+      _first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
+  if submitted_first_line is None:
+    return False
+  candidate = " ".join(state.content.partition("❯")[2].split())
+  return candidate == submitted_first_line
+
+
 def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] = None) -> bool:
   """Return True if the pane is blocked on an 'Enter to select' menu.
 
@@ -336,15 +345,9 @@ def _pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] =
   control, and a cursor line matching the submitted prompt's first non-empty line is
   not a menu.
   """
-  submitted_first_line = (
-      _first_nonempty_normalized_line(submitted_prompt) if submitted_prompt is not None else None)
   state = _classify_pane_input(pane_text)
   if state.kind == PaneInputKind.MENU:
-    if submitted_first_line is not None:
-      candidate = " ".join(state.content.partition("❯")[2].split())
-      if candidate == submitted_first_line:
-        return False
-    return True
+    return not _menu_state_matches_submitted_prompt(state, submitted_prompt)
   if state.kind == PaneInputKind.PROMPT:
     return False
   if state.kind == PaneInputKind.UNKNOWN:
@@ -685,11 +688,14 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
         last_probe = now
         pane_state = _classify_pane_input(await _capture_pane_escapes(session_id))
         if pane_state.kind == PaneInputKind.MENU:
-          menu_probes += 1
-          if menu_probes >= _MENU_CONFIRM_PROBES:
-            await _interrupt_turn(session_id)
-            raise RuntimeError(
-                "interactive TUI menu detected (AskUserQuestion / plan-approval); claude-sub cannot answer it")
+          if _menu_state_matches_submitted_prompt(pane_state, args.prompt):
+            menu_probes = 0
+          else:
+            menu_probes += 1
+            if menu_probes >= _MENU_CONFIRM_PROBES:
+              await _interrupt_turn(session_id)
+              raise RuntimeError(
+                  "interactive TUI menu detected (AskUserQuestion / plan-approval); claude-sub cannot answer it")
         elif pane_state.kind == PaneInputKind.PROMPT:
           menu_probes = 0
         elif pane_state.kind == PaneInputKind.UNKNOWN:

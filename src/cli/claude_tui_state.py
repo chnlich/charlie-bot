@@ -1,4 +1,4 @@
-"""Claude TUI pane parsing for claude-sub."""
+"""Claude TUI pane parsing and context-aware state interpretation."""
 
 from __future__ import annotations
 
@@ -101,73 +101,49 @@ def _raw_pane_input_state(pane_text: str) -> PaneInputState:
   return PaneInputState(PaneInputKind.PROMPT, _cursor_content(cursor_line))
 
 
-@dataclass(frozen=True)
-class PaneInputContext:
-  """Context for interpreting ambiguous digit-leading Claude TUI cursor lines."""
-
-  submitted_prompt: Optional[str] = None
-
-  def menu_state_matches_submitted_prompt(self, state: PaneInputState) -> bool:
-    submitted_first_line = (
-        first_nonempty_normalized_line(self.submitted_prompt) if self.submitted_prompt is not None else None)
-    if submitted_first_line is None:
-      return False
-    candidate = " ".join(_cursor_content(state.content).split())
-    return candidate == submitted_first_line
-
-  def classify(self, pane_text: str) -> PaneInputState:
-    state = _raw_pane_input_state(pane_text)
-    if state.kind == PaneInputKind.MENU and self.menu_state_matches_submitted_prompt(state):
-      return PaneInputState(PaneInputKind.PROMPT, _cursor_content(state.content))
-    return state
-
-  def input_box_content(self, pane_text: str) -> Optional[str]:
-    state = self.classify(pane_text)
-    if state.kind == PaneInputKind.PROMPT:
-      return state.content
-    if state.kind == PaneInputKind.UNKNOWN:
-      return None
-    if state.kind == PaneInputKind.MENU:
-      return None
-    raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
-
-  def has_prompt(self, pane_text: str) -> bool:
-    return self.classify(pane_text).kind == PaneInputKind.PROMPT
-
-  def has_interactive_menu(self, pane_text: str) -> bool:
-    state = _raw_pane_input_state(pane_text)
-    if state.kind == PaneInputKind.MENU:
-      return not self.menu_state_matches_submitted_prompt(state)
-    if state.kind == PaneInputKind.PROMPT:
-      return False
-    if state.kind == PaneInputKind.UNKNOWN:
-      return False
-    raise AssertionError(f"unhandled pane input kind: {state.kind!r}")
+def _menu_state_matches_prompt(state: PaneInputState, prompt: str) -> bool:
+  prompt_first_line = first_nonempty_normalized_line(prompt)
+  if prompt_first_line is None:
+    return False
+  candidate = " ".join(_cursor_content(state.content).split())
+  return candidate == prompt_first_line
 
 
-def classify_pane_input(pane_text: str, submitted_prompt: Optional[str] = None) -> PaneInputState:
-  """Classify the active TUI input control from an escape-preserving pane capture.
+def prompt_ready_state(pane_text: str) -> PaneInputState:
+  """Interpret a pane while waiting for an idle prompt before sending.
+
+  In this context a numbered cursor line is a startup/permission-style menu, because
+  no submitted prompt can explain a digit-leading active line yet.
+  """
+  return _raw_pane_input_state(pane_text)
+
+
+def prompt_send_input_state(pane_text: str, expected_prompt: str) -> PaneInputState:
+  """Interpret a pane while a just-pasted prompt is expected in the input box.
 
   The input box is the LAST ❯-prefixed line: after a submit the TUI echoes the
   submitted message in scrollback with the same ❯ prefix, so earlier ❯ lines must
   not count. Ghost suggestions and idle hints render dim and are stripped, so a box
-  showing only ghost text reads as empty. A digit-leading real cursor line is a menu
-  unless it matches the first non-empty line of `submitted_prompt`.
+  showing only ghost text reads as empty. A digit-leading real cursor line is prompt
+  input when it matches the first non-empty line of `expected_prompt`.
   """
-  return PaneInputContext(submitted_prompt).classify(pane_text)
+  state = _raw_pane_input_state(pane_text)
+  if state.kind == PaneInputKind.MENU and _menu_state_matches_prompt(state, expected_prompt):
+    return PaneInputState(PaneInputKind.PROMPT, _cursor_content(state.content))
+  return state
 
 
-def input_box_content(pane_text: str, submitted_prompt: Optional[str] = None) -> Optional[str]:
-  return PaneInputContext(submitted_prompt).input_box_content(pane_text)
+def quiet_turn_has_blocking_menu(pane_text: str, submitted_prompt: str) -> bool:
+  """Return True when a quiet turn is blocked on an interactive TUI menu.
 
-
-def pane_has_prompt(pane_text: str, submitted_prompt: Optional[str] = None) -> bool:
-  return PaneInputContext(submitted_prompt).has_prompt(pane_text)
-
-
-def menu_state_matches_prompt(state: PaneInputState, submitted_prompt: Optional[str]) -> bool:
-  return PaneInputContext(submitted_prompt).menu_state_matches_submitted_prompt(state)
-
-
-def pane_has_interactive_menu(pane_text: str, submitted_prompt: Optional[str] = None) -> bool:
-  return PaneInputContext(submitted_prompt).has_interactive_menu(pane_text)
+  Submitted prompts can be echoed with the same cursor prefix as menus, so a numbered
+  cursor line matching the submitted prompt's first non-empty line is not blocking.
+  """
+  state = _raw_pane_input_state(pane_text)
+  if state.kind == PaneInputKind.MENU:
+    return not _menu_state_matches_prompt(state, submitted_prompt)
+  if state.kind == PaneInputKind.PROMPT:
+    return False
+  if state.kind == PaneInputKind.UNKNOWN:
+    return False
+  raise AssertionError(f"unhandled pane input kind: {state.kind!r}")

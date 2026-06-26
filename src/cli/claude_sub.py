@@ -21,16 +21,9 @@ from typing import Any, Optional
 
 from src.agents.backends.pty_common import _TMUX_SOCKET, _tmux_binary, _tmux_client_env, tmux_session_name
 from src.agents.backends.tui import _find_existing_claude_jsonl, ensure_tmux_session, tmux_session_exists
-from src.cli.claude_sub_pane import PaneInputContext
-from src.cli.claude_sub_pane import PaneInputKind
-from src.cli.claude_sub_pane import PaneInputState
-from src.cli.claude_sub_pane import classify_pane_input as _classify_pane_input
-from src.cli.claude_sub_pane import first_nonempty_normalized_line as _first_nonempty_normalized_line
-from src.cli.claude_sub_pane import input_box_content as _input_box_content
-from src.cli.claude_sub_pane import menu_state_matches_prompt as _menu_state_matches_submitted_prompt
-from src.cli.claude_sub_pane import pane_has_interactive_menu as _pane_has_interactive_menu
-from src.cli.claude_sub_pane import pane_has_prompt as _pane_has_prompt
-from src.cli.claude_sub_pane import strip_dim_text as _strip_dim_text
+from src.cli import claude_tui_state
+from src.cli.claude_tui_state import PaneInputKind
+from src.cli.claude_tui_state import PaneInputState
 
 _POLL_SECONDS = 0.1
 _PROMPT_READY_TIMEOUT_SECONDS = 60.0
@@ -259,7 +252,7 @@ async def _wait_for_prompt_state(session_id: str, emit: Any) -> PaneInputState:
   deadline = time.monotonic() + _PROMPT_READY_TIMEOUT_SECONDS
   dismissed = 0
   while time.monotonic() < deadline:
-    state = _classify_pane_input(await _capture_pane_escapes(session_id))
+    state = claude_tui_state.prompt_ready_state(await _capture_pane_escapes(session_id))
     if state.kind == PaneInputKind.PROMPT:
       return state
     if state.kind == PaneInputKind.MENU:
@@ -281,18 +274,20 @@ async def _wait_for_prompt(session_id: str, emit: Any | None = None) -> None:
 async def _wait_input_box_empty(
     session_id: str,
     timeout: float,
-    pane_context: PaneInputContext | None = None,
+    expected_prompt: str | None = None,
 ) -> Optional[str]:
   """Poll until the input box's real content reads empty.
 
   Returns None once empty, or the content still present at timeout — the caller's
   verified-non-empty witness for retrying or failing loud.
   """
-  if pane_context is None:
-    pane_context = PaneInputContext()
   deadline = time.monotonic() + timeout
   while True:
-    state = pane_context.classify(await _capture_pane_escapes(session_id))
+    pane_text = await _capture_pane_escapes(session_id)
+    if expected_prompt is None:
+      state = claude_tui_state.prompt_ready_state(pane_text)
+    else:
+      state = claude_tui_state.prompt_send_input_state(pane_text, expected_prompt)
     if state.kind == PaneInputKind.PROMPT:
       if not state.content:
         return None
@@ -320,9 +315,8 @@ async def _send_prompt(session_id: str, prompt: str, emit: Any | None = None) ->
   if emit is None:
     emit = _emit
   target = tmux_session_name(session_id)
-  prompt_pane_context = PaneInputContext(prompt)
 
-  state = _classify_pane_input(await _capture_pane_escapes(session_id))
+  state = claude_tui_state.prompt_ready_state(await _capture_pane_escapes(session_id))
   if state.kind == PaneInputKind.MENU:
     state = await _wait_for_prompt_state(session_id, emit)
   elif state.kind == PaneInputKind.UNKNOWN:
@@ -349,7 +343,7 @@ async def _send_prompt(session_id: str, prompt: str, emit: Any | None = None) ->
 
   deadline = time.monotonic() + _PASTE_RENDER_TIMEOUT_SECONDS
   while True:
-    state = prompt_pane_context.classify(await _capture_pane_escapes(session_id))
+    state = claude_tui_state.prompt_send_input_state(await _capture_pane_escapes(session_id), prompt)
     if state.kind == PaneInputKind.PROMPT:
       if state.content:
         break
@@ -371,7 +365,7 @@ async def _send_prompt(session_id: str, prompt: str, emit: Any | None = None) ->
     content = await _wait_input_box_empty(
         session_id,
         _SUBMIT_VERIFY_WAIT_SECONDS if attempt == 0 else _SUBMIT_RETRY_WAIT_SECONDS,
-        prompt_pane_context,
+        prompt,
     )
     if content is None:
       return
@@ -552,7 +546,6 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   last_activity = turn_start
   last_probe = turn_start
   menu_probes = 0
-  turn_pane_context = PaneInputContext(args.prompt)
   try:
     while True:
       if stop_event.is_set():
@@ -578,19 +571,14 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
       now = time.monotonic()
       if now - last_activity >= _STALL_PROBE_SECONDS and now - last_probe >= _PANE_PROBE_INTERVAL_SECONDS:
         last_probe = now
-        pane_state = turn_pane_context.classify(await _capture_pane_escapes(session_id))
-        if pane_state.kind == PaneInputKind.MENU:
+        if claude_tui_state.quiet_turn_has_blocking_menu(await _capture_pane_escapes(session_id), args.prompt):
           menu_probes += 1
           if menu_probes >= _MENU_CONFIRM_PROBES:
             await _interrupt_turn(session_id)
             raise RuntimeError(
                 "interactive TUI menu detected (AskUserQuestion / plan-approval); claude-sub cannot answer it")
-        elif pane_state.kind == PaneInputKind.PROMPT:
-          menu_probes = 0
-        elif pane_state.kind == PaneInputKind.UNKNOWN:
-          menu_probes = 0
         else:
-          raise AssertionError(f"unhandled pane input kind: {pane_state.kind!r}")
+          menu_probes = 0
 
       if now - turn_start >= _TURN_HARD_CAP_SECONDS:
         await _interrupt_turn(session_id)

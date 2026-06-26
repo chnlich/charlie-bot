@@ -32,7 +32,7 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   assert opt.id == "claude-opus-4.6"
   assert opt.model == "claude-opus-4-6"
   assert opt.effort == "max"
-  assert opt.cli_binary is None
+  assert opt.cli_binary == "claude-sub"
 
   with pytest.raises(ValueError, match="not configured"):
     spawner.resolve_backend_option(cfg, "missing", "o3")
@@ -603,6 +603,67 @@ async def test_create_repoless_worker_propagates_antigravity_missing_model(
   assert thread.model is None
   assert captures["backend_option"].id == "agy"
   assert captures["backend_option"].model is None
+
+
+@pytest.mark.asyncio
+async def test_create_repoless_worker_assigns_claude_session_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
+      ],
+  )
+  thread = ThreadMetadata(
+      id="thread-1",
+      session_id="session-id",
+      description="Prompt task",
+  )
+  captures: dict[str, Any] = {}
+
+  class FakeThreadManager:
+
+    async def save_metadata(self, meta: ThreadMetadata) -> None:
+      captures["saved_thread"] = meta
+
+    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
+      return tmp_path / "events.jsonl"
+
+  class FakeWorker:
+
+    def __init__(
+        self,
+        thread_metadata: ThreadMetadata,
+        working_dir: Path,
+        events_log_path: Path,
+        task_description: str,
+        worker_cfg: CharlieBotConfig,
+        backend_option: Optional[BackendOption] = None,
+        extra_env: Optional[dict[str, str]] = None,
+        on_spawned: Optional[callable] = None,
+        instructions_content: Optional[str] = None,
+    ) -> None:
+      captures["backend_option"] = backend_option
+
+  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+
+  await spawner._create_repoless_process(
+      "session-id",
+      thread,
+      "Prompt task",
+      cfg,
+      FakeThreadManager(),
+      SpawnRequest(resolved_backend="claude-opus", resolved_model="claude-opus-4-8"),
+  )
+
+  assert thread.claude_session_id is not None
+  assert "--session-id" in (thread.cli_command or "")
+  assert thread.claude_session_id in (thread.cli_command or "")
+  assert captures["saved_thread"].claude_session_id == thread.claude_session_id
+  assert captures["backend_option"].type == "cc-claude"
 
 
 @pytest.mark.asyncio

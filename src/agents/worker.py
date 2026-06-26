@@ -74,14 +74,15 @@ class Worker:
 
     # Build the correct backend based on backend_option
     if self._backend_option:
-      self._backend = build_backend(
-          self._backend_option,
-          self._cfg,
-          buffer_limit=self._cfg.subprocess_buffer_limit,
-          on_spawn=_on_spawn,
-          instructions_content=self._instructions_content,
-          log_dir=self._events_log.parent,
-      )
+      backend_kwargs = {
+          "buffer_limit": self._cfg.subprocess_buffer_limit,
+          "on_spawn": _on_spawn,
+          "instructions_content": self._instructions_content,
+          "log_dir": self._events_log.parent,
+      }
+      if self._backend_option.type == "cc-claude":
+        backend_kwargs["claude_session_id"] = self._thread.claude_session_id
+      self._backend = build_backend(self._backend_option, self._cfg, **backend_kwargs)
     else:
       # Fallback to default ClaudeCodeBackend
       self._backend = ClaudeCodeBackend(

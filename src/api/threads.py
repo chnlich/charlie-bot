@@ -1,6 +1,9 @@
 """Thread management API routes."""
 
 import asyncio
+import os
+import shlex
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from src.core.process import kill_process_group
@@ -8,8 +11,10 @@ from src.core.process import kill_process_group
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
+from src.agents.backends.pty_common import _TMUX_SOCKET, tmux_session_exists, tmux_session_name
 from src.api.deps import get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message, extract_tool_result_text
+from src.core.config import CharlieBotConfig, get_config
 from src.core.models import (
     ThreadMetadata,
     ThreadStatus,
@@ -22,6 +27,103 @@ from src.core.triggers import TriggerManager
 log = structlog.get_logger()
 
 router = APIRouter()
+
+
+class ThreadMetadataResponse(ThreadMetadata):
+  attach_command: str | None = None
+  attach_available: bool = False
+
+
+@dataclass(frozen=True)
+class _BackendDispatch:
+  type: str
+  cli_binary: str | None = None
+
+
+def _backend_dispatch(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> _BackendDispatch | None:
+  if not thread.backend:
+    return None
+  if cfg is not None:
+    option = cfg.get_backend_option(thread.backend)
+    if option is not None:
+      return _BackendDispatch(type=option.type, cli_binary=option.cli_binary)
+  return _BackendDispatch(type=thread.backend)
+
+
+def _tmux_attach_command(session_id: str) -> str:
+  return shlex.join(["tmux", "-L", _TMUX_SOCKET, "attach", "-t", tmux_session_name(session_id)])
+
+
+def _tmux_attach_id(thread: ThreadMetadata, dispatch: _BackendDispatch) -> str | None:
+  if dispatch.type == "tui-cli":
+    return thread.session_id
+  if dispatch.type == "cc-claude" and dispatch.cli_binary == "claude-sub":
+    return thread.claude_session_id
+  return None
+
+
+def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None = None) -> str | None:
+  dispatch = _backend_dispatch(thread, cfg)
+  if dispatch is None:
+    return None
+
+  if dispatch.type == "cc-claude":
+    tmux_id = _tmux_attach_id(thread, dispatch)
+    if tmux_id:
+      return _tmux_attach_command(tmux_id)
+    if not thread.worktree_path or not thread.claude_session_id:
+      return None
+    return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"
+  if dispatch.type == "cc-kimi":
+    return None
+  if dispatch.type == "cc-deepseek-sglang":
+    return None
+  if dispatch.type == "codex":
+    return None
+  if dispatch.type == "charlie-code":
+    return None
+  if dispatch.type == "gemini":
+    return None
+  if dispatch.type == "opencode":
+    return None
+  if dispatch.type == "antigravity":
+    return None
+  if dispatch.type == "tui-cli":
+    tmux_id = _tmux_attach_id(thread, dispatch)
+    if tmux_id is None:
+      return None
+    return _tmux_attach_command(tmux_id)
+  return None
+
+
+async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bool:
+  dispatch = _backend_dispatch(thread, cfg)
+  if dispatch is None:
+    return False
+
+  if dispatch.type == "cc-claude":
+    tmux_id = _tmux_attach_id(thread, dispatch)
+    if tmux_id:
+      return await tmux_session_exists(tmux_id)
+    return bool(thread.claude_session_id and thread.worktree_path and os.path.isdir(thread.worktree_path))
+  if dispatch.type == "cc-kimi":
+    return False
+  if dispatch.type == "cc-deepseek-sglang":
+    return False
+  if dispatch.type == "codex":
+    return False
+  if dispatch.type == "charlie-code":
+    return False
+  if dispatch.type == "gemini":
+    return False
+  if dispatch.type == "opencode":
+    return False
+  if dispatch.type == "antigravity":
+    return False
+  if dispatch.type == "tui-cli":
+    tmux_id = _tmux_attach_id(thread, dispatch)
+    return bool(tmux_id and await tmux_session_exists(tmux_id))
+  return False
 
 
 @router.get("/{session_id}/list")
@@ -61,16 +163,21 @@ async def list_threads(
   return combined
 
 
-@router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadata)
+@router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadataResponse)
 async def get_thread(
     session_id: str,
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
   meta = await thread_mgr.get_thread(session_id, thread_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Thread not found")
-  return meta
+  return ThreadMetadataResponse(
+      **meta.model_dump(),
+      attach_command=build_attach_command(meta, cfg),
+      attach_available=await _attach_available(meta, cfg),
+  )
 
 
 @router.get("/{session_id}/threads/{thread_id}/events", response_model=list[WorkerEvent])

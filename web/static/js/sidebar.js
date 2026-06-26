@@ -518,6 +518,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
       + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
       + '</div>'
       + '<div id="thread-detail-' + t.id + '" class="hidden border-t border-slate-700">'
+      + '<div id="thread-attach-' + t.id + '" class="px-4 pt-4 hidden"></div>'
       + '<div id="thread-events-' + t.id + '" class="p-4 max-h-96 overflow-y-auto"><p class="text-xs text-slate-500">Loading events...</p></div>'
       + '</div></div>';
   });
@@ -867,6 +868,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
       </svg>
     </div>
     <div id="thread-detail-${threadId}" class="hidden border-t border-slate-700">
+      <div id="thread-attach-${threadId}" class="px-4 pt-4 hidden"></div>
       <div id="thread-events-${threadId}" class="p-4 max-h-96 overflow-y-auto">
         <p class="text-xs text-slate-500">Loading events...</p>
       </div>

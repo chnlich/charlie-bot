@@ -5,8 +5,13 @@ const loadedThreads = new Set();
 const threadPollIntervals = new Map();
 
 async function fetchAndRenderEvents(threadId, sessionId) {
-  const res = await fetch(`/api/threads/${sessionId}/threads/${threadId}/events`);
-  const events = await res.json();
+  const [eventsRes, metadataRes] = await Promise.all([
+    fetch(`/api/threads/${sessionId}/threads/${threadId}/events`),
+    fetch(`/api/threads/${sessionId}/threads/${threadId}`)
+  ]);
+  const events = await eventsRes.json();
+  const metadata = await metadataRes.json();
+  renderAttachCommand(threadId, metadata);
   renderThreadEvents(threadId, events);
 }
 
@@ -47,6 +52,40 @@ function stopAllThreadPolls() {
     clearInterval(intervalId);
   }
   threadPollIntervals.clear();
+}
+
+function ensureThreadAttachContainer(threadId) {
+  let container = document.getElementById('thread-attach-' + threadId);
+  if (container) return container;
+  const eventsContainer = document.getElementById('thread-events-' + threadId);
+  if (!eventsContainer || !eventsContainer.parentElement) return null;
+  container = document.createElement('div');
+  container.id = 'thread-attach-' + threadId;
+  container.className = 'px-4 pt-4 hidden';
+  eventsContainer.parentElement.insertBefore(container, eventsContainer);
+  return container;
+}
+
+function renderAttachCommand(threadId, metadata) {
+  const container = ensureThreadAttachContainer(threadId);
+  if (!container) return;
+  const command = metadata && metadata.attach_command;
+  if (!command) {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+  const muted = metadata.attach_available === false;
+  container.classList.remove('hidden');
+  container.innerHTML = `
+    <div class="mb-3">
+      <div class="text-xs font-medium text-slate-400 mb-1">Attach from terminal</div>
+      <div class="code-block ${muted ? 'opacity-50' : ''}">
+        <div class="code-header"><span class="code-lang">terminal</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+        <pre><code>${escapeHtml(command)}</code></pre>
+      </div>
+      ${muted ? '<p class="mt-1 text-xs text-slate-500">Session is no longer live (worktree removed or tmux session ended).</p>' : ''}
+    </div>`;
 }
 
 async function toggleThreadDetail(threadId, sessionId) {

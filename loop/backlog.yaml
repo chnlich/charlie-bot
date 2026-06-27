@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Move review prompt checklist text out of build_review_prompt
+  description: |
+    PURPOSE: Keep review-prompt assembly readable by moving the static checklist text out of build_review_prompt.
+    HOW:
+    - Add a module-level `_REVIEW_CHECKLIST` string in src/core/review.py.
+    - Have build_review_prompt interpolate that constant and keep only context/path assembly inline.
+  category: long-function
+  status: pending
+  created: '2026-06-27T17:13:52Z'
+  priority: low

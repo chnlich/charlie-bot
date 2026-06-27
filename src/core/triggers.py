@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import random
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import structlog
 from src.api.message_utils import build_user_event
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
-from src.core.models import PendingTrigger, TriggerStatus, WatchTarget
+from src.core.models import LocalPid, PendingTrigger, RemotePid, SlurmJob, TriggerStatus, WatchKind, WatchTarget
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 
@@ -29,6 +30,34 @@ _REMOTE_PROBE_NOISE_MAX = 10  # uniform random 0..10s added to each interval
 # Per-probe ssh subprocess timeouts (locked, no flag).
 _SSH_CONNECT_TIMEOUT = 10  # ssh -o ConnectTimeout=10
 _SSH_OVERALL_TIMEOUT = 60.0  # asyncio.wait_for timeout wrapping the subprocess
+
+# SLURM watch (sacct polling).
+_SACCT_POLL_INTERVAL = 30  # seconds between sacct probes
+# Non-terminal job states: the job is still in flight, keep polling.
+_SLURM_ACTIVE_STATES = frozenset({
+    "PENDING",
+    "RUNNING",
+    "CONFIGURING",
+    "COMPLETING",
+    "REQUEUED",
+    "RESIZING",
+    "SUSPENDED",
+})
+# Terminal job states: the job has stopped, capture State + ExitCode. Any state
+# string in neither set is unknown (logged, treated as not-finished).
+_SLURM_TERMINAL_STATES = frozenset({
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "TIMEOUT",
+    "OUT_OF_MEMORY",
+    "NODE_FAIL",
+    "BOOT_FAIL",
+    "DEADLINE",
+    "PREEMPTED",
+    "REVOKED",
+    "SPECIAL_EXIT",
+})
 
 
 class RemoteVerifyError(Exception):
@@ -128,6 +157,9 @@ def _detect_pidfd():
 _pidfd_open, _waitid_pidfd = _detect_pidfd()
 _PIDFD_SUPPORTED = _pidfd_open is not None
 
+# Probed once at import; stdlib-only and must not raise on slurm-less hosts.
+_SACCT_AVAILABLE = shutil.which("sacct") is not None
+
 
 # ---------------------------------------------------------------------------
 # Remote probe via ssh
@@ -183,25 +215,25 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
 async def _probe_remaining_remote_pids(
     remaining: dict[str, set[int]],
     trigger_id: str,
-) -> list[tuple[str, int | None]]:
+) -> list[str]:
   """Probe every (host, pid) in ``remaining`` concurrently via ssh.
 
   Mutates ``remaining`` in place: DEAD pids are discarded and hosts whose set
-  goes empty are dropped. Returns ``(label, None)`` tuples for newly-exited
-  pids; transient probe errors are logged and the pid stays under observation.
+  goes empty are dropped. Returns ``host:pid`` labels for newly-exited pids;
+  transient probe errors are logged and the pid stays under observation.
   """
   probes: list[tuple[str, int]] = []
   for host, pids in remaining.items():
     for pid in pids:
       probes.append((host, pid))
   results = await asyncio.gather(*[_ssh_probe_pid(h, p) for h, p in probes])
-  newly_exited: list[tuple[str, int | None]] = []
+  newly_exited: list[str] = []
   for (host, pid), (status, raw) in zip(probes, results):
     if status == "DEAD":
       remaining[host].discard(pid)
       if not remaining[host]:
         del remaining[host]
-      newly_exited.append((f"{host}:{pid}", None))
+      newly_exited.append(f"{host}:{pid}")
     elif status == "ALIVE":
       continue
     else:
@@ -217,26 +249,72 @@ async def _probe_remaining_remote_pids(
 
 
 # ---------------------------------------------------------------------------
+# SLURM probe via sacct
+# ---------------------------------------------------------------------------
+async def _probe_sacct(job_ids: list[int], trigger_id: str) -> dict[int, tuple[str, str]]:
+  """Run ``sacct`` once for the given job ids.
+
+  Returns ``{job_id: (state, exit_code)}`` for every row sacct reports. Jobs
+  absent from the output (slurmdbd accounting lag, job id not yet registered)
+  are simply omitted — callers keep polling them rather than treating the gap
+  as terminal. A non-zero sacct exit is logged and yields an empty result.
+  """
+  ids = ",".join(str(j) for j in job_ids)
+  cmd = ["sacct", "-j", ids, "-X", "-n", "-P", "--format=JobID,State,ExitCode"]
+  proc = await asyncio.create_subprocess_exec(
+      *cmd,
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+  )
+  stdout_b, stderr_b = await proc.communicate()
+  if proc.returncode != 0:
+    log.warning(
+        "sacct_probe_nonzero",
+        trigger_id=trigger_id,
+        returncode=proc.returncode,
+        stderr=stderr_b.decode("utf-8", errors="replace").strip(),
+    )
+    return {}
+  states: dict[int, tuple[str, str]] = {}
+  for line in stdout_b.decode("utf-8", errors="replace").splitlines():
+    fields = line.strip().split("|")
+    if len(fields) < 3:
+      continue
+    try:
+      job_id = int(fields[0])
+    except ValueError:
+      # Step rows / array sub-ids — not the allocation we asked about.
+      continue
+    states[job_id] = (fields[1].strip(), fields[2].strip())
+  return states
+
+
+# ---------------------------------------------------------------------------
 # Schema migration: legacy `watch_pids: list[int]` -> `watch_targets: list[WatchTarget]`
 # ---------------------------------------------------------------------------
 
 
 def _migrate_legacy_watch_pids(raw_text: str) -> tuple[PendingTrigger, bool]:
-  """Parse a trigger JSON string; if it has legacy `watch_pids`, convert in-memory.
+  """Parse a trigger JSON string, upgrading legacy watch fields in-memory.
 
-  Returns (trigger, migrated). When `migrated` is True, the file should be
-  rewritten by the caller in the new schema. The new schema treats every
-  legacy pid as local (host=None).
+  Two legacy shapes are converged here (the single migration point):
+    - the original `watch_pids: list[int]` -> `watch_targets` of local pids;
+    - pre-discriminator `watch_targets` whose entries lack `kind` -> backfill
+      LOCAL_PID when host is None, REMOTE_PID when a host is set.
+
+  Returns (trigger, migrated). When `migrated` is True, the caller rewrites the
+  file once in the new schema.
   """
   data = json.loads(raw_text)
   migrated = False
   if "watch_pids" in data:
     legacy = data.pop("watch_pids")
     if "watch_targets" not in data:
-      if legacy:
-        data["watch_targets"] = [{"host": None, "pid": int(p)} for p in legacy]
-      else:
-        data["watch_targets"] = []
+      data["watch_targets"] = [{"host": None, "pid": int(p)} for p in legacy] if legacy else []
+    migrated = True
+  for target in data.get("watch_targets") or []:
+    if "kind" not in target:
+      target["kind"] = (WatchKind.REMOTE_PID if target.get("host") is not None else WatchKind.LOCAL_PID).value
       migrated = True
   return PendingTrigger.model_validate(data), migrated
 
@@ -258,16 +336,15 @@ class TriggerManager:
   ) -> PendingTrigger:
     """Create a pending trigger, persist to disk, and start the sleep task."""
     targets = list(watch_targets or [])
+    kinds = {t.kind for t in targets}
 
-    has_local = any(t.host is None for t in targets)
-    has_remote = any(t.host is not None for t in targets)
-    if has_local and has_remote:
-      raise RuntimeError("watch_targets must be all local or all remote, not mixed")
-    if has_local and not _PIDFD_SUPPORTED:
+    if WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
       raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
+    if WatchKind.SLURM_JOB in kinds and not _SACCT_AVAILABLE:
+      raise RuntimeError("sacct unavailable: cannot watch a SLURM job on a host without slurm")
 
-    if has_remote:
-      await self._verify_remote_targets(targets)
+    if WatchKind.REMOTE_PID in kinds:
+      await self._verify_remote_targets([t for t in targets if t.kind == WatchKind.REMOTE_PID])
 
     fire_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
     trigger = PendingTrigger(
@@ -287,14 +364,11 @@ class TriggerManager:
     )
     return trigger
 
-  async def _verify_remote_targets(self, targets: list[WatchTarget]) -> None:
+  async def _verify_remote_targets(self, targets: list[RemotePid]) -> None:
     """Probe each remote target once before persisting; reject if any not ALIVE."""
-    results = await asyncio.gather(*[_ssh_probe_pid(t.host, t.pid) for t in targets if t.host is not None])
+    results = await asyncio.gather(*[_ssh_probe_pid(t.host, t.pid) for t in targets])
     bad: list[str] = []
-    for t, (status, raw) in zip(
-        [t for t in targets if t.host is not None],
-        results,
-    ):
+    for t, (status, raw) in zip(targets, results):
       if status != "ALIVE":
         bad.append(f"{t.host}:{t.pid} -> {status} ({raw.strip()!r})")
     if bad:
@@ -365,24 +439,41 @@ class TriggerManager:
     self._tasks[trigger.id] = task
 
   async def _wait_and_fire(self, trigger: PendingTrigger) -> None:
-    """Sleep until fire_at (or until all watched PIDs exit), then trigger the master agent."""
-    targets = trigger.watch_targets
-    has_local = any(t.host is None for t in targets)
-    has_remote = any(t.host is not None for t in targets)
+    """Wait until every watch group finishes (or fire_at), then trigger the master agent.
 
-    if targets and has_local and not has_remote:
-      reason, exited, still_alive, missing = await self._wait_with_pidfd(trigger)
-    elif targets and has_remote and not has_local:
-      reason, exited, still_alive, missing = await self._wait_with_remote_probe(trigger)
+    Targets are grouped by kind and each group's sub-waiter runs concurrently
+    against the shared ``fire_at`` deadline. The reason is 'completed' when all
+    groups finish, 'timeout' if the deadline arrives with anything still alive.
+    """
+    groups: dict[WatchKind, list[WatchTarget]] = {}
+    for t in trigger.watch_targets:
+      groups.setdefault(t.kind, []).append(t)
+
+    if groups:
+      sub_waiters = []
+      for kind, group in groups.items():
+        if kind == WatchKind.LOCAL_PID:
+          sub_waiters.append(self._wait_with_pidfd(trigger, group))
+        elif kind == WatchKind.REMOTE_PID:
+          sub_waiters.append(self._wait_with_remote_probe(trigger, group))
+        elif kind == WatchKind.SLURM_JOB:
+          sub_waiters.append(self._wait_with_sacct(trigger, group))
+        elif kind == WatchKind.UNKNOWN:
+          raise RuntimeError("WatchKind.UNKNOWN is a fail-loud sentinel and must never be watched")
+        else:
+          raise RuntimeError(f"unhandled WatchKind in dispatch: {kind!r}")
+      results = await asyncio.gather(*sub_waiters)
+      finished = [label for group_finished, _ in results for label in group_finished]
+      still_alive = [label for _, group_alive in results for label in group_alive]
+      reason = "timeout" if still_alive else "completed"
     else:
       now = datetime.now(timezone.utc)
       remaining = (trigger.fire_at - now).total_seconds()
       if remaining > 0:
         await asyncio.sleep(remaining)
       reason = "timeout"
-      exited = []
+      finished = []
       still_alive = []
-      missing = []
 
     # Re-load to check for cancellation during sleep
     try:
@@ -394,7 +485,7 @@ class TriggerManager:
       return
 
     if fresh.watch_targets:
-      suffix = _format_suffix(reason, exited, still_alive, missing)
+      suffix = _format_suffix(reason, finished, still_alive)
       trigger_message = f"[Scheduled trigger fired | {reason}] {fresh.message}{suffix}"
     else:
       trigger_message = f"[Scheduled trigger fired] {fresh.message}"
@@ -422,33 +513,29 @@ class TriggerManager:
   async def _wait_with_pidfd(
       self,
       trigger: PendingTrigger,
-  ) -> tuple[str, list[tuple[str, int | None]], list[str], list[str]]:
-    """Event-driven wait on pidfds. Returns (reason, exited, still_alive, missing).
+      targets: list[LocalPid],
+  ) -> tuple[list[str], list[str]]:
+    """Event-driven wait on local pidfds. Returns (finished, still_alive) labels.
 
-    `exited` items are (label, status) where label is the local-pid string.
-    `still_alive` and `missing` are lists of pid labels (strings).
+    A pid that has already exited at start counts as finished (labelled "gone at
+    start") and the wait continues for the rest — per-target, AND-correct. pidfd
+    readiness cannot reap an arbitrary (non-child) pid, so finished labels carry
+    no exit code.
     """
     loop = asyncio.get_running_loop()
     pidfds: dict[int, int] = {}  # fd -> pid
-    exited: list[tuple[str, int | None]] = []  # (label, exit_status_or_None)
+    finished: list[str] = []
 
-    missing: list[str] = []
-    local_pids = [t.pid for t in trigger.watch_targets if t.host is None]
-    for pid in local_pids:
+    for t in targets:
       try:
-        fd = _pidfd_open(pid)
+        fd = _pidfd_open(t.pid)
       except ProcessLookupError:
-        missing.append(str(pid))
+        finished.append(f"{t.pid} (gone at start)")
         continue
-      pidfds[fd] = pid
+      pidfds[fd] = t.pid
 
-    if missing:
-      for fd in list(pidfds):
-        try:
-          os.close(fd)
-        except OSError:
-          pass
-      return "pid_gone", [], [], missing
+    if not pidfds:
+      return finished, []
 
     done = asyncio.Event()
 
@@ -460,18 +547,15 @@ class TriggerManager:
         loop.remove_reader(fd)
       except Exception:
         pass
-      status: int | None = None
       try:
-        info = _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)
-        if info is not None:
-          status = info.si_status
+        _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)  # reap if it is our child
       except (ChildProcessError, OSError):
-        status = None  # non-child; cannot retrieve status
+        pass  # non-child; nothing to reap
       try:
         os.close(fd)
       except OSError:
         pass
-      exited.append((str(pid), status))
+      finished.append(str(pid))
       if not pidfds:
         done.set()
 
@@ -480,12 +564,10 @@ class TriggerManager:
 
     now = datetime.now(timezone.utc)
     remaining = (trigger.fire_at - now).total_seconds()
-    reason: str
     try:
       await asyncio.wait_for(done.wait(), timeout=max(0.0, remaining))
-      reason = "pid_exit"
     except asyncio.TimeoutError:
-      reason = "timeout"
+      pass
     finally:
       # Cleanup any remaining fds (e.g. timeout case, or cancellation)
       for fd in list(pidfds):
@@ -499,27 +581,24 @@ class TriggerManager:
           pass
 
     still_alive = [str(p) for p in pidfds.values()]
-    return reason, exited, still_alive, []
+    return finished, still_alive
 
   async def _wait_with_remote_probe(
       self,
       trigger: PendingTrigger,
-  ) -> tuple[str, list[tuple[str, int | None]], list[str], list[str]]:
-    """Polling wait via ssh probes with backoff.
+      targets: list[RemotePid],
+  ) -> tuple[list[str], list[str]]:
+    """Polling wait via ssh probes with backoff. Returns (finished, still_alive).
 
-    Returns (reason, exited, still_alive, missing) using ``host:pid`` labels.
-    Verify-on-create has already confirmed every PID was ALIVE at create time,
-    so `missing` is always empty here.
+    Labels use ``host:pid``. Verify-on-create has already confirmed every PID was
+    ALIVE at create time.
     """
     remaining: dict[str, set[int]] = {}
-    for t in trigger.watch_targets:
-      if t.host is None:
-        continue
+    for t in targets:
       remaining.setdefault(t.host, set()).add(t.pid)
 
-    exited: list[tuple[str, int | None]] = []
+    finished: list[str] = []
     step = 0
-    reason = "timeout"
 
     while True:
       now = datetime.now(timezone.utc)
@@ -535,20 +614,65 @@ class TriggerManager:
       if (trigger.fire_at - now).total_seconds() <= 0:
         break
 
-      newly_exited = await _probe_remaining_remote_pids(remaining, trigger.id)
-      exited.extend(newly_exited)
+      finished.extend(await _probe_remaining_remote_pids(remaining, trigger.id))
 
       step += 1
       if not remaining:
-        reason = "pid_exit"
         break
 
-    still_alive: list[str] = []
-    for host, pids in remaining.items():
-      for pid in pids:
-        still_alive.append(f"{host}:{pid}")
+    still_alive = [f"{host}:{pid}" for host, pids in remaining.items() for pid in pids]
+    return finished, still_alive
 
-    return reason, exited, still_alive, []
+  async def _wait_with_sacct(
+      self,
+      trigger: PendingTrigger,
+      targets: list[SlurmJob],
+  ) -> tuple[list[str], list[str]]:
+    """Polling wait via ``sacct`` for SLURM jobs. Returns (finished, still_alive).
+
+    Probes once immediately, then every ``_SACCT_POLL_INTERVAL`` seconds.
+    Finished labels carry the authoritative State + ExitCode; still-alive labels
+    are bare ``slurm:<id>``. On a host without sacct (server restart recovering a
+    slurm trigger) this skips polling and waits out the deadline rather than
+    spinning on a missing binary.
+    """
+    remaining: set[int] = {t.job_id for t in targets}
+
+    if not _SACCT_AVAILABLE:
+      log.warning("slurm_watch_no_sacct_skip", trigger_id=trigger.id, job_ids=sorted(remaining))
+      now = datetime.now(timezone.utc)
+      time_to_fire = (trigger.fire_at - now).total_seconds()
+      if time_to_fire > 0:
+        await asyncio.sleep(time_to_fire)
+      return [], [f"slurm:{j}" for j in sorted(remaining)]
+
+    finished: list[str] = []
+    while True:
+      states = await _probe_sacct(sorted(remaining), trigger.id)
+      for job_id in sorted(remaining):
+        row = states.get(job_id)
+        if row is None:
+          continue  # accounting lag / not yet registered — keep polling
+        state, exit_code = row
+        state_key = state.split()[0] if state else ""
+        if state_key in _SLURM_ACTIVE_STATES:
+          continue
+        if state_key not in _SLURM_TERMINAL_STATES:
+          log.warning("slurm_unknown_state", trigger_id=trigger.id, job_id=job_id, state=state)
+          continue
+        finished.append(f"slurm:{job_id}: {state} {exit_code}")
+        remaining.discard(job_id)
+
+      if not remaining:
+        break
+      now = datetime.now(timezone.utc)
+      time_to_fire = (trigger.fire_at - now).total_seconds()
+      if time_to_fire <= 0:
+        break
+      await asyncio.sleep(min(_SACCT_POLL_INTERVAL, time_to_fire))
+
+    still_alive = [f"slurm:{j}" for j in sorted(remaining)]
+    return finished, still_alive
 
   def _triggers_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id / "triggers"
@@ -572,31 +696,20 @@ class TriggerManager:
 
 def _format_suffix(
     reason: str,
-    exited: list[tuple[str, int | None]],
+    finished: list[str],
     still_alive: list[str],
-    missing: list[str],
 ) -> str:
-  """Build the message suffix describing PID outcomes for a fired trigger.
+  """Build the message suffix describing watch outcomes for a fired trigger.
 
-  Labels in `exited`, `still_alive`, and `missing` are pre-formatted strings:
-  `"1234"` for local PIDs and `"host:5678"` for remote PIDs.
+  Labels are pre-formatted by each sub-waiter: `"1234"` (local pid, possibly
+  "gone at start"), `"host:5678"` (remote pid), `"slurm:42: COMPLETED 0:0"`
+  (slurm job).
   """
-  if reason == "pid_gone":
-    pids = ", ".join(missing)
-    return f" (pid_gone: {pids})"
-  if reason == "pid_exit":
-    parts = ", ".join(_format_exited_part(label, s) for label, s in exited)
-    return f" (exited: {parts})"
+  finished_part = ", ".join(finished)
+  if reason == "completed":
+    return f" (finished: {finished_part})"
   # timeout
-  exited_parts = ", ".join(_format_exited_part(label, s) for label, s in exited)
-  alive_parts = ", ".join(still_alive)
-  if exited_parts:
-    return f" (exited: {exited_parts}; still alive: {alive_parts})"
-  return f" (still alive: {alive_parts})"
-
-
-def _format_exited_part(label: str, status: int | None) -> str:
-  """Format a single exited entry. Remote labels (host:pid) omit the status field."""
-  if ":" in label:
-    return label
-  return f"{label}={'unknown' if status is None else status}"
+  alive_part = ", ".join(still_alive)
+  if finished_part:
+    return f" (finished: {finished_part}; still alive: {alive_part})"
+  return f" (still alive: {alive_part})"

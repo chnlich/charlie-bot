@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, ScheduleTriggerRequest, TriggerStatus, WatchTarget
+from src.core.models import CreateSessionRequest, LocalPid, RemotePid, ScheduleTriggerRequest, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import (
     RemoteVerifyError,
@@ -93,13 +93,13 @@ async def test_remote_create_alive_persists(tmp_path: Path) -> None:
         session_id,
         delay_seconds=30,
         message="remote watch",
-        watch_targets=[WatchTarget(host="neptune", pid=1234)],
+        watch_targets=[RemotePid(host="neptune", pid=1234)],
     )
 
   # File on disk has the new schema.
   raw = (cfg.sessions_dir / session_id / "triggers" / f"{trigger.id}.json").read_text("utf-8")
   data = json.loads(raw)
-  assert data["watch_targets"] == [{"host": "neptune", "pid": 1234}]
+  assert data["watch_targets"] == [{"kind": "remote_pid", "host": "neptune", "pid": 1234}]
   assert "watch_pids" not in data
 
 
@@ -114,7 +114,7 @@ async def test_remote_create_dead_rejects(tmp_path: Path) -> None:
           session_id,
           delay_seconds=30,
           message="dead remote",
-          watch_targets=[WatchTarget(host="neptune", pid=1234)],
+          watch_targets=[RemotePid(host="neptune", pid=1234)],
       )
 
   assert "neptune:1234" in str(excinfo.value)
@@ -138,31 +138,14 @@ async def test_remote_create_one_dead_among_many_rejects(tmp_path: Path) -> None
           delay_seconds=30,
           message="dead remote",
           watch_targets=[
-              WatchTarget(host="neptune", pid=1),
-              WatchTarget(host="neptune", pid=2),
-              WatchTarget(host="noire", pid=3),
+              RemotePid(host="neptune", pid=1),
+              RemotePid(host="neptune", pid=2),
+              RemotePid(host="noire", pid=3),
           ],
       )
   msg = str(excinfo.value)
   assert "neptune:2" in msg
   assert "DEAD" in msg
-
-
-# ---------------------------------------------------------------------------
-# Mix rejection (server-side defense; CLI also rejects, tested below)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_create_trigger_rejects_mixed(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  with pytest.raises(RuntimeError, match="all local or all remote"):
-    await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=30,
-        message="mix",
-        watch_targets=[WatchTarget(host=None, pid=1), WatchTarget(host="neptune", pid=2)],
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +179,9 @@ async def test_remote_multi_host_all_die_fires(tmp_path: Path) -> None:
         delay_seconds=600,
         message="multi host",
         watch_targets=[
-            WatchTarget(host="neptune", pid=1),
-            WatchTarget(host="neptune", pid=2),
-            WatchTarget(host="noire", pid=3),
+            RemotePid(host="neptune", pid=1),
+            RemotePid(host="neptune", pid=2),
+            RemotePid(host="noire", pid=3),
         ],
     )
     task = trigger_mgr._tasks[trigger.id]
@@ -206,9 +189,9 @@ async def test_remote_multi_host_all_die_fires(tmp_path: Path) -> None:
 
   stored = await trigger_mgr._load_trigger(session_id, trigger.id)
   assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "pid_exit"
+  assert stored.fire_reason == "completed"
   msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | pid_exit]" in msg
+  assert "[Scheduled trigger fired | completed]" in msg
   assert "neptune:1" in msg
   assert "neptune:2" in msg
   assert "noire:3" in msg
@@ -233,7 +216,7 @@ async def test_remote_timeout_with_alive_pids(tmp_path: Path) -> None:
         session_id,
         delay_seconds=0,  # fire_at already in the past after verify
         message="too late",
-        watch_targets=[WatchTarget(host="neptune", pid=1)],
+        watch_targets=[RemotePid(host="neptune", pid=1)],
     )
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=10)
@@ -279,7 +262,7 @@ async def test_backoff_intervals_and_plateau(tmp_path: Path) -> None:
         session_id,
         delay_seconds=10_000,
         message="long wait",
-        watch_targets=[WatchTarget(host="neptune", pid=1)],
+        watch_targets=[RemotePid(host="neptune", pid=1)],
     )
     task = trigger_mgr._tasks[trigger.id]
     for _ in range(200):
@@ -322,10 +305,7 @@ def test_migrate_legacy_watch_pids_helper() -> None:
   )
   trigger, migrated = _migrate_legacy_watch_pids(legacy)
   assert migrated is True
-  assert [t.model_dump() for t in trigger.watch_targets] == [
-      {"host": None, "pid": 123},
-      {"host": None, "pid": 456},
-  ]
+  assert trigger.watch_targets == [LocalPid(pid=123), LocalPid(pid=456)]
 
 
 def test_migrate_legacy_watch_pids_none_value() -> None:
@@ -356,12 +336,31 @@ def test_migrate_legacy_no_op_when_already_new_schema() -> None:
           "created_at": "2030-01-01T00:00:00+00:00",
           "status": "pending",
           "fired_at": None,
-          "watch_targets": [{"host": "neptune", "pid": 7}],
+          "watch_targets": [{"kind": "remote_pid", "host": "neptune", "pid": 7}],
       }
   )
   trigger, migrated = _migrate_legacy_watch_pids(modern)
   assert migrated is False
-  assert trigger.watch_targets == [WatchTarget(host="neptune", pid=7)]
+  assert trigger.watch_targets == [RemotePid(host="neptune", pid=7)]
+
+
+def test_migrate_backfills_kind_on_kindless_targets() -> None:
+  """Pre-discriminator watch_targets (no `kind`) get LOCAL/REMOTE backfilled."""
+  legacy = json.dumps(
+      {
+          "id": "kindless-1",
+          "session_id": "s1",
+          "fire_at": "2030-01-01T00:00:00+00:00",
+          "message": "hi",
+          "created_at": "2030-01-01T00:00:00+00:00",
+          "status": "pending",
+          "fired_at": None,
+          "watch_targets": [{"host": None, "pid": 1}, {"host": "neptune", "pid": 2}],
+      }
+  )
+  trigger, migrated = _migrate_legacy_watch_pids(legacy)
+  assert migrated is True
+  assert trigger.watch_targets == [LocalPid(pid=1), RemotePid(host="neptune", pid=2)]
 
 
 @pytest.mark.asyncio
@@ -394,47 +393,79 @@ async def test_recover_pending_rewrites_legacy_file(tmp_path: Path) -> None:
 
   rewritten = json.loads(legacy_path.read_text("utf-8"))
   assert "watch_pids" not in rewritten
-  assert rewritten["watch_targets"] == [{"host": None, "pid": 777}]
+  assert rewritten["watch_targets"] == [{"kind": "local_pid", "pid": 777}]
 
 
 # ---------------------------------------------------------------------------
-# CLI parsing — mix rejection + host:pid parsing
+# CLI parsing — self-describing --watch specs (local / remote / slurm)
 # ---------------------------------------------------------------------------
 
 
 def test_cli_parse_local_only(monkeypatch) -> None:
   ns = cli_module._parse_watch_target("12345")
-  assert ns == {"host": None, "pid": 12345}
+  assert ns == {"kind": "local_pid", "pid": 12345}
 
 
 def test_cli_parse_remote_host_pid() -> None:
   ns = cli_module._parse_watch_target("neptune:67890")
-  assert ns == {"host": "neptune", "pid": 67890}
+  assert ns == {"kind": "remote_pid", "host": "neptune", "pid": 67890}
+
+
+def test_cli_parse_slurm_job() -> None:
+  ns = cli_module._parse_watch_target("slurm:98765")
+  assert ns == {"kind": "slurm_job", "job_id": 98765}
 
 
 def test_cli_parse_rejects_bad_pid() -> None:
   import argparse
-  with pytest.raises(argparse.ArgumentTypeError):
-    cli_module._parse_watch_target("neptune:abc")
-  with pytest.raises(argparse.ArgumentTypeError):
-    cli_module._parse_watch_target(":123")
-  with pytest.raises(argparse.ArgumentTypeError):
-    cli_module._parse_watch_target("0")
+  for bad in ("neptune:abc", ":123", "0", "slurm:abc", "slurm:0", "slurm:"):
+    with pytest.raises(argparse.ArgumentTypeError):
+      cli_module._parse_watch_target(bad)
 
 
-def test_cli_rejects_mixed_local_remote(tmp_path: Path) -> None:
+def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
   argv = [
       "schedule_trigger",
       "--session", "s1",
       "--max-wait", "60",
       "--message", "m",
-      "--watch-pid", "1234", "neptune:5678",
+      "--watch", "1234", "neptune:5678", "slurm:99",
+  ]
+  captured: dict = {}
+
+  class _FakeResp:
+    status_code = 200
+    ok = True
+
+    def json(self) -> dict:
+      return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
+
+  def _fake_post(url, json, headers, timeout, verify):  # noqa: A002, ARG001
+    captured["payload"] = json
+    return _FakeResp()
+
+  monkeypatch.setattr(cli_module.requests, "post", _fake_post)
+  with patch.object(sys, "argv", argv):
+    cli_module.main()
+
+  assert captured["payload"]["watch_targets"] == [
+      {"kind": "local_pid", "pid": 1234},
+      {"kind": "remote_pid", "host": "neptune", "pid": 5678},
+      {"kind": "slurm_job", "job_id": 99},
+  ]
+
+
+def test_cli_watch_pid_flag_removed() -> None:
+  argv = [
+      "schedule_trigger",
+      "--session", "s1",
+      "--max-wait", "60",
+      "--message", "m",
+      "--watch-pid", "1234",
   ]
   with patch.object(sys, "argv", argv):
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(SystemExit):
       cli_module.main()
-  # argparse parser.error() exits with code 2.
-  assert excinfo.value.code == 2
 
 
 def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
@@ -465,7 +496,7 @@ def test_cli_max_wait_accepted(monkeypatch) -> None:
     def json(self) -> dict:
       return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
 
-  def _fake_post(url, json, timeout, verify):  # noqa: A002, ARG001
+  def _fake_post(url, json, headers, timeout, verify):  # noqa: A002, ARG001
     captured["url"] = url
     captured["payload"] = json
     return _FakeResp()
@@ -487,7 +518,7 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
       "--session", "s1",
       "--max-wait", "60",
       "--message", "hello",
-      "--watch-pid", "neptune:5678",
+      "--watch", "neptune:5678",
   ]
 
   class _FakeResp:
@@ -498,7 +529,7 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
     def json(self) -> dict:
       return {"detail": "verify-on-create failed for remote watch target(s): neptune:5678 -> DEAD ('DEAD\\n')"}
 
-  def _fake_post(url, json, timeout, verify):  # noqa: A002, ARG001
+  def _fake_post(url, json, headers, timeout, verify):  # noqa: A002, ARG001
     return _FakeResp()
 
   monkeypatch.setattr(cli_module.requests, "post", _fake_post)

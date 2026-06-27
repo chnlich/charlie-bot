@@ -6,7 +6,7 @@ The config and session data are at ~/.charliebot
 
 ## Headless Mode
 
-You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger` firings, (3) delegation merge/failure summaries, (4) improve-loop completion summaries. **Delegations and improve loops auto-wake on completion — do NOT schedule_trigger to poll them.** Only use `schedule_trigger` for things with no built-in completion signal (e.g. waiting on a detached training PID, or a scheduled future check-in).
+You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger` firings, (3) delegation merge/failure summaries, (4) improve-loop completion summaries. **Delegations and improve loops auto-wake on completion — do NOT schedule_trigger to poll them.** Only use `schedule_trigger` for things with no built-in completion signal (e.g. waiting on a detached training PID, a SLURM job, or a scheduled future check-in).
 Before ending a turn while an external process is still running, create a `schedule_trigger` unless the process has a built-in CharlieBot completion signal.
 
 ---
@@ -123,39 +123,53 @@ Say **"take off"** to start.
 
 Schedule a one-shot delayed wake-up. After `--max-wait` seconds, master receives `[Scheduled trigger fired] <message>`. Persisted to `sessions/{id}/triggers/*.json` and auto-recovered on server restart.
 
-Pure delay (no PID watch):
+Pure delay (no watch):
 ```bash
 charliebot schedule-trigger \
   --max-wait SECONDS \
   --message "Check status"
 ```
 
-**PID watcher** (auto-trigger when watched PIDs exit). `--watch-pid` accepts local PIDs (integer) or remote PIDs (`host:integer`); cannot mix in one trigger:
+**Watch targets** (fire when the watched things finish). `--watch` takes one or more targets; each token self-describes its kind, and kinds can be freely mixed in one trigger:
+
+- `PID` (bare integer) — local PID (event-driven via `os.pidfd_open`)
+- `host:PID` — remote PID (ssh `kill -0` probe with backoff)
+- `slurm:JOBID` — SLURM job (terminal state + exit code via local `sacct`)
 
 ```bash
-# Local PID(s) — event-driven via os.pidfd_open + asyncio reader (no polling)
+# single SLURM job
 charliebot schedule-trigger \
   --max-wait SECONDS \
-  --watch-pid PID [PID ...] \
-  --message "Local job finished"
+  --watch slurm:JOBID \
+  --message "train done"
 
-# Remote PID(s) — ssh probe with exponential backoff (10s -> 600s, +0-10s noise)
+# mixed — local PID + remote PID + two SLURM jobs (AND: wake when all finish)
 charliebot schedule-trigger \
   --max-wait SECONDS \
-  --watch-pid host:PID [host2:PID2 ...] \
-  --message "Remote job finished"
+  --watch 12345 host:6789 slurm:91038 slurm:91039 \
+  --message "all targets done"
 ```
 
-With `--watch-pid`, `--max-wait` is the upper bound: trigger fires when **ALL** watched PIDs have exited OR `--max-wait` elapses, whichever first.
+With `--watch`, `--max-wait` is the upper bound: the trigger fires when **ALL** targets have finished OR `--max-wait` elapses, whichever first.
 
-**Verify-on-create**: for any remote PID, the trigger ssh-probes `kill -0` at create time. If any remote PID is already dead, the CLI exits non-zero — your launch-failed signal. Do NOT yield in that case; retry the launch.
+**SLURM jobs — no time estimation.** Submit with `sbatch --parsable` (prints only the job id), then watch it:
+```bash
+JOBID=$(sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
+charliebot schedule-trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
+```
+The watcher polls `sacct` locally (cheap login-node command), so detection latency is independent of job length — never estimate a duration. `sacct` terminal state covers scancel / TIMEOUT / OOM / NODE_FAIL, which a job-script self-notification cannot. (If the submission runs in a `script-run` delegation, the worker returns the JOBID and master schedules the trigger.)
 
-The fired message is prefixed with the reason:
-- `[Scheduled trigger fired | pid_exit] <msg> (exited: 1234, neptune:5678)` — all PIDs exited
-- `[Scheduled trigger fired | pid_gone] <msg> (pid_gone: ...)` — some PID was already gone at create time
-- `[Scheduled trigger fired | timeout]  <msg> (exited: ...; still alive: neptune:1234)` — `--max-wait` elapsed
+**Verify-on-create / fail-loud:**
+- Remote PID: ssh-probes `kill -0` at create time; if already dead the CLI exits non-zero — your launch-failed signal. Do NOT yield; retry the launch.
+- SLURM job: on a host without `sacct` (charlie-bot is shared across hosts), creating a `slurm:` target exits non-zero (`sacct not found: SLURM watch unavailable on this host`). Pure PID / pure-delay triggers are unaffected. SLURM targets are NOT rejected by job state (slurmdbd accounting lag).
 
-For starting long-running remote jobs alongside `--watch-pid host:PID`, use `charliebot remote-launch` (separate CLI; the two are independent and master glues them).
+The fired message is prefixed with the reason; per-target detail is in the suffix:
+- `[Scheduled trigger fired | completed] <msg> (exited: 12345, host:6789; slurm:91038: COMPLETED 0:0)` — all targets finished
+- `[Scheduled trigger fired | timeout]  <msg> (exited: 12345; still alive: slurm:91039: RUNNING)` — `--max-wait` elapsed
+
+`completed` means all targets finished; success/failure is in the suffix (a SLURM `FAILED 2:0` is a failed job).
+
+For starting long-running remote jobs alongside `--watch host:PID`, use `charliebot remote-launch` (separate CLI; the two are independent and master glues them).
 
 ---
 

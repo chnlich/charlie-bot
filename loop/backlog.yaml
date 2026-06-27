@@ -7328,3 +7328,16 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Drop unused os.walk path binding in core/git.py
+  description: 'PURPOSE: Remove the unused os.walk path binding in core/git.py.
+
+    HOW: In _contains_git_marker, bind the first os.walk tuple slot to _ instead of
+    dirpath, then verify pylint --disable=all --enable=unused-variable src/core/git.py
+    is clean.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-06-27T23:12:17Z'
+  priority: low

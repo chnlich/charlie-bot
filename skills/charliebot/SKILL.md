@@ -77,7 +77,7 @@ Better practice — choose one of:
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
 - **Long-running remote command**:
   1. `charliebot remote-launch --host H --cwd P --cmd '...'` — launches the command on H, returns `launch_id` and `host:pid` in stdout JSON.
-  2. `charliebot schedule-trigger --watch-pid H:PID --max-wait N --message "..."` — verifies PID alive on remote at create time. If the launch died, this exits non-zero — do NOT yield, retry the launch.
+  2. `charliebot schedule-trigger --watch H:PID --max-wait N --message "..."` — verifies PID alive on remote at create time. If the launch died, this exits non-zero — do NOT yield, retry the launch.
   3. **Do not yield immediately.** Busy-wait a few minutes and tail `/tmp/charliebot_runs/<launch_id>/log` to confirm the output matches expectations. If wrong, `ssh H kill PID`, investigate, retry.
   4. Yield only after the busy-wait confirms the job is doing the right thing.
   5. On wake (trigger fired): `ssh H cat /tmp/charliebot_runs/<launch_id>/sentinel` for exit code; pull log if needed; `ssh H rm -rf /tmp/charliebot_runs/<launch_id>` to clean up remote staging.
@@ -86,7 +86,7 @@ Better practice — choose one of:
 
   Constraints: wrapped cmd must run in foreground (no detached `&` inside `--cmd`). For parallel jobs, call `charliebot remote-launch` N times. The wrapper log captures stdout/stderr only — if the cmd internally redirects output to its own log path (e.g. `/storage/...`), that file is the source of truth and the wrapper log will be near-empty. For sub-2-minute commands, just `ssh host 'cmd'` synchronously instead — the launch+trigger overhead is not worth it.
 
-- **One trigger watches many PIDs — do not spawn a trigger per job.** When master is waiting on N parallel runs (local or remote), pass all PIDs to a single `charliebot schedule-trigger --watch-pid PID1 PID2 ...` (same host family — can't mix local + remote in one trigger). The trigger fires when ALL listed PIDs have exited or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event.
+- **One trigger watches many targets — do not spawn a trigger per job.** When master is waiting on N parallel runs, pass all targets to a single `charliebot schedule-trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event.
 
 ---
 

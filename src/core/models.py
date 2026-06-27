@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Awaitable, Callable, Dict, Literal, Optional
+from typing import Annotated, Awaitable, Callable, Dict, Literal, Optional, Union
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -66,6 +66,13 @@ class TaskType(str, Enum):
   SCRIPT_RUN = "script-run"
 
 
+class WatchKind(str, Enum):
+  UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default
+  LOCAL_PID = "local_pid"
+  REMOTE_PID = "remote_pid"
+  SLURM_JOB = "slurm_job"
+
+
 # ---------------------------------------------------------------------------
 # Thread Models
 # ---------------------------------------------------------------------------
@@ -102,9 +109,29 @@ class ThreadMetadata(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class WatchTarget(BaseModel):
-  host: Optional[str] = None  # None means local
+class LocalPid(BaseModel):
+  """A process on the trigger-server host, watched via pidfd."""
+  kind: Literal[WatchKind.LOCAL_PID] = WatchKind.LOCAL_PID
   pid: int
+
+
+class RemotePid(BaseModel):
+  """A process on another host, watched via periodic ssh `kill -0` probes."""
+  kind: Literal[WatchKind.REMOTE_PID] = WatchKind.REMOTE_PID
+  host: str
+  pid: int
+
+
+class SlurmJob(BaseModel):
+  """A SLURM job, watched via `sacct` for its authoritative terminal state."""
+  kind: Literal[WatchKind.SLURM_JOB] = WatchKind.SLURM_JOB
+  job_id: int
+
+
+# Discriminated union on `kind`: each variant carries only its own fields, so
+# illegal combinations (a local pid with a host, a slurm job with a pid) are
+# unconstructable.
+WatchTarget = Annotated[Union[LocalPid, RemotePid, SlurmJob], Field(discriminator="kind")]
 
 
 class PendingTrigger(BaseModel):
@@ -116,7 +143,7 @@ class PendingTrigger(BaseModel):
   status: TriggerStatus = TriggerStatus.PENDING
   fired_at: Optional[UtcDatetime] = None
   watch_targets: list[WatchTarget] = Field(default_factory=list)
-  fire_reason: Optional[str] = None  # one of 'timeout', 'pid_exit', 'pid_gone', populated when fired
+  fire_reason: Optional[str] = None  # one of 'completed', 'timeout', populated when fired
 
 
 # ---------------------------------------------------------------------------

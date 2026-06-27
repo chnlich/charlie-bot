@@ -79,3 +79,5 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
   assert stored_trigger.status == TriggerStatus.FIRED
   assert stored_trigger.fired_at is not None
+  # Pure-delay triggers (no watch targets) converge on the 'timeout' reason.
+  assert stored_trigger.fire_reason == "timeout"

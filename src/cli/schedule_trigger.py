@@ -7,21 +7,21 @@ is optional; auto-derived from cwd in normal master use.
     --max-wait 3600 \
     --message 'Check PID 12345'
 
-Optional: watch one or more PIDs. The trigger fires when ALL watched PIDs have
-exited OR when --max-wait elapses (whichever comes first). Each --watch-pid
-value is either a local PID (e.g. ``12345``) or a remote PID of the form
-``host:pid`` (e.g. ``neptune:12345``). All values in a single trigger must be
-either all local or all remote — mixing is rejected.
+Optional: watch one or more targets. The trigger fires when ALL targets have
+finished OR when --max-wait elapses (whichever comes first). Each --watch spec
+self-describes its kind: a bare integer is a local PID (e.g. ``12345``),
+``host:pid`` is a remote PID (e.g. ``neptune:12345``), and ``slurm:<jobid>`` is a
+SLURM job (e.g. ``slurm:98765``). Kinds may be mixed freely in one trigger.
 
   charliebot schedule-trigger \
     --max-wait 3600 \
-    --watch-pid 12345 67890 \
+    --watch 12345 67890 \
     --message 'Training finished'
 
   charliebot schedule-trigger \
     --max-wait 3600 \
-    --watch-pid neptune:12345 noire:67890 \
-    --message 'Remote training finished'
+    --watch neptune:12345 slurm:98765 \
+    --message 'Remote + slurm training finished'
 """
 
 import argparse
@@ -32,32 +32,38 @@ import requests
 
 from src.cli.common import internal_api_auth_headers, resolve_session_id
 from src.core.config import get_config
+from src.core.models import WatchKind
 from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
 
 # Exit code returned when remote-PID verify-on-create rejects the trigger.
 EXIT_VERIFY_REJECTED = 2
 
 
-def _parse_watch_target(raw: str) -> dict:
-  """Parse a single --watch-pid value into a dict {'host': str|None, 'pid': int}."""
-  if ":" in raw:
-    host, _, pid_str = raw.partition(":")
-    if not host:
-      raise argparse.ArgumentTypeError(f"--watch-pid host must be non-empty (got {raw!r})")
-    try:
-      pid = int(pid_str)
-    except ValueError as e:
-      raise argparse.ArgumentTypeError(f"--watch-pid pid must be int (got {raw!r})") from e
-    if pid <= 0:
-      raise argparse.ArgumentTypeError(f"--watch-pid pid must be positive (got {raw!r})")
-    return {"host": host, "pid": pid}
+def _positive_int(value: str, raw: str, what: str) -> int:
+  """Parse ``value`` as a positive int, raising a parser-friendly error on failure."""
   try:
-    pid = int(raw)
+    n = int(value)
   except ValueError as e:
-    raise argparse.ArgumentTypeError(f"--watch-pid must be int or host:int (got {raw!r})") from e
-  if pid <= 0:
-    raise argparse.ArgumentTypeError(f"--watch-pid pid must be positive (got {raw!r})")
-  return {"host": None, "pid": pid}
+    raise argparse.ArgumentTypeError(f"--watch {what} must be int (got {raw!r})") from e
+  if n <= 0:
+    raise argparse.ArgumentTypeError(f"--watch {what} must be positive (got {raw!r})")
+  return n
+
+
+def _parse_watch_target(raw: str) -> dict:
+  """Parse a single --watch spec into a watch-target dict carrying its kind.
+
+  Forms: ``12345`` (local pid), ``host:12345`` (remote pid), ``slurm:12345``
+  (slurm job). ``slurm`` is a reserved scheme keyword.
+  """
+  if ":" in raw:
+    scheme, _, rest = raw.partition(":")
+    if scheme == "slurm":
+      return {"kind": WatchKind.SLURM_JOB.value, "job_id": _positive_int(rest, raw, "slurm job id")}
+    if not scheme:
+      raise argparse.ArgumentTypeError(f"--watch host must be non-empty (got {raw!r})")
+    return {"kind": WatchKind.REMOTE_PID.value, "host": scheme, "pid": _positive_int(rest, raw, "pid")}
+  return {"kind": WatchKind.LOCAL_PID.value, "pid": _positive_int(raw, raw, "pid")}
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -71,22 +77,23 @@ def _build_parser() -> argparse.ArgumentParser:
       "--max-wait",
       required=True,
       type=int,
-      help="Max wait in seconds before the trigger fires. When --watch-pid is set, "
-      "this is the upper bound; the trigger fires earlier when all watched PIDs exit.",
+      help="Max wait in seconds before the trigger fires. When --watch is set, "
+      "this is the upper bound; the trigger fires earlier when all watched targets finish.",
   )
   parser.add_argument("--message", required=True, help="Message to send to the master CC when the trigger fires")
   parser.add_argument(
-      "--watch-pid",
+      "--watch",
       nargs="+",
       type=_parse_watch_target,
-      metavar="PID|HOST:PID",
+      metavar="SPEC",
       default=None,
       help=(
-          "Optional PIDs to watch. Each value is either a local PID (e.g. 12345) "
-          "or a remote PID of the form HOST:PID (e.g. neptune:12345). All values "
-          "in a single trigger must be either all local or all remote — mixing is "
-          "rejected. The trigger fires when ALL listed PIDs have exited (ALL-die "
-          "semantics) OR when --max-wait elapses, whichever comes first."),
+          "Optional targets to watch. Each SPEC self-describes its kind: a bare "
+          "integer is a local PID (e.g. 12345), HOST:PID is a remote PID (e.g. "
+          "neptune:12345), and slurm:JOBID is a SLURM job (e.g. slurm:98765). "
+          "Kinds may be mixed freely. The trigger fires when ALL targets have "
+          "finished (ALL semantics) OR when --max-wait elapses, whichever comes "
+          "first."),
   )
   return parser
 
@@ -96,12 +103,7 @@ def main() -> None:
   args = parser.parse_args()
   session_id = resolve_session_id(args.session)
 
-  watch_targets: list[dict] | None = args.watch_pid
-  if watch_targets is not None:
-    has_local = any(t["host"] is None for t in watch_targets)
-    has_remote = any(t["host"] is not None for t in watch_targets)
-    if has_local and has_remote:
-      parser.error("--watch-pid values must be all local or all remote, not mixed")
+  watch_targets: list[dict] | None = args.watch
 
   payload: dict = {
       "session_id": session_id,

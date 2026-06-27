@@ -13,13 +13,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus, WatchTarget
+from src.core.models import CreateSessionRequest, LocalPid, PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager, _format_suffix
 
 
-def _local(*pids: int) -> list[WatchTarget]:
-  return [WatchTarget(host=None, pid=p) for p in pids]
+def _local(*pids: int) -> list[LocalPid]:
+  return [LocalPid(pid=p) for p in pids]
 
 
 @pytest.fixture
@@ -70,10 +70,10 @@ async def test_pid_gone_immediate_fire(tmp_path: Path, pidfd_open_available: Non
 
   stored = await trigger_mgr._load_trigger(session_id, trigger.id)
   assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "pid_gone"
+  assert stored.fire_reason == "completed"
   msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | pid_gone]" in msg
-  assert f"pid_gone: {missing_pid}" in msg
+  assert "[Scheduled trigger fired | completed]" in msg
+  assert f"finished: {missing_pid} (gone at start)" in msg
 
 
 @pytest.mark.asyncio
@@ -102,10 +102,10 @@ async def test_pid_exit_before_timeout(tmp_path: Path, pidfd_open_available: Non
 
   stored = await trigger_mgr._load_trigger(session_id, trigger.id)
   assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "pid_exit"
+  assert stored.fire_reason == "completed"
   msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | pid_exit]" in msg
-  assert f"exited: {proc.pid}=" in msg
+  assert "[Scheduled trigger fired | completed]" in msg
+  assert f"finished: {proc.pid}" in msg
 
 
 @pytest.mark.asyncio
@@ -164,9 +164,9 @@ async def test_multiple_pids_all_semantics(tmp_path: Path, pidfd_open_available:
     assert elapsed >= 1.0, f"fired too early: {elapsed:.2f}s"
     assert elapsed < 5, f"fired too late: {elapsed:.2f}s"
     stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-    assert stored.fire_reason == "pid_exit"
+    assert stored.fire_reason == "completed"
     msg = mock_master.await_args.args[1]
-    assert "[Scheduled trigger fired | pid_exit]" in msg
+    assert "[Scheduled trigger fired | completed]" in msg
     assert str(fast.pid) in msg
     assert str(slow.pid) in msg
   finally:
@@ -219,38 +219,43 @@ async def test_pidfd_fallback_works_on_host(tmp_path: Path) -> None:
         if fresh.status == TriggerStatus.FIRED:
           break
       assert fresh is not None and fresh.status == TriggerStatus.FIRED
-      assert fresh.fire_reason == "pid_exit"
+      assert fresh.fire_reason == "completed"
   finally:
     proc.wait()
 
 
-def test_format_suffix_pid_gone() -> None:
-  assert _format_suffix("pid_gone", [], [], ["111", "222"]) == " (pid_gone: 111, 222)"
+def test_format_suffix_completed_gone_at_start() -> None:
+  assert _format_suffix("completed", ["111 (gone at start)", "222"], []) == (
+      " (finished: 111 (gone at start), 222)")
 
 
-def test_format_suffix_pid_exit_with_unknown() -> None:
-  out = _format_suffix("pid_exit", [("111", 0), ("222", None)], [], [])
-  assert out == " (exited: 111=0, 222=unknown)"
+def test_format_suffix_completed_pids() -> None:
+  assert _format_suffix("completed", ["111", "222"], []) == " (finished: 111, 222)"
 
 
-def test_format_suffix_timeout_with_exited() -> None:
-  out = _format_suffix("timeout", [("111", 0)], ["222", "333"], [])
-  assert out == " (exited: 111=0; still alive: 222, 333)"
+def test_format_suffix_timeout_with_finished() -> None:
+  out = _format_suffix("timeout", ["111"], ["222", "333"])
+  assert out == " (finished: 111; still alive: 222, 333)"
 
 
 def test_format_suffix_timeout_all_alive() -> None:
-  out = _format_suffix("timeout", [], ["222", "333"], [])
+  out = _format_suffix("timeout", [], ["222", "333"])
   assert out == " (still alive: 222, 333)"
 
 
-def test_format_suffix_pid_exit_remote_only() -> None:
-  out = _format_suffix("pid_exit", [("neptune:5678", None), ("noire:9012", None)], [], [])
-  assert out == " (exited: neptune:5678, noire:9012)"
+def test_format_suffix_completed_remote_only() -> None:
+  out = _format_suffix("completed", ["neptune:5678", "noire:9012"], [])
+  assert out == " (finished: neptune:5678, noire:9012)"
 
 
-def test_format_suffix_timeout_remote_mix() -> None:
-  out = _format_suffix("timeout", [("neptune:5678", None)], ["noire:9012"], [])
-  assert out == " (exited: neptune:5678; still alive: noire:9012)"
+def test_format_suffix_completed_slurm() -> None:
+  out = _format_suffix("completed", ["slurm:42: COMPLETED 0:0"], [])
+  assert out == " (finished: slurm:42: COMPLETED 0:0)"
+
+
+def test_format_suffix_timeout_mixed_kinds() -> None:
+  out = _format_suffix("timeout", ["neptune:5678", "slurm:42: COMPLETED 0:0"], ["1234", "slurm:99"])
+  assert out == " (finished: neptune:5678, slurm:42: COMPLETED 0:0; still alive: 1234, slurm:99)"
 
 
 def test_load_legacy_trigger_without_watch_pids() -> None:

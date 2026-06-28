@@ -7328,3 +7328,13 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Remove unused imports from test modules
+  description: |-
+    PURPOSE - Remove unused test imports so pyflakes noise stays focused.
+    HOW - Drop the unused imports from the four flagged test files.
+    HOW - Verify with `pyflakes tests/test_trigger_pid_watch.py tests/test_spawner_exit_override.py tests/test_message_attachments.py tests/test_backend_logging.py`.
+  category: imports
+  status: pending
+  created: '2026-06-28T21:12:09Z'
+  priority: low

@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Extract OpenCode turn streaming from OpenCodeBackend.run
+  description: |-
+    PURPOSE: Make OpenCodeBackend.run easier to read by isolating turn streaming from process setup.
+    HOW:
+    - Extract the SSE prompt/idle/error loop into a private _stream_prompt_turn helper.
+    - Keep process launch, health/session setup, and cleanup in run.
+    - Verify yapf --diff --recursive src/ and pyflakes src/agents/backends/opencode.py.
+  category: long-function
+  status: pending
+  created: '2026-06-28T03:12:28Z'
+  priority: low

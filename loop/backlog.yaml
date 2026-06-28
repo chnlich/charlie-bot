@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Remove unused dirpath binding in core/git.py
+  description: |-
+    PURPOSE: Remove the unused `dirpath` binding in `_contains_git_marker`.
+    HOW:
+    - Change the os.walk loop to bind the first tuple element as `_`.
+    - Verify with `python -m pylint --disable=all --enable=unused-variable src/core/git.py`.
+  category: dead-code
+  status: pending
+  created: '2026-06-28T05:13:14Z'
+  priority: low

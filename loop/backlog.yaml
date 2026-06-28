@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Extract Claude model env helper for Anthropic-compatible backends
+  description: 'PURPOSE — Keep Claude Code model override environment variables in
+    one shared place. HOW — Add a small helper on ClaudeCodeBackend or a backend
+    utility that returns the ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
+    ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL, and
+    CLAUDE_CODE_SUBAGENT_MODEL mapping; use it from deepseek_sglang.py and kimi.py.'
+  category: duplication
+  status: pending
+  created: '2026-06-28T11:12:57Z'
+  priority: low

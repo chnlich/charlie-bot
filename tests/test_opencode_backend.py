@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from src.agents.backends.opencode import OpenCodeBackend
@@ -13,6 +14,17 @@ def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
       lambda name, fallback: "/usr/bin/opencode",
   )
   return OpenCodeBackend(**kwargs)
+
+
+class _FakeEventStream:
+  """Async-iterable of pre-baked SSE event dicts for _consume_sse_events tests."""
+
+  def __init__(self, events: list[dict]) -> None:
+    self._events = events
+
+  async def __aiter__(self):
+    for event in self._events:
+      yield event
 
 
 class _FakeSseResponse:
@@ -159,6 +171,8 @@ def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
   data = json.loads(env["OPENCODE_CONFIG_CONTENT"])
   assert data["default_agent"] == "charliebot"
   assert data["agent"]["charliebot"]["permission"] == {"*": "allow"}
+  # The internal task tool is disabled so hidden explore subagents cannot run headless.
+  assert data["agent"]["charliebot"]["tools"] == {"task": False}
 
 
 def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
@@ -227,6 +241,117 @@ def test_translate_tool_error_emits_tool_result(monkeypatch) -> None:
           "content": "The user rejected permission to use this specific tool call.",
       },
   ]
+
+
+async def _drain(events):
+  return [event async for event in events]
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch) -> None:
+  """A permission ask for the parent session is a terminal error that ends the turn."""
+  backend = _build_backend(monkeypatch)
+  backend._session_id = "parent-session"
+
+  events = await _drain(
+      backend._consume_sse_events(
+          _FakeEventStream([
+              {
+                  "type": "permission.asked",
+                  "properties": {
+                      "id": "perm-1",
+                      "sessionID": "parent-session",
+                      "permission": "external_directory",
+                      "patterns": ["/etc"],
+                  },
+              },
+              {
+                  "type": "session.idle",
+                  "properties": {"sessionID": "parent-session"},
+              },
+          ])))
+
+  assert len(events) == 1
+  assert events[0]["type"] == ET.ERROR
+  assert "external_directory" in events[0]["message"]
+  assert "/etc" in events[0]["message"]
+  assert "parent-session" in events[0]["message"]
+  assert backend._failed is True
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_events_child_permission_ask_fails_before_filtering(monkeypatch) -> None:
+  """A child-session permission ask must be caught before the parent-session filter drops it."""
+  backend = _build_backend(monkeypatch)
+  backend._session_id = "parent-session"
+
+  events = await _drain(
+      backend._consume_sse_events(
+          _FakeEventStream([{
+              "type": "permission.asked",
+              "properties": {
+                  "id": "perm-2",
+                  "sessionID": "child-session",
+                  "permission": "doom_loop",
+                  "patterns": ["task"],
+              },
+          }])))
+
+  assert len(events) == 1
+  assert events[0]["type"] == ET.ERROR
+  assert "doom_loop" in events[0]["message"]
+  assert "child-session" in events[0]["message"]
+  assert backend._failed is True
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_events_normal_parent_turn(monkeypatch) -> None:
+  """Assistant text, parent-session filtering, idle, and usage aggregation still work."""
+  backend = _build_backend(monkeypatch)
+  backend._session_id = "parent-session"
+
+  events = await _drain(
+      backend._consume_sse_events(
+          _FakeEventStream([
+              {  # dropped: belongs to an unrelated session
+                  "type": "message.part.updated",
+                  "properties": {"sessionID": "other", "part": {"messageID": "m9", "id": "p9", "type": "text",
+                                                                "text": "ignored"}},
+              },
+              {
+                  "type": "message.updated",
+                  "properties": {"sessionID": "parent-session", "info": {"id": "m1", "role": "assistant"}},
+              },
+              {
+                  "type": "message.part.updated",
+                  "properties": {"sessionID": "parent-session",
+                                 "part": {"messageID": "m1", "id": "p1", "type": "text", "text": "Hello"}},
+              },
+              {
+                  "type": "session.idle",
+                  "properties": {"sessionID": "parent-session"},
+              },
+          ])))
+
+  assert events == [
+      {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello"}]}},
+      backend._make_accumulated_result(),
+  ]
+  assert backend._failed is False
+
+
+def test_is_cancellation_disconnect_true_after_terminate(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+  backend.terminated = True
+
+  assert backend._is_cancellation_disconnect(httpx.RemoteProtocolError("incomplete chunked read")) is True
+
+
+def test_is_cancellation_disconnect_false_without_terminate(monkeypatch) -> None:
+  """An unexpected disconnect with no deliberate terminate stays a visible backend failure."""
+  backend = _build_backend(monkeypatch)
+
+  assert backend._is_cancellation_disconnect(httpx.RemoteProtocolError("incomplete chunked read")) is False
 
 
 def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) -> None:

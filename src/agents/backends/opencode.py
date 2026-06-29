@@ -71,16 +71,28 @@ class OpenCodeBackend(AgentBackend):
     current_path = oc_env.get("PATH", "")
     if opencode_bin_dir not in current_path.split(":"):
       oc_env["PATH"] = f"{opencode_bin_dir}:{current_path}"
-    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps({
+    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(self._headless_config())
+    return oc_env
+
+  def _headless_config(self) -> dict:
+    """Injected opencode policy for headless master runs.
+
+    The primary ``charliebot`` agent stays permissive (``"*": "allow"``) so direct
+    read/search/bash work never blocks. opencode's internal ``task`` tool is disabled
+    because it spawns explore/general subagents in child sessions that raise their own
+    interactive permission prompts — a second, untracked delegation system with no
+    headless approval path. Disabling it keeps delegation inside CharlieBot.
+    """
+    return {
         "default_agent": "charliebot",
         "agent": {
             "charliebot": {
                 "mode": "primary",
                 "permission": {"*": "allow"},
+                "tools": {"task": False},
             }
         },
-    })
-    return oc_env
+    }
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
     """Drive OpenCode through its per-run HTTP server and SSE event stream."""
@@ -119,34 +131,66 @@ class OpenCodeBackend(AgentBackend):
           await self._wait_for_server_connected(sse_events)
           await self._send_prompt(client, self._session_id, prompt)
 
-          turn_finished = False
-          async for event in sse_events:
-            properties = event.get("properties", {})
-            if properties.get("sessionID") != self._session_id:
-              continue
-
-            event_type = event.get("type")
-            for translated in self._translate_sse_event(event):
-              yield translated
-
-            if event_type == "session.error":
-              self._failed = True
-              turn_finished = True
-              break
-
-            if event_type == "session.idle":
-              yield self._make_accumulated_result()
-              turn_finished = True
-              break
-          if not turn_finished:
-            raise RuntimeError("OpenCode SSE stream closed before session.idle")
+          async for translated in self._consume_sse_events(sse_events):
+            yield translated
     except Exception as e:
-      self._failed = True
-      log.exception("opencode_backend_failed", error=str(e))
-      detail = str(e) or e.__class__.__name__
-      yield make_error_event(f"OpenCode backend failed: {detail}")
+      if self._is_cancellation_disconnect(e):
+        # terminate() killed the server, which closes the /event stream mid-read. That
+        # transport error is cancellation cleanup, not the root failure — do not report it.
+        log.info("opencode_sse_closed_after_terminate", error=str(e))
+      else:
+        self._failed = True
+        log.exception("opencode_backend_failed", error=str(e))
+        detail = str(e) or e.__class__.__name__
+        yield make_error_event(f"OpenCode backend failed: {detail}")
     finally:
       await self._cleanup_server()
+
+  async def _consume_sse_events(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
+    """Translate parent-session SSE events until the turn ends.
+
+    A ``permission.asked`` event is a terminal backend error: headless runs have no human
+    to approve it, and this opencode server is dedicated to a single run, so an ask from
+    ANY session (parent or a subagent child) means the run cannot proceed. It is detected
+    before the parent-session filter so child-session asks — which carry a different
+    ``sessionID`` — are not silently dropped.
+    """
+    async for event in sse_events:
+      properties = event.get("properties", {})
+      event_type = event.get("type")
+
+      if event_type == "permission.asked":
+        self._failed = True
+        yield make_error_event(self._format_permission_error(properties))
+        return
+
+      if properties.get("sessionID") != self._session_id:
+        continue
+
+      for translated in self._translate_sse_event(event):
+        yield translated
+
+      if event_type == "session.error":
+        self._failed = True
+        return
+
+      if event_type == "session.idle":
+        yield self._make_accumulated_result()
+        return
+    raise RuntimeError("OpenCode SSE stream closed before session.idle")
+
+  def _is_cancellation_disconnect(self, error: Exception) -> bool:
+    """True when an SSE stream error is the expected fallout of a deliberate terminate().
+
+    A genuine unexpected disconnect (terminate() not called) stays a visible backend error.
+    """
+    return self.terminated and isinstance(error, httpx.RemoteProtocolError)
+
+  def _format_permission_error(self, properties: dict) -> str:
+    return (
+        f"OpenCode requested interactive permission '{properties.get('permission')}' "
+        f"(patterns={properties.get('patterns')}, session={properties.get('sessionID')}) "
+        "but CharlieBot runs headless with no approval path; aborting run.")
 
   def _reset_run_state(self) -> None:
     self._server_url = None

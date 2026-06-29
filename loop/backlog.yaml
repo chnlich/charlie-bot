@@ -7328,3 +7328,16 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Resolve current src code-health findings
+  description: 'PURPOSE: Remove current static code-health debt in src.
+
+    HOW: Drop the unused import and unused exception bindings reported by pyflakes.
+    Confirm or remove the dead-code signal in core/config.py. Split only the long
+    functions whose extracted helper has a clear single responsibility.
+
+    '
+  category: maintainability
+  status: pending
+  created: '2026-06-29T21:12:00Z'
+  priority: low

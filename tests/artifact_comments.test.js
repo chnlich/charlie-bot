@@ -96,7 +96,7 @@ function loadArtifactCommentsScript(pathname, framed = false) {
   };
   vm.createContext(context);
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
-  return {window, head, listeners};
+  return {window, head, body, listeners};
 }
 
 test('extractSessionIdFromPath parses session ids from artifact file paths', () => {
@@ -127,6 +127,17 @@ test('artifact comments script stays inert inside frames', () => {
   assert.equal(window.__cbcFindBlock, undefined);
   assert.equal(head.children.length, 0);
   assert.equal(listeners.length, 0);
+});
+
+test('artifact comments script does not install shortcut controls', () => {
+  const {body} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+
+  assert.equal(
+    body.children.some((child) => child.className === '__cbc-shortcuts'),
+    false
+  );
 });
 
 test('buildBatchMessage combines pending comments into one numbered message', () => {
@@ -188,32 +199,6 @@ test('buildBatchMessage preserves newline quote and comment content', () => {
   assert.equal(
     message.split('\n').filter((line) => line.trimStart().startsWith('\u21B3 ')).length,
     entries.length
-  );
-});
-
-test('buildBatchMessage renders no-quote Improve entries with context only', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(artifactPath);
-  const buildBatchMessage = window.__cbcBuildBatchMessage;
-  const entries = [
-    {
-      kind: 'improve',
-      quote: '',
-      context: 'Improve',
-      comment: 'Think from scratch, how to improve this?',
-    },
-  ];
-
-  const message = buildBatchMessage(entries);
-
-  assert.equal(
-    message,
-    [
-      '[Artifact comments \u00B7 ' + artifactPath + '] (1)',
-      '',
-      '1. \u25B8 Improve',
-      '   \u21B3 Think from scratch, how to improve this?',
-    ].join('\n')
   );
 });
 
@@ -374,33 +359,6 @@ test('buildBatchMessage handles mixed default and edited entries', () => {
       '',
       '2. ▸ C2 › "Q2"',
       '   ↳ second',
-    ].join('\n')
-  );
-});
-
-test('buildBatchMessage uses draftText for improve shortcut entries', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(artifactPath);
-  const buildBatchMessage = window.__cbcBuildBatchMessage;
-
-  const entries = [
-    {
-      kind: 'improve',
-      quote: '',
-      context: 'Improve',
-      comment: 'Think from scratch, how to improve this?',
-      draftText: 'Custom improve prompt',
-    },
-  ];
-
-  const message = buildBatchMessage(entries);
-
-  assert.equal(
-    message,
-    [
-      '[Artifact comments · ' + artifactPath + '] (1)',
-      '',
-      '1. Custom improve prompt',
     ].join('\n')
   );
 });

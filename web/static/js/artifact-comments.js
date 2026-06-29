@@ -169,7 +169,9 @@ if (!framed) {
     function isCommentableBlock(el) {
       if (el.nodeType !== 1 || !isBlockLevel(el)) return false;
       if (hasOwnText(el)) return true;
-      return window.getComputedStyle(el).display === 'table-cell' && isTextBearing(el);
+      if (!isTextBearing(el)) return false;
+      var tagName = el.tagName;
+      return tagName === 'PRE' || tagName === 'TD' || tagName === 'TH';
     }
 
     function findBlock(target) {

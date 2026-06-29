@@ -15,6 +15,7 @@ function makeElement() {
     children: [],
     childNodes: [],
     nodeType: 1,
+    tagName: 'DIV',
     parentElement: null,
     display: 'block',
     get textContent() {
@@ -258,15 +259,17 @@ test('findBlock keeps a td commentable even when it contains a display:block chi
   assert.equal(findBlock(small), small);
 });
 
-test('findBlock returns a code-only table cell instead of skipping to a wrapper', () => {
+test('findBlock returns pre for nested code and td for blank-area target in a code-only table cell', () => {
   const findBlock = loadFindBlock();
   const code = makeBlock('git status --short', {display: 'inline'});
   const pre = makeBlock('', {childNodes: [code]});
+  pre.tagName = 'PRE';
   const td = makeBlock('', {display: 'table-cell', childNodes: [pre]});
+  td.tagName = 'TD';
 
+  assert.equal(findBlock(code), pre);
+  assert.equal(findBlock(pre), pre);
   assert.equal(findBlock(td), td);
-  assert.equal(findBlock(pre), td);
-  assert.equal(findBlock(code), td);
 });
 
 test('findBlock still returns pre and li blocks that own text', () => {

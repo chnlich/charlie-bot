@@ -71,15 +71,18 @@ class OpenCodeBackend(AgentBackend):
     current_path = oc_env.get("PATH", "")
     if opencode_bin_dir not in current_path.split(":"):
       oc_env["PATH"] = f"{opencode_bin_dir}:{current_path}"
-    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps({
-        "default_agent": "charliebot",
-        "agent": {
-            "charliebot": {
-                "mode": "primary",
-                "permission": {"*": "allow"},
-            }
-        },
-    })
+    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
+        {
+            "default_agent": "charliebot",
+            "agent": {
+                "charliebot": {
+                    "mode": "primary",
+                    "permission": {
+                        "*": "allow"
+                    },
+                }
+            },
+        })
     return oc_env
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
@@ -344,17 +347,19 @@ class OpenCodeBackend(AgentBackend):
     events: list[dict] = []
 
     if call_id not in self._tool_use_emitted and state.get("status") != "pending":
-      events.append({
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": ET.TOOL_USE,
-                  "name": tool_name,
-                  "id": call_id,
-                  "input": state["input"],
-              }]
-          },
-      })
+      events.append(
+          {
+              "type": ET.ASSISTANT,
+              "message":
+                  {
+                      "content": [{
+                          "type": ET.TOOL_USE,
+                          "name": tool_name,
+                          "id": call_id,
+                          "input": state["input"],
+                      }]
+                  },
+          })
       self._tool_use_emitted.add(call_id)
 
     if call_id not in self._tool_result_emitted:

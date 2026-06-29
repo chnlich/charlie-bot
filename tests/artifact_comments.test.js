@@ -260,3 +260,127 @@ test('findBlock still returns pre and li blocks that own text', () => {
   assert.equal(findBlock(pre), pre);
   assert.equal(findBlock(li), li);
 });
+
+
+test('resolveEntryDraft returns default comment lines when no draft override', () => {
+  const {window} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+
+  const resolveEntryDraft = window.__cbcResolveEntryDraft;
+  assert.equal(typeof resolveEntryDraft, 'function');
+
+  const entry = {quote: 'quoted text', context: 'Context', comment: 'comment text'};
+  const lines = resolveEntryDraft(entry);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], '▸ Context › "quoted text"');
+  assert.equal(lines[1], '↳ comment text');
+});
+
+test('resolveEntryDraft returns draftText lines when override exists', () => {
+  const {window} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+
+  const resolveEntryDraft = window.__cbcResolveEntryDraft;
+  const entry = {
+    quote: 'quoted text',
+    context: 'Context',
+    comment: 'comment text',
+    draftText: 'Custom draft\nsecond line',
+  };
+  const lines = resolveEntryDraft(entry);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], 'Custom draft');
+  assert.equal(lines[1], 'second line');
+});
+
+test('buildBatchMessage uses draftText override instead of default formatting', () => {
+  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(artifactPath);
+  const buildBatchMessage = window.__cbcBuildBatchMessage;
+
+  const entries = [
+    {quote: 'First', context: 'Ctx', comment: 'default comment'},
+    {quote: 'Second', context: 'Ctx2', comment: 'also default', draftText: 'Overridden text'},
+  ];
+
+  const message = buildBatchMessage(entries);
+
+  assert.ok(message.includes('1. ▸ Ctx › "First"'), 'first entry uses default format');
+  assert.ok(message.includes('↳ default comment'), 'first entry comment rendered');
+  assert.ok(message.includes('2. Overridden text'), 'second entry uses draftText');
+  assert.ok(!message.includes('↳ also default'), 'second default comment is not rendered');
+});
+
+test('buildBatchMessage indents multiline draftText correctly', () => {
+  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(artifactPath);
+  const buildBatchMessage = window.__cbcBuildBatchMessage;
+
+  const entries = [{quote: 'Q', context: 'C', comment: 'c', draftText: 'Line one\nLine two'}];
+
+  const message = buildBatchMessage(entries);
+
+  assert.equal(
+    message,
+    [
+      '[Artifact comments · ' + artifactPath + '] (1)',
+      '',
+      '1. Line one',
+      '   Line two',
+    ].join('\n')
+  );
+});
+
+test('buildBatchMessage handles mixed default and edited entries', () => {
+  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(artifactPath);
+  const buildBatchMessage = window.__cbcBuildBatchMessage;
+
+  const entries = [
+    {quote: 'Q1', context: 'C1', comment: 'first', draftText: 'Edited first'},
+    {quote: 'Q2', context: 'C2', comment: 'second'},
+  ];
+
+  const message = buildBatchMessage(entries);
+
+  assert.equal(
+    message,
+    [
+      '[Artifact comments · ' + artifactPath + '] (2)',
+      '',
+      '1. Edited first',
+      '',
+      '2. ▸ C2 › "Q2"',
+      '   ↳ second',
+    ].join('\n')
+  );
+});
+
+test('buildBatchMessage uses draftText for improve shortcut entries', () => {
+  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(artifactPath);
+  const buildBatchMessage = window.__cbcBuildBatchMessage;
+
+  const entries = [
+    {
+      kind: 'improve',
+      quote: '',
+      context: 'Improve',
+      comment: 'Think from scratch, how to improve this?',
+      draftText: 'Custom improve prompt',
+    },
+  ];
+
+  const message = buildBatchMessage(entries);
+
+  assert.equal(
+    message,
+    [
+      '[Artifact comments · ' + artifactPath + '] (1)',
+      '',
+      '1. Custom improve prompt',
+    ].join('\n')
+  );
+});

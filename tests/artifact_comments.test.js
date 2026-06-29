@@ -17,6 +17,12 @@ function makeElement() {
     nodeType: 1,
     parentElement: null,
     display: 'block',
+    get textContent() {
+      return this.childNodes.map((node) => node.textContent || '').join('');
+    },
+    get innerText() {
+      return this.textContent;
+    },
     classList: {add() {}, remove() {}},
     appendChild(child) {
       this.children.push(child);
@@ -250,6 +256,17 @@ test('findBlock keeps a td commentable even when it contains a display:block chi
   assert.equal(findBlock(td), td);
   // The display:block <small> owns its own text, so it is independently commentable.
   assert.equal(findBlock(small), small);
+});
+
+test('findBlock returns a code-only table cell instead of skipping to a wrapper', () => {
+  const findBlock = loadFindBlock();
+  const code = makeBlock('git status --short', {display: 'inline'});
+  const pre = makeBlock('', {childNodes: [code]});
+  const td = makeBlock('', {display: 'table-cell', childNodes: [pre]});
+
+  assert.equal(findBlock(td), td);
+  assert.equal(findBlock(pre), td);
+  assert.equal(findBlock(code), td);
 });
 
 test('findBlock still returns pre and li blocks that own text', () => {

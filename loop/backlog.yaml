@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split long claude-sub CLI flows
+  description: |
+    PURPOSE: Make claude-sub's argument parsing, prompt submission, and transcript streaming easier to review.
+    HOW:
+    - Extract flag-token handling from parse_argv into a small parser helper.
+    - Split _send_prompt into clear-input, paste-wait, and submit-verify helpers.
+    - Move _stream_turn's transcript polling loop into a focused helper that owns TurnState updates.
+  category: long-function
+  status: pending
+  created: '2026-06-29T09:12:41Z'
+  priority: low

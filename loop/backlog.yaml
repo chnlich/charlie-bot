@@ -7325,6 +7325,23 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: Resolved by running `yapf --in-place --recursive src/`; `yapf
+    --diff --recursive src/` is clean.
+- id: '186'
+  title: Share Claude proxy model environment mapping
+  description: 'PURPOSE: Keep Anthropic-compatible Claude Code backends from duplicating
+    the same model environment contract.
+
+    HOW: Add a small helper in the Claude backend layer that returns the ANTHROPIC_MODEL,
+    ANTHROPIC_DEFAULT_*_MODEL, and CLAUDE_CODE_SUBAGENT_MODEL keys for a model string.
+    Use it from KimiBackend._prepare_env and DeepSeekSGLangBackend._prepare_env, leaving
+    each backend to supply its own base URL and auth token.
+
+    '
+  category: duplication
+  status: pending
+  created: '2026-06-29T05:12:35Z'
   priority: low

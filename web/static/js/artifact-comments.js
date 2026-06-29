@@ -26,6 +26,7 @@ if (!framed) {
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
     window.__cbcBuildBatchMessage = buildBatchMessage;
+    window.__cbcResolveEntryDraft = resolveEntryDraft;
     window.__cbcFindBlock = findBlock;
 
     installStyles();
@@ -70,11 +71,14 @@ if (!framed) {
         '.' + GLOBAL_PREFIX + '-tray{position:fixed;right:14px;bottom:110px;z-index:2147483646;width:min(300px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
         '.' + GLOBAL_PREFIX + '-tray-header{font-weight:600;font-size:12px;color:#8b949e}' +
         '.' + GLOBAL_PREFIX + '-tray-list{max-height:200px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
-        '.' + GLOBAL_PREFIX + '-tray-item{position:relative;background:#0d1117;border:1px solid #2d3340;border-radius:6px;padding:7px 28px 7px 8px}' +
+        '.' + GLOBAL_PREFIX + '-tray-item{position:relative;background:#0d1117;border:1px solid #2d3340;border-radius:6px;padding:7px 34px 7px 8px;min-height:48px}' +
         '.' + GLOBAL_PREFIX + '-tray-item-quote{color:#8b949e;font-size:11px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-        '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:pre-line;cursor:default}' +
+        '.' + GLOBAL_PREFIX + '-tray-edited{display:none;margin-top:3px;color:#58a6ff;font-size:11px}' +
         '.' + GLOBAL_PREFIX + '-tray-edit{box-sizing:border-box;width:100%;min-height:58px;resize:vertical;margin-top:3px;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:6px 7px;font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
         '.' + GLOBAL_PREFIX + '-tray-edit:focus{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.18)}' +
+        '.' + GLOBAL_PREFIX + '-tray-edit-btn{position:absolute;bottom:4px;right:4px;border:1px solid #2d3340;border-radius:4px;padding:2px 6px;background:#1c2230;color:#e6edf3;font:10px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-tray-edit-btn:hover{background:#262d36}' +
         '.' + GLOBAL_PREFIX + '-tray-remove{position:absolute;top:4px;right:4px;width:18px;height:18px;border:none;border-radius:4px;background:transparent;color:#8b949e;font:14px/1 -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}' +
         '.' + GLOBAL_PREFIX + '-tray-remove:hover{background:#21262d;color:#e6edf3}' +
         '.' + GLOBAL_PREFIX + '-tray-reason{background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;font-size:11px;line-height:1.3}' +
@@ -320,13 +324,18 @@ if (!framed) {
       return quoteLine.split('\n').concat(('\u21B3 ' + comment).split('\n'));
     }
 
+    function resolveEntryDraft(entry) {
+      if (entry.draftText != null) return entry.draftText.split('\n');
+      return buildCommentEntry(entry.quote, entry.context, entry.comment);
+    }
+
     function buildBatchMessage(entries) {
       var lines = [];
       lines.push('[Artifact comments \u00B7 ' + artifactPath + '] (' + entries.length + ')');
       lines.push('');
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
-        var entryLines = buildCommentEntry(entry.quote, entry.context, entry.comment);
+        var entryLines = resolveEntryDraft(entry);
         lines.push((i + 1) + '. ' + entryLines[0]);
         for (var j = 1; j < entryLines.length; j++) {
           lines.push('   ' + entryLines[j]);
@@ -527,11 +536,24 @@ if (!framed) {
       quote.className = GLOBAL_PREFIX + '-tray-item-quote';
       quote.textContent = entry.quote === '' ? entry.context : '\u201C' + entry.quote + '\u201D';
 
-      var comment = document.createElement('div');
-      comment.className = GLOBAL_PREFIX + '-tray-item-comment';
-      comment.textContent = entry.comment;
-      comment.addEventListener('click', function() {
-        editTrayComment(idx, comment);
+      var draft = document.createElement('div');
+      draft.className = GLOBAL_PREFIX + '-tray-item-comment';
+      draft.textContent = resolveEntryDraft(entry).join('\n');
+      draft.title = 'Outbound text';
+
+      var edited = document.createElement('span');
+      edited.className = GLOBAL_PREFIX + '-tray-edited';
+      edited.textContent = 'edited';
+      edited.style.display = entry.draftText != null ? 'inline' : 'none';
+
+      var editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = GLOBAL_PREFIX + '-tray-edit-btn';
+      editBtn.textContent = 'Edit';
+      editBtn.title = 'Edit outbound text';
+      editBtn.setAttribute('aria-label', 'Edit outbound text for this comment');
+      editBtn.addEventListener('click', function() {
+        editTrayEntry(idx, item);
       });
 
       var remove = document.createElement('button');
@@ -544,16 +566,22 @@ if (!framed) {
         removeEntry(idx);
       });
 
+      item.appendChild(editBtn);
       item.appendChild(remove);
       item.appendChild(quote);
-      item.appendChild(comment);
+      item.appendChild(draft);
+      item.appendChild(edited);
       return item;
     }
 
-    function editTrayComment(idx, commentNode) {
+    function editTrayEntry(idx, itemNode) {
+      var entry = pending[idx];
+      var draftNode = itemNode.querySelector('.' + GLOBAL_PREFIX + '-tray-item-comment');
+      if (!draftNode) return;
       var textarea = document.createElement('textarea');
       textarea.className = GLOBAL_PREFIX + '-tray-edit';
-      textarea.value = pending[idx].comment;
+      textarea.value = resolveEntryDraft(entry).join('\n');
+      textarea.setAttribute('aria-label', 'Edit outbound text');
       var done = false;
 
       function cancel() {
@@ -564,13 +592,13 @@ if (!framed) {
 
       function save() {
         if (done) return;
-        var next = textarea.value.trim();
-        if (!next) {
+        var next = textarea.value;
+        if (!next.trim()) {
           cancel();
           return;
         }
         done = true;
-        pending[idx].comment = next;
+        pending[idx].draftText = next;
         refreshTray();
       }
 
@@ -586,7 +614,7 @@ if (!framed) {
         }
       });
       textarea.addEventListener('blur', save);
-      commentNode.parentNode.replaceChild(textarea, commentNode);
+      draftNode.parentNode.replaceChild(textarea, draftNode);
       textarea.focus();
       textarea.select();
     }

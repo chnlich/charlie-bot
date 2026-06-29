@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude-sub prompt submission flow
+  description: |-
+    PURPOSE: Make claude-sub prompt submission easier to audit by separating its input-state phases.
+    HOW:
+    - Extract helpers for prompt visibility handling, stale-input clearing, paste-render waiting, and Enter retry verification.
+    - Keep _send_prompt as the orchestration wrapper and preserve the current fail-fast RuntimeError paths.
+    - Verify with yapf --in-place --recursive src/ and a focused claude-sub tmux smoke check.
+  category: long-function
+  status: pending
+  created: '2026-06-29T07:13:01Z'
+  priority: low

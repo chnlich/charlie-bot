@@ -7328,3 +7328,12 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude-sub prompt submission phases
+  description: |-
+    PURPOSE — Make claude-sub prompt submission easier to reason about by separating prompt readiness, paste rendering, and submit verification.
+    HOW — Extract helpers from src/cli/claude_sub.py:_send_prompt: one to ensure/clear the prompt input, one to paste and wait for visible input, and one to send Enter until the input empties. Keep existing tmux commands, timeout constants, and error behavior; verify with yapf and pyflakes.
+  category: long-function
+  status: pending
+  created: '2026-06-29T01:13:10Z'
+  priority: low

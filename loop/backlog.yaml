@@ -7328,3 +7328,12 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude_sub._send_prompt into prompt phases
+  description: |
+    PURPOSE: Make claude-sub prompt submission easier to audit by separating stale-input clearing, paste verification, and submit verification.
+    HOW: Extract `_clear_stale_prompt_input`, `_wait_for_pasted_prompt`, and `_submit_prompt_with_verification` helpers from `src/cli/claude_sub.py:_send_prompt`, preserving the current tmux commands, timeouts, and error messages. Verify with `python -m py_compile src/cli/claude_sub.py` and the existing claude-sub tests.
+  category: long-function
+  status: pending
+  created: '2026-06-30T21:13:16Z'
+  priority: low

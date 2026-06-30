@@ -6,7 +6,8 @@ Called by the master Claude Code instance via its run_command tool:
   charliebot delegate \
     --repo /path/to/repo \
     --base-branch main \
-    --description "implement feature X" \
+    --task-spec-file /path/to/task_spec.md \
+    --reviewer-context-file /path/to/reviewer_context.md \
     --keep-worktree 0 \
     --task-type implement
 """
@@ -14,21 +15,22 @@ Called by the master Claude Code instance via its run_command tool:
 import argparse
 import json
 
-from src.cli.common import post_internal_api, resolve_session_id
+from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id, validate_task_spec_markdown
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
-  parser.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Session ID (optional; auto-derived from cwd)")
+  parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
-  parser.add_argument("--description", required=True, help="Task description")
+  parser.add_argument(
+      "--task-spec-file", dest="task_spec_file", required=True, help="Path to a structured Markdown task spec file")
   parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")
   parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
-  parser.add_argument("--context", default=None, help="Business context for reviewers")
+  parser.add_argument(
+      "--reviewer-context-file",
+      dest="reviewer_context_file",
+      default=None,
+      help="Optional path to reviewer-only context")
   parser.add_argument(
       "--keep-worktree",
       required=True,
@@ -54,10 +56,15 @@ def main() -> None:
   )
   args = parser.parse_args()
   session_id = resolve_session_id(args.session)
+  task_spec = read_required_text_file("--task-spec-file", args.task_spec_file)
+  validate_task_spec_markdown(task_spec)
+  reviewer_context = None
+  if args.reviewer_context_file is not None:
+    reviewer_context = read_required_text_file("--reviewer-context-file", args.reviewer_context_file)
 
   payload = {
       "session_id": session_id,
-      "description": args.description,
+      "description": task_spec,
       "base_branch": args.base_branch,
       "keep_worktree": bool(args.keep_worktree),
       "task_type": args.task_type,
@@ -66,8 +73,8 @@ def main() -> None:
     payload["backend"] = args.backend
   if args.repo is not None:
     payload["repo_path"] = args.repo
-  if args.context is not None:
-    payload["context"] = args.context
+  if reviewer_context is not None:
+    payload["context"] = reviewer_context
 
   result = post_internal_api("/api/internal/delegate", payload)
   print(json.dumps(result, indent=2))

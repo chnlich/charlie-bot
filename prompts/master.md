@@ -51,9 +51,10 @@ Spawn a worker in an isolated git worktree for any code change:
 
 ```bash
 charliebot delegate \
-  --repo /path/to/target/repo \
-  --description "concise task description" \
-  --context "optional business context for reviewers" \
+  --repo <repo> \
+  --base-branch <base> \
+  --task-spec-file <task-spec.md> \
+  --reviewer-context-file <reviewer-context.md> \
   --keep-worktree 0 \
   --task-type implement
 ```
@@ -61,6 +62,30 @@ charliebot delegate \
 Do NOT pass `--session` in normal master use. Session identity is supplied by cwd (`~/.charliebot/sessions/{session_id}`); a mismatch with an explicit `--session` is rejected. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
 
 Pass `--keep-worktree 1` instead when the worker launches a long-running external job (e.g. a SLURM submission) whose WorkDir lives in the worktree.
+
+Every one-shot delegation must use `--task-spec-file`; do not pass naked task text through CLI arguments. Write a structured Markdown task spec first:
+
+```markdown
+## Goal
+One concise deliverable.
+
+## Source Files
+- <absolute-source-path>
+
+## Required Behavior
+Executable contract, state-machine semantics, and boundary rules.
+
+## Acceptance Tests
+Focused tests or verification commands.
+
+## Reviewer Checklist
+Concrete checks beyond "tests passed".
+
+## Out of Scope
+Things the worker must not change.
+```
+
+For simple tasks with no external source files, use `- (none)` under `## Source Files`. Reviewer-only hints go in `--reviewer-context-file`; do not put worker requirements there.
 
 `--task-type` picks the worker prompt template AND the post-task pipeline. Three profiles:
 
@@ -71,7 +96,7 @@ Pass `--keep-worktree 1` instead when the worker launches a long-running externa
 - **Always delegate**: feature implementation, bug fixes, refactoring, writing tests, any code change — including tooling setup commands like `uv init`, `npm init`, `cargo init` that create/modify tracked files.
 - **Do NOT delegate**: answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
 - **Never include revert/keep-only-report decision rules in delegate prompts** — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit.
-- Be specific (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success (for `implement`), rebases, and merges `--ff-only`. You receive a summary on merge.
+- Be specific in the task spec (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success (for `implement`), rebases, and merges `--ff-only`. You receive a summary on merge.
 - **Merge-back failover.** Delegation lands automatically — the reviewer rebases the work branch onto the latest base and ff-pushes. If the base moved so it can't fast-forward, it returns failed with the work branch and its worktree kept. Then rebase and push from that kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user, or delegate the resolution.
 
 ---

@@ -22,3 +22,26 @@ def test_review_prompt_fetches_remote_base_before_scope_diff() -> None:
   assert fetch_line in prompt
   assert diff_line in prompt
   assert prompt.index(fetch_line) < prompt.index(diff_line)
+
+
+def test_review_prompt_instructs_task_spec_review_contract() -> None:
+  prompt = build_review_prompt(
+      branch_name="feature/review-fix",
+      wt_path="/tmp/review-worktree",
+      base_branch="main",
+      session_id="session-1",
+      original_thread_id="thread-1",
+      sessions_dir=Path("/tmp/sessions"),
+      context="review context",
+      user_request=(
+          "## Goal\nFix it\n\n"
+          "## Source Files\n- /tmp/source.md\n\n"
+          "## Required Behavior\nPreserve state-machine transitions.\n\n"
+          "## Reviewer Checklist\nVerify transitions."),
+      worker_summary="changed review prompt",
+  )
+
+  assert "read every path listed under `## Source Files`" in prompt
+  assert "Apply the task spec's `## Reviewer Checklist`" in prompt
+  assert "verify the implementation against `## Required Behavior`" in prompt
+  assert "do not rely only on tests" in prompt

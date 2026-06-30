@@ -96,7 +96,6 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
 
 
 def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None:
-  """IMPLEMENT preserves the historical worker prompt exactly."""
   prompt = spawner._build_worker_prompt(
       description="Implement X",
       repo_path=Path("/tmp/repo"),
@@ -110,6 +109,23 @@ def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None
   assert "A reviewer will handle that." in prompt
   assert "Do NOT modify tracked files." not in prompt
   assert "Do NOT commit." not in prompt
+
+
+def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
+  prompt = spawner._build_worker_prompt(
+      description="## Goal\nImplement X\n\n## Source Files\n- /tmp/source.md",
+      repo_path=Path("/tmp/repo"),
+      base_branch="main",
+      branch_name="charliebot/task-xyz",
+      wt_path="/tmp/worktrees/charliebot-task-xyz",
+      session_meta=SessionMetadata(id="session-id", name="impl"),
+      task_type=TaskType.IMPLEMENT,
+  )
+
+  assert "contains a `## Source Files` section" in prompt
+  assert "read every listed source file before editing" in prompt
+  assert "stop and report the conflict" in prompt
+  assert "instead of inventing a merged requirement" in prompt
 
 
 def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> None:

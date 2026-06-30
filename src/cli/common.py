@@ -5,6 +5,7 @@ entry point, including consistent error-detail extraction on 4xx/5xx responses.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,15 @@ import requests
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
+
+TASK_SPEC_REQUIRED_HEADINGS = (
+    "Goal",
+    "Source Files",
+    "Required Behavior",
+    "Acceptance Tests",
+    "Reviewer Checklist",
+    "Out of Scope",
+)
 
 
 def internal_api_auth_headers(cfg: CharlieBotConfig) -> dict[str, str]:
@@ -25,6 +35,60 @@ def internal_api_auth_headers(cfg: CharlieBotConfig) -> dict[str, str]:
   if cfg.charliebot_access_key:
     return {"Authorization": f"Bearer {cfg.charliebot_access_key}"}
   return {}
+
+
+def exit_usage_error(message: str) -> None:
+  """Emit a CLI usage error as JSON and exit with argparse-compatible code 2."""
+  print(json.dumps({"error": message}), file=sys.stderr)
+  sys.exit(2)
+
+
+def read_required_text_file(flag_name: str, file_path: str) -> str:
+  """Read a required text file, exiting non-zero on a missing or empty file."""
+  path = Path(file_path)
+  if not path.is_file():
+    exit_usage_error(f"{flag_name} not found: {file_path}")
+  content = path.read_text()
+  if not content.strip():
+    exit_usage_error(f"{flag_name} is empty: {file_path}")
+  return content
+
+
+def validate_task_spec_markdown(content: str) -> None:
+  """Validate the structured Markdown task spec contract used by delegation."""
+  missing_headings = [
+      heading for heading in TASK_SPEC_REQUIRED_HEADINGS
+      if re.search(rf"^## {re.escape(heading)}[ \t]*$", content, flags=re.MULTILINE) is None
+  ]
+  if missing_headings:
+    exit_usage_error(
+        "task spec missing required headings: " + ", ".join(f"## {heading}" for heading in missing_headings))
+
+  source_match = re.search(
+      r"^## Source Files[ \t]*\n(?P<section>.*?)(?=^## [^\n]+|\Z)",
+      content,
+      flags=re.MULTILINE | re.DOTALL,
+  )
+  if source_match is None:
+    raise RuntimeError("Source Files heading presence was validated but section extraction failed")
+
+  saw_source_entry = False
+  for line in source_match.group("section").splitlines():
+    stripped = line.strip()
+    if not stripped.startswith("- "):
+      continue
+    saw_source_entry = True
+    if stripped == "- (none)":
+      continue
+    if stripped.startswith("- /"):
+      source_path = stripped[2:].strip()
+      if not Path(source_path).exists():
+        exit_usage_error(f"task spec source file not found: {source_path}")
+      continue
+    exit_usage_error(f"task spec source file entries must be absolute paths or - (none): {stripped}")
+
+  if not saw_source_entry:
+    exit_usage_error("task spec Source Files section must list source files or - (none)")
 
 
 def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:

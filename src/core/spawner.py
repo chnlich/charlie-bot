@@ -112,9 +112,18 @@ def _build_worker_prompt(
   else:
     raise ValueError(f"unsupported task_type: {task_type!r}")
 
-  worktree_section = (f"## Worktree Workflow\n"
-                      f"{workflow_body}\n\n"
-                      f"## Task\n{description}")
+  task_spec_section = (
+      "## Task Spec Source Files\n"
+      "- If the task text below is a structured task spec or contains a `## Source Files` section, "
+      "read every listed source file before editing.\n"
+      "- If the task spec and source files conflict, stop and report the conflict instead of inventing "
+      "a merged requirement.\n")
+
+  worktree_section = (
+      f"## Worktree Workflow\n"
+      f"{workflow_body}\n\n"
+      f"{task_spec_section}\n"
+      f"## Task\n{description}")
 
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:

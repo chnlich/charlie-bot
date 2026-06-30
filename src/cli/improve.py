@@ -19,33 +19,18 @@ completes.
 
 import argparse
 import json
-import sys
-from pathlib import Path
 
-from src.cli.common import post_internal_api, resolve_session_id
-
-
-def _read_required_markdown_file(flag_name: str, file_path: str) -> str:
-  """Read a required markdown file, exiting non-zero on a missing or empty file."""
-  path = Path(file_path)
-  if not path.is_file():
-    print(json.dumps({"error": f"{flag_name} not found: {file_path}"}), file=sys.stderr)
-    sys.exit(2)
-  content = path.read_text()
-  if not content.strip():
-    print(json.dumps({"error": f"{flag_name} is empty: {file_path}"}), file=sys.stderr)
-    sys.exit(2)
-  return content
+from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id
 
 
 def _read_goal_file(goal_file: str) -> str:
   """Read the goal file, exiting non-zero on a missing or empty file."""
-  return _read_required_markdown_file("--goal-file", goal_file)
+  return read_required_text_file("--goal-file", goal_file)
 
 
 def _read_plan_file(plan_file: str) -> str:
   """Read the optional plan file when provided, exiting non-zero if invalid."""
-  return _read_required_markdown_file("--plan-file", plan_file)
+  return read_required_text_file("--plan-file", plan_file)
 
 
 def main() -> None:

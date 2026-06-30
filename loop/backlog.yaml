@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split oversized claude_sub command-flow functions
+  description: |
+    PURPOSE: Make claude_sub.py easier to maintain by splitting its oversized command-flow functions.
+    HOW:
+    - Extract parser option-group builders from parse_argv.
+    - Extract send-result handling from _send_prompt and stream-event handling from _stream_turn.
+    - Verify with pyflakes src/cli/claude_sub.py and yapf --in-place --recursive src/.
+  category: long-function
+  status: pending
+  created: '2026-06-30T05:12:04Z'
+  priority: low

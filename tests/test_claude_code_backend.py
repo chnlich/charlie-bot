@@ -63,6 +63,16 @@ def test_base_command_disallows_headless_unsafe_tools() -> None:
       "CronCreate",
       "CronDelete",
       "CronList",
+      "Agent",
+      "Workflow",
+      "TaskCreate",
+      "TaskGet",
+      "TaskUpdate",
+      "TaskList",
+      "TaskStop",
+      "TaskOutput",
+      "SendMessage",
+      "ListAgents",
   }
 
   assert required_tools <= disallowed_tools

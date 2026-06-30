@@ -80,7 +80,10 @@ function loadArtifactCommentsScript(pathname, framed = false) {
     addEventListener(type, handler, options) {
       listeners.push({target: 'document', type, handler, options});
     },
-    querySelectorAll() {
+    querySelectorAll(selector) {
+      if (selector === '.__cbc-shortcuts') {
+        return body.children.filter((child) => child.className === '__cbc-shortcuts');
+      }
       return [];
     },
   };
@@ -96,7 +99,11 @@ function loadArtifactCommentsScript(pathname, framed = false) {
   };
   vm.createContext(context);
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
-  return {window, head, listeners};
+  return {window, head, body, listeners};
+}
+
+function rectsIntersect(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
 test('extractSessionIdFromPath parses session ids from artifact file paths', () => {
@@ -215,6 +222,39 @@ test('buildBatchMessage renders no-quote Improve entries with context only', () 
       '   \u21B3 Think from scratch, how to improve this?',
     ].join('\n')
   );
+});
+
+test('comment trigger avoids overlapping artifact shortcut controls', () => {
+  const {window, body, listeners} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+  const shortcuts = body.children.find((child) => child.className === '__cbc-shortcuts');
+  assert.ok(shortcuts, 'shortcut controls are installed');
+
+  const shortcutRect = {left: 960, top: 700, right: 1018, bottom: 760};
+  shortcuts.getBoundingClientRect = () => shortcutRect;
+
+  const block = makeBlock('Full height plan section');
+  block.getBoundingClientRect = () => ({left: 0, top: 760, right: 2000, bottom: 1600});
+  const naturalTriggerRect = {left: 982, top: 726, right: 1016, bottom: 760};
+  assert.equal(rectsIntersect(naturalTriggerRect, shortcutRect), true, 'test setup overlaps naturally');
+
+  const mouseover = listeners.find((listener) => (
+    listener.target === 'document' && listener.type === 'mouseover'
+  ));
+  mouseover.handler({target: block});
+
+  const trigger = body.children.find((child) => child.className === '__cbc-trigger');
+  assert.ok(trigger, 'comment trigger is installed');
+  const left = Number.parseFloat(trigger.style.left);
+  const top = Number.parseFloat(trigger.style.top);
+  const triggerRect = {left, top, right: left + 34, bottom: top + 34};
+
+  assert.equal(rectsIntersect(triggerRect, shortcutRect), false);
+  assert.ok(triggerRect.left >= 8);
+  assert.ok(triggerRect.top >= 8);
+  assert.ok(triggerRect.right <= window.innerWidth - 8);
+  assert.ok(triggerRect.bottom <= window.innerHeight - 8);
 });
 
 function loadFindBlock() {

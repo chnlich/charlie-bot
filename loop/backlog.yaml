@@ -7325,6 +7325,23 @@
     and src/api/ncu_parsing.py, then verify `yapf --diff --recursive src/` reports
     no remaining diff.
   category: formatting
-  status: pending
+  status: done
   created: '2026-06-13T16:42:10Z'
+  priority: low
+  done_reason: 'Resolved by the 2026-06-30 YAPF pass; `yapf --diff --recursive src/`
+    is clean.'
+- id: '186'
+  title: Split claude_sub._send_prompt into named prompt-send phases
+  description: 'PURPOSE: Reduce risk in Claude TUI prompt submission by keeping each
+    prompt-send phase named and short.
+
+    HOW: Extract helpers from src/cli/claude_sub.py:_send_prompt for prompt readiness,
+    stale-input clearing, and paste-render waiting. Keep _send_prompt as the high-level
+    orchestration with the existing timeouts and RuntimeError messages. Verify with
+    pyflakes src/cli/claude_sub.py and the existing claude-sub/TUI tests.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-30T07:12:47Z'
   priority: low

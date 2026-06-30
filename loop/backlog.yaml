@@ -7328,3 +7328,14 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Drop unused cls receiver from Config.migrate_and_expand
+  description: |-
+    PURPOSE: Remove the unused validator receiver flagged by the dead-code scan.
+    HOW:
+    - In src/core/config.py:migrate_and_expand, drop @classmethod and the cls parameter if Pydantic accepts a plain before-validator; otherwise rename cls to _cls.
+    - Verify uvx vulture src --min-confidence 80 no longer reports this finding.
+  category: dead-code
+  status: pending
+  created: '2026-06-30T01:12:39Z'
+  priority: low

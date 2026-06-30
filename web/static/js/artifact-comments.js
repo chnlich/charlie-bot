@@ -216,9 +216,91 @@ if (!framed) {
     function positionTrigger(block) {
       var btn = ensureTrigger();
       var rect = block.getBoundingClientRect();
-      btn.style.left = Math.max(8, Math.min(rect.right - TRIGGER_SIZE, window.innerWidth - TRIGGER_SIZE - 8)) + 'px';
-      btn.style.top = Math.max(8, Math.min(rect.top + 4, window.innerHeight - TRIGGER_SIZE - 8)) + 'px';
+      var left = clamp(rect.right - TRIGGER_SIZE, 8, window.innerWidth - TRIGGER_SIZE - 8);
+      var top = clamp(rect.top + 4, 8, window.innerHeight - TRIGGER_SIZE - 8);
+      var position = avoidShortcutOverlap(left, top);
+      btn.style.left = position.left + 'px';
+      btn.style.top = position.top + 'px';
       btn.style.display = 'flex';
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(value, max));
+    }
+
+    function rectForTrigger(left, top) {
+      return {
+        left: left,
+        top: top,
+        right: left + TRIGGER_SIZE,
+        bottom: top + TRIGGER_SIZE,
+      };
+    }
+
+    function rectsIntersect(a, b) {
+      return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    }
+
+    function intersectsAnyShortcut(left, top, shortcuts) {
+      var triggerRect = rectForTrigger(left, top);
+      for (var i = 0; i < shortcuts.length; i++) {
+        if (rectsIntersect(triggerRect, shortcuts[i])) return true;
+      }
+      return false;
+    }
+
+    function addCandidate(values, value, min, max) {
+      var clamped = clamp(value, min, max);
+      if (values.indexOf(clamped) === -1) values.push(clamped);
+    }
+
+    function avoidShortcutOverlap(left, top) {
+      var shortcutNodes = Array.prototype.slice.call(document.querySelectorAll('.' + GLOBAL_PREFIX + '-shortcuts'));
+      var shortcuts = shortcutNodes.map(function(node) { return node.getBoundingClientRect(); });
+      if (!intersectsAnyShortcut(left, top, shortcuts)) return {left: left, top: top};
+
+      var minLeft = 8;
+      var minTop = 8;
+      var maxLeft = window.innerWidth - TRIGGER_SIZE - 8;
+      var maxTop = window.innerHeight - TRIGGER_SIZE - 8;
+      var lefts = [];
+      var tops = [];
+      addCandidate(lefts, left, minLeft, maxLeft);
+      addCandidate(lefts, minLeft, minLeft, maxLeft);
+      addCandidate(lefts, maxLeft, minLeft, maxLeft);
+      addCandidate(tops, top, minTop, maxTop);
+      addCandidate(tops, minTop, minTop, maxTop);
+      addCandidate(tops, maxTop, minTop, maxTop);
+
+      for (var i = 0; i < shortcuts.length; i++) {
+        var shortcut = shortcuts[i];
+        addCandidate(lefts, shortcut.left - TRIGGER_SIZE - 8, minLeft, maxLeft);
+        addCandidate(lefts, shortcut.left - TRIGGER_SIZE, minLeft, maxLeft);
+        addCandidate(lefts, shortcut.right, minLeft, maxLeft);
+        addCandidate(lefts, shortcut.right + 8, minLeft, maxLeft);
+        addCandidate(tops, shortcut.top - TRIGGER_SIZE - 8, minTop, maxTop);
+        addCandidate(tops, shortcut.top - TRIGGER_SIZE, minTop, maxTop);
+        addCandidate(tops, shortcut.bottom, minTop, maxTop);
+        addCandidate(tops, shortcut.bottom + 8, minTop, maxTop);
+      }
+
+      var best = null;
+      var bestDistance = Infinity;
+      for (var x = 0; x < lefts.length; x++) {
+        for (var y = 0; y < tops.length; y++) {
+          var candidateLeft = lefts[x];
+          var candidateTop = tops[y];
+          if (intersectsAnyShortcut(candidateLeft, candidateTop, shortcuts)) continue;
+          var distance = Math.pow(candidateLeft - left, 2) + Math.pow(candidateTop - top, 2);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = {left: candidateLeft, top: candidateTop};
+          }
+        }
+      }
+
+      if (!best) throw new Error('Cannot position comment trigger without overlapping artifact shortcuts');
+      return best;
     }
 
     function setHovered(block) {

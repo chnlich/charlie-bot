@@ -8,6 +8,7 @@ if (!framed) {
     var TRIGGER_SIZE = 34;
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
+    var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this?'}];
     var sessionId = extractSessionIdFromPath(window.location.pathname);
     var artifactPath = artifactPathFromPath(window.location.pathname);
     var hovered = null;
@@ -30,6 +31,7 @@ if (!framed) {
 
     installStyles();
     installListeners();
+    installShortcuts();
     installBatchTray();
 
     function extractSessionIdFromPath(pathname) {
@@ -60,6 +62,11 @@ if (!framed) {
         '.' + GLOBAL_PREFIX + '-error{display:none;margin-top:8px;color:#ffb4ab;font-size:12px}' +
         '.' + GLOBAL_PREFIX + '-toast{position:fixed;z-index:2147483647;max-width:min(360px,calc(100vw - 16px));left:50%;bottom:18px;transform:translateX(-50%);background:#1f6f3a;color:#dfffe5;border:1px solid rgba(63,185,80,.65);border-radius:999px;padding:7px 12px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-toast-error{background:#5f2120;color:#ffe2df;border-color:rgba(248,81,73,.7);border-radius:8px}' +
+        '.' + GLOBAL_PREFIX + '-shortcuts{position:fixed;right:14px;bottom:64px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:6px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+        '.' + GLOBAL_PREFIX + '-shortcut{border:1px solid #2ea043;border-radius:7px;padding:7px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35);cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-shortcut:hover:not(:disabled){background:#2ea043}' +
+        '.' + GLOBAL_PREFIX + '-shortcut:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
+        '.' + GLOBAL_PREFIX + '-shortcut-reason{max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-marked{outline:2px solid rgba(88,166,255,.45)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.08)!important}' +
         '.' + GLOBAL_PREFIX + '-tray{position:fixed;right:14px;bottom:110px;z-index:2147483646;width:min(300px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
         '.' + GLOBAL_PREFIX + '-tray-header{font-weight:600;font-size:12px;color:#8b949e}' +
@@ -342,6 +349,53 @@ if (!framed) {
       return lines.join('\n');
     }
 
+    function installShortcuts() {
+      var container = document.createElement('div');
+      container.className = GLOBAL_PREFIX + '-shortcuts';
+
+      for (var i = 0; i < SHORTCUTS.length; i++) {
+        (function(shortcut) {
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = GLOBAL_PREFIX + '-shortcut';
+          button.textContent = shortcut.label;
+          button.title = shortcut.prompt;
+          button.setAttribute('aria-label', shortcut.prompt);
+          if (!sessionId) {
+            button.disabled = true;
+          } else {
+            button.addEventListener('click', function() {
+              addShortcutComment(shortcut);
+            });
+          }
+          container.appendChild(button);
+        })(SHORTCUTS[i]);
+      }
+
+      if (!sessionId) {
+        var reason = document.createElement('div');
+        reason.className = GLOBAL_PREFIX + '-shortcut-reason';
+        reason.textContent = 'Cannot parse session id from this artifact URL.';
+        container.appendChild(reason);
+      }
+
+      document.body.appendChild(container);
+    }
+
+    function addShortcutComment(shortcut) {
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].kind === 'improve') return;
+      }
+      pending.push({
+        kind: 'improve',
+        el: null,
+        quote: '',
+        context: shortcut.label,
+        comment: shortcut.prompt,
+      });
+      refreshTray();
+    }
+
     function openPopover(block) {
       cancelHide();
       closePopover();
@@ -613,6 +667,9 @@ if (!framed) {
       var count = pending.length;
       var ordered = pending.slice();
       ordered.sort(function(a, b) {
+        if (a.kind === 'improve' && b.kind === 'block') return -1;
+        if (a.kind === 'block' && b.kind === 'improve') return 1;
+        if (a.kind === 'improve' && b.kind === 'improve') return 0;
         var mask = a.el.compareDocumentPosition(b.el);
         if (mask & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
         if (mask & Node.DOCUMENT_POSITION_PRECEDING) return 1;

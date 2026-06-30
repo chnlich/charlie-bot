@@ -16,12 +16,14 @@ BASE_COMMAND: list[str] = [
     "stream-json",
     "--verbose",
     "--dangerously-skip-permissions",
-    # Disable Claude Code scheduling/monitoring tools that are unsafe in CharlieBot
-    # headless one-shot mode. In -p mode, scheduling tools are no-ops, and Monitor
-    # can create false recall expectations after external waits.
-    # Workers should use CharlieBot's schedule_trigger mechanism instead.
+    # Disable Claude Code tools that are unsafe in CharlieBot headless one-shot mode.
+    # Besides scheduling/monitoring (scheduling tools are no-ops in -p mode, and Monitor
+    # can create false recall expectations after external waits), this also blocks Claude
+    # Code's subagent dispatch (Agent), workflow (Workflow), task system (Task*), and agent
+    # comms (SendMessage/ListAgents) so the model routes async/background work through
+    # CharlieBot's schedule-trigger / delegate mechanism instead.
     "--disallowed-tools",
-    "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList",
+    "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents",
 ]
 
 # Subscription mode (cli_binary='claude-sub') drives an interactive `claude` TUI in

@@ -85,13 +85,20 @@ class OpenCodeBackend(AgentBackend):
     """
     return {
         "default_agent": "charliebot",
-        "agent": {
-            "charliebot": {
-                "mode": "primary",
-                "permission": {"*": "allow", "question": "deny"},
-                "tools": {"task": False},
-            }
-        },
+        "agent":
+            {
+                "charliebot":
+                    {
+                        "mode": "primary",
+                        "permission": {
+                            "*": "allow",
+                            "question": "deny"
+                        },
+                        "tools": {
+                            "task": False
+                        },
+                    }
+            },
     }
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
@@ -388,17 +395,19 @@ class OpenCodeBackend(AgentBackend):
     events: list[dict] = []
 
     if call_id not in self._tool_use_emitted and state.get("status") != "pending":
-      events.append({
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": ET.TOOL_USE,
-                  "name": tool_name,
-                  "id": call_id,
-                  "input": state["input"],
-              }]
-          },
-      })
+      events.append(
+          {
+              "type": ET.ASSISTANT,
+              "message":
+                  {
+                      "content": [{
+                          "type": ET.TOOL_USE,
+                          "name": tool_name,
+                          "id": call_id,
+                          "input": state["input"],
+                      }]
+                  },
+          })
       self._tool_use_emitted.add(call_id)
 
     if call_id not in self._tool_result_emitted:

@@ -7328,3 +7328,18 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude-sub prompt submission into named phases
+  description: 'PURPOSE — Make claude-sub prompt submission easier to audit by separating
+    stale-input clearing, paste rendering, and Enter verification.
+
+    HOW — Extract `_clear_prompt_input`, `_paste_prompt_and_wait`, and `_submit_prompt_and_verify`
+    from `src/cli/claude_sub.py:_send_prompt`. Keep existing tmux commands, timeouts,
+    and error messages behaviorally equivalent. Verify `pyflakes src/cli/claude_sub.py`
+    and `yapf --diff src/cli/claude_sub.py`.
+
+    '
+  category: long-function
+  status: pending
+  created: '2026-06-30T09:12:41Z'
+  priority: low

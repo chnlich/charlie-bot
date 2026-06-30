@@ -88,7 +88,7 @@ class OpenCodeBackend(AgentBackend):
         "agent": {
             "charliebot": {
                 "mode": "primary",
-                "permission": {"*": "allow"},
+                "permission": {"*": "allow", "question": "deny"},
                 "tools": {"task": False},
             }
         },

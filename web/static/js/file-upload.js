@@ -200,4 +200,8 @@ function initPasteUpload() {
   input.addEventListener('paste', handlePaste);
 }
 
-document.addEventListener('DOMContentLoaded', initPasteUpload);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initPasteUpload);
+} else {
+  initPasteUpload();
+}

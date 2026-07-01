@@ -155,10 +155,10 @@ Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered re
 
 ## Improvement Decisions (Feb 2026)
 
-**Not needed (single-user):** test suite, SQLite (JSON preferred), worker retry/backoff, worker resource limits, rate limiting/auth.
+**Not needed (single-user):** SQLite (JSON preferred), worker retry/backoff, worker resource limits, rate limiting.
 **Done:** session full-text search, error handling consistency, session rewind.
 **Planned:** worker templates as slash commands.
-**Deferred:** metrics/observability, notifications, multi-repo dashboard, semantic search, cost tracking, mobile UX, keyboard shortcuts.
+**Deferred:** metrics/observability, multi-repo dashboard, semantic search.
 
 ---
 

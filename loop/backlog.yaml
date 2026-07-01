@@ -7328,3 +7328,20 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Drop unused dirpath loop target in core/git.py
+  description: 'PURPOSE: Remove a dead local variable flagged in the worktree cleanup
+    helper.
+
+    HOW:
+
+    - In src/core/git.py:_contains_git_marker, rename the unused os.walk dirpath target
+    to `_`.
+
+    - Verify pylint no longer reports W0612 for that function.
+
+    '
+  category: dead-code
+  status: pending
+  created: '2026-07-01T19:13:18Z'
+  priority: low

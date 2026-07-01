@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from src.core.config import ImprovementLoopConfig
-from src.core.improvement_loop import determine_action, _next_id
+from src.core.backlog_loop import determine_action, _next_id
 
 
 def _make_cfg(**overrides) -> ImprovementLoopConfig:
@@ -94,7 +94,7 @@ async def test_stale_in_progress_reset(tmp_path: Path) -> None:
   _write_backlog(backlog, items)
   cfg = _make_cfg()
 
-  with patch('src.core.improvement_loop.git_add_commit_push', new_callable=AsyncMock) as mock_commit:
+  with patch('src.core.backlog_loop.git_add_commit_push', new_callable=AsyncMock) as mock_commit:
     action, prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'stale_reset'

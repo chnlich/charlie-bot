@@ -57,6 +57,8 @@
   details.details-layer ul{margin:0;padding:10px 16px 13px 34px}
   .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
   .foot p{margin:0}
+  .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#e8c37a;border:1px solid #5b4720;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#e8c37a}
   @media(max-width:760px){body{padding:18px}}
 </style>
 </head>
@@ -106,6 +108,13 @@
       Verification: div.meta includes one verification-status chip as span.mtag with the plan status:
                     "verification · in flight", "verification · clean", or "verification · amended". The
                     master updates the artifact when verifier results flow back.
+      Revision marks: when an already-presented plan is updated, every changed section gets a
+                    span.revbadge in its h2, such as "changed · r3", and a div.revnote immediately after
+                    the h2 with the format "rN · trigger — what changed in this section". The trigger
+                    briefly quotes the comment or message that caused the change. Row-level changes reuse
+                    the existing .new and .edit marks. Only the latest revision's marks are kept: a new
+                    revision clears all previous badges, revnotes, and row marks. A first presentation
+                    (r1) carries no revision marks.
       Shared blocks: p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks;
       div.callout highlights a note (.warn for amber); div.flow with span.b and span.ar sketches a data flow;
       div.meta > span.mtag gives small metadata chips near the top of a plan.
@@ -129,7 +138,8 @@
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">3</span> Contract</h2>
+      <h2><span class="n">3</span> Contract<span class="revbadge">changed · r2</span></h2>
+      <div class="revnote">r2 · "2 all" — Contract now shows all trigger states rather than pending only.</div>
       <p><code>charliebot triggers list</code> — read-only, session resolved from cwd, exits 0 with a table (or the empty-list message).</p>
       <table>
         <tr><th>Column</th><th>Content</th></tr>

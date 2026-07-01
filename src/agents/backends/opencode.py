@@ -85,7 +85,9 @@ class OpenCodeBackend(AgentBackend):
         "permission": "allow",
         "default_agent": "charliebot",
         "agent": {
-            "charliebot": {"mode": "primary"},
+            "charliebot": {
+                "mode": "primary"
+            },
         },
     }
 
@@ -383,17 +385,19 @@ class OpenCodeBackend(AgentBackend):
     events: list[dict] = []
 
     if call_id not in self._tool_use_emitted and state.get("status") != "pending":
-      events.append({
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": ET.TOOL_USE,
-                  "name": tool_name,
-                  "id": call_id,
-                  "input": state["input"],
-              }]
-          },
-      })
+      events.append(
+          {
+              "type": ET.ASSISTANT,
+              "message":
+                  {
+                      "content": [{
+                          "type": ET.TOOL_USE,
+                          "name": tool_name,
+                          "id": call_id,
+                          "input": state["input"],
+                      }]
+                  },
+          })
       self._tool_use_emitted.add(call_id)
 
     if call_id not in self._tool_result_emitted:

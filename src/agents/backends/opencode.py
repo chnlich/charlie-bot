@@ -77,20 +77,15 @@ class OpenCodeBackend(AgentBackend):
   def _headless_config(self) -> dict:
     """Injected opencode policy for headless master runs.
 
-    The primary ``charliebot`` agent stays permissive (``"*": "allow"``) so direct
-    read/search/bash work never blocks. opencode's internal ``task`` tool is disabled
-    because it spawns explore/general subagents in child sessions that raise their own
-    interactive permission prompts — a second, untracked delegation system with no
-    headless approval path. Disabling it keeps delegation inside CharlieBot.
+    Headless runs have no human approver, so the injected policy sets top-level
+    ``permission: "allow"`` to auto-approve all tool calls, including OpenCode's
+    internal subagents. This broad auto-approval is deliberate.
     """
     return {
+        "permission": "allow",
         "default_agent": "charliebot",
         "agent": {
-            "charliebot": {
-                "mode": "primary",
-                "permission": {"*": "allow", "question": "deny"},
-                "tools": {"task": False},
-            }
+            "charliebot": {"mode": "primary"},
         },
     }
 

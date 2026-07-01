@@ -21,10 +21,16 @@ from src.cli.common import post_internal_api, read_required_text_file, resolve_s
 def main() -> None:
   parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
   parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
-  parser.add_argument("--repo", required=True, help="Path to the git repo the worker should operate on")
+  parser.add_argument(
+      "--repo",
+      required=False,
+      help="Path to the git repo; required for implement/quick-edit/script-run, forbidden for verify")
   parser.add_argument(
       "--task-spec-file", dest="task_spec_file", required=True, help="Path to a structured Markdown task spec file")
-  parser.add_argument("--base-branch", required=True, help="Base branch for the worktree")
+  parser.add_argument(
+      "--base-branch",
+      required=False,
+      help="Base branch for the worktree; required for implement/quick-edit/script-run, forbidden for verify")
   parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
   parser.add_argument(
       "--reviewer-context-file",
@@ -44,7 +50,7 @@ def main() -> None:
   )
   parser.add_argument(
       "--task-type",
-      choices=["implement", "quick-edit", "script-run"],
+      choices=["implement", "quick-edit", "script-run", "verify"],
       default="implement",
       help=(
           "Worker task profile. "
@@ -52,9 +58,22 @@ def main() -> None:
           "'quick-edit' = worker commits, no reviewer (use for trivial repo ops: cherry-picks, "
           "branch pushes, single-line/doc-only edits); master handles push/merge manually. "
           "'script-run' = worker uses worktree as an isolated sandbox to run scripts / submit jobs / "
-          "query state; worker must NOT modify tracked files and must NOT commit. No reviewer, no merge."),
+          "query state; worker must NOT modify tracked files and must NOT commit. No reviewer, no merge. "
+          "'verify' = repo-less read-only plan verifier; no worktree, reviewer, or merge."),
   )
   args = parser.parse_args()
+
+  if args.task_type == "verify":
+    if args.repo is not None:
+      parser.error("--repo is forbidden when --task-type verify")
+    if args.base_branch is not None:
+      parser.error("--base-branch is forbidden when --task-type verify")
+  else:
+    if args.repo is None:
+      parser.error(f"--repo is required when --task-type {args.task_type}")
+    if args.base_branch is None:
+      parser.error(f"--base-branch is required when --task-type {args.task_type}")
+
   session_id = resolve_session_id(args.session)
   task_spec = read_required_text_file("--task-spec-file", args.task_spec_file)
   validate_task_spec_markdown(task_spec)
@@ -65,10 +84,11 @@ def main() -> None:
   payload = {
       "session_id": session_id,
       "description": task_spec,
-      "base_branch": args.base_branch,
       "keep_worktree": bool(args.keep_worktree),
       "task_type": args.task_type,
   }
+  if args.base_branch is not None:
+    payload["base_branch"] = args.base_branch
   if args.backend is not None:
     payload["backend"] = args.backend
   if args.repo is not None:

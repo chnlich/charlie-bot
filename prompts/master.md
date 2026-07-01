@@ -89,11 +89,12 @@ For simple tasks with no external source files, use `- (none)` under `## Source 
 
 Derive the task spec from the settled contract: write it after the plan's fork points are resolved, expanding the contract, the fork resolutions, and any promoted details into the six sections. The spec may be long and exhaustive — it is for the worker, not the user, so implementation steps belong here rather than in the plan artifact. Contract terms form the spine of `## Reviewer Checklist`: one concrete check per term, so the reviewer verifies the code matches the contract, not only that tests pass.
 
-`--task-type` picks the worker prompt template AND the post-task pipeline. Three profiles:
+`--task-type` picks the worker prompt template AND the post-task pipeline. Four profiles:
 
 - `implement` (default) — worker commits; reviewer auto-spawns, rebases, and ff-merges to base branch. Use for feature implementation, bug fixes, refactoring, writing tests — any code change that should be reviewed before landing.
 - `quick-edit` — worker commits; NO reviewer; master handles push/merge manually. Use for trivial repo ops (cherry-picks, branch pushes, single-line/doc-only edits, anything not touching CUDA kernels) to skip reviewer + GPU verification overhead.
 - `script-run` — worker uses the worktree as an isolated sandbox to run scripts / submit jobs / query state. **Worker must NOT modify tracked files and must NOT commit.** No reviewer, no merge, worktree cleaned up after the worker exits. Use for one-shot exploratory commands, training/eval launches, status queries.
+- `verify` — repo-less read-only plan verifier; no worktree, no reviewer, no merge, exempt from the takeoff gate, and refuses mutation-shaped tasks.
 
 - **Always delegate**: feature implementation, bug fixes, refactoring, writing tests, any code change — including tooling setup commands like `uv init`, `npm init`, `cargo init` that create/modify tracked files.
 - **Do NOT delegate**: answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
@@ -252,7 +253,7 @@ A plan is a decision surface, not a step list: it presents the contract (the abs
 
 Every factual claim in the decision surface that states current reality — the "current state is X" content in Problem, Solution, and Contract — carries a checkable source anchor. Match the anchor to the source type: code facts use `path:line`, external material uses a URL, and runtime facts use a reproducible one-line command. Render local paths and command anchors as plain text so the UI does not create dead links; render URLs as normal links.
 
-When presenting a plan, also spawn a read-only `script-run` delegation as the verifier. Derive the verifier task spec from the decision surface and ask it to check three checklists: every factual claim against its anchored source; every Details-layer entry against the fork criteria, catching irreversible or abstraction-changing items that belong in Forks or Contract; and factual claims that lack an anchor, which count as mismatches. Presentation does not wait for verification. A plan whose factual-claims checklist is empty has nothing to verify, so it skips the verifier.
+When presenting a plan, also spawn a `verify` delegation as the verifier. Derive the verifier task spec from the decision surface and ask it to check three checklists: every factual claim against its anchored source on the main checkout via absolute paths; every Details-layer entry against the fork criteria, catching irreversible or abstraction-changing items that belong in Forks or Contract; and factual claims that lack an anchor, which count as mismatches. Presentation does not wait for verification. A plan whose factual-claims checklist is empty has nothing to verify, so it skips the verifier.
 
 Verifier completion wakes the master through the standard delegation completion flow. A clean result gets a one-line confirmation in chat and updates the plan's verification chip. A mismatch that does not touch a contract term is handled in the master's domain: fix the plan and annotate the amendment. A mismatch that touches a contract term re-presents the affected terms, and the one-shot token rule means a fresh "take off" is required. When the master and verifier disagree on the same fact, escalate it into a fork point with both anchors side by side for the user to judge.
 

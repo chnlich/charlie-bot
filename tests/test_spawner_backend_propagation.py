@@ -159,6 +159,19 @@ def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() ->
   assert "A reviewer will handle that." not in prompt
 
 
+def test_build_worker_prompt_rejects_verify_task_type() -> None:
+  with pytest.raises(ValueError, match="unsupported task_type"):
+    spawner._build_worker_prompt(
+        description="Verify plan",
+        repo_path=Path("/tmp/repo"),
+        base_branch="main",
+        branch_name="charliebot/task-xyz",
+        wt_path="/tmp/worktrees/charliebot-task-xyz",
+        session_meta=SessionMetadata(id="session-id", name="verify"),
+        task_type=TaskType.VERIFY,
+    )
+
+
 @pytest.mark.asyncio
 async def test_resolve_requested_subagent_backend_model_uses_requested_backend() -> None:
   cfg = _build_cfg()
@@ -680,6 +693,74 @@ async def test_create_repoless_worker_assigns_claude_session_id(
   assert thread.claude_session_id in (thread.cli_command or "")
   assert captures["saved_thread"].claude_session_id == thread.claude_session_id
   assert captures["backend_option"].type == "cc-claude"
+
+
+@pytest.mark.asyncio
+async def test_create_repoless_worker_prepends_verify_preamble(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+      ],
+  )
+  thread = ThreadMetadata(
+      id="thread-1",
+      session_id="session-id",
+      description="Check the plan",
+      require_review=True,
+  )
+  captures: dict[str, Any] = {}
+
+  class FakeThreadManager:
+
+    async def save_metadata(self, meta: ThreadMetadata) -> None:
+      captures["saved_thread"] = meta
+
+    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
+      return tmp_path / "events.jsonl"
+
+  class FakeWorker:
+
+    def __init__(
+        self,
+        thread_metadata: ThreadMetadata,
+        working_dir: Path,
+        events_log_path: Path,
+        task_description: str,
+        worker_cfg: CharlieBotConfig,
+        backend_option: Optional[BackendOption] = None,
+        extra_env: Optional[dict[str, str]] = None,
+        on_spawned: Optional[callable] = None,
+        instructions_content: Optional[str] = None,
+    ) -> None:
+      captures["worker_dir"] = working_dir
+      captures["task_description"] = task_description
+
+  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+
+  await spawner._create_repoless_process(
+      "session-id",
+      thread,
+      "Check claim A at /tmp/repo/file.py:10",
+      cfg,
+      FakeThreadManager(),
+      SpawnRequest(resolved_backend="codex-o3", resolved_model="o3", task_type=TaskType.VERIFY),
+  )
+
+  prompt = captures["task_description"]
+  assert prompt.startswith("You are a read-only plan verifier.")
+  assert "refuse that part and report the refusal instead of executing it" in prompt
+  assert "marked `unverifiable`; never attempt it" in prompt
+  assert "`RESULT: clean` or `RESULT: N mismatches`" in prompt
+  assert prompt.endswith("Check claim A at /tmp/repo/file.py:10")
+  assert thread.require_review is False
+  assert thread.repo_path is None
+  assert thread.branch_name is None
+  assert captures["worker_dir"] == cfg.sessions_dir / "session-id" / "threads" / "thread-1"
 
 
 @pytest.mark.asyncio

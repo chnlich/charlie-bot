@@ -48,6 +48,15 @@ _CODING_PRINCIPLES = (
     "- **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.\n"
     "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n")
 
+_VERIFY_PROMPT_PREAMBLE = (
+    "You are a read-only plan verifier. Only read files, run read-only commands, and report findings.\n"
+    "If the task text asks for any change -- editing files, any git write operation, submitting jobs, "
+    "or writing to external systems -- refuse that part and report the refusal instead of executing it.\n"
+    "A claim that needs network access or any state change to verify is marked `unverifiable`; never attempt it.\n"
+    "Report format: one line per checked claim, `<verdict> | <claim> | <anchor> | <one-line evidence>` "
+    "with verdict exactly one of `confirmed` / `mismatch` / `unverifiable`; final line `RESULT: clean` "
+    "or `RESULT: N mismatches`.")
+
 
 def _build_worker_prompt(
     description: str,
@@ -461,7 +470,12 @@ async def _create_repoless_process(
     req: SpawnRequest,
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
-  worker_prompt = req.prompt_override or description
+  if req.task_type == TaskType.VERIFY:
+    worker_prompt = f"{_VERIFY_PROMPT_PREAMBLE}\n\n{description}"
+  elif req.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
+    worker_prompt = req.prompt_override or description
+  else:
+    raise ValueError(f"unsupported task_type: {req.task_type!r}")
   thread_dir = cfg.sessions_dir / session_id / 'threads' / thread.id
 
   # Repo-less tasks cannot produce branch/worktree review artifacts.

@@ -51,10 +51,13 @@ async def _authorize_spawn_request(
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
 
-  try:
-    await asyncio.to_thread(check_takeoff_gate, req.session_id, session_mgr)
-  except DelegationBlockedError as e:
-    raise HTTPException(status_code=403, detail=str(e))
+  if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY:
+    pass
+  else:
+    try:
+      await asyncio.to_thread(check_takeoff_gate, req.session_id, session_mgr)
+    except DelegationBlockedError as e:
+      raise HTTPException(status_code=403, detail=str(e))
 
   cfg = get_config()
   try:
@@ -73,6 +76,17 @@ async def delegate_task(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ):
   """Create a thread and spawn a worker agent directly."""
+  if req.task_type == TaskType.VERIFY:
+    if req.repo_path is not None:
+      raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit repo_path")
+    if req.base_branch is not None:
+      raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit base_branch")
+  else:
+    if req.repo_path is None:
+      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require repo_path")
+    if req.base_branch is None:
+      raise HTTPException(status_code=400, detail=f"{req.task_type.value} delegations require base_branch")
+
   meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
   require_review = req.task_type == TaskType.IMPLEMENT
@@ -95,7 +109,7 @@ async def delegate_task(
               context=req.context,
               resolved_backend=resolved_backend,
               resolved_model=resolved_model,
-              require_takeoff=True,
+              require_takeoff=req.task_type != TaskType.VERIFY,
               keep_worktree=req.keep_worktree,
               task_type=req.task_type,
           ),

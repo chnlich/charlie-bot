@@ -64,6 +64,7 @@ class TaskType(str, Enum):
   IMPLEMENT = "implement"
   QUICK_EDIT = "quick-edit"
   SCRIPT_RUN = "script-run"
+  VERIFY = "verify"
 
 
 class WatchKind(str, Enum):
@@ -316,7 +317,7 @@ class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str
   description: str
-  base_branch: str
+  base_branch: Optional[str] = None
   backend: Optional[str] = None
   repo_path: Optional[str] = None
   context: Optional[str] = None

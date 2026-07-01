@@ -113,6 +113,121 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
   assert payload["task_type"] == task_type
 
 
+def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _mock_config(tmp_path)
+  monkeypatch.chdir(tmp_path)
+  task_spec_file = _write_task_spec(tmp_path)
+  resp_mock = MagicMock()
+  resp_mock.json.return_value = {"thread_id": "t2", "description": "task"}
+  resp_mock.raise_for_status = MagicMock()
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--task-spec-file",
+          str(task_spec_file),
+          "--keep-worktree",
+          "0",
+          "--task-type",
+          "verify",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload["task_type"] == "verify"
+  assert "repo_path" not in payload
+  assert "base_branch" not in payload
+
+
+@pytest.mark.parametrize(("flag", "value"), [("--repo", "/tmp/repo"), ("--base-branch", "main")])
+def test_main_verify_rejects_repo_scoped_arguments(
+    tmp_path: Path,
+    flag: str,
+    value: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  task_spec_file = _write_task_spec(tmp_path)
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--task-spec-file",
+          str(task_spec_file),
+          "--keep-worktree",
+          "0",
+          "--task-type",
+          "verify",
+          flag,
+          value,
+      ]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  err = capsys.readouterr().err
+  assert flag in err
+  assert "forbidden" in err
+
+
+@pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
+@pytest.mark.parametrize(
+    ("argv_tail", "missing_flag"),
+    [
+        (["--base-branch", "main"], "--repo"),
+        (["--repo", "/tmp/repo"], "--base-branch"),
+    ],
+)
+def test_main_repo_task_types_require_repo_and_base_branch(
+    tmp_path: Path,
+    task_type: str,
+    argv_tail: list[str],
+    missing_flag: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  task_spec_file = _write_task_spec(tmp_path)
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--task-spec-file",
+          str(task_spec_file),
+          "--keep-worktree",
+          "0",
+          "--task-type",
+          task_type,
+          *argv_tail,
+      ]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  err = capsys.readouterr().err
+  assert missing_flag in err
+  assert "required" in err
+
+
+def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> None:
+  with patch("sys.argv", ["delegate", "--help"]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code == 0
+  out = capsys.readouterr().out
+  assert "verify" in out
+  assert "read-only plan verifier" in out
+
+
 def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)

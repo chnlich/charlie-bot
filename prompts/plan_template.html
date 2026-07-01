@@ -27,6 +27,7 @@
   ul,ol{margin:6px 0 0;padding-left:18px}
   li{margin:3px 0}
   li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#6e7987}
   code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#ffd9a0}
   pre{background:#0a0e14;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#cdd9e5;margin:9px 0 0}
   table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
@@ -101,7 +102,7 @@
       Source anchors: factual claims in Problem, Solution, and Contract that describe current reality carry a
                     checkable source. Use path:line for code facts, a URL for external material, and a
                     reproducible one-line command for runtime facts. Keep local paths and commands as plain
-                    text; only URLs should be links.
+                    text; only URLs should be links. Source anchors render as span.src (&lt;span class=&quot;src&quot;&gt;...&lt;/span&gt;).
       Verification: div.meta includes one verification-status chip as span.mtag with the plan status:
                     "verification · in flight", "verification · clean", or "verification · amended". The
                     master updates the artifact when verifier results flow back.
@@ -112,14 +113,14 @@
 
     <section class="plan-section">
       <h2><span class="n">1</span> Problem</h2>
-      <p>The CLI has a write path for delayed triggers through <code>charliebot schedule-trigger</code>, but the unified CLI command map has no trigger-listing subcommand. <span class="muted">Sources: src/cli/main.py:19, src/cli/main.py:22</span></p>
-      <p>TriggerManager persists scheduled triggers as JSON files under the session's <code>triggers</code> directory. <span class="muted">Sources: src/core/triggers.py:337, src/core/triggers.py:677, src/core/triggers.py:683</span></p>
+      <p>The CLI has a write path for delayed triggers through <code>charliebot schedule-trigger</code>, but the unified CLI command map has no trigger-listing subcommand. <span class="src">Sources: src/cli/main.py:19, src/cli/main.py:22</span></p>
+      <p>TriggerManager persists scheduled triggers as JSON files under the session's <code>triggers</code> directory. <span class="src">Sources: src/core/triggers.py:337, src/core/triggers.py:677, src/core/triggers.py:683</span></p>
       <p>That makes it easy to double-schedule a watch, or to forget that a wake-up is already pending for a long-running job.</p>
     </section>
 
     <section class="plan-section">
       <h2><span class="n nb">2</span> Solution</h2>
-      <p>Add a read-only <code>charliebot triggers list</code> subcommand that loads the session's trigger JSON files and prints one row per trigger. No new state: the trigger files stay the single source of truth; the command only formats them. <span class="muted">Current storage source: src/core/triggers.py:683</span></p>
+      <p>Add a read-only <code>charliebot triggers list</code> subcommand that loads the session's trigger JSON files and prints one row per trigger. No new state: the trigger files stay the single source of truth; the command only formats them. <span class="src">Current storage source: src/core/triggers.py:683</span></p>
       <div class="flow">
         <span class="b">sessions/{id}/triggers/*.json</span><span class="ar">→</span>
         <span class="b n">triggers list</span><span class="ar">→</span>

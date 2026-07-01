@@ -11,15 +11,23 @@ const ARTIFACT_COMMENTS_JS = fs.readFileSync(
 
 function makeElement() {
   return {
+    _textContent: '',
     style: {},
     children: [],
     childNodes: [],
     nodeType: 1,
     tagName: 'DIV',
+    className: '',
+    parentNode: null,
     parentElement: null,
     display: 'block',
     get textContent() {
+      if (this.childNodes.length === 0) return this._textContent;
       return this.childNodes.map((node) => node.textContent || '').join('');
+    },
+    set textContent(value) {
+      this._textContent = String(value);
+      this.childNodes = [];
     },
     get innerText() {
       return this.textContent;
@@ -27,11 +35,34 @@ function makeElement() {
     classList: {add() {}, remove() {}},
     appendChild(child) {
       this.children.push(child);
+      child.parentNode = this;
+      child.parentElement = this;
+      return child;
+    },
+    replaceChild(next, prev) {
+      const index = this.children.indexOf(prev);
+      assert.notEqual(index, -1, 'replaceChild target exists');
+      this.children[index] = next;
+      next.parentNode = this;
+      next.parentElement = this;
+      prev.parentNode = null;
+      prev.parentElement = null;
+      return prev;
     },
     addEventListener() {},
     setAttribute() {},
     focus() {},
-    querySelector() {
+    select() {},
+    querySelector(selector) {
+      if (!selector.startsWith('.')) return null;
+      const targetClass = selector.slice(1);
+      const stack = this.children.slice();
+      while (stack.length > 0) {
+        const child = stack.shift();
+        const classes = String(child.className || '').split(/\s+/);
+        if (classes.includes(targetClass)) return child;
+        stack.push(...child.children);
+      }
       return null;
     },
   };
@@ -131,6 +162,7 @@ test('artifact comments script stays inert inside frames', () => {
 
   assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
   assert.equal(window.__cbcBuildBatchMessage, undefined);
+  assert.equal(window.__cbcBuildTrayItem, undefined);
   assert.equal(window.__cbcFindBlock, undefined);
   assert.equal(head.children.length, 0);
   assert.equal(listeners.length, 0);
@@ -443,4 +475,54 @@ test('buildBatchMessage uses draftText for improve shortcut entries', () => {
       '1. Custom improve prompt',
     ].join('\n')
   );
+});
+
+function cssRule(styleText, selector) {
+  const start = styleText.indexOf(selector + '{');
+  assert.notEqual(start, -1, selector + ' rule exists');
+  const end = styleText.indexOf('}', start);
+  assert.notEqual(end, -1, selector + ' rule closes');
+  return styleText.slice(start, end + 1);
+}
+
+test('tray item layout keeps controls in normal flow beside bounded preview text', () => {
+  const {window, head} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+  const buildTrayItem = window.__cbcBuildTrayItem;
+  assert.equal(typeof buildTrayItem, 'function');
+
+  const entry = {
+    quote: 'A very long quote '.repeat(20),
+    context: 'Context',
+    comment: 'A very long outbound comment preview '.repeat(30),
+  };
+  const item = buildTrayItem(0, entry);
+
+  assert.equal(item.className, '__cbc-tray-item');
+  assert.equal(item.children.length, 1);
+  const main = item.children[0];
+  assert.equal(main.className, '__cbc-tray-item-main');
+  assert.equal(main.children.length, 2);
+
+  const body = main.children[0];
+  const controls = main.children[1];
+  assert.equal(body.className, '__cbc-tray-item-body');
+  assert.equal(controls.className, '__cbc-tray-item-controls');
+  assert.deepEqual(
+    controls.children.map((child) => child.className),
+    ['__cbc-tray-remove', '__cbc-tray-edit-btn']
+  );
+
+  const draft = body.querySelector('.__cbc-tray-item-comment');
+  assert.ok(draft, 'draft preview exists in the text column');
+  assert.equal(draft.textContent, window.__cbcResolveEntryDraft(entry).join('\n'));
+
+  const styleText = head.children[0].textContent;
+  assert.match(cssRule(styleText, '.__cbc-tray-item-main'), /display:flex/);
+  assert.match(cssRule(styleText, '.__cbc-tray-item-body'), /min-width:0/);
+  assert.match(cssRule(styleText, '.__cbc-tray-item-comment'), /-webkit-line-clamp:2/);
+  assert.match(cssRule(styleText, '.__cbc-tray-item-comment'), /overflow-wrap:anywhere/);
+  assert.doesNotMatch(cssRule(styleText, '.__cbc-tray-edit-btn'), /position:absolute/);
+  assert.doesNotMatch(cssRule(styleText, '.__cbc-tray-remove'), /position:absolute/);
 });

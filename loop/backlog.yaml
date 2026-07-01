@@ -7328,3 +7328,13 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split stale failed-worktree quarantine into selection and action helpers
+  description: 'PURPOSE — Reduce the 76-line startup quarantine sweep in src/core/init.py
+    into named steps so the failure-handling path is easier to audit. HOW — Extract
+    a helper that returns quarantine candidates from thread metadata, then keep
+    git_quarantine_worktree execution and trash-size logging in _quarantine_stale_failed_worktrees.'
+  category: long-function
+  status: pending
+  created: '2026-07-01T09:12:27Z'
+  priority: low

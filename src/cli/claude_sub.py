@@ -231,12 +231,13 @@ async def _capture_pane_escapes(session_id: str) -> str:
 
 
 def _emit_tui_menu_dismissed(emit: Any) -> None:
-  emit({
-      "type": "system",
-      "subtype": "tui_menu_dismissed",
-      "content": _TUI_MENU_DISMISSED_WARNING,
-      "uuid": str(uuid.uuid4()),
-  })
+  emit(
+      {
+          "type": "system",
+          "subtype": "tui_menu_dismissed",
+          "content": _TUI_MENU_DISMISSED_WARNING,
+          "uuid": str(uuid.uuid4()),
+      })
 
 
 async def _dismiss_pre_prompt_menu(session_id: str, emit: Any, dismissed: int) -> int:

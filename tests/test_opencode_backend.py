@@ -169,10 +169,9 @@ def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
   env = backend._prepare_env({"PATH": "/usr/bin"})
 
   data = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+  assert data["permission"] == "allow"
   assert data["default_agent"] == "charliebot"
-  assert data["agent"]["charliebot"]["permission"] == {"*": "allow", "question": "deny"}
-  # The internal task tool is disabled so hidden explore subagents cannot run headless.
-  assert data["agent"]["charliebot"]["tools"] == {"task": False}
+  assert data["agent"]["charliebot"] == {"mode": "primary"}
 
 
 def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:

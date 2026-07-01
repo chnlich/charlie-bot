@@ -29,7 +29,7 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 from src.core.spawner import (
     DelegationBlockedError,
-    _check_takeoff_gate,
+    check_takeoff_gate,
     resolve_requested_subagent_backend_model,
     spawn_worker,
 )
@@ -52,7 +52,7 @@ async def _authorize_spawn_request(
     raise HTTPException(status_code=404, detail="Session not found")
 
   try:
-    await asyncio.to_thread(_check_takeoff_gate, req.session_id, session_mgr)
+    await asyncio.to_thread(check_takeoff_gate, req.session_id, session_mgr)
   except DelegationBlockedError as e:
     raise HTTPException(status_code=403, detail=str(e))
 

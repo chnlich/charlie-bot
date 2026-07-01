@@ -68,6 +68,7 @@
       <span class="mtag">repo · path/to/repo</span>
       <span class="mtag">scope · concise label</span>
       <span class="mtag">deps · none</span>
+      <span class="mtag">verification · in flight</span>
     </div>
   </header>
 
@@ -97,6 +98,13 @@
       6. Foot     — div.foot with the interaction instructions: reply by fork number; unmentioned forks accept
                     the recommendation; any detail the user asks to control graduates into the Contract;
                     "take off" releases the plan for implementation.
+      Source anchors: factual claims in Problem, Solution, and Contract that describe current reality carry a
+                    checkable source. Use path:line for code facts, a URL for external material, and a
+                    reproducible one-line command for runtime facts. Keep local paths and commands as plain
+                    text; only URLs should be links.
+      Verification: div.meta includes one verification-status chip as span.mtag with the plan status:
+                    "verification · in flight", "verification · clean", or "verification · amended". The
+                    master updates the artifact when verifier results flow back.
       Shared blocks: p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks;
       div.callout highlights a note (.warn for amber); div.flow with span.b and span.ar sketches a data flow;
       div.meta > span.mtag gives small metadata chips near the top of a plan.
@@ -104,14 +112,14 @@
 
     <section class="plan-section">
       <h2><span class="n">1</span> Problem</h2>
-      <p>Pending triggers are invisible: once <code>charliebot schedule-trigger</code> creates one, the only way to see what is armed is to read the JSON files under <code>sessions/{id}/triggers/</code> by hand.</p>
+      <p>The CLI has a write path for delayed triggers through <code>charliebot schedule-trigger</code>, but the unified CLI command map has no trigger-listing subcommand. <span class="muted">Sources: src/cli/main.py:19, src/cli/main.py:22</span></p>
+      <p>TriggerManager persists scheduled triggers as JSON files under the session's <code>triggers</code> directory. <span class="muted">Sources: src/core/triggers.py:337, src/core/triggers.py:677, src/core/triggers.py:683</span></p>
       <p>That makes it easy to double-schedule a watch, or to forget that a wake-up is already pending for a long-running job.</p>
-      <p>The CLI has no read side for triggers: <code>src/cli/schedule_trigger.py</code> only writes them.</p>
     </section>
 
     <section class="plan-section">
       <h2><span class="n nb">2</span> Solution</h2>
-      <p>Add a read-only <code>charliebot triggers list</code> subcommand that loads the session's trigger JSON files and prints one row per trigger. No new state: the trigger files stay the single source of truth; the command only formats them.</p>
+      <p>Add a read-only <code>charliebot triggers list</code> subcommand that loads the session's trigger JSON files and prints one row per trigger. No new state: the trigger files stay the single source of truth; the command only formats them. <span class="muted">Current storage source: src/core/triggers.py:683</span></p>
       <div class="flow">
         <span class="b">sessions/{id}/triggers/*.json</span><span class="ar">→</span>
         <span class="b n">triggers list</span><span class="ar">→</span>

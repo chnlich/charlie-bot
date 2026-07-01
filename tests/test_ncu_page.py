@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import pages
-from src.api.ncu_parsing import _extract_rules, parse_ncu_report
+from src.core.ncu_parsing import _extract_rules, parse_ncu_report
 
 _SAMPLE_REPORT = Path("/data/home/chaoli/scripts/20260528_rmsnorm_ncu/out/ncu_cuda.ncu-rep")
 _FULL_REPORT = Path("/data/home/chaoli/scripts/20260528_rmsnorm_ncu_s1856/out/ncu_cuda_full.ncu-rep")

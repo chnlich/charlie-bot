@@ -706,7 +706,7 @@ class DelegationBlockedError(Exception):
   """Raised when the takeoff gate rejects a delegation attempt."""
 
 
-def _check_takeoff_gate(session_id: str, session_mgr: SessionManager) -> None:
+def check_takeoff_gate(session_id: str, session_mgr: SessionManager) -> None:
   """Verify the last real user message contains 'take off'. Raises DelegationBlockedError if not."""
   events = session_mgr.load_chat_events_sync(session_id)
   if not events:
@@ -744,7 +744,7 @@ async def spawn_worker(
   """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
   req = request or SpawnRequest()
   if req.require_takeoff:
-    await asyncio.to_thread(_check_takeoff_gate, session_id, session_mgr)
+    await asyncio.to_thread(check_takeoff_gate, session_id, session_mgr)
 
   thread = None
   worker = None

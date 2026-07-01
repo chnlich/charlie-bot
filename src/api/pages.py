@@ -15,10 +15,10 @@ from fastapi.templating import Jinja2Templates
 
 from src.api.code_server import is_code_server_available
 from src.api.deps import get_session_manager, get_thread_manager
-from src.api.ncu_parsing import NcuParseError, parse_ncu_report
 from src.api.message_utils import build_session_bootstrap_data
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
+from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT

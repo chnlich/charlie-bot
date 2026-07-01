@@ -427,7 +427,7 @@ async def test_improve_endpoint_creates_background_task(tmp_path: Path):
   cfg.sessions_dir = tmp_path / "sessions"
 
   with patch("src.api.internal.get_config") as mock_cfg, \
-       patch("src.api.internal._check_takeoff_gate", return_value=None), \
+       patch("src.api.internal.check_takeoff_gate", return_value=None), \
        patch(
            "src.api.internal.resolve_requested_subagent_backend_model",
            side_effect=fake_resolve_requested_subagent_backend_model), \
@@ -487,7 +487,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend():
   async def fake_resolve_requested_subagent_backend_model(*args: object, **kwargs: object) -> tuple[str, str]:
     raise ValueError("requested backend 'missing' is not in backend_options")
 
-  with patch("src.api.internal._check_takeoff_gate", return_value=None), \
+  with patch("src.api.internal.check_takeoff_gate", return_value=None), \
        patch(
            "src.api.internal.resolve_requested_subagent_backend_model",
            side_effect=fake_resolve_requested_subagent_backend_model):
@@ -521,7 +521,7 @@ async def test_improve_endpoint_returns_409_for_running_loop():
   thread_mgr = AsyncMock()
 
   with patch("src.api.internal.get_config", return_value=MagicMock()), \
-       patch("src.api.internal._check_takeoff_gate", return_value=None), \
+       patch("src.api.internal.check_takeoff_gate", return_value=None), \
        patch("src.api.internal.resolve_requested_subagent_backend_model", return_value=("codex-o3", "o3")), \
        patch(
            "src.api.internal.reserve_loop_state",

@@ -148,7 +148,7 @@ if (!framed) {
     }
 
     function isInteractiveElement(target) {
-      return Boolean(target && target.closest && target.closest('a,button,input,textarea,select,label'));
+      return Boolean(target && target.closest && target.closest('a,button,input,textarea,select,label,summary'));
     }
 
     function hasActiveTextSelection() {

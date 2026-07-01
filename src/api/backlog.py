@@ -31,8 +31,8 @@ def _repo_path(repo: str | None) -> Path:
 
 
 def _load_all_items(repo_path: Path) -> list[dict]:
-  """Load items from loop/backlogs/*.yaml (with _source), or fall back to loop/backlog.yaml."""
-  backlogs_dir = repo_path / 'loop' / 'backlogs'
+  """Load items from backlog/backlogs/*.yaml (with _source), or fall back to backlog/backlog.yaml."""
+  backlogs_dir = repo_path / 'backlog' / 'backlogs'
   if backlogs_dir.is_dir():
     items = []
     for yaml_file in sorted(backlogs_dir.glob('*.yaml')):
@@ -43,7 +43,7 @@ def _load_all_items(repo_path: Path) -> list[dict]:
       items.extend(file_items)
     return items
 
-  path = repo_path / 'loop' / 'backlog.yaml'
+  path = repo_path / 'backlog' / 'backlog.yaml'
   if not path.exists():
     return []
   items = load_yaml(path, default=[])
@@ -58,7 +58,7 @@ def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) ->
   If *source* is given (e.g. 'alpha-lab-backtest'), only search that file —
   this disambiguates duplicate IDs across per-module backlogs.
   """
-  backlogs_dir = repo_path / 'loop' / 'backlogs'
+  backlogs_dir = repo_path / 'backlog' / 'backlogs'
   if backlogs_dir.is_dir():
     files = sorted(backlogs_dir.glob('*.yaml'))
     if source:
@@ -69,7 +69,7 @@ def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) ->
         return yaml_file, items
     return None, None
 
-  path = repo_path / 'loop' / 'backlog.yaml'
+  path = repo_path / 'backlog' / 'backlog.yaml'
   if not path.exists():
     return None, None
   items = load_yaml(path, default=[])
@@ -88,7 +88,7 @@ async def get_repos():
 
 @router.get('')
 async def get_backlog(repo: str | None = None):
-  """Return backlog items from loop/backlogs/*.yaml or fallback loop/backlog.yaml."""
+  """Return backlog items from backlog/backlogs/*.yaml or fallback backlog/backlog.yaml."""
   repo_path = _repo_path(repo)
   items = await asyncio.to_thread(_load_all_items, repo_path)
   return JSONResponse(content=items)
@@ -96,8 +96,8 @@ async def get_backlog(repo: str | None = None):
 
 @router.get('/history')
 async def get_history(repo: str | None = None):
-  """Return history entries from {repo}/loop/history-*.yaml files, sorted by timestamp descending."""
-  loop_dir = _repo_path(repo) / 'loop'
+  """Return history entries from {repo}/backlog/history-*.yaml files, sorted by timestamp descending."""
+  loop_dir = _repo_path(repo) / 'backlog'
   files = sorted(loop_dir.glob('history-*.yaml'))
   if not files:
     return JSONResponse(content=[], status_code=200)

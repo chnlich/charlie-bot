@@ -16,7 +16,7 @@ from src.core.yaml_utils import load_yaml
 class ImprovementLoopConfig(BaseModel):
   """Declarative config for an improvement-loop cron task."""
 
-  backlog: str  # relative path within repo, e.g. 'loop/backlog.yaml'
+  backlog: str  # relative path within repo, e.g. 'backlog/backlog.yaml'
   role: str  # agent role description
   scope_files: list[str]  # files/dirs agent may modify
   id_prefix: str = ''  # e.g. 'D' for D-001, empty for plain 001

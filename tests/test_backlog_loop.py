@@ -13,7 +13,7 @@ from src.core.backlog_loop import determine_action, _next_id
 
 def _make_cfg(**overrides) -> ImprovementLoopConfig:
   defaults = dict(
-      backlog='loop/backlog.yaml',
+      backlog='backlog/backlog.yaml',
       role='test agent',
       scope_files=['src/'],
       id_prefix='',
@@ -321,10 +321,10 @@ async def test_state_files_in_implement_prompt(tmp_path: Path) -> None:
   backlog = tmp_path / 'backlog.yaml'
   items = [{'id': '001', 'status': 'approved', 'title': 'Fix', 'priority': 'high', 'description': 'desc'}]
   _write_backlog(backlog, items)
-  cfg = _make_cfg(state_files=['loop/history.yaml', 'loop/e2e_report.json'])
+  cfg = _make_cfg(state_files=['backlog/history.yaml', 'backlog/e2e_report.json'])
 
   action, prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'implement'
-  assert 'Read loop/history.yaml before acting' in prompt
-  assert 'Read loop/e2e_report.json (read-only, do not modify)' in prompt
+  assert 'Read backlog/history.yaml before acting' in prompt
+  assert 'Read backlog/e2e_report.json (read-only, do not modify)' in prompt

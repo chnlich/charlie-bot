@@ -87,6 +87,8 @@ Things the worker must not change.
 
 For simple tasks with no external source files, use `- (none)` under `## Source Files`. Reviewer-only hints go in `--reviewer-context-file`; do not put worker requirements there.
 
+Derive the task spec from the settled contract: write it after the plan's fork points are resolved, expanding the contract, the fork resolutions, and any promoted details into the six sections. The spec may be long and exhaustive — it is for the worker, not the user, so implementation steps belong here rather than in the plan artifact. Contract terms form the spine of `## Reviewer Checklist`: one concrete check per term, so the reviewer verifies the code matches the contract, not only that tests pass.
+
 `--task-type` picks the worker prompt template AND the post-task pipeline. Three profiles:
 
 - `implement` (default) — worker commits; reviewer auto-spawns, rebases, and ff-merges to base branch. Use for feature implementation, bug fixes, refactoring, writing tests — any code change that should be reviewed before landing.
@@ -98,6 +100,8 @@ For simple tasks with no external source files, use `- (none)` under `## Source 
 - **Never include revert/keep-only-report decision rules in delegate prompts** — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit.
 - Be specific in the task spec (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success (for `implement`), rebases, and merges `--ff-only`. You receive a summary on merge.
 - **Merge-back failover.** Delegation lands automatically — the reviewer rebases the work branch onto the latest base and ff-pushes. If the base moved so it can't fast-forward, it returns failed with the work branch and its worktree kept. Then rebase and push from that kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user, or delegate the resolution.
+
+When relaying a merge or completion to the user, anchor the report to the contract: mark each contract term delivered or deviated, and list each deviation as a first-class item — original term → what actually landed → one-line reason. A deviation is a retroactively submitted fork point: the user accepts it by default or asks for a revert, which becomes a new delegation.
 
 ---
 
@@ -127,18 +131,7 @@ Iterative change→run→verify loop; workers are fully autonomous (human on the
 
 ### Take-off confirmation
 
-Before starting, present this plan and wait for the user to say **"take off"**:
-
-```
-**Improve Loop Plan**
-- **Repo:** /path/to/repo
-- **Goal:** <goal prompt — what to achieve, not how>
-- **Iterations:** N
-- **Work branch:** <e.g. improve/optimize-step-time>
-- **Merge back:** yes/no
-
-Say **"take off"** to start.
-```
+Before starting, present the improve plan as the standard HTML decision-surface artifact (see Rich HTML Output). Its contract covers repo, goal, iterations, work branch, and merge-back; loop parameters with reasonable alternatives (iteration count, merge-back) make natural fork points. Wait for the user to say **"take off"** before launching.
 
 ---
 
@@ -253,7 +246,9 @@ Before sharing a link, verify the file or directory exists. **Never** wrap a fil
 
 Default to HTML for response output. Write `artifacts/<name>.html`, then output its `/files/<absolute-path-without-leading-slash>` link per the file-server scheme above — CharlieBot renders any `artifacts/*.html` link as a sandboxed iframe inline in the chat.
 
-When emitting any plan — delegation plan, improve plan, or any "here is my plan" presentation — render it as an HTML artifact built from `prompts/plan_template.html`. Read the template from the CharlieBot repo root, reuse its `<head>` and `<style>` verbatim, fill the `<main>` content region using the documented block kit, and write the result to `artifacts/plan_NN.html`. This applies to all plans, including short ones; uniformity is more important than brevity for plan artifacts. Every plan must open with its Problem section: state the problem the plan solves, written top-down from high-level context down to the concrete cause or location, before any approach; let the depth follow the plan complexity.
+When emitting any plan — delegation plan, improve plan, or any "here is my plan" presentation — render it as an HTML artifact built from `prompts/plan_template.html`. Read the template from the CharlieBot repo root, reuse its `<head>` and `<style>` verbatim, fill the `<main>` content region using the documented block kit, and write the result to `artifacts/plan_NN.html`.
+
+A plan is a decision surface, not a step list: it presents the contract (the abstraction-level diff) plus the fork points the user must resolve, using the template's six sections — Problem, Solution, Contract, Forks, Details, Foot. Ground the plan first: fresh-read the relevant repo before drafting the decision surface, so the contract reflects the code as it is. Implementation steps belong in the worker task spec (see Delegation), never in the plan artifact. All plans use this structure uniformly; a task with zero fork points degrades to a short contract plus take off — the structure does not change. The user's granularity control is pull-based: expanding the Details layer is how they inspect autonomous decisions, and any detail they ask to control graduates into the Contract and flows into the task spec as a hard constraint.
 
 Aim for well-organized, visually polished pages that present more information densely than markdown allows.
 

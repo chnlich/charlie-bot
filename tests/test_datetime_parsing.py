@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from src.core.config import CharlieBotConfig, ImprovementLoopConfig, ScheduledTaskConfig
-from src.core.improvement_loop import _handle_stale
+from src.core.backlog_loop import _handle_stale
 from src.core.models import SessionMetadata, parse_utc_datetime
 from src.core.scheduler import Scheduler
 
@@ -44,9 +44,9 @@ async def test_handle_stale_accepts_z_timestamp(
   )
   commit_mock = AsyncMock()
 
-  monkeypatch.setattr("src.core.improvement_loop.git_add_commit_push", commit_mock)
+  monkeypatch.setattr("src.core.backlog_loop.git_add_commit_push", commit_mock)
   monkeypatch.setattr(
-      "src.core.improvement_loop.datetime", SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz),))
+      "src.core.backlog_loop.datetime", SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz),))
 
   modified = await _handle_stale(items, backlog_path, cfg, tmp_path)
 

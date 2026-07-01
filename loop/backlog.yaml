@@ -7328,3 +7328,15 @@
   status: pending
   created: '2026-06-13T16:42:10Z'
   priority: low
+- id: '186'
+  title: Split claude-sub prompt submission helper into phases
+  description: 'PURPOSE: Make claude-sub prompt submission easier to reason about
+    by separating stale-input clearing, paste verification, and submit verification.
+    HOW: Extract focused helpers from src/cli/claude_sub.py:_send_prompt for clearing
+    stale input and waiting for pasted prompt content. Keep tmux buffer creation and
+    the submit retry loop in _send_prompt, then verify with py_compile, pyflakes on
+    claude_sub.py, and yapf --diff --recursive src/.'
+  category: long-function
+  status: pending
+  created: '2026-07-01T01:14:13Z'
+  priority: low

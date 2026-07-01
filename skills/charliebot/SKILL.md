@@ -92,7 +92,7 @@ Better practice — choose one of:
 
 ## Sidebar & Frontend
 
-- New sidebar filter panels: When adding a filter panel (like "scheduled"), also add the filter name to the URL filter restoration array in `web/static/js/app.js` (`switchSidebarFilter` init). Without it, the page load doesn't restore the filter and falls back to "All".
+- New sidebar filter panels: Register the filter once in `web/static/js/sidebar/filters.js`; the filter pills, switching URLs, and URL restoration all derive from that registry.
 
 ---
 

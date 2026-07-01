@@ -26,8 +26,8 @@ from src.core.models import (
     parse_utc_datetime,
     utc_now,
 )
-from src.core.codex_usage import CodexUsageResolver
 from src.core.ndjson import append_ndjson
+from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import streaming_manager
 
 # Raw event types whose render content is now produced by the per-session
@@ -39,28 +39,6 @@ log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 30.0  # seconds
 _UNSET = object()
-_DEFAULT_CONTEXT_LIMIT = 200_000
-
-
-def _extract_usage_from_result(event: dict) -> tuple[int, int, str]:
-  """Extract (context_tokens, context_limit, model) from a single 'result' event.
-
-  context_tokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens.
-  context_limit and model come from the first modelUsage entry (defaults:
-  200_000 and "").
-  """
-  usage = event.get("usage", {})
-  context_tokens = (
-      usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
-      usage.get("cache_read_input_tokens", 0))
-  context_limit = _DEFAULT_CONTEXT_LIMIT
-  model = ""
-  for model_name, info in event.get("modelUsage", {}).items():
-    model = model_name
-    context_limit = info.get("contextWindow", _DEFAULT_CONTEXT_LIMIT)
-    break
-  return context_tokens, context_limit, model
-
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
@@ -85,9 +63,6 @@ class SessionManager:
 
   def __init__(self, cfg: CharlieBotConfig):
     self._cfg = cfg
-    # In-memory usage cache: session_id -> usage dict (context_tokens, context_limit, total_cost_usd, model).
-    # Incrementally updated on each 'result' event via save_chat_event(), avoiding O(n) rescans.
-    self._usage_cache: dict[str, dict] = {}
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp).
     # TTL-based to avoid repeated disk reads within the same poll cycle.
     self._metadata_cache: dict[str, tuple[SessionMetadata, float]] = {}
@@ -97,14 +72,18 @@ class SessionManager:
     # save back — without a lock the second save overwrites the first's change.
     self._metadata_locks: dict[str, asyncio.Lock] = {}
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
+    self._session_usage = SessionUsageResolver(
+        cfg,
+        self._chat_events.events_cache,
+        self._chat_events_path,
+        self.load_chat_events_sync,
+    )
     # Per-session MessageAggregator instance carrying live streaming state
     # (assistant_buf, tools_buf). Lazy-initialized from disk on first
     # persist_and_broadcast for a session after server start, then maintained
     # in memory across calls so consecutive assistant chunks accumulate into
     # a single bubble and tool-only events attach to the prior text bubble.
     self._aggregators: dict[str, MessageAggregator] = {}
-    # Codex-specific usage resolution delegated to a dedicated module.
-    self._codex_resolver = CodexUsageResolver(cfg, self._chat_events.events_cache, self._chat_events_path)
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -341,7 +320,7 @@ class SessionManager:
         fresh_parent.updated_at = utc_now()
         await self._save_metadata(fresh_parent)
     self._chat_events.clear_cache(parent_id)
-    self._usage_cache.pop(parent_id, None)
+    self._session_usage.clear_cache(parent_id)
     self._aggregators.pop(parent_id, None)
 
     log.info(
@@ -462,7 +441,7 @@ class SessionManager:
     """Mark a session as archived (does not delete files)."""
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._chat_events.clear_cache(session_id)
-    self._usage_cache.pop(session_id, None)
+    self._session_usage.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     return meta
 
@@ -475,7 +454,7 @@ class SessionManager:
     await self._backend_destroy_hook(session_id, meta)
     await asyncio.to_thread(shutil.rmtree, session_dir)
     self._chat_events.clear_cache(session_id)
-    self._usage_cache.pop(session_id, None)
+    self._session_usage.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     self._invalidate_cache(session_id)
     self._metadata_locks.pop(session_id, None)
@@ -507,7 +486,7 @@ class SessionManager:
           fresh.archive_offset += events_archived
           await self._save_metadata(fresh)
       self._chat_events.clear_cache(session_id)
-      self._usage_cache.pop(session_id, None)
+      self._session_usage.clear_cache(session_id)
       self._aggregators.pop(session_id, None)
 
     log.info(
@@ -698,7 +677,7 @@ class SessionManager:
     await self._chat_events.save_chat_event(session_id, event)
     # Incrementally update usage cache on result events
     if event.get('type') == 'result':
-      self._update_usage_cache(session_id, event)
+      self._session_usage._update_usage_cache(session_id, event)
 
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     """Persist event, run it through the session's aggregator, broadcast deltas + raw event.
@@ -760,12 +739,7 @@ class SessionManager:
     was_cached = self._chat_events.has_cache(session_id)
     events = self._chat_events.load_chat_events_sync(session_id)
     if not was_cached:
-      # Always derive usage from a full load so the cache stays exact.
-      usage = self.usage_from_events(events)
-      if usage:
-        self._usage_cache[session_id] = usage
-      else:
-        self._usage_cache.pop(session_id, None)
+      self._session_usage.cache_usage_from_events(session_id, events)
     return events
 
   def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
@@ -820,24 +794,7 @@ class SessionManager:
     Codex backends override context usage from the native rollout log when the
     native thread id can be resolved.
     """
-    usage = self.get_usage_cached(session_id)
-    if usage is None and events is not None:
-      usage = self.usage_from_events(events)
-      if usage is not None:
-        self._usage_cache[session_id] = usage
-    if usage is None and events is None:
-      await asyncio.to_thread(self.load_chat_events_sync, session_id)
-      usage = self.get_usage_cached(session_id)
-
-    if not self._codex_resolver.is_codex_backend(session_meta.backend):
-      return usage
-
-    merged = await asyncio.to_thread(
-        self._codex_resolver.resolve, session_id, session_meta.cc_session_id, events, usage)
-    if merged is not None:
-      self._usage_cache[session_id] = merged
-      return merged
-    return usage
+    return await self._session_usage.resolve_session_usage(session_id, session_meta, events)
 
   # ---------------------------------------------------------------------------
   # Usage / token tracking
@@ -857,60 +814,15 @@ class SessionManager:
       model           – primary model name
     Returns None if no result events exist.
     """
-    if not events:
-      return None
-
-    last_result: dict | None = None
-    last_usage_result: dict | None = None
-    total_cost = 0.0
-    unknown_cost = False
-
-    for ev in events:
-      if ev.get("type") != ET.RESULT:
-        continue
-      last_result = ev
-      event_cost = ev.get("total_cost_usd", 0.0)
-      if event_cost is None:
-        unknown_cost = True
-      else:
-        total_cost += event_cost
-      if _extract_usage_from_result(ev)[0] > 0:
-        last_usage_result = ev
-
-    if last_result is None:
-      return None
-
-    context_tokens, context_limit, model = _extract_usage_from_result(last_usage_result or last_result)
-    return {
-        "context_tokens": context_tokens,
-        "context_limit": context_limit,
-        "total_cost_usd": None if unknown_cost else round(total_cost, 4),
-        "model": model,
-    }
+    return SessionUsageResolver.usage_from_events(events)
 
   def get_usage_cached(self, session_id: str) -> dict | None:
     """Return cached usage data for a session, or None if not yet computed."""
-    return self._usage_cache.get(session_id)
+    return self._session_usage.get_usage_cached(session_id)
 
   def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
     """Incrementally update the usage cache from a single 'result' event."""
-    cached = self._usage_cache.get(session_id) or {
-        "context_tokens": 0,
-        "context_limit": _DEFAULT_CONTEXT_LIMIT,
-        "total_cost_usd": 0.0,
-        "model": "",
-    }
-    event_cost = result_event.get("total_cost_usd", 0.0)
-    if event_cost is None:
-      cached["total_cost_usd"] = None
-    elif cached["total_cost_usd"] is not None:
-      cached["total_cost_usd"] = round(cached["total_cost_usd"] + event_cost, 4)
-    ctx, context_limit, model = _extract_usage_from_result(result_event)
-    if ctx > 0:
-      cached["context_tokens"] = ctx
-      cached["context_limit"] = context_limit
-      cached["model"] = model
-    self._usage_cache[session_id] = cached
+    self._session_usage._update_usage_cache(session_id, result_event)
 
   # ---------------------------------------------------------------------------
   # Private helpers

@@ -1,6 +1,7 @@
 """Chat API routes — triggers master CC process, returns 202 Accepted."""
 
 import asyncio
+from pathlib import Path
 
 import aiofiles
 import structlog
@@ -38,7 +39,7 @@ async def upload_file(
   uploads_dir = cfg.sessions_dir / session_id / "uploads"
   uploads_dir.mkdir(parents=True, exist_ok=True)
 
-  dest = uploads_dir / (file.filename or "upload")
+  dest = uploads_dir / Path(file.filename or "upload").name
   size = 0
   try:
     async with aiofiles.open(dest, "wb") as out:

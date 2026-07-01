@@ -37,7 +37,7 @@ async def test_handle_stale_accepts_z_timestamp(
       }
   ]
   cfg = ImprovementLoopConfig(
-      backlog="loop/backlog.yaml",
+      backlog="backlog/backlog.yaml",
       role="test agent",
       scope_files=["src/core"],
       stale_timeout_hours=1.0,

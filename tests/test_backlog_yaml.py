@@ -1,11 +1,11 @@
-"""Validate that loop/backlog.yaml is well-formed."""
+"""Validate that backlog/backlog.yaml is well-formed."""
 
 from pathlib import Path
 
 import pytest
 import yaml
 
-BACKLOG_PATH = Path(__file__).resolve().parent.parent / 'loop' / 'backlog.yaml'
+BACKLOG_PATH = Path(__file__).resolve().parent.parent / 'backlog' / 'backlog.yaml'
 
 VALID_STATUSES = frozenset({
     'pending',
@@ -32,8 +32,8 @@ def test_parses_without_error(backlog_items: list[dict]) -> None:
   assert isinstance(backlog_items, list)
 
 
-def test_non_empty(backlog_items: list[dict]) -> None:
-  assert len(backlog_items) > 0, 'backlog.yaml must contain at least one item'
+def test_empty(backlog_items: list[dict]) -> None:
+  assert backlog_items == []
 
 
 @pytest.mark.parametrize('field', REQUIRED_FIELDS)

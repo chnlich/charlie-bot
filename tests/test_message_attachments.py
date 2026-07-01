@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.api.chat import send_message
+from fastapi import UploadFile
+
+from src.api.chat import send_message, upload_file
 from src.api.message_utils import events_to_messages
 from src.api.slash import SlashExecuteRequest, execute_command
 from src.core.config import CharlieBotConfig
@@ -16,6 +19,28 @@ from src.core.slash_commands import SlashDispatchResult
 
 def _close_scheduled_task(coro) -> None:
   coro.close()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_strips_directory_components(tmp_path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  meta = SessionMetadata(name="Upload Session")
+  outside_path = cfg.sessions_dir / "evil.txt"
+  outside_path.parent.mkdir(parents=True)
+  outside_path.write_text("do not overwrite", encoding="utf-8")
+  upload = UploadFile(file=io.BytesIO(b"safe contents"), filename="../../evil.txt")
+
+  response = await upload_file(
+      meta.id,
+      upload,
+      _meta=meta,
+      cfg=cfg,
+  )
+
+  stored_path = cfg.sessions_dir / meta.id / "uploads" / "evil.txt"
+  assert stored_path.read_bytes() == b"safe contents"
+  assert outside_path.read_text(encoding="utf-8") == "do not overwrite"
+  assert response == {"filename": "../../evil.txt", "path": str(stored_path.resolve()), "size": 13}
 
 
 def test_events_to_messages_uses_structured_uploaded_files_without_leaking_paths() -> None:
@@ -155,4 +180,3 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
   assert mock_run.call_args.kwargs["uploaded_files"] == [
       {"filename": "report.pdf", "path": "/tmp/report.pdf", "size": 99},
   ]
-

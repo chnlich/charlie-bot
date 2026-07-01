@@ -34,30 +34,32 @@ _SSH_OVERALL_TIMEOUT = 60.0  # asyncio.wait_for timeout wrapping the subprocess
 # SLURM watch (sacct polling).
 _SACCT_POLL_INTERVAL = 30  # seconds between sacct probes
 # Non-terminal job states: the job is still in flight, keep polling.
-_SLURM_ACTIVE_STATES = frozenset({
-    "PENDING",
-    "RUNNING",
-    "CONFIGURING",
-    "COMPLETING",
-    "REQUEUED",
-    "RESIZING",
-    "SUSPENDED",
-})
+_SLURM_ACTIVE_STATES = frozenset(
+    {
+        "PENDING",
+        "RUNNING",
+        "CONFIGURING",
+        "COMPLETING",
+        "REQUEUED",
+        "RESIZING",
+        "SUSPENDED",
+    })
 # Terminal job states: the job has stopped, capture State + ExitCode. Any state
 # string in neither set is unknown (logged, treated as not-finished).
-_SLURM_TERMINAL_STATES = frozenset({
-    "COMPLETED",
-    "FAILED",
-    "CANCELLED",
-    "TIMEOUT",
-    "OUT_OF_MEMORY",
-    "NODE_FAIL",
-    "BOOT_FAIL",
-    "DEADLINE",
-    "PREEMPTED",
-    "REVOKED",
-    "SPECIAL_EXIT",
-})
+_SLURM_TERMINAL_STATES = frozenset(
+    {
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED",
+        "TIMEOUT",
+        "OUT_OF_MEMORY",
+        "NODE_FAIL",
+        "BOOT_FAIL",
+        "DEADLINE",
+        "PREEMPTED",
+        "REVOKED",
+        "SPECIAL_EXIT",
+    })
 
 
 class RemoteVerifyError(Exception):

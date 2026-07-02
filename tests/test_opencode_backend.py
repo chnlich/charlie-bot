@@ -169,7 +169,7 @@ def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
   env = backend._prepare_env({"PATH": "/usr/bin"})
 
   data = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-  assert data["permission"] == "allow"
+  assert data["permission"] == {"*": "allow", "question": "deny"}
   assert data["default_agent"] == "charliebot"
   assert data["agent"]["charliebot"] == {"mode": "primary"}
 

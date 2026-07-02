@@ -76,7 +76,7 @@ def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None = 
     return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"
   if dispatch.type == "cc-kimi":
     return None
-  if dispatch.type == "cc-deepseek-sglang":
+  if dispatch.type == "cc-openai-compatible":
     return None
   if dispatch.type == "codex":
     return None
@@ -108,7 +108,7 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
     return bool(thread.claude_session_id and thread.worktree_path and os.path.isdir(thread.worktree_path))
   if dispatch.type == "cc-kimi":
     return False
-  if dispatch.type == "cc-deepseek-sglang":
+  if dispatch.type == "cc-openai-compatible":
     return False
   if dispatch.type == "codex":
     return False

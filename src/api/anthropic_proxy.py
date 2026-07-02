@@ -1,9 +1,10 @@
 """Anthropic-compatible proxy routes for non-Anthropic model servers."""
 
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 import structlog
@@ -17,12 +18,10 @@ log = structlog.get_logger()
 
 router = APIRouter()
 
-_DEEPSEEK_SGLANG_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
-
 
 def _join_openai_chat_url(base_url: str) -> str:
   if not base_url:
-    raise ValueError("deepseek_sglang_base_url not set in config")
+    raise ValueError("api_base not set for backend")
   return f"{base_url.rstrip('/')}/chat/completions"
 
 
@@ -181,17 +180,14 @@ def _convert_tool_choice(choice: dict) -> str | dict:
   raise ValueError(f"unsupported tool_choice type: {choice_type}")
 
 
-def anthropic_to_openai_chat_request(payload: dict) -> dict:
+def anthropic_to_openai_chat_request(payload: dict, upstream_model: str) -> dict:
   """Translate an Anthropic Messages payload into an OpenAI chat completions payload."""
   messages = payload.get("messages")
   if not isinstance(messages, list):
     raise ValueError("messages must be a list")
-  model = payload.get("model")
-  if not model:
-    raise ValueError("model is required")
 
   converted: dict[str, Any] = {
-      "model": _DEEPSEEK_SGLANG_MODEL,
+      "model": upstream_model,
       "messages": _convert_messages(messages, payload.get("system")),
       "stream": bool(payload.get("stream", False)),
   }
@@ -212,12 +208,13 @@ def anthropic_to_openai_chat_request(payload: dict) -> dict:
       converted["parallel_tool_calls"] = not bool(tool_choice["disable_parallel_tool_use"])
   if converted["stream"]:
     converted["stream_options"] = {"include_usage": True}
-  # Do not pass Anthropic thinking through yet: SGLang's reasoning_content is
-  # not an Anthropic thinking block and does not provide Anthropic signatures.
+  # Do not pass Anthropic thinking through yet: the OpenAI-compatible upstream's
+  # reasoning_content is not an Anthropic thinking block and does not provide
+  # Anthropic signatures.
   if payload.get("thinking") is not None:
-    raise ValueError("DeepSeek SGLang proxy does not support Anthropic thinking blocks")
+    raise ValueError("OpenAI-compatible proxy does not support Anthropic thinking blocks")
   if payload.get("top_k") is not None:
-    raise ValueError("DeepSeek SGLang proxy does not support Anthropic top_k")
+    raise ValueError("OpenAI-compatible proxy does not support Anthropic top_k")
   return converted
 
 
@@ -476,10 +473,14 @@ async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIter
     await upstream.aclose()
 
 
-def _upstream_headers(cfg: CharlieBotConfig) -> dict[str, str]:
+def _upstream_headers(api_key_env: Optional[str], backend_id: str) -> dict[str, str]:
   headers = {"Content-Type": "application/json"}
-  if cfg.deepseek_sglang_api_key:
-    headers["Authorization"] = f"Bearer {cfg.deepseek_sglang_api_key}"
+  if not api_key_env:
+    return headers
+  token = os.environ.get(api_key_env)
+  if not token:
+    raise ValueError(f"api_key_env '{api_key_env}' is not set in the environment for backend '{backend_id}'")
+  headers["Authorization"] = f"Bearer {token}"
   return headers
 
 
@@ -489,21 +490,33 @@ async def _upstream_error(response: httpx.Response) -> HTTPException:
   return HTTPException(status_code=response.status_code, detail=body)
 
 
-@router.post("/deepseek-sglang/v1/messages")
-async def deepseek_sglang_messages(
+@router.post("/openai-compatible/{backend_id}/v1/messages")
+async def openai_compatible_messages(
+    backend_id: str,
     request: Request,
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Serve Anthropic Messages API requests through a DeepSeek SGLang OpenAI endpoint."""
+  """Serve Anthropic Messages API requests through a per-backend OpenAI-compatible endpoint."""
+  option = cfg.get_backend_option(backend_id)
+  if option is None:
+    raise HTTPException(status_code=404, detail=f"unknown backend id: {backend_id}")
+  if option.type != "cc-openai-compatible":
+    raise HTTPException(
+        status_code=400, detail=f"backend '{backend_id}' is not type 'cc-openai-compatible' (got '{option.type}')")
+  if not option.api_base:
+    raise HTTPException(status_code=400, detail=f"backend '{backend_id}' missing api_base")
+  if not option.model:
+    raise HTTPException(status_code=400, detail=f"backend '{backend_id}' missing model")
+
   try:
     anthropic_payload = await request.json()
-    openai_payload = anthropic_to_openai_chat_request(anthropic_payload)
-    upstream_url = _join_openai_chat_url(cfg.deepseek_sglang_base_url or "")
+    openai_payload = anthropic_to_openai_chat_request(anthropic_payload, upstream_model=option.model)
+    upstream_url = _join_openai_chat_url(option.api_base)
+    headers = _upstream_headers(option.api_key_env, backend_id)
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
   client = get_http_client()
-  headers = _upstream_headers(cfg)
   model = openai_payload["model"]
 
   if openai_payload["stream"]:

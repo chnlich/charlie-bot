@@ -74,14 +74,6 @@ class CharlieBotConfig(BaseModel):
   # Kimi (Moonshot) — optional, not wired in by default
   moonshot_api_key: Optional[str] = None
 
-  # DeepSeek SGLang — OpenAI-compatible base URL, including /v1.
-  # Used by CharlieBot's hosted Anthropic proxy.
-  deepseek_sglang_base_url: Optional[str] = None
-  deepseek_sglang_api_key: Optional[str] = None
-  # Claude-facing Anthropic proxy base URL for DeepSeek SGLang, including
-  # /api/anthropic-proxy/deepseek-sglang. If unset, use the local proxy URL.
-  deepseek_sglang_proxy_base_url: Optional[str] = None
-
   # Authentication — shared secret; empty string disables auth
   charliebot_access_key: str = ""
 
@@ -176,13 +168,6 @@ class CharlieBotConfig(BaseModel):
   def server_base_url(self) -> str:
     """Return the local base URL for CLI-to-server internal API calls."""
     return f"http://localhost:{self.server_port}"
-
-  @property
-  def deepseek_sglang_anthropic_proxy_base_url(self) -> str:
-    """Return the Claude-facing Anthropic proxy base URL for DeepSeek SGLang."""
-    if self.deepseek_sglang_proxy_base_url:
-      return self.deepseek_sglang_proxy_base_url.rstrip("/")
-    return f"{self.server_base_url}/api/anthropic-proxy/deepseek-sglang"
 
   @property
   def sessions_dir(self) -> Path:

@@ -30,7 +30,7 @@ def _thread(**overrides) -> ThreadMetadata:
     [
         ("cc-claude", "claude-resume"),
         ("cc-kimi", None),
-        ("cc-deepseek-sglang", None),
+        ("cc-openai-compatible", None),
         ("codex", None),
         ("charlie-code", None),
         ("gemini", None),

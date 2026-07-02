@@ -128,10 +128,11 @@ class CharlieBotConfig(BaseModel):
       BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
   ]
 
-  # Ordered preference list for reviewer backend selection.
-  # Each entry is a BackendOption.id. The first entry that differs from
-  # the worker's backend and resolves successfully is used for the reviewer.
-  # Empty list (default) preserves current behavior: reviewer uses same backend as worker.
+  # Ordered preference list for checking-role backend selection: the delegation
+  # reviewer and the default backend of verify (plan verifier) delegations.
+  # Each entry is a BackendOption.id. The first entry that differs from the
+  # checked party's backend and resolves successfully is used.
+  # Empty list (default) preserves same-backend behavior.
   model_preference: list[str] = []
 
   # Telegram notifications

@@ -69,6 +69,14 @@ function loadChatScript() {
   const context = {
     SESSION_ID: 'test-session',
     console: {error: () => {}},
+    fetch: async () => ({
+      ok: true,
+      async text() {
+        return '<main>Artifact</main>';
+      },
+    }),
+    hljs: {highlight: (value) => ({value: escapeHtml(value)})},
+    localStorage: {getItem: () => null, setItem: () => {}},
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
     window: {
@@ -76,9 +84,23 @@ function loadChatScript() {
       location: {href: 'https://example.com/sessions/test-session'},
     },
     URL: globalThis.URL,
+    Node: {ELEMENT_NODE: 1},
     document: {
       addEventListener() {},
-      createElement() {
+      createElement(tagName) {
+        if (tagName === 'template') {
+          return {
+            content: {firstElementChild: null},
+            set innerHTML(value) {
+              this.content.firstElementChild = {
+                renderedHtml: String(value),
+                nodeType: 1,
+                dataset: {},
+                classList: {contains: (className) => className === 'html-artifact'},
+              };
+            },
+          };
+        }
         let text = '';
         return {
           set textContent(value) {
@@ -89,12 +111,69 @@ function loadChatScript() {
           },
         };
       },
+      getElementById() {
+        return null;
+      },
+      querySelector() {
+        return null;
+      },
     },
   };
 
   vm.createContext(context);
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   return context;
+}
+
+function makeAnchor(href) {
+  return {
+    dataset: {},
+    isConnected: true,
+    href,
+    getAttribute(name) {
+      return name === 'href' ? this.href : null;
+    },
+    setAttribute(name, value) {
+      if (name === 'href') this.href = value;
+    },
+    closest(selector) {
+      return selector === '.prose-msg' ? this.prose : null;
+    },
+  };
+}
+
+function makeProseRoot(anchors) {
+  const parent = {
+    inserted: [],
+    insertBefore(child) {
+      this.inserted.push(child);
+      child.parentNode = this;
+      return child;
+    },
+  };
+  const prose = {
+    id: '',
+    parentNode: parent,
+    nextSibling: null,
+    nextElementSibling: null,
+    closest() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === 'a[href]') return anchors;
+      if (selector === 'code') return [];
+      return [];
+    },
+  };
+  for (const anchor of anchors) anchor.prose = prose;
+  return {
+    parent,
+    root: {
+      querySelectorAll(selector) {
+        return selector === '.prose-msg' ? [prose] : [];
+      },
+    },
+  };
 }
 
 function loadFileUploadScript(fetchImpl) {
@@ -322,6 +401,28 @@ test('resolveHtmlArtifactLink accepts raw URL strings and anchor elements', () =
   assert.equal(context.resolveHtmlArtifactLink('/files/report/artifacts/plot.txt'), null);
   assert.equal(context.resolveHtmlArtifactLink('/other/path/artifacts/plot.html'), null);
   assert.equal(context.resolveHtmlArtifactLink('not a url'), null);
+});
+
+test('embedLinkedHtmlArtifacts stamps artifact prose links and rendered card open URLs with session fragment', async () => {
+  const context = loadChatScript();
+  context.SESSION_ID = 'view-session';
+  const artifactAnchor = makeAnchor('/files/%2Ftmp%2Freport/artifacts/plot.html#old');
+  const plainAnchor = makeAnchor('/files/%2Ftmp%2Freport/readme.txt#keep');
+  const {root, parent} = makeProseRoot([artifactAnchor, plainAnchor]);
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  assert.equal(
+    artifactAnchor.getAttribute('href'),
+    '/files/%2Ftmp%2Freport/artifacts/plot.html#cbsession=view-session'
+  );
+  assert.equal(plainAnchor.getAttribute('href'), '/files/%2Ftmp%2Freport/readme.txt#keep');
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(parent.inserted.length, 1);
+  assert.match(
+    parent.inserted[0].renderedHtml,
+    /href="\/files\/\/tmp\/report\/artifacts\/plot\.html#cbsession=view-session"/
+  );
 });
 
 test('findArtifactLinkInCode extracts artifact URLs from inline code text', () => {

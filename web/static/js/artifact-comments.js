@@ -9,8 +9,12 @@ if (!framed) {
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
     var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this?'}];
-    var sessionId = extractSessionIdFromPath(window.location.pathname);
+    var pathSessionId = extractSessionIdFromPath(window.location.pathname);
+    var hashSessionId = extractSessionIdFromHash(window.location.hash);
+    var sessionId = resolveSessionIdFromLocation(window.location.pathname, window.location.hash);
     var artifactPath = artifactPathFromPath(window.location.pathname);
+    var sessionNameCache = {};
+    var sessionNameRequests = {};
     var hovered = null;
     var hideTimer = null;
     var trigger = null;
@@ -25,6 +29,7 @@ if (!framed) {
     var trayReason = null;
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
+    window.__cbcResolveSessionId = resolveSessionIdFromLocation;
     window.__cbcBuildBatchMessage = buildBatchMessage;
     window.__cbcResolveEntryDraft = resolveEntryDraft;
     window.__cbcBuildTrayItem = buildTrayItem;
@@ -43,8 +48,91 @@ if (!framed) {
       return value || null;
     }
 
+    function extractSessionIdFromHash(hash) {
+      var text = String(hash || '');
+      var prefix = '#cbsession=';
+      if (text.indexOf(prefix) !== 0) return null;
+      var value;
+      try {
+        value = decodeURIComponent(text.slice(prefix.length)).trim();
+      } catch (e) {
+        console.warn('Invalid cbsession hash', hash, e);
+        return null;
+      }
+      if (!value || value.indexOf('/') !== -1) return null;
+      return value;
+    }
+
+    function resolveSessionIdFromLocation(pathname, hash) {
+      return extractSessionIdFromHash(hash) || extractSessionIdFromPath(pathname);
+    }
+
     function artifactPathFromPath(pathname) {
       return decodeURIComponent(String(pathname || '').replace(/%2F/gi, '/'));
+    }
+
+    function fallbackSessionLabel(id) {
+      return String(id || '').slice(0, 8);
+    }
+
+    function targetSessionLabel() {
+      if (!sessionId) return '';
+      return sessionNameCache[sessionId] || fallbackSessionLabel(sessionId);
+    }
+
+    function targetSessionSuffix() {
+      var label = targetSessionLabel();
+      return label ? ' \u2192 ' + label : '';
+    }
+
+    function fetchSessionName(id) {
+      if (sessionNameCache[id]) return Promise.resolve(sessionNameCache[id]);
+      if (sessionNameRequests[id]) return sessionNameRequests[id];
+
+      var request = fetch('/api/sessions/' + encodeURIComponent(id), {
+        credentials: 'same-origin',
+      }).then(function(response) {
+        if (response.status === 404) {
+          var notFound = new Error('Session not found: ' + id);
+          notFound.status = 404;
+          throw notFound;
+        }
+        if (!response.ok) {
+          throw new Error('Session name fetch failed: HTTP ' + response.status);
+        }
+        return response.json();
+      }).then(function(data) {
+        var name = data && data.name ? String(data.name).trim() : '';
+        sessionNameCache[id] = name || fallbackSessionLabel(id);
+        delete sessionNameRequests[id];
+        return sessionNameCache[id];
+      }).catch(function(err) {
+        delete sessionNameRequests[id];
+        throw err;
+      });
+
+      sessionNameRequests[id] = request;
+      return request;
+    }
+
+    function ensureTargetSessionName() {
+      if (!sessionId || sessionNameCache[sessionId] || sessionNameRequests[sessionId]) return;
+      var requestedId = sessionId;
+      fetchSessionName(requestedId).then(function() {
+        if (sessionId === requestedId) refreshTray();
+      }).catch(function(err) {
+        if (err.status === 404 && hashSessionId && requestedId === hashSessionId && pathSessionId && pathSessionId !== requestedId) {
+          console.warn('Artifact comment target session not found; falling back to path session:', requestedId);
+          sessionId = pathSessionId;
+          hashSessionId = null;
+          ensureTargetSessionName();
+          refreshTray();
+          return;
+        }
+        console.error('Artifact comment session name fetch failed:', err);
+        sessionNameCache[requestedId] = fallbackSessionLabel(requestedId);
+        if (sessionId === requestedId) refreshTray();
+      });
     }
 
     function installStyles() {
@@ -723,12 +811,14 @@ if (!framed) {
 
     function refreshTray() {
       if (!tray) return;
-      trayHeader.textContent = 'Pending comments (' + pending.length + ')';
+      if (pending.length > 0 && sessionId) ensureTargetSessionName();
+      var targetSuffix = targetSessionSuffix();
+      trayHeader.textContent = 'Pending comments (' + pending.length + ')' + targetSuffix;
       trayList.innerHTML = '';
       for (var i = 0; i < pending.length; i++) {
         trayList.appendChild(buildTrayItem(i, pending[i]));
       }
-      traySendBtn.textContent = 'Send ' + pending.length;
+      traySendBtn.textContent = 'Send ' + pending.length + targetSuffix;
       tray.style.display = pending.length > 0 ? 'flex' : 'none';
       if (!sessionId) {
         traySendBtn.disabled = true;

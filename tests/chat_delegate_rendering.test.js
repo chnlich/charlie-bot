@@ -71,6 +71,31 @@ function loadChatRendering() {
   return context;
 }
 
+function assertWellFormedMarkup(html, label = 'html') {
+  assert.doesNotMatch(html, /<[^>]*</, `${label} contains a nested tag opener`);
+
+  const tags = html.match(/<[^<>]*>/g) || [];
+  assert.equal(tags.length, (html.match(/</g) || []).length, `${label} contains an unterminated tag`);
+
+  const counts = new Map();
+  for (const tagText of tags) {
+    const match = /^<\/?\s*([A-Za-z][A-Za-z0-9:-]*)\b/.exec(tagText);
+    assert.ok(match, `${label} contains an unparseable tag: ${tagText}`);
+
+    const tagName = match[1].toLowerCase();
+    if (/\/\s*>$/.test(tagText)) continue;
+
+    const count = counts.get(tagName) || {opening: 0, closing: 0};
+    if (tagText.startsWith('</')) count.closing += 1;
+    else count.opening += 1;
+    counts.set(tagName, count);
+  }
+
+  for (const [tagName, count] of counts) {
+    assert.equal(count.opening, count.closing, `${label} has unbalanced <${tagName}> tags`);
+  }
+}
+
 function loadSidebarWorkers(elements) {
   const context = {
     SESSION_ID: 'session-a',
@@ -181,6 +206,70 @@ test('worker_summary renders non-clickable locator without worker result content
   assert.doesNotMatch(html, /showTextModal/);
   assert.doesNotMatch(html, /data-full/);
   assert.doesNotMatch(html, /Large worker result body/);
+});
+
+test('renderMessage returns well-formed markup for every role branch', () => {
+  const context = loadChatRendering();
+
+  const messages = [
+    {
+      role: 'user',
+      content: 'Please inspect the report.',
+      timestamp: '2026-07-01T12:30:00Z',
+      uploaded_files: [{filename: 'report.pdf', path: '/tmp/report.pdf'}],
+    },
+    {
+      role: 'assistant',
+      content: 'Done.',
+      timestamp: '2026-07-01T12:31:00Z',
+    },
+    {
+      role: 'system',
+      content: 'Session resumed',
+      timestamp: '2026-07-01T12:32:00Z',
+    },
+    {
+      role: 'task_delegated',
+      content: 'Task delegated',
+      thread_id: 'thread-123',
+      backend: 'codex-o3',
+      model: 'o3',
+      delegate_invocation: {
+        task_type: 'implement',
+        repo_path: '/tmp/repo',
+        base_branch: 'main',
+        task_spec_file: '/tmp/task.md',
+        reviewer_context_file: '/tmp/reviewer.md',
+        keep_worktree: true,
+        backend: 'codex-o3',
+      },
+      timestamp: '2026-07-01T12:33:00Z',
+    },
+    {
+      role: 'worker_summary',
+      content: 'Worker `12345678` | thread `12345678-full` | status: completed',
+      timestamp: '2026-07-01T12:34:00Z',
+    },
+    {
+      role: 'plan',
+      content: '1. Inspect\n2. Fix',
+      timestamp: '2026-07-01T12:35:00Z',
+    },
+    {
+      role: 'clone_start',
+      content: 'Parent & Session',
+      parent_session_id: 'parent/session?tab=chat',
+    },
+    {
+      role: 'separator',
+      thinking_seconds: 12,
+      event_index: 4,
+    },
+  ];
+
+  for (const msg of messages) {
+    assertWellFormedMarkup(context.renderMessage(msg, 'session-a'), msg.role);
+  }
 });
 
 test('workers sidebar escapes full descriptions in initial and live cards', () => {

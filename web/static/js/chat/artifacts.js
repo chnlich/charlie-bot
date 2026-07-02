@@ -59,6 +59,14 @@ function loadHtmlArtifactSavedSize(filePath) {
   return null;
 }
 
+function stampViewingSessionFragment(href) {
+  if (typeof SESSION_ID === 'undefined' || !SESSION_ID) return href;
+  var raw = String(href || '');
+  var hashIdx = raw.indexOf('#');
+  var base = hashIdx === -1 ? raw : raw.slice(0, hashIdx);
+  return base + '#cbsession=' + encodeURIComponent(String(SESSION_ID));
+}
+
 function saveHtmlArtifactSavedSize(filePath, size) {
   var key = htmlArtifactSizeStorageKey(filePath);
   if (!key) return;
@@ -74,7 +82,7 @@ function buildHtmlArtifactCard(opts) {
   var frameId = 'hf-' + Math.random().toString(36).slice(2);
   var withScript = injectResizeScript(rawHtml, frameId);
   var srcdoc = escapeForSrcdoc(withScript);
-  var openUrl = '/files' + absPath;
+  var openUrl = stampViewingSessionFragment('/files' + absPath);
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
   var savedSize = loadHtmlArtifactSavedSize(filePath);
   var iframeSizeStyle = 'min-height:60px;max-height:80vh;';
@@ -206,6 +214,7 @@ function embedLinkedHtmlArtifacts(root) {
       if (anchor.dataset.embedded === '1') return;
       var resolved = resolveHtmlArtifactLink(anchor);
       if (!resolved) return;
+      anchor.setAttribute('href', stampViewingSessionFragment(anchor.getAttribute('href') || ''));
       if (seen.has(resolved.absPath)) return;
       seen.add(resolved.absPath);
       links.push({

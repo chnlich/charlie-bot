@@ -12,6 +12,9 @@ const ARTIFACT_COMMENTS_JS = fs.readFileSync(
 function makeElement() {
   return {
     _textContent: '',
+    _innerHTML: '',
+    _listeners: {},
+    attributes: {},
     style: {},
     children: [],
     childNodes: [],
@@ -28,6 +31,18 @@ function makeElement() {
     set textContent(value) {
       this._textContent = String(value);
       this.childNodes = [];
+      this.children = [];
+      this._innerHTML = '';
+    },
+    get innerHTML() {
+      return this._innerHTML;
+    },
+    set innerHTML(value) {
+      this._innerHTML = String(value);
+      if (this._innerHTML === '') {
+        this.children = [];
+        this.childNodes = [];
+      }
     },
     get innerText() {
       return this.textContent;
@@ -35,6 +50,7 @@ function makeElement() {
     classList: {add() {}, remove() {}},
     appendChild(child) {
       this.children.push(child);
+      this.childNodes.push(child);
       child.parentNode = this;
       child.parentElement = this;
       return child;
@@ -43,14 +59,21 @@ function makeElement() {
       const index = this.children.indexOf(prev);
       assert.notEqual(index, -1, 'replaceChild target exists');
       this.children[index] = next;
+      const nodeIndex = this.childNodes.indexOf(prev);
+      if (nodeIndex !== -1) this.childNodes[nodeIndex] = next;
       next.parentNode = this;
       next.parentElement = this;
       prev.parentNode = null;
       prev.parentElement = null;
       return prev;
     },
-    addEventListener() {},
-    setAttribute() {},
+    addEventListener(type, handler) {
+      if (!this._listeners[type]) this._listeners[type] = [];
+      this._listeners[type].push(handler);
+    },
+    setAttribute(name, value = '') {
+      this.attributes[name] = String(value);
+    },
     focus() {},
     select() {},
     querySelector(selector) {
@@ -83,10 +106,10 @@ function makeBlock(text, {display = 'block', childNodes = []} = {}) {
   return el;
 }
 
-function loadArtifactCommentsScript(pathname, framed = false) {
+function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
   const listeners = [];
   const window = {
-    location: {pathname},
+    location: {pathname, hash: opts.hash || ''},
     innerWidth: 1024,
     innerHeight: 768,
     addEventListener(type, handler, options) {
@@ -122,15 +145,32 @@ function loadArtifactCommentsScript(pathname, framed = false) {
   const context = {
     window,
     document,
-    console,
+    console: opts.console || console,
     Node: {DOCUMENT_POSITION_FOLLOWING: 4},
-    fetch() {
+    fetch: opts.fetch || function() {
       throw new Error('fetch should not run while loading artifact-comments.js');
     },
   };
   vm.createContext(context);
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
   return {window, head, body, listeners};
+}
+
+function clickElement(el) {
+  assert.ok(el._listeners.click && el._listeners.click.length > 0, 'click listener exists');
+  return el._listeners.click[0]({preventDefault() {}, stopPropagation() {}});
+}
+
+function waitForPromises() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function flushPromises(times = 3) {
+  for (let i = 0; i < times; i++) await waitForPromises();
+}
+
+function findChildByClass(parent, className) {
+  return parent.children.find((child) => child.className === className);
 }
 
 function rectsIntersect(a, b) {
@@ -154,6 +194,103 @@ test('extractSessionIdFromPath parses session ids from artifact file paths', () 
   assert.equal(parse('/files/data/home/chaoli/.charliebot/artifacts/plan.html'), null);
 });
 
+test('resolveSessionId prefers a valid cbsession hash over the artifact path session', () => {
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(pathName, false, {hash: '#cbsession=view-session'});
+  const resolve = window.__cbcResolveSessionId;
+
+  assert.equal(resolve(pathName, '#cbsession=view-session'), 'view-session');
+  assert.equal(resolve(pathName, '#cbsession=%20view-session%20'), 'view-session');
+});
+
+test('resolveSessionId keeps path-derived behavior when hash is absent', () => {
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(pathName);
+
+  assert.equal(window.__cbcResolveSessionId(pathName, ''), 'path-session');
+});
+
+test('resolveSessionId falls back to the path for malformed cbsession hashes', () => {
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(pathName);
+  const resolve = window.__cbcResolveSessionId;
+
+  assert.equal(resolve(pathName, '#cbsession='), 'path-session');
+  assert.equal(resolve(pathName, '#cbsession=%20'), 'path-session');
+  assert.equal(resolve(pathName, '#cbsession=bad%2Fsession'), 'path-session');
+});
+
+test('batch tray labels and POST target use the hash session when it resolves', async () => {
+  const calls = [];
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {body} = loadArtifactCommentsScript(pathName, false, {
+    hash: '#cbsession=view-session',
+    fetch: async (url, options = {}) => {
+      calls.push({url, method: options.method || 'GET'});
+      if (url === '/api/sessions/view-session') {
+        return {ok: true, status: 200, async json() { return {name: 'Viewing Session'}; }};
+      }
+      if (url === '/api/chat/view-session/message') {
+        return {ok: true, status: 200};
+      }
+      throw new Error('Unexpected fetch: ' + url);
+    },
+  });
+
+  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
+  clickElement(shortcutBtn);
+  await flushPromises();
+
+  const tray = findChildByClass(body, '__cbc-tray');
+  const header = findChildByClass(tray, '__cbc-tray-header');
+  const actions = findChildByClass(tray, '__cbc-tray-actions');
+  const sendBtn = findChildByClass(actions, '__cbc-tray-send');
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 Viewing Session');
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Viewing Session');
+
+  await clickElement(sendBtn);
+  assert.ok(calls.some((call) => call.url === '/api/chat/view-session/message' && call.method === 'POST'));
+});
+
+test('hash session name 404 falls back to the artifact path session', async () => {
+  const calls = [];
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {body} = loadArtifactCommentsScript(pathName, false, {
+    hash: '#cbsession=missing-session',
+    console: {warn() {}, error() {}},
+    fetch: async (url, options = {}) => {
+      calls.push({url, method: options.method || 'GET'});
+      if (url === '/api/sessions/missing-session') {
+        return {ok: false, status: 404};
+      }
+      if (url === '/api/sessions/path-session') {
+        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
+      }
+      if (url === '/api/chat/path-session/message') {
+        return {ok: true, status: 200};
+      }
+      throw new Error('Unexpected fetch: ' + url);
+    },
+  });
+
+  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
+  clickElement(shortcutBtn);
+  await flushPromises(5);
+
+  const tray = findChildByClass(body, '__cbc-tray');
+  const header = findChildByClass(tray, '__cbc-tray-header');
+  const actions = findChildByClass(tray, '__cbc-tray-actions');
+  const sendBtn = findChildByClass(actions, '__cbc-tray-send');
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
+
+  await clickElement(sendBtn);
+  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'));
+  assert.equal(calls.some((call) => call.url === '/api/chat/missing-session/message'), false);
+});
+
 test('artifact comments script stays inert inside frames', () => {
   const {window, head, listeners} = loadArtifactCommentsScript(
     '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
@@ -161,6 +298,7 @@ test('artifact comments script stays inert inside frames', () => {
   );
 
   assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
+  assert.equal(window.__cbcResolveSessionId, undefined);
   assert.equal(window.__cbcBuildBatchMessage, undefined);
   assert.equal(window.__cbcBuildTrayItem, undefined);
   assert.equal(window.__cbcFindBlock, undefined);

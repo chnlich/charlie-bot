@@ -77,12 +77,14 @@ class OpenCodeBackend(AgentBackend):
   def _headless_config(self) -> dict:
     """Injected opencode policy for headless master runs.
 
-    Headless runs have no human approver, so the injected policy sets top-level
-    ``permission: "allow"`` to auto-approve all tool calls, including OpenCode's
-    internal subagents. This broad auto-approval is deliberate.
+    Headless runs have no human approver, so the injected policy keeps broad
+    auto-approval for all tool calls, including OpenCode's internal subagents.
+    This broad auto-approval is deliberate. The explicit ``question`` deny restores
+    OpenCode's built-in default, which a bare top-level ``permission: "allow"``
+    overrides; headless runs have no UI to answer interactive questions.
     """
     return {
-        "permission": "allow",
+        "permission": {"*": "allow", "question": "deny"},
         "default_agent": "charliebot",
         "agent": {
             "charliebot": {"mode": "primary"},

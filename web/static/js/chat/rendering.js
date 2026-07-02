@@ -339,7 +339,7 @@ function renderMessage(msg, sessionId) {
       + renderDelegateMetadata(msg) + timeDiv() + "</div></div>";
   }
   if (msg.role === "worker_summary") {
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\""
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
       + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + "</div></div>";
   }
   if (msg.role === "plan") {

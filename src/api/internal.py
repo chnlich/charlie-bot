@@ -27,11 +27,13 @@ from src.core.models import (
     TaskType,
     WatchKind,
 )
+from src.core.review import select_reviewer_backend
 from src.core.sessions import SessionManager
 from src.core.spawner import (
     DelegationBlockedError,
     check_takeoff_gate,
     resolve_requested_subagent_backend_model,
+    resolve_session_subagent_backend_model,
     spawn_worker,
 )
 from src.core.tasks import create_logged_task
@@ -78,8 +80,14 @@ async def _authorize_spawn_request(
 
   cfg = get_config()
   try:
-    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-        req.session_id, cfg, session_mgr, requested_backend=req.backend)
+    if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY and req.backend is None:
+      # Verify checks the session's work, so default its backend cross-model via model_preference,
+      # exactly like the delegation reviewer. With tried_backends=[] this never returns None.
+      session_backend, session_model = await resolve_session_subagent_backend_model(req.session_id, cfg, session_mgr)
+      resolved_backend, resolved_model, _ = select_reviewer_backend(cfg, session_backend, session_model, [])
+    else:
+      resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+          req.session_id, cfg, session_mgr, requested_backend=req.backend)
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 

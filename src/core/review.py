@@ -257,7 +257,7 @@ def select_reviewer_backend(
     worker_model: Optional[str],
     tried_backends: list[str],
 ) -> Optional[tuple[str, Optional[str], list[str]]]:
-  """Select a reviewer backend via model_preference, skipping already-tried backends.
+  """Select a checking-role backend (reviewer, verify default) via model_preference, skipping already-tried backends.
 
   Returns (resolved_backend, resolved_model, updated_tried_backends) or None if exhausted.
   """

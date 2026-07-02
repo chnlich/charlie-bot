@@ -173,6 +173,117 @@ def test_build_worker_prompt_rejects_verify_task_type() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_start_summary_is_locator_without_task_description(monkeypatch: pytest.MonkeyPatch) -> None:
+  thread = ThreadMetadata(
+      id="12345678-1234-1234-1234-123456789abc",
+      session_id="session-id",
+      description="Sensitive task description",
+      backend="codex-o3",
+      model="o3",
+  )
+  captured: dict[str, Any] = {}
+
+  class FakeWorker:
+
+    async def run(self) -> int:
+      return 0
+
+    async def terminate(self) -> None:
+      return None
+
+  class FakeThreadManager:
+
+    async def save_metadata(self, meta: ThreadMetadata) -> None:
+      captured["saved_thread"] = meta
+
+  class FakeSessionManager:
+
+    async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
+      captured["session_id"] = session_id
+      captured["event"] = event
+
+  monkeypatch.setattr(spawner, "_worker_summary_timestamp", lambda: "2026-07-01 12:34 PDT")
+
+  exit_code, quota_exhausted, error = await spawner._stream_worker_events(
+      FakeWorker(),
+      "session-id",
+      "Sensitive task description",
+      thread,
+      FakeThreadManager(),
+      FakeSessionManager(),
+  )
+
+  assert exit_code == 0
+  assert quota_exhausted is False
+  assert error == ""
+  event = captured["event"]
+  assert event["status"] == "running"
+  assert "12345678" in event["content"]
+  assert thread.id in event["content"]
+  assert "status: running" in event["content"]
+  assert "Workers panel" in event["content"]
+  assert "Sensitive task description" not in event["content"]
+
+
+@pytest.mark.asyncio
+async def test_worker_finish_summary_is_locator_without_task_description(monkeypatch: pytest.MonkeyPatch) -> None:
+  thread = ThreadMetadata(
+      id="87654321-4321-4321-4321-cba987654321",
+      session_id="session-id",
+      description="Sensitive task description",
+      backend="codex-o3",
+      model="o3",
+  )
+  captured: dict[str, Any] = {}
+
+  class FakeThreadManager:
+
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
+      del session_id, thread_id
+      return thread
+
+  class FakeSessionManager:
+
+    async def get_session(self, session_id: str) -> SessionMetadata:
+      return SessionMetadata(id=session_id, name="Test")
+
+    async def mark_unread(self, session_id: str) -> None:
+      captured["mark_unread"] = session_id
+
+    async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
+      captured["session_id"] = session_id
+      captured["event"] = event
+
+  async def fake_read_events_summary(session_id: str, thread_id: str, thread_mgr: Any) -> str:
+    del session_id, thread_id, thread_mgr
+    return "Worker output body"
+
+  monkeypatch.setattr(spawner, "_read_events_summary", fake_read_events_summary)
+  monkeypatch.setattr(spawner, "_worker_summary_timestamp", lambda: "2026-07-01 12:35 PDT")
+
+  events_summary, full_summary = await spawner._broadcast_completion(
+      "session-id",
+      "Sensitive task description",
+      thread,
+      0,
+      FakeThreadManager(),
+      FakeSessionManager(),
+  )
+
+  assert events_summary == "Worker output body"
+  assert "Sensitive task description" in full_summary
+  event = captured["event"]
+  assert event["status"] == "completed"
+  assert "87654321" in event["content"]
+  assert thread.id in event["content"]
+  assert "status: completed" in event["content"]
+  assert "Workers panel" in event["content"]
+  assert "Sensitive task description" not in event["content"]
+  assert "Worker output body" not in event["content"]
+  assert "Worker output body" in event["full_content"]
+
+
+@pytest.mark.asyncio
 async def test_resolve_requested_subagent_backend_model_uses_requested_backend() -> None:
   cfg = _build_cfg()
 

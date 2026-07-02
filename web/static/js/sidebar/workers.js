@@ -12,6 +12,10 @@ function formatTriggerTimeLabel(status, fireAt) {
   return prefix + mm + '/' + dd + ' ' + hh + ':' + mi;
 }
 
+function escapeWorkerDescriptionAttr(value) {
+  return escapeHtml(value || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function renderWorkersTab(threads, sessionId, triggers) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
@@ -45,7 +49,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
       + '<div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750" onclick="toggleThreadDetail(\'' + t.id + '\', \'' + sessionId + '\')">'
       + '<span id="thread-dot-' + t.id + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dotColor + pulse + '"></span>'
       + '<div class="flex-1 min-w-0">'
-      + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeHtml(t.description || '').replace(/"/g, '&quot;') + '">' + escapeHtml(t.description || '') + '</p>'
+      + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeWorkerDescriptionAttr(t.description) + '">' + escapeHtml(t.description || '') + '</p>'
       + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + timeStr + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[t.backend] || t.backend) : '') + '</p>'
       + '</div>'
       + cancelBtn
@@ -246,7 +250,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
          onclick="toggleThreadDetail('${threadId}', '${SESSION_ID}')">
       <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 bg-blue-500 animate-pulse"></span>
       <div class="flex-1 min-w-0">
-        <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="${escapeHtml(description)}">${escapeHtml(description)}</p>
+        <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="${escapeWorkerDescriptionAttr(description)}">${escapeHtml(description || '')}</p>
         <p id="thread-status-${threadId}" class="text-xs text-slate-500">running &middot; ${nowStr}${backend ? ' &middot; ' + (BACKEND_OPTIONS[backend] || backend) : ''}</p>
       </div>
       <button id="cancel-btn-${threadId}" onclick="event.stopPropagation(); cancelThread('${threadId}', '${SESSION_ID}')"

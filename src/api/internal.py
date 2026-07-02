@@ -18,6 +18,7 @@ from src.core.improve_command import (
     run_improve_loop,
 )
 from src.core.models import (
+    DelegateInvocationMetadata,
     DelegateRequest,
     ImproveRequest,
     ScheduleTriggerRequest,
@@ -40,6 +41,22 @@ from src.core.triggers import RemoteVerifyError, TriggerManager
 log = structlog.get_logger()
 
 router = APIRouter()
+
+
+def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
+  """Return typed delegate invocation metadata for chat event persistence."""
+  invocation = req.delegate_invocation
+  if invocation is None:
+    invocation = DelegateInvocationMetadata(
+        task_type=req.task_type,
+        repo_path=req.repo_path,
+        base_branch=req.base_branch,
+        task_spec_file=None,
+        reviewer_context_file=None,
+        keep_worktree=req.keep_worktree,
+        backend=req.backend,
+    )
+  return invocation.model_dump(mode="json")
 
 
 async def _authorize_spawn_request(
@@ -123,6 +140,7 @@ async def delegate_task(
       "timestamp": thread.created_at.isoformat(),
       "backend": resolved_backend or "",
       "model": resolved_model or "",
+      "delegate_invocation": _delegate_invocation_event_payload(req),
   }
   await session_mgr.persist_and_broadcast(req.session_id, task_event)
 

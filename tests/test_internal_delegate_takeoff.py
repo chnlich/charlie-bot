@@ -163,6 +163,21 @@ async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monke
       task_type=TaskType.VERIFY,
   )
   session_mgr.persist_and_broadcast.assert_awaited_once()
+  task_event = session_mgr.persist_and_broadcast.await_args.args[1]
+  assert task_event["type"] == ET.TASK_DELEGATED
+  assert task_event["thread_id"] == "thread-id"
+  assert task_event["description"] == req.description
+  assert task_event["backend"] == "codex-o3"
+  assert task_event["model"] == "o3"
+  assert task_event["delegate_invocation"] == {
+      "task_type": "verify",
+      "repo_path": None,
+      "base_branch": None,
+      "task_spec_file": None,
+      "reviewer_context_file": None,
+      "keep_worktree": False,
+      "backend": "codex-o3",
+  }
 
 
 @pytest.mark.asyncio
@@ -250,6 +265,21 @@ async def test_delegate_task_passes_require_takeoff_to_spawn_worker(monkeypatch:
       task_type=TaskType.IMPLEMENT,
   )
   session_mgr.persist_and_broadcast.assert_awaited_once()
+  task_event = session_mgr.persist_and_broadcast.await_args.args[1]
+  assert task_event["type"] == ET.TASK_DELEGATED
+  assert task_event["thread_id"] == "thread-id"
+  assert task_event["description"] == req.description
+  assert task_event["backend"] == "codex-o3"
+  assert task_event["model"] == "o3"
+  assert task_event["delegate_invocation"] == {
+      "task_type": "implement",
+      "repo_path": "/tmp/repo",
+      "base_branch": "main",
+      "task_spec_file": None,
+      "reviewer_context_file": None,
+      "keep_worktree": False,
+      "backend": "codex-o3",
+  }
 
 
 @pytest.mark.asyncio

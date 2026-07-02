@@ -85,7 +85,7 @@ def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() ->
       "stream": True,
   }
 
-  converted = anthropic_to_openai_chat_request(payload)
+  converted = anthropic_to_openai_chat_request(payload, upstream_model="deepseek-ai/DeepSeek-V4-Pro")
 
   assert converted["model"] == "deepseek-ai/DeepSeek-V4-Pro"
   assert converted["stream"] is True
@@ -162,7 +162,8 @@ def test_anthropic_request_rejects_unsupported_blocks() -> None:
                     "source": {}
                 }],
             }],
-        })
+        },
+        upstream_model="deepseek")
 
   with pytest.raises(ValueError, match="thinking"):
     anthropic_to_openai_chat_request(
@@ -175,7 +176,8 @@ def test_anthropic_request_rejects_unsupported_blocks() -> None:
             "thinking": {
                 "type": "enabled",
             },
-        })
+        },
+        upstream_model="deepseek")
 
 
 def test_openai_non_stream_response_translates_to_anthropic_message() -> None:

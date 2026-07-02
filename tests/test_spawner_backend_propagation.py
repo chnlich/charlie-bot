@@ -59,7 +59,7 @@ def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
 
 @pytest.mark.parametrize(
     "backend_type",
-    ["cc-claude", "cc-kimi", "cc-deepseek-sglang", "codex", "charlie-code", "gemini", "opencode"],
+    ["cc-claude", "cc-kimi", "cc-openai-compatible", "codex", "charlie-code", "gemini", "opencode"],
 )
 def test_resolve_backend_option_rejects_missing_model_for_model_required_backends(backend_type: str) -> None:
   cfg = CharlieBotConfig(

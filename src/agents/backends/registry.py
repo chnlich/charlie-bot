@@ -7,9 +7,9 @@ from src.agents.backends.antigravity_cli import AntigravityCliBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.codex import CodexBackend
-from src.agents.backends.deepseek_sglang import DeepSeekSGLangBackend
 from src.agents.backends.gemini_cli import GeminiCliBackend
 from src.agents.backends.kimi import KimiBackend
+from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeBackend
 from src.agents.backends.opencode import OpenCodeBackend
 from src.agents.backends.tui import TuiBackend
 from src.core.config import CharlieBotConfig
@@ -49,14 +49,12 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
     if not cfg.moonshot_api_key:
       raise ValueError("moonshot_api_key not set in config")
     return KimiBackend(api_key=cfg.moonshot_api_key, model=model, **kwargs)
-  elif option.type == "cc-deepseek-sglang":
+  elif option.type == "cc-openai-compatible":
     model = _require_model(option)
-    if not cfg.deepseek_sglang_base_url:
-      raise ValueError("deepseek_sglang_base_url not set in config")
     if not cfg.charliebot_access_key:
       raise ValueError("charliebot_access_key not set in config")
-    proxy_base_url = cfg.deepseek_sglang_anthropic_proxy_base_url
-    return DeepSeekSGLangBackend(
+    proxy_base_url = f"{cfg.server_base_url}/api/anthropic-proxy/openai-compatible/{option.id}"
+    return OpenAICompatibleClaudeBackend(
         proxy_base_url=proxy_base_url,
         auth_token=cfg.charliebot_access_key,
         model=model,

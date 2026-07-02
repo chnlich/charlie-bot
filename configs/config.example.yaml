@@ -50,7 +50,8 @@ backlog_repos: []
 voice_custom_words: []
 
 # --- Optional credentials (add per host when used) ---
-# Other backend / notification secrets: moonshot_api_key, deepseek_sglang_api_key,
-# deepseek_sglang_base_url, telegram_bot_token, telegram_chat_id.
+# Other backend / notification secrets: moonshot_api_key, telegram_bot_token,
+# telegram_chat_id. cc-openai-compatible backends configure the upstream api_base,
+# model, and api_key_env per backend_option above (no top-level fields).
 # Skill integration tokens (github / linear / slack / feishu / google) are omitted
 # for now, pending a cleanup of which keys are still used.

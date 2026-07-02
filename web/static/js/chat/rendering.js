@@ -251,6 +251,55 @@ function renderMessagesToDetachedContainer(messages, sessionId) {
   return tempDiv;
 }
 
+function displayMetadataValue(value, emptyText) {
+  if (value === null || value === undefined || value === '') return emptyText;
+  return String(value);
+}
+
+function renderMetadataRow(label, value) {
+  return '<div class="grid grid-cols-[9rem_minmax(0,1fr)] gap-3">'
+    + '<span class="text-slate-500">' + escapeHtml(label) + '</span>'
+    + '<span class="min-w-0 break-words">' + escapeHtml(value) + '</span>'
+    + '</div>';
+}
+
+function delegateBackendModel(invocation, msg) {
+  var backend = displayMetadataValue((invocation && invocation.backend) || msg.backend || msg.resolved_backend, '(none)');
+  var model = displayMetadataValue(msg.model || msg.resolved_model, '');
+  return model ? backend + ' / ' + model : backend;
+}
+
+function renderDelegateMetadata(msg) {
+  var invocation = msg.delegate_invocation;
+  var rows = [];
+  if (invocation) {
+    var taskType = displayMetadataValue(invocation.task_type || msg.task_type, '(unknown)');
+    var repoEmpty = taskType === 'verify' ? '(none)' : '(unknown)';
+    var baseEmpty = taskType === 'verify' ? '(none)' : '(unknown)';
+    rows = [
+      ['task type', taskType],
+      ['thread id', displayMetadataValue(msg.thread_id, '(unknown)')],
+      ['repo', displayMetadataValue(invocation.repo_path, repoEmpty)],
+      ['base', displayMetadataValue(invocation.base_branch, baseEmpty)],
+      ['task spec file', displayMetadataValue(invocation.task_spec_file, '(unknown)')],
+      ['reviewer context file', displayMetadataValue(invocation.reviewer_context_file, '(none)')],
+      ['backend/model', delegateBackendModel(invocation, msg)],
+      ['keep worktree', invocation.keep_worktree ? 'true' : 'false'],
+      ['full details', 'Workers panel'],
+    ];
+  } else {
+    rows = [
+      ['thread id', displayMetadataValue(msg.thread_id, '(unknown)')],
+    ];
+    var backendModel = delegateBackendModel(null, msg);
+    if (backendModel !== '(none)') rows.push(['backend/model', backendModel]);
+    rows.push(['full details', 'Workers panel']);
+  }
+  return '<div class="font-mono text-xs leading-5 bg-slate-950/35 border border-amber-700/20 rounded-lg px-3 py-2 space-y-1">'
+    + rows.map(row => renderMetadataRow(row[0], row[1])).join('')
+    + '</div>';
+}
+
 function renderMessage(msg, sessionId) {
   function timeDiv(colorClass) {
     if (!msg.timestamp) return "";
@@ -287,13 +336,10 @@ function renderMessage(msg, sessionId) {
       + "<div class=\"flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2\">"
       + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"/></svg>"
       + "Delegated</div>"
-      + "<div class=\"whitespace-pre-wrap\">" + escapeHtml(msg.content) + "</div>" + timeDiv() + "</div></div>";
+      + renderDelegateMetadata(msg) + timeDiv() + "</div></div>";
   }
   if (msg.role === "worker_summary") {
-    var escaped = escapeHtml(msg.full_content || "").replace(/"/g, "&quot;");
-    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300 cursor-pointer\""
-      + " data-full=\"" + escaped + "\""
-      + " onclick=\"showTextModal(\x27Worker Result\x27, this.dataset.full)\">"
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\""
       + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + "</div></div>";
   }
   if (msg.role === "plan") {

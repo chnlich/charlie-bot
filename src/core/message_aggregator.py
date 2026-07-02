@@ -78,6 +78,21 @@ def _system_msg(ev: dict) -> dict | None:
   }
 
 
+def _task_delegated_msg(ev: dict) -> dict:
+  backend = ev.get("backend") or ev.get("resolved_backend") or ""
+  model = ev.get("model") or ev.get("resolved_model") or ""
+  return {
+      "role": "task_delegated",
+      "content": "Task delegated",
+      "thread_id": ev.get("thread_id", ""),
+      "description": ev.get("description", ""),
+      "delegate_invocation": ev.get("delegate_invocation"),
+      "backend": backend,
+      "model": model,
+      "timestamp": ev.get("timestamp") or ev.get("created_at"),
+  }
+
+
 # Dispatch table for event types that usually follow the flush-then-append pattern.
 # Each handler returns a message dict (role + content + any extras) or None to
 # skip the event.  The aggregator adds event_index and a default timestamp.
@@ -98,11 +113,7 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             'content': f"Error: {ev.get('content') or ev.get('message') or 'Unknown error'}",
         },
     ET.TASK_DELEGATED:
-        lambda ev: {
-            'role': 'task_delegated',
-            'content': f"Task delegated: {ev.get('description', '')}",
-            'timestamp': ev.get('timestamp') or ev.get('created_at'),
-        },
+        _task_delegated_msg,
     ET.WORKER_SUMMARY:
         lambda ev: {
             'role': 'worker_summary',

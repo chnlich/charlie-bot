@@ -187,6 +187,17 @@ def _short_desc(description: str, limit: int = 120) -> str:
   return first_line
 
 
+def _worker_summary_timestamp() -> str:
+  return datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d %H:%M %Z')
+
+
+def _worker_locator_summary(thread_id: str, status: str, timestamp: str) -> str:
+  short_id = thread_id[:8]
+  return (
+      f"Worker `{short_id}` | thread `{thread_id}` | status: {status} | time: {timestamp} | "
+      f"find in Workers panel by thread ID")
+
+
 def _build_worker_event(
     thread_id: str,
     content: str,
@@ -522,10 +533,10 @@ async def _stream_worker_events(
   await thread_mgr.save_metadata(thread)
   log.info("worker_running", thread_id=thread.id, session=session_id)
 
-  now = datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%m/%d %H:%M')
+  now = _worker_summary_timestamp()
   started_event = _build_worker_event(
       thread.id,
-      f'Worker `{thread.id[:8]}` started ({now}): {_short_desc(description)}',
+      _worker_locator_summary(thread.id, 'running', now),
       'running',
       backend=thread.backend,
       model=thread.model,
@@ -825,8 +836,8 @@ async def _broadcast_completion(
   cancelled = current_thread and current_thread.status == ThreadStatus.CANCELLED
 
   status = 'cancelled' if cancelled else ('completed' if exit_code == 0 else 'failed')
-  now = datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%m/%d %H:%M')
-  chat_summary = f'Worker `{thread.id[:8]}` finished ({now}): {_short_desc(description)}'
+  now = _worker_summary_timestamp()
+  chat_summary = _worker_locator_summary(thread.id, status, now)
   full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
 
   suffix = ""
@@ -838,7 +849,6 @@ async def _broadcast_completion(
     suffix = f"\n\n*Worker error: {error}*"
   elif exit_code != 0:
     suffix = f"\n\n*Worker exited with code {exit_code}.*"
-  chat_summary += suffix
   full_summary += suffix
 
   worker_event = _build_worker_event(
@@ -887,12 +897,13 @@ async def _notify_completion(
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
-      fallback = f'Worker `{thread.id[:8]}` finished: {_short_desc(description)}\n\n*(summary unavailable: {e})*'
+      status = "completed" if exit_code == 0 else "failed"
+      fallback = _worker_locator_summary(thread.id, status, _worker_summary_timestamp())
       fallback_event = _build_worker_event(
           thread.id,
           fallback,
-          "completed" if exit_code == 0 else "failed",
-          full_content=fallback,
+          status,
+          full_content=f"{fallback}\n\n*(summary unavailable: {e})*",
           backend=thread.backend,
           model=thread.model,
       )

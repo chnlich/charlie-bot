@@ -76,6 +76,15 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
   assert payload["backend"] == "codex-o3"
   assert payload["description"] == task_spec
   assert payload["task_type"] == "implement"
+  assert payload["delegate_invocation"] == {
+      "task_type": "implement",
+      "repo_path": "/tmp/repo",
+      "base_branch": "main",
+      "task_spec_file": str(task_spec_file),
+      "reviewer_context_file": None,
+      "keep_worktree": False,
+      "backend": "codex-o3",
+  }
   assert "context" not in payload
 
 
@@ -111,6 +120,10 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["task_type"] == task_type
+  assert payload["delegate_invocation"]["task_type"] == task_type
+  assert payload["delegate_invocation"]["repo_path"] == "/tmp/repo"
+  assert payload["delegate_invocation"]["base_branch"] == "main"
+  assert payload["delegate_invocation"]["task_spec_file"] == str(task_spec_file)
 
 
 def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,6 +155,15 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
   assert payload["task_type"] == "verify"
   assert "repo_path" not in payload
   assert "base_branch" not in payload
+  assert payload["delegate_invocation"] == {
+      "task_type": "verify",
+      "repo_path": None,
+      "base_branch": None,
+      "task_spec_file": str(task_spec_file),
+      "reviewer_context_file": None,
+      "keep_worktree": False,
+      "backend": None,
+  }
 
 
 @pytest.mark.parametrize(("flag", "value"), [("--repo", "/tmp/repo"), ("--base-branch", "main")])
@@ -261,6 +283,8 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["context"] == "review these state-machine edges"
+  assert payload["delegate_invocation"]["task_spec_file"] == str(task_spec_file)
+  assert payload["delegate_invocation"]["reviewer_context_file"] == str(reviewer_context_file)
 
 
 def test_main_requires_task_spec_file(capsys: pytest.CaptureFixture[str]) -> None:

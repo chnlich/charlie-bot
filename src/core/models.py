@@ -313,6 +313,19 @@ class DeleteGroupRequest(BaseModel):
   group: str
 
 
+class DelegateInvocationMetadata(BaseModel):
+  """CLI invocation metadata to render delegate handoffs without inlining task specs."""
+  model_config = ConfigDict(extra="forbid")
+
+  task_type: TaskType
+  repo_path: Optional[str] = None
+  base_branch: Optional[str] = None
+  task_spec_file: Optional[str] = None
+  reviewer_context_file: Optional[str] = None
+  keep_worktree: bool
+  backend: Optional[str] = None
+
+
 class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str
@@ -323,6 +336,7 @@ class DelegateRequest(BaseModel):
   context: Optional[str] = None
   task_type: TaskType = TaskType.IMPLEMENT
   keep_worktree: bool = False
+  delegate_invocation: Optional[DelegateInvocationMetadata] = None
 
 
 class ImproveRequest(BaseModel):

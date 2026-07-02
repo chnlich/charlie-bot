@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
 
 
@@ -107,6 +108,61 @@ def test_master_done_with_still_thinking_skips_separator() -> None:
           },
       }
   ]
+
+
+def test_task_delegated_message_exposes_metadata_without_full_description_body() -> None:
+  agg = MessageAggregator()
+  long_description = "## Goal\nDo a long task spec that belongs in Workers."
+
+  deltas = list(
+      agg.feed(
+          {
+              "type": ET.TASK_DELEGATED,
+              "thread_id": "thread-id",
+              "description": long_description,
+              "timestamp": "2026-07-01T12:00:00Z",
+              "backend": "codex-o3",
+              "model": "o3",
+              "delegate_invocation":
+                  {
+                      "task_type": "implement",
+                      "repo_path": "/tmp/repo",
+                      "base_branch": "main",
+                      "task_spec_file": "/tmp/task.md",
+                      "reviewer_context_file": "/tmp/reviewer.md",
+                      "keep_worktree": False,
+                      "backend": "codex-o3",
+                  },
+          }))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "task_delegated",
+                  "content": "Task delegated",
+                  "thread_id": "thread-id",
+                  "description": long_description,
+                  "delegate_invocation":
+                      {
+                          "task_type": "implement",
+                          "repo_path": "/tmp/repo",
+                          "base_branch": "main",
+                          "task_spec_file": "/tmp/task.md",
+                          "reviewer_context_file": "/tmp/reviewer.md",
+                          "keep_worktree": False,
+                          "backend": "codex-o3",
+                      },
+                  "backend": "codex-o3",
+                  "model": "o3",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "2026-07-01T12:00:00Z",
+              },
+      }
+  ]
+  assert long_description not in deltas[0]["message"]["content"]
 
 
 def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:

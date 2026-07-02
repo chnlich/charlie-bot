@@ -86,6 +86,15 @@ def main() -> None:
       "description": task_spec,
       "keep_worktree": bool(args.keep_worktree),
       "task_type": args.task_type,
+      "delegate_invocation": {
+          "task_type": args.task_type,
+          "repo_path": args.repo,
+          "base_branch": args.base_branch,
+          "task_spec_file": args.task_spec_file,
+          "reviewer_context_file": args.reviewer_context_file,
+          "keep_worktree": bool(args.keep_worktree),
+          "backend": args.backend,
+      },
   }
   if args.base_branch is not None:
     payload["base_branch"] = args.base_branch

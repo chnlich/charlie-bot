@@ -13,20 +13,18 @@ from src.core.codex_pricing import calculate_codex_usage_cost_usd
 
 log = structlog.get_logger()
 
-# model_reasoning_effort="xhigh" is the only working value.
-# Other values are silently ignored by the Codex CLI. Do not make configurable.
-_MODEL_REASONING_EFFORT_CONFIG = 'model_reasoning_effort="xhigh"'
-
 
 class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, *, model: str, codex_home: str | None = None, **kwargs):
+  def __init__(self, *, model: str, codex_home: str | None = None,
+               model_reasoning_effort: str | None = None, **kwargs):
     if not model:
       raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
     super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
     self._codex_home = str(Path(codex_home).expanduser()) if codex_home else None
+    self._model_reasoning_effort = model_reasoning_effort or "xhigh"
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
     # Track accumulated reasoning text per item_id for delta computation.
@@ -56,7 +54,7 @@ class CodexBackend(AgentBackend):
           "--model",
           self._model,
           "--config",
-          _MODEL_REASONING_EFFORT_CONFIG,
+          f'model_reasoning_effort="{self._model_reasoning_effort}"',
           self._resume_session_id,
       ]
     else:
@@ -69,7 +67,7 @@ class CodexBackend(AgentBackend):
           "--model",
           self._model,
           "--config",
-          _MODEL_REASONING_EFFORT_CONFIG,
+          f'model_reasoning_effort="{self._model_reasoning_effort}"',
       ]
     cmd.extend(self._extra_flags)
     cmd.extend(["--", effective_prompt])

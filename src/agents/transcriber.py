@@ -24,15 +24,16 @@ MAX_RECORDING_SECONDS = 5 * 60
 MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
 LIVE_DECODE_INTERVAL_SAMPLES = SAMPLE_RATE
 LIVE_DECODE_MIN_SAMPLES = SAMPLE_RATE // 2
+SEGMENT_DECODE_PAD_SAMPLES = 6_400
 VAD_BUFFER_SECONDS = MAX_RECORDING_SECONDS + 10
 
-SENSEVOICE_DIR_NAME = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
+SENSEVOICE_DIR_NAME = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
 SENSEVOICE_ARCHIVE_NAME = f"{SENSEVOICE_DIR_NAME}.tar.bz2"
 SENSEVOICE_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-    "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2"
+    "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2"
 )
-SENSEVOICE_SHA256 = "7305f7905bfcf77fa0b39388a313f3da35c68d971661a65475b56fb2162c8e63"
+SENSEVOICE_SHA256 = "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e"
 
 SILERO_VAD_NAME = "silero_vad.onnx"
 SILERO_VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
@@ -279,6 +280,7 @@ class SimulatedStreamingTranscriptionSession:
     self._last_live_text = ""
     self._last_live_decode_at = -LIVE_DECODE_INTERVAL_SAMPLES
     self._saw_speech = False
+    self._decoded_region_end = 0
     self._finished = False
 
   @property
@@ -328,9 +330,12 @@ class SimulatedStreamingTranscriptionSession:
     changed = False
     while not self._vad.empty():
       segment = self._vad.front
-      samples = np.asarray(segment.samples, dtype=np.float32)
+      segment_start = int(segment.start)
+      segment_end = segment_start + len(segment.samples)
+      samples, decoded_right = self._raw_samples_for_decode(segment_start, segment_end)
       self._saw_speech = True
       text = _decode_samples(self._bundle, samples)
+      self._decoded_region_end = decoded_right
       if text:
         self._frozen_segments.append(text)
       self._vad.pop()
@@ -342,13 +347,22 @@ class SimulatedStreamingTranscriptionSession:
       return ""
     self._saw_speech = True
     segment = self._vad.current_segment
-    samples = np.asarray(segment.samples, dtype=np.float32)
-    if samples.size < LIVE_DECODE_MIN_SAMPLES:
+    segment_start = int(segment.start)
+    if self._fed_samples - segment_start < LIVE_DECODE_MIN_SAMPLES:
       return None
     if self._fed_samples - self._last_live_decode_at < LIVE_DECODE_INTERVAL_SAMPLES:
       return None
     self._last_live_decode_at = self._fed_samples
+    samples, _ = self._raw_samples_for_decode(segment_start, self._fed_samples)
     return _decode_samples(self._bundle, samples)
+
+  def _raw_samples_for_decode(self, start_sample: int, end_sample: int) -> tuple[np.ndarray, int]:
+    left = max(self._decoded_region_end, start_sample - SEGMENT_DECODE_PAD_SAMPLES)
+    right = min(self._fed_samples, end_sample + SEGMENT_DECODE_PAD_SAMPLES)
+    if right <= left:
+      return np.empty(0, dtype=np.float32), left
+    raw_samples = np.frombuffer(self.audio_bytes, dtype="<i2", count=right - left, offset=left * 2)
+    return raw_samples.astype(np.float32) / 32768.0, right
 
   def _compose_partial(self, live_text: str) -> str:
     return _join_segments(*self._frozen_segments, live_text)

@@ -98,12 +98,17 @@ def start_model_provisioning(cfg: CharlieBotConfig):
     _provisioning_error = None
 
   async def _run() -> None:
-    global _ready_paths, _provisioning_error
+    global _ready_paths, _provisioning_error, _provisioning_started
     try:
       paths = await asyncio.to_thread(ensure_models_cached, cfg)
+    except asyncio.CancelledError:
+      with _state_lock:
+        _provisioning_started = False
+      raise
     except Exception as exc:
       with _state_lock:
         _provisioning_error = str(exc)
+        _provisioning_started = False
       log.exception("speech_model_provisioning_failed")
       return
     with _state_lock:
@@ -271,6 +276,7 @@ class SimulatedStreamingTranscriptionSession:
     self._frozen_segments: list[str] = []
     self._fed_samples = 0
     self._last_partial = ""
+    self._last_live_text = ""
     self._last_live_decode_at = -LIVE_DECODE_INTERVAL_SAMPLES
     self._saw_speech = False
     self._finished = False
@@ -296,8 +302,12 @@ class SimulatedStreamingTranscriptionSession:
       self._fed_samples += samples.size
 
     closed_changed = self._drain_closed_segments()
+    if closed_changed:
+      self._last_live_text = ""
     live_text = self._decode_live_segment_if_due()
-    partial = self._compose_partial(live_text)
+    if live_text is not None:
+      self._last_live_text = live_text
+    partial = self._compose_partial(self._last_live_text)
     cap_reached = self._fed_samples >= MAX_RECORDING_SAMPLES
     if closed_changed or (partial and partial != self._last_partial):
       self._last_partial = partial
@@ -327,16 +337,16 @@ class SimulatedStreamingTranscriptionSession:
       changed = True
     return changed
 
-  def _decode_live_segment_if_due(self) -> str:
+  def _decode_live_segment_if_due(self) -> str | None:
     if not self._vad.is_speech_detected():
       return ""
     self._saw_speech = True
     segment = self._vad.current_segment
     samples = np.asarray(segment.samples, dtype=np.float32)
     if samples.size < LIVE_DECODE_MIN_SAMPLES:
-      return ""
+      return None
     if self._fed_samples - self._last_live_decode_at < LIVE_DECODE_INTERVAL_SAMPLES:
-      return ""
+      return None
     self._last_live_decode_at = self._fed_samples
     return _decode_samples(self._bundle, samples)
 

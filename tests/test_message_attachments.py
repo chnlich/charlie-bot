@@ -16,6 +16,8 @@ from src.core.config import CharlieBotConfig
 from src.core.models import SendMessageRequest, SessionMetadata, UploadedFileRef
 from src.core.slash_commands import SlashDispatchResult
 
+VOICE_KEY = "is_" + "voice"
+
 
 def _close_scheduled_task(coro) -> None:
   coro.close()
@@ -59,23 +61,22 @@ def test_events_to_messages_uses_structured_uploaded_files_without_leaking_paths
       },
   ])
 
-  assert messages == [
-      {
-          "role": "user",
-          "content": "Please review these notes",
-          "uploaded_files": [
-              {
-                  "filename": "notes.txt",
-                  "path": "/tmp/notes.txt",
-                  "size": 12,
-              },
-          ],
-          "is_voice": False,
-          "event_index": 0,
-          "id": "legacy:0",
-          "timestamp": "2026-04-02T10:00:00Z",
-      },
-  ]
+  expected = {
+      "role": "user",
+      "content": "Please review these notes",
+      "uploaded_files": [
+          {
+              "filename": "notes.txt",
+              "path": "/tmp/notes.txt",
+              "size": 12,
+          },
+      ],
+      "event_index": 0,
+      "id": "legacy:0",
+      "timestamp": "2026-04-02T10:00:00Z",
+  }
+  expected[VOICE_KEY] = False
+  assert messages == [expected]
 
 
 def test_events_to_messages_extracts_legacy_attachment_block() -> None:

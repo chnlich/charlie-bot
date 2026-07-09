@@ -63,13 +63,12 @@ def build_agent_input_content(content: str, uploaded_files: list[dict] | None = 
   return content + _ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
 
 
-def build_user_event(content: str, uploaded_files: list[dict] | None = None, *, is_voice: bool = False) -> dict:
+def build_user_event(content: str, uploaded_files: list[dict] | None = None) -> dict:
   """Build the persisted user event payload for chat history and websocket updates."""
   event = {
       "type": ET.USER,
       "content": content,
       "timestamp": datetime.now(timezone.utc).isoformat(),
-      "is_voice": is_voice,
   }
   if uploaded_files:
     event["uploaded_files"] = uploaded_files

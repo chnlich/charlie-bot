@@ -72,7 +72,6 @@ async def _run_cc_with_stderr_backend(
       session_meta=session_meta,
       user_content="stop",
       callbacks=callbacks,
-      is_voice=False,
       auto_trigger=False,
       backend_option=cfg.backend_options[0],
       extra_claude_flags=None,

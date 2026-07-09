@@ -106,7 +106,6 @@ class _WorkItem:
   session_meta: SessionMetadata
   user_content: str
   callbacks: SessionCallbacks
-  is_voice: bool
   auto_trigger: bool
   backend_option: Optional[BackendOption]
   extra_claude_flags: Optional[list[str]]
@@ -142,16 +141,6 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
       parts.append(mf.read_text(encoding="utf-8"))
 
   return "\n\n".join(parts)
-
-
-def _build_prompt(user_content: str, is_voice: bool) -> str:
-  """Prepend voice-transcription disclaimer when the message comes from voice input."""
-  if is_voice:
-    return (
-        "[The following message is from voice transcription and might not be accurate. "
-        "Please ask the user first for any words that are unclear or might be wrong.]\n"
-        f"{user_content}")
-  return user_content
 
 
 def _route_resume_session(backend_type: str, cc_session_id: Optional[str]) -> tuple[list[str], Optional[str]]:
@@ -238,7 +227,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 
   env = _build_master_env(cfg, session_meta.id)
 
-  prompt = _build_prompt(item.user_content, item.is_voice)
+  prompt = item.user_content
 
   log.info(
       "master_cc_starting",
@@ -423,7 +412,6 @@ async def run_message(
     user_content: str,
     callbacks: SessionCallbacks,
     skip_user_event: bool = False,
-    is_voice: bool = False,
     auto_trigger: bool = False,
     backend_option: Optional[BackendOption] = None,
     extra_claude_flags: Optional[list[str]] = None,
@@ -470,7 +458,6 @@ async def run_message(
         "type": ET.USER,
         "content": user_content if display_content is None else display_content,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "is_voice": is_voice
     }
     if uploaded_files:
       user_event["uploaded_files"] = uploaded_files
@@ -505,7 +492,6 @@ async def run_message(
       session_meta=session_meta,
       user_content=user_content,
       callbacks=callbacks,
-      is_voice=is_voice,
       auto_trigger=auto_trigger,
       backend_option=backend_option,
       extra_claude_flags=extra_claude_flags,

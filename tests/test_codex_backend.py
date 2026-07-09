@@ -53,6 +53,26 @@ def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch)
   assert "sess-123" in cmd
 
 
+def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model")
+
+  cmd = backend._build_command("do the thing")
+
+  assert "model_reasoning_effort=\"xhigh\"" in cmd
+  idx = cmd.index("model_reasoning_effort=\"xhigh\"")
+  assert cmd[idx - 1] == "--config"
+
+
+def test_build_command_uses_custom_reasoning_effort(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", model_reasoning_effort="ultra")
+
+  cmd = backend._build_command("do the thing")
+
+  assert "model_reasoning_effort=\"ultra\"" in cmd
+  idx = cmd.index("model_reasoning_effort=\"ultra\"")
+  assert cmd[idx - 1] == "--config"
+
+
 def test_turn_completed_includes_codex_cost(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, model="gpt-5.5")
 

@@ -20,6 +20,9 @@
   h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#04101f;font-size:12px;font-weight:700;align-items:center;justify-content:center}
   h2 .nb{background:var(--vio)}
   h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#04101f;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  h3 .sn.read{background:var(--grn)}
+  h3 .layer{font-size:11px;font-weight:600;color:var(--mut);margin-left:7px}
   p{margin:7px 0}
   .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
   .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
@@ -65,71 +68,84 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Plan Title<span class="status">PLAN</span></h1>
-    <p class="sub">One-sentence summary of the plan, decision, or delegation shape.</p>
+    <h1>List Scheduled Triggers<span class="status">PLAN</span></h1>
+    <p class="sub">Add a read-only CLI view of the triggers already scheduled for a session.</p>
     <div class="meta">
-      <span class="mtag">repo · path/to/repo</span>
-      <span class="mtag">scope · concise label</span>
+      <span class="mtag">repo · charlie-bot</span>
+      <span class="mtag">scope · trigger CLI</span>
       <span class="mtag">deps · none</span>
       <span class="mtag">verification · in flight</span>
     </div>
   </header>
 
   <main>
-    <!-- PLAN CONTENT: fill <main> using the block kit below. The plan is a decision surface, not a step list:
-         it carries the abstraction-level contract plus the fork points the user must resolve. Implementation
-         steps live in the delegation task spec, never in this artifact. Keep content in semantic blocks so
-         inline comments can anchor to useful units. -->
     <!--
-      BLOCK KIT — six sections, in this order:
-      1. Problem  — why this work matters, written top-down from high-level context to the concrete cause or
-                    location. Depth follows complexity: a sentence for trivial changes, several layers for
-                    complex ones.
-      2. Solution — the high-level solution: mechanism, data flow, state ownership — how the problem is solved.
-                    It describes design, not steps. Depth follows complexity: a trivial task shrinks it to a
-                    sentence or omits it.
-      3. Contract — the interface diff: commands, types, data model, state machine changes; the static
-                    projection of the Solution. Persisted schema (on-disk formats, DB tables, wire formats)
-                    belongs here by default; purely internal structures default to the Details layer.
-      4. Forks    — numbered fork points as div.fork blocks: question (p.q with span.fn number) +
-                    recommendation (p.rec) + one-line tradeoff (p.trade). A decision is a fork when it changes
-                    an abstraction (including the Solution layer), has multiple reasonable options the user may
-                    disagree with, or is irreversible. When the user resolves a fork, record it with a
-                    p.resolved line inside the block.
-      5. Details  — details.details-layer, default collapsed: one li per autonomous decision — the decision
-                    plus a one-line rationale (span.m). Never record rejected alternatives.
-      6. Foot     — div.foot with the interaction instructions: reply by fork number; unmentioned forks accept
-                    the recommendation; any detail the user asks to control graduates into the Contract;
-                    "take off" releases the plan for implementation.
-      Source anchors: factual claims in Problem, Solution, and Contract that describe current reality carry a
-                    checkable source. Use path:line for code facts, a URL for external material, and a
-                    reproducible one-line command for runtime facts. Keep local paths and commands as plain
-                    text; only URLs should be links. Source anchors render as span.src (&lt;span class=&quot;src&quot;&gt;...&lt;/span&gt;).
+      BLOCK KIT — canonical plan grammar and the only definition of its section semantics. A plan is a decision
+      surface, not a step list. It exposes the generalized contract and the choices the user must judge;
+      implementation steps belong in the worker task spec. Keep content in semantic blocks so inline comments
+      can anchor to useful units.
+
+      Header: show the title, a one-line summary, and meta chips for repo, scope, branch or deps, and verification.
+
+      Use these six sections, in this order:
+      1. Problem / Goal — one or two sentences stating what the plan resolves. Include no background or method.
+                    When a non-goal matters, add one sentence here; never create a separate Non-goals section.
+      2. Context — the current situation: existing systems, constraints, and facts that cause the problem. Every
+                    current-reality claim carries a checkable source anchor.
+      3. High Level Solution — the overall mechanism, component relationships, data flow, and state ownership.
+                    Describe the design, not implementation detail.
+      4. Detailed Design — two read layers:
+         4.1 Schema — the precision-read layer and generalized contract: commands, interfaces, types, persisted
+                    formats, state transitions, and error and boundary behavior. Omit categories irrelevant to
+                    the plan.
+         4.2 Design Details — the optional-read layer: implementation mechanisms, algorithms, concurrency,
+                    failure paths, compatibility, and verification approach, organized by subsystem or data flow.
+      5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
+                    the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
+                    (p.trade). A resolved item keeps only the question and resolution (p.resolved); never record
+                    rejected alternatives. When nothing needs judging, keep one line stating there are no open
+                    trade-offs.
+      6. Other Details — a collapsed details.details-layer. Use one li per autonomous implementation decision,
+                    with a one-line rationale in span.m. Never hide content here that belongs in Schema or
+                    Trade-offs.
+
+      Shrink rule: depth scales with complexity. Any section may shrink to a sentence. 4.2 Design Details and
+                    6. Other Details may be empty and omitted entirely. Section order and numbering never change.
+      Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
+                    resolution; unmentioned items accept the recommendation. Any Other Details entry the user
+                    asks to control is promoted and then joins the approval object. "take off" releases the plan.
+      Source anchors: every current-reality claim carries a checkable source. Use path:line for code facts, a URL
+                    for external material, and a reproducible one-line command for runtime facts. Keep local paths
+                    and commands as plain text; only URLs are links. Render anchors as span.src
+                    (&lt;span class=&quot;src&quot;&gt;...&lt;/span&gt;). Current-reality claims should be concentrated in Context.
       Verification: div.meta includes one verification-status chip as span.mtag with the plan status:
                     "verification · in flight", "verification · clean", or "verification · amended". The
                     master updates the artifact when verifier results flow back.
       Revision marks: when an already-presented plan is updated, every changed section gets a
                     span.revbadge in its h2, such as "changed · r3", and a div.revnote immediately after
-                    the h2 with the format "rN · trigger — what changed in this section". The trigger
-                    briefly quotes the comment or message that caused the change. Row-level changes reuse
-                    the existing .new and .edit marks. Only the latest revision's marks are kept: a new
-                    revision clears all previous badges, revnotes, and row marks. A first presentation
-                    (r1) carries no revision marks.
+                    the h2 stating "rN · trigger — what changed". The trigger briefly quotes the comment or
+                    message that caused the change. Row-level changes reuse the existing .new and .edit marks.
+                    Keep only the latest revision's marks: a new revision clears all previous badges, revnotes,
+                    and row marks. A first presentation carries no revision marks.
       Shared blocks: p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks;
       div.callout highlights a note (.warn for amber); div.flow with span.b and span.ar sketches a data flow;
       div.meta > span.mtag gives small metadata chips near the top of a plan.
     -->
 
     <section class="plan-section">
-      <h2><span class="n">1</span> Problem</h2>
-      <p>The CLI has a write path for delayed triggers through <code>charliebot schedule-trigger</code>, but the unified CLI command map has no trigger-listing subcommand. <span class="src">Sources: src/cli/main.py:19, src/cli/main.py:22</span></p>
-      <p>TriggerManager persists scheduled triggers as JSON files under the session's <code>triggers</code> directory. <span class="src">Sources: src/core/triggers.py:337, src/core/triggers.py:677, src/core/triggers.py:683</span></p>
-      <p>That makes it easy to double-schedule a watch, or to forget that a wake-up is already pending for a long-running job.</p>
+      <h2><span class="n">1</span> Problem / Goal</h2>
+      <p>The goal is to make scheduled triggers inspectable before an operator adds another watch. Trigger scheduling and persistence are out of scope.</p>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n nb">2</span> Solution</h2>
-      <p>Add a read-only <code>charliebot triggers list</code> subcommand that loads the session's trigger JSON files and prints one row per trigger. No new state: the trigger files stay the single source of truth; the command only formats them. <span class="src">Current storage source: src/core/triggers.py:683</span></p>
+      <h2><span class="n">2</span> Context</h2>
+      <p>The unified CLI exposes <code>charliebot schedule-trigger</code> for creating delayed triggers, but its command map has no trigger-listing subcommand. <span class="src">Sources: src/cli/main.py:19, src/cli/main.py:22</span></p>
+      <p><code>TriggerManager</code> persists each scheduled trigger as a JSON file under the session's <code>triggers</code> directory. <span class="src">Sources: src/core/triggers.py:337, src/core/triggers.py:677, src/core/triggers.py:683</span></p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n nb">3</span> High Level Solution</h2>
+      <p>Add a read-only <code>charliebot triggers list</code> command that resolves the current session, loads its trigger records through the existing manager, and formats them for inspection. Trigger files remain the single source of truth; the command owns no state.</p>
       <div class="flow">
         <span class="b">sessions/{id}/triggers/*.json</span><span class="ar">→</span>
         <span class="b n">triggers list</span><span class="ar">→</span>
@@ -138,9 +154,10 @@
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">3</span> Contract<span class="revbadge">changed · r2</span></h2>
-      <div class="revnote">r2 · "2 all" — Contract now shows all trigger states rather than pending only.</div>
-      <p><code>charliebot triggers list</code> — read-only, session resolved from cwd, exits 0 with a table (or the empty-list message).</p>
+      <h2><span class="n">4</span> Detailed Design</h2>
+
+      <h3><span class="sn read">4.1</span>Schema<span class="layer">precision-read layer</span></h3>
+      <p><code>charliebot triggers list</code> is read-only, resolves the session from the current working directory, and exits 0 after printing a table or <code>no triggers</code>.</p>
       <table>
         <tr><th>Column</th><th>Content</th></tr>
         <tr><td class="f">id</td><td>Trigger id (the JSON file stem).</td></tr>
@@ -149,38 +166,42 @@
         <tr><td class="f">fires-in</td><td>Time remaining until <code>--max-wait</code> elapses.</td></tr>
         <tr><td class="f">message</td><td>The wake-up message.</td></tr>
       </table>
-      <div class="callout"><p><b>Persisted schema:</b> the trigger JSON format on disk is unchanged — this command is a pure reader.</p></div>
+      <div class="callout"><p><b>Boundaries:</b> the persisted trigger JSON format is unchanged. A malformed record surfaces the loader error instead of being skipped.</p></div>
+
+      <h3><span class="sn">4.2</span>Design Details<span class="layer">optional-read layer</span></h3>
+      <ul>
+        <li><b>CLI integration:</b> register <code>triggers list</code> in the unified command map and reuse cwd-based session resolution.</li>
+        <li><b>Read path:</b> ask <code>TriggerManager</code> for records, derive display-only fields, then render aligned plain-text columns.</li>
+        <li><b>Verification:</b> cover populated, empty, and malformed-record cases with command-level tests, then run the existing CLI suite.</li>
+      </ul>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">4</span> Forks</h2>
+      <h2><span class="n">5</span> Trade-offs</h2>
       <div class="fork">
         <p class="q"><span class="fn">1</span> Scope: list triggers for the current session only, or across all sessions?</p>
-        <p class="rec"><b>Recommendation:</b> current session only, matching the cwd-derived session identity of the other CLIs.</p>
+        <p class="rec"><b>Recommendation:</b> current session only, keeping the command's scope explicit.</p>
         <p class="trade">Tradeoff: consistent with the rest of the CLI, but triggers created from other sessions stay invisible.</p>
       </div>
       <div class="fork">
-        <p class="q"><span class="fn">2</span> States: show pending triggers only, or all states including fired and expired?</p>
-        <p class="rec"><b>Recommendation:</b> pending only — the question this command answers is "what will wake me up".</p>
-        <p class="trade">Tradeoff: a tighter default, at the cost of history when debugging a trigger that already fired.</p>
-        <p class="resolved">Resolved: all states (user reply "2 all").</p>
+        <p class="q"><span class="fn">2</span> Which trigger states should the command display?</p>
+        <p class="resolved">Resolved: all persisted states.</p>
       </div>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">5</span> Details</h2>
+      <h2><span class="n">6</span> Other Details</h2>
       <details class="details-layer">
         <summary>Autonomous decisions — expand to inspect</summary>
         <ul>
           <li>Plain aligned text columns, no box-drawing characters. <span class="m">— survives copy-paste into chat and logs.</span></li>
-          <li>Column order: id, state, watch, fires-in, message. <span class="m">— identity first, free-form text last.</span></li>
-          <li>Empty list prints <code>no triggers</code> and exits 0. <span class="m">— empty is a normal state, not an error.</span></li>
+          <li>Keep table rendering in a private CLI helper. <span class="m">— isolates column-width calculation without adding a public interface.</span></li>
         </ul>
       </details>
     </section>
 
     <div class="foot">
-      <p><b>How to respond:</b> reply by fork number to resolve forks (e.g. "1 all sessions, 2 default"). Forks you do not mention accept the recommendation. Ask to control any Details entry and it graduates into the Contract. Say <b>take off</b> to release the plan for implementation.</p>
+      <p><b>How to respond:</b> reply by Trade-off number to override a recommendation or resolution (for example, "1 all sessions"). Unmentioned items accept the recommendation. Ask to control any Other Details entry and it will be promoted into the approval object. Say <b>take off</b> to release the plan for implementation.</p>
     </div>
   </main>
 </div>

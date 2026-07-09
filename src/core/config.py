@@ -114,6 +114,8 @@ class CharlieBotConfig(BaseModel):
           model="claude-opus-4-8",
           effort="medium",
           fast_mode=True),
+      BackendOption(
+          id="claude-fable-5", label="CC \u00b7 Fable 5", type="cc-claude", model="claude-fable-5", effort="max"),
       BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
   ]
 

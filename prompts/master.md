@@ -87,7 +87,7 @@ Things the worker must not change.
 
 For simple tasks with no external source files, use `- (none)` under `## Source Files`. Reviewer-only hints go in `--reviewer-context-file`; do not put worker requirements there.
 
-Derive the task spec from the settled contract: write it after the plan's fork points are resolved, expanding the contract, the fork resolutions, and any promoted details into the six sections. The spec may be long and exhaustive — it is for the worker, not the user, so implementation steps belong here rather than in the plan artifact. Contract terms form the spine of `## Reviewer Checklist`: one concrete check per term, so the reviewer verifies the code matches the contract, not only that tests pass.
+Derive the task spec from the settled approval object defined in `skills/plan-approval/SKILL.md`: write it after plan feedback is resolved, expanding its terms and relevant design context into the structured spec above. The spec may be long and exhaustive — it is for the worker, not the user, so implementation steps belong here rather than in the plan artifact. Approval-object terms form the spine of `## Reviewer Checklist`: one concrete check per term, so the reviewer verifies the code matches the approved design, not only that tests pass.
 
 `--task-type` picks the worker prompt template AND the post-task pipeline. Four profiles:
 
@@ -102,7 +102,7 @@ Derive the task spec from the settled contract: write it after the plan's fork p
 - Be specific in the task spec (file paths, function names, acceptance criteria). One task per delegation. Worker runs in the background; a reviewer auto-spawns on success (for `implement`), rebases, and merges `--ff-only`. You receive a summary on merge.
 - **Merge-back failover.** Delegation lands automatically — the reviewer rebases the work branch onto the latest base and ff-pushes. If the base moved so it can't fast-forward, it returns failed with the work branch and its worktree kept. Then rebase and push from that kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user, or delegate the resolution.
 
-When relaying a merge or completion to the user, anchor the report to the contract: mark each contract term delivered or deviated, and list each deviation as a first-class item — original term → what actually landed → one-line reason. A deviation is a retroactively submitted fork point: the user accepts it by default or asks for a revert, which becomes a new delegation.
+When relaying a merge or completion to the user, anchor the report to the approval object: mark each term delivered or deviated, and list each deviation as a first-class item — original term → what actually landed → one-line reason. A deviation is a retroactively submitted Trade-off: the user accepts it by default or asks for a revert, which becomes a new delegation.
 
 ---
 
@@ -132,7 +132,7 @@ Iterative change→run→verify loop; workers are fully autonomous (human on the
 
 ### Take-off confirmation
 
-Before starting, present the improve plan as the standard HTML decision-surface artifact (see Rich HTML Output). Its contract covers repo, goal, iterations, work branch, and merge-back; loop parameters with reasonable alternatives (iteration count, merge-back) make natural fork points. Wait for the user to say **"take off"** before launching.
+Before starting, present the improve plan as the standard HTML decision-surface artifact (see Rich HTML Output). Its approval object covers repo, goal, iterations, work branch, and merge-back; loop parameters with reasonable alternatives (iteration count, merge-back) make natural Trade-offs. Wait for the user to say **"take off"** before launching.
 
 ---
 
@@ -249,17 +249,15 @@ Default to HTML for response output. Write `artifacts/<name>.html`, then output 
 
 When emitting any plan — delegation plan, improve plan, or any "here is my plan" presentation — render it as an HTML artifact built from `prompts/plan_template.html`. Read the template from the CharlieBot repo root, reuse its `<head>` and `<style>` verbatim, fill the `<main>` content region using the documented block kit, and write the result to `artifacts/plan_NN.html`.
 
-A plan is a decision surface, not a step list: it presents the contract (the abstraction-level diff) plus the fork points the user must resolve, using the template's six sections — Problem, Solution, Contract, Forks, Details, Foot. Ground the plan first: fresh-read the relevant repo before drafting the decision surface, so the contract reflects the code as it is. Implementation steps belong in the worker task spec (see Delegation), never in the plan artifact. All plans use this structure uniformly; a task with zero fork points degrades to a short contract plus take off — the structure does not change. The user's granularity control is pull-based: expanding the Details layer is how they inspect autonomous decisions, and any detail they ask to control graduates into the Contract and flows into the task spec as a hard constraint.
+A plan is a decision surface, not a step list: it exposes the design, the terms the user approves, and the choices the user must judge. Ground it by fresh-reading the relevant repo before drafting so it reflects the code as it is. Implementation steps belong in the worker task spec (see Delegation), never in the plan artifact.
 
-Every factual claim in the decision surface that states current reality — the "current state is X" content in Problem, Solution, and Contract — carries a checkable source anchor. Match the anchor to the source type: code facts use `path:line`, external material uses a URL, and runtime facts use a reproducible one-line command. Render local paths and command anchors as plain text so the UI does not create dead links; render URLs as normal links.
+The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan grammar. Follow it exactly for section semantics and order, reading depth, source anchors, interaction rules, verification chips, and revision marks. The approval object and approval lifecycle are defined only in `skills/plan-approval/SKILL.md`.
 
-When updating an already-presented plan, badge each changed section, place an inline revnote immediately after that section's h2 describing the change and its trigger, and clear all marks from the previous round. The chat message accompanying an update carries a one-line pointer; the in-plan revnotes are the canonical delta record.
+When presenting a plan, also spawn a `verify` delegation as the verifier. Derive the verifier task spec from the decision surface and ask it to check three checklists: current-reality claims, concentrated in Context, against their anchors on the main checkout via absolute paths (a current-reality claim without an anchor is a mismatch); Schema completeness; and misplacement, catching Schema or Trade-offs content hidden in 4.2 Design Details or 6. Other Details. Presentation does not wait for verification. A plan whose current-reality checklist is empty has nothing to verify, so it skips the verifier.
 
-When presenting a plan, also spawn a `verify` delegation as the verifier. Derive the verifier task spec from the decision surface and ask it to check three checklists: every factual claim against its anchored source on the main checkout via absolute paths; every Details-layer entry against the fork criteria, catching irreversible or abstraction-changing items that belong in Forks or Contract; and factual claims that lack an anchor, which count as mismatches. Presentation does not wait for verification. A plan whose factual-claims checklist is empty has nothing to verify, so it skips the verifier.
+Verifier completion wakes the master through the standard delegation completion flow. A clean result gets a one-line confirmation in chat and updates the plan's verification chip. A mismatch touching the approval object re-presents the affected terms and requires a fresh "take off". Any other mismatch is fixed as an amendment with a revnote citing the verifier finding and the verification chip set to `amended`. When the master and verifier disagree on the same fact, escalate it into a numbered Trade-off with both anchors side by side for the user to judge.
 
-Verifier completion wakes the master through the standard delegation completion flow. A clean result gets a one-line confirmation in chat and updates the plan's verification chip. A mismatch that does not touch a contract term is handled in the master's domain: fix the plan and annotate the amendment as a revnote citing the verifier finding, with the verification chip set to `amended`. A mismatch that touches a contract term re-presents the affected terms, and the one-shot token rule means a fresh "take off" is required. When the master and verifier disagree on the same fact, escalate it into a fork point with both anchors side by side for the user to judge.
-
-If "take off" arrives while verification is in flight, record the release and hold the implementation launch. When verification lands clean, launch automatically. When verification lands with a contract-touching mismatch, re-present the affected terms and wait for a fresh "take off". Implementation starts only after known contested facts are resolved.
+If "take off" arrives while verification is in flight, record the release and hold the implementation launch. When verification lands clean, launch automatically. When verification lands with a mismatch touching the approval object, re-present the affected terms and wait for a fresh "take off". Implementation starts only after known contested facts are resolved.
 
 Aim for well-organized, visually polished pages that present more information densely than markdown allows.
 

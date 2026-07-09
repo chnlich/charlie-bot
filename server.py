@@ -11,6 +11,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
+from src.agents import transcriber
 from src.api import anthropic_proxy, backlog, chat, code_server, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
@@ -118,7 +119,7 @@ async def lifespan(app: FastAPI):
   # reaches readiness immediately; boot_time guards against killing a worker
   # spawned during the recovery window.
   app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time))
-  app.state.speech_model_task = voice.start_model_provisioning(cfg)
+  app.state.speech_model_task = transcriber.start_model_provisioning(cfg)
 
   scheduler = Scheduler(cfg)
   app.state.scheduler = scheduler

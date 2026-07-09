@@ -24,7 +24,7 @@ class CodexBackend(AgentBackend):
     super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
     self._codex_home = str(Path(codex_home).expanduser()) if codex_home else None
-    self._model_reasoning_effort = model_reasoning_effort or "xhigh"
+    self._model_reasoning_effort = "xhigh" if model_reasoning_effort is None else model_reasoning_effort
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
     # Track accumulated reasoning text per item_id for delta computation.

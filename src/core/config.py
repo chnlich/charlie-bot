@@ -67,7 +67,7 @@ class CharlieBotConfig(BaseModel):
 
   # LLM
   gemini_api_key: str = ""
-  # Gemini API model for autonamer / audio transcription
+  # Gemini API model for autonamer
   # (NOT the CLI backend model — that lives in backend_options[].model)
   gemini_model: str = "gemini-flash-latest"
 
@@ -100,9 +100,6 @@ class CharlieBotConfig(BaseModel):
 
   # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
   subprocess_buffer_limit_mb: int = 1024
-
-  # Voice transcription: custom vocabulary hints for Gemini
-  voice_custom_words: list[str] = []
 
   # Backend options available for model switching
   # Additional backends (Codex/Gemini/Kimi/Antigravity/etc.) must be configured via

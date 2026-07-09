@@ -276,4 +276,4 @@ Multiple artifacts per response are supported.
 
 ## Voice Input
 
-For voice-transcribed messages, prepend a disclaimer about transcription accuracy. Voice output (Gemini transcription) must be simplified Chinese or English only — never traditional Chinese.
+Voice input is transcribed locally with sherpa-onnx and placed into the chat box for the user to confirm or edit before sending. Treat sent voice text as a normal user-confirmed message.

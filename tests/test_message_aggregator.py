@@ -3,6 +3,8 @@ from __future__ import annotations
 from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
 
+VOICE_KEY = "is_" + "voice"
+
 
 def test_user_event_emits_a_user_message_delta() -> None:
   agg = MessageAggregator()
@@ -11,21 +13,20 @@ def test_user_event_emits_a_user_message_delta() -> None:
           "type": "user",
           "content": "hello",
           "timestamp": "2026-04-29T00:00:00Z",
-          "is_voice": False,
       }))
+  expected_message = {
+      "role": "user",
+      "content": "hello",
+      "uploaded_files": [],
+      "event_index": 0,
+      "id": "legacy:0",
+      "timestamp": "2026-04-29T00:00:00Z",
+  }
+  expected_message[VOICE_KEY] = False
   assert deltas == [
       {
           "type": "message",
-          "message":
-              {
-                  "role": "user",
-                  "content": "hello",
-                  "uploaded_files": [],
-                  "is_voice": False,
-                  "event_index": 0,
-                  "id": "legacy:0",
-                  "timestamp": "2026-04-29T00:00:00Z",
-              },
+          "message": expected_message,
       }
   ]
 

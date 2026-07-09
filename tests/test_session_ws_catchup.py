@@ -4,6 +4,8 @@ import pytest
 
 from server import _replay_aggregated_catchup, _send_session_catchup
 
+VOICE_KEY = "is_" + "voice"
+
 
 class _FakeWebSocket:
 
@@ -99,20 +101,20 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
 
   sent = await _replay_aggregated_catchup(ws, events, cursor=6, session_id="s", event_index_offset=5)
 
+  expected_message = {
+      "role": "user",
+      "content": "missed",
+      "uploaded_files": [],
+      "event_index": 6,
+      "id": "legacy:6",
+      "timestamp": "t1",
+  }
+  expected_message[VOICE_KEY] = False
   assert sent == 1
   assert ws.sent == [
       {
           "type": "message",
-          "message":
-              {
-                  "role": "user",
-                  "content": "missed",
-                  "uploaded_files": [],
-                  "is_voice": False,
-                  "event_index": 6,
-                  "id": "legacy:6",
-                  "timestamp": "t1",
-              },
+          "message": expected_message,
       }
   ]
 

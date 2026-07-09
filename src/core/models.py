@@ -286,13 +286,6 @@ class SendMessageRequest(BaseModel):
   uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
 
 
-class VoiceTranscriptionResponse(BaseModel):
-  transcription: str
-  disclaimer: str = (
-      "This is a voice-transcribed message and may not be exactly accurate. "
-      "Please ask clarifying questions if anything is unclear.")
-
-
 class RenameSessionRequest(BaseModel):
   name: str
 

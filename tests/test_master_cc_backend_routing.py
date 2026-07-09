@@ -91,7 +91,6 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
       session_meta=session_meta,
       user_content="hello",
       callbacks=_make_callbacks(),
-      is_voice=False,
       auto_trigger=False,
       backend_option=backend_option,
       extra_claude_flags=None,

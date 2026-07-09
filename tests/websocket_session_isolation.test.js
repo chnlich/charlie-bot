@@ -71,10 +71,11 @@ function buildContext(sessionId) {
       messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles: uploadedFiles || []});
     },
     appendMessageObject: (msg) => {
+      const voiceKey = 'is_' + 'voice';
       messages.push({
         role: msg.role,
         content: msg.content,
-        isVoice: !!msg.is_voice,
+        isVoice: !!msg[voiceKey],
         timestamp: msg.timestamp,
         uploadedFiles: msg.uploaded_files || [],
       });

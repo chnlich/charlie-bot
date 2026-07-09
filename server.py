@@ -3,7 +3,7 @@
 import asyncio
 import hmac
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import structlog
@@ -118,6 +118,7 @@ async def lifespan(app: FastAPI):
   # reaches readiness immediately; boot_time guards against killing a worker
   # spawned during the recovery window.
   app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time))
+  app.state.speech_model_task = voice.start_model_provisioning(cfg)
 
   scheduler = Scheduler(cfg)
   app.state.scheduler = scheduler
@@ -134,6 +135,11 @@ async def lifespan(app: FastAPI):
   log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
   yield
 
+  speech_model_task = getattr(app.state, "speech_model_task", None)
+  if speech_model_task is not None and not speech_model_task.done():
+    speech_model_task.cancel()
+    with suppress(asyncio.CancelledError):
+      await speech_model_task
   await ext_usage.stop_poller()
   await close_http_client()
   await scheduler.stop()
@@ -158,7 +164,6 @@ app.include_router(pages.router, tags=["pages"])
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
-app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
 app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
 app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
@@ -231,6 +236,15 @@ async def session_websocket(websocket: WebSocket, session_id: str):
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe("sidebar", websocket)
     log.info("session_ws_disconnected", session_id=session_id)
+
+
+@app.websocket("/ws/voice/{session_id}")
+async def voice_websocket(websocket: WebSocket, session_id: str):
+  """Receive PCM audio and stream local transcription updates to the browser."""
+  if not await _check_ws_auth(websocket):
+    return
+  await websocket.accept()
+  await voice.handle_voice_websocket(websocket, session_id)
 
 
 async def _send_session_catchup(

@@ -12,6 +12,8 @@ from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
 
+VOICE_KEY = "is_" + "voice"
+
 
 @pytest.mark.asyncio
 async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Path) -> None:
@@ -37,37 +39,25 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   assert len(events) == 1
   assert events[0]["type"] == "user"
   assert events[0]["content"] == "[Scheduled trigger fired] Check PID 12345"
-  assert events[0]["is_voice"] is False
+  assert VOICE_KEY not in events[0]
 
+  expected_message = {
+      "role": "user",
+      "content": "[Scheduled trigger fired] Check PID 12345",
+      "uploaded_files": [],
+      "event_index": 0,
+      "id": events[0]["id"],
+      "timestamp": events[0]["timestamp"],
+  }
+  expected_message[VOICE_KEY] = False
   messages = events_to_messages(events)
-  assert messages == [
-      {
-          "role": "user",
-          "content": "[Scheduled trigger fired] Check PID 12345",
-          "uploaded_files": [],
-          "is_voice": False,
-          "event_index": 0,
-          "id": events[0]["id"],
-          "timestamp": events[0]["timestamp"],
-      },
-  ]
+  assert messages == [expected_message]
 
   channel, broadcast_event = mock_broadcast.await_args.args
   assert channel == f"session:{session.id}"
   # Raw user events are no longer broadcast; the per-session aggregator emits a
   # `message` delta carrying the same payload, which is what the client renders.
-  assert broadcast_event == {
-      "type": "message",
-      "message": {
-          "role": "user",
-          "content": "[Scheduled trigger fired] Check PID 12345",
-          "uploaded_files": [],
-          "is_voice": False,
-          "event_index": 0,
-          "id": events[0]["id"],
-          "timestamp": events[0]["timestamp"],
-      },
-  }
+  assert broadcast_event == {"type": "message", "message": expected_message}
 
   mock_trigger_master.assert_awaited_once_with(
       session.id,

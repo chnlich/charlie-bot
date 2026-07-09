@@ -3,12 +3,12 @@
 # Every field below is uncommented and set to its default. Edit per host, fill in
 # secrets, and never commit your filled-in config.yaml.
 
-# --- LLM (Gemini API: session autoname + audio transcription; NOT the CLI backend model) ---
+# --- LLM (Gemini API: session autoname; NOT the CLI backend model) ---
 
 # Gemini API model. "gemini-flash-latest" always tracks the newest Flash release.
 gemini_model: gemini-flash-latest
 
-# Gemini API key. Secret. Required for voice transcription and session autoname.
+# Gemini API key. Secret. Required for session autoname.
 gemini_api_key: ""
 
 # --- Server ---
@@ -43,11 +43,6 @@ backend_options:
 
 # Repos shown in the backlog panel, each {label, path}.
 backlog_repos: []
-
-# --- Voice ---
-
-# Custom vocabulary hints for transcription.
-voice_custom_words: []
 
 # --- Optional credentials (add per host when used) ---
 # Other backend / notification secrets: moonshot_api_key, telegram_bot_token,

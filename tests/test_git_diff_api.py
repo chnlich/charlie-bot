@@ -77,6 +77,9 @@ def test_diff_files_manifest(tmp_path: Path) -> None:
   assert data["total_files"] == len(data["files"]) == 4
   assert data["total_additions"] == sum(f["additions"] for f in data["files"])
   assert data["total_deletions"] == sum(f["deletions"] for f in data["files"])
+  expected_head_sha = subprocess.run(
+      ["git", "rev-parse", "feature"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+  assert data["head_sha"] == expected_head_sha
 
 
 def test_diff_file_returns_unified_diff(tmp_path: Path) -> None:

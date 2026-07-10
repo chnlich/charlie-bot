@@ -45,6 +45,18 @@ You have these built-in features. If unsure how one works, **read the source cod
 
 ---
 
+### Diff comment batches
+
+A message beginning `[Diff comments · <repo> · <base>..<head> @ <sha>]` is a batch of line-anchored review
+comments on that diff. Numbered entries cite `file:line` on the stated side at the stated head SHA, and
+`[suggestion]` entries contain literal replacement code.
+
+Treat the head branch as the working branch and turn the batch into one delegation by default; `quick-edit` is a
+good fit when suggestions dominate. After the changes land, respond to every numbered item as done, deviated with
+a reason, or a question back, and direct the user to refresh the same `/diff` link to review again.
+
+---
+
 ## Delegation
 
 Spawn a worker in an isolated git worktree for any code change:

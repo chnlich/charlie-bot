@@ -1,0 +1,113 @@
+import gzip
+import json
+from pathlib import Path
+
+from src.core.trace_merge import merge_traces
+
+
+def _write_trace(path: Path, events: list[dict], *, bare: bool = False) -> None:
+  payload: list[dict] | dict[str, list[dict]] = events if bare else {"traceEvents": events}
+  path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _read_merged(path: Path) -> list[dict]:
+  with gzip.open(path, "rt", encoding="utf-8") as merged_file:
+    return json.load(merged_file)["traceEvents"]
+
+
+def _rank_events(rank: int) -> list[dict]:
+  return [
+      {"ph": "M", "pid": 10, "tid": 0, "name": "process_labels", "args": {"labels": "CPU"}},
+      {"ph": "M", "pid": 20, "tid": 0, "name": "process_labels", "args": {"labels": "GPU 0"}},
+      {"ph": "M", "pid": 10, "tid": 0, "name": "process_name", "args": {"name": "original"}},
+      {"ph": "X", "pid": 10, "tid": 7, "name": f"cpu-{rank}", "ts": rank + 1, "args": {"value": rank}},
+      {"ph": "X", "pid": 20, "tid": 8, "name": f"gpu-{rank}", "ts": rank + 2},
+      {"ph": "s", "pid": 10, "tid": 7, "name": f"flow-start-{rank}", "id": 99},
+      {"ph": "f", "pid": 20, "tid": 8, "name": f"flow-end-{rank}", "id": 99},
+  ]
+
+
+def test_merge_remaps_processes_threads_flows_and_metadata(tmp_path: Path) -> None:
+  rank0 = tmp_path / "trace_rank0.json"
+  rank1 = tmp_path / "trace_RANK1.json"
+  output = tmp_path / "merged.json.gz"
+  _write_trace(rank0, _rank_events(0))
+  _write_trace(rank1, _rank_events(1), bare=True)
+
+  merge_traces([rank0, rank1], output, slim=False)
+  events = _read_merged(output)
+  by_name = {event.get("name"): event for event in events if event.get("name")}
+
+  assert by_name["cpu-0"]["pid"] == "rank0"
+  assert by_name["gpu-0"]["pid"] == "rank0/GPU 0"
+  assert by_name["cpu-1"]["pid"] == "rank1"
+  assert by_name["gpu-1"]["pid"] == "rank1/GPU 0"
+
+  thread_names = {
+      event["args"]["name"]: event["tid"] for event in events if event.get("name") == "thread_name"
+  }
+  assert set(thread_names) == {"rank0/7", "rank0/8", "rank1/7", "rank1/8"}
+  assert len(set(thread_names.values())) == 4
+  assert by_name["cpu-0"]["tid"] == thread_names["rank0/7"]
+  assert by_name["gpu-1"]["tid"] == thread_names["rank1/8"]
+
+  assert by_name["flow-start-0"]["id"] == by_name["flow-end-0"]["id"]
+  assert by_name["flow-start-1"]["id"] == by_name["flow-end-1"]["id"]
+  assert by_name["flow-start-0"]["id"] != by_name["flow-start-1"]["id"]
+
+  process_meta = [event for event in events if event.get("name", "").startswith("process_")]
+  assert len(process_meta) == 12
+  assert all(event["args"].get("labels") not in {"CPU", "GPU 0"} for event in process_meta)
+
+  sort_indices = {
+      event["pid"]: event["args"]["sort_index"]
+      for event in process_meta
+      if event["name"] == "process_sort_index"
+  }
+  assert sort_indices == {
+      "rank0": 0,
+      "rank0/GPU 0": 1000,
+      "rank1": 10000,
+      "rank1/GPU 0": 11000,
+  }
+  labels = {
+      event["pid"]: event["args"]["labels"] for event in process_meta if event["name"] == "process_labels"
+  }
+  assert labels == {
+      "rank0": "rank0 CPU",
+      "rank0/GPU 0": "rank0 GPU 0",
+      "rank1": "rank1 CPU",
+      "rank1/GPU 0": "rank1 GPU 0",
+  }
+
+
+def test_slim_reduces_args_and_drops_cpu_instants(tmp_path: Path) -> None:
+  trace = tmp_path / "rank3.json"
+  slim_output = tmp_path / "slim.json.gz"
+  full_output = tmp_path / "full.json.gz"
+  events = [
+      {"ph": "M", "pid": 1, "name": "process_labels", "args": {"labels": "CPU"}},
+      {"ph": "X", "pid": 1, "tid": 1, "name": "keep", "args": {"stream": 4, "detail": "drop"}},
+      {"ph": "X", "pid": 1, "tid": 2, "name": "empty", "args": {"detail": "drop"}},
+      {
+          "ph": "i",
+          "pid": 1,
+          "tid": 3,
+          "name": "memory",
+          "cat": "cpu_instant_event",
+          "args": {"stream": 9},
+      },
+  ]
+  _write_trace(trace, events)
+
+  merge_traces([trace], slim_output, slim=True)
+  slim_by_name = {event.get("name"): event for event in _read_merged(slim_output)}
+  assert slim_by_name["keep"]["args"] == {"stream": 4}
+  assert "args" not in slim_by_name["empty"]
+  assert "memory" not in slim_by_name
+
+  merge_traces([trace], full_output, slim=False)
+  full_by_name = {event.get("name"): event for event in _read_merged(full_output)}
+  assert full_by_name["keep"]["args"] == {"stream": 4, "detail": "drop"}
+  assert full_by_name["empty"]["args"] == {"detail": "drop"}
+  assert full_by_name["memory"]["args"] == {"stream": 9}

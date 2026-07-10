@@ -9,10 +9,10 @@ from starlette.responses import HTMLResponse, Response
 
 from src.core.config import get_config
 
-# Paths that are always public (no auth required). "/perfetto" and "/ncu" are
-# read-only viewer shells that only render data already public via "/files/", so
-# exposing them leaks nothing new and makes trace/report links shareable.
-_PUBLIC_PATHS = frozenset({"/", "/perfetto", "/ncu", "/api/auth/status"})
+# Paths that are always public (no auth required). The viewer routes only render
+# or re-serve data already public via "/files/", so exposing them leaks nothing
+# new and makes trace/report links shareable.
+_PUBLIC_PATHS = frozenset({"/", "/perfetto", "/perfetto/merged", "/ncu", "/api/auth/status"})
 _PUBLIC_PREFIXES = ("/static/", "/files/")
 
 # Self-contained HTML login page served to unauthenticated browser navigations.

@@ -10,6 +10,7 @@ import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.types import Receive, Scope, Send
 
 from src.agents import transcriber
 from src.api import anthropic_proxy, backlog, chat, code_server, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
@@ -33,6 +34,16 @@ log = structlog.get_logger()
 
 # Interval between WebSocket keepalive pings (seconds).
 _WS_KEEPALIVE_TIMEOUT = 30.0
+
+
+class _CharlieBotGZipMiddleware(GZipMiddleware):
+  """Skip HTTP transport compression for already-compressed trace files."""
+
+  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    if scope["type"] == "http" and scope["path"] == "/perfetto/merged":
+      await self.app(scope, receive, send)
+      return
+    await super().__call__(scope, receive, send)
 
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:
@@ -155,7 +166,7 @@ app = FastAPI(
   lifespan=lifespan,
 )
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000)
 app.add_middleware(AuthMiddleware)
 
 # Page router (GET / — Jinja2 rendered)

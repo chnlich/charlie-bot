@@ -111,7 +111,7 @@ async def test_public_path_passes_without_credential(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["/perfetto", "/ncu"])
+@pytest.mark.parametrize("path", ["/perfetto", "/perfetto/merged", "/ncu"])
 async def test_viewer_pages_public_without_credential(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
   # The read-only viewer shells are reachable without any Bearer or cookie.
   mw = _middleware(monkeypatch, key="secret")

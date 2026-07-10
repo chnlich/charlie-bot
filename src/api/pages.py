@@ -2,15 +2,21 @@
 
 import asyncio
 import fnmatch
+import hashlib
+import json
+import os
 import pathlib
 import socket
 import subprocess
+import tempfile
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.api.code_server import is_code_server_available
@@ -22,11 +28,14 @@ from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
+from src.core.trace_merge import merge_traces
 
 log = structlog.get_logger()
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _PT_TZ = ZoneInfo("America/Los_Angeles")
+_PERFETTO_MERGE_CACHE_DIR = Path.home() / ".charliebot" / "cache" / "perfetto_merge"
+_PERFETTO_MERGE_CACHE_LIMIT = 8
 
 
 def _get_git_version() -> str:
@@ -98,38 +107,152 @@ async def perfetto_viewer(
     dir: str | None = None,
     pattern: str = "*.json",
     title: str | None = None,
+    slim: Literal[0, 1] | None = None,
 ):
   """Render the Perfetto trace viewer page.
 
   Supports single trace, multiple traces, and directory auto-discovery.
   """
-  trace_urls: list[str] = [
-      f"/files{url}" if url.startswith("/") and not url.startswith("/files/") else url for url in trace
-  ]
+  inputs = [_trace_input(value) for value in trace]
+  if dir is not None:
+    discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
+    inputs.extend((f"/files{path}", path) for path in discovered)
 
-  if dir:
-    dir_path = Path(dir)
-    if dir_path.is_dir():
-      filenames = sorted(f.name for f in dir_path.iterdir() if f.is_file() and fnmatch.fnmatch(f.name, pattern))
-      dir_stripped = dir.rstrip("/")
-      trace_urls.extend(f"/files/{dir_stripped}/{name}" for name in filenames)
-    else:
-      log.warning("perfetto_dir_not_found", dir=dir)
-
-  if not trace_urls:
+  if not inputs:
     raise HTTPException(status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")
 
-  trace_names = [url.rsplit("/", 1)[-1] for url in trace_urls]
+  warn = None
+  if len(inputs) == 1:
+    trace_url = inputs[0][0]
+  elif await asyncio.to_thread(_all_local_json_traces, inputs):
+    query: list[tuple[str, str]] = [("trace", str(path)) for _, path in inputs[:len(trace)]]
+    if dir is not None:
+      query.extend((("dir", dir), ("pattern", pattern)))
+    if slim is not None:
+      query.append(("slim", str(slim)))
+    trace_url = f"/perfetto/merged?{urlencode(query)}"
+  else:
+    trace_url = inputs[0][0]
+    warn = "⚠ Remote or non-JSON traces cannot be merged, showing first trace only"
+
+  display_title = title or dir or inputs[0][0].rsplit("/", 1)[-1]
 
   return templates.TemplateResponse(
       request,
       "perfetto.html",
       context={
-          "trace_urls": trace_urls,
-          "trace_names": trace_names,
-          "trace_dir": dir,
-          "title": title,
+          "trace_url": trace_url,
+          "title": display_title,
+          "warn": warn,
       })
+
+
+def _discover_trace_paths(directory: str, pattern: str) -> list[Path]:
+  dir_path = Path(directory)
+  if not dir_path.is_dir():
+    log.warning("perfetto_dir_not_found", dir=directory)
+    return []
+  return sorted(
+      (path for path in dir_path.iterdir() if path.is_file() and fnmatch.fnmatch(path.name, pattern)),
+      key=lambda path: path.name,
+  )
+
+
+def _trace_input(value: str) -> tuple[str, Path | None]:
+  if value.startswith("/files/"):
+    return value, Path(value.removeprefix("/files"))
+  if value.startswith("/"):
+    return f"/files{value}", Path(value)
+  return value, None
+
+
+def _all_local_json_traces(inputs: list[tuple[str, Path | None]]) -> bool:
+  return all(path is not None and path.is_file() and _is_json_trace(path) for _, path in inputs)
+
+
+def _is_json_trace(path: Path) -> bool:
+  with path.open("rb") as trace_file:
+    prefix = trace_file.read(64)
+  for byte in prefix:
+    if byte in b" \t\n\r":
+      continue
+    return byte in b"{["
+  return False
+
+
+def _merge_cache_key(paths: list[Path], slim: bool) -> str:
+  inputs = []
+  for path in paths:
+    stat = path.stat()
+    inputs.append((str(path), stat.st_size, stat.st_mtime_ns))
+  payload = json.dumps({"paths": inputs, "slim": slim}, separators=(",", ":"))
+  return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
+  entries = sorted(
+      (path for path in _PERFETTO_MERGE_CACHE_DIR.glob("*.json.gz") if path != fresh_path),
+      key=lambda path: path.stat().st_mtime_ns,
+      reverse=True,
+  )
+  for stale_path in entries[_PERFETTO_MERGE_CACHE_LIMIT - 1:]:
+    stale_path.unlink()
+
+
+def _cached_merge(paths: list[Path], slim: bool) -> Path:
+  _PERFETTO_MERGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+  cache_path = _PERFETTO_MERGE_CACHE_DIR / f"{_merge_cache_key(paths, slim)}.json.gz"
+  if cache_path.is_file():
+    return cache_path
+
+  descriptor, temp_name = tempfile.mkstemp(dir=_PERFETTO_MERGE_CACHE_DIR, suffix=".tmp")
+  os.close(descriptor)
+  temp_path = Path(temp_name)
+  try:
+    merge_traces(paths, temp_path, slim)
+  except Exception:
+    temp_path.unlink()
+    raise
+  os.replace(temp_path, cache_path)
+  _prune_perfetto_merge_cache(cache_path)
+  return cache_path
+
+
+@router.get("/perfetto/merged")
+async def perfetto_merged(
+    trace: list[str] = Query(default=[]),
+    dir: str | None = None,
+    pattern: str = "*.json",
+    slim: Literal[0, 1] = 0,
+) -> FileResponse:
+  """Merge local Chrome JSON traces and serve the cached gzip output."""
+  if not trace and dir is None:
+    raise HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
+
+  paths = [Path(value) for value in trace]
+  if dir is not None:
+    discovered = await asyncio.to_thread(_discover_trace_paths, dir, pattern)
+    if not discovered:
+      raise HTTPException(status_code=400, detail="Provide at least one trace path; 'dir' matched no files.")
+    paths.extend(discovered)
+  if not paths:
+    raise HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
+
+  resolved_paths: list[Path] = []
+  for path in paths:
+    if not await asyncio.to_thread(path.is_file):
+      raise HTTPException(status_code=404, detail=f"Trace path not found: {path}")
+    resolved_path = await asyncio.to_thread(path.resolve)
+    if not await asyncio.to_thread(_is_json_trace, resolved_path):
+      raise HTTPException(status_code=400, detail=f"Trace is not JSON: {path}")
+    resolved_paths.append(resolved_path)
+
+  try:
+    cache_path = await asyncio.to_thread(_cached_merge, resolved_paths, bool(slim))
+  except Exception as error:
+    log.exception("perfetto_merge_failed", paths=[str(path) for path in resolved_paths], slim=slim)
+    raise HTTPException(status_code=500, detail=str(error)) from error
+  return FileResponse(cache_path, media_type="application/gzip")
 
 
 def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLResponse:

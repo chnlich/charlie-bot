@@ -20,8 +20,8 @@
 </head>
 <body>
   <div id="topbar">
-    <span class="trace-name" id="trace-label">{{ title or trace_dir or trace_names[0] }}</span>
-    <span class="warn" id="warn-text"></span>
+    <span class="trace-name" id="trace-label">{{ title }}</span>
+    <span class="warn" id="warn-text">{{ warn or "" }}</span>
     <span class="spacer"></span>
     <a href="#" id="open-new-tab">Open in new tab</a>
   </div>
@@ -31,16 +31,12 @@
 
   <script>
     const PERFETTO_UI = 'https://ui.perfetto.dev';
-    const traceUrls = {{ trace_urls | tojson }};
-    const traceNames = {{ trace_names | tojson }};
-    const traceTitle = {{ (title or trace_dir or trace_names[0]) | tojson }};
+    const traceUrl = {{ trace_url | tojson }};
+    const traceTitle = {{ title | tojson }};
 
     const statusEl = document.getElementById('status');
     const iframeEl = document.getElementById('perfetto-iframe');
     const openNewTabLink = document.getElementById('open-new-tab');
-    const traceLabelEl = document.getElementById('trace-label');
-    const warnEl = document.getElementById('warn-text');
-
     let traceBuffer = null;
 
     function showError(msg) {
@@ -52,192 +48,20 @@
       statusEl.textContent = msg;
     }
 
-    function basename(name) {
-      // Extract a short label from filename, e.g. 'rank000' from 'trace_rank000_step001.json'
-      const m = name.match(/rank(\d+)/i);
-      return m ? 'rank' + m[1] : name.replace(/\.json$/i, '');
-    }
-
-    async function fetchOneTrace(url, index) {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${traceNames[index]}`);
+    async function fetchTrace() {
+      updateStatus('Loading trace...');
+      const resp = await fetch(traceUrl);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${traceTitle}`);
       return resp.arrayBuffer();
     }
 
-    function isJsonTrace(buf) {
-      // Check if the first non-whitespace byte looks like JSON ('{' or '[')
-      const view = new Uint8Array(buf, 0, Math.min(buf.byteLength, 64));
-      for (let i = 0; i < view.length; i++) {
-        const ch = view[i];
-        if (ch === 0x20 || ch === 0x09 || ch === 0x0a || ch === 0x0d) continue;
-        return ch === 0x7b || ch === 0x5b; // '{' or '['
-      }
-      return false;
-    }
-
-    function mergeJsonTraces(buffers) {
-      const allEvents = [];
-      const tidMap = new Map();  // 'rankIndex:originalTid' -> synthetic numeric tid
-      let nextTid = 1;
-      const flowIdMap = new Map();  // 'rankIndex:originalFlowId' -> synthetic numeric flow id
-      let nextFlowId = 1;
-
-      function getNumericTid(rankIndex, originalTid) {
-        const key = rankIndex + ':' + originalTid;
-        if (!tidMap.has(key)) {
-          tidMap.set(key, nextTid++);
-        }
-        return tidMap.get(key);
-      }
-
-      function getNumericFlowId(rankIndex, originalId) {
-        const key = rankIndex + ':' + originalId;
-        if (!flowIdMap.has(key)) {
-          flowIdMap.set(key, nextFlowId++);
-        }
-        return flowIdMap.get(key);
-      }
-
-      for (let i = 0; i < buffers.length; i++) {
-        const text = new TextDecoder().decode(buffers[i].buf);
-        const json = JSON.parse(text);
-        const events = json.traceEvents || (Array.isArray(json) ? json : []);
-        const rankLabel = basename(traceNames[buffers[i].idx]);
-
-        // Pass 1: scan metadata to build original pid -> label map
-        const pidLabel = {};  // original pid -> 'CPU' or 'GPU N'
-        for (const evt of events) {
-          if (evt.ph === 'M' && evt.name === 'process_labels' && evt.args) {
-            const lbl = evt.args.labels || '';
-            pidLabel[evt.pid] = lbl;  // e.g. 'CPU' or 'GPU 0'
-          }
-        }
-
-        // Pass 2: build synthetic pid mapping
-        // CPU -> rankLabel, GPU N -> rankLabel + '/GPU N'
-        const pidMap = {};
-        for (const [origPid, lbl] of Object.entries(pidLabel)) {
-          if (lbl === 'CPU') {
-            pidMap[origPid] = rankLabel;
-          } else {
-            pidMap[origPid] = rankLabel + '/' + lbl;
-          }
-        }
-
-        // Compute sort indices: CPU on top, then GPUs in order
-        const baseSortIndex = i * 10000;
-        const syntheticMeta = {};  // synthetic pid -> sort_index
-        for (const [origPid, lbl] of Object.entries(pidLabel)) {
-          const synPid = pidMap[origPid];
-          if (lbl === 'CPU') {
-            syntheticMeta[synPid] = { sortIndex: baseSortIndex, label: rankLabel + ' CPU' };
-          } else {
-            const gpuMatch = lbl.match(/GPU\s*(\d+)/i);
-            const gpuIdx = gpuMatch ? parseInt(gpuMatch[1], 10) : 0;
-            syntheticMeta[synPid] = { sortIndex: baseSortIndex + 1000 + gpuIdx, label: rankLabel + ' ' + lbl };
-          }
-        }
-
-        // Track which (rankIndex, originalTid) pairs we've already emitted thread_name for
-        const emittedThreadNames = new Set();
-
-        // Pass 3: remap events
-        for (const evt of events) {
-          if (evt.ph === 'M' && evt.name && evt.name.startsWith('process_')) {
-            // Drop original process-level metadata to avoid conflicts
-            continue;
-          }
-          const remappedPid = (pidMap[evt.pid] !== undefined) ? pidMap[evt.pid] : rankLabel;
-          evt.pid = remappedPid;
-          if (evt.tid !== undefined) {
-            const originalTid = evt.tid;
-            const syntheticTid = getNumericTid(i, originalTid);
-            evt.tid = syntheticTid;
-
-            // Emit thread_name metadata event on first encounter
-            const threadKey = i + ':' + originalTid;
-            if (!emittedThreadNames.has(threadKey)) {
-              emittedThreadNames.add(threadKey);
-              allEvents.push({
-                ph: 'M', pid: remappedPid, tid: syntheticTid,
-                name: 'thread_name', args: { name: rankLabel + '/' + originalTid }
-              });
-            }
-          }
-          if (evt.ph === 's' || evt.ph === 't' || evt.ph === 'f') {
-            if (evt.id !== undefined) {
-              evt.id = getNumericFlowId(i, evt.id);
-            }
-          }
-          allEvents.push(evt);
-        }
-
-        // Emit synthetic metadata events for each new process
-        const metaTid = getNumericTid(i, 'meta');
-        for (const [synPid, meta] of Object.entries(syntheticMeta)) {
-          allEvents.push({ ph: 'M', pid: synPid, tid: metaTid, name: 'process_name', args: { name: meta.label } });
-          allEvents.push({ ph: 'M', pid: synPid, tid: metaTid, name: 'process_labels', args: { labels: meta.label } });
-          allEvents.push({ ph: 'M', pid: synPid, tid: metaTid, name: 'process_sort_index', args: { sort_index: meta.sortIndex } });
-        }
-      }
-      const merged = JSON.stringify({ traceEvents: allEvents });
-      return new TextEncoder().encode(merged).buffer;
-    }
-
-    async function fetchAllTraces() {
-      const total = traceUrls.length;
-      let loaded = 0;
-      const errors = [];
-
-      if (total > 1) {
-        traceLabelEl.textContent = `${total} traces` + (traceTitle ? ` from ${traceTitle}` : '');
-      }
-
-      const results = await Promise.allSettled(traceUrls.map((url, i) => {
-        return fetchOneTrace(url, i).then(buf => {
-          loaded++;
-          updateStatus(`Loading ${loaded}/${total}...`);
-          return { buf, idx: i };
-        });
-      }));
-
-      const successes = [];
-      for (const r of results) {
-        if (r.status === 'fulfilled') {
-          successes.push(r.value);
-        } else {
-          errors.push(r.reason.message);
-        }
-      }
-
-      if (successes.length === 0) {
-        showError('Error: all traces failed to load. ' + errors[0]);
+    async function loadTrace() {
+      try {
+        return await fetchTrace();
+      } catch (error) {
+        showError(`Error: ${error.message}`);
         return null;
       }
-
-      if (errors.length > 0) {
-        warnEl.textContent = `⚠ ${errors.length} trace(s) failed to load`;
-        warnEl.title = errors.join('\n');
-      }
-
-      // Single trace — pass through as-is
-      if (successes.length === 1) {
-        return successes[0].buf;
-      }
-
-      // Multiple traces — try JSON merge
-      if (isJsonTrace(successes[0].buf)) {
-        try {
-          return mergeJsonTraces(successes);
-        } catch (e) {
-          warnEl.textContent = '⚠ JSON merge failed, showing first trace only';
-          return successes[0].buf;
-        }
-      }
-
-      // Non-JSON (protobuf) — can't merge, use first
-      warnEl.textContent = '⚠ Non-JSON traces cannot be merged, showing first trace only';
-      return successes[0].buf;
     }
 
     function sendToPerfetto(target, buffer, origin) {
@@ -275,7 +99,7 @@
 
     openNewTabLink.addEventListener('click', async (e) => {
       e.preventDefault();
-      const buf = traceBuffer || await fetchAllTraces();
+      const buf = traceBuffer || await loadTrace();
       if (!buf) return;
       const win = window.open(PERFETTO_UI);
       if (!win) {
@@ -286,7 +110,7 @@
     });
 
     (async () => {
-      traceBuffer = await fetchAllTraces();
+      traceBuffer = await loadTrace();
       if (!traceBuffer) return;
       loadInIframe(traceBuffer);
     })();

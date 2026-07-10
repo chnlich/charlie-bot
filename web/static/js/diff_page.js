@@ -21,6 +21,7 @@
 
   // Bumped on every Compare so stale per-file fetches don't render into a newer view.
   let comparisonToken = 0;
+  let comparison = null;
 
   const STATUS_LABELS = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed', C: 'copied', T: 'type changed' };
   const STATUS_CLASSES = {
@@ -53,11 +54,13 @@
       head: p.get('head') || '',
       mode: p.get('mode') || 'three-dot',
       outputFormat: p.get('outputFormat') || 'side-by-side',
+      session: p.get('session') || '',
     };
   }
 
   function writeQuery({ repo, base, head, mode, outputFormat }) {
-    const p = new URLSearchParams();
+    const p = new URLSearchParams(location.search);
+    for (const key of ['repo', 'base', 'head', 'mode', 'outputFormat']) p.delete(key);
     if (repo) p.set('repo', repo);
     if (base) p.set('base', base);
     if (head) p.set('head', head);
@@ -181,6 +184,10 @@
     const container = document.createElement('div');
     body.appendChild(container);
     renderFileDiff(container, diffText);
+    body.dispatchEvent(new CustomEvent('cbdiff:file-rendered', {
+      bubbles: true,
+      detail: { body, container, file },
+    }));
   }
 
   function buildFileRow(params, file, token) {
@@ -222,6 +229,10 @@
         body.innerHTML = '';
         body.classList.add('hidden');
         chevron.style.transform = '';
+        body.dispatchEvent(new CustomEvent('cbdiff:file-collapsed', {
+          bubbles: true,
+          detail: { body, file },
+        }));
         return;
       }
       chevron.style.transform = 'rotate(90deg)';
@@ -272,6 +283,15 @@
       return;
     }
 
+    comparison = {
+      repo: params.repo,
+      base: data.base,
+      head: data.head,
+      mode: data.mode,
+      headSha: data.head_sha,
+    };
+    window.dispatchEvent(new CustomEvent('cbdiff:compared', { detail: { comparison } }));
+
     const files = data.files || [];
     const sep = data.mode === 'three-dot' ? '...' : '..';
     statusEl.textContent =
@@ -304,6 +324,8 @@
       setError('repo, base, and head are required');
       return;
     }
+    const event = new CustomEvent('cbdiff:before-compare', { cancelable: true, detail: { params } });
+    if (!window.dispatchEvent(event)) return;
     writeQuery(params);
     compare(params);
   });
@@ -353,6 +375,10 @@
   repoInput.addEventListener('change', () => {
     loadBranches(repoInput.value.trim());
   });
+
+  window.__cbdiffPage = {
+    getComparison: () => comparison,
+  };
 
   // Init from URL.
   (async () => {

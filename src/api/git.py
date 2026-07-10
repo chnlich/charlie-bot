@@ -47,6 +47,21 @@ def _run_git_diff(repo_path: Path, args: list[str]) -> str:
   return result.stdout
 
 
+def _resolve_commit(repo_path: Path, ref: str) -> str:
+  """Resolve a git ref to its full commit SHA."""
+  result = subprocess.run(
+      ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+      cwd=repo_path,
+      capture_output=True,
+      text=True,
+      check=False,
+      timeout=SUBPROCESS_GIT_READ_TIMEOUT,
+  )
+  if result.returncode != 0:
+    raise HTTPException(status_code=500, detail=result.stderr.strip() or "git rev-parse failed")
+  return result.stdout.strip()
+
+
 def _parse_numstat_z(output: str) -> list[tuple[int, int, str, str | None]]:
   """Parse `git diff --numstat -z` into (additions, deletions, new_path, old_path) tuples.
 
@@ -166,6 +181,7 @@ async def diff_files(
   """
   repo_path = _resolve_repo_under_workspace(repo, cfg)
   range_spec = _range_spec(base, head, mode)
+  head_sha = _resolve_commit(repo_path, head)
   status_by_path = _parse_name_status_z(_run_git_diff(repo_path, ["--name-status", "-z", range_spec]))
 
   files: list[dict] = []
@@ -189,6 +205,7 @@ async def diff_files(
       "files": files,
       "base": base,
       "head": head,
+      "head_sha": head_sha,
       "mode": mode,
       "total_files": len(files),
       "total_additions": total_additions,

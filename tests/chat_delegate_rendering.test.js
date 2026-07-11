@@ -208,6 +208,97 @@ test('worker_summary renders non-clickable locator without worker result content
   assert.doesNotMatch(html, /Large worker result body/);
 });
 
+test('assistant OpenCode protocol renders complete collapsed literal output without Markdown parsing', () => {
+  const context = loadChatRendering();
+  const parseCalls = [];
+  context.marked.parse = (value) => {
+    parseCalls.push(value);
+    return '<p>unexpected Markdown</p>';
+  };
+  const prefix = '<tool_call>read</tool_call>\n<function_results>';
+  const suffix = '</function_results>';
+  const content = prefix + 'x'.repeat(100373 - prefix.length - suffix.length) + suffix;
+
+  const html = context.renderMessage({role: 'assistant', content}, 'session-a');
+
+  assert.equal(content.length, 100373);
+  assert.deepEqual(parseCalls, []);
+  const detailsTag = html.match(/<details[^>]*>/);
+  assert.ok(detailsTag);
+  assert.doesNotMatch(detailsTag[0], /\sopen(?:\s|=|>)/);
+  assert.match(html, /Raw backend output/);
+  assert.match(html, /100373 characters/);
+  assert.match(html, /<pre style="max-height:24rem;overflow:auto">/);
+  assert.match(html, /<button class="copy-btn" onclick="copyCode\(this\)">Copy<\/button>/);
+  assert.match(html, /&lt;tool_call&gt;/);
+  assert.match(html, /&lt;function_results&gt;/);
+  assert.doesNotMatch(html, /<tool_call>/);
+  assert.doesNotMatch(html, /<function_results>/);
+
+  const literal = html.match(/<pre[^>]*><code>([\s\S]*)<\/code><\/pre>/);
+  assert.ok(literal);
+  assert.equal(literal[1], escapeHtml(content));
+  assertWellFormedMarkup(html);
+});
+
+test('assistant OpenCode protocol detection accepts leading whitespace', () => {
+  const context = loadChatRendering();
+  const parseCalls = [];
+  context.marked.parse = (value) => {
+    parseCalls.push(value);
+    return '<p>unexpected Markdown</p>';
+  };
+  const content = '\n \t<tool_call>read</tool_call>';
+
+  const html = context.renderMessage({role: 'assistant', content}, 'session-a');
+
+  assert.deepEqual(parseCalls, []);
+  assert.match(html, /Raw backend output/);
+  const literal = html.match(/<pre[^>]*><code>([\s\S]*)<\/code><\/pre>/);
+  assert.ok(literal);
+  assert.equal(literal[1], escapeHtml(content));
+});
+
+test('ordinary assistant Markdown keeps the existing marked.parse path', () => {
+  const context = loadChatRendering();
+  const parseCalls = [];
+  context.marked.parse = (value) => {
+    parseCalls.push(value);
+    return '<p><strong>ordinary</strong></p>';
+  };
+  const content = '**ordinary**';
+
+  const html = context.renderMessage({role: 'assistant', content}, 'session-a');
+
+  assert.deepEqual(parseCalls, [content]);
+  assert.match(html, /<p><strong>ordinary<\/strong><\/p>/);
+  assert.doesNotMatch(html, /Raw backend output/);
+});
+
+test('raw assistant output retains thinking and representative structured tools', () => {
+  const context = loadChatRendering();
+  const html = context.renderMessage({
+    role: 'assistant',
+    content: '<tool_call>read</tool_call>',
+    thinking: 'Inspecting <protocol>',
+    tools: [
+      {name: 'Bash', input: {command: 'pwd'}},
+      {name: 'Read', input: {file_path: '/tmp/input.txt'}},
+      {name: 'Edit', input: {file_path: '/tmp/output.txt'}},
+      {name: 'Glob', input: {pattern: '*.js'}},
+      {name: 'Grep', input: {pattern: 'needle', path: '/tmp'}},
+    ],
+  }, 'session-a');
+
+  assert.match(html, /Thinking…/);
+  assert.match(html, /Inspecting &lt;protocol&gt;/);
+  assert.match(html, /5 tool calls/);
+  for (const toolName of ['Bash', 'Read', 'Edit', 'Glob', 'Grep']) {
+    assert.match(html, new RegExp('>' + toolName + '<'));
+  }
+  assert.match(html, /Raw backend output/);
+});
+
 test('renderMessage returns well-formed markup for every role branch', () => {
   const context = loadChatRendering();
 

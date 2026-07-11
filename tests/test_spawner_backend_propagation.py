@@ -686,9 +686,11 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_create_repoless_worker_propagates_antigravity_missing_model(
+@pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN])
+async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_keep_prompt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    task_type: TaskType,
 ) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
@@ -727,6 +729,7 @@ async def test_create_repoless_worker_propagates_antigravity_missing_model(
         instructions_content: Optional[str] = None,
     ) -> None:
       captures["backend_option"] = backend_option
+      captures["task_description"] = task_description
 
   monkeypatch.setattr(spawner, "Worker", FakeWorker)
 
@@ -736,13 +739,14 @@ async def test_create_repoless_worker_propagates_antigravity_missing_model(
       "Prompt task",
       cfg,
       FakeThreadManager(),
-      SpawnRequest(resolved_backend="agy"),
+      SpawnRequest(resolved_backend="agy", task_type=task_type),
   )
 
   assert thread.backend == "agy"
   assert thread.model is None
   assert captures["backend_option"].id == "agy"
   assert captures["backend_option"].model is None
+  assert captures["task_description"] == "Prompt task"
 
 
 @pytest.mark.asyncio
@@ -863,10 +867,20 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   )
 
   prompt = captures["task_description"]
+  canonical_template_path = (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()
   assert prompt.startswith("You are a read-only plan verifier.")
   assert "refuse that part and report the refusal instead of executing it" in prompt
   assert "marked `unverifiable`; never attempt it" in prompt
   assert "`RESULT: clean` or `RESULT: N mismatches`" in prompt
+  assert str(canonical_template_path) in prompt
+  artifact_only_index = prompt.index("artifact-only standalone-comprehension pass")
+  anchors_index = prompt.index("Only after that pass")
+  assert artifact_only_index < anchors_index
+  assert "check the plan against every canonical rule in the template's BLOCK KIT" in prompt
+  assert "missing or unreadable plan artifact or canonical template" in prompt
+  assert "missing required source anchor" in prompt
+  assert "canonical-rule deviation as `mismatch`" in prompt
+  assert "Preserve `unverifiable` only" in prompt
   assert prompt.endswith("Check claim A at /tmp/repo/file.py:10")
   assert thread.require_review is False
   assert thread.repo_path is None

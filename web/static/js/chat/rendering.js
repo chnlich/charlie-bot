@@ -70,6 +70,19 @@ function renderToolActivity(tools) {
     + '</div>';
 }
 
+function renderRawBackendOutput(text) {
+  return '<details class="prose-msg border border-slate-600/30 rounded-lg overflow-hidden">'
+    + '<summary class="cursor-pointer flex items-center justify-between gap-3 px-3 py-2 bg-slate-800/50 text-xs text-slate-300">'
+    + '<span class="font-medium">Raw backend output</span>'
+    + '<span class="text-slate-500 whitespace-nowrap">' + text.length + ' characters</span>'
+    + '</summary>'
+    + '<div class="code-block">'
+    + '<div class="code-header"><span class="code-lang">literal text</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>'
+    + '<pre style="max-height:24rem;overflow:auto"><code>' + escapeHtml(text) + '</code></pre>'
+    + '</div>'
+    + '</details>';
+}
+
 function renderedMessageId(el) {
   return el && el.dataset ? (el.dataset.messageId || '') : '';
 }
@@ -316,6 +329,10 @@ function renderMessage(msg, sessionId) {
       + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
   }
   if (msg.role === "assistant") {
+    var content = msg.content || "";
+    var contentHtml = content.trimStart().startsWith("<tool_call>")
+      ? renderRawBackendOutput(content)
+      : mdDiv(content);
     var toolsHtml = renderToolActivity(msg.tools);
     var thinkingHtml = "";
     if (msg.thinking) {
@@ -324,7 +341,7 @@ function renderMessage(msg, sessionId) {
         + "<div id=\"" + thinkId + "\" style=\"display:none\" class=\"text-xs text-slate-500 whitespace-pre-wrap mb-2\">" + escapeHtml(String(msg.thinking)) + "</div>";
     }
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
-      + thinkingHtml + mdDiv(msg.content) + toolsHtml + timeDiv() + "</div></div>";
+      + thinkingHtml + contentHtml + toolsHtml + timeDiv() + "</div></div>";
   }
   if (msg.role === "system") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";

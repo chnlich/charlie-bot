@@ -229,13 +229,14 @@ test('assistant OpenCode protocol renders complete collapsed literal output with
   assert.match(html, /Raw backend output/);
   assert.match(html, /100373 characters/);
   assert.match(html, /<pre style="max-height:24rem;overflow:auto">/);
+  assert.match(html, /<code data-embedded="1">/);
   assert.match(html, /<button class="copy-btn" onclick="copyCode\(this\)">Copy<\/button>/);
   assert.match(html, /&lt;tool_call&gt;/);
   assert.match(html, /&lt;function_results&gt;/);
   assert.doesNotMatch(html, /<tool_call>/);
   assert.doesNotMatch(html, /<function_results>/);
 
-  const literal = html.match(/<pre[^>]*><code>([\s\S]*)<\/code><\/pre>/);
+  const literal = html.match(/<pre[^>]*><code[^>]*>([\s\S]*)<\/code><\/pre>/);
   assert.ok(literal);
   assert.equal(literal[1], escapeHtml(content));
   assertWellFormedMarkup(html);
@@ -254,7 +255,7 @@ test('assistant OpenCode protocol detection accepts leading whitespace', () => {
 
   assert.deepEqual(parseCalls, []);
   assert.match(html, /Raw backend output/);
-  const literal = html.match(/<pre[^>]*><code>([\s\S]*)<\/code><\/pre>/);
+  const literal = html.match(/<pre[^>]*><code[^>]*>([\s\S]*)<\/code><\/pre>/);
   assert.ok(literal);
   assert.equal(literal[1], escapeHtml(content));
 });

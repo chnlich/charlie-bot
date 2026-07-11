@@ -6,6 +6,9 @@ from typing import Any
 # 2026-06-01: Codex rate-card credits / 25 = OpenAI API list price;
 # update if OpenAI changes pricing.
 _CODEX_USD_PER_1M_TOKENS: dict[str, tuple[float, float, float]] = {
+    "gpt-5.6-sol": (5.00, 0.50, 30.0),
+    "gpt-5.6-terra": (2.50, 0.25, 15.0),
+    "gpt-5.6-luna": (1.00, 0.10, 6.00),
     "gpt-5.5": (5.00, 0.50, 30.0),
     "gpt-5.4": (2.50, 0.25, 15.0),
     "gpt-5.4-mini": (0.75, 0.075, 4.50),

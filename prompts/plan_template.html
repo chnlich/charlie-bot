@@ -85,13 +85,19 @@
       implementation steps belong in the worker task spec. Keep content in semantic blocks so inline comments
       can anchor to useful units.
 
+      Treat the plan artifact as the reader's only session context. A technically capable reader with repository
+      access but no prior conversation, older plan, run nickname, comment thread, or verifier output must be able
+      to understand and judge it. Introduce every project-specific term, phase label, and run label by its role
+      before later sections rely on its name. Code identifiers may locate an explanation but never replace it.
+
       Header: show the title, a one-line summary, and meta chips for repo, scope, branch or deps, and verification.
 
       Use these six sections, in this order:
       1. Problem / Goal — one or two sentences stating what the plan resolves. Include no background or method.
                     When a non-goal matters, add one sentence here; never create a separate Non-goals section.
-      2. Context — the current situation: existing systems, constraints, and facts that cause the problem. Every
-                    current-reality claim carries a checkable source anchor.
+      2. Context — establish the minimum complete mental model before the design: how the relevant system
+                    currently works, why the problem occurs, its impact, and the relationships among the
+                    components involved. Every current-reality claim carries a checkable source anchor.
       3. High Level Solution — the overall mechanism, component relationships, data flow, and state ownership.
                     Describe the design, not implementation detail.
       4. Detailed Design — two read layers:
@@ -118,15 +124,19 @@
                     for external material, and a reproducible one-line command for runtime facts. Keep local paths
                     and commands as plain text; only URLs are links. Render anchors as span.src
                     (&lt;span class=&quot;src&quot;&gt;...&lt;/span&gt;). Current-reality claims should be concentrated in Context.
+                    Restate any conclusion imported from an earlier plan, run, comment, or review in the current
+                    plan and anchor it directly to stable, checkable evidence. Session-local identifiers cannot
+                    carry meaning for the reader, and source anchors support rather than replace the explanation.
       Verification: div.meta includes one verification-status chip as span.mtag with the plan status:
                     "verification · in flight", "verification · clean", or "verification · amended". The
                     master updates the artifact when verifier results flow back.
-      Revision marks: when an already-presented plan is updated, every changed section gets a
-                    span.revbadge in its h2, such as "changed · r3", and a div.revnote immediately after
-                    the h2 stating "rN · trigger — what changed". The trigger briefly quotes the comment or
-                    message that caused the change. Row-level changes reuse the existing .new and .edit marks.
-                    Keep only the latest revision's marks: a new revision clears all previous badges, revnotes,
-                    and row marks. A first presentation carries no revision marks.
+      Revision marks: when an already-presented plan is updated, its body remains the complete current design.
+                    Every changed section gets a span.revbadge in its h2, such as "changed · r3", and a
+                    div.revnote immediately after the h2 stating "rN · trigger — what changed". The note only
+                    summarizes the current delta, describes it in terms understandable without the triggering
+                    conversation, and never carries background missing from the body. Row-level changes reuse the
+                    existing .new and .edit marks. Keep only the latest revision's marks: a new revision clears
+                    all previous badges, revnotes, and row marks. A first presentation carries no revision marks.
       Shared blocks: p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks;
       div.callout highlights a note (.warn for amber); div.flow with span.b and span.ar sketches a data flow;
       div.meta > span.mtag gives small metadata chips near the top of a plan.
@@ -134,13 +144,13 @@
 
     <section class="plan-section">
       <h2><span class="n">1</span> Problem / Goal</h2>
-      <p>The goal is to make scheduled triggers inspectable before an operator adds another watch. Trigger scheduling and persistence are out of scope.</p>
+      <p>The goal is to make a session's persisted one-shot wake-ups, called scheduled triggers, inspectable before an operator adds another watch. Trigger scheduling and persistence are out of scope.</p>
     </section>
 
     <section class="plan-section">
       <h2><span class="n">2</span> Context</h2>
-      <p>The unified CLI exposes <code>charliebot schedule-trigger</code> for creating delayed triggers, but its command map has no trigger-listing subcommand. <span class="src">Sources: src/cli/main.py:19, src/cli/main.py:22</span></p>
-      <p><code>TriggerManager</code> persists each scheduled trigger as a JSON file under the session's <code>triggers</code> directory. <span class="src">Sources: src/core/triggers.py:337, src/core/triggers.py:677, src/core/triggers.py:683</span></p>
+      <p>A scheduled trigger resumes a CharlieBot session after a delay or when watched work finishes. Operators can create these triggers, but cannot inspect the triggers already scheduled for the session before adding another watch. <span class="src">Sources: src/cli/main.py:19-25; src/core/triggers.py:322-337</span></p>
+      <p>The unified command dispatcher exposes trigger creation as <code>charliebot schedule-trigger</code>. The component responsible for trigger lifecycle, <code>TriggerManager</code>, persists each record as a JSON file under the session's <code>triggers</code> directory; no read-only CLI path currently loads those records for inspection. <span class="src">Sources: src/cli/main.py:19-25; src/core/triggers.py:322-337, 677-687</span></p>
     </section>
 
     <section class="plan-section">

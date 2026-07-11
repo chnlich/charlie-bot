@@ -101,19 +101,26 @@
       3. High Level Solution — the overall mechanism, component relationships, data flow, and state ownership.
                     Describe the design, not implementation detail.
       4. Detailed Design — two read layers:
-         4.1 Schema — the precision-read layer and generalized contract: commands, interfaces, types, persisted
-                    formats, state transitions, and error and boundary behavior. Omit categories irrelevant to
-                    the plan.
-         4.2 Design Details — the optional-read layer: implementation mechanisms, algorithms, concurrency,
-                    failure paths, compatibility, and verification approach, organized by subsystem or data flow.
+         4.1 Schema — the precision-read layer, minimal approval surface, and generalized contract. It contains only
+                    terms whose change would invalidate an issued "take off"; a detail that can change during
+                    implementation without renegotiating approval belongs in 4.2. Examples, when they satisfy that
+                    criterion, include commands, interfaces, types, persisted formats, and externally observable
+                    contract behavior for state transitions, errors, and boundaries. It is expected to be the
+                    shortest and densest of the three layers, with one line or one table row per term.
+         4.2 Design Details — the optional-read bulk layer: implementation mechanisms, algorithms, concurrency,
+                    compatibility, and verification approach, organized by subsystem or data flow. The mechanics of
+                    state transitions, internal failure paths, and the implementation side of boundary handling
+                    default here.
+         Misplacement in either direction is a defect: Schema or Trade-offs content hidden in 4.2 or 6,
+                    and implementation mechanisms that can change during implementation without renegotiating
+                    approval padding 4.1, are both violations.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
                     (p.trade). A resolved item keeps only the question and resolution (p.resolved); never record
                     rejected alternatives. When nothing needs judging, keep one line stating there are no open
                     trade-offs.
       6. Other Details — a collapsed details.details-layer. Use one li per autonomous implementation decision,
-                    with a one-line rationale in span.m. Never hide content here that belongs in Schema or
-                    Trade-offs.
+                    with a one-line rationale in span.m.
 
       Shrink rule: depth scales with complexity. Any section may shrink to a sentence. 4.2 Design Details and
                     6. Other Details may be empty and omitted entirely. Section order and numbering never change.

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
+from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
 
@@ -515,3 +518,164 @@ def test_thinking_event_alone_creates_assistant_draft() -> None:
   assert deltas[0]["message"]["role"] == "assistant"
   assert deltas[0]["message"]["content"] == ""
   assert deltas[0]["message"]["thinking"] == "reasoning"
+
+
+def _assistant_event(content: str, event_id: str = "assistant") -> dict:
+  return {
+      "id": event_id,
+      "type": ET.ASSISTANT,
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": content
+          }]
+      },
+  }
+
+
+def test_stable_history_orders_queued_user_between_completed_runs() -> None:
+  events = [
+      {"session_id": "opencode-session"},
+      {"id": "thinking-1", "type": ET.THINKING, "content": "final thought"},
+      {"id": "tool-1", "type": ET.TOOL_USE, "name": "Read", "input": {"file_path": "report.txt"}},
+      {"id": "queued-user", "type": ET.USER, "content": "second question"},
+      {"id": "tool-result-1", "type": ET.TOOL_RESULT, "content": "report contents"},
+      _assistant_event("first conclusion", "assistant-1"),
+      {"id": "done-1", "type": ET.MASTER_DONE, "thinking_seconds": 4},
+      {"session_id": "opencode-session"},
+      _assistant_event("second answer", "assistant-2"),
+      {"id": "done-2", "type": ET.MASTER_DONE, "thinking_seconds": 2},
+  ]
+
+  messages = events_to_messages(events)
+  view_messages, pending = events_to_view(events)
+
+  assert view_messages == messages
+  assert pending is None
+  assert [message["role"] for message in messages] == ["assistant", "separator", "user", "assistant", "separator"]
+  assert [message["id"] for message in messages] == [
+      "assistant-1", "done-1", "queued-user", "assistant-2", "done-2"
+  ]
+  assert messages[0]["thinking"] == "final thought"
+  assert messages[0]["tools"][0]["output"] == "report contents"
+
+
+def test_stable_history_preserves_still_thinking_separator_semantics() -> None:
+  for still_thinking, expected_roles in [
+      (False, ["assistant", "separator", "user"]),
+      (True, ["assistant", "user"]),
+  ]:
+    events = [
+        {"session_id": "opencode-session"},
+        _assistant_event("conclusion"),
+        {"type": ET.USER, "content": "queued"},
+        {"type": ET.MASTER_DONE, "still_thinking": still_thinking},
+    ]
+
+    assert [message["role"] for message in events_to_messages(events)] == expected_roles
+
+
+def test_stable_history_preserves_multiple_deferred_user_source_order() -> None:
+  events = [
+      {"session_id": "opencode-session"},
+      _assistant_event("conclusion"),
+      {"id": "user-1", "type": ET.USER, "content": "first queued user"},
+      {"id": "user-2", "type": ET.USER, "content": "second queued user"},
+      {"type": ET.MASTER_DONE},
+  ]
+
+  messages = events_to_messages(events)
+
+  assert [message["role"] for message in messages] == ["assistant", "separator", "user", "user"]
+  assert [message["id"] for message in messages if message["role"] == "user"] == ["user-1", "user-2"]
+
+
+def test_stable_history_leaves_tool_result_and_slash_users_on_immediate_path() -> None:
+  events = [
+      {"session_id": "opencode-session"},
+      _assistant_event("before slash", "assistant-before-slash"),
+      {"id": "tool", "type": ET.TOOL_USE, "name": "Read", "input": {"file_path": "a.txt"}},
+      {"type": ET.USER, "message": {"content": [{"type": "tool_result", "content": "tool output"}]}},
+      {"id": "slash-user", "type": ET.USER, "content": "/status"},
+      _assistant_event("after slash", "assistant-after-slash"),
+      {"id": "done", "type": ET.MASTER_DONE},
+  ]
+  live = MessageAggregator()
+  live_messages = [delta["message"] for delta in live.feed_all(events) if delta["type"] == "message"]
+
+  messages = events_to_messages(events)
+
+  assert messages == live_messages
+  assert [message["role"] for message in messages] == ["assistant", "user", "assistant", "separator"]
+  assert messages[0]["tools"][0]["output"] == "tool output"
+  assert messages[1]["content"] == "/status"
+
+
+def test_stable_history_does_not_repair_incomplete_windows() -> None:
+  cases = [
+      (
+          [
+              _assistant_event("answer"),
+              {"id": "user", "type": ET.USER, "content": "next"},
+              {"id": "done", "type": ET.MASTER_DONE},
+          ],
+          ["assistant", "user", "separator"],
+      ),
+      (
+          [
+              {"session_id": "opencode-session"},
+              _assistant_event("answer"),
+              {"id": "user", "type": ET.USER, "content": "next"},
+          ],
+          ["assistant", "user"],
+      ),
+  ]
+
+  for events, expected_roles in cases:
+    messages = events_to_messages(events)
+    view_messages, pending = events_to_view(events)
+    assert [message["role"] for message in messages] == expected_roles
+    assert [message["role"] for message in view_messages] == expected_roles
+    assert [message["id"] for message in messages].count("user") == 1
+    assert pending is None
+
+
+def test_stable_history_preserves_deferred_user_metadata_without_mutating_events() -> None:
+  events = [
+      {"session_id": "opencode-session", "timestamp": "start"},
+      _assistant_event("conclusion") | {"timestamp": "assistant-ts"},
+      {
+          "id": "queued-user",
+          "type": ET.USER,
+          "content": "voice question",
+          "timestamp": "user-ts",
+          "is_voice": True,
+          "uploaded_files": [{
+              "filename": "trace.json",
+              "path": "/tmp/trace.json",
+              "size": 42,
+          }],
+      },
+      {"id": "done", "type": ET.MASTER_DONE, "timestamp": "done-ts"},
+  ]
+  original = deepcopy(events)
+
+  messages = events_to_messages(events, event_index_offset=40)
+  events_to_view(events, event_index_offset=40)
+  user = next(message for message in messages if message["role"] == "user")
+
+  expected = {
+      "role": "user",
+      "content": "voice question",
+      "uploaded_files": [{
+          "filename": "trace.json",
+          "path": "/tmp/trace.json",
+          "size": 42,
+      }],
+      "event_index": 42,
+      "id": "queued-user",
+      "timestamp": "user-ts",
+  }
+  expected[VOICE_KEY] = True
+  assert user == expected
+  assert events == original

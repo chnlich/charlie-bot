@@ -159,6 +159,12 @@ class MessageAggregator:
     for ev in events:
       yield from self.feed(ev)
 
+  def feed_indexed(self, events: list[tuple[int, dict]]) -> Iterator[dict]:
+    """Feed projected events while preserving their original list indices."""
+    for idx, ev in events:
+      self._processed += 1
+      yield from self._feed(ev, self._idx_offset + idx)
+
   def flush_pending(self) -> Iterator[dict]:
     """Emit any pending assistant draft as a finalized message.
 

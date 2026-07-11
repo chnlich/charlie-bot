@@ -71,6 +71,7 @@ function renderToolActivity(tools) {
 }
 
 function renderRawBackendOutput(text) {
+  // Keep literal protocol paths inert during linked-artifact post-processing.
   return '<details class="prose-msg border border-slate-600/30 rounded-lg overflow-hidden">'
     + '<summary class="cursor-pointer flex items-center justify-between gap-3 px-3 py-2 bg-slate-800/50 text-xs text-slate-300">'
     + '<span class="font-medium">Raw backend output</span>'
@@ -78,7 +79,7 @@ function renderRawBackendOutput(text) {
     + '</summary>'
     + '<div class="code-block">'
     + '<div class="code-header"><span class="code-lang">literal text</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>'
-    + '<pre style="max-height:24rem;overflow:auto"><code>' + escapeHtml(text) + '</code></pre>'
+    + '<pre style="max-height:24rem;overflow:auto"><code data-embedded="1">' + escapeHtml(text) + '</code></pre>'
     + '</div>'
     + '</details>';
 }

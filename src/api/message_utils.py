@@ -108,6 +108,42 @@ def normalize_user_message_event(ev: dict) -> dict:
   return {"content": stripped_content, "uploaded_files": legacy_files}
 
 
+def _stable_history_projection(events: list[dict]) -> list[tuple[int, dict]]:
+  """Move queued users behind completed OpenCode runs without changing source events."""
+  complete_intervals: list[tuple[int, int]] = []
+  interval_start: int | None = None
+  for idx, event in enumerate(events):
+    if event.get("type") is None and event.get("session_id"):
+      interval_start = idx
+    elif event.get("type") == ET.MASTER_DONE and interval_start is not None:
+      complete_intervals.append((interval_start, idx))
+      interval_start = None
+
+  deferred_indices: set[int] = set()
+  deferred_by_end: dict[int, list[tuple[int, dict]]] = {}
+  for start, end in complete_intervals:
+    deferred: list[tuple[int, dict]] = []
+    for idx in range(start + 1, end):
+      event = events[idx]
+      if event.get("type") != ET.USER:
+        continue
+      if "message" in event and "content" not in event:
+        continue
+      if normalize_user_message_event(event)["content"].startswith("/"):
+        continue
+      deferred.append((idx, event))
+    if deferred:
+      deferred_by_end[end] = deferred
+      deferred_indices.update(idx for idx, _ in deferred)
+
+  projected: list[tuple[int, dict]] = []
+  for idx, event in enumerate(events):
+    if idx not in deferred_indices:
+      projected.append((idx, event))
+    projected.extend(deferred_by_end.get(idx, []))
+  return projected
+
+
 @dataclass
 class SessionBootstrapData:
   """Critical data needed to make one chat session usable."""
@@ -236,7 +272,7 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
   """
   agg = MessageAggregator(event_index_offset=event_index_offset)
   messages: list[dict] = []
-  for delta in agg.feed_all(events):
+  for delta in agg.feed_indexed(_stable_history_projection(events)):
     if delta["type"] == "message":
       messages.append(delta["message"])
   for delta in agg.flush_pending():
@@ -254,7 +290,7 @@ def events_to_view(events: list[dict], event_index_offset: int = 0) -> tuple[lis
   """
   agg = MessageAggregator(event_index_offset=event_index_offset)
   messages: list[dict] = []
-  for delta in agg.feed_all(events):
+  for delta in agg.feed_indexed(_stable_history_projection(events)):
     if delta["type"] == "message":
       messages.append(delta["message"])
   return messages, agg.pending_draft_message()

@@ -8,6 +8,8 @@
   let batchContext = null;
   let pending = [];
   let editorRow = null;
+  let editorSpacerRow = null;
+  let editorResizeObserver = null;
   let editorBody = null;
   let drag = null;
   let sending = false;
@@ -103,8 +105,6 @@
   function installStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      .${PREFIX}-line > .d2h-code-linenumber,
-      .${PREFIX}-line > .d2h-code-side-linenumber { position: relative; }
       .${PREFIX}-add {
         position: absolute; left: 2px; top: 50%; transform: translateY(-50%); z-index: 2;
         width: 18px; height: 18px; border: 0; border-radius: 4px; padding: 0;
@@ -115,7 +115,9 @@
       .${PREFIX}-marked > td { box-shadow: inset 3px 0 #2563eb; }
       .${PREFIX}-selected > td { background: #dbeafe !important; }
       .${PREFIX}-editor-row > td { padding: 0 !important; background: #f8fafc !important; }
+      .${PREFIX}-editor-spacer > td { padding: 0 !important; }
       .${PREFIX}-editor {
+        box-sizing: border-box; position: sticky; left: 0;
         display: flex; flex-direction: column; gap: 8px; padding: 10px;
         border-top: 1px solid #93c5fd; border-bottom: 1px solid #93c5fd;
       }
@@ -362,6 +364,8 @@
     td.colSpan = targetRow.children.length;
     const editor = document.createElement('div');
     editor.className = `${PREFIX}-editor`;
+    const scrollPane = targetRow.closest('.d2h-file-side-diff, .d2h-file-diff');
+    editor.style.width = `${scrollPane.clientWidth - 20}px`;
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'Add a comment (Ctrl+Enter)';
     const footer = document.createElement('div');
@@ -385,6 +389,24 @@
     targetRow.parentNode.insertBefore(tr, targetRow.nextSibling);
     editorRow = tr;
     editorBody = body;
+
+    const sideDiff = targetRow.closest('.d2h-file-side-diff');
+    if (sideDiff) {
+      const sideDiffs = sideDiff.parentNode.querySelectorAll('.d2h-file-side-diff');
+      const otherSideDiff = sideDiffs[sideDiff === sideDiffs[0] ? 1 : 0];
+      const otherTargetRow = otherSideDiff.querySelector('tbody').children[targetRow.sectionRowIndex];
+      const spacer = document.createElement('tr');
+      spacer.className = `${PREFIX}-editor-spacer`;
+      const spacerCell = document.createElement('td');
+      spacerCell.colSpan = otherTargetRow.children.length;
+      spacer.appendChild(spacerCell);
+      otherTargetRow.parentNode.insertBefore(spacer, otherTargetRow.nextSibling);
+      editorSpacerRow = spacer;
+      editorResizeObserver = new ResizeObserver(() => {
+        spacer.style.height = `${tr.getBoundingClientRect().height}px`;
+      });
+      editorResizeObserver.observe(editor);
+    }
 
     const submit = () => {
       if (!textarea.value.trim()) {
@@ -418,7 +440,11 @@
   }
 
   function closeEditor() {
+    if (editorResizeObserver) editorResizeObserver.disconnect();
+    if (editorSpacerRow) editorSpacerRow.remove();
     if (editorRow) editorRow.remove();
+    editorResizeObserver = null;
+    editorSpacerRow = null;
     editorRow = null;
     editorBody = null;
   }

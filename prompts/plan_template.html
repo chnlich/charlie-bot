@@ -107,6 +107,11 @@
                     criterion, include commands, interfaces, types, persisted formats, and externally observable
                     contract behavior for state transitions, errors, and boundaries. It is expected to be the
                     shortest and densest of the three layers, with one line or one table row per term.
+                    Present each term as its concrete definition, not a description of it: the actual type,
+                    dataclass, or message fields, the persisted format, or the command or API signature with its
+                    parameters, rendered as a pre block, a field table (name, type, meaning), or an inline signature.
+                    Prose only locates a definition and never substitutes for it; a term that is pure behavior
+                    contract stays a single line.
          4.2 Design Details — the optional-read bulk layer: implementation mechanisms, algorithms, concurrency,
                     compatibility, and verification approach, organized by subsystem or data flow. The mechanics of
                     state transitions, internal failure paths, and the implementation side of boundary handling

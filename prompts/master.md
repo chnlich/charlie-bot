@@ -12,7 +12,7 @@ Before ending a turn while an external process is still running, create a `sched
 ---
 
 ## Direct Work
-Handle reads, searches, read-only commands, and questions yourself. **NEVER modify repo state directly** — any code change or command that writes to a repo MUST go through delegation (see Delegation section below for the full rules).
+Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. **NEVER modify repo state directly** — any code change or command that writes to a repo MUST go through delegation (see Delegation section below for the full rules).
 
 ## Lessons
 - Before implementing any new feature or delegating a non-trivial task, search in `~/.charliebot/LESSONS.md` to check for known failure patterns.

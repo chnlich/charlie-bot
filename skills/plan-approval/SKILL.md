@@ -1,37 +1,69 @@
 ---
 name: plan-approval
-description: Enforces explicit user approval before implementing any plan. Use when presenting a plan, receiving plan feedback, or about to delegate implementation.
+description: Enforces explicit user approval before implementing any plan. Use when
+  presenting a plan, receiving plan feedback, or about to delegate implementation.
 user-invocable: false
 ---
 
-## Plan-to-Implementation Gate
+## The principle
 
-When the user asks you to plan something, follow this strict protocol:
+The user judges before what they cannot judge after. Exactly two things need that
+before-judgment: the design, because implementation builds on it and reversing it
+later means redoing the work; and any action the user cannot take back afterward —
+because something is destroyed, or because it has already reached other people.
+Everything else the user can still correct after the fact, so it belongs to
+execution — done autonomously, logged, and surfaced in the completion report,
+which is where after-the-fact judgment happens.
 
-The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical source for plan section semantics. Do not restate its grammar here.
+**approval object = 4.1 Schema + resolved Trade-offs + entries promoted from Other
+Details.** These are the exact terms a "take off" approves. The `BLOCK KIT` comment
+in `prompts/plan_template.html` is the canonical grammar for the plan surface; do
+not restate it here.
 
-**approval object = 4.1 Schema + resolved Trade-offs + entries promoted from Other Details.** "take off" approves the approval object as settled at that moment.
+## Plan
 
-### Phase 1: Plan
-- Research the codebase as needed.
-- Present the plan as a decision surface following the template block kit, including numbered Trade-offs for choices the user must judge.
+- Research the codebase first; present the plan as a decision surface following the
+  template block kit, with numbered Trade-offs for the choices the user must judge.
 - End with: "Say **take off** when ready to implement."
 
-### Phase 2: Feedback Loop
-- Trade-off replies are plan feedback, not approval. The user replies by number to override a recommendation or resolution (e.g. "1 default, 2 both"); record each resolution inside its numbered block. Unmentioned items accept the recommendation when the plan is approved.
-- Other feedback works the same way — refine the plan and wait:
-  - "no validator needed" — refining a detail
-  - "be careful about X" — adding a constraint
-  - "what about Y?" — asking a question
-  - "make the output JSON" — changing a settled term
-- When the user asks to control an Other Details entry, promote it; it then joins the approval object.
-- After incorporating feedback, re-present the updated plan (or the updated parts) and wait.
+## Feedback
 
-### Phase 3: Approval
-- Proceed to implementation only when the user says **"take off"** (case-insensitive). Silence, corrections, and refinements keep you in Phase 2.
-- Apply Trade-off resolutions before consuming approval; unmentioned items take their recommendations.
-- Trade-off resolutions may arrive in the same message as approval: "1 default, 2 both, take off" resolves the Trade-offs first, then approves the resulting approval object.
-- "take off" is the ONLY approval trigger. "go ahead", "do it", "implement", "proceed", "LGTM", "ship it", "yes" are ambiguous — ask: "Say **take off** to confirm."
-- Think of it like flight control: the plane does not move until the tower says "take off".
-- **"Take off" is a one-shot token.** Once consumed, it is gone. Any later change touching the approval object **invalidates** the previous "take off": re-present the affected terms and wait for a new "take off". A "take off" approves the approval object as it existed at that moment, not any future version.
-- Corrections to Context, Design Details, or unpromoted Other Details entries are amendments and do not require re-approval.
+- Replies that touch the plan are feedback, not approval: Trade-off resolutions by
+  number, added constraints, questions, changed terms. Fold each into the plan and
+  re-present what changed, then wait.
+- When the user asks to control an Other Details entry, promote it; it joins the
+  approval object. Unmentioned Trade-offs take their recommendation at approval.
+
+## Approval
+
+- "take off" (case-insensitive) is the only trigger. Anything else — "go ahead",
+  "LGTM", "ship it" — gets: "Say **take off** to confirm."
+- Trade-off resolutions may ride in the approval message ("1 default, 2 both, take
+  off"): resolve them first; the approval covers the result.
+- One "take off" releases the entire approved scope — every step, gate, and
+  delegation inside it, including irreversible actions the plan itself names.
+- Approval binds to the approval object as it stands: progress never expires it,
+  change does. If a term must change mid-flight, re-present the affected terms and
+  wait for a fresh "take off". Amendments to Context, Design Details, or unpromoted
+  Other Details need no re-approval.
+
+## Execution
+
+- Default to acting. If you can undo an operation alone at similar cost and its
+  effect stays within what you own — reaching neither other people nor systems
+  they rely on — do it without asking.
+- An action that fails that test and is not named in the approved plan waits for
+  explicit approval — for that one action, while the rest of the plan keeps moving
+  where it can.
+- When reality forces a change that leaves the approval object intact, make it,
+  log it as a deviation, and keep going.
+- Between "take off" and the report there is nothing to ask: return to the user
+  only at a checkpoint the plan assigns to the user, at an unapproved action that
+  fails the test, or at a blocking failure. Progress updates are fine; requests
+  for permission are not.
+
+## Report
+
+- At completion or at a blocking failure, account for every approval-object term:
+  delivered or deviated. Each deviation is a retroactive Trade-off — approved term,
+  what landed, one-line reason — accepted by default or reverted on request.

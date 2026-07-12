@@ -11,7 +11,7 @@ from src.api import internal
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, DelegateRequest, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata
-from src.core.spawner import DelegationBlockedError
+from src.core.spawner import DelegationBlockedError, check_takeoff_gate
 
 
 def _build_request(
@@ -41,6 +41,47 @@ class FakeSessionManager:
 
   def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
     return self.events
+
+
+def test_takeoff_gate_allows_takeoff_followed_by_ordinary_user_message() -> None:
+  session_mgr = FakeSessionManager([
+      {"type": ET.USER, "content": "Take Off"},
+      {"type": ET.USER, "content": "One more ordinary message"},
+  ])
+
+  check_takeoff_gate("session-id", session_mgr)
+
+
+def test_takeoff_gate_allows_takeoff_followed_by_trigger_user_message() -> None:
+  session_mgr = FakeSessionManager([
+      {"type": ET.USER, "content": "take off"},
+      {"type": ET.USER, "content": "[Scheduled trigger fired] training completed"},
+  ])
+
+  check_takeoff_gate("session-id", session_mgr)
+
+
+def test_takeoff_gate_blocks_when_no_user_string_message_contains_takeoff() -> None:
+  session_mgr = FakeSessionManager([
+      {"type": ET.USER, "content": "please proceed"},
+      {"type": ET.USER, "content": [{"type": ET.TOOL_RESULT, "content": "take off"}]},
+  ])
+
+  with pytest.raises(DelegationBlockedError) as exc_info:
+    check_takeoff_gate("session-id", session_mgr)
+
+  assert str(exc_info.value) == (
+      'Delegation blocked: no user message in this session contains "take off". '
+      'Show the plan and wait for the user to say "take off" before delegating.')
+
+
+@pytest.mark.parametrize("events", [
+    [],
+    [{"type": ET.ASSISTANT, "content": "take off"}],
+])
+def test_takeoff_gate_blocks_with_empty_history_or_no_user_messages(events: list[dict[str, Any]]) -> None:
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", FakeSessionManager(events))
 
 
 @pytest.mark.asyncio
@@ -77,7 +118,7 @@ async def test_delegate_task_repo_task_types_block_without_takeoff(task_type: Ta
     await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert exc_info.value.status_code == 403
-  assert 'does not contain "take off"' in exc_info.value.detail
+  assert 'no user message in this session contains "take off"' in exc_info.value.detail
   thread_mgr.create_thread.assert_not_awaited()
   session_mgr.persist_and_broadcast.assert_not_awaited()
 
@@ -98,7 +139,7 @@ async def test_improve_stays_blocked_without_takeoff() -> None:
     await internal.start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert exc_info.value.status_code == 403
-  assert 'does not contain "take off"' in exc_info.value.detail
+  assert 'no user message in this session contains "take off"' in exc_info.value.detail
 
 
 @pytest.mark.asyncio

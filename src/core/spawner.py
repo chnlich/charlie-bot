@@ -743,28 +743,17 @@ class DelegationBlockedError(Exception):
 
 
 def check_takeoff_gate(session_id: str, session_mgr: SessionManager) -> None:
-  """Verify the last real user message contains 'take off'. Raises DelegationBlockedError if not."""
+  """Verify any user string message in the session contains 'take off'."""
   events = session_mgr.load_chat_events_sync(session_id)
-  if not events:
-    raise DelegationBlockedError(
-        'Delegation blocked: no chat events found for session. '
-        'Show the plan and wait for the user to say "take off" before delegating.')
-
-  # Scan backwards for the last user event with real text (not a tool_result)
-  for event in reversed(events):
+  for event in events:
     if event.get("type") != ET.USER:
       continue
     content = event.get("content")
-    # Real user text is a string; tool_results come as list-of-dict with type=tool_result
-    if isinstance(content, str):
-      if "take off" not in content.lower():
-        raise DelegationBlockedError(
-            'Delegation blocked: the last user message does not contain "take off". '
-            'Show the plan and wait for the user to say "take off" before delegating.')
+    if isinstance(content, str) and "take off" in content.lower():
       return
 
   raise DelegationBlockedError(
-      'Delegation blocked: no user message found in chat history. '
+      'Delegation blocked: no user message in this session contains "take off". '
       'Show the plan and wait for the user to say "take off" before delegating.')
 
 

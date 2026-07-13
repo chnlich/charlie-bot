@@ -151,14 +151,17 @@ async def test_verify_final_report_falls_back_to_untruncated_last_assistant_mess
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "report", [
-        "", "confirmed | claim | anchor | evidence\nRESULT: clean-ish",
-        "confirmed | claim | anchor | evidence\nRESULT: clean\n\n"
+    ("report", "worker_error"), [
+        ("", ""),
+        ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", ""),
+        ("confirmed | claim | anchor | evidence\nRESULT: clean\n\n", ""),
+        ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", "backend shutdown"),
     ])
 async def test_missing_or_malformed_verify_result_trailer_fails_without_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     report: str,
+    worker_error: str,
 ) -> None:
   cfg = _build_cfg(tmp_path)
   events_path = tmp_path / "events.jsonl"
@@ -186,7 +189,7 @@ async def test_missing_or_malformed_verify_result_trailer_fails_without_retry(
   async def fake_stream_worker_events(worker: FakeWorker, *args: Any) -> tuple[int, bool, str]:
     del args
     worker_runs.append(worker.backend)
-    return 0, False, ""
+    return 0, False, worker_error
 
   async def fake_maybe_spawn_reviewer(*args: Any, **kwargs: Any) -> None:
     del args, kwargs
@@ -217,6 +220,9 @@ async def test_missing_or_malformed_verify_result_trailer_fails_without_retry(
   assert completion["status"] == "failed"
   assert "Verifier completion failed" in completion["full_content"]
   assert "RESULT:" in completion["full_content"]
+  if worker_error:
+    assert worker_error in completion["full_content"]
+    assert "missing or malformed `RESULT:` trailer" in completion["full_content"]
   assert thread.description not in completion["full_content"]
 
 

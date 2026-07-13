@@ -869,7 +869,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   prompt = captures["task_description"]
   canonical_template_path = (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()
   assert prompt.startswith("You are a read-only plan verifier.")
-  preamble, plan_instructions = prompt.split("Verification order:\n", maxsplit=1)
+  preamble, plan_instructions = prompt.split("Verification scope:\n", maxsplit=1)
   for contract_layer in (preamble, plan_instructions):
     assert "allowed local and network reads" in contract_layer
     assert "already-available tools, commands, connectivity, and credentials" in contract_layer
@@ -896,18 +896,24 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   assert "verdict exactly one of `confirmed` / `mismatch` / `unverifiable`" in prompt
   assert "`RESULT: clean` or `RESULT: N mismatches`" in prompt
   assert str(canonical_template_path) in prompt
+  assert "Check exactly the scope the task spec declares; do not add checks beyond it." in prompt
+  assert "Full verification (the spec declares full)" in prompt
   artifact_only_index = prompt.index("artifact-only standalone-comprehension pass")
-  anchors_index = prompt.index("Only after that pass")
+  anchors_index = prompt.index("then read the canonical plan template")
   assert artifact_only_index < anchors_index
   assert "check the plan against every canonical rule in the template's BLOCK KIT" in prompt
+  assert "Delta verification (the spec declares delta)" in prompt
+  assert "check only the declared terms, their dependent claims, prior mismatches, and document structure" in prompt
+  assert "do not reopen unchanged content" in prompt
   assert "missing or unreadable plan artifact or canonical template" in prompt
-  assert "missing required source anchor" in prompt
-  assert "canonical-rule deviation as `mismatch`" in prompt
+  assert "missing required in-scope source anchor" in prompt
+  assert "in-scope canonical-rule deviation as `mismatch`" in prompt
   assert "Preserve `unverifiable` only" in prompt
   assert prompt.endswith("Check claim A at /tmp/repo/file.py:10")
   assert thread.require_review is False
   assert thread.repo_path is None
   assert thread.branch_name is None
+  assert thread.tried_backends == ["codex-o3"]
   assert captures["worker_dir"] == cfg.sessions_dir / "session-id" / "threads" / "thread-1"
 
 

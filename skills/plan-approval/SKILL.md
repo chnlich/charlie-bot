@@ -1,9 +1,19 @@
 ---
 name: plan-approval
-description: Enforces explicit user approval before implementing any plan. Use when
-  presenting a plan, receiving plan feedback, or about to delegate implementation.
+description: Enforces explicit user approval at the CharlieBot master-to-user
+  boundary. Use only when the CharlieBot master is presenting a plan, receiving plan
+  feedback, or preparing to delegate implementation.
 user-invocable: false
 ---
+
+## Scope
+
+- This skill governs only the CharlieBot master-to-user approval boundary; a
+  delegated task is already past that boundary.
+- A delegated worker, reviewer, or improve-loop worker does not present another plan
+  and does not wait for another `take off`; it follows its delegated task contract.
+- A delegated agent still stops and reports a blocker, contract conflict, or required
+  scope expansion.
 
 ## The principle
 

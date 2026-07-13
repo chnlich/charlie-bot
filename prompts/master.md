@@ -266,13 +266,22 @@ A plan is a decision surface, not a step list: it exposes the design, the terms 
 
 The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan grammar. Follow it exactly for section semantics and order, reading depth, source anchors, interaction rules, verification chips, and revision marks. The approval object and approval lifecycle are defined only in `skills/plan-approval/SKILL.md`.
 
-Every plan uses one release sequence: write the plan artifact and its structured verify task spec; launch the `verify` delegation; require the command to succeed and its JSON response to contain a non-empty `thread_id` worker identifier; only then present the plan with `verification · in flight`. A worker identifier proves verifier creation, not verifier completion, so presentation does not wait for completion after that creation gate passes. If launch fails or its response lacks a worker identifier, treat that as a launch error: surface it directly, do not present the plan, and do not claim verification has started.
+### Plan verification
 
-Derive the verifier task spec from the decision surface and require it to read the plan artifact alone before consulting its anchors, then check four checklists: current-reality claims, concentrated in Context, against the canonical anchor routes — code facts use absolute paths on the main checkout, external material uses URL anchors checked through read-only network access, and runtime facts use reproducible read-only commands (a current-reality claim without the appropriate anchor is a mismatch); approval-object completeness, verifying that every term the user must judge is present in the approval surface (4.1 Schema, resolved Trade-offs, or promoted Other Details entries), where a term present only as narrative description, without the concrete definition (fields, parameters, signature, or format) the user would judge, counts as missing; bidirectional misplacement, reporting Schema or Trade-offs content hidden in 4.2 Design Details or 6. Other Details as mismatches and likewise reporting descriptions of implementation mechanisms that could change during implementation without renegotiating approval appearing in 4.1 Schema as mismatches; and standalone comprehension. The fourth checklist reports a mismatch for any unexplained project-specific term, phase or run label, or reference whose meaning depends on chat history, older plans, comments, or worker threads. Run the verifier for every plan, including a plan with no current-reality claims.
-
-Verifier completion wakes the master through the standard delegation completion flow. A clean result gets a one-line confirmation in chat and updates the plan's verification chip. A mismatch touching the approval object re-presents the affected terms and requires a fresh "take off". Any other mismatch is fixed as an amendment with a revnote citing the verifier finding and the verification chip set to `amended`. When the master and verifier disagree on the same fact, escalate it into a numbered Trade-off with both anchors side by side for the user to judge.
-
-If "take off" arrives while verification is in flight, record the release and hold the implementation launch. When verification lands clean, launch automatically. When verification lands with a mismatch touching the approval object, re-present the affected terms and wait for a fresh "take off". Implementation starts only after known contested facts are resolved.
+- Before presentation, write the HTML and verifier spec, launch a read-only `verify` worker, and require a
+  non-empty `thread_id`; otherwise report the launch error and withhold the plan. Present successful launches as
+  `verification · in flight`.
+- First versions get a full check of anchored current reality, approval-object completeness and placement, and
+  standalone readability. Amendments check only changed approval terms, their dependent claims, prior mismatches,
+  and document structure. The verifier spec declares which mode applies. Check code through absolute paths pinned
+  to the plan's commit, external evidence through URL anchors and read-only network access, and runtime facts
+  through reproducible read-only commands. Check branch drift once before implementation.
+- Verifiers cannot add approval terms. A completeness mismatch is a design decision or irreversible action absent
+  from the approval surface; implementation detail is never a missing term. Leave ambiguous evidence as an open
+  Trade-off. Auto-amend once per plan lineage (one presented plan plus its automatic amendments; new user feedback
+  starts a new lineage); a second approval mismatch returns control to the user.
+- A clean result updates the chip and releases a recorded `take off`. Approval mismatches require a fresh
+  `take off`; other findings may be amended without reapproval.
 
 Aim for well-organized, visually polished pages that present more information densely than markdown allows.
 

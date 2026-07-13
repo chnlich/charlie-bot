@@ -1,6 +1,7 @@
 """Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
 import asyncio
+import re
 import shlex
 import time
 import traceback
@@ -16,6 +17,7 @@ from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
+from src.core import review
 from src.core.models import (
     BackendOption,
     SessionMetadata,
@@ -37,7 +39,6 @@ from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.notifications import send_telegram
-from src.core.review import maybe_spawn_reviewer
 
 log = structlog.get_logger()
 
@@ -62,6 +63,8 @@ _VERIFY_PROMPT_PREAMBLE = (
     "Report format: one line per checked claim, `<verdict> | <claim> | <anchor> | <one-line evidence>` "
     "with verdict exactly one of `confirmed` / `mismatch` / `unverifiable`; final line `RESULT: clean` "
     "or `RESULT: N mismatches`.")
+
+_VERIFY_RESULT_TRAILER_RE = re.compile(r"RESULT: (?:clean|[1-9][0-9]* mismatches)")
 
 
 def _build_worker_prompt(
@@ -326,6 +329,28 @@ async def resolve_requested_subagent_backend_model(
   return _resolve_session_backend_with_fallback(cfg, session_meta, session_id)
 
 
+async def _select_verify_quota_retry_backend(
+    session_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread: ThreadMetadata,
+) -> Optional[tuple[str, Optional[str], list[str]]]:
+  """Select the next untried checking-role backend after verifier quota exhaustion."""
+  current_backend, _ = _require_thread_backend_model(thread, cfg)
+  checked_backend, checked_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
+  tried_backends = list(thread.tried_backends)
+  retry = review.select_reviewer_backend(cfg, checked_backend, checked_model, tried_backends)
+  if retry is None or retry[0] == current_backend:
+    log.warning(
+        "verify_quota_retry_backend_unavailable",
+        thread_id=thread.id,
+        current_backend=current_backend,
+        tried=tried_backends,
+    )
+    return None
+  return retry
+
+
 def _require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, Optional[str]]:
   """Return backend+model from thread metadata or raise."""
   if not thread.backend:
@@ -491,21 +516,24 @@ async def _create_repoless_process(
     canonical_template_path = (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()
     worker_prompt = (
         f"{_VERIFY_PROMPT_PREAMBLE}\n"
-        "Verification order:\n"
-        "1. Read the plan artifact by itself and complete an artifact-only standalone-comprehension pass. "
-        "Do not inspect its source anchors, the canonical template, or other task-provided evidence during this pass.\n"
-        f"2. Only after that pass, read the canonical plan template at `{canonical_template_path}` and all "
-        "task-provided evidence, then check the plan against every canonical rule in the template's BLOCK KIT.\n"
+        "Verification scope:\n"
+        "Check exactly the scope the task spec declares; do not add checks beyond it.\n"
+        "- Full verification (the spec declares full): read the plan artifact by itself and complete an "
+        "artifact-only standalone-comprehension pass first, then read the canonical plan template at "
+        f"`{canonical_template_path}` and all task-provided evidence, and check the plan against every canonical "
+        "rule in the template's BLOCK KIT.\n"
+        "- Delta verification (the spec declares delta): check only the declared terms, their dependent claims, "
+        "prior mismatches, and document structure; do not reopen unchanged content.\n"
         "Use reasonable allowed local and network reads through already-available tools, commands, connectivity, "
         "and credentials when checking evidence, including web search/fetch, read-only API queries, and read-only "
         "SSH commands. The boundary remains "
         "semantic read-only behavior, not a transport or HTTP-method allowlist. Refuse and report any check that "
         "would mutate local or external state instead of executing it, including operations that create, update, "
         "delete, trigger, submit, upload, or send messages, as well as file edits, Git writes, and job submissions.\n"
-        "Report a missing or unreadable plan artifact or canonical template, a missing required source anchor, "
-        "or any canonical-rule deviation as `mismatch`. Preserve `unverifiable` only when reasonable allowed local "
-        "or network reads cannot access the evidence, or verification would require state mutation. Network access "
-        "alone never makes a claim `unverifiable`."
+        "Report a missing or unreadable plan artifact or canonical template, a missing required in-scope source "
+        "anchor, or any in-scope canonical-rule deviation as `mismatch`. Preserve `unverifiable` only when "
+        "reasonable allowed local or network reads cannot access the evidence, or verification would require "
+        "state mutation. Network access alone never makes a claim `unverifiable`."
         f"\n\n{description}")
   elif req.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
     worker_prompt = req.prompt_override or description
@@ -523,6 +551,8 @@ async def _create_repoless_process(
   backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
   thread.backend = backend_option.id
   thread.model = backend_option.model
+  if req.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
+    thread.tried_backends.append(backend_option.id)
   _prepare_thread_backend_metadata(thread, backend_option, description)
   await thread_mgr.save_metadata(thread)
 
@@ -678,11 +708,20 @@ async def _finalize_worker(
     quota_exhausted: bool = False,
     error: str = "",
     skip_notify: bool = False,
+    task_type: TaskType = TaskType.IMPLEMENT,
 ) -> None:
   """Update thread status and notify completion."""
   # Re-read from disk: the cancel endpoint may have already set CANCELLED.
   current = await thread_mgr.get_thread(session_id, thread.id)
-  if current and current.status == ThreadStatus.CANCELLED:
+  cancelled = current and current.status == ThreadStatus.CANCELLED
+  if task_type == TaskType.VERIFY and not cancelled and not quota_exhausted and not error:
+    report = await _read_verify_final_report(session_id, thread.id, thread_mgr)
+    trailer_error = _verify_result_trailer_error(report)
+    if trailer_error:
+      exit_code = -1
+      error = trailer_error
+
+  if cancelled:
     # Cancel endpoint already set the status; don't overwrite.
     log.info("worker_already_cancelled", thread_id=thread.id)
   elif quota_exhausted:
@@ -702,16 +741,29 @@ async def _finalize_worker(
     await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
 
   if not skip_notify:
-    await _notify_completion(
-        session_id,
-        description,
-        thread,
-        exit_code,
-        thread_mgr,
-        session_mgr,
-        cfg,
-        quota_exhausted=quota_exhausted,
-        error=error)
+    if task_type == TaskType.VERIFY:
+      await _notify_completion(
+          session_id,
+          description,
+          thread,
+          exit_code,
+          thread_mgr,
+          session_mgr,
+          cfg,
+          quota_exhausted=quota_exhausted,
+          error=error,
+          task_type=task_type)
+    else:
+      await _notify_completion(
+          session_id,
+          description,
+          thread,
+          exit_code,
+          thread_mgr,
+          session_mgr,
+          cfg,
+          quota_exhausted=quota_exhausted,
+          error=error)
 
 
 async def _finalize_worker_safely(
@@ -725,6 +777,7 @@ async def _finalize_worker_safely(
     quota_exhausted: bool,
     error: str,
     skip_notify: bool,
+    task_type: TaskType = TaskType.IMPLEMENT,
 ) -> None:
   """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
   try:
@@ -738,7 +791,8 @@ async def _finalize_worker_safely(
         cfg,
         quota_exhausted=quota_exhausted,
         error=error,
-        skip_notify=skip_notify)
+        skip_notify=skip_notify,
+        task_type=task_type)
   except Exception as e:
     log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
     try:
@@ -806,6 +860,24 @@ async def spawn_worker(
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, description, thread, thread_mgr, session_mgr)
 
+    if req.task_type == TaskType.VERIFY and quota_exhausted:
+      retry_backend = await _select_verify_quota_retry_backend(session_id, cfg, session_mgr, thread)
+      if retry_backend is not None:
+        resolved_backend, resolved_model, tried_backends = retry_backend
+        log.warning(
+            "verify_quota_retry",
+            thread_id=thread.id,
+            exhausted_backend=thread.backend,
+            retry_backend=resolved_backend,
+        )
+        req.resolved_backend = resolved_backend
+        req.resolved_model = resolved_model
+        thread.tried_backends = tried_backends
+        quota_exhausted = False
+        worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, req)
+        exit_code, quota_exhausted, error_msg = await _stream_worker_events(
+            worker, session_id, description, thread, thread_mgr, session_mgr)
+
     if exit_code != 0 and not quota_exhausted and not error_msg:
       exit_code = await _maybe_override_exit_code_from_result(exit_code, session_id, thread, thread_mgr)
 
@@ -820,8 +892,17 @@ async def spawn_worker(
   finally:
     if thread is not None:
       await _finalize_worker_safely(
-          session_id, description, thread, exit_code, thread_mgr, session_mgr, cfg, quota_exhausted, error_msg,
-          req.skip_notify)
+          session_id,
+          description,
+          thread,
+          exit_code,
+          thread_mgr,
+          session_mgr,
+          cfg,
+          quota_exhausted,
+          error_msg,
+          req.skip_notify,
+          task_type=req.task_type)
 
 
 async def _broadcast_completion(
@@ -833,6 +914,7 @@ async def _broadcast_completion(
     session_mgr: SessionManager,
     quota_exhausted: bool = False,
     error: str = "",
+    task_type: TaskType = TaskType.IMPLEMENT,
 ) -> tuple[str, str]:
   """Build and broadcast the worker_summary event. Returns (events_summary, full_summary)."""
   # Update last_run_status for scheduled sessions
@@ -842,7 +924,10 @@ async def _broadcast_completion(
     session_meta.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session_meta)
 
-  events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
+  if task_type == TaskType.VERIFY:
+    events_summary = await _read_verify_final_report(session_id, thread.id, thread_mgr)
+  else:
+    events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
 
   # Re-read to pick up cancel endpoint's status
   current_thread = await thread_mgr.get_thread(session_id, thread.id)
@@ -851,7 +936,11 @@ async def _broadcast_completion(
   status = 'cancelled' if cancelled else ('completed' if exit_code == 0 else 'failed')
   now = _worker_summary_timestamp()
   chat_summary = _worker_locator_summary(thread.id, status, now)
-  full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
+  if task_type == TaskType.VERIFY:
+    report = events_summary or "(no verifier final report)"
+    full_summary = f"**Verifier completion: thread `{thread.id}`**\n\n{report}"
+  else:
+    full_summary = f"**Worker finished: {description}**\n\n{events_summary}"
 
   suffix = ""
   if cancelled:
@@ -859,7 +948,10 @@ async def _broadcast_completion(
   elif quota_exhausted:
     suffix = "\n\n*Worker stopped: API quota exhausted.*"
   elif error:
-    suffix = f"\n\n*Worker error: {error}*"
+    if task_type == TaskType.VERIFY:
+      suffix = f"\n\n*Verifier completion failed: {error}*"
+    else:
+      suffix = f"\n\n*Worker error: {error}*"
   elif exit_code != 0:
     suffix = f"\n\n*Worker exited with code {exit_code}.*"
   full_summary += suffix
@@ -888,11 +980,20 @@ async def _notify_completion(
     cfg: CharlieBotConfig,
     quota_exhausted: bool = False,
     error: str = "",
+    task_type: TaskType = TaskType.IMPLEMENT,
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
     events_summary, full_summary = await _broadcast_completion(
-        session_id, description, thread, exit_code, thread_mgr, session_mgr, quota_exhausted, error)
+        session_id,
+        description,
+        thread,
+        exit_code,
+        thread_mgr,
+        session_mgr,
+        quota_exhausted,
+        error,
+        task_type=task_type)
 
     # Send Telegram notification if the session's scheduled task has notify='telegram'.
     try:
@@ -905,7 +1006,7 @@ async def _notify_completion(
     except Exception as tg_err:
       log.warning("telegram_notify_failed", session=session_id, error=str(tg_err))
 
-    await maybe_spawn_reviewer(
+    await review.maybe_spawn_reviewer(
         session_id, thread, exit_code, events_summary, full_summary, thread_mgr, session_mgr, cfg)
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
@@ -924,6 +1025,40 @@ async def _notify_completion(
       await session_mgr.persist_and_broadcast(session_id, fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
+
+
+async def _read_verify_final_report(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
+  """Read the verifier's complete final result, falling back to its last assistant text."""
+  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
+  events = await asyncio.to_thread(parse_ndjson_file, events_path)
+
+  for ev in reversed(events):
+    if ev.get("type") != ET.RESULT:
+      continue
+    result = ev.get("result")
+    if isinstance(result, str) and result.strip():
+      return result
+    break
+
+  for ev in reversed(events):
+    if ev.get("type") != ET.ASSISTANT:
+      continue
+    message = ev.get("message") if isinstance(ev.get("message"), dict) else None
+    text = extract_text_from_message(message)
+    if text.strip():
+      return text
+  return ""
+
+
+def _verify_result_trailer_error(report: str) -> str:
+  """Return an explicit verifier completion error, or an empty string for a valid trailer."""
+  expected = "`RESULT: clean` or `RESULT: N mismatches` with N a positive integer"
+  if not report.strip():
+    return f"Verifier final report is empty; expected a final {expected} line."
+  final_line = report.splitlines()[-1]
+  if _VERIFY_RESULT_TRAILER_RE.fullmatch(final_line):
+    return ""
+  return f"Verifier final report has a missing or malformed `RESULT:` trailer; expected a final {expected} line."
 
 
 async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:

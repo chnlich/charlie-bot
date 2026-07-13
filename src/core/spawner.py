@@ -49,10 +49,16 @@ _CODING_PRINCIPLES = (
     "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n")
 
 _VERIFY_PROMPT_PREAMBLE = (
-    "You are a read-only plan verifier. Only read files, run read-only commands, and report findings.\n"
-    "If the task text asks for any change -- editing files, any git write operation, submitting jobs, "
-    "or writing to external systems -- refuse that part and report the refusal instead of executing it.\n"
-    "A claim that needs network access or any state change to verify is marked `unverifiable`; never attempt it.\n"
+    "You are a read-only plan verifier. Retrieve evidence through allowed local and network reads, and report "
+    "findings.\n"
+    "Local and network evidence reads are allowed through already-available tools, commands, connectivity, and "
+    "credentials. Network examples include web search/fetch, read-only API queries, and read-only SSH commands; "
+    "the boundary is semantic read-only behavior, not a transport or HTTP-method allowlist.\n"
+    "Refuse and report any requested part that would mutate local or external state instead of executing it. This "
+    "includes operations that create, update, delete, trigger, submit, upload, or send messages, as well as file "
+    "edits, Git writes, and job submissions.\n"
+    "Mark a claim `unverifiable` only when reasonable allowed local or network reads cannot access the evidence, "
+    "or verification would require state mutation. Network access alone never makes a claim `unverifiable`.\n"
     "Report format: one line per checked claim, `<verdict> | <claim> | <anchor> | <one-line evidence>` "
     "with verdict exactly one of `confirmed` / `mismatch` / `unverifiable`; final line `RESULT: clean` "
     "or `RESULT: N mismatches`.")
@@ -490,9 +496,15 @@ async def _create_repoless_process(
         "Do not inspect its source anchors, the canonical template, or other task-provided evidence during this pass.\n"
         f"2. Only after that pass, read the canonical plan template at `{canonical_template_path}` and all "
         "task-provided evidence, then check the plan against every canonical rule in the template's BLOCK KIT.\n"
+        "Use reasonable allowed local and network reads when checking evidence, including web search/fetch, "
+        "read-only API queries, and read-only SSH commands through existing capabilities. The boundary remains "
+        "semantic read-only behavior, not a transport or HTTP-method allowlist. Refuse and report any check that "
+        "would mutate local or external state instead of executing it, including operations that create, update, "
+        "delete, trigger, submit, upload, or send messages, as well as file edits, Git writes, and job submissions.\n"
         "Report a missing or unreadable plan artifact or canonical template, a missing required source anchor, "
-        "or any canonical-rule deviation as `mismatch`. Preserve `unverifiable` only for a claim whose verification "
-        "would require forbidden network access or state mutation."
+        "or any canonical-rule deviation as `mismatch`. Preserve `unverifiable` only when reasonable allowed local "
+        "or network reads cannot access the evidence, or verification would require state mutation. Network access "
+        "alone never makes a claim `unverifiable`."
         f"\n\n{description}")
   elif req.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
     worker_prompt = req.prompt_override or description

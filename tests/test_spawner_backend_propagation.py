@@ -869,8 +869,31 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   prompt = captures["task_description"]
   canonical_template_path = (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()
   assert prompt.startswith("You are a read-only plan verifier.")
-  assert "refuse that part and report the refusal instead of executing it" in prompt
-  assert "marked `unverifiable`; never attempt it" in prompt
+  preamble, plan_instructions = prompt.split("Verification order:\n", maxsplit=1)
+  for contract_layer in (preamble, plan_instructions):
+    assert "allowed local and network reads" in contract_layer
+    assert "web search/fetch" in contract_layer
+    assert "read-only API queries" in contract_layer
+    assert "read-only SSH commands" in contract_layer
+    assert "semantic read-only behavior, not a transport or HTTP-method allowlist" in contract_layer
+    assert "mutate local or external state" in contract_layer
+    assert "create" in contract_layer
+    assert "update" in contract_layer
+    assert "delete" in contract_layer
+    assert "trigger" in contract_layer
+    assert "submit" in contract_layer
+    assert "upload" in contract_layer
+    assert "message" in contract_layer
+    assert "file edit" in contract_layer
+    assert "Git write" in contract_layer
+    assert "job submission" in contract_layer
+    assert "reasonable allowed local or network reads cannot access the evidence" in contract_layer
+    assert "verification would require state mutation" in contract_layer
+    assert "Network access alone never makes a claim `unverifiable`" in contract_layer
+  assert "already-available tools, commands, connectivity, and credentials" in preamble
+  assert "never attempt it" not in prompt
+  assert "forbidden network access" not in prompt
+  assert "verdict exactly one of `confirmed` / `mismatch` / `unverifiable`" in prompt
   assert "`RESULT: clean` or `RESULT: N mismatches`" in prompt
   assert str(canonical_template_path) in prompt
   artifact_only_index = prompt.index("artifact-only standalone-comprehension pass")

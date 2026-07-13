@@ -714,12 +714,12 @@ async def _finalize_worker(
   # Re-read from disk: the cancel endpoint may have already set CANCELLED.
   current = await thread_mgr.get_thread(session_id, thread.id)
   cancelled = current and current.status == ThreadStatus.CANCELLED
-  if task_type == TaskType.VERIFY and not cancelled and not quota_exhausted and not error:
+  if task_type == TaskType.VERIFY and not cancelled and not quota_exhausted:
     report = await _read_verify_final_report(session_id, thread.id, thread_mgr)
     trailer_error = _verify_result_trailer_error(report)
     if trailer_error:
       exit_code = -1
-      error = trailer_error
+      error = f"{error}; {trailer_error}" if error else trailer_error
 
   if cancelled:
     # Cancel endpoint already set the status; don't overwrite.

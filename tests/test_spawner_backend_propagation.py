@@ -872,6 +872,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   preamble, plan_instructions = prompt.split("Verification order:\n", maxsplit=1)
   for contract_layer in (preamble, plan_instructions):
     assert "allowed local and network reads" in contract_layer
+    assert "already-available tools, commands, connectivity, and credentials" in contract_layer
     assert "web search/fetch" in contract_layer
     assert "read-only API queries" in contract_layer
     assert "read-only SSH commands" in contract_layer
@@ -890,7 +891,6 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     assert "reasonable allowed local or network reads cannot access the evidence" in contract_layer
     assert "verification would require state mutation" in contract_layer
     assert "Network access alone never makes a claim `unverifiable`" in contract_layer
-  assert "already-available tools, commands, connectivity, and credentials" in preamble
   assert "never attempt it" not in prompt
   assert "forbidden network access" not in prompt
   assert "verdict exactly one of `confirmed` / `mismatch` / `unverifiable`" in prompt

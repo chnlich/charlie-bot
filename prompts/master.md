@@ -277,7 +277,8 @@ The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan gr
   and document structure. The verifier spec declares which mode applies. Check code through absolute paths pinned
   to the plan's commit, external evidence through URL anchors and read-only network access, and runtime facts
   through reproducible read-only commands. Check branch drift once before implementation.
-- A plan lineage's verification status is its latest verify run: after amending a plan that had mismatches, launch the delta re-verify before presenting the amended plan.
+- A plan lineage's verification status is its latest verify run: after amending a plan that had
+  mismatches, launch the delta re-verify before presenting the amended plan.
 - Verifiers cannot add approval terms. A completeness mismatch is a design decision or irreversible action absent
   from the approval surface; implementation detail is never a missing term. Leave ambiguous evidence as an open
   Trade-off. Auto-amend once per plan lineage (one presented plan plus its automatic amendments; new user feedback

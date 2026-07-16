@@ -271,11 +271,13 @@ The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan gr
 - Before presentation, write the HTML and verifier spec, launch a read-only `verify` worker, and require a
   non-empty `thread_id`; otherwise report the launch error and withhold the plan. Present successful launches as
   `verification · in flight`.
+- Verifier specs must not define or restate the report format; the harness verify prompt is the single authority for it.
 - First versions get a full check of anchored current reality, approval-object completeness and placement, and
   standalone readability. Amendments check only changed approval terms, their dependent claims, prior mismatches,
   and document structure. The verifier spec declares which mode applies. Check code through absolute paths pinned
   to the plan's commit, external evidence through URL anchors and read-only network access, and runtime facts
   through reproducible read-only commands. Check branch drift once before implementation.
+- A plan lineage's verification status is its latest verify run: after amending a plan that had mismatches, launch the delta re-verify before presenting the amended plan.
 - Verifiers cannot add approval terms. A completeness mismatch is a design decision or irreversible action absent
   from the approval surface; implementation detail is never a missing term. Leave ambiguous evidence as an open
   Trade-off. Auto-amend once per plan lineage (one presented plan plus its automatic amendments; new user feedback

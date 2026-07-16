@@ -893,8 +893,10 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     assert "Network access alone never makes a claim `unverifiable`" in contract_layer
   assert "never attempt it" not in prompt
   assert "forbidden network access" not in prompt
-  assert "verdict exactly one of `confirmed` / `mismatch` / `unverifiable`" in prompt
-  assert "`RESULT: clean` or `RESULT: N mismatches`" in prompt
+  assert "verdict exactly one of `confirmed` / `mismatch` / `mismatch-approval` / `unverifiable`" in prompt
+  assert "`mismatch-approval` is a mismatch that invalidates a term of the approval object (the plan's 4.1 Schema, resolved Trade-offs, or promoted Other Details entries)." in prompt
+  assert "`RESULT: clean`, `RESULT: 2 mismatches (1 approval)`, and `RESULT: 1 mismatch (0 approval)`" in prompt
+  assert "This report format is fixed by the harness and overrides any output format the task spec requests; a task spec may add checks or scope, never change the report format." in prompt
   assert str(canonical_template_path) in prompt
   assert "Check exactly the scope the task spec declares; do not add checks beyond it." in prompt
   assert "Full verification (the spec declares full)" in prompt

@@ -151,17 +151,27 @@ async def test_verify_final_report_falls_back_to_untruncated_last_assistant_mess
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("report", "worker_error"), [
-        ("", ""),
-        ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", ""),
-        ("confirmed | claim | anchor | evidence\nRESULT: clean\n\n", ""),
-        ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", "backend shutdown"),
+    ("report", "worker_error", "expected_status", "expected_exit_code"), [
+        ("confirmed | claim | anchor | evidence\nRESULT: clean", "", ThreadStatus.COMPLETED, 0),
+        ("mismatch | claim | anchor | evidence\nRESULT: 1 mismatch (0 approval)", "", ThreadStatus.COMPLETED, 0),
+        ("mismatch | claim | anchor | evidence\nRESULT: 3 mismatches (2 approval)", "", ThreadStatus.COMPLETED, 0),
+        ("mismatch | claim | anchor | evidence\nRESULT: 1 mismatches (1 approval)", "", ThreadStatus.COMPLETED, 0),
+        ("", "", ThreadStatus.FAILED, -1),
+        ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", "", ThreadStatus.FAILED, -1),
+        ("confirmed | claim | anchor | evidence\nRESULT: clean\n\n", "", ThreadStatus.FAILED, -1),
+        ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", "backend shutdown", ThreadStatus.FAILED, -1),
+        ("mismatch | claim | anchor | evidence\nRESULT: 1 mismatch", "", ThreadStatus.FAILED, -1),
+        ("mismatch | claim | anchor | evidence\nRESULT: 3 mismatches", "", ThreadStatus.FAILED, -1),
+        ("mismatch | claim | anchor | evidence\nRESULT: 2 mismatches (1 approval); CONTRACT-TOUCHING", "", ThreadStatus.FAILED, -1),
+        ('{"status": "clean", "mismatches": []}', "", ThreadStatus.FAILED, -1),
     ])
-async def test_missing_or_malformed_verify_result_trailer_fails_without_retry(
+async def test_verify_result_trailer_controls_completion_without_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     report: str,
     worker_error: str,
+    expected_status: ThreadStatus,
+    expected_exit_code: int,
 ) -> None:
   cfg = _build_cfg(tmp_path)
   events_path = tmp_path / "events.jsonl"
@@ -213,12 +223,15 @@ async def test_missing_or_malformed_verify_result_trailer_fails_without_retry(
   )
 
   assert worker_runs == ["codex-o3"]
-  assert thread.status == ThreadStatus.FAILED
-  assert thread.exit_code == -1
+  assert thread.status == expected_status
+  assert thread.exit_code == expected_exit_code
   completion = session_mgr.events[-1]
   assert completion["type"] == ET.WORKER_SUMMARY
-  assert completion["status"] == "failed"
-  assert "Verifier completion failed" in completion["full_content"]
+  assert completion["status"] == ("completed" if expected_status == ThreadStatus.COMPLETED else "failed")
+  if expected_status == ThreadStatus.FAILED:
+    assert "Verifier completion failed" in completion["full_content"]
+  else:
+    assert "Verifier completion failed" not in completion["full_content"]
   assert "RESULT:" in completion["full_content"]
   if worker_error:
     assert worker_error in completion["full_content"]

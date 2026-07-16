@@ -49,6 +49,10 @@ _CODING_PRINCIPLES = (
     "- **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.\n"
     "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n")
 
+_VERIFY_RESULT_TRAILER_RE = re.compile(
+    r"RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \([0-9]+ approval\))")
+_VERIFY_RESULT_TRAILER_EXPECTED = f"`{_VERIFY_RESULT_TRAILER_RE.pattern}`"
+
 _VERIFY_PROMPT_PREAMBLE = (
     "You are a read-only plan verifier. Retrieve evidence through allowed local and network reads, and report "
     "findings.\n"
@@ -61,10 +65,16 @@ _VERIFY_PROMPT_PREAMBLE = (
     "Mark a claim `unverifiable` only when reasonable allowed local or network reads cannot access the evidence, "
     "or verification would require state mutation. Network access alone never makes a claim `unverifiable`.\n"
     "Report format: one line per checked claim, `<verdict> | <claim> | <anchor> | <one-line evidence>` "
-    "with verdict exactly one of `confirmed` / `mismatch` / `unverifiable`; final line `RESULT: clean` "
-    "or `RESULT: N mismatches`.")
-
-_VERIFY_RESULT_TRAILER_RE = re.compile(r"RESULT: (?:clean|[1-9][0-9]* mismatches)")
+    "with verdict exactly one of `confirmed` / `mismatch` / `mismatch-approval` / `unverifiable`. "
+    "`mismatch-approval` is a mismatch that invalidates a term of the approval object "
+    "(the plan's 4.1 Schema, resolved Trade-offs, or promoted Other Details entries). "
+    f"The final line must match {_VERIFY_RESULT_TRAILER_EXPECTED}. Complete examples are "
+    "`RESULT: clean`, `RESULT: 2 mismatches (1 approval)`, and `RESULT: 1 mismatch (0 approval)`. "
+    "For a non-clean result, N is the total count of `mismatch` and `mismatch-approval` lines, "
+    "and M is the count of `mismatch-approval` lines, with 0 <= M <= N; when N = 1, both "
+    "singular `mismatch` and plural `mismatches` are legal.\n"
+    "This report format is fixed by the harness and overrides any output format the task spec requests; "
+    "a task spec may add checks or scope, never change the report format.")
 
 
 def _build_worker_prompt(
@@ -1052,7 +1062,7 @@ async def _read_verify_final_report(session_id: str, thread_id: str, thread_mgr:
 
 def _verify_result_trailer_error(report: str) -> str:
   """Return an explicit verifier completion error, or an empty string for a valid trailer."""
-  expected = "`RESULT: clean` or `RESULT: N mismatches` with N a positive integer"
+  expected = _VERIFY_RESULT_TRAILER_EXPECTED
   if not report.strip():
     return f"Verifier final report is empty; expected a final {expected} line."
   final_line = report.splitlines()[-1]

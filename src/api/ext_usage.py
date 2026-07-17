@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ import structlog
 from fastapi import APIRouter
 
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
+from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_POLL_INTERVAL, HTTP_OAUTH_TIMEOUT
@@ -20,39 +22,130 @@ log = structlog.get_logger()
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Cached usage data (module-level, keyed by provider name)
+# Cached usage data (module-level, keyed by "<provider>:<account>")
 # ---------------------------------------------------------------------------
 
 _cached_usage: dict[str, dict] = {}
 _poller_task: asyncio.Task | None = None
+# Per-instance provider state, keyed by (provider, expanded dir path), kept
+# across cycles so per-instance 429 backoff survives between polls.
+_instances: dict[tuple[str, str], "_UsageInstance"] = {}
 
 POLL_INTERVAL_SECONDS = EXT_USAGE_POLL_INTERVAL
-CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://console.anthropic.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_BETA = "oauth-2025-04-20"
 
+CLAUDE_DEFAULT_DIR = str(Path.home() / ".claude")
+CODEX_DEFAULT_DIR = str(Path.home() / ".codex")
 
-class CcOpusProvider:
-  """Fetches usage data from the Anthropic OAuth usage endpoint."""
 
-  def __init__(self) -> None:
+# ---------------------------------------------------------------------------
+# Account-set derivation (no registry): run at the start of every poll cycle.
+# Reads get_config(), which is mtime-cached, so config.yaml edits take effect
+# on the next cycle without a server restart.
+# ---------------------------------------------------------------------------
+
+
+def _account_label(provider: str, expanded_path: str) -> str:
+  """Derive an account label from a directory's expanded absolute path.
+
+  basename -> strip a leading '.' -> strip the provider prefix ('claude-'/
+  'codex-') when followed by '-'. The provider default dir is labelled 'main'
+  by the caller, not by this function.
+  """
+  name = os.path.basename(expanded_path)
+  if name.startswith("."):
+    name = name[1:]
+  prefix = provider + "-"
+  if name.startswith(prefix):
+    name = name[len(prefix):]
+  return name
+
+
+def _derive_provider_accounts(
+    provider: str,
+    default_dir: str,
+    options: list,
+    get_dir: Any,
+) -> list[tuple[str, str]]:
+  """Return ordered [(label, expanded_abs_path)] for one provider.
+
+  Always includes the provider default dir first (label 'main'). Dedupes by
+  expanded absolute path, so an entry explicitly pointing at the default
+  collapses into the default. Later label collisions fall back to the full
+  basename, then fail loud (skip) — never silently overwriting an existing key.
+  """
+  default_expanded = os.path.abspath(os.path.expanduser(default_dir))
+  seen: set[str] = {default_expanded}
+  labels: set[str] = {"main"}
+  accounts: list[tuple[str, str]] = [("main", default_expanded)]
+
+  for opt in options:
+    raw = get_dir(opt)
+    if not raw:
+      continue
+    expanded = os.path.abspath(os.path.expanduser(raw))
+    if expanded in seen:
+      continue
+    label = _account_label(provider, expanded)
+    if label in labels:
+      label = os.path.basename(expanded)
+      if label in labels:
+        log.error("ext_usage_account_label_collision_skip", provider=provider, dir=expanded)
+        continue
+    seen.add(expanded)
+    labels.add(label)
+    accounts.append((label, expanded))
+
+  return accounts
+
+
+def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
+  """Derive the full account set for both providers from the live config."""
+  cfg = get_config()
+  claude_opts = [o for o in cfg.backend_options if o.type == "cc-claude"]
+  codex_opts = [o for o in cfg.backend_options if o.type == "codex"]
+  return {
+      "claude": _derive_provider_accounts("claude", CLAUDE_DEFAULT_DIR, claude_opts, lambda o: o.claude_config_dir),
+      "codex": _derive_provider_accounts("codex", CODEX_DEFAULT_DIR, codex_opts, lambda o: o.codex_home),
+  }
+
+
+# ---------------------------------------------------------------------------
+# Per-account usage providers
+# ---------------------------------------------------------------------------
+
+
+class ClaudeUsageProvider:
+  """Fetches usage data from the Anthropic OAuth usage endpoint for one account."""
+
+  def __init__(self, label: str, credentials_path: Path) -> None:
+    self.label = label
+    self.credentials_path = Path(credentials_path)
     self._backoff_seconds = 0.0
+    self._backoff_until = 0.0
+    self.last_error = "no data"
 
   async def fetch(self) -> dict[str, Any] | None:
-    creds = await asyncio.to_thread(_read_credentials)
+    if time.time() < self._backoff_until:
+      self.last_error = "rate limited"
+      return None
+
+    creds = await asyncio.to_thread(_read_credentials, self.credentials_path)
     if creds is None:
+      self.last_error = "credentials not found"
       return None
 
     access_token = creds["access_token"]
     expires_at = creds["expires_at"]
 
-    # Refresh token if expired
     if expires_at and time.time() >= expires_at:
-      log.info("ext_usage_token_expired, refreshing")
-      access_token = await _refresh_access_token(creds["refresh_token"])
+      log.info("ext_usage_token_expired_refreshing", account=self.label)
+      access_token = await _refresh_access_token(self.credentials_path, creds["refresh_token"])
       if access_token is None:
+        self.last_error = "token refresh failed"
         return None
 
     client = get_http_client()
@@ -67,55 +160,62 @@ class CcOpusProvider:
 
     if resp.status_code == 429:
       self._backoff_seconds = min((self._backoff_seconds or 30) * 2, 30 * 60)
-      log.warning("ext_usage_rate_limited", backoff_seconds=self._backoff_seconds)
+      self._backoff_until = time.time() + self._backoff_seconds
+      self.last_error = "rate limited"
+      log.warning("ext_usage_rate_limited", account=self.label, backoff_seconds=self._backoff_seconds)
       return None
 
-    # Reset backoff on success
     self._backoff_seconds = 0.0
     resp.raise_for_status()
     return _transform_response(resp.json())
 
 
-class CodexProvider:
-  """Reads usage from ~/.codex/sessions/ JSONL files."""
+class CodexUsageProvider:
+  """Reads usage from <home_dir>/sessions/ JSONL files for one account."""
 
-  SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+  def __init__(self, label: str, home_dir: str) -> None:
+    self.label = label
+    self.sessions_dir = Path(home_dir) / "sessions"
+    self.last_error = "no recent sessions"
 
   async def fetch(self) -> dict[str, Any] | None:
     usage, spend = await asyncio.gather(
-        asyncio.to_thread(self._fetch_sync),
-        asyncio.to_thread(_compute_codex_spend_windows, sessions_dir=self.SESSIONS_DIR),
+        asyncio.to_thread(self._fetch_usage),
+        asyncio.to_thread(_compute_codex_spend_windows, sessions_dir=self.sessions_dir),
         return_exceptions=True,
     )
-    if isinstance(usage, Exception) or usage is None:
+    if isinstance(usage, Exception):
+      log.error("ext_usage_codex_usage_error", account=self.label, error=str(usage))
+      self.last_error = "usage read failed"
+      return None
+    if usage is None:
+      self.last_error = "no recent sessions"
       return None
     if isinstance(spend, Exception):
-      log.error("ext_usage_codex_spend_failed", error=str(spend))
+      log.error("ext_usage_codex_spend_failed", account=self.label, error=str(spend))
       spend = None
     usage["spend"] = spend
     return usage
 
-  def _fetch_sync(self) -> dict[str, Any] | None:
+  def _fetch_usage(self) -> dict[str, Any] | None:
     jsonl_path = self._find_latest_session_file()
     if jsonl_path is None:
       return None
-
     text = jsonl_path.read_text()
     return _extract_latest_codex_usage(text.splitlines())
 
   def _find_latest_session_file(self) -> Path | None:
-    """Walk SESSIONS_DIR/YYYY/MM/DD/ backwards from today, checking 3 days."""
-    if not self.SESSIONS_DIR.exists():
+    """Walk sessions_dir/YYYY/MM/DD/ backwards from today, checking 3 days."""
+    if not self.sessions_dir.exists():
       return None
 
     today = date.today()
     for days_ago in range(3):
       d = today - timedelta(days=days_ago)
-      day_dir = self.SESSIONS_DIR / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.day:02d}"
+      day_dir = self.sessions_dir / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.day:02d}"
       if not day_dir.exists():
         continue
 
-      # Find most recent rollout-*.jsonl by modification time
       candidates = sorted(day_dir.glob("rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
       if candidates:
         return candidates[0]
@@ -123,25 +223,50 @@ class CodexProvider:
     return None
 
 
+class _UsageInstance:
+  """Bundles a derived account's identity with its persistent provider instance."""
+
+  def __init__(self, provider: str, label: str, dir_path: str) -> None:
+    self.provider = provider
+    self.label = label
+    self.dir_path = dir_path
+    self.provider_instance = _create_provider(provider, label, dir_path)
+
+  async def fetch(self) -> dict[str, Any] | None:
+    return await self.provider_instance.fetch()
+
+  @property
+  def last_error(self) -> str:
+    return self.provider_instance.last_error
+
+
+def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsageProvider | CodexUsageProvider:
+  if provider == "claude":
+    return ClaudeUsageProvider(label, Path(dir_path) / ".credentials.json")
+  if provider == "codex":
+    return CodexUsageProvider(label, dir_path)
+  raise ValueError(f"unknown usage provider: {provider!r}")
+
+
 # ---------------------------------------------------------------------------
 # Credentials helpers
 # ---------------------------------------------------------------------------
 
 
-def _read_credentials() -> dict[str, Any] | None:
-  """Read OAuth credentials from ~/.claude/.credentials.json."""
-  if not CREDENTIALS_PATH.exists():
-    log.warning("ext_usage_credentials_not_found", path=str(CREDENTIALS_PATH))
+def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
+  """Read OAuth credentials from a Claude account's .credentials.json."""
+  if not credentials_path.exists():
+    log.warning("ext_usage_credentials_not_found", path=str(credentials_path))
     return None
 
-  data = json.loads(CREDENTIALS_PATH.read_text())
+  data = json.loads(credentials_path.read_text())
   oauth = data.get("claudeAiOauth", {})
   access_token = oauth.get("accessToken")
   refresh_token = oauth.get("refreshToken")
   expires_at = oauth.get("expiresAt")
 
   if not access_token:
-    log.warning("ext_usage_no_access_token")
+    log.warning("ext_usage_no_access_token", path=str(credentials_path))
     return None
 
   return {
@@ -233,7 +358,7 @@ def _compute_codex_spend_windows(
   one_day_ago = effective_now - timedelta(days=1)
   seven_days_ago = effective_now - timedelta(days=7)
   min_mtime = seven_days_ago.timestamp()
-  root = sessions_dir or CodexProvider.SESSIONS_DIR
+  root = sessions_dir or (Path.home() / ".codex" / "sessions")
 
   last_24h_by_model: dict[str, dict[str, int]] = {}
   last_7d_by_model: dict[str, dict[str, int]] = {}
@@ -341,8 +466,8 @@ def _transform_codex_response(
   return usage
 
 
-async def _refresh_access_token(refresh_token: str) -> str | None:
-  """Refresh the OAuth access token and save new credentials."""
+async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> str | None:
+  """Refresh the OAuth access token and save new credentials to the account's file."""
   client = get_http_client()
   resp = await client.post(
       TOKEN_REFRESH_URL,
@@ -360,25 +485,23 @@ async def _refresh_access_token(refresh_token: str) -> str | None:
   new_refresh = token_data.get("refresh_token", refresh_token)
   new_expires = token_data.get("expires_at")
 
-  # Save back to credentials file
   def _update_creds() -> None:
-    creds_data = json.loads(CREDENTIALS_PATH.read_text())
+    creds_data = json.loads(credentials_path.read_text())
     creds_data["claudeAiOauth"]["accessToken"] = new_access
     creds_data["claudeAiOauth"]["refreshToken"] = new_refresh
     if new_expires:
       creds_data["claudeAiOauth"]["expiresAt"] = new_expires
-    CREDENTIALS_PATH.write_text(json.dumps(creds_data, indent=2))
+    credentials_path.write_text(json.dumps(creds_data, indent=2))
 
   await asyncio.to_thread(_update_creds)
 
-  log.info("ext_usage_token_refreshed")
+  log.info("ext_usage_token_refreshed", path=str(credentials_path))
   return new_access
 
 
 def _transform_response(raw: dict[str, Any]) -> dict[str, Any]:
-  """Transform the raw API response into our cached format."""
+  """Transform the raw Anthropic usage API response into our cached format."""
   now = datetime.now(timezone.utc).isoformat()
-  # The API returns usage windows; map them to our schema.
   five_hour = raw.get("fiveHour", raw.get("five_hour", {}))
   seven_day = raw.get("sevenDay", raw.get("seven_day", {}))
 
@@ -394,7 +517,7 @@ def _transform_response(raw: dict[str, Any]) -> dict[str, Any]:
               "resets_at": seven_day.get("resetsAt", seven_day.get("resets_at", "")),
           },
       "fetched_at": now,
-      "provider": "cc-opus",
+      "provider": "claude",
   }
 
 
@@ -402,47 +525,63 @@ def _transform_response(raw: dict[str, Any]) -> dict[str, Any]:
 # Background poller
 # ---------------------------------------------------------------------------
 
-_cc_provider = CcOpusProvider()
-_codex_provider = CodexProvider()
-
 
 async def _poll_loop() -> None:
-  """Background loop that fetches usage data every POLL_INTERVAL_SECONDS."""
+  """Background loop that fetches usage data at a fixed cadence for every derived account."""
+  global _cached_usage
 
   while True:
     try:
-      # Poll both providers
-      cc_result, codex_result = await asyncio.gather(
-          _cc_provider.fetch(),
-          _codex_provider.fetch(),
+      accounts = _derive_accounts()
+      cycle: list[_UsageInstance] = []
+      live_keys: set[tuple[str, str]] = set()
+      for provider in ("claude", "codex"):
+        for label, dir_path in accounts.get(provider, []):
+          key = (provider, dir_path)
+          live_keys.add(key)
+          inst = _instances.get(key)
+          if inst is None:
+            inst = _UsageInstance(provider, label, dir_path)
+            _instances[key] = inst
+          inst.label = label
+          cycle.append(inst)
+      for key in list(_instances):
+        if key not in live_keys:
+          del _instances[key]
+
+      results = await asyncio.gather(
+          *(inst.fetch() for inst in cycle),
           return_exceptions=True,
       )
 
-      if isinstance(cc_result, Exception):
-        log.error("ext_usage_cc_poll_error", error=str(cc_result))
-        cc_result = None
-      if isinstance(codex_result, Exception):
-        log.error("ext_usage_codex_poll_error", error=str(codex_result))
-        codex_result = None
+      new_cache: dict[str, dict] = {}
+      for inst, result in zip(cycle, results):
+        cache_key = f"{inst.provider}:{inst.label}"
+        if isinstance(result, Exception):
+          log.error("ext_usage_poll_error", provider=inst.provider, account=inst.label, error=str(result))
+          result = None
+        if result is not None:
+          new_cache[cache_key] = {**result, "account": inst.label}
+        else:
+          prev = _cached_usage.get(cache_key)
+          if prev is not None and "error" not in prev:
+            new_cache[cache_key] = prev
+          else:
+            new_cache[cache_key] = {
+                "provider": inst.provider,
+                "account": inst.label,
+                "error": inst.last_error,
+            }
 
-      if cc_result is not None:
-        _cached_usage["cc-opus"] = cc_result
-      if codex_result is not None:
-        _cached_usage["codex"] = codex_result
+      _cached_usage = new_cache
 
-      # Broadcast to sidebar channel
       if _cached_usage:
         await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)})
-        log.info(
-            "ext_usage_fetched",
-            providers=list(_cached_usage.keys()),
-        )
+        log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
     except Exception:
       log.exception("ext_usage_poll_error")
 
-    # Use provider backoff if rate-limited, otherwise normal interval
-    wait = _cc_provider._backoff_seconds if _cc_provider._backoff_seconds > 0 else POLL_INTERVAL_SECONDS
-    await asyncio.sleep(wait)
+    await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
 # ---------------------------------------------------------------------------

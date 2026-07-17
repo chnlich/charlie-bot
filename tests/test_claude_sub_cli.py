@@ -6,36 +6,68 @@ from pathlib import Path
 import pytest
 
 from src.cli import claude_sub
-
-# Real `tmux capture-pane -e` fixtures from claude v2.1.174. Ghost suggestions and
-# idle hints render SGR dim (\x1b[2m) and must read as EMPTY real content; pasted
-# text (placeholder or literal) renders non-dim and must read as NON-empty.
-_FIXTURE_IDLE_HINT = '\x1b[39m❯ \x1b[2mTry "how do I log an error?"\x1b[0m'
-_FIXTURE_GHOST_SUGGESTION = "\x1b[39m❯ \x1b[2m3D latent draft suggestion\x1b[0m"
-_FIXTURE_PASTE_PLACEHOLDER = "\x1b[39m❯ [Pasted text #1 +5 lines]"
-_FIXTURE_LITERAL_PASTE = "\x1b[39m❯ short literal paste"
-_FIXTURE_DIGIT_LEADING_LITERAL_PASTE = "\x1b[39m❯ 1. Inspect the current failure"
-_FIXTURE_STARTUP_MENU = """\
-\x1b[?25l╭────────────────────────────────────────────╮
-│ Claude Code can help with this repository.   │
-│ ❯ 1. Yes, try it                             │
-│   2. No, keep using the terminal             │
-╰────────────────────────────────────────────╯"""
+from src.cli import claude_sub_hook
+from src.cli.claude_sub_bridge import (
+    HookBridge,
+    HookProtocolError,
+    HookTurnState,
+    PromptDelivery,
+)
+from src.core import event_types as ET
 
 
-def _stub_turn_setup(monkeypatch: pytest.MonkeyPatch, jsonl: Path) -> None:
-  """Stub tmux/transcript plumbing so _stream_turn drives only its poll loop."""
-
-  async def _noop(*args, **kwargs) -> None:
-    return None
-
-  monkeypatch.setattr(claude_sub, "ensure_tmux_session", _noop)
-  monkeypatch.setattr(claude_sub, "_wait_for_prompt", _noop)
-  monkeypatch.setattr(claude_sub, "_send_prompt", _noop)
-  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: jsonl)
+SESSION_ID = "session-id"
+WORKING_DIRECTORY = "/tmp/claude-sub-test"
+PROMPT = "Fix the race\nwith details on later lines"
 
 
-def test_parse_argv_accepts_cc_backend_flags_without_prompt() -> None:
+def _payload(event_name: str, **fields) -> dict:
+  payload = {
+      "hook_event_name": event_name,
+      "session_id": SESSION_ID,
+      "cwd": WORKING_DIRECTORY,
+      **fields,
+  }
+  if event_name == "SessionStart":
+    payload.setdefault("model", "claude-opus-4-8")
+  if event_name == "Notification":
+    payload.setdefault("message", "Claude is waiting for your input")
+  return payload
+
+
+def _state(prompt: str = PROMPT) -> HookTurnState:
+  return HookTurnState(
+      expected_session_id=SESSION_ID,
+      expected_cwd=WORKING_DIRECTORY,
+      expected_prompt=prompt,
+      expected_source="startup",
+      model="claude-opus-4-8",
+  )
+
+
+def _started_turn(prompt: str = PROMPT) -> HookTurnState:
+  state = _state(prompt)
+  state.handle("SessionStart", _payload("SessionStart", source="startup"))
+  state.handle(
+      "UserPromptSubmit",
+      _payload("UserPromptSubmit", prompt=prompt, turn_id="turn-1"),
+  )
+  return state
+
+
+def _stop_payload(**fields) -> dict:
+  values = {
+      "stop_hook_active": False,
+      "last_assistant_message": "final answer",
+      "background_tasks": [],
+      "session_crons": [],
+      "turn_id": "turn-1",
+  }
+  values.update(fields)
+  return _payload("Stop", **values)
+
+
+def test_parse_argv_preserves_existing_backend_options() -> None:
   args = claude_sub.parse_argv(
       [
           "-p",
@@ -53,6 +85,8 @@ def test_parse_argv_accepts_cc_backend_flags_without_prompt() -> None:
           "fresh-session-id",
           "--resume",
           "session-id",
+          "--settings",
+          '{"fastMode":true}',
       ])
 
   assert args.output_format == "stream-json"
@@ -62,6 +96,7 @@ def test_parse_argv_accepts_cc_backend_flags_without_prompt() -> None:
   assert args.session_id == "fresh-session-id"
   assert args.resume == "session-id"
   assert args.disallowed_tools == ["Monitor,CronCreate"]
+  assert args.settings == ['{"fastMode":true}']
 
 
 def test_parse_argv_rejects_non_stream_json_output() -> None:
@@ -74,22 +109,7 @@ def test_parse_argv_rejects_positional_prompt_tokens() -> None:
     claude_sub.parse_argv(["-p", "--output-format", "stream-json", "--", "hello"])
 
 
-def test_parse_argv_collects_multiple_disallowed_tools_flags() -> None:
-  args = claude_sub.parse_argv(
-      [
-          "-p",
-          "--output-format",
-          "stream-json",
-          "--disallowed-tools",
-          "Monitor,CronCreate",
-          "--disallowed-tools",
-          "AskUserQuestion,ExitPlanMode",
-      ])
-
-  assert args.disallowed_tools == ["Monitor,CronCreate", "AskUserQuestion,ExitPlanMode"]
-
-
-def test_main_reads_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_reads_exactly_one_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
   captured: dict[str, claude_sub.ClaudeSubArgs] = {}
 
   async def fake_run(args: claude_sub.ClaudeSubArgs) -> None:
@@ -102,562 +122,402 @@ def test_main_reads_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
   assert captured["args"].prompt == "hello\nworld"
 
 
-@pytest.mark.asyncio
-async def test_run_tmux_bytes_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
-  captured: dict[str, dict[str, str]] = {}
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
-  monkeypatch.setattr(claude_sub, "_tmux_binary", lambda: "/usr/bin/tmux")
+def test_validate_prompt_reports_nul_and_size_causes() -> None:
+  with pytest.raises(ValueError, match="NUL"):
+    claude_sub.validate_prompt("before\x00after")
 
-  class FakeProcess:
-    returncode = 0
+  with pytest.raises(ValueError, match="exceeding"):
+    claude_sub.validate_prompt("x" * (claude_sub.MAX_PROMPT_BYTES + 1))
 
-    async def communicate(self, stdin):
-      return b"pane", b""
 
-  async def fake_create_subprocess_exec(*args, **kwargs):
-    captured["env"] = kwargs["env"]
-    return FakeProcess()
-
-  monkeypatch.setattr(claude_sub.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-
-  output = await claude_sub._run_tmux_bytes("capture-pane", "-p", capture=True)
-
-  assert output == b"pane"
-  assert "CHARLIEBOT_SESSION_ID" not in captured["env"]
-
-
-def _stub_send_prompt_tmux(monkeypatch: pytest.MonkeyPatch, captures) -> list[str]:
-  """Stub tmux for _send_prompt tests: zero waits, scripted -e pane captures.
-
-  Returns the list of send-keys keystrokes recorded during the call.
-  """
-  keys: list[str] = []
-
-  async def fake_run_tmux_bytes(*args, stdin=None, capture=False) -> bytes:
-    if args[0] == "send-keys":
-      keys.append(args[-1])
-    return b""
-
-  pane_iter = iter(captures)
-
-  async def fake_capture_escapes(session_id: str) -> str:
-    return next(pane_iter)
-
-  monkeypatch.setattr(claude_sub, "_run_tmux_bytes", fake_run_tmux_bytes)
-  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture_escapes)
-  monkeypatch.setattr(claude_sub, "_SUBMIT_VERIFY_WAIT_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_SUBMIT_RETRY_WAIT_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_PASTE_RENDER_TIMEOUT_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_CLEAR_INPUT_TIMEOUT_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_POLL_SECONDS", 0.0)
-  return keys
-
-
-def _forever(first: list[str], repeated: str):
-  yield from first
-  while True:
-    yield repeated
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_resends_enter_until_input_box_empties(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys = _stub_send_prompt_tmux(
-      monkeypatch,
-      [
-          _FIXTURE_IDLE_HINT,  # pre-paste: only a dim hint -> empty, nothing to clear
-          _FIXTURE_PASTE_PLACEHOLDER,  # paste rendered as the multi-line placeholder
-          _FIXTURE_PASTE_PLACEHOLDER,  # first Enter dropped: box still non-empty
-          _FIXTURE_IDLE_HINT,  # second Enter landed: box empty again (ghost hint only)
-      ])
-
-  await claude_sub._send_prompt("session-id", "Fix the race\nwith details on later lines")
-
-  assert keys == ["Enter", "Enter"]
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_submits_digit_leading_literal_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys = _stub_send_prompt_tmux(
-      monkeypatch,
-      [
-          _FIXTURE_IDLE_HINT,  # pre-paste: empty
-          _FIXTURE_DIGIT_LEADING_LITERAL_PASTE,  # paste rendered literally, not as a menu
-          _FIXTURE_DIGIT_LEADING_LITERAL_PASTE,  # first Enter dropped: retry while still non-empty
-          _FIXTURE_IDLE_HINT,  # second Enter landed
-      ])
-
-  await claude_sub._send_prompt("session-id", "1. Inspect the current failure")
-
-  assert keys == ["Enter", "Enter"]
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_does_not_retry_when_ghost_text_fills_empty_box(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys = _stub_send_prompt_tmux(
-      monkeypatch,
-      [
-          _FIXTURE_IDLE_HINT,  # pre-paste: empty
-          _FIXTURE_LITERAL_PASTE,  # paste rendered literally
-          _FIXTURE_GHOST_SUGGESTION,  # Enter landed; a dim ghost suggestion reappeared in the emptied box
-      ])
-
-  await claude_sub._send_prompt("session-id", "short literal paste")
-
-  assert keys == ["Enter"]  # ghost text must not look unsubmitted and trigger stray Enters
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_raises_with_box_content_when_enter_never_lands(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys = _stub_send_prompt_tmux(monkeypatch, _forever([_FIXTURE_IDLE_HINT], _FIXTURE_PASTE_PLACEHOLDER))
-
-  with pytest.raises(RuntimeError, match=r"unsubmitted.*\[Pasted text #1 \+5 lines\]"):
-    await claude_sub._send_prompt("session-id", "Fix the race\nwith details on later lines")
-
-  assert keys == ["Enter"] * claude_sub._SUBMIT_MAX_ENTER_ATTEMPTS
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_clears_stale_input_before_pasting(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys = _stub_send_prompt_tmux(
-      monkeypatch,
-      [
-          _FIXTURE_LITERAL_PASTE,  # stale text from a prior failed turn
-          _FIXTURE_IDLE_HINT,  # C-e/C-u cleared it
-          _FIXTURE_PASTE_PLACEHOLDER,  # paste rendered
-          _FIXTURE_IDLE_HINT,  # Enter landed
-      ])
-
-  await claude_sub._send_prompt("session-id", "Fix the race\nwith details on later lines")
-
-  assert keys == ["C-e", "C-u", "Enter"]
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_dismisses_startup_menu_before_pasting(monkeypatch: pytest.MonkeyPatch) -> None:
-  events: list[dict] = []
-  keys = _stub_send_prompt_tmux(
-      monkeypatch,
-      [
-          _FIXTURE_STARTUP_MENU,  # pre-send check sees a startup menu, not stale input
-          _FIXTURE_STARTUP_MENU,  # bounded cancel path sends Escape
-          _FIXTURE_IDLE_HINT,  # menu dismissed; real prompt is ready
-          _FIXTURE_PASTE_PLACEHOLDER,  # paste rendered
-          _FIXTURE_IDLE_HINT,  # Enter landed
-      ])
-
-  await claude_sub._send_prompt("session-id", "Fix the race\nwith details on later lines", events.append)
-
-  assert keys == ["Escape", "Enter"]
-  assert [event["subtype"] for event in events] == ["tui_menu_dismissed"]
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_raises_when_stale_input_never_clears(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys = _stub_send_prompt_tmux(monkeypatch, _forever([], _FIXTURE_LITERAL_PASTE))
-
-  with pytest.raises(RuntimeError, match="stale content.*short literal paste"):
-    await claude_sub._send_prompt("session-id", "Fix the race")
-
-  assert keys == ["C-e", "C-u"]  # never pasted, never sent Enter
-
-
-@pytest.mark.asyncio
-async def test_send_prompt_raises_when_paste_never_renders(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys = _stub_send_prompt_tmux(monkeypatch, _forever([], _FIXTURE_IDLE_HINT))
-
-  with pytest.raises(RuntimeError, match="did not render"):
-    await claude_sub._send_prompt("session-id", "Fix the race")
-
-  assert keys == []  # no Enter ever sent toward an empty box
-
-
-@pytest.mark.asyncio
-async def test_wait_for_prompt_dismisses_startup_menu_and_emits_warning(monkeypatch: pytest.MonkeyPatch) -> None:
-  captures = iter([_FIXTURE_STARTUP_MENU, _FIXTURE_IDLE_HINT])
-  keys: list[str] = []
-  events: list[dict] = []
-
-  async def fake_capture(session_id: str) -> str:
-    return next(captures)
-
-  async def fake_run_tmux_bytes(*args, stdin=None, capture=False) -> bytes:
-    if args[0] == "send-keys":
-      keys.append(args[-1])
-    return b""
-
-  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
-  monkeypatch.setattr(claude_sub, "_run_tmux_bytes", fake_run_tmux_bytes)
-  monkeypatch.setattr(claude_sub, "_POLL_SECONDS", 0.0)
-
-  await claude_sub._wait_for_prompt("session-id", events.append)
-
-  assert keys == ["Escape"]
-  assert len(events) == 1
-  assert events[0]["type"] == "system"
-  assert events[0]["subtype"] == "tui_menu_dismissed"
-  assert events[0]["content"] == claude_sub._TUI_MENU_DISMISSED_WARNING
-  assert events[0]["uuid"]
-
-
-@pytest.mark.asyncio
-async def test_wait_for_prompt_fails_loud_after_startup_menu_dismiss_bound(monkeypatch: pytest.MonkeyPatch) -> None:
-  keys: list[str] = []
-
-  async def fake_capture(session_id: str) -> str:
-    return _FIXTURE_STARTUP_MENU
-
-  async def fake_run_tmux_bytes(*args, stdin=None, capture=False) -> bytes:
-    if args[0] == "send-keys":
-      keys.append(args[-1])
-    return b""
-
-  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
-  monkeypatch.setattr(claude_sub, "_run_tmux_bytes", fake_run_tmux_bytes)
-  monkeypatch.setattr(claude_sub, "_PRE_PROMPT_MENU_MAX_DISMISS", 2)
-  monkeypatch.setattr(claude_sub, "_POLL_SECONDS", 0.0)
-
-  with pytest.raises(RuntimeError, match="startup menu.*before the first prompt") as exc_info:
-    await claude_sub._wait_for_prompt("session-id", lambda event: None)
-
-  assert keys == ["Escape", "Escape"]
-  assert "120" not in str(exc_info.value)
-
-
-def test_convert_record_suppresses_typed_user_prompt() -> None:
-  event = claude_sub._convert_record(
-      {
-          "type": "user",
-          "message": {
-              "role": "user",
-              "content": "hello",
-          },
-          "sessionId": "session-id",
-      },
-      "session-id",
-  )
-
-  assert event is None
-
-
-def test_convert_record_preserves_tool_result_user_event() -> None:
-  event = claude_sub._convert_record(
-      {
-          "type": "user",
-          "message":
-              {
-                  "role": "user",
-                  "content": [{
-                      "type": "tool_result",
-                      "tool_use_id": "toolu_123",
-                      "content": "ok",
-                  }],
-              },
-          "toolUseResult": {
-              "stdout": "ok"
-          },
-          "sessionId": "session-id",
-          "uuid": "event-id",
-      },
-      "session-id",
-  )
-
-  assert event == {
-      "type": "user",
-      "message": {
-          "role": "user",
-          "content": [{
-              "type": "tool_result",
-              "tool_use_id": "toolu_123",
-              "content": "ok",
-          }],
-      },
-      "parent_tool_use_id": None,
-      "session_id": "session-id",
-      "uuid": "event-id",
-      "tool_use_result": {
-          "stdout": "ok"
-      },
-  }
-
-
-def test_result_event_uses_aggregate_usage_from_unique_messages() -> None:
-  state = claude_sub.TurnState()
-  state.observe_assistant(
-      {
-          "id": "msg-a",
-          "content": [{
-              "type": "text",
-              "text": "final",
-          }],
-          "stop_reason": "end_turn",
-          "usage":
-              {
-                  "input_tokens": 10,
-                  "output_tokens": 2,
-                  "cache_read_input_tokens": 3,
-                  "cache_creation_input_tokens": 4,
-              },
-      })
-
-  event = claude_sub._result_event("session-id", state, {"durationMs": 123})
-
-  assert event["type"] == "result"
-  assert event["subtype"] == "success"
-  assert event["session_id"] == "session-id"
-  assert event["result"] == "final"
-  assert event["usage"]["input_tokens"] == 10
-  assert event["usage"]["output_tokens"] == 2
-
-
-@pytest.mark.asyncio
-async def test_resume_requires_existing_transcript_or_tmux_session(monkeypatch: pytest.MonkeyPatch) -> None:
-  ensure_called = False
-
-  async def fake_tmux_session_exists(session_id: str) -> bool:
-    return False
-
-  async def fake_ensure_tmux_session(*args, **kwargs) -> None:
-    nonlocal ensure_called
-    ensure_called = True
-
-  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: None)
-  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_tmux_session_exists)
-  monkeypatch.setattr(claude_sub, "ensure_tmux_session", fake_ensure_tmux_session)
-
+def test_leading_dash_prompt_is_one_protected_argv_element(tmp_path: Path) -> None:
   args = claude_sub.ClaudeSubArgs(
       output_format="stream-json",
-      prompt="hello",
-      resume="missing-session",
+      prompt="-do not parse this as an option",
   )
-  with pytest.raises(RuntimeError, match="resume session not found: missing-session"):
-    await claude_sub._stream_turn(args, asyncio.Event())
 
-  assert not ensure_called
+  claude_sub.validate_prompt(args.prompt)
+  argv = claude_sub._build_claude_argv(args, SESSION_ID, False, tmp_path / "plugin")
+
+  assert argv[-2:] == ["--", args.prompt]
+  assert argv.count(args.prompt) == 1
+
+
+def test_prompt_delivery_starts_unknown_and_acknowledges_exact_submit() -> None:
+  state = _state()
+
+  assert state.delivery is PromptDelivery.UNKNOWN
+  state.handle("SessionStart", _payload("SessionStart", source="startup"))
+  state.handle(
+      "UserPromptSubmit",
+      _payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1", future_field="ignored"),
+  )
+
+  assert state.delivery is PromptDelivery.ACKNOWLEDGED
+  assert state.correlation_field == "turn_id"
+  assert state.correlation_id == "turn-1"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"prompt": "different prompt", "turn_id": "turn-1"},
+        {"prompt": PROMPT, "turn_id": "turn-1", "session_id": "other-session"},
+        {"prompt": PROMPT, "turn_id": "turn-1", "cwd": "/tmp/other-directory"},
+    ],
+)
+def test_prompt_delivery_mismatch_blocks_and_never_acknowledges(fields: dict) -> None:
+  state = _state()
+  state.handle("SessionStart", _payload("SessionStart", source="startup"))
+
+  with pytest.raises(HookProtocolError, match="mismatch"):
+    state.handle("UserPromptSubmit", _payload("UserPromptSubmit", **fields))
+
+  assert state.delivery is PromptDelivery.UNKNOWN
+
+
+def test_user_prompt_submit_requires_a_correlation_field() -> None:
+  state = _state()
+  state.handle("SessionStart", _payload("SessionStart", source="startup"))
+
+  with pytest.raises(HookProtocolError, match="correlation"):
+    state.handle("UserPromptSubmit", _payload("UserPromptSubmit", prompt=PROMPT))
+
+
+def test_hook_mapping_covers_message_tools_compaction_and_unknown_fields() -> None:
+  state = _started_turn()
+
+  message_events = state.handle(
+      "MessageDisplay",
+      _payload(
+          "MessageDisplay",
+          turn_id="turn-1",
+          message_id="message-1",
+          index=0,
+          final=False,
+          delta="assistant text",
+          transcript_path="/must-not-be-read",
+          unknown_non_control={"ignored": True},
+      ))
+  assert message_events[0]["type"] == ET.ASSISTANT
+  assert message_events[0]["message"]["content"] == [{"type": "text", "text": "assistant text"}]
+  assert message_events[0]["message_id"] == "message-1"
+
+  tool_events = state.handle(
+      "PreToolUse",
+      _payload(
+          "PreToolUse",
+          tool_name="Bash",
+          tool_input={"command": "printf test"},
+          tool_use_id="tool-1",
+          unknown_non_control="ignored",
+      ))
+  assert tool_events[0]["message"]["content"][0]["id"] == "tool-1"
+
+  result_events = state.handle(
+      "PostToolUse",
+      _payload(
+          "PostToolUse",
+          tool_name="Bash",
+          tool_input={"command": "printf test"},
+          tool_use_id="tool-1",
+          tool_response={"content": "test"},
+      ))
+  assert result_events[0]["message"]["content"][0]["tool_use_id"] == "tool-1"
+  assert result_events[0]["message"]["content"][0]["is_error"] is False
+
+  failure_events = state.handle(
+      "PostToolUseFailure",
+      _payload(
+          "PostToolUseFailure",
+          tool_name="Bash",
+          tool_input={"command": "false"},
+          tool_use_id="tool-2",
+          error="command failed",
+          is_interrupt=False,
+      ))
+  assert failure_events[0]["message"]["content"][0]["tool_use_id"] == "tool-2"
+  assert failure_events[0]["message"]["content"][0]["is_error"] is True
+
+  compact_events = state.handle(
+      "PostCompact",
+      _payload(
+          "PostCompact",
+          trigger="auto",
+          pre_tokens=123,
+          compact_summary="summary",
+          unknown_non_control=True,
+      ))
+  assert compact_events == [{
+      "type": ET.CONTEXT_COMPACTED,
+      "trigger": "auto",
+      "pre_tokens": 123,
+  }]
+
+
+def test_message_display_uses_turn_id_for_the_wrapped_event() -> None:
+  state = _state()
+  state.handle("SessionStart", _payload("SessionStart", source="startup"))
+  state.handle(
+      "UserPromptSubmit",
+      _payload("UserPromptSubmit", prompt=PROMPT, prompt_id="prompt-1"),
+  )
+
+  events = state.handle(
+      "MessageDisplay",
+      _payload(
+          "MessageDisplay",
+          prompt_id="prompt-1",
+          turn_id="turn-1",
+          message_id="message-1",
+          index=0,
+          final=True,
+          delta="answer",
+      ))
+
+  assert events[0]["turn_id"] == "turn-1"
+
+
+def test_missing_required_message_field_fails_loudly() -> None:
+  state = _started_turn()
+  payload = _payload(
+      "MessageDisplay",
+      turn_id="turn-1",
+      message_id="message-1",
+      index=0,
+      final=True,
+  )
+
+  with pytest.raises(HookProtocolError, match="delta"):
+    state.handle("MessageDisplay", payload)
+
+
+def test_unknown_control_enum_fails_loudly() -> None:
+  state = _started_turn()
+
+  with pytest.raises(HookProtocolError, match="unknown PostCompact trigger"):
+    state.handle("PostCompact", _payload("PostCompact", trigger="future"))
+
+
+def test_completion_requires_stop_then_idle_prompt() -> None:
+  state = _started_turn()
+
+  with pytest.raises(HookProtocolError, match="before Stop"):
+    state.handle("Notification", _payload("Notification", notification_type="idle_prompt"))
+
+  assert state.stop_seen is False
+  state.handle("Stop", _stop_payload())
+  assert state.stop_candidate == "final answer"
+  assert state.idle_seen is False
+  state.handle("Notification", _payload("Notification", notification_type="idle_prompt"))
+  assert state.idle_seen is True
+
+
+def test_session_end_during_active_turn_fails() -> None:
+  state = _started_turn()
+
+  with pytest.raises(HookProtocolError, match="active turn"):
+    state.handle("SessionEnd", _payload("SessionEnd", reason="logout"))
+
+
+def test_stop_rejects_background_work_and_stop_failure_preserves_error() -> None:
+  state = _started_turn()
+  with pytest.raises(HookProtocolError, match="background work"):
+    state.handle("Stop", _stop_payload(background_tasks=["task-1"]))
+
+  state = _started_turn()
+  events = state.handle(
+      "StopFailure",
+      _payload(
+          "StopFailure",
+          turn_id="turn-1",
+          error="rate_limit",
+          error_details="limit reached",
+          last_assistant_message="partial answer",
+      ))
+
+  assert [event["type"] for event in events] == ["rate_limit_event", ET.ERROR]
+  assert events[0]["rate_limit_info"]["status"] == "rejected"
+  assert events[1]["error"] == "rate_limit"
+  assert events[1]["error_details"] == "limit reached"
+  assert events[1]["message"] == "partial answer"
+  assert state.failure is not None
 
 
 @pytest.mark.asyncio
-async def test_stream_turn_injects_headless_env_into_tmux(
+async def test_hook_bridge_accepts_fake_hook_source_and_emits_events(tmp_path: Path) -> None:
+  bridge = HookBridge(tmp_path / "bridge.sock", "token", _state())
+  await bridge.start()
+  try:
+    session_start = await asyncio.to_thread(
+        claude_sub_hook._send_request,
+        str(bridge.socket_path),
+        bridge.token,
+        False,
+        _payload("SessionStart", source="startup"),
+    )
+    assert session_start == {"ok": True}
+    assert (await bridge.events.get())["subtype"] == "init"
+
+    user_submit = await asyncio.to_thread(
+        claude_sub_hook._send_request,
+        str(bridge.socket_path),
+        bridge.token,
+        True,
+        _payload("UserPromptSubmit", prompt=PROMPT, turn_id="turn-1"),
+    )
+    assert user_submit == {"ok": True}
+    message = await asyncio.to_thread(
+        claude_sub_hook._send_request,
+        str(bridge.socket_path),
+        bridge.token,
+        False,
+        _payload(
+            "MessageDisplay",
+            turn_id="turn-1",
+            message_id="message-1",
+            index=0,
+            final=True,
+            delta="hello",
+        ),
+    )
+    assert message == {"ok": True}
+    assert (await bridge.events.get())["message_id"] == "message-1"
+  finally:
+    await bridge.stop()
+
+
+def test_session_settings_are_session_scoped_and_lower_idle_threshold() -> None:
+  args = claude_sub.ClaudeSubArgs(
+      output_format="stream-json",
+      settings=['{"fastMode":true,"messageIdleNotifThresholdMs":60000}'],
+  )
+
+  settings = json.loads(claude_sub._session_settings(args))
+  assert settings["fastMode"] is True
+  assert settings["skipDangerousModePermissionPrompt"] is True
+  assert settings["messageIdleNotifThresholdMs"] == claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS
+  assert settings["inputNeededNotifEnabled"] is True
+
+  with pytest.raises(claude_sub.ClaudeSubError, match="inline JSON"):
+    claude_sub._session_settings(
+        claude_sub.ClaudeSubArgs(output_format="stream-json", settings=["user-settings.json"]))
+
+
+def test_session_config_overlay_sets_idle_threshold_without_touching_sources(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  jsonl = tmp_path / "session.jsonl"
-  records = [
-      {
-          "type": "assistant",
-          "message": {
-              "id": "msg-a",
-              "content": [{
-                  "type": "text",
-                  "text": "done",
-              }],
-          },
-      },
-      {
-          "type": "system",
-          "subtype": "turn_duration",
-          "durationMs": 5,
-      },
-  ]
-  jsonl.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
-  injected_env = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
-  captured_kwargs: dict[str, object] = {}
-
-  async def fake_ensure_tmux_session(*args, **kwargs) -> None:
-    captured_kwargs.update(kwargs)
-
-  async def fake_wait_for_prompt(session_id: str, emit) -> None:
-    return None
-
-  async def fake_send_prompt(session_id: str, prompt: str, emit=None) -> None:
-    return None
-
-  async def fake_wait_transcript(session_id: str) -> Path:
-    return jsonl
-
-  monkeypatch.setattr(claude_sub, "headless_claude_env", lambda: injected_env)
-  monkeypatch.setattr(claude_sub, "ensure_tmux_session", fake_ensure_tmux_session)
-  monkeypatch.setattr(claude_sub, "_wait_for_prompt", fake_wait_for_prompt)
-  monkeypatch.setattr(claude_sub, "_send_prompt", fake_send_prompt)
-  monkeypatch.setattr(claude_sub, "_wait_for_transcript_path", fake_wait_transcript)
-  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: None)
-
-  await claude_sub._stream_turn(claude_sub.ClaudeSubArgs(output_format="stream-json", prompt="hi"), asyncio.Event())
-
-  assert captured_kwargs["inject_env"] == injected_env
-
-
-@pytest.mark.asyncio
-async def test_stream_turn_emits_init_before_prompt_wait_warning(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  jsonl = tmp_path / "session.jsonl"
-  records = [
-      {
-          "type": "assistant",
-          "message": {
-              "id": "msg-a",
-              "content": [{
-                  "type": "text",
-                  "text": "done",
-              }],
-          },
-      },
-      {
-          "type": "system",
-          "subtype": "turn_duration",
-          "durationMs": 5,
-      },
-  ]
-  jsonl.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
-
-  async def fake_ensure_tmux_session(*args, **kwargs) -> None:
-    print("tmux startup noise")
-
-  async def fake_wait_for_prompt(session_id: str, emit) -> None:
-    emit(
-        {
-            "type": "system",
-            "subtype": "tui_menu_dismissed",
-            "content": claude_sub._TUI_MENU_DISMISSED_WARNING,
-            "uuid": "warning-id",
-        })
-
-  async def fake_send_prompt(session_id: str, prompt: str, emit=None) -> None:
-    return None
-
-  async def fake_wait_transcript(session_id: str) -> Path:
-    return jsonl
-
-  monkeypatch.setattr(claude_sub, "ensure_tmux_session", fake_ensure_tmux_session)
-  monkeypatch.setattr(claude_sub, "_wait_for_prompt", fake_wait_for_prompt)
-  monkeypatch.setattr(claude_sub, "_send_prompt", fake_send_prompt)
-  monkeypatch.setattr(claude_sub, "_wait_for_transcript_path", fake_wait_transcript)
-  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: None)
-
-  args = claude_sub.ClaudeSubArgs(output_format="stream-json", prompt="hi")
-  await claude_sub._stream_turn(args, asyncio.Event())
-
-  output = capsys.readouterr().out
-  assert "tmux startup noise" not in output
-  events = [json.loads(line) for line in output.splitlines()]
-  assert events[0]["type"] == "system"
-  assert events[0]["subtype"] == "init"
-  assert events[1] == {
-      "type": "system",
-      "subtype": "tui_menu_dismissed",
-      "content": claude_sub._TUI_MENU_DISMISSED_WARNING,
-      "uuid": "warning-id",
-  }
-
-
-@pytest.mark.asyncio
-async def test_stream_turn_aborts_on_blocking_menu(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  jsonl = tmp_path / "session.jsonl"
-  jsonl.write_text("", encoding="utf-8")  # no records ever -> transcript stays quiet
-  _stub_turn_setup(monkeypatch, jsonl)
-
-  interrupted = False
-
-  async def fake_interrupt(session_id: str) -> None:
-    nonlocal interrupted
-    interrupted = True
-
-  async def fake_capture(session_id: str) -> str:
-    return "Would you like to proceed?\n❯ 1. Yes\n  2. No"
-
-  monkeypatch.setattr(claude_sub, "_interrupt_turn", fake_interrupt)
-  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
-  monkeypatch.setattr(claude_sub, "_STALL_PROBE_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_PANE_PROBE_INTERVAL_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_POLL_SECONDS", 0.0)
-
-  args = claude_sub.ClaudeSubArgs(output_format="stream-json", prompt="hi")
-  with pytest.raises(RuntimeError, match="interactive TUI menu"):
-    await claude_sub._stream_turn(args, asyncio.Event())
-
-  assert interrupted  # the TUI was C-c'd before raising
-
-
-@pytest.mark.asyncio
-async def test_stream_turn_does_not_abort_on_numbered_prompt_echo(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  jsonl = tmp_path / "session.jsonl"
-  jsonl.write_text("", encoding="utf-8")  # no records ever -> transcript stays quiet
-  _stub_turn_setup(monkeypatch, jsonl)
-
-  capture_called = False
-
-  async def fake_interrupt(session_id: str) -> None:
-    return None
-
-  async def fake_capture(session_id: str) -> str:
-    nonlocal capture_called
-    capture_called = True
-    return "❯ 1. Inspect the current failure\n  2. Patch the narrowest fix"
-
-  monkeypatch.setattr(claude_sub, "_interrupt_turn", fake_interrupt)
-  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
-  monkeypatch.setattr(claude_sub, "_STALL_PROBE_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_PANE_PROBE_INTERVAL_SECONDS", 0.0)
-  monkeypatch.setattr(claude_sub, "_MENU_CONFIRM_PROBES", 1)
-  monkeypatch.setattr(claude_sub, "_TURN_HARD_CAP_SECONDS", 0.0)
-
-  args = claude_sub.ClaudeSubArgs(
-      output_format="stream-json",
-      prompt="1. Inspect the current failure\n2. Patch the narrowest fix",
+  source_global = tmp_path / "source-claude.json"
+  source_settings = tmp_path / "source-settings.json"
+  source_credentials = tmp_path / "source-credentials.json"
+  source_remote = tmp_path / "source-remote-settings.json"
+  source_global.write_text(json.dumps({"projects": {"/project": {}}}), encoding="utf-8")
+  source_settings.write_text(json.dumps({"hooks": {"Stop": []}}), encoding="utf-8")
+  source_credentials.write_text("credentials", encoding="utf-8")
+  source_remote.write_text("{}", encoding="utf-8")
+  monkeypatch.setattr(
+      claude_sub,
+      "_claude_user_config_paths",
+      lambda: (source_global, source_settings, source_credentials, source_remote),
   )
-  with pytest.raises(RuntimeError, match="turn exceeded"):
-    await claude_sub._stream_turn(args, asyncio.Event())
+  monkeypatch.setattr(claude_sub, "_SESSION_MARKER_DIR", tmp_path / "markers")
 
-  assert capture_called
+  config_dir = claude_sub._prepare_session_config(SESSION_ID)
+
+  assert config_dir == tmp_path / "markers" / "configs" / SESSION_ID
+  assert json.loads((config_dir / ".claude.json").read_text())["messageIdleNotifThresholdMs"] == 1000
+  assert (config_dir / "settings.json").read_text() == source_settings.read_text()
+  assert (config_dir / ".credentials.json").read_text() == "credentials"
+  assert json.loads(source_global.read_text()) == {"projects": {"/project": {}}}
+
+
+def test_hook_plugin_registers_every_required_event_without_user_settings(tmp_path: Path) -> None:
+  bridge = HookBridge(tmp_path / "bridge.sock", "per-turn-token", _state())
+  plugin_dir = claude_sub._write_hook_plugin(tmp_path, bridge)
+  plugin = json.loads((plugin_dir / ".claude-plugin" / "plugin.json").read_text())
+  hooks = json.loads((plugin_dir / "hooks" / "hooks.json").read_text())
+
+  assert plugin["name"] == "charliebot-hook-bridge"
+  assert set(hooks["hooks"]) == set(claude_sub._HOOK_EVENTS)
+  for event_name, groups in hooks["hooks"].items():
+    if event_name == "Notification":
+      assert "matcher" not in groups[0]
+    command = groups[0]["hooks"][0]
+    assert command["type"] == "command"
+    assert command["command"] == claude_sub.sys.executable
+    assert "--socket" in command["args"]
+    assert ("--gate" in command["args"]) is (event_name in {
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+    })
 
 
 @pytest.mark.asyncio
-async def test_stream_turn_completes_without_aborting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  jsonl = tmp_path / "session.jsonl"
-  records = [
-      {
-          "type": "assistant",
-          "message": {
-              "id": "msg-a",
-              "content": [{
-                  "type": "text",
-                  "text": "done",
-              }],
-          },
-      },
-      {
-          "type": "system",
-          "subtype": "turn_duration",
-          "durationMs": 5,
-      },
-  ]
-  jsonl.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+async def test_respawn_passes_one_prompt_directly_and_does_not_use_a_shell(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  calls: list[tuple[str, ...]] = []
 
-  async def fake_wait_transcript(session_id: str) -> Path:
-    return jsonl
-
-  _stub_turn_setup(monkeypatch, jsonl)
-  monkeypatch.setattr(claude_sub, "_wait_for_transcript_path", fake_wait_transcript)
-  # offset must start at 0 so the tail reads the pre-written records.
-  monkeypatch.setattr(claude_sub, "_find_existing_claude_jsonl", lambda session_id: None)
-
-  capture_called = False
-  interrupt_called = False
-
-  async def fake_capture(session_id: str) -> str:
-    nonlocal capture_called
-    capture_called = True
+  async def fake_tmux_checked(*args: str, **kwargs) -> str:
+    calls.append(args)
     return ""
 
-  async def fake_interrupt(session_id: str) -> None:
-    nonlocal interrupt_called
-    interrupt_called = True
+  monkeypatch.setattr(claude_sub, "_tmux_checked", fake_tmux_checked)
+  args = claude_sub.ClaudeSubArgs(
+      output_format="stream-json",
+      prompt="-leading prompt",
+      model="claude-opus-4-8",
+      effort="max",
+      disallowed_tools=["AskUserQuestion,ExitPlanMode"],
+  )
 
-  monkeypatch.setattr(claude_sub, "_capture_pane_escapes", fake_capture)
-  monkeypatch.setattr(claude_sub, "_interrupt_turn", fake_interrupt)
+  await claude_sub._respawn_claude(args, SESSION_ID, True, tmp_path / "plugin", Path.cwd())
 
-  args = claude_sub.ClaudeSubArgs(output_format="stream-json", prompt="hi")
-  await claude_sub._stream_turn(args, asyncio.Event())  # returns normally
+  assert len(calls) == 1
+  command = calls[0]
+  assert command[0:4] == ("respawn-pane", "-k", "-t", claude_sub.tmux_session_name(SESSION_ID))
+  assert "sh" not in command
+  assert command[-2:] == ("--", "-leading prompt")
+  assert command.count("-leading prompt") == 1
 
-  assert not capture_called  # completed before any stall probe
-  assert not interrupt_called
+
+@pytest.mark.asyncio
+async def test_old_style_live_pane_is_migration_blocked_without_killing_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  marker_states: list[claude_sub.SessionMarkerState] = []
+
+  async def fake_exists(session_id: str) -> bool:
+    return True
+
+  async def fake_pane(session_id: str) -> claude_sub.PaneInfo:
+    return claude_sub.PaneInfo(
+        pid=1234,
+        cwd=str(tmp_path),
+        command="claude",
+        dead=False,
+    )
+
+  monkeypatch.setattr(claude_sub, "_read_marker", lambda session_id: None)
+  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_exists)
+  monkeypatch.setattr(claude_sub, "_pane_info", fake_pane)
+  monkeypatch.setattr(claude_sub, "_write_marker", lambda session_id, state: marker_states.append(state))
+
+  with pytest.raises(claude_sub.ClaudeSubError, match="old-style live Claude TUI"):
+    await claude_sub._prepare_tmux_session(SESSION_ID, tmp_path, requested_resume=True)
+
+  assert marker_states == [claude_sub.SessionMarkerState.MIGRATION_BLOCKED]
+
+
+def test_success_result_uses_stop_candidate_without_usage_or_cost() -> None:
+  event = claude_sub._result_event(SESSION_ID, "final answer", 1234)
+
+  assert event["result"] == "final answer"
+  assert event["duration_ms"] == 1234
+  assert event["usage"] == {}
+  assert event["total_cost_usd"] is None
+  assert "thinking" not in event

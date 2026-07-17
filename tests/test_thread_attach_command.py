@@ -67,7 +67,7 @@ def test_build_attach_command_uses_tmux_for_claude_sub_config(tmp_path: Path) ->
 
   command = build_attach_command(_thread(backend="claude-sub"), cfg)
 
-  assert command == f"tmux -L {_TMUX_SOCKET} attach -t {tmux_session_name('claude-session-id')}"
+  assert command == f"tmux -L {_TMUX_SOCKET} attach -r -t {tmux_session_name('claude-session-id')}"
 
 
 @pytest.mark.asyncio

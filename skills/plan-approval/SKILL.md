@@ -50,8 +50,6 @@ not restate it here.
   "LGTM", "ship it" — gets: "Say **take off** to confirm."
 - Trade-off resolutions may ride in the approval message ("1 default, 2 both, take
   off"): resolve them first; the approval covers the result.
-- One "take off" releases the entire approved scope — every step, gate, and
-  delegation inside it, including irreversible actions the plan itself names.
 - Approval binds to the approval object as it stands: progress never expires it,
   change does. If a term must change mid-flight, re-present the affected terms and
   wait for a fresh "take off". Amendments to Context, Design Details, or unpromoted
@@ -62,9 +60,6 @@ not restate it here.
 - Default to acting. If you can undo an operation alone at similar cost and its
   effect stays within what you own — reaching neither other people nor systems
   they rely on — do it without asking.
-- An action that fails that test and is not named in the approved plan waits for
-  explicit approval — for that one action, while the rest of the plan keeps moving
-  where it can.
 - When reality forces a change that leaves the approval object intact, make it,
   log it as a deviation, and keep going.
 - Between "take off" and the report there is nothing to ask: return to the user

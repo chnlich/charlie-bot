@@ -155,6 +155,25 @@ def test_prepare_env_applies_headless_policy_over_incoming_env(monkeypatch: pyte
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 
+def test_claude_config_dir_expands_user_and_injects_env(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setenv("HOME", "/home/test-user")
+  backend = ClaudeCodeBackend(model="claude-opus-4-8", claude_config_dir="~/accounts/invite-1")
+
+  env = backend._prepare_env({})
+
+  assert env["CLAUDE_CONFIG_DIR"] == "/home/test-user/accounts/invite-1"
+  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
+def test_claude_config_dir_absent_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+  backend = ClaudeCodeBackend(model="claude-opus-4-8")
+
+  env = backend._prepare_env({})
+
+  assert "CLAUDE_CONFIG_DIR" not in env
+
+
 @pytest.mark.asyncio
 async def test_large_prompt_is_sent_on_stdin_not_argv(tmp_path: Path) -> None:
   capture_path = tmp_path / "captured-prompt.txt"

@@ -43,6 +43,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         effort=option.effort,
         cli_binary=option.cli_binary,
         fast_mode=option.fast_mode,
+        claude_config_dir=option.claude_config_dir,
         **kwargs)
   elif option.type == "cc-kimi":
     model = _require_model(option)

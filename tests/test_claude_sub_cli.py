@@ -1,6 +1,8 @@
 import asyncio
 import io
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -423,13 +425,200 @@ def test_session_config_overlay_sets_idle_threshold_without_touching_sources(
   )
   monkeypatch.setattr(claude_sub, "_SESSION_MARKER_DIR", tmp_path / "markers")
 
-  config_dir = claude_sub._prepare_session_config(SESSION_ID)
+  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
   assert config_dir == tmp_path / "markers" / "configs" / SESSION_ID
-  assert json.loads((config_dir / ".claude.json").read_text())["messageIdleNotifThresholdMs"] == 1000
+  overlay_global = json.loads((config_dir / ".claude.json").read_text())
+  assert overlay_global["messageIdleNotifThresholdMs"] == 1000
+  assert overlay_global["projects"][WORKING_DIRECTORY] == {
+      "hasTrustDialogAccepted": True,
+      "projectOnboardingSeenCount": 1,
+  }
+  assert overlay_global["projects"]["/project"] == {}
   assert (config_dir / "settings.json").read_text() == source_settings.read_text()
   assert (config_dir / ".credentials.json").read_text() == "credentials"
   assert json.loads(source_global.read_text()) == {"projects": {"/project": {}}}
+
+
+def _install_config_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    credentials_content: str | None = "credentials",
+    global_content: dict | None = None,
+) -> tuple[Path, Path, Path, Path]:
+  source_global = tmp_path / "source-claude.json"
+  source_settings = tmp_path / "source-settings.json"
+  source_credentials = tmp_path / "source-credentials.json"
+  source_remote = tmp_path / "source-remote-settings.json"
+  source_global.write_text(json.dumps(global_content if global_content is not None else {}), encoding="utf-8")
+  source_settings.write_text(json.dumps({"hooks": {"Stop": []}}), encoding="utf-8")
+  if credentials_content is not None:
+    source_credentials.write_text(credentials_content, encoding="utf-8")
+  source_remote.write_text("{}", encoding="utf-8")
+  monkeypatch.setattr(
+      claude_sub,
+      "_claude_user_config_paths",
+      lambda: (source_global, source_settings, source_credentials, source_remote),
+  )
+  monkeypatch.setattr(claude_sub, "_SESSION_MARKER_DIR", tmp_path / "markers")
+  return source_global, source_settings, source_credentials, source_remote
+
+
+def test_session_config_overlay_heals_existing_overlay_missing_trust_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  source_global, _, _, _ = _install_config_paths(monkeypatch, tmp_path)
+  config_dir = claude_sub._session_config_dir(SESSION_ID)
+  config_dir.mkdir(parents=True)
+  overlay_global = config_dir / ".claude.json"
+  overlay_global.write_text(
+      json.dumps({
+          "preservedKey": "kept",
+          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+          "projects": {"/unrelated": {"hasTrustDialogAccepted": True}},
+      }),
+      encoding="utf-8",
+  )
+
+  claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+
+  data = json.loads(overlay_global.read_text())
+  assert data["preservedKey"] == "kept"
+  assert data["projects"]["/unrelated"] == {"hasTrustDialogAccepted": True}
+  assert data["projects"][WORKING_DIRECTORY] == {
+      "hasTrustDialogAccepted": True,
+      "projectOnboardingSeenCount": 1,
+  }
+  assert json.loads(source_global.read_text()) == {}
+
+
+def test_session_config_overlay_preserves_existing_project_onboarding_seen_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  _install_config_paths(monkeypatch, tmp_path)
+  config_dir = claude_sub._session_config_dir(SESSION_ID)
+  config_dir.mkdir(parents=True)
+  overlay_global = config_dir / ".claude.json"
+  overlay_global.write_text(
+      json.dumps({
+          "projects": {
+              WORKING_DIRECTORY: {
+                  "hasTrustDialogAccepted": False,
+                  "projectOnboardingSeenCount": 7,
+              },
+          },
+      }),
+      encoding="utf-8",
+  )
+
+  claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+
+  project = json.loads(overlay_global.read_text())["projects"][WORKING_DIRECTORY]
+  assert project["hasTrustDialogAccepted"] is True
+  assert project["projectOnboardingSeenCount"] == 7
+
+
+def test_session_config_overlay_idempotent_when_already_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  _install_config_paths(monkeypatch, tmp_path)
+  config_dir = claude_sub._session_config_dir(SESSION_ID)
+  config_dir.mkdir(parents=True)
+  overlay_global = config_dir / ".claude.json"
+  overlay_global.write_text(
+      json.dumps({
+          "projects": {
+              WORKING_DIRECTORY: {
+                  "hasTrustDialogAccepted": True,
+                  "projectOnboardingSeenCount": 3,
+              },
+          },
+          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+      }),
+      encoding="utf-8",
+  )
+  writes: list[Path] = []
+  real_write = claude_sub._write_json_atomically
+
+  def counting_write(path: Path, value: dict) -> None:
+    writes.append(path)
+    real_write(path, value)
+
+  monkeypatch.setattr(claude_sub, "_write_json_atomically", counting_write)
+
+  claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+
+  assert writes == []
+
+
+def test_session_credentials_recopied_when_source_strictly_newer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  _, _, source_credentials, _ = _install_config_paths(monkeypatch, tmp_path)
+  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+  credentials_target = config_dir / ".credentials.json"
+  assert credentials_target.read_text() == "credentials"
+  os.utime(credentials_target, (1000, 1000))
+  source_credentials.write_text("rotated-credentials", encoding="utf-8")
+  os.utime(source_credentials, (2000, 2000))
+
+  claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+
+  assert credentials_target.read_text() == "rotated-credentials"
+  assert stat.S_IMODE(os.stat(credentials_target).st_mode) == 0o600
+
+
+def test_session_credentials_not_recopied_when_copy_same_age_or_newer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  _, _, source_credentials, _ = _install_config_paths(monkeypatch, tmp_path)
+  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+  credentials_target = config_dir / ".credentials.json"
+  source_credentials.write_text("should-not-be-copied", encoding="utf-8")
+  os.utime(source_credentials, (1000, 1000))
+  os.utime(credentials_target, (2000, 2000))
+
+  claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+
+  assert credentials_target.read_text() == "credentials"
+  source_credentials.write_text("same-age-still-skipped", encoding="utf-8")
+  os.utime(source_credentials, (1500, 1500))
+  os.utime(credentials_target, (1500, 1500))
+  claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+  assert credentials_target.read_text() == "credentials"
+
+
+def test_session_credentials_source_missing_with_copy_present_proceeds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  _, _, source_credentials, _ = _install_config_paths(monkeypatch, tmp_path)
+  config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+  credentials_target = config_dir / ".credentials.json"
+  source_credentials.unlink()
+
+  claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
+
+  assert credentials_target.read_text() == "credentials"
+
+
+def test_session_credentials_both_missing_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  _install_config_paths(monkeypatch, tmp_path, credentials_content=None)
+  config_dir = claude_sub._session_config_dir(SESSION_ID)
+  config_dir.mkdir(parents=True)
+  # No source credentials, no overlay copy.
+
+  with pytest.raises(claude_sub.ClaudeSubError, match="credentials"):
+    claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
 
 def test_hook_plugin_registers_every_required_event_without_user_settings(tmp_path: Path) -> None:

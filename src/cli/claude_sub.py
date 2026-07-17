@@ -348,7 +348,7 @@ def _copy_session_file(source: Path, target: Path, description: str) -> None:
   os.chmod(target, 0o600)
 
 
-def _prepare_session_config(session_id: str) -> Path:
+def _prepare_session_config(session_id: str, cwd: Path) -> Path:
   """Create the persistent per-session Claude config overlay without touching user files."""
   config_dir = _session_config_dir(session_id)
   try:
@@ -365,11 +365,26 @@ def _prepare_session_config(session_id: str) -> Path:
       raise ClaudeSubError(f"Claude global state is missing; cannot create session config overlay: {global_source}")
     _copy_session_file(global_source, global_target, "Claude global state")
     global_settings = _read_json_object(global_target, "session-only Claude global state")
+  # Seed folder trust for this turn's cwd so the interactive TUI does not park on
+  # the trust dialog (which would stall hooks until the submission-confirmation
+  # timeout).  Mirror the shape of _ensure_claude_project_trusted in
+  # src/agents/backends/tui.py:102-113, but write only this overlay file through
+  # _write_json_atomically (never the user's ~/.claude.json).
+  project = global_settings.setdefault("projects", {}).setdefault(str(cwd), {})
+  trust_changed = (
+      project.get("hasTrustDialogAccepted") is not True
+      or "projectOnboardingSeenCount" not in project
+  )
+  project["hasTrustDialogAccepted"] = True
+  project.setdefault("projectOnboardingSeenCount", 1)
   # Claude 2.1.211/2.1.212 reads this notification setting from global state rather
   # than the --settings flag.  Keep the override in this session-only copy so the
-  # idle hook remains prompt without modifying ~/.claude.json.
-  if global_settings.get("messageIdleNotifThresholdMs") != _IDLE_NOTIFICATION_THRESHOLD_MS:
-    global_settings["messageIdleNotifThresholdMs"] = _IDLE_NOTIFICATION_THRESHOLD_MS
+  # idle hook remains prompt without modifying ~/.claude.json.  Combine the trust
+  # and idle changes so one prepare writes .claude.json at most once, only when
+  # something actually changed.
+  idle_changed = global_settings.get("messageIdleNotifThresholdMs") != _IDLE_NOTIFICATION_THRESHOLD_MS
+  global_settings["messageIdleNotifThresholdMs"] = _IDLE_NOTIFICATION_THRESHOLD_MS
+  if trust_changed or idle_changed:
     _write_json_atomically(global_target, global_settings)
 
   if settings_source.is_file() and not (config_dir / "settings.json").exists():
@@ -380,6 +395,11 @@ def _prepare_session_config(session_id: str) -> Path:
   if not credentials_target.exists():
     if not credentials_source.is_file():
       raise ClaudeSubError(f"Claude subscription credentials are missing: {credentials_source}")
+    _copy_session_file(credentials_source, credentials_target, "Claude credentials")
+  elif credentials_source.is_file() and credentials_source.stat().st_mtime > credentials_target.stat().st_mtime:
+    # Claude rotates OAuth tokens and rewrites ~/.claude/.credentials.json; a
+    # long-lived overlay must not start a turn with a stale snapshot.  Refresh
+    # only when the source is strictly newer so an unchanged overlay is untouched.
     _copy_session_file(credentials_source, credentials_target, "Claude credentials")
   return config_dir
 
@@ -697,7 +717,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   cwd = Path.cwd().resolve()
   requested_resume = args.resume is not None
   resume = await _prepare_tmux_session(session_id, cwd, requested_resume)
-  config_dir = _prepare_session_config(session_id)
+  config_dir = _prepare_session_config(session_id, cwd)
 
   with tempfile.TemporaryDirectory(prefix=f"claude-sub-{session_id[:8]}-") as temporary_dir:
     temporary_root = Path(temporary_dir)

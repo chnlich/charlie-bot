@@ -65,6 +65,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         model=_require_model(option),
         codex_home=option.codex_home,
         model_reasoning_effort=option.model_reasoning_effort,
+        model_auto_compact_token_limit=option.model_auto_compact_token_limit,
         **kwargs)
   elif option.type == "charlie-code":
     return CharlieCodeBackend(model=_require_model(option), api_base=option.api_base, **kwargs)

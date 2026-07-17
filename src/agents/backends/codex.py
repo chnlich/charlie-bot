@@ -18,13 +18,15 @@ class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
   def __init__(self, *, model: str, codex_home: str | None = None,
-               model_reasoning_effort: str | None = None, **kwargs):
+               model_reasoning_effort: str | None = None,
+               model_auto_compact_token_limit: int | None = None, **kwargs):
     if not model:
       raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
     super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
     self._codex_home = str(Path(codex_home).expanduser()) if codex_home else None
     self._model_reasoning_effort = "xhigh" if model_reasoning_effort is None else model_reasoning_effort
+    self._model_auto_compact_token_limit = model_auto_compact_token_limit
     # Track accumulated text per item_id for delta computation
     self._last_agent_text: dict[str, str] = {}
     # Track accumulated reasoning text per item_id for delta computation.
@@ -40,6 +42,13 @@ class CodexBackend(AgentBackend):
     agents_md.write_text(self._instructions_content, encoding='utf-8')
     log.debug('codex_wrote_agents_md', path=str(agents_md))
 
+  def _model_config_args(self) -> list[str]:
+    args = ["--config", f'model_reasoning_effort="{self._model_reasoning_effort}"']
+    if self._model_auto_compact_token_limit is not None:
+      args.append("--config")
+      args.append(f"model_auto_compact_token_limit={self._model_auto_compact_token_limit}")
+    return args
+
   def _build_command(self, prompt: str) -> list[str]:
     effective_prompt = prompt
 
@@ -53,8 +62,7 @@ class CodexBackend(AgentBackend):
           "--dangerously-bypass-approvals-and-sandbox",
           "--model",
           self._model,
-          "--config",
-          f'model_reasoning_effort="{self._model_reasoning_effort}"',
+          *self._model_config_args(),
           self._resume_session_id,
       ]
     else:
@@ -66,8 +74,7 @@ class CodexBackend(AgentBackend):
           "--dangerously-bypass-approvals-and-sandbox",
           "--model",
           self._model,
-          "--config",
-          f'model_reasoning_effort="{self._model_reasoning_effort}"',
+          *self._model_config_args(),
       ]
     cmd.extend(self._extra_flags)
     cmd.extend(["--", effective_prompt])

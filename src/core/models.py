@@ -160,6 +160,7 @@ class BackendOption(BaseModel):
   effort: Optional[str] = None
   cli_binary: Optional[str] = None
   codex_home: Optional[str] = None  # codex backend only: per-account $CODEX_HOME
+  claude_config_dir: Optional[str] = None  # cc-claude backend only: per-account CLAUDE_CONFIG_DIR
   model_reasoning_effort: Optional[str] = None  # codex backend only: per-backend reasoning effort override
   model_auto_compact_token_limit: Optional[int] = Field(default=None, gt=0)  # codex backend only: per-backend auto-compact token limit
   api_base: Optional[str] = None  # OpenAI-compatible base URL (charlie-code, cc-openai-compatible)

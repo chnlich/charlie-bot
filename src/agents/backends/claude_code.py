@@ -48,10 +48,12 @@ def headless_claude_env() -> dict[str, str]:
 class ClaudeCodeBackend(AgentBackend):
   """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
 
-  def __init__(self, *, model=None, effort=None, cli_binary=None, fast_mode=False, claude_session_id=None, **kwargs):
+  def __init__(self, *, model=None, effort=None, cli_binary=None, fast_mode=False, claude_session_id=None,
+               claude_config_dir=None, **kwargs):
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._fast_mode = fast_mode
+    self._claude_config_dir = str(Path(claude_config_dir).expanduser()) if claude_config_dir else None
     self._cmd: list[str] = list(BASE_COMMAND)
     if cli_binary:
       self._cmd[0] = cli_binary
@@ -77,7 +79,10 @@ class ClaudeCodeBackend(AgentBackend):
     log.debug("claude_code_wrote_claude_md", path=str(claude_md))
 
   def _prepare_env(self, env: dict) -> dict:
-    return {**env, **headless_claude_env()}
+    out = {**env, **headless_claude_env()}
+    if self._claude_config_dir:
+      out["CLAUDE_CONFIG_DIR"] = self._claude_config_dir
+    return out
 
   def _build_command(self, prompt: str) -> list[str]:
     return list(self._cmd)

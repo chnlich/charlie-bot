@@ -1,7 +1,13 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from src.agents.backends.codex import CodexBackend
+from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption
 
 
 def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
@@ -434,3 +440,100 @@ def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
   assert first == [{"type": ET.THINKING, "content": "Plan"}]
   assert second == [{"type": ET.THINKING, "content": " in action"}]
   assert duplicate == []
+
+
+# ---------------------------------------------------------------------------
+# model_auto_compact_token_limit
+# ---------------------------------------------------------------------------
+
+
+def test_build_command_omits_auto_compact_when_absent(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model")
+
+  cmd = backend._build_command("do the thing")
+
+  assert not any("model_auto_compact_token_limit" in arg for arg in cmd)
+
+
+def test_build_command_resume_omits_auto_compact_when_absent(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id="sess-1")
+
+  cmd = backend._build_command("do the thing")
+
+  assert not any("model_auto_compact_token_limit" in arg for arg in cmd)
+
+
+def test_build_command_emits_auto_compact_once_when_configured(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", model_auto_compact_token_limit=50000)
+
+  cmd = backend._build_command("do the thing")
+
+  assert cmd.count("model_auto_compact_token_limit=50000") == 1
+  idx = cmd.index("model_auto_compact_token_limit=50000")
+  assert cmd[idx - 1] == "--config"
+
+
+def test_build_command_resume_emits_auto_compact_once_when_configured(monkeypatch) -> None:
+  backend = _build_backend(
+      monkeypatch,
+      model="codex-test-model",
+      model_auto_compact_token_limit=50000,
+      resume_session_id="sess-1",
+  )
+
+  cmd = backend._build_command("do the thing")
+
+  assert cmd.count("model_auto_compact_token_limit=50000") == 1
+  idx = cmd.index("model_auto_compact_token_limit=50000")
+  assert cmd[idx - 1] == "--config"
+  assert cmd[-2:] == ["--", "do the thing"]
+  assert cmd.index("sess-1") > idx
+
+
+def test_backend_option_defaults_auto_compact_limit_to_none() -> None:
+  option = BackendOption(id="codex-o3", label="Codex", type="codex", model="o3")
+  assert option.model_auto_compact_token_limit is None
+
+
+def test_backend_option_accepts_positive_auto_compact_limit() -> None:
+  option = BackendOption(
+      id="codex-o3",
+      label="Codex",
+      type="codex",
+      model="o3",
+      model_auto_compact_token_limit=50000,
+  )
+  assert option.model_auto_compact_token_limit == 50000
+
+
+@pytest.mark.parametrize("bad", [0, -1, -1000])
+def test_backend_option_rejects_nonpositive_auto_compact_limit(bad: int) -> None:
+  with pytest.raises(ValidationError):
+    BackendOption(
+        id="codex-o3",
+        label="Codex",
+        type="codex",
+        model="o3",
+        model_auto_compact_token_limit=bad,
+    )
+
+
+def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) -> None:
+  monkeypatch.setattr(
+      "src.agents.backends.codex.resolve_binary",
+      lambda name, fallback: "/usr/bin/codex",
+  )
+  option = BackendOption(
+      id="codex-o3",
+      label="Codex",
+      type="codex",
+      model="codex-test-model",
+      model_auto_compact_token_limit=50000,
+  )
+
+  backend = build_backend(option, CharlieBotConfig())
+
+  assert isinstance(backend, CodexBackend)
+  assert backend._model_auto_compact_token_limit == 50000
+  cmd = backend._build_command("do the thing")
+  assert cmd.count("model_auto_compact_token_limit=50000") == 1

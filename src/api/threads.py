@@ -50,8 +50,12 @@ def _backend_dispatch(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> _
   return _BackendDispatch(type=thread.backend)
 
 
-def _tmux_attach_command(session_id: str) -> str:
-  return shlex.join(["tmux", "-L", _TMUX_SOCKET, "attach", "-t", tmux_session_name(session_id)])
+def _tmux_attach_command(session_id: str, *, read_only: bool = False) -> str:
+  command = ["tmux", "-L", _TMUX_SOCKET, "attach"]
+  if read_only:
+    command.append("-r")
+  command.extend(["-t", tmux_session_name(session_id)])
+  return shlex.join(command)
 
 
 def _tmux_attach_id(thread: ThreadMetadata, dispatch: _BackendDispatch) -> str | None:
@@ -70,7 +74,7 @@ def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None = 
   if dispatch.type == "cc-claude":
     tmux_id = _tmux_attach_id(thread, dispatch)
     if tmux_id:
-      return _tmux_attach_command(tmux_id)
+      return _tmux_attach_command(tmux_id, read_only=dispatch.cli_binary == "claude-sub")
     if not thread.worktree_path or not thread.claude_session_id:
       return None
     return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"

@@ -513,6 +513,57 @@ async def test_old_style_live_pane_is_migration_blocked_without_killing_it(
   assert marker_states == [claude_sub.SessionMarkerState.MIGRATION_BLOCKED]
 
 
+@pytest.mark.asyncio
+async def test_migration_resumes_same_session_after_old_tui_exits_and_session_closes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  marker_states: list[claude_sub.SessionMarkerState] = []
+  created: list[str] = []
+
+  async def fake_exists(session_id: str) -> bool:
+    return False
+
+  async def fake_create(session_id: str, cwd: Path) -> None:
+    created.append(session_id)
+
+  monkeypatch.setattr(
+      claude_sub,
+      "_read_marker",
+      lambda session_id: claude_sub.SessionMarkerState.MIGRATION_BLOCKED,
+  )
+  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_exists)
+  monkeypatch.setattr(claude_sub, "_create_tmux_host", fake_create)
+  monkeypatch.setattr(claude_sub, "_write_marker", lambda session_id, state: marker_states.append(state))
+
+  # Old sessions lack remain-on-exit, so exiting the old TUI closes the session.
+  # The new path must still resume the same Claude session id rather than refuse.
+  resume = await claude_sub._prepare_tmux_session(SESSION_ID, tmp_path, requested_resume=False)
+
+  assert resume is True
+  assert created == [SESSION_ID]
+  assert marker_states == []
+
+
+@pytest.mark.asyncio
+async def test_started_marker_without_session_refuses_to_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  async def fake_exists(session_id: str) -> bool:
+    return False
+
+  monkeypatch.setattr(
+      claude_sub,
+      "_read_marker",
+      lambda session_id: claude_sub.SessionMarkerState.STARTED_BY_NEW_ADAPTER,
+  )
+  monkeypatch.setattr(claude_sub, "tmux_session_exists", fake_exists)
+
+  with pytest.raises(claude_sub.ClaudeSubError, match="refusing to resume"):
+    await claude_sub._prepare_tmux_session(SESSION_ID, tmp_path, requested_resume=True)
+
+
 def test_success_result_uses_stop_candidate_without_usage_or_cost() -> None:
   event = claude_sub._result_event(SESSION_ID, "final answer", 1234)
 

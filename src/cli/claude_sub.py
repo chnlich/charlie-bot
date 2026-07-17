@@ -409,12 +409,20 @@ async def _prepare_tmux_session(session_id: str, cwd: Path, requested_resume: bo
   marker_state = _read_marker(session_id)
   exists = await tmux_session_exists(session_id)
   if not exists:
-    if marker_state is not None:
-      if marker_state != SessionMarkerState.NEW:
-        raise ClaudeSubError(
-            f"claude-sub session {session_id} has a {marker_state.value} marker but no live tmux pane; "
-            "refusing to resume without verifying its bound working directory")
+    if marker_state is not None and marker_state not in (
+        SessionMarkerState.NEW,
+        SessionMarkerState.MIGRATION_BLOCKED,
+    ):
+      raise ClaudeSubError(
+          f"claude-sub session {session_id} has a {marker_state.value} marker but no live tmux pane; "
+          "refusing to resume without verifying its bound working directory")
     await _create_tmux_host(session_id, cwd)
+    if marker_state == SessionMarkerState.MIGRATION_BLOCKED:
+      # The old-style TUI was exited (old sessions lacked remain-on-exit and
+      # closed); the cwd was already verified when the marker was written, so
+      # resume the same Claude session id.  Keep the marker until the turn
+      # launches, then _stream_turn flips it to STARTED_BY_NEW_ADAPTER.
+      return True
     _write_marker(session_id, SessionMarkerState.NEW)
     return requested_resume
 

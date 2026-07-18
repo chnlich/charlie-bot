@@ -134,7 +134,6 @@ async def delegate_task(
               context=req.context,
               resolved_backend=resolved_backend,
               resolved_model=resolved_model,
-              require_takeoff=req.task_type != TaskType.VERIFY,
               keep_worktree=req.keep_worktree,
               task_type=req.task_type,
           ),

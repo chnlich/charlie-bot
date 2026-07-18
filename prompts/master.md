@@ -113,6 +113,26 @@ Derive the task spec from the settled approval object defined in `skills/plan-ap
 - `verify` — repo-less plan verifier; no worktree, no reviewer, no merge, exempt from the takeoff gate, permits
   read-only local and network access through existing capabilities, and refuses local or external state mutation.
 
+### Runtime delegation authorization
+
+The plan-approval interaction and runtime delegation authorization are separate boundaries. Saying `take off` in
+the plan conversation approves the settled approval object; when `/delegate` or `/improve` is called, the runtime
+gate derives authorization only from the existing chat event log.
+
+- `verify` is always allowed without authorization and remains repo-less.
+- A real user event is an `ET.USER` event with string `content` that does not start with
+  `[Scheduled trigger fired`. Nested tool-result events and scheduled-trigger events are not real user messages.
+- Match `pre take off` and `take off` independently after case-insensitive consecutive-whitespace normalization.
+  The `take off` substring inside `pre take off` counts, so one message can create both windows.
+- A real `pre take off` starts a 12-hour window from its valid UTC event timestamp. It survives later real user
+  messages; a new `pre take off` starts a new 12-hour window. Missing or invalid timestamps fail closed for pre.
+- Ordinary `take off` authorizes every non-`verify` type, without a count limit, when the latest real user message
+  contains it. The next real user message ends that window. Scheduled-trigger and nested tool-result events do not
+  mint or end it.
+- The same gate covers `implement`, `quick-edit`, `script-run`, and `/improve`. Scheduled workers that call
+  `spawn_worker` directly remain outside this user-facing gate.
+- Authorization is stateless: do not add authorization persistence or read `TASK_DELEGATED` to decide access.
+
 - **Always delegate**: feature implementation, bug fixes, refactoring, writing tests, any code change — including tooling setup commands like `uv init`, `npm init`, `cargo init` that create/modify tracked files.
 - **Do NOT delegate**: answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
 - **Never include revert/keep-only-report decision rules in delegate prompts** — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit.

@@ -420,6 +420,7 @@ def _patch_config(monkeypatch, options: list[BackendOption]) -> None:
 def test_account_label_strips_provider_prefix_and_leading_dot() -> None:
   assert _account_label("claude", "/home/u/.claude-invite-1") == "invite-1"
   assert _account_label("codex", "/home/u/.codex-personal") == "personal"
+  assert _account_label("claude", "/home/u/claudepersonal") == "personal"
 
 
 def test_account_label_keeps_non_conventional_basename() -> None:

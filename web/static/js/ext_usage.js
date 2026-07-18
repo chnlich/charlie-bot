@@ -3,7 +3,6 @@
 // The strip DOM is built dynamically from the payload: one group per provider
 // (labels "Claude" / "Codex"), one row per account.
 // ---------------------------------------------------------------------------
-let _extUsageData = null;
 // Per-row reset element refs + captured data, rebuilt on every render so the
 // 60s client-side countdown refresh can recompute reset labels without a
 // server round-trip.
@@ -196,7 +195,6 @@ function _buildRow(key, providerData) {
 }
 
 function renderExtUsage(data) {
-  _extUsageData = data;
   const strip = document.getElementById('ext-usage-strip');
   if (!strip) return;
 
@@ -220,7 +218,7 @@ function renderExtUsage(data) {
     const built = _buildRow(key, providerData);
     nodes.push(built.row);
     if (built.fiveHourResetEl) {
-      rows.push({key, providerData, fiveHourResetEl: built.fiveHourResetEl, sevenDayResetEl: built.sevenDayResetEl});
+      rows.push({providerData, fiveHourResetEl: built.fiveHourResetEl, sevenDayResetEl: built.sevenDayResetEl});
     }
   }
 

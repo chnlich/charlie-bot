@@ -2,6 +2,19 @@
 (function() {
   const Chat = globalThis.Chat;
 
+  let voiceContributed = false;
+
+  function setVoiceContributed(value) {
+    voiceContributed = !!value;
+  }
+
+  const _msgInput = document.getElementById('msg-input');
+  if (_msgInput) {
+    _msgInput.addEventListener('input', () => {
+      if (!_msgInput.value) voiceContributed = false;
+    });
+  }
+
 // ---------------------------------------------------------------------------
 // Send message
 // ---------------------------------------------------------------------------
@@ -48,13 +61,16 @@ async function sendMessage() {
   }));
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
+  const isVoice = voiceContributed;
+
   // Optimistic UI: append user message and bump session to top
   pendingUserMsg = true;
-  appendMessage('user', content, false, new Date().toISOString(), payloadFiles);
+  appendMessage('user', content, isVoice, new Date().toISOString(), payloadFiles);
   bumpCurrentSessionToTop();
   input.value = '';
   input.style.height = 'auto';
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
+  voiceContributed = false;
 
   // Start thinking indicator
   startThinking();
@@ -63,7 +79,7 @@ async function sendMessage() {
     const res = await fetch(`/api/chat/${SESSION_ID}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: contentWithCtx, uploaded_files: payloadFiles }),
+      body: JSON.stringify({ content: contentWithCtx, uploaded_files: payloadFiles, is_voice: isVoice }),
     });
     if (!res.ok) throw new Error(String(res.status));
   } catch (err) {
@@ -74,9 +90,11 @@ async function sendMessage() {
   }
 }
 
+Chat.setVoiceContributed = setVoiceContributed;
 Chat.bumpCurrentSessionToTop = bumpCurrentSessionToTop;
 Chat.sendMessage = sendMessage;
 Chat.expose([
+  'setVoiceContributed',
   'bumpCurrentSessionToTop',
   'sendMessage',
 ]);

@@ -177,6 +177,7 @@ function resetVoiceState() {
   cleanupVoiceCapture();
   closeVoiceSocket();
   removeVoiceOverlay();
+  Chat.setVoiceContributed(false);
 }
 
 function openVoiceSocket(targetSession) {
@@ -280,6 +281,7 @@ function applyVoiceFinal(text) {
   const input = document.getElementById('msg-input');
   const current = input.value.trim();
   input.value = current ? current + ' ' + finalText : finalText;
+  Chat.setVoiceContributed(true);
   autoResize(input);
   saveDraft();
   input.focus();

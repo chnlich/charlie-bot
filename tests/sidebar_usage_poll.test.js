@@ -98,6 +98,7 @@ function createElement(overrides = {}) {
       this.removed = true;
     },
     focus() {},
+    addEventListener() {},
     setAttribute(name, value) {
       this[name] = value;
     },

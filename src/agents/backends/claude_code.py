@@ -48,8 +48,16 @@ def headless_claude_env() -> dict[str, str]:
 class ClaudeCodeBackend(AgentBackend):
   """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
 
-  def __init__(self, *, model=None, effort=None, cli_binary=None, fast_mode=False, claude_session_id=None,
-               claude_config_dir=None, **kwargs):
+  def __init__(
+      self,
+      *,
+      model=None,
+      effort=None,
+      cli_binary=None,
+      fast_mode=False,
+      claude_session_id=None,
+      claude_config_dir=None,
+      **kwargs):
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._fast_mode = fast_mode

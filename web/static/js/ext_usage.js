@@ -98,6 +98,13 @@ function _el(tag, className) {
   return node;
 }
 
+function _providerPill(provider) {
+  const cls = provider === 'claude' ? 'provider-claude' : 'provider-codex';
+  const pill = _el('span', 'provider-pill ' + cls);
+  pill.textContent = _providerGroupLabel(provider);
+  return pill;
+}
+
 function _buildBucket(row, label, bucket, providerData, bucketKey) {
   const group = _el('div', 'flex items-center gap-1.5');
   const lbl = _el('span', '');
@@ -142,6 +149,7 @@ function _buildRow(key, providerData) {
   if (providerData.error) {
     const row = _el('div', 'flex items-center gap-1.5 text-slate-600 opacity-60');
     row.setAttribute('data-key', key);
+    row.appendChild(_providerPill(providerData.provider));
     const label = _el('span', 'text-slate-500 font-medium');
     label.textContent = providerData.account || key;
     row.appendChild(label);
@@ -154,6 +162,7 @@ function _buildRow(key, providerData) {
 
   const row = _el('div', 'flex items-center gap-1.5');
   row.setAttribute('data-key', key);
+  row.appendChild(_providerPill(providerData.provider));
   const label = _el('span', 'text-slate-300 font-medium');
   label.textContent = providerData.account || key;
   row.appendChild(label);
@@ -201,20 +210,7 @@ function renderExtUsage(data) {
   const providers = (data && data.providers) || {};
   const nodes = [];
   const rows = [];
-  let currentProvider = null;
   for (const [key, providerData] of Object.entries(providers)) {
-    const provider = providerData.provider;
-    if (provider !== currentProvider) {
-      if (currentProvider !== null) {
-        const sep = _el('span', 'text-slate-700');
-        sep.textContent = '\u2502';
-        nodes.push(sep);
-      }
-      const glabel = _el('span', 'text-slate-500 font-medium');
-      glabel.textContent = _providerGroupLabel(provider);
-      nodes.push(glabel);
-      currentProvider = provider;
-    }
     const built = _buildRow(key, providerData);
     nodes.push(built.row);
     if (built.fiveHourResetEl) {

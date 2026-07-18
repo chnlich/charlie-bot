@@ -91,20 +91,8 @@ function _walk(root, predicate) {
   return null;
 }
 
-function _findAll(root, predicate, acc = []) {
-  for (const child of root.children) {
-    if (predicate(child)) acc.push(child);
-    _findAll(child, predicate, acc);
-  }
-  return acc;
-}
-
 function _byAttr(attr, value) {
   return (el) => el.getAttribute(attr) === value;
-}
-
-function _byClass(className) {
-  return (el) => el.classList.contains(className);
 }
 
 function _rowByKey(strip, key) {

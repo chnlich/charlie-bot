@@ -50,16 +50,17 @@ CODEX_DEFAULT_DIR = str(Path.home() / ".codex")
 def _account_label(provider: str, expanded_path: str) -> str:
   """Derive an account label from a directory's expanded absolute path.
 
-  basename -> strip a leading '.' -> strip the provider prefix ('claude-'/
-  'codex-') when followed by '-'. The provider default dir is labelled 'main'
-  by the caller, not by this function.
+  basename -> strip a leading '.' -> strip the provider prefix ('claude'/'codex')
+  and a following '-'. The provider default dir is labelled 'main' by the
+  caller, not by this function.
   """
   name = os.path.basename(expanded_path)
   if name.startswith("."):
     name = name[1:]
-  prefix = provider + "-"
-  if name.startswith(prefix):
-    name = name[len(prefix):]
+  if name.startswith(provider):
+    name = name[len(provider):]
+    if name.startswith("-"):
+      name = name[1:]
   return name
 
 
@@ -228,7 +229,6 @@ class _UsageInstance:
   def __init__(self, provider: str, label: str, dir_path: str) -> None:
     self.provider = provider
     self.label = label
-    self.dir_path = dir_path
     self.provider_instance = _create_provider(provider, label, dir_path)
 
   async def fetch(self) -> dict[str, Any] | None:

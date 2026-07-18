@@ -129,7 +129,14 @@ async def send_message(
 
   # Fire-and-forget: spawn master CC in a background task
   create_logged_task(
-      run_and_finalize(cfg, meta, content, session_mgr, display_content=req.content, uploaded_files=uploaded_files))
+      run_and_finalize(
+          cfg,
+          meta,
+          content,
+          session_mgr,
+          display_content=req.content,
+          uploaded_files=uploaded_files,
+          is_voice=req.is_voice))
 
   return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -162,6 +169,7 @@ async def run_and_finalize(
     skip_user_event: bool = False,
     display_content: str | None = None,
     uploaded_files: list[dict] | None = None,
+    is_voice: bool = False,
 ) -> None:
   """Run master CC, persist cc_session_id, and auto-name the session."""
   log.info("run_and_finalize_start", session=meta.id, backend=meta.backend)
@@ -180,6 +188,7 @@ async def run_and_finalize(
         extra_claude_flags=extra_claude_flags,
         display_content=display_content,
         uploaded_files=uploaded_files,
+        is_voice=is_voice,
     )
     # Persist CC session ID if newly assigned.
     # Re-read fresh metadata from disk to avoid overwriting has_unread

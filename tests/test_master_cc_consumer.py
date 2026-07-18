@@ -31,6 +31,7 @@ def _make_item(session_meta: SessionMetadata, callbacks: SessionCallbacks) -> ma
       session_meta=session_meta,
       user_content="hi",
       callbacks=callbacks,
+      is_voice=False,
       auto_trigger=False,
       backend_option=None,
       extra_claude_flags=None,

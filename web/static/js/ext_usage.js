@@ -1,15 +1,21 @@
 // ---------------------------------------------------------------------------
-// External tool usage strip (multi-provider: CC Opus, Codex)
+// External tool usage strip (multi-provider, multi-account: Claude, Codex).
+// The strip DOM is built dynamically from the payload: one group per provider
+// (labels "Claude" / "Codex"), one row per account.
 // ---------------------------------------------------------------------------
 let _extUsageData = null;
+// Per-row reset element refs + captured data, rebuilt on every render so the
+// 60s client-side countdown refresh can recompute reset labels without a
+// server round-trip.
+let _extUsageRows = [];
 
 function _parseTimestampMs(isoString) {
   if (!isoString) return NaN;
   return new Date(isoString).getTime();
 }
 
-function _shouldWaitForFreshCodexCapData(providerKey, providerData, bucket) {
-  if (providerKey !== 'codex') return false;
+function _shouldWaitForFreshCodexCapData(providerData, bucket) {
+  if (providerData.provider !== 'codex') return false;
 
   const reset = _parseTimestampMs(bucket.resets_at);
   if (!Number.isFinite(reset) || reset > Date.now()) return false;
@@ -26,8 +32,8 @@ function _formatLocalHMS(isoString) {
   return hh + ':' + mm + ':' + ss;
 }
 
-function _providerRateLimitState(providerKey, providerData) {
-  if (providerKey !== 'codex') return '';
+function _providerRateLimitState(providerData) {
+  if (providerData.provider !== 'codex') return '';
   return providerData.rate_limits_state || '';
 }
 
@@ -41,21 +47,21 @@ function _bucketStateResetLabel(bucketKey, state) {
   return bucketKey === 'five_hour' ? 'no 5h cap' : 'no 7d cap';
 }
 
-function _formatFiveHourReset(providerKey, providerData, bucket) {
-  const stale = _shouldWaitForFreshCodexCapData(providerKey, providerData, bucket);
+function _formatFiveHourReset(providerData, bucket) {
+  const stale = _shouldWaitForFreshCodexCapData(providerData, bucket);
   const resetHMS = _formatLocalHMS(bucket.resets_at);
   if (stale) return '(stale \u2013 ' + resetHMS + ')';
-  const sampledAt = (providerKey === 'codex' && providerData.token_count_observed_at)
+  const sampledAt = (providerData.provider === 'codex' && providerData.token_count_observed_at)
     ? providerData.token_count_observed_at
     : providerData.fetched_at;
   const sampledHMS = _formatLocalHMS(sampledAt);
   return '(' + sampledHMS + ' \u2013 ' + resetHMS + ')';
 }
 
-function formatResetTime(providerKey, providerData, bucket) {
+function formatResetTime(providerData, bucket) {
   const now = Date.now();
   const reset = _parseTimestampMs(bucket.resets_at);
-  if (_shouldWaitForFreshCodexCapData(providerKey, providerData, bucket)) {
+  if (_shouldWaitForFreshCodexCapData(providerData, bucket)) {
     return 'waiting for fresh cap data';
   }
   let diff = reset - now;
@@ -81,65 +87,112 @@ function _formatSpendUsd(value) {
   return '$' + value.toFixed(2);
 }
 
-// Map provider key to DOM ID prefix: 'cc-opus' -> 'cc', 'codex' -> 'codex'
-function _providerPrefix(providerKey) {
-  if (providerKey === 'cc-opus') return 'cc';
-  return providerKey;
+function _providerGroupLabel(provider) {
+  if (provider === 'claude') return 'Claude';
+  if (provider === 'codex') return 'Codex';
+  throw new Error('unknown usage provider: ' + provider);
 }
 
-function _renderProvider(providerKey, prefix, data) {
-  if (providerKey === 'codex') {
-    const spend = data.spend || {};
-    const spend24hEl = document.getElementById('ext-usage-codex-24h-spend');
-    const spend7dEl = document.getElementById('ext-usage-codex-7d-spend');
-    if (spend24hEl) spend24hEl.textContent = _formatSpendUsd(spend.last_24h_usd);
-    if (spend7dEl) spend7dEl.textContent = _formatSpendUsd(spend.last_7d_usd);
-  }
+function _el(tag, className) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  return node;
+}
 
-  const rateLimitState = _providerRateLimitState(providerKey, data);
-  const stateEl = document.getElementById('ext-usage-' + prefix + '-state');
-  if (stateEl) {
-    const stateLabel = _providerStateLabel(rateLimitState);
-    stateEl.textContent = stateLabel;
-    stateEl.classList.toggle('hidden', !stateLabel);
-  }
+function _buildBucket(row, label, bucket, providerData, bucketKey) {
+  const group = _el('div', 'flex items-center gap-1.5');
+  const lbl = _el('span', '');
+  lbl.textContent = label;
+  group.appendChild(lbl);
+  const barWrap = _el('div', 'w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden');
+  const bar = _el('div', 'h-full rounded-full transition-all duration-300');
+  bar.setAttribute('data-field', bucketKey === 'five_hour' ? '5h-bar' : '7d-bar');
+  barWrap.appendChild(bar);
+  group.appendChild(barWrap);
+  const pctEl = _el('span', '');
+  pctEl.setAttribute('data-field', bucketKey === 'five_hour' ? '5h-pct' : '7d-pct');
+  group.appendChild(pctEl);
+  const resetEl = _el('span', 'text-slate-500');
+  resetEl.setAttribute('data-field', bucketKey === 'five_hour' ? '5h-reset' : '7d-reset');
+  group.appendChild(resetEl);
+  row.appendChild(group);
 
-  const buckets = [
-    {key: 'five_hour', bar: 'ext-usage-' + prefix + '-5h-bar', pct: 'ext-usage-' + prefix + '-5h-pct', reset: 'ext-usage-' + prefix + '-5h-reset'},
-    {key: 'seven_day', bar: 'ext-usage-' + prefix + '-7d-bar', pct: 'ext-usage-' + prefix + '-7d-pct', reset: 'ext-usage-' + prefix + '-7d-reset'},
-  ];
-
-  for (const b of buckets) {
-    const bucket = data[b.key];
-    if (!bucket) continue;
-    const barEl = document.getElementById(b.bar);
-    const pctEl = document.getElementById(b.pct);
-    const resetEl = document.getElementById(b.reset);
-    if (rateLimitState) {
-      if (barEl) {
-        barEl.style.width = '0.0%';
-        barEl.className = 'h-full rounded-full transition-all duration-300 bg-slate-600';
-      }
-      if (pctEl) pctEl.textContent = 'plan';
-      if (resetEl) resetEl.textContent = _bucketStateResetLabel(b.key, rateLimitState);
-      continue;
-    }
+  const state = _providerRateLimitState(providerData);
+  if (state) {
+    bar.style.width = '0.0%';
+    bar.className = 'h-full rounded-full transition-all duration-300 bg-slate-600';
+    pctEl.textContent = 'plan';
+    resetEl.textContent = _bucketStateResetLabel(bucketKey, state);
+  } else {
     let pct = typeof bucket.utilization === 'number' ? bucket.utilization : 0;
-    const stale = _shouldWaitForFreshCodexCapData(providerKey, data, bucket);
+    const stale = _shouldWaitForFreshCodexCapData(providerData, bucket);
     if (stale) pct = 0;
-    if (barEl) {
-      barEl.style.width = Math.min(pct, 100).toFixed(1) + '%';
-      barEl.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
-    }
-    if (pctEl) pctEl.textContent = stale ? '\u2014' : Math.round(pct) + '%';
-    if (resetEl) {
-      resetEl.textContent = bucket.resets_at
-        ? (b.key === 'five_hour'
-          ? _formatFiveHourReset(providerKey, data, bucket)
-          : formatResetTime(providerKey, data, bucket))
-        : '\u2014';
-    }
+    bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
+    bar.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
+    pctEl.textContent = stale ? '\u2014' : Math.round(pct) + '%';
+    resetEl.textContent = bucket.resets_at
+      ? (bucketKey === 'five_hour'
+        ? _formatFiveHourReset(providerData, bucket)
+        : formatResetTime(providerData, bucket))
+      : '\u2014';
   }
+  return resetEl;
+}
+
+function _buildRow(key, providerData) {
+  if (providerData.error) {
+    const row = _el('div', 'flex items-center gap-1.5 text-slate-600 opacity-60');
+    row.setAttribute('data-key', key);
+    const label = _el('span', 'text-slate-500 font-medium');
+    label.textContent = providerData.account || key;
+    row.appendChild(label);
+    const err = _el('span', 'italic');
+    err.setAttribute('data-field', 'error');
+    err.textContent = providerData.error;
+    row.appendChild(err);
+    return {row, fiveHourResetEl: null, sevenDayResetEl: null};
+  }
+
+  const row = _el('div', 'flex items-center gap-1.5');
+  row.setAttribute('data-key', key);
+  const label = _el('span', 'text-slate-300 font-medium');
+  label.textContent = providerData.account || key;
+  row.appendChild(label);
+  const fiveHourResetEl = _buildBucket(row, '5h:', providerData.five_hour || {}, providerData, 'five_hour');
+  const sevenDayResetEl = _buildBucket(row, '7d:', providerData.seven_day || {}, providerData, 'seven_day');
+
+  if (providerData.provider === 'codex') {
+    const state = _providerRateLimitState(providerData);
+    if (state) {
+      const badge = _el('span', 'px-1.5 py-0.5 rounded bg-slate-700 text-[10px] font-medium text-slate-300');
+      badge.setAttribute('data-field', 'state');
+      badge.textContent = _providerStateLabel(state);
+      row.appendChild(badge);
+    }
+    const spend = providerData.spend || {};
+    const spendGroup = _el('div', 'flex items-center gap-1.5 text-slate-400');
+    const l24 = _el('span', '');
+    l24.textContent = '24h:';
+    const s24 = _el('span', '');
+    s24.setAttribute('data-field', 'spend-24h');
+    s24.textContent = _formatSpendUsd(spend.last_24h_usd);
+    const dot = _el('span', 'text-slate-700');
+    dot.textContent = '\u00b7';
+    const l7 = _el('span', '');
+    l7.textContent = '7d:';
+    const s7 = _el('span', '');
+    s7.setAttribute('data-field', 'spend-7d');
+    s7.textContent = _formatSpendUsd(spend.last_7d_usd);
+    spendGroup.appendChild(l24);
+    spendGroup.appendChild(s24);
+    spendGroup.appendChild(dot);
+    spendGroup.appendChild(l7);
+    spendGroup.appendChild(s7);
+    row.appendChild(spendGroup);
+  } else if (providerData.provider !== 'claude') {
+    throw new Error('unknown usage provider: ' + providerData.provider);
+  }
+  return {row, fiveHourResetEl, sevenDayResetEl};
 }
 
 function renderExtUsage(data) {
@@ -147,32 +200,47 @@ function renderExtUsage(data) {
   const strip = document.getElementById('ext-usage-strip');
   if (!strip) return;
 
-  const providers = data.providers || {};
+  const providers = (data && data.providers) || {};
+  const nodes = [];
+  const rows = [];
+  let currentProvider = null;
   for (const [key, providerData] of Object.entries(providers)) {
-    _renderProvider(key, _providerPrefix(key), providerData);
+    const provider = providerData.provider;
+    if (provider !== currentProvider) {
+      if (currentProvider !== null) {
+        const sep = _el('span', 'text-slate-700');
+        sep.textContent = '\u2502';
+        nodes.push(sep);
+      }
+      const glabel = _el('span', 'text-slate-500 font-medium');
+      glabel.textContent = _providerGroupLabel(provider);
+      nodes.push(glabel);
+      currentProvider = provider;
+    }
+    const built = _buildRow(key, providerData);
+    nodes.push(built.row);
+    if (built.fiveHourResetEl) {
+      rows.push({key, providerData, fiveHourResetEl: built.fiveHourResetEl, sevenDayResetEl: built.sevenDayResetEl});
+    }
   }
 
-  strip.classList.remove('hidden');
+  strip.replaceChildren(...nodes);
+  _extUsageRows = rows;
+  if (nodes.length > 0) {
+    strip.classList.remove('hidden');
+  }
 }
 
 function _refreshResetTimers() {
-  if (!_extUsageData) return;
-  const providers = _extUsageData.providers || {};
-  for (const [key, providerData] of Object.entries(providers)) {
-    const prefix = _providerPrefix(key);
-    const buckets = [
-      {key: 'five_hour', el: 'ext-usage-' + prefix + '-5h-reset'},
-      {key: 'seven_day', el: 'ext-usage-' + prefix + '-7d-reset'},
-    ];
-    for (const b of buckets) {
-      const bucket = providerData[b.key];
-      if (!bucket || !bucket.resets_at) continue;
-      const el = document.getElementById(b.el);
-      if (el) {
-        el.textContent = b.key === 'five_hour'
-          ? _formatFiveHourReset(key, providerData, bucket)
-          : formatResetTime(key, providerData, bucket);
-      }
+  for (const entry of _extUsageRows) {
+    const providerData = entry.providerData;
+    const fiveHour = providerData.five_hour;
+    if (fiveHour && fiveHour.resets_at && entry.fiveHourResetEl) {
+      entry.fiveHourResetEl.textContent = _formatFiveHourReset(providerData, fiveHour);
+    }
+    const sevenDay = providerData.seven_day;
+    if (sevenDay && sevenDay.resets_at && entry.sevenDayResetEl) {
+      entry.sevenDayResetEl.textContent = formatResetTime(providerData, sevenDay);
     }
   }
 }

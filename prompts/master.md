@@ -11,7 +11,7 @@ Before ending a turn while an external process is still running, create a `sched
 
 ## Intent First
 
-Open your first response to a new task by stating, in one or two sentences, the intent you read behind it: the underlying goal and what a good outcome looks like. Then start the work; the user will correct the reading early if it is off. Confirm before executing only when different readings lead to materially different work. Follow-up messages within an aligned task need no restatement.
+Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work.
 
 ---
 

@@ -265,9 +265,12 @@ test('renderExtUsage renders error rows greyed with the error text', () => {
   assert.ok(row);
   assert.equal(row.classList.contains('opacity-60'), true);
   assert.equal(_field(row, 'error').textContent, 'credentials not found');
+  const errPill = row.children.find((c) => c.classList.contains('provider-pill'));
+  assert.ok(errPill, 'error row carries a provider pill');
+  assert.equal(errPill.textContent, 'Claude');
 });
 
-test('renderExtUsage groups accounts by provider with labels and a separator', () => {
+test('renderExtUsage renders a provider pill on every account row', () => {
   const { context, strip } = loadExtUsageScript();
 
   context.renderExtUsage({
@@ -278,15 +281,23 @@ test('renderExtUsage groups accounts by provider with labels and a separator', (
     },
   });
 
-  const labelEls = strip.children.filter((c) => c.classList.contains('text-slate-500') && c.classList.contains('font-medium'));
-  assert.equal(labelEls.length, 2);
-  assert.equal(labelEls[0].textContent, 'Claude');
-  assert.equal(labelEls[1].textContent, 'Codex');
+  // The old strip-level group-label spans and │ separators are gone: every
+  // strip child is now an account row carrying a data-key attribute.
+  for (const child of strip.children) {
+    assert.ok(child.getAttribute('data-key'), 'strip child is an account row with a data-key');
+  }
 
-  const separators = strip.children.filter((c) => c.textContent === '\u2502');
-  assert.equal(separators.length, 1);
-
-  assert.ok(_rowByKey(strip, 'claude:main'));
-  assert.ok(_rowByKey(strip, 'claude:invite-1'));
-  assert.ok(_rowByKey(strip, 'codex:main'));
+  const expected = {
+    'claude:main': {label: 'Claude', cls: 'provider-claude'},
+    'claude:invite-1': {label: 'Claude', cls: 'provider-claude'},
+    'codex:main': {label: 'Codex', cls: 'provider-codex'},
+  };
+  for (const [key, want] of Object.entries(expected)) {
+    const row = _rowByKey(strip, key);
+    assert.ok(row, key + ' row rendered');
+    const pill = row.children.find((c) => c.classList.contains('provider-pill'));
+    assert.ok(pill, key + ' row has a provider pill');
+    assert.equal(pill.textContent, want.label);
+    assert.ok(pill.classList.contains(want.cls), key + ' pill has ' + want.cls);
+  }
 });

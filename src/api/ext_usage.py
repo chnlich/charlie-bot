@@ -40,7 +40,6 @@ ANTHROPIC_BETA = "oauth-2025-04-20"
 CLAUDE_DEFAULT_DIR = str(Path.home() / ".claude")
 CODEX_DEFAULT_DIR = str(Path.home() / ".codex")
 
-
 # ---------------------------------------------------------------------------
 # Account-set derivation (no registry): run at the start of every poll cycle.
 # Reads get_config(), which is mtime-cached, so config.yaml edits take effect

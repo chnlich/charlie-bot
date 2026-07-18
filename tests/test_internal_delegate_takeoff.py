@@ -116,6 +116,32 @@ def test_takeoff_gate_ignores_task_delegated_metadata() -> None:
     check_takeoff_gate("session-id", session_mgr)
 
 
+def test_takeoff_gate_allows_repeated_ordinary_takeoff_after_task_delegated_event() -> None:
+  session_mgr = FakeSessionManager([
+      _user_event("take off"),
+      {
+          "type": ET.TASK_DELEGATED,
+          "thread_id": "thread-id",
+          "description": "Do work",
+          "timestamp": "2026-07-18T12:00:00+00:00",
+          "backend": "codex-o3",
+          "model": "o3",
+          "delegate_invocation": {
+              "task_type": "implement",
+              "repo_path": "/tmp/repo",
+              "base_branch": "main",
+              "task_spec_file": None,
+              "reviewer_context_file": None,
+              "keep_worktree": False,
+              "backend": "codex-o3",
+          },
+      },
+  ])
+
+  check_takeoff_gate("session-id", session_mgr)
+  check_takeoff_gate("session-id", session_mgr)
+
+
 def test_pre_takeoff_window_survives_real_user_messages_and_expires_at_12_hours() -> None:
   issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
   session_mgr = FakeSessionManager([

@@ -302,9 +302,3 @@ HTML requirements:
 - Sandboxed: no access to parent window, cookies, or storage.
 
 Multiple artifacts per response are supported.
-
----
-
-## Voice Input
-
-Voice input is transcribed locally with sherpa-onnx and placed into the chat box for the user to confirm or edit before sending. Treat sent voice text as a normal user-confirmed message.

@@ -10,6 +10,10 @@ user-invocable: false
 
 - This skill governs only the CharlieBot master-to-user approval boundary; a
   delegated task is already past that boundary.
+- Plan approval and runtime delegation authorization are separate boundaries. The
+  approval interaction approves the settled plan terms; the runtime gate decides
+  whether a later `/delegate` or `/improve` request has an active user-message
+  authorization window.
 - A delegated worker, reviewer, or improve-loop worker does not present another plan
   and does not wait for another `take off`; it follows its delegated task contract.
 - A delegated agent still stops and reports a blocker, contract conflict, or required
@@ -54,6 +58,29 @@ not restate it here.
   change does. If a term must change mid-flight, re-present the affected terms and
   wait for a fresh "take off". Amendments to Context, Design Details, or unpromoted
   Other Details need no re-approval.
+
+## Runtime delegation authorization
+
+This runtime contract is separate from the plan-approval interaction above. It is
+derived statelessly from the existing chat event log and applies at `/api/internal/delegate`
+and `/api/internal/improve`:
+
+- `verify` is always allowed without authorization and remains repo-less.
+- A real user event is `ET.USER` with string `content` that does not start with
+  `[Scheduled trigger fired`. Nested tool-result events and scheduled-trigger events
+  are not real user messages for authorization.
+- Match `pre take off` and `take off` independently, case-insensitively, after
+  normalizing consecutive whitespace. The `take off` substring inside `pre take off`
+  counts, so one message can create both windows.
+- A real `pre take off` authorizes every non-`verify` behavior for exactly 12 hours
+  from its valid UTC event timestamp, survives later real user messages, and is
+  restarted by a new pre token. Missing or unparseable pre timestamps fail closed.
+- Ordinary `take off` authorizes every non-`verify` delegation type without a count
+  limit when the latest real user message contains it. The next real user message
+  ends that window. Scheduled-trigger and nested tool-result events do not mint or cancel it.
+- Scheduled workers that call `spawn_worker` directly remain outside this user-facing
+  gate. No authorization file, field, event, counter, lease, consumption marker, or
+  `TASK_DELEGATED` authorization read is permitted; it remains delegation history/UI data.
 
 ## Execution
 

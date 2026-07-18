@@ -393,7 +393,6 @@ class SpawnRequest:
   branch_name_override: Optional[str] = None
   loop_dir: Optional[str] = None
   iteration_number: Optional[int] = None
-  require_takeoff: bool = False
   worktree_path_override: Optional[str] = None
   skip_cleanup: bool = False
   skip_notify: bool = False

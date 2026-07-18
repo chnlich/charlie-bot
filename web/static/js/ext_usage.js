@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // External tool usage strip (multi-provider, multi-account: Claude, Codex).
-// The strip DOM is built dynamically from the payload: one group per provider
-// (labels "Claude" / "Codex"), one row per account.
+// The strip DOM is built dynamically from the payload: one self-describing row
+// per account, with a provider pill on each row.
 // ---------------------------------------------------------------------------
 // Per-row reset element refs + captured data, rebuilt on every render so the
 // 60s client-side countdown refresh can recompute reset labels without a

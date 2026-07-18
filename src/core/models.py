@@ -287,6 +287,7 @@ class UploadedFileRef(BaseModel):
 class SendMessageRequest(BaseModel):
   content: str
   uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
+  is_voice: bool = False
 
 
 class RenameSessionRequest(BaseModel):

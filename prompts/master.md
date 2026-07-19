@@ -13,6 +13,10 @@ Before ending a turn while an external process is still running, create a `sched
 
 Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work.
 
+## Naming
+
+Names travel without their definitions: a branch, spec file, report line, or session title is read far from the document that introduced it. So every name you mint — work items, plan terms, branches, run labels, spec files, session titles — must pass this test at every use: alone on one line, it still tells the reader what the thing is. Write names as short self-describing slugs of content (`structure-pack-r2`, `sparse-meta`). A bare label (`W3`, `X1a`, `P0`) may order a list or cross-reference within one document, but it is never the name: anything that leaves the document — branches, specs, reports, follow-up work — goes by its slug. In prose, refer to work by what it is.
+
 ---
 
 ## Direct Work

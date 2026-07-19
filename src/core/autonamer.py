@@ -51,6 +51,7 @@ _PREAMBLE_RE = re.compile(
 )
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL)
 _MAX_TITLE_WORDS = 8
+_UNFAITHFUL_PUNCT = ".,:;!?()[]{}\"'"
 
 
 def _prefix_session_number_if_default(session_name: str, name: str) -> str:
@@ -70,6 +71,7 @@ _TITLE_INSTRUCTION = (
     "Generate a short, descriptive title (3-6 words) and assign a group for this conversation.\n"
     "Return ONLY valid JSON: {{\"name\": \"<title>\", \"group\": \"<group>\"}}\n"
     "No explanation, no markdown fences, no extra text.\n"
+    "Use only names that appear verbatim in the conversation (project, repo, tool names); never invent abbreviations, codes, or new spellings.\n"
     "{groups_clause}")
 
 _SYSTEM_PROMPT = (
@@ -78,6 +80,7 @@ _SYSTEM_PROMPT = (
     'The name should be 3-6 words, no quotes or punctuation at the end. '
     'The group should be a short category (1-3 words). '
     '{groups_clause} '
+    'Use only names that appear verbatim in the conversation (project, repo, tool names); never invent abbreviations, codes, or new spellings. '
     'Do not attempt to answer or act on the user\'s question - just generate the JSON.')
 
 _NAMING_PROMPT = (
@@ -245,6 +248,30 @@ async def _apply_name_to_session(
     log.info("session_auto_grouped", session_id=session_meta.id, group=group)
 
 
+def _unfaithful_tokens(title: str, source_text: str) -> list[str]:
+  """Return title tokens absent from source_text, per the naming-fidelity rule.
+
+  A token is checked only if it has a letter AND (a digit OR 2+ uppercase letters).
+  Leading/trailing punctuation is stripped; interior characters are preserved.
+  Digit-only tokens (e.g. a session-number prefix) and single-capital ordinary
+  words are never checked. A checked token is unfaithful when it is not a
+  case-insensitive substring of source_text.
+  """
+  lowered_source = source_text.lower()
+  unfaithful: list[str] = []
+  for token in title.split():
+    stripped = token.strip(_UNFAITHFUL_PUNCT)
+    if not stripped or not any(c.isalpha() for c in stripped):
+      continue
+    has_digit = any(c.isdigit() for c in stripped)
+    upper_count = sum(1 for c in stripped if c.isupper())
+    if not (has_digit or upper_count >= 2):
+      continue
+    if stripped.lower() not in lowered_source:
+      unfaithful.append(stripped)
+  return unfaithful
+
+
 async def maybe_auto_name(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -265,21 +292,49 @@ async def maybe_auto_name(
     title_instruction = _TITLE_INSTRUCTION.format(groups_clause=groups_clause)
     system_prompt = _SYSTEM_PROMPT.format(groups_clause=groups_clause)
 
+    user_slice = user_message[:500]
+    assistant_slice = assistant_response[:300]
     prompt = _NAMING_PROMPT.format(
-        user_message=user_message[:500],
-        assistant_response=assistant_response[:300],
+        user_message=user_slice,
+        assistant_response=assistant_slice,
     )
-    full_prompt = f"{title_instruction}\n\n{prompt}"
+    source_text = "\n".join([user_slice, assistant_slice, *existing_groups])
 
-    if cfg.gemini_api_key:
-      provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
-      raw = await provider.generate_text(full_prompt)
-    else:
-      raw = await _generate_name_via_claude_cli(full_prompt, system_prompt)
+    async def _generate(prompt_text: str) -> str:
+      if cfg.gemini_api_key:
+        provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
+        return await provider.generate_text(prompt_text)
+      return await _generate_name_via_claude_cli(prompt_text, system_prompt)
 
+    raw = await _generate(f"{title_instruction}\n\n{prompt}")
     name = _sanitize_session_title(raw, session_meta.name)
     if name is None:
       return
+
+    tokens = _unfaithful_tokens(name, source_text)
+    if tokens:
+      correction = (
+          f"Your previous title used names not present in the conversation: {', '.join(tokens)}. "
+          "Use only names that appear verbatim in the conversation.")
+      raw = await _generate(f"{title_instruction}\n\n{prompt}\n\n{correction}")
+      name = _sanitize_session_title(raw, session_meta.name)
+      if name is None:
+        log.warning(
+            "session_auto_name_unfaithful",
+            session_id=session_meta.id,
+            rejected_title=None,
+            tokens=tokens,
+        )
+        return
+      tokens = _unfaithful_tokens(name, source_text)
+      if tokens:
+        log.warning(
+            "session_auto_name_unfaithful",
+            session_id=session_meta.id,
+            rejected_title=name,
+            tokens=tokens,
+        )
+        return
 
     _, group, _ = _parse_name_and_group(raw)
     matched_group = _fuzzy_match_group(group, existing_groups) if group else None

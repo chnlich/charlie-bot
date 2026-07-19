@@ -16,6 +16,11 @@ function escapeWorkerDescriptionAttr(value) {
   return escapeHtml(value || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function workerUuidRow(id) {
+  const safe = escapeHtml(id);
+  return '<p class="text-xs text-slate-600 font-mono truncate" title="click to copy" data-uuid="' + safe + '" onclick="navigator.clipboard.writeText(this.dataset.uuid); const el=this; el.textContent=\'copied\'; if(el._copyTimer)clearTimeout(el._copyTimer); el._copyTimer=setTimeout(()=>{el.textContent=el.dataset.uuid;el._copyTimer=null;},800)">' + safe + '</p>';
+}
+
 function renderWorkersTab(threads, sessionId, triggers) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
@@ -51,6 +56,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
       + '<div class="flex-1 min-w-0">'
       + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeWorkerDescriptionAttr(t.description) + '">' + escapeHtml(t.description || '') + '</p>'
       + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + timeStr + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[t.backend] || t.backend) : '') + '</p>'
+      + workerUuidRow(t.id)
       + '</div>'
       + cancelBtn
       + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
@@ -252,6 +258,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
       <div class="flex-1 min-w-0">
         <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="${escapeWorkerDescriptionAttr(description)}">${escapeHtml(description || '')}</p>
         <p id="thread-status-${threadId}" class="text-xs text-slate-500">running &middot; ${nowStr}${backend ? ' &middot; ' + (BACKEND_OPTIONS[backend] || backend) : ''}</p>
+        ${workerUuidRow(threadId)}
       </div>
       <button id="cancel-btn-${threadId}" onclick="event.stopPropagation(); cancelThread('${threadId}', '${SESSION_ID}')"
               class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel">

@@ -40,6 +40,51 @@ function injectResizeScript(html, frameId) {
   return src.slice(0, idx) + script + src.slice(idx);
 }
 
+function injectLinkBehavior(html, absPath) {
+  var baseHref = '/files' + absPath;
+  var src = String(html || '');
+  var hasBase = /<base\b/i.test(src);
+  var baseTag = '<base href="' + escapeHtml(baseHref) + '">';
+  var withBase;
+  if (hasBase) {
+    withBase = src;
+  } else {
+    var headMatch = src.match(/<head\b[^>]*>/i);
+    if (headMatch) {
+      var headEnd = headMatch.index + headMatch[0].length;
+      withBase = src.slice(0, headEnd) + baseTag + src.slice(headEnd);
+    } else {
+      withBase = baseTag + src;
+    }
+  }
+  var interceptor = '<script>(function(){'
+    + 'document.addEventListener("click", function(e){'
+    + 'if(e.defaultPrevented) return;'
+    + 'if(e.ctrlKey||e.metaKey||e.shiftKey||e.altKey) return;'
+    + 'if(e.button!==0) return;'
+    + 'var a=e.target.closest("a[href]");'
+    + 'if(!a) return;'
+    + 'var raw=a.getAttribute("href");'
+    + 'if(raw.charAt(0)==="#"){'
+    + 'e.preventDefault();'
+    + 'if(raw==="#") return;'
+    + 'var frag;'
+    + 'try{frag=decodeURIComponent(raw.slice(1));}catch(_e){frag=raw.slice(1);}'
+    + 'var el=document.getElementById(frag)||document.getElementsByName(frag)[0];'
+    + 'if(el) el.scrollIntoView();'
+    + 'return;'
+    + '}'
+    + 'e.preventDefault();'
+    + 'var url;'
+    + 'try{url=new URL(raw, document.baseURI);}catch(_e){console.warn("Invalid href in artifact", raw);return;}'
+    + 'window.open(url.href, "_blank", "noopener");'
+    + '});'
+    + '})();<\/script>';
+  var bodyIdx = withBase.lastIndexOf('</body>');
+  if (bodyIdx === -1) return withBase + interceptor;
+  return withBase.slice(0, bodyIdx) + interceptor + withBase.slice(bodyIdx);
+}
+
 function htmlArtifactSizeStorageKey(filePath) {
   return filePath ? 'html-artifact-size:' + filePath : '';
 }
@@ -80,7 +125,7 @@ function buildHtmlArtifactCard(opts) {
   var absPath = opts.absPath || resolveArtifactAbsolutePath(filePath);
   var rawHtml = opts.html || '';
   var frameId = 'hf-' + Math.random().toString(36).slice(2);
-  var withScript = injectResizeScript(rawHtml, frameId);
+  var withScript = injectResizeScript(injectLinkBehavior(rawHtml, absPath), frameId);
   var srcdoc = escapeForSrcdoc(withScript);
   var openUrl = stampViewingSessionFragment('/files' + absPath);
   var sourceHighlighted = hljs.highlight(rawHtml, {language: 'xml'}).value;
@@ -418,12 +463,14 @@ Chat.findArtifactLinkInCode = findArtifactLinkInCode;
 Chat.toggleHtmlArtifactSource = toggleHtmlArtifactSource;
 Chat.startHtmlArtifactResize = startHtmlArtifactResize;
 Chat.expandHtmlArtifact = expandHtmlArtifact;
+Chat.injectLinkBehavior = injectLinkBehavior;
 Chat.expose([
   'resolveHtmlArtifactLink',
   'findArtifactLinkInCode',
   'toggleHtmlArtifactSource',
   'startHtmlArtifactResize',
   'expandHtmlArtifact',
+  'injectLinkBehavior',
 ]);
 
 })();

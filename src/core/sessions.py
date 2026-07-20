@@ -656,6 +656,15 @@ class SessionManager:
     if event.get('type') not in _RAW_EVENTS_REPLACED_BY_DELTAS:
       await streaming_manager.broadcast(channel, event)
 
+  async def broadcast_only(self, session_id: str, event: dict) -> None:
+    """Broadcast an event on the session channel without persisting it as a chat event.
+
+    Used for state-change notifications (e.g. ``plan_updated``) that must not
+    pollute the chat history or replay on reconnect.
+    """
+    channel = f"session:{session_id}"
+    await streaming_manager.broadcast(channel, event)
+
   def _get_or_init_aggregator(self, session_id: str) -> MessageAggregator:
     """Return the live aggregator for *session_id*, lazy-initialized from disk.
 

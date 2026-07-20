@@ -221,14 +221,10 @@ const planPanel = (() => {
     if (!notice) return;
     var plan = _findPlan(_selectedPlanId);
     if (!plan || _selectedVersion == null) {
-      notice.style.display = 'none';
+      notice.classList.add('hidden');
       return;
     }
-    if (isStaleVersion(plan, _selectedVersion)) {
-      notice.style.display = '';
-    } else {
-      notice.style.display = 'none';
-    }
+    notice.classList.toggle('hidden', !isStaleVersion(plan, _selectedVersion));
   }
 
   function _renderViewer() {
@@ -311,7 +307,7 @@ const planPanel = (() => {
       var vsel = _getEl('plan-version-selector');
       if (vsel) vsel.innerHTML = '';
       var notice = _getEl('plan-stale-notice');
-      if (notice) notice.style.display = 'none';
+      if (notice) notice.classList.add('hidden');
       var bar = _getEl('plan-action-bar');
       if (bar) bar.innerHTML = '';
       return;

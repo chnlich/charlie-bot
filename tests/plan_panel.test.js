@@ -11,7 +11,7 @@ const PLAN_PANEL_JS = fs.readFileSync(
 
 function loadPlanPanelScript(opts = {}) {
   const noop = () => {};
-  const document = {
+  const document = opts.document || {
     readyState: 'loading',
     addEventListener: noop,
     getElementById: () => null,
@@ -124,6 +124,43 @@ test('isStaleVersion returns false for a plan with no versions', () => {
   const {planPanel} = loadPlanPanelScript();
   assert.equal(planPanel.isStaleVersion({versions: []}, 1), false);
   assert.equal(planPanel.isStaleVersion(null, 1), false);
+});
+
+test('render shows the stale notice when an older version is selected', async () => {
+  const elements = {};
+  for (const id of ['tab-plans', 'plan-empty-state', 'plan-viewer', 'plan-selector',
+    'plan-version-selector', 'plan-stale-notice', 'plan-action-bar']) {
+    const classes = new Set(id === 'plan-stale-notice' ? ['hidden'] : []);
+    elements[id] = {
+      style: {},
+      innerHTML: '',
+      src: '',
+      classList: {
+        add(name) { classes.add(name); },
+        toggle(name, force) {
+          if (force) classes.add(name);
+          else classes.delete(name);
+        },
+        contains(name) { return classes.has(name); },
+      },
+    };
+  }
+  elements['tab-plans'].classList.toggle = () => {};
+  const document = {
+    readyState: 'loading',
+    addEventListener: () => {},
+    getElementById: (id) => elements[id] || null,
+  };
+  const fetch = async () => ({
+    ok: true,
+    json: async () => ({plans: [makePlan(1, [makeVersion(1), makeVersion(2)])]}),
+  });
+  const {planPanel} = loadPlanPanelScript({document, fetch});
+
+  await planPanel.refresh();
+  assert.equal(elements['plan-stale-notice'].classList.contains('hidden'), true);
+  planPanel.selectVersion('1');
+  assert.equal(elements['plan-stale-notice'].classList.contains('hidden'), false);
 });
 
 // ---------------------------------------------------------------------------

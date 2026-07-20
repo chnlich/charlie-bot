@@ -304,6 +304,7 @@ function lookupPlanVersionState(snapshot, planId, v) {
 }
 
 function buildPlanCompactCardHtml(planId, v, title, state, absPath) {
+  var openInTabUrl = stampViewingSessionFragment('/files' + absPath);
   return '<div class="plan-compact-card html-artifact" data-artifact-path="' + escapeHtml(absPath) + '"'
     + ' data-plan-card-plan="' + escapeHtml(planId) + '"'
     + ' data-plan-card-version="' + escapeHtml(v) + '"'
@@ -313,6 +314,7 @@ function buildPlanCompactCardHtml(planId, v, title, state, absPath) {
     + '<span class="plan-compact-version">v' + escapeHtml(v) + '</span>'
     + '<span class="plan-compact-state">' + escapeHtml(state || '') + '</span>'
     + '<button type="button" onclick="openPlanFromCard(this)">Open panel</button>'
+    + '<a href="' + escapeHtml(openInTabUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
     + '</div>'
     + '</div>';
 }

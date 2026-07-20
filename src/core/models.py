@@ -103,6 +103,7 @@ class ThreadMetadata(BaseModel):
   skip_cleanup: bool = False
   keep_worktree: bool = False
   tried_backends: list[str] = Field(default_factory=list)
+  task_type: Optional[TaskType] = None
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +163,8 @@ class BackendOption(BaseModel):
   codex_home: Optional[str] = None  # codex backend only: per-account $CODEX_HOME
   claude_config_dir: Optional[str] = None  # cc-claude backend only: per-account CLAUDE_CONFIG_DIR
   model_reasoning_effort: Optional[str] = None  # codex backend only: per-backend reasoning effort override
-  model_auto_compact_token_limit: Optional[int] = Field(default=None, gt=0)  # codex backend only: per-backend auto-compact token limit
+  model_auto_compact_token_limit: Optional[int] = Field(
+      default=None, gt=0)  # codex backend only: per-backend auto-compact token limit
   api_base: Optional[str] = None  # OpenAI-compatible base URL (charlie-code, cc-openai-compatible)
   api_key_env: Optional[str] = None  # cc-openai-compatible: env var holding the upstream API key
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
@@ -360,6 +362,64 @@ class ScheduleTriggerRequest(BaseModel):
   delay_seconds: int
   message: str
   watch_targets: Optional[list[WatchTarget]] = None
+
+
+# ---------------------------------------------------------------------------
+# Plan Registry Request Models
+# ---------------------------------------------------------------------------
+
+
+class PlanPresentRequest(BaseModel):
+  """Request body for the internal plan/present endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  file: str
+  verify_thread: str
+  title: str
+  base_repo: Optional[str] = None
+  base_branch: Optional[str] = None
+  base_sha: Optional[str] = None
+
+
+class PlanAmendRequest(BaseModel):
+  """Request body for the internal plan/amend endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  file: str
+  verify_thread: str
+  plan_id: Optional[int] = None
+  trigger: Literal["initial", "auto_amend", "feedback"] = "feedback"
+  base_repo: Optional[str] = None
+  base_branch: Optional[str] = None
+  base_sha: Optional[str] = None
+
+
+class PlanApproveRequest(BaseModel):
+  """Request body for the internal plan/approve endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  plan_id: Optional[int] = None
+
+
+class PlanReverifyRequest(BaseModel):
+  """Request body for the internal plan/reverify endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  verify_thread: str
+  plan_id: Optional[int] = None
+
+
+class PlanCloseRequest(BaseModel):
+  """Request body for the internal plan/close endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  plan_id: int
+  close_as: Literal["superseded", "abandoned"]
 
 
 # ---------------------------------------------------------------------------

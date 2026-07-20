@@ -8,7 +8,7 @@ import aiofiles
 import structlog
 
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus, utc_now
+from src.core.models import SessionMetadata, TaskType, ThreadMetadata, ThreadStatus, utc_now
 
 log = structlog.get_logger()
 
@@ -28,6 +28,7 @@ class ThreadManager:
       review_of: Optional[str] = None,
       context: Optional[str] = None,
       require_review: bool = True,
+      task_type: Optional[TaskType] = None,
   ) -> ThreadMetadata:
     """Create a new thread directory and metadata."""
     thread = ThreadMetadata(
@@ -37,6 +38,7 @@ class ThreadManager:
         review_of=review_of,
         context=context,
         require_review=require_review,
+        task_type=task_type,
     )
 
     thread_dir = self._thread_dir(session_meta.id, thread.id)

@@ -507,114 +507,6 @@ test('resolveEntryDraft returns default comment lines when no draft override', (
   assert.equal(lines[1], '↳ comment text');
 });
 
-test('resolveEntryDraft returns draftText lines when override exists', () => {
-  const {window} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
-  );
-
-  const resolveEntryDraft = window.__cbcResolveEntryDraft;
-  const entry = {
-    quote: 'quoted text',
-    context: 'Context',
-    comment: 'comment text',
-    draftText: 'Custom draft\nsecond line',
-  };
-  const lines = resolveEntryDraft(entry);
-  assert.equal(lines.length, 2);
-  assert.equal(lines[0], 'Custom draft');
-  assert.equal(lines[1], 'second line');
-});
-
-test('buildBatchMessage uses draftText override instead of default formatting', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(artifactPath);
-  const buildBatchMessage = window.__cbcBuildBatchMessage;
-
-  const entries = [
-    {quote: 'First', context: 'Ctx', comment: 'default comment'},
-    {quote: 'Second', context: 'Ctx2', comment: 'also default', draftText: 'Overridden text'},
-  ];
-
-  const message = buildBatchMessage(entries);
-
-  assert.ok(message.includes('1. ▸ Ctx › "First"'), 'first entry uses default format');
-  assert.ok(message.includes('↳ default comment'), 'first entry comment rendered');
-  assert.ok(message.includes('2. Overridden text'), 'second entry uses draftText');
-  assert.ok(!message.includes('↳ also default'), 'second default comment is not rendered');
-});
-
-test('buildBatchMessage indents multiline draftText correctly', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(artifactPath);
-  const buildBatchMessage = window.__cbcBuildBatchMessage;
-
-  const entries = [{quote: 'Q', context: 'C', comment: 'c', draftText: 'Line one\nLine two'}];
-
-  const message = buildBatchMessage(entries);
-
-  assert.equal(
-    message,
-    [
-      '[Artifact comments · ' + artifactPath + '] (1)',
-      '',
-      '1. Line one',
-      '   Line two',
-    ].join('\n')
-  );
-});
-
-test('buildBatchMessage handles mixed default and edited entries', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(artifactPath);
-  const buildBatchMessage = window.__cbcBuildBatchMessage;
-
-  const entries = [
-    {quote: 'Q1', context: 'C1', comment: 'first', draftText: 'Edited first'},
-    {quote: 'Q2', context: 'C2', comment: 'second'},
-  ];
-
-  const message = buildBatchMessage(entries);
-
-  assert.equal(
-    message,
-    [
-      '[Artifact comments · ' + artifactPath + '] (2)',
-      '',
-      '1. Edited first',
-      '',
-      '2. ▸ C2 › "Q2"',
-      '   ↳ second',
-    ].join('\n')
-  );
-});
-
-test('buildBatchMessage uses draftText for improve shortcut entries', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(artifactPath);
-  const buildBatchMessage = window.__cbcBuildBatchMessage;
-
-  const entries = [
-    {
-      kind: 'improve',
-      quote: '',
-      context: 'Improve',
-      comment: 'Think from scratch, how to improve this?',
-      draftText: 'Custom improve prompt',
-    },
-  ];
-
-  const message = buildBatchMessage(entries);
-
-  assert.equal(
-    message,
-    [
-      '[Artifact comments · ' + artifactPath + '] (1)',
-      '',
-      '1. Custom improve prompt',
-    ].join('\n')
-  );
-});
-
 function cssRule(styleText, selector) {
   const start = styleText.indexOf(selector + '{');
   assert.notEqual(start, -1, selector + ' rule exists');
@@ -654,7 +546,7 @@ test('tray item layout keeps controls in normal flow beside bounded preview text
 
   const draft = body.querySelector('.__cbc-tray-item-comment');
   assert.ok(draft, 'draft preview exists in the text column');
-  assert.equal(draft.textContent, window.__cbcResolveEntryDraft(entry).join('\n'));
+  assert.equal(draft.textContent, entry.comment);
 
   const styleText = head.children[0].textContent;
   assert.match(cssRule(styleText, '.__cbc-tray-item-main'), /display:flex/);
@@ -663,4 +555,40 @@ test('tray item layout keeps controls in normal flow beside bounded preview text
   assert.match(cssRule(styleText, '.__cbc-tray-item-comment'), /overflow-wrap:anywhere/);
   assert.doesNotMatch(cssRule(styleText, '.__cbc-tray-edit-btn'), /position:absolute/);
   assert.doesNotMatch(cssRule(styleText, '.__cbc-tray-remove'), /position:absolute/);
+});
+
+test('popover and tray edit windows are widened and share a single width source', () => {
+  const {head} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+  const styleText = head.children[0].textContent;
+
+  assert.match(ARTIFACT_COMMENTS_JS, /var POPOVER_WIDTH = 460;/, 'POPOVER_WIDTH constant is defined once');
+  assert.match(
+    ARTIFACT_COMMENTS_JS,
+    /Math\.min\(POPOVER_WIDTH, window\.innerWidth - 16\)/,
+    'positionPopover uses the POPOVER_WIDTH constant'
+  );
+  assert.doesNotMatch(ARTIFACT_COMMENTS_JS, /Math\.min\(300,/, 'no literal 300 popover width remains in positioning math');
+
+  const popover = cssRule(styleText, '.__cbc-popover');
+  assert.ok(popover.includes('min(460px,calc(100vw - 16px))'), 'popover width uses the constant value');
+  assert.doesNotMatch(popover, /min\(300px/, 'popover rule no longer hardcodes 300px');
+
+  const popoverTextarea = cssRule(styleText, '.__cbc-popover textarea');
+  assert.match(popoverTextarea, /min-height:140px/, 'popover textarea is widened to 140px');
+  assert.match(popoverTextarea, /resize:vertical/, 'popover textarea keeps resize:vertical');
+
+  const tray = cssRule(styleText, '.__cbc-tray');
+  assert.ok(tray.includes('min(400px'), 'tray width is widened to 400px');
+  assert.ok(tray.includes('calc(100vw - 28px)'), 'tray width keeps the narrow-screen cap');
+
+  const trayList = cssRule(styleText, '.__cbc-tray-list');
+  assert.match(trayList, /max-height:320px/, 'tray list is widened to 320px');
+
+  const trayEdit = cssRule(styleText, '.__cbc-tray-edit');
+  assert.match(trayEdit, /min-height:130px/, 'tray edit textarea is widened to 130px');
+  assert.match(trayEdit, /resize:vertical/, 'tray edit textarea keeps resize:vertical');
+
+  assert.doesNotMatch(styleText, /__cbc-tray-edited/, 'the draftText-keyed edited indicator rule is gone');
 });

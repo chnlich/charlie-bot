@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from starlette.responses import Response
 
-from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager, require_session
+from src.api.deps import get_plan_manager, get_session_manager, get_thread_manager, get_trigger_manager, require_session
 from src.api.message_utils import build_session_bootstrap_data, build_session_view_data, events_to_messages
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
@@ -273,6 +273,7 @@ async def get_session_view(
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
+    plan_mgr=Depends(get_plan_manager),
 ):
   """Return data needed to render a session chat panel (SPA switch).
 
@@ -290,6 +291,7 @@ async def get_session_view(
   view = await build_session_view_data(session_id, session_mgr, thread_mgr, tail_limit=200)
   trigger_mgr = get_trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
+  plans_payload = await plan_mgr.list_plans(session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
@@ -299,6 +301,7 @@ async def get_session_view(
       "pending_draft": view.pending_draft,
       "threads": [t.model_dump(mode="json") for t in view.threads],
       "triggers": [tr.model_dump(mode="json") for tr in triggers],
+      "plans": plans_payload["plans"],
       "event_count": view.total_event_count,
       "oldest_event_index": view.oldest_event_index,
       "usage": view.usage,
@@ -607,3 +610,9 @@ async def get_events_jsonl(session_id: str):
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])
 async def list_threads(session_id: str, thread_mgr: ThreadManager = Depends(get_thread_manager)):
   return await thread_mgr.list_threads(session_id)
+
+
+@router.get("/{session_id}/plans")
+async def list_plans(session_id: str, plan_mgr=Depends(get_plan_manager)):
+  """Return the plan registry for a session with derived states."""
+  return await plan_mgr.list_plans(session_id)

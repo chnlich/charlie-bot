@@ -7,7 +7,7 @@ from typing import Union
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.deps import get_session_manager, get_thread_manager, get_trigger_manager
+from src.api.deps import get_plan_manager, get_session_manager, get_thread_manager, get_trigger_manager
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
@@ -21,6 +21,11 @@ from src.core.models import (
     DelegateInvocationMetadata,
     DelegateRequest,
     ImproveRequest,
+    PlanAmendRequest,
+    PlanApproveRequest,
+    PlanCloseRequest,
+    PlanPresentRequest,
+    PlanReverifyRequest,
     ScheduleTriggerRequest,
     SessionMetadata,
     SpawnRequest,
@@ -117,7 +122,13 @@ async def delegate_task(
   require_review = req.task_type == TaskType.IMPLEMENT
 
   # Create thread immediately so it's visible in the UI
-  thread = await thread_mgr.create_thread(meta, req.description, context=req.context, require_review=require_review)
+  thread = await thread_mgr.create_thread(
+      meta,
+      req.description,
+      context=req.context,
+      require_review=require_review,
+      task_type=req.task_type,
+  )
 
   # Fire-and-forget: spawn worker in background
   create_logged_task(
@@ -275,3 +286,103 @@ async def cancel_trigger(
   except FileNotFoundError as exc:
     raise HTTPException(status_code=404, detail="Trigger not found") from exc
   return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Plan registry verbs
+# ---------------------------------------------------------------------------
+
+
+def _build_base(req: PlanPresentRequest | PlanAmendRequest) -> dict | None:
+  if req.base_repo is None and req.base_branch is None and req.base_sha is None:
+    return None
+  return {"repo": req.base_repo, "branch": req.base_branch, "sha": req.base_sha}
+
+
+async def _authorize_plan_session(session_id: str, session_mgr: SessionManager) -> None:
+  meta = await session_mgr.get_session(session_id)
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@router.post("/plan/present")
+async def plan_present(
+    req: PlanPresentRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    plan_mgr=Depends(get_plan_manager),
+):
+  """Register a new plan lineage (v1, trigger=initial)."""
+  await _authorize_plan_session(req.session_id, session_mgr)
+  try:
+    return await plan_mgr.present(
+        req.session_id,
+        file=req.file,
+        verify_thread=req.verify_thread,
+        title=req.title,
+        base=_build_base(req),
+    )
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/plan/amend")
+async def plan_amend(
+    req: PlanAmendRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    plan_mgr=Depends(get_plan_manager),
+):
+  """Append the next version to a plan lineage."""
+  await _authorize_plan_session(req.session_id, session_mgr)
+  try:
+    return await plan_mgr.amend(
+        req.session_id,
+        file=req.file,
+        verify_thread=req.verify_thread,
+        plan_id=req.plan_id,
+        trigger=req.trigger,
+        base=_build_base(req),
+    )
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/plan/approve")
+async def plan_approve(
+    req: PlanApproveRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    plan_mgr=Depends(get_plan_manager),
+):
+  """Record a takeoff against the latest version of a plan lineage."""
+  await _authorize_plan_session(req.session_id, session_mgr)
+  try:
+    return await plan_mgr.approve(req.session_id, plan_id=req.plan_id)
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/plan/reverify")
+async def plan_reverify(
+    req: PlanReverifyRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    plan_mgr=Depends(get_plan_manager),
+):
+  """Rebind a new verify thread to a failed plan version."""
+  await _authorize_plan_session(req.session_id, session_mgr)
+  try:
+    return await plan_mgr.reverify(req.session_id, verify_thread=req.verify_thread, plan_id=req.plan_id)
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/plan/close")
+async def plan_close(
+    req: PlanCloseRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    plan_mgr=Depends(get_plan_manager),
+):
+  """Terminate a plan lineage as superseded or abandoned."""
+  await _authorize_plan_session(req.session_id, session_mgr)
+  try:
+    return await plan_mgr.close(req.session_id, req.plan_id, req.close_as)
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e

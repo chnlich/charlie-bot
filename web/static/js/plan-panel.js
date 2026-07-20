@@ -14,6 +14,7 @@ const planPanel = (() => {
   let _loadedSessionId = null;
   let _selectedPlanId = null;
   let _selectedVersion = null;
+  let _loadPromise = null;
 
   // -- Pure helpers (exported for testing) --------------------------------
 
@@ -305,6 +306,37 @@ const planPanel = (() => {
     return resp.json();
   }
 
+  function ensureLoaded() {
+    if (_loadPromise) return _loadPromise;
+    if (typeof SESSION_ID === 'undefined' || !SESSION_ID) {
+      _loadPromise = Promise.resolve();
+      _loaded = true;
+      return _loadPromise;
+    }
+    _loadPromise = (async () => {
+      try {
+        var data = await _fetchRegistry();
+        _registry = data || {plans: []};
+        _loaded = true;
+        _loadedSessionId = SESSION_ID;
+      } catch (e) {
+        console.error('plan-panel ensureLoaded failed:', e);
+        _registry = {plans: []};
+        _loaded = true;
+        _loadedSessionId = SESSION_ID;
+      }
+    })();
+    return _loadPromise;
+  }
+
+  function ready() {
+    return _loadPromise || Promise.resolve();
+  }
+
+  function getRegistrySnapshot() {
+    return _registry;
+  }
+
   function _ensureSelection() {
     var plans = _registry.plans || [];
     var found = _findPlan(_selectedPlanId);
@@ -350,6 +382,7 @@ const planPanel = (() => {
       console.error('plan-panel onPlanUpdated fetch failed:', e);
       return;
     }
+    _refreshPlanCardBadges();
     var isNew = detectNewPlanOrVersion(prev, _registry);
     if (isNew) {
       _selectedPlanId = isNew.planId;
@@ -362,6 +395,15 @@ const planPanel = (() => {
       _ensureSelection();
     }
     render();
+  }
+
+  function _refreshPlanCardBadges() {
+    if (typeof Chat === 'undefined' || !Chat || typeof Chat.updatePlanCardBadges !== 'function') return;
+    try {
+      Chat.updatePlanCardBadges(_registry);
+    } catch (e) {
+      console.warn('plan-panel: updatePlanCardBadges failed', e);
+    }
   }
 
   async function onReconnect() {
@@ -389,6 +431,16 @@ const planPanel = (() => {
 
   function selectVersion(version) {
     _selectedVersion = version != null ? Number(version) : null;
+    _renderStaleNotice();
+    _renderViewer();
+  }
+
+  function openPlan(planId, v) {
+    _selectedPlanId = planId != null ? Number(planId) : null;
+    if (v != null) _selectedVersion = Number(v);
+    if (typeof switchTab === 'function') switchTab('chat-plans');
+    _renderSelector();
+    _renderVersionSwitcher();
     _renderStaleNotice();
     _renderViewer();
   }
@@ -447,6 +499,7 @@ const planPanel = (() => {
   function init() {
     initViewerLoadHook();
     initPlanResize();
+    ensureLoaded();
   }
 
   if (typeof document !== 'undefined') {
@@ -464,6 +517,10 @@ const planPanel = (() => {
     onReconnect,
     selectPlan,
     selectVersion,
+    openPlan,
+    ensureLoaded,
+    ready,
+    getRegistrySnapshot,
     init,
     selectDefaultLineage,
     isStaleVersion,

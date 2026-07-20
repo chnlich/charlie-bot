@@ -250,6 +250,180 @@ function insertHtmlArtifactCard(prose, card, ordinal) {
   parent.insertBefore(card, before);
 }
 
+// ---------------------------------------------------------------------------
+// Plan compact cards — registered plan-version links render as native cards.
+// Pure helpers (exported for testing) live below; the DOM render path is in
+// embedLinkedHtmlArtifacts. The registry snapshot is owned by the plan panel
+// module (single source of truth, no client-side state derivation).
+// ---------------------------------------------------------------------------
+
+function buildSessionDir(sessionId, userHome) {
+  var home = userHome;
+  if (home == null && typeof window !== 'undefined' && window.USER_HOME) home = window.USER_HOME;
+  if (!home) return '';
+  return home + '/.charliebot/sessions/' + sessionId;
+}
+
+function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, userHome) {
+  var plans = (snapshot && snapshot.plans) || [];
+  var sessionDir = buildSessionDir(sessionId, userHome);
+  if (!sessionDir) return null;
+  for (var i = 0; i < plans.length; i++) {
+    var plan = plans[i];
+    var versions = (plan && plan.versions) || [];
+    for (var j = 0; j < versions.length; j++) {
+      var ver = versions[j];
+      if (!ver || !ver.file) continue;
+      var expected = sessionDir + '/' + ver.file;
+      if (absPath === expected) {
+        return {planId: plan.id, v: ver.v, title: plan.title, state: plan.state, file: ver.file};
+      }
+    }
+  }
+  return null;
+}
+
+function decidePlanCardRender(snapshot, absPath, sessionId, userHome) {
+  return lookupRegisteredPlanVersion(snapshot, absPath, sessionId, userHome) ? 'compact' : 'legacy';
+}
+
+function lookupPlanVersionState(snapshot, planId, v) {
+  var plans = (snapshot && snapshot.plans) || [];
+  for (var i = 0; i < plans.length; i++) {
+    var plan = plans[i];
+    if (String(plan && plan.id) !== String(planId)) continue;
+    var versions = (plan && plan.versions) || [];
+    for (var j = 0; j < versions.length; j++) {
+      var ver = versions[j];
+      if (Number(ver && ver.v) === Number(v)) {
+        return {planId: plan.id, v: ver.v, title: plan.title, state: plan.state, file: ver.file};
+      }
+    }
+  }
+  return null;
+}
+
+function buildPlanCompactCardHtml(planId, v, title, state, absPath) {
+  return '<div class="plan-compact-card html-artifact" data-artifact-path="' + escapeHtml(absPath) + '"'
+    + ' data-plan-card-plan="' + escapeHtml(planId) + '"'
+    + ' data-plan-card-version="' + escapeHtml(v) + '"'
+    + ' data-plan-card-abs-path="' + escapeHtml(absPath) + '">'
+    + '<div class="html-artifact-toolbar">'
+    + '<span class="filename">' + escapeHtml(title || '(untitled)') + '</span>'
+    + '<span class="plan-compact-version">v' + escapeHtml(v) + '</span>'
+    + '<span class="plan-compact-state">' + escapeHtml(state || '') + '</span>'
+    + '<button type="button" onclick="openPlanFromCard(this)">Open panel</button>'
+    + '</div>'
+    + '</div>';
+}
+
+function openPlanFromCard(btn) {
+  var card = btn.closest('.plan-compact-card');
+  if (!card) return;
+  var planId = card.dataset.planCardPlan;
+  var v = Number(card.dataset.planCardVersion);
+  if (typeof planPanel !== 'undefined' && planPanel && typeof planPanel.openPlan === 'function') {
+    planPanel.openPlan(planId, v);
+  }
+}
+
+function updatePlanCardBadges(snapshot) {
+  var cards = document.querySelectorAll('.plan-compact-card');
+  if (!cards.length) return;
+  cards.forEach(function(card) {
+    var planId = card.dataset.planCardPlan;
+    var v = Number(card.dataset.planCardVersion);
+    var info = lookupPlanVersionState(snapshot, planId, v);
+    if (!info) return;
+    var badge = card.querySelector('.plan-compact-state');
+    if (badge) badge.textContent = info.state;
+  });
+}
+
+function _planRegistryReady() {
+  if (typeof planPanel === 'undefined' || !planPanel) return null;
+  if (typeof planPanel.ready !== 'function') return null;
+  return planPanel.ready();
+}
+
+function _planRegistrySnapshot() {
+  if (typeof planPanel === 'undefined' || !planPanel) return null;
+  if (typeof planPanel.getRegistrySnapshot !== 'function') return null;
+  return planPanel.getRegistrySnapshot();
+}
+
+function renderPlanCompactCard(link, ordinal, prose, reg) {
+  var template = document.createElement('template');
+  template.innerHTML = buildPlanCompactCardHtml(reg.planId, reg.v, reg.title, reg.state, link.absPath);
+  var card = template.content.firstElementChild;
+  if (!card) {
+    throw new Error('plan compact card render produced no element');
+  }
+  var mc = document.getElementById('messages');
+  var atBottom = mc ? shouldAutoScroll(mc) : false;
+  insertHtmlArtifactCard(prose, card, ordinal);
+  link.el.dataset.embedded = '1';
+  if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
+}
+
+function renderLegacyArtifactEmbed(link, ordinal) {
+  fetchHtmlArtifact(link.absPath, link.fetchUrl).then(function(html) {
+    if (!link.el.isConnected) return;
+    if (link.el.dataset.embedded === '1') return;
+    var currentProse = link.el.closest('.prose-msg');
+    if (!currentProse || currentProse.closest('#streaming-msg')) return;
+    if (findEmbeddedHtmlArtifactCard(currentProse, link.absPath)) {
+      link.el.dataset.embedded = '1';
+      return;
+    }
+    var template = document.createElement('template');
+    template.innerHTML = buildHtmlArtifactCard({
+      absPath: link.absPath,
+      filePath: link.absPath,
+      html: html,
+    });
+    var card = template.content.firstElementChild;
+    if (!card) {
+      throw new Error('HTML artifact card render produced no element');
+    }
+    var mc = document.getElementById('messages');
+    var atBottom = mc ? shouldAutoScroll(mc) : false;
+    insertHtmlArtifactCard(currentProse, card, ordinal);
+    link.el.dataset.embedded = '1';
+    if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
+  }).catch(function(e) {
+    console.warn('Failed to render linked HTML artifact', link.fetchUrl, e);
+  });
+}
+
+function renderArtifactLink(link, ordinal, prose) {
+  var ready = _planRegistryReady();
+  if (!ready) {
+    renderLegacyArtifactEmbed(link, ordinal);
+    return;
+  }
+  ready.then(function() {
+    if (!link.el.isConnected) return;
+    if (link.el.dataset.embedded === '1') return;
+    var currentProse = link.el.closest('.prose-msg');
+    if (!currentProse || currentProse.closest('#streaming-msg')) return;
+    if (findEmbeddedHtmlArtifactCard(currentProse, link.absPath)) {
+      link.el.dataset.embedded = '1';
+      return;
+    }
+    var snapshot = _planRegistrySnapshot();
+    var reg = snapshot ? lookupRegisteredPlanVersion(snapshot, link.absPath, SESSION_ID, window.USER_HOME) : null;
+    if (reg) {
+      renderPlanCompactCard(link, ordinal, currentProse, reg);
+    } else {
+      renderLegacyArtifactEmbed(link, ordinal);
+    }
+  }).catch(function(e) {
+    console.warn('plan registry readiness failed; using legacy embed', e);
+    renderLegacyArtifactEmbed(link, ordinal);
+  });
+}
+
 function embedLinkedHtmlArtifacts(root) {
   root.querySelectorAll('.prose-msg').forEach(function(prose) {
     if (prose.id === 'streaming-msg' || prose.closest('#streaming-msg')) return;
@@ -285,33 +459,7 @@ function embedLinkedHtmlArtifacts(root) {
         link.el.dataset.embedded = '1';
         return;
       }
-      fetchHtmlArtifact(link.absPath, link.fetchUrl).then(function(html) {
-        if (!link.el.isConnected) return;
-        if (link.el.dataset.embedded === '1') return;
-        var currentProse = link.el.closest('.prose-msg');
-        if (!currentProse || currentProse.closest('#streaming-msg')) return;
-        if (findEmbeddedHtmlArtifactCard(currentProse, link.absPath)) {
-          link.el.dataset.embedded = '1';
-          return;
-        }
-        var template = document.createElement('template');
-        template.innerHTML = buildHtmlArtifactCard({
-          absPath: link.absPath,
-          filePath: link.absPath,
-          html: html,
-        });
-        var card = template.content.firstElementChild;
-        if (!card) {
-          throw new Error('HTML artifact card render produced no element');
-        }
-        var mc = document.getElementById('messages');
-        var atBottom = mc ? shouldAutoScroll(mc) : false;
-        insertHtmlArtifactCard(currentProse, card, ordinal);
-        link.el.dataset.embedded = '1';
-        if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
-      }).catch(function(e) {
-        console.warn('Failed to render linked HTML artifact', link.fetchUrl, e);
-      });
+      renderArtifactLink(link, ordinal, prose);
     });
   });
 }
@@ -464,6 +612,13 @@ Chat.toggleHtmlArtifactSource = toggleHtmlArtifactSource;
 Chat.startHtmlArtifactResize = startHtmlArtifactResize;
 Chat.expandHtmlArtifact = expandHtmlArtifact;
 Chat.injectLinkBehavior = injectLinkBehavior;
+Chat.lookupRegisteredPlanVersion = lookupRegisteredPlanVersion;
+Chat.decidePlanCardRender = decidePlanCardRender;
+Chat.lookupPlanVersionState = lookupPlanVersionState;
+Chat.buildPlanCompactCardHtml = buildPlanCompactCardHtml;
+Chat.buildSessionDir = buildSessionDir;
+Chat.updatePlanCardBadges = updatePlanCardBadges;
+Chat.openPlanFromCard = openPlanFromCard;
 Chat.expose([
   'resolveHtmlArtifactLink',
   'findArtifactLinkInCode',
@@ -471,6 +626,13 @@ Chat.expose([
   'startHtmlArtifactResize',
   'expandHtmlArtifact',
   'injectLinkBehavior',
+  'lookupRegisteredPlanVersion',
+  'decidePlanCardRender',
+  'lookupPlanVersionState',
+  'buildPlanCompactCardHtml',
+  'buildSessionDir',
+  'updatePlanCardBadges',
+  'openPlanFromCard',
 ]);
 
 })();

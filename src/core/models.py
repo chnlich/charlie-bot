@@ -205,6 +205,7 @@ class SessionMetadata(BaseModel):
   has_pending_trigger: bool = False
   pending_trigger_count: int = 0
   next_trigger_at: Optional[datetime] = None
+  has_pending_plan_approval: bool = False
   starred: bool = False
   thinking_since: Optional[UtcDatetime] = None
   created_at: UtcDatetime = Field(default_factory=utc_now)

@@ -46,6 +46,7 @@ _TRANSIENT_METADATA_FIELDS = {
     "has_pending_trigger",
     "pending_trigger_count",
     "next_trigger_at",
+    "has_pending_plan_approval",
     "schedule_cron",
     "schedule_enabled",
     "schedule_next_run",
@@ -963,6 +964,23 @@ class SessionManager:
 
     return await asyncio.to_thread(_check)
 
+  def _has_pending_plan_approval(self, session_id: str) -> bool:
+    """Return True if the session has a lineage whose derived state is 'awaiting approval'.
+
+    Existence-check short-circuits sessions without plans.json. Derived state
+    is computed via the single authority in src.core.plans (no re-derivation).
+    """
+    plans_path = self._session_dir(session_id) / "plans.json"
+    if not plans_path.exists():
+      return False
+    from src.core.plans import derive_state_str
+    raw = plans_path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    for plan in data.get("plans", []):
+      if derive_state_str(plan) == "awaiting approval":
+        return True
+    return False
+
   async def _enrich_and_sort(
       self,
       sessions: list[SessionMetadata],
@@ -983,12 +1001,14 @@ class SessionManager:
       sessions: list[SessionMetadata],
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
+      include_pending_plan_approval: bool = False,
   ) -> None:
     """Public wrapper for _populate_sidebar_state."""
     await self._populate_sidebar_state(
         sessions,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
+        include_pending_plan_approval=include_pending_plan_approval,
     )
 
   async def _populate_sidebar_state(
@@ -996,6 +1016,7 @@ class SessionManager:
       sessions: list[SessionMetadata],
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
+      include_pending_plan_approval: bool = False,
   ) -> None:
     """Populate derived sidebar-only state on session metadata objects."""
     if not sessions:
@@ -1014,27 +1035,41 @@ class SessionManager:
         meta.has_pending_trigger = False
         meta.pending_trigger_count = 0
         meta.next_trigger_at = None
+    if include_pending_plan_approval:
+      for meta in archived_sessions:
+        meta.has_pending_plan_approval = False
 
     if not active_sessions:
       return
 
     running_future = None
     trigger_future = None
+    plan_approval_future = None
     if include_running_status:
       running_future = asyncio.gather(*(self._has_running_tasks(meta.id) for meta in active_sessions))
     if include_pending_trigger_status:
       trigger_future = asyncio.gather(*(self._get_pending_trigger_state(meta.id) for meta in active_sessions))
+    if include_pending_plan_approval:
+      plan_approval_future = asyncio.gather(
+          *(asyncio.to_thread(self._has_pending_plan_approval, meta.id) for meta in active_sessions))
 
-    if running_future and trigger_future:
-      running_flags, trigger_states = await asyncio.gather(running_future, trigger_future)
-    elif running_future:
-      running_flags = await running_future
-      trigger_states = None
-    elif trigger_future:
-      running_flags = None
-      trigger_states = await trigger_future
-    else:
+    pending_futures = [f for f in (running_future, trigger_future, plan_approval_future) if f is not None]
+    if not pending_futures:
       return
+    gathered = await asyncio.gather(*pending_futures)
+    idx = 0
+    running_flags = None
+    trigger_states = None
+    plan_approval_flags = None
+    if running_future is not None:
+      running_flags = gathered[idx]
+      idx += 1
+    if trigger_future is not None:
+      trigger_states = gathered[idx]
+      idx += 1
+    if plan_approval_future is not None:
+      plan_approval_flags = gathered[idx]
+      idx += 1
 
     if running_flags is not None:
       for meta, running in zip(active_sessions, running_flags):
@@ -1045,6 +1080,10 @@ class SessionManager:
         meta.has_pending_trigger = pending_count > 0
         meta.pending_trigger_count = pending_count
         meta.next_trigger_at = next_trigger_at
+
+    if plan_approval_flags is not None:
+      for meta, has_pending in zip(active_sessions, plan_approval_flags):
+        meta.has_pending_plan_approval = bool(has_pending)
 
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.

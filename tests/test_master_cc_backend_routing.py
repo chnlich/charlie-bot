@@ -110,3 +110,44 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
   assert cc_session_id == "existing-session-id"
   assert exit_code == 0
   assert error_msg is None
+
+
+@pytest.mark.asyncio
+async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
+      ],
+  )
+  session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
+  backend_option = cfg.backend_options[0]
+  captures: dict[str, object] = {}
+
+  def fake_build_backend(option, cfg, **kwargs):
+    captures["kwargs"] = kwargs
+    return _FakeBackend()
+
+  monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+
+  item = master_cc._WorkItem(
+      cfg=cfg,
+      session_meta=session_meta,
+      user_content="hello",
+      callbacks=_make_callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=backend_option,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
+  )
+
+  await master_cc._run_cc(item)
+
+  backend_kwargs = captures["kwargs"]
+  assert backend_kwargs["extra_flags"] == ["--exclude-dynamic-system-prompt-sections"]

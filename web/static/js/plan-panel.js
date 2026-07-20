@@ -15,6 +15,7 @@ const planPanel = (() => {
   let _selectedPlanId = null;
   let _selectedVersion = null;
   let _loadPromise = null;
+  let _loadPromiseSessionId = null;
 
   // -- Pure helpers (exported for testing) --------------------------------
 
@@ -307,10 +308,19 @@ const planPanel = (() => {
   }
 
   function ensureLoaded() {
-    if (_loadPromise) return _loadPromise;
-    if (typeof SESSION_ID === 'undefined' || !SESSION_ID) {
+    var sid = (typeof SESSION_ID === 'undefined') ? null : SESSION_ID;
+    // Reuse an in-flight/completed load only when it is for the current
+    // session. Session switching is an in-place SPA swap (SESSION_ID changes
+    // without a page reload), so a promise/snapshot from the previous session
+    // must not be reused: otherwise the chat embed path would decide
+    // registered-vs-not against the previous session's registry and mis-render
+    // another session's plan cards (file names like plan_01.html collide).
+    if (_loadPromise && _loadPromiseSessionId === sid) return _loadPromise;
+    _loadPromiseSessionId = sid;
+    if (!sid) {
       _loadPromise = Promise.resolve();
       _loaded = true;
+      _loadedSessionId = null;
       return _loadPromise;
     }
     _loadPromise = (async () => {
@@ -318,19 +328,19 @@ const planPanel = (() => {
         var data = await _fetchRegistry();
         _registry = data || {plans: []};
         _loaded = true;
-        _loadedSessionId = SESSION_ID;
+        _loadedSessionId = sid;
       } catch (e) {
         console.error('plan-panel ensureLoaded failed:', e);
         _registry = {plans: []};
         _loaded = true;
-        _loadedSessionId = SESSION_ID;
+        _loadedSessionId = sid;
       }
     })();
     return _loadPromise;
   }
 
   function ready() {
-    return _loadPromise || Promise.resolve();
+    return ensureLoaded();
   }
 
   function getRegistrySnapshot() {

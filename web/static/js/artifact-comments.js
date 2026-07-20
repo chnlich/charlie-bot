@@ -6,6 +6,7 @@ if (!framed) {
     var GLOBAL_PREFIX = '__cbc';
     var HIDE_DELAY_MS = 300;
     var TRIGGER_SIZE = 34;
+    var POPOVER_WIDTH = 460;
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
     var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this?'}];
@@ -141,8 +142,8 @@ if (!framed) {
         '.' + GLOBAL_PREFIX + '-hover{outline:2px solid rgba(88,166,255,.95)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.16)!important}' +
         '.' + GLOBAL_PREFIX + '-trigger{position:fixed;z-index:2147483646;width:34px;height:34px;border-radius:999px;border:1px solid rgba(88,166,255,.75);background:#0d1117;color:#e6edf3;display:none;align-items:center;justify-content:center;font-size:16px;line-height:1;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;padding:0}' +
         '.' + GLOBAL_PREFIX + '-trigger:hover{background:#1c2230;border-color:#58a6ff}' +
-        '.' + GLOBAL_PREFIX + '-popover{position:fixed;z-index:2147483647;width:min(300px,calc(100vw - 16px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
-        '.' + GLOBAL_PREFIX + '-popover textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:7px 8px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
+        '.' + GLOBAL_PREFIX + '-popover{position:fixed;z-index:2147483647;width:min(' + POPOVER_WIDTH + 'px,calc(100vw - 16px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+        '.' + GLOBAL_PREFIX + '-popover textarea{box-sizing:border-box;width:100%;min-height:140px;resize:vertical;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:7px 8px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
         '.' + GLOBAL_PREFIX + '-popover textarea:focus{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.18)}' +
         '.' + GLOBAL_PREFIX + '-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:8px}' +
         '.' + GLOBAL_PREFIX + '-actions button{border:1px solid #2d3340;border-radius:6px;padding:4px 9px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
@@ -157,17 +158,16 @@ if (!framed) {
         '.' + GLOBAL_PREFIX + '-shortcut:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-shortcut-reason{max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-marked{outline:2px solid rgba(88,166,255,.45)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.08)!important}' +
-        '.' + GLOBAL_PREFIX + '-tray{position:fixed;right:14px;bottom:110px;z-index:2147483646;width:min(300px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
+        '.' + GLOBAL_PREFIX + '-tray{position:fixed;right:14px;bottom:110px;z-index:2147483646;width:min(400px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
         '.' + GLOBAL_PREFIX + '-tray-header{font-weight:600;font-size:12px;color:#8b949e}' +
-        '.' + GLOBAL_PREFIX + '-tray-list{max-height:200px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
+        '.' + GLOBAL_PREFIX + '-tray-list{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
         '.' + GLOBAL_PREFIX + '-tray-item{background:#0d1117;border:1px solid #2d3340;border-radius:6px;padding:7px;min-height:0}' +
         '.' + GLOBAL_PREFIX + '-tray-item-main{display:flex;align-items:flex-start;gap:7px;min-width:0}' +
         '.' + GLOBAL_PREFIX + '-tray-item-body{flex:1;min-width:0}' +
         '.' + GLOBAL_PREFIX + '-tray-item-controls{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:5px}' +
         '.' + GLOBAL_PREFIX + '-tray-item-quote{color:#8b949e;font-size:11px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
         '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:pre-line;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;max-height:3.4em;cursor:default}' +
-        '.' + GLOBAL_PREFIX + '-tray-edited{display:none;margin-top:3px;color:#58a6ff;font-size:11px}' +
-        '.' + GLOBAL_PREFIX + '-tray-edit{box-sizing:border-box;width:100%;min-height:58px;resize:vertical;margin-top:3px;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:6px 7px;font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
+        '.' + GLOBAL_PREFIX + '-tray-edit{box-sizing:border-box;width:100%;min-height:130px;resize:vertical;margin-top:3px;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:6px 7px;font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
         '.' + GLOBAL_PREFIX + '-tray-edit:focus{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.18)}' +
         '.' + GLOBAL_PREFIX + '-tray-edit-btn{border:1px solid #2d3340;border-radius:4px;padding:2px 6px;background:#1c2230;color:#e6edf3;font:10px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-edit-btn:hover{background:#262d36}' +
@@ -466,7 +466,7 @@ if (!framed) {
 
     function positionPopover(node, block) {
       var rect = block.getBoundingClientRect();
-      var width = Math.min(300, window.innerWidth - 16);
+      var width = Math.min(POPOVER_WIDTH, window.innerWidth - 16);
       var left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
       var top = Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - node.offsetHeight - 8));
       node.style.left = left + 'px';
@@ -503,7 +503,6 @@ if (!framed) {
     }
 
     function resolveEntryDraft(entry) {
-      if (entry.draftText != null) return entry.draftText.split('\n');
       return buildCommentEntry(entry.quote, entry.context, entry.comment);
     }
 
@@ -725,20 +724,15 @@ if (!framed) {
 
       var draft = document.createElement('div');
       draft.className = GLOBAL_PREFIX + '-tray-item-comment';
-      draft.textContent = resolveEntryDraft(entry).join('\n');
-      draft.title = 'Outbound text';
-
-      var edited = document.createElement('span');
-      edited.className = GLOBAL_PREFIX + '-tray-edited';
-      edited.textContent = 'edited';
-      edited.style.display = entry.draftText != null ? 'inline' : 'none';
+      draft.textContent = entry.comment;
+      draft.title = 'Comment text';
 
       var editBtn = document.createElement('button');
       editBtn.type = 'button';
       editBtn.className = GLOBAL_PREFIX + '-tray-edit-btn';
       editBtn.textContent = 'Edit';
-      editBtn.title = 'Edit outbound text';
-      editBtn.setAttribute('aria-label', 'Edit outbound text for this comment');
+      editBtn.title = 'Edit comment';
+      editBtn.setAttribute('aria-label', 'Edit comment for this entry');
       editBtn.addEventListener('click', function() {
         editTrayEntry(idx, item);
       });
@@ -755,7 +749,6 @@ if (!framed) {
 
       body.appendChild(quote);
       body.appendChild(draft);
-      body.appendChild(edited);
       controls.appendChild(remove);
       controls.appendChild(editBtn);
       main.appendChild(body);
@@ -770,8 +763,8 @@ if (!framed) {
       if (!draftNode) return;
       var textarea = document.createElement('textarea');
       textarea.className = GLOBAL_PREFIX + '-tray-edit';
-      textarea.value = resolveEntryDraft(entry).join('\n');
-      textarea.setAttribute('aria-label', 'Edit outbound text');
+      textarea.value = entry.comment;
+      textarea.setAttribute('aria-label', 'Edit comment');
       var done = false;
 
       function cancel() {
@@ -782,13 +775,13 @@ if (!framed) {
 
       function save() {
         if (done) return;
-        var next = textarea.value;
-        if (!next.trim()) {
+        var next = textarea.value.trim();
+        if (!next) {
           cancel();
           return;
         }
         done = true;
-        pending[idx].draftText = next;
+        pending[idx].comment = next;
         refreshTray();
       }
 

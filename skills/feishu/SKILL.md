@@ -1,7 +1,7 @@
 ---
 name: feishu
 description: This skill should be used when the user asks to read, create, or edit Feishu/Lark documents, search docs in their Feishu workspace, or fetch content from a Feishu wiki or docx URL.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Feishu Docs
@@ -330,3 +330,8 @@ Extract tokens from Feishu URLs:
 - After creating the doc and getting explicit user approval for the permission write, set its public permission with `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` and `{"link_share_entity":"tenant_readable"}`, then update the Linear issue description to include the Feishu doc URL
 - **Organize by date:** Feishu docs linked from Linear issues are living documents with ongoing updates. Structure content with **H1 date headers** (e.g. `# 2026-03-26`) as top-level sections. Each day's work goes under its date. New updates append a new date section — never overwrite previous dates.
 - **Use Pacific Time (PT) for dates** — all date headers use `America/Los_Angeles` timezone, not UTC. Run `TZ=America/Los_Angeles date +%Y-%m-%d` to get the correct date.
+
+## Content conventions
+
+For docs linked to a Linear issue, the division of content between the issue and
+the doc is defined in the `linear` skill (Content conventions).

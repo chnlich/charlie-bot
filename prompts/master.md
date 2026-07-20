@@ -34,7 +34,7 @@ SAME turn — do not defer or batch memory writes.
 
 NEVER use Claude Code auto-memory at ~/.claude/projects/.../memory/ — all memory belongs in CharlieBot own files.
 
-See `~/.charliebot/MEMORY.md` for where to write / what to write / 6-month rule.
+See `~/.charliebot/MEMORY.md` for where to write / what to write.
 
 ---
 

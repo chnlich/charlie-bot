@@ -296,6 +296,38 @@ test('buildIframeUrlFromVersion returns null for unknown version', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildStandaloneUrl / buildStandaloneUrlFromVersion (Open in tab path)
+// ---------------------------------------------------------------------------
+
+test('buildStandaloneUrl builds a real /files URL with cbsession and NO cbpanel marker', () => {
+  const {planPanel} = loadPlanPanelScript({sessionId: 'sess-42', userHome: '/home/alice'});
+  const url = planPanel.buildStandaloneUrl('artifacts/plan_01.html', 'sess-42', '/home/alice');
+  const expectedPath = '/files/home/alice/.charliebot/sessions/sess-42/artifacts/plan_01.html';
+  assert.ok(url.startsWith(expectedPath), 'URL starts with the real /files path');
+  assert.ok(url.indexOf('#cbsession=sess-42') !== -1, 'URL carries the cbsession fragment');
+  assert.equal(url.indexOf('cbpanel'), -1, 'standalone URL must NOT carry the cbpanel marker');
+});
+
+test('buildStandaloneUrlFromVersion resolves the version file without cbpanel', () => {
+  const {planPanel} = loadPlanPanelScript({sessionId: 's1', userHome: '/home/u'});
+  const plan = makePlan(1, [
+    makeVersion(1, 'artifacts/plan_01.html'),
+    makeVersion(2, 'artifacts/plan_02.html'),
+  ]);
+  const url = planPanel.buildStandaloneUrlFromVersion(plan, 2, 's1', '/home/u');
+  assert.ok(url.indexOf('artifacts/plan_02.html') !== -1, 'URL points to v2 file');
+  assert.ok(url.indexOf('#cbsession=s1') !== -1, 'URL carries the cbsession fragment');
+  assert.equal(url.indexOf('cbpanel'), -1, 'standalone URL must NOT carry the cbpanel marker');
+});
+
+test('buildStandaloneUrlFromVersion returns null for unknown version', () => {
+  const {planPanel} = loadPlanPanelScript();
+  const plan = makePlan(1, [makeVersion(1)]);
+  assert.equal(planPanel.buildStandaloneUrlFromVersion(plan, 99, 's1', '/home/u'), null);
+  assert.equal(planPanel.buildStandaloneUrlFromVersion(null, 1, 's1', '/home/u'), null);
+});
+
+// ---------------------------------------------------------------------------
 // stateBadgeClass
 // ---------------------------------------------------------------------------
 

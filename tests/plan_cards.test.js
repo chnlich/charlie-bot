@@ -206,6 +206,20 @@ test('buildPlanCompactCardHtml includes the title, vN, verbatim state, and Open 
   assert.match(html, /<button[^>]*onclick="openPlanFromCard\(this\)"[^>]*>Open panel<\/button>/, 'Open panel button present');
 });
 
+test('buildPlanCompactCardHtml includes an Open in tab anchor whose href carries #cbsession= and no cbpanel', () => {
+  const ctx = loadArtifactsScript();
+  const absPath = '/home/user/.charliebot/sessions/sess-42/artifacts/plan_03.html';
+  const html = ctx.buildPlanCompactCardHtml(3, 2, 'Refactor the registry', 'awaiting approval', absPath);
+  // Anchor is present, opens in a new tab with the standard rel attributes.
+  const anchorMatch = html.match(/<a[^>]*href="([^"]+)"[^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Open in tab<\/a>/);
+  assert.ok(anchorMatch, 'Open in tab anchor present with target=_blank and rel=noopener noreferrer');
+  const href = anchorMatch[1];
+  // stampViewingSessionFragment reads SESSION_ID from the script context.
+  assert.match(href, /#cbsession=test-session/, 'href carries the #cbsession= fragment for the comment tray');
+  assert.equal(href.indexOf('cbpanel'), -1, 'href must NOT carry the cbpanel marker (standalone page path)');
+  assert.ok(href.indexOf('/files' + absPath) === 0, 'href targets the real /files URL of the card version file');
+});
+
 test('buildPlanCompactCardHtml renders the derived state string verbatim with no client-side derivation', () => {
   const ctx = loadArtifactsScript();
   const states = ['in flight', 'awaiting approval', 'needs amendment', 'approved', 'approved \u00B7 awaiting clean verify', 'superseded'];

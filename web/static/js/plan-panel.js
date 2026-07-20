@@ -1,10 +1,11 @@
 // ---------------------------------------------------------------------------
-// Plan panel — persistent right-side split panel for plan lineage review.
+// Plan panel — full-content-area view for plan lineage review.
 //
 // Marker `cbpanel` is the single URL-fragment marker that activates the
-// artifact comment tray inside this panel's iframe. artifact-comments.js
+// artifact comment tray inside this view's iframe. artifact-comments.js
 // checks the same literal (`'cbpanel'`) in its framed guard. Keep both in
-// sync when renaming.
+// sync when renaming. The standalone "Open in tab" path omits the marker so
+// the comment tray activates via the top-level-page branch instead.
 // ---------------------------------------------------------------------------
 const PLAN_PANEL_MARKER = 'cbpanel';
 
@@ -117,6 +118,32 @@ const planPanel = (() => {
     }
     if (!ver) return null;
     return buildIframeUrl(ver.file, sessionId, userHome);
+  }
+
+  // Standalone URL for the "Open in tab" action: real /files URL with the
+  // cbsession fragment but WITHOUT the cbpanel marker. The comment tray
+  // activates via the top-level-page branch of artifact-comments.js (the
+  // framed guard is skipped because the page is not in an iframe).
+  function buildStandaloneUrl(file, sessionId, userHome) {
+    var home = userHome;
+    if (typeof window !== 'undefined' && window.USER_HOME && !home) {
+      home = window.USER_HOME;
+    }
+    if (!home) {
+      throw new Error('USER_HOME not available for plan standalone URL');
+    }
+    var absPath = home + '/.charliebot/sessions/' + sessionId + '/' + file;
+    return '/files' + absPath + '#cbsession=' + encodeURIComponent(sessionId);
+  }
+
+  function buildStandaloneUrlFromVersion(plan, version, sessionId, userHome) {
+    if (!plan || !plan.versions) return null;
+    var ver = null;
+    for (var i = 0; i < plan.versions.length; i++) {
+      if (plan.versions[i].v === version) { ver = plan.versions[i]; break; }
+    }
+    if (!ver) return null;
+    return buildStandaloneUrl(ver.file, sessionId, userHome);
   }
 
   function stateBadgeClass(stateStr) {
@@ -273,7 +300,7 @@ const planPanel = (() => {
   }
 
   function render() {
-    var panel = _getEl('plan-panel');
+    var panel = _getEl('tab-plans');
     if (!panel) return;
     var empty = _getEl('plan-empty-state');
     var viewer = _getEl('plan-viewer');
@@ -466,49 +493,26 @@ const planPanel = (() => {
     });
   }
 
-  // -- Resize (mirrors initBacklogResize) ---------------------------------
+  // -- Open in tab --------------------------------------------------------
 
-  function initPlanResize() {
-    var handle = _getEl('plan-resize-handle');
-    var panel = _getEl('plan-panel');
-    if (!handle || !panel) return;
-    var container = panel.parentElement;
-    var saved = localStorage.getItem('plan-panel-pct');
-    if (saved) panel.style.width = saved + '%';
-
-    var startX, startW, containerW;
-    handle.addEventListener('mousedown', function(e) {
-      e.preventDefault();
-      startX = e.clientX;
-      containerW = container.offsetWidth;
-      startW = panel.offsetWidth;
-      handle.classList.add('active');
-      document.body.classList.add('resizing');
-
-      function onMove(ev) {
-        var delta = startX - ev.clientX;
-        var w = Math.min(Math.max(startW + delta, containerW * 0.2), containerW * 0.8);
-        panel.style.width = w + 'px';
+  function openCurrentInTab() {
+    var plan = _findPlan(_selectedPlanId);
+    if (!plan || _selectedVersion == null) return;
+    try {
+      var url = buildStandaloneUrlFromVersion(plan, _selectedVersion, SESSION_ID);
+      if (!url) return;
+      if (typeof window !== 'undefined' && typeof window.open === 'function') {
+        window.open(url, '_blank', 'noopener,noreferrer');
       }
-      function onUp() {
-        handle.classList.remove('active');
-        document.body.classList.remove('resizing');
-        var pct = (panel.offsetWidth / container.offsetWidth * 100).toFixed(1);
-        localStorage.setItem('plan-panel-pct', pct);
-        panel.style.width = pct + '%';
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
+    } catch (e) {
+      console.error('plan-panel: openCurrentInTab failed', e);
+    }
   }
 
   // -- Init ---------------------------------------------------------------
 
   function init() {
     initViewerLoadHook();
-    initPlanResize();
     ensureLoaded();
   }
 
@@ -528,6 +532,7 @@ const planPanel = (() => {
     selectPlan,
     selectVersion,
     openPlan,
+    openCurrentInTab,
     ensureLoaded,
     ready,
     getRegistrySnapshot,
@@ -538,6 +543,8 @@ const planPanel = (() => {
     parseOpenForks,
     buildIframeUrl,
     buildIframeUrlFromVersion,
+    buildStandaloneUrl,
+    buildStandaloneUrlFromVersion,
     stateBadgeClass,
   };
 })();

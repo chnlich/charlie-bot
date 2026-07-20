@@ -197,6 +197,7 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
       sessions,
       include_running_status=True,
       include_pending_trigger_status=True,
+      include_pending_plan_approval=True,
   )
   result: dict[str, dict] = {}
   for meta in sessions:
@@ -207,6 +208,7 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
         "has_pending_trigger": meta.has_pending_trigger,
         "pending_trigger_count": meta.pending_trigger_count,
         "next_trigger_at": meta.next_trigger_at.isoformat() if meta.next_trigger_at else None,
+        "has_pending_plan_approval": meta.has_pending_plan_approval,
     }
   return result
 

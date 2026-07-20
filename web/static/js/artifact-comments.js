@@ -1,7 +1,17 @@
+// Marker `cbpanel` is the single URL-fragment marker shared with plan-panel.js.
+// When the plan panel loads an artifact in its same-origin iframe, it appends
+// `&cbpanel=1` to the #cbsession= fragment. This guard activates the comment
+// tray inside that iframe. Keep this literal in sync with plan-panel.js.
+var CB_PLAN_PANEL_MARKER = 'cbpanel';
 var framed;
 try { framed = window.parent !== window.self; } catch (e) { framed = true; }
 
-if (!framed) {
+function _hasPanelReviewMarker(hash) {
+  var text = String(hash || '');
+  return text.indexOf(CB_PLAN_PANEL_MARKER + '=1') !== -1;
+}
+
+if (!framed || _hasPanelReviewMarker(window.location.hash)) {
   (function() {
     var GLOBAL_PREFIX = '__cbc';
     var HIDE_DELAY_MS = 300;
@@ -53,9 +63,11 @@ if (!framed) {
       var text = String(hash || '');
       var prefix = '#cbsession=';
       if (text.indexOf(prefix) !== 0) return null;
+      var rest = text.slice(prefix.length);
+      var ampIdx = rest.indexOf('&');
       var value;
       try {
-        value = decodeURIComponent(text.slice(prefix.length)).trim();
+        value = decodeURIComponent(ampIdx === -1 ? rest : rest.slice(0, ampIdx)).trim();
       } catch (e) {
         console.warn('Invalid cbsession hash', hash, e);
         return null;

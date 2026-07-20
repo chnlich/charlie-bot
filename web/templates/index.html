@@ -187,6 +187,7 @@
           <button onclick="switchTab('terminal')" id="btn-terminal" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Terminal</button>
           <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>
           <button onclick="switchTab('chat-backlog')" id="btn-chat-backlog" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Backlog</button>
+          <button onclick="switchTab('chat-plans')" id="btn-chat-plans" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Plans</button>
           <button onclick="switchTab('chat')" id="btn-chat" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors bg-blue-600/20 text-blue-300">Chat</button>
           <button onclick="switchTab('workers')" id="btn-workers" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">
             Workers
@@ -389,6 +390,26 @@
         </div>
         <div id="backlog-list" class="flex-1 overflow-y-auto p-3 space-y-3"></div>
       </div>
+      <div id="plan-resize-handle" class="resize-handle" style="display:none"></div>
+
+      <!-- ===== PLAN PANEL ===== -->
+      <div id="plan-panel" class="hidden flex flex-col bg-gray-900 border-l border-gray-700 overflow-hidden" style="width: 40%">
+        <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-700 bg-gray-800">
+          <select id="plan-selector" onchange="planPanel.selectPlan(this.value)"
+                  class="flex-1 min-w-0 text-sm font-medium bg-gray-800 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
+          <select id="plan-version-selector" onchange="planPanel.selectVersion(this.value)"
+                  class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
+          <button onclick="planPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Refresh</button>
+        </div>
+        <div id="plan-stale-notice" class="hidden px-4 py-1.5 text-xs text-yellow-400 bg-yellow-900/20 border-b border-yellow-700/40">
+          Viewing an older version — the latest version may differ.
+        </div>
+        <div id="plan-empty-state" class="flex-1 flex items-center justify-center text-sm text-gray-500">
+          No plans registered for this session.
+        </div>
+        <iframe id="plan-viewer" class="flex-1 min-h-0 w-full bg-white" src="" style="border:none;"></iframe>
+        <div id="plan-action-bar" class="border-t border-gray-700 px-3 py-2 flex flex-wrap gap-2"></div>
+      </div>
       </div><!-- end tab content wrapper -->
 
       {% else %}
@@ -519,6 +540,7 @@
   <script src="/static/js/voice-input.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/latex-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/backlog-panel.js?v={{ static_asset_version|urlencode }}"></script>
+  <script src="/static/js/plan-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/ext_usage.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/app.js?v={{ static_asset_version|urlencode }}"></script>
 

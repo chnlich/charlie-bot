@@ -592,3 +592,65 @@ test('popover and tray edit windows are widened and share a single width source'
 
   assert.doesNotMatch(styleText, /__cbc-tray-edited/, 'the draftText-keyed edited indicator rule is gone');
 });
+
+// ---------------------------------------------------------------------------
+// Panel review marker guard change (C3)
+// ---------------------------------------------------------------------------
+
+test('comment tray activates inside a framed page when the fragment carries the panel marker', () => {
+  const {window, head, listeners} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
+    true,
+    {hash: '#cbsession=session-270&cbpanel=1'}
+  );
+
+  assert.equal(typeof window.__cbcExtractSessionIdFromPath, 'function');
+  assert.equal(typeof window.__cbcResolveSessionId, 'function');
+  assert.equal(typeof window.__cbcBuildBatchMessage, 'function');
+  assert.equal(typeof window.__cbcBuildTrayItem, 'function');
+  assert.equal(typeof window.__cbcFindBlock, 'function');
+  assert.ok(head.children.length > 0, 'styles are installed');
+  assert.ok(listeners.length > 0, 'listeners are installed');
+});
+
+test('comment tray stays inactive inside a framed page without the panel marker', () => {
+  const {window, head, listeners} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
+    true,
+    {hash: '#cbsession=session-270'}
+  );
+
+  assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
+  assert.equal(window.__cbcResolveSessionId, undefined);
+  assert.equal(window.__cbcBuildBatchMessage, undefined);
+  assert.equal(head.children.length, 0);
+  assert.equal(listeners.length, 0);
+});
+
+test('comment tray is active when not framed regardless of marker (unchanged)', () => {
+  const {window, head} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
+    false
+  );
+
+  assert.equal(typeof window.__cbcExtractSessionIdFromPath, 'function');
+  assert.ok(head.children.length > 0, 'styles are installed');
+});
+
+test('resolveSessionId extracts the session from a fragment with the panel marker', () => {
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(pathName, false, {
+    hash: '#cbsession=marker-session&cbpanel=1',
+  });
+  const resolve = window.__cbcResolveSessionId;
+
+  assert.equal(resolve(pathName, '#cbsession=marker-session&cbpanel=1'), 'marker-session');
+});
+
+test('resolveSessionId still extracts the session from a plain cbsession fragment without marker', () => {
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(pathName);
+  const resolve = window.__cbcResolveSessionId;
+
+  assert.equal(resolve(pathName, '#cbsession=plain-session'), 'plain-session');
+});

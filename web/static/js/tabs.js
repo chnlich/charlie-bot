@@ -2,11 +2,12 @@
 // Tabs
 // ---------------------------------------------------------------------------
 let _backlogLoaded = false;
+let _plansLoaded = false;
 
 function switchTab(tab) {
-  const allTabs = ['terminal', 'chat-tex', 'chat', 'workers', 'chat-backlog'];
-  // chat-tex, chat, and chat-backlog all show the chat content
-  const showChat = (tab === 'chat-tex' || tab === 'chat' || tab === 'chat-backlog');
+  const allTabs = ['terminal', 'chat-tex', 'chat', 'workers', 'chat-backlog', 'chat-plans'];
+  // chat-tex, chat, chat-backlog, and chat-plans all show the chat content
+  const showChat = (tab === 'chat-tex' || tab === 'chat' || tab === 'chat-backlog' || tab === 'chat-plans');
   document.getElementById('tab-chat').classList.toggle('hidden', !showChat);
   document.getElementById('tab-workers').classList.toggle('hidden', tab !== 'workers');
   const terminalTab = document.getElementById('tab-terminal');
@@ -34,11 +35,21 @@ function switchTab(tab) {
     backlogHandle.style.display = (tab === 'chat-backlog') ? '' : 'none';
   }
 
-  // Mobile: backlog and latex take full screen, hide chat area
+  // Plan panel visible only in chat-plans
+  const planPanelEl = document.getElementById('plan-panel');
+  if (planPanelEl) {
+    planPanelEl.classList.toggle('hidden', tab !== 'chat-plans');
+  }
+  const planHandle = document.getElementById('plan-resize-handle');
+  if (planHandle) {
+    planHandle.style.display = (tab === 'chat-plans') ? '' : 'none';
+  }
+
+  // Mobile: backlog, plan, and latex take full screen, hide chat area
   const isMobile = platform.isMobile;
   if (isMobile) {
     const chatEl = document.getElementById('tab-chat');
-    if (tab === 'chat-backlog' || tab === 'chat-tex') {
+    if (tab === 'chat-backlog' || tab === 'chat-plans' || tab === 'chat-tex') {
       chatEl.classList.add('hidden');
     } else if (showChat) {
       chatEl.classList.remove('hidden');
@@ -56,6 +67,11 @@ function switchTab(tab) {
   if (tab === 'chat-backlog' && !_backlogLoaded) {
     _backlogLoaded = true;
     backlogPanel.refresh();
+  }
+
+  if (tab === 'chat-plans' && !_plansLoaded) {
+    _plansLoaded = true;
+    planPanel.refresh();
   }
 
   if (tab === 'workers' && typeof ensureWorkersLoadedForActiveSession === 'function') {

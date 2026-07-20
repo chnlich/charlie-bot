@@ -60,6 +60,9 @@ function connectWS() {
     if (globalThis.TuiSession && globalThis.TuiSession.isTuiActive()) {
       globalThis.TuiSession.onWsOpenIfTui();
     }
+    // Re-sync plan panel state on (re)connect.
+    if (typeof _plansLoaded !== 'undefined') _plansLoaded = false;
+    if (typeof planPanel !== 'undefined') planPanel.onReconnect();
   };
 
   socket.onmessage = (e) => {
@@ -203,5 +206,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     if (globalThis.TuiSession) globalThis.TuiSession.onPtyOutput(ev.data || '');
   } else if (t === 'pty_exit') {
     if (globalThis.TuiSession) globalThis.TuiSession.onPtyExit();
+  } else if (t === 'plan_updated') {
+    if (typeof planPanel !== 'undefined') planPanel.onPlanUpdated(ev.plan_id);
   }
 }

@@ -128,12 +128,14 @@ def test_claude_session_id_appends_session_flag() -> None:
 
 def test_prepare_env_skips_absent_forwarded_var(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.delenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", raising=False)
+  monkeypatch.delenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", raising=False)
   backend = ClaudeCodeBackend()
 
   env = backend._prepare_env({})
 
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
   assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in env
+  assert "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in env
 
 
 def test_prepare_env_forwards_allowlisted_host_var(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,6 +146,16 @@ def test_prepare_env_forwards_allowlisted_host_var(monkeypatch: pytest.MonkeyPat
 
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
   assert env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "forwarded-test-value"
+
+
+def test_prepare_env_forwards_max_context_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "400000")
+  backend = ClaudeCodeBackend()
+
+  env = backend._prepare_env({})
+
+  assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "400000"
+  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 
 def test_prepare_env_applies_headless_policy_over_incoming_env(monkeypatch: pytest.MonkeyPatch) -> None:

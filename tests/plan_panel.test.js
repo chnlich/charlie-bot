@@ -311,3 +311,44 @@ test('stateBadgeClass maps derived state strings to badge classes', () => {
   assert.match(planPanel.stateBadgeClass('abandoned'), /bg-gray-700/);
   assert.match(planPanel.stateBadgeClass('unknown state'), /bg-gray-700/);
 });
+
+// ---------------------------------------------------------------------------
+// ensureLoaded / ready — session-keyed load (SPA switch safety)
+// ---------------------------------------------------------------------------
+
+function makeSessionFetch(registries) {
+  return async (url) => {
+    const m = String(url).match(/\/api\/sessions\/([^/]+)\/plans/);
+    const sid = m ? decodeURIComponent(m[1]) : null;
+    return {ok: true, json: async () => registries[sid] || {plans: []}};
+  };
+}
+
+test('ready() reloads the registry for the current session after an SPA session switch', async () => {
+  const registries = {
+    A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]},
+    B: {plans: [makePlan(9, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan B'})]},
+  };
+  const {context, planPanel} = loadPlanPanelScript({sessionId: 'A', fetch: makeSessionFetch(registries)});
+
+  await planPanel.ready();
+  assert.equal(planPanel.getRegistrySnapshot().plans[0].id, 1, 'loads the current (A) session registry');
+
+  // Session switching is an in-place SPA swap: SESSION_ID changes with no reload.
+  context.SESSION_ID = 'B';
+  await planPanel.ready();
+  const snap = planPanel.getRegistrySnapshot();
+  assert.equal(snap.plans[0].id, 9, 'ready() re-fetches session B, not the stale session A snapshot');
+  assert.equal(snap.plans[0].title, 'Plan B');
+});
+
+test('ensureLoaded issues a single fetch per session across repeated ready() calls', async () => {
+  let calls = 0;
+  const fetch = async (url) => {
+    calls += 1;
+    return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1)])]})};
+  };
+  const {planPanel} = loadPlanPanelScript({sessionId: 'A', fetch});
+  await Promise.all([planPanel.ready(), planPanel.ready(), planPanel.ready()]);
+  assert.equal(calls, 1, 'no polling / no per-call refetch for the same session');
+});

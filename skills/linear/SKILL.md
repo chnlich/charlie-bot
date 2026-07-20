@@ -1,7 +1,7 @@
 ---
 name: linear
 description: This skill should be used when the user asks to read, create, update, or search Linear issues, projects, cycles, or teams.
-version: 1.1.0
+version: 1.1.1
 ---
 
 # Linear
@@ -192,7 +192,7 @@ query($teamId: String!) {
 7. **When adding detailed content to an issue:**
    a. Check if the issue description already contains a Feishu doc URL — if so, append new content to that existing doc
    b. If no Feishu doc exists yet, get the user's approval for the Feishu document creation and permission write, create one with the same title as the Linear issue, set its public permission via `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` and `{"link_share_entity":"tenant_readable"}`, then update the Linear issue description to include the Feishu doc URL
-   c. All detailed notes, investigation logs, and updates go into the Feishu doc; Linear issue stays concise (status + Feishu link)
+   c. All detailed notes, investigation logs, and updates go into the Feishu doc; Linear issue stays concise (see Content conventions)
 
 ## Content conventions
 

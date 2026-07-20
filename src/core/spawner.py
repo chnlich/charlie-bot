@@ -1,7 +1,6 @@
 """Direct worker spawner — creates a task, enriches the prompt, and runs the worker."""
 
 import asyncio
-import re
 import shlex
 import time
 import traceback
@@ -28,6 +27,11 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.ndjson import parse_ndjson_file
+from src.core.plans import (
+    VERIFY_RESULT_TRAILER_EXPECTED as _VERIFY_RESULT_TRAILER_EXPECTED,
+    read_verify_final_report as _read_verify_final_report,
+    verify_result_trailer_error as _verify_result_trailer_error,
+)
 from src.core.git import (
     git_current_branch,
     git_create_worktree,
@@ -53,10 +57,6 @@ _CODING_PRINCIPLES = (
     "- **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery.\n"
     "- **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.\n"
     "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n")
-
-_VERIFY_RESULT_TRAILER_RE = re.compile(
-    r"RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \([0-9]+ approval\))")
-_VERIFY_RESULT_TRAILER_EXPECTED = f"`{_VERIFY_RESULT_TRAILER_RE.pattern}`"
 
 _VERIFY_PROMPT_PREAMBLE = (
     "You are a read-only plan verifier. Retrieve evidence through allowed local and network reads, and report "
@@ -750,6 +750,13 @@ async def _finalize_worker(
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
+  if task_type == TaskType.VERIFY:
+    try:
+      from src.api.deps import get_plan_manager
+      await get_plan_manager().flip_on_verify_completion(session_id, thread.id)
+    except Exception as e:
+      log.error("plan_verify_flip_failed", session=session_id, thread_id=thread.id, error=str(e))
+
   skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
   cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
   if cleanup_error:
@@ -1103,40 +1110,6 @@ async def _notify_completion(
       await session_mgr.persist_and_broadcast(session_id, fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
-
-
-async def _read_verify_final_report(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
-  """Read the verifier's complete final result, falling back to its last assistant text."""
-  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  events = await asyncio.to_thread(parse_ndjson_file, events_path)
-
-  for ev in reversed(events):
-    if ev.get("type") != ET.RESULT:
-      continue
-    result = ev.get("result")
-    if isinstance(result, str) and result.strip():
-      return result
-    break
-
-  for ev in reversed(events):
-    if ev.get("type") != ET.ASSISTANT:
-      continue
-    message = ev.get("message") if isinstance(ev.get("message"), dict) else None
-    text = extract_text_from_message(message)
-    if text.strip():
-      return text
-  return ""
-
-
-def _verify_result_trailer_error(report: str) -> str:
-  """Return an explicit verifier completion error, or an empty string for a valid trailer."""
-  expected = _VERIFY_RESULT_TRAILER_EXPECTED
-  if not report.strip():
-    return f"Verifier final report is empty; expected a final {expected} line."
-  final_line = report.splitlines()[-1]
-  if _VERIFY_RESULT_TRAILER_RE.fullmatch(final_line):
-    return ""
-  return f"Verifier final report has a missing or malformed `RESULT:` trailer; expected a final {expected} line."
 
 
 async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:

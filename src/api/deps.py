@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException
 
 from src.core.config import get_config
 from src.core.models import SessionMetadata
+from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -12,6 +13,7 @@ from src.core.triggers import TriggerManager
 _session_manager: SessionManager | None = None
 _thread_manager: ThreadManager | None = None
 _trigger_manager: TriggerManager | None = None
+_plan_manager: PlanRegistryManager | None = None
 
 
 def get_session_manager() -> SessionManager:
@@ -39,6 +41,13 @@ def set_trigger_manager(mgr: TriggerManager) -> None:
   """Set the trigger manager singleton (called from server lifespan)."""
   global _trigger_manager
   _trigger_manager = mgr
+
+
+def get_plan_manager() -> PlanRegistryManager:
+  global _plan_manager
+  if _plan_manager is None:
+    _plan_manager = PlanRegistryManager(get_config(), get_session_manager(), get_thread_manager())
+  return _plan_manager
 
 
 async def require_session(

@@ -118,6 +118,33 @@ def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     sys.exit(1)
 
 
+def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+  """GET a CharlieBot API endpoint and return the parsed JSON response.
+
+  Mirrors ``post_internal_api`` error handling. Used by read-only CLI verbs
+  (e.g. ``plan list``) that hit the public sessions router.
+  """
+  cfg = get_config()
+  try:
+    resp = requests.get(
+        f"{cfg.server_base_url}{endpoint}",
+        params=params,
+        headers=internal_api_auth_headers(cfg),
+        timeout=HTTP_INTERNAL_API_TIMEOUT,
+        verify=False)
+    resp.raise_for_status()
+    return resp.json()
+  except requests.RequestException as e:
+    msg = str(e)
+    if e.response is not None:
+      try:
+        msg = e.response.json()["detail"]
+      except (ValueError, KeyError):
+        pass
+    print(json.dumps({"error": msg}), file=sys.stderr)
+    sys.exit(1)
+
+
 def resolve_session_id(arg_session: str | None) -> str:
   """Resolve the session id to use for a CLI invocation.
 

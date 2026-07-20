@@ -22,6 +22,7 @@ _COMMANDS = {
     "schedule-trigger": "src.cli.schedule_trigger",
     "remote-launch": "src.cli.remote_launch",
     "gc-trash": "src.cli.gc_trash",
+    "plan": "src.cli.plan",
 }
 
 

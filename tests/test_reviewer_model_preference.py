@@ -16,10 +16,26 @@ BACKEND_OPTIONS = [
 ]
 
 
+_WORKTREE_DIR: str = ""
+_WORKTREE_PATH: str = ""
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _worktree_paths(tmp_path_factory: pytest.TempPathFactory) -> None:
+  """Create a real worktree dir under pytest's tmp area so spawn_review_worker's
+  worktree existence check passes (replaces the former hardcoded worktree literals)."""
+  global _WORKTREE_DIR, _WORKTREE_PATH
+  worktree_root = tmp_path_factory.mktemp("worktrees")
+  worktree_subdir = worktree_root / "charliebot-task-1"
+  worktree_subdir.mkdir()
+  _WORKTREE_DIR = str(worktree_root)
+  _WORKTREE_PATH = str(worktree_subdir)
+
+
 def _build_cfg(**overrides: Any) -> CharlieBotConfig:
   defaults = dict(
       charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir="/tmp/worktrees",
+      worktree_dir=_WORKTREE_DIR,
       backend_options=BACKEND_OPTIONS,
   )
   defaults.update(overrides)
@@ -37,7 +53,7 @@ def _make_original_thread(
       branch_name="charliebot/task-1",
       base_branch="main",
       repo_path="/tmp/repo",
-      worktree_path="/tmp/worktrees/charliebot-task-1",
+      worktree_path=_WORKTREE_PATH,
       backend=backend,
       model=model,
   )
@@ -415,7 +431,7 @@ def _make_review_thread(tried_backends: Optional[list[str]] = None,) -> ThreadMe
       tried_backends=tried_backends or [],
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
-      worktree_path="/tmp/worktrees/charliebot-task-1",
+      worktree_path=_WORKTREE_PATH,
   )
 
 
@@ -588,7 +604,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
       model="claude-opus-4-6",
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
-      worktree_path="/tmp/worktrees/charliebot-task-1",
+      worktree_path=_WORKTREE_PATH,
   )
 
   thread_mgr = NotifyFakeThreadManager({
@@ -639,7 +655,7 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
       model="claude-opus-4-6",
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
-      worktree_path="/tmp/worktrees/charliebot-task-1",
+      worktree_path=_WORKTREE_PATH,
   )
 
   thread_mgr = NotifyFakeThreadManager({

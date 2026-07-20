@@ -331,7 +331,48 @@ class SessionManager:
     }
     await append_ndjson(events_path, clone_event)
     await self._save_metadata(meta)
+    await self._copy_plans_to_child(parent_id, session_dir)
     return meta
+
+  async def _copy_plans_to_child(self, parent_id: str, child_session_dir: Path) -> None:
+    """Copy parent plans.json and every referenced artifact file into the child.
+
+    Copied registry content is not rewritten: ids, versions, states, takeoff,
+    and closed carry over as-is. Relative file paths resolve under the child
+    dir naturally. A missing referenced artifact logs a warning and does not
+    abort the fork. No plans.json in the parent means nothing to copy.
+    """
+    parent_plans_path = self._session_dir(parent_id) / "plans.json"
+    if not parent_plans_path.exists():
+      return
+    await asyncio.to_thread(
+        self._copy_plans_sync, parent_plans_path, self._session_dir(parent_id), child_session_dir)
+
+  @staticmethod
+  def _copy_plans_sync(parent_plans_path: Path, parent_dir: Path, child_dir: Path) -> None:
+    raw = parent_plans_path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    child_plans_path = child_dir / "plans.json"
+    child_plans_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = child_plans_path.with_suffix(child_plans_path.suffix + ".tmp")
+    tmp.write_text(raw, encoding="utf-8")
+    os.replace(tmp, child_plans_path)
+    for plan in data.get("plans", []):
+      for ver in plan.get("versions", []):
+        file_rel = ver.get("file")
+        if not file_rel:
+          continue
+        src = parent_dir / file_rel
+        dst = child_dir / file_rel
+        if not src.exists():
+          log.warning(
+              "plan_artifact_missing_on_fork",
+              file=str(src),
+              plan=plan.get("id"),
+              v=ver.get("v"))
+          continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
 
   @staticmethod
   def _write_reference_events_sync(path: Path, events: list[dict]) -> None:

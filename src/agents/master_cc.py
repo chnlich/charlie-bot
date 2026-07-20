@@ -233,6 +233,12 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
     option = option.model_copy(update={"model": None})
 
   extra_flags, resume_session_id = _route_resume_session(option.type, session_meta.cc_session_id)
+  # Move per-machine sections (cwd, env info, memory paths, git status) out of the
+  # system prompt into the first user message. Keeps the system prompt stable across
+  # sessions so cross-run prompt-cache reuse improves. Only the Claude Code CLI
+  # family supports this flag.
+  if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
   resume_session = bool(extra_flags or resume_session_id)
   if session_meta.cc_session_id and not resume_session:
     log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)

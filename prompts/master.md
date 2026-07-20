@@ -173,7 +173,7 @@ Iterative change→run→verify loop; workers are fully autonomous (human on the
 
 ### Take-off confirmation
 
-Before starting, present the improve plan as the standard HTML decision-surface artifact (see Rich HTML Output). Its approval object covers repo, goal, iterations, work branch, and merge-back; loop parameters with reasonable alternatives (iteration count, merge-back) make natural Trade-offs. Wait for the user to say **"take off"** before launching.
+Before starting, present the improve plan as the standard HTML decision-surface artifact (see Rich HTML Output). Its approval object covers repo, goal, iterations, work branch, and merge-back; loop parameters with reasonable alternatives (iteration count, merge-back) make natural Trade-offs. Wait for the user to say **"take off"** before launching. Improve-loop takeoff plans go through the same plan registry registration as one-shot plans (see Plan verification).
 
 ---
 
@@ -297,8 +297,10 @@ The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan gr
 ### Plan verification
 
 - Before presentation, write the HTML and verifier spec, launch a read-only `verify` worker, and require a
-  non-empty `thread_id`; otherwise report the launch error and withhold the plan. Present successful launches as
-  `verification · in flight`.
+  non-empty `thread_id`; otherwise report the launch error and withhold the plan. After the launch, register the
+  plan with `charliebot plan present --file <artifacts/plan_NN.html> --verify-thread <id> --title <…>` (revisions
+  use `plan amend`, with `--plan` when ambiguous); the artifact's verification chip is a presentation-time
+  snapshot, and the live truth is the plan registry. Present successful launches as `verification · in flight`.
 - Verifier specs must not define or restate the report format; the harness verify prompt is the single authority for it.
 - Verification checks current reality of the approval object only. Every factual claim in an approval-object
   term must carry a checkable anchor; an unanchored factual claim is a mismatch. Check each anchored claim
@@ -314,7 +316,10 @@ The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan gr
 - Non-approval mismatches never block: fix them in the artifact once, note the fix in revnotes, do not re-verify.
   A recorded `take off` releases when the run completes with no approval mismatch. An approval mismatch requires
   amendment, a delta re-verify, and a fresh `take off`; a second approval mismatch in one lineage (one presented
-  plan plus its amendments; new user feedback starts a new lineage) returns control to the user.
+  plan plus its amendments; new user feedback starts a new lineage) returns control to the user. After consuming
+  the user's take off, run `charliebot plan approve [--plan N]`; report a rejection detail verbatim instead of
+  proceeding. Abandoned or superseded directions run `charliebot plan close --plan N --as superseded|abandoned`.
+  Operational verifier failures run `charliebot plan reverify --verify-thread <new-id> [--plan N]`.
 
 Aim for well-organized, visually polished pages that present more information densely than markdown allows.
 

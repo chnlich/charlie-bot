@@ -301,6 +301,8 @@ The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan gr
   plan with `charliebot plan present --file <artifacts/plan_NN.html> --verify-thread <id> --title <…>` (revisions
   use `plan amend`, with `--plan` when ambiguous); the artifact's verification chip is a presentation-time
   snapshot, and the live truth is the plan registry. Present successful launches as `verification · in flight`.
+  Record the code baseline with `--base-repo/--base-branch/--base-sha` when the plan pins one; the
+  pre-implementation drift check compares those two shas.
 - Verifier specs must not define or restate the report format; the harness verify prompt is the single authority for it.
 - Verification checks current reality of the approval object only. Every factual claim in an approval-object
   term must carry a checkable anchor; an unanchored factual claim is a mismatch. Check each anchored claim
@@ -313,7 +315,8 @@ The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan gr
   unchanged never re-verifies. Re-verify in delta mode — only the changed terms and their dependent claims — when
   an approval mismatch is amended or user feedback changes approval terms. The verifier spec declares full or
   delta mode.
-- Non-approval mismatches never block: fix them in the artifact once, note the fix in revnotes, do not re-verify.
+- Non-approval mismatches never block: fix them in the artifact once, note the fix in revnotes, do not re-verify;
+  for a registered version this in-place fix is the single exception to version immutability.
   A recorded `take off` releases when the run completes with no approval mismatch. An approval mismatch requires
   amendment, a delta re-verify, and a fresh `take off`; a second approval mismatch in one lineage (one presented
   plan plus its amendments; new user feedback starts a new lineage) returns control to the user. After consuming

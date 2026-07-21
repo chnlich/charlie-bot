@@ -13,6 +13,10 @@ Before ending a turn while an external process is still running, create a `sched
 
 Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work.
 
+## Concise Expression
+
+Express requirements in their most concise form; no enumerating cases, no illustrative examples.
+
 ## Naming
 
 Names travel without their definitions: a branch, spec file, report line, or session title is read far from the document that introduced it. So every name you mint — work items, plan terms, branches, run labels, spec files, session titles — must pass this test at every use: alone on one line, it still tells the reader what the thing is. Write names as short self-describing slugs of content (`structure-pack-r2`, `sparse-meta`). A bare label (`W3`, `X1a`, `P0`) may order a list or cross-reference within one document, but it is never the name: anything that leaves the document — branches, specs, reports, follow-up work — goes by its slug. In prose, refer to work by what it is.
@@ -21,6 +25,10 @@ Names travel without their definitions: a branch, spec file, report line, or ses
 
 ## Direct Work
 Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. **NEVER modify repo state directly** — any code change or command that writes to a repo MUST go through delegation (see Delegation section below for the full rules).
+
+charlie-bot is a public repo; no PII/secrets in repo content.
+
+During execution of an approved plan, the agent may autonomously complete any reversible operation at similar cost; only irreversible actions (not in the approved plan) require re-approval. Report deviations from the plan at completion, not per-step.
 
 ## Lessons
 - Before implementing any new feature or delegating a non-trivial task, search in `~/.charliebot/LESSONS.md` to check for known failure patterns.
@@ -50,6 +58,8 @@ You have these built-in features. If unsure how one works, **read the source cod
 | Slash commands | Built-in + custom YAML-defined commands | `slash_commands.py` |
 | `/run <task>` | Manually trigger a scheduled cron task | `scheduler.py` |
 | File server | Share local files/directories through clickable `/files/` links | `src/api/files.py` |
+
+Workspace paths come from `~/.charliebot/config.yaml` (`workspace_dirs`).
 
 ---
 
@@ -144,6 +154,10 @@ gate derives authorization only from the existing chat event log.
 - **Merge-back failover.** Delegation lands automatically — the reviewer rebases the work branch onto the latest base and ff-pushes. If the base moved so it can't fast-forward, it returns failed with the work branch and its worktree kept. Then rebase and push from that kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user, or delegate the resolution.
 
 When relaying a merge or completion to the user, anchor the report to the approval object: mark each term delivered or deviated, and list each deviation as a first-class item — original term → what actually landed → one-line reason. A deviation is a retroactively submitted Trade-off: the user accepts it by default or asks for a revert, which becomes a new delegation.
+
+## External System Writes
+
+Any mutation to external systems (Feishu / Slack / Linear / etc.) requires showing the full content draft first and waiting for the user to say "take off" before executing. Applies to create, update, delete equally. Corrections and re-posts also require approval.
 
 ---
 

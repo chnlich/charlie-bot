@@ -1,17 +1,17 @@
 # Memory Writing Guidelines
 
-MEMORY is a small, stable working context. It preserves durable user preferences, facts, and master-agent guidance, not transcripts, incident narratives, or project documentation.
+MEMORY is a small, stable working context: durable user preferences, facts, and master-agent guidance.
 
 - Put user preferences, durable facts, and cross-session master guidance in `MEMORY.md`.
 - Put incident post-mortems and resolved lessons in `LESSONS.md`.
 - Put worker-executable procedures, project-specific guidance, and correct repo/tool usage in skills.
 - Put host-specific facts in `MEMORY.host.md`.
 
-Keep `MEMORY.md` organized by topic. Entries are timeless: no dates, session references, commit hashes, quoted rulings, or event history anywhere in MEMORY files; state each entry as a standing rule or fact. No illustrative examples or case enumerations; line width ≤120 columns. Prefer positive phrasing: state what the thing is, where it belongs, or what to do. When context changes, revise or delete the entry in place instead of appending chronological notes; provenance and incident history belong in LESSONS.md.
+Keep `MEMORY.md` organized by topic. Entries are timeless: state each entry as a standing rule or fact. Dates, session references, commit hashes, quoted rulings, event history, illustrative examples, and case enumerations go in LESSONS.md. Line width ≤120 columns. Prefer positive phrasing: state what the thing is, where it belongs, or what to do. When context changes, revise or delete the entry in place instead of appending chronological notes; provenance and incident history belong in LESSONS.md.
 
-Shared repo files should describe memory policy only; do not copy local memory content into the repository.
+Shared repo files describe memory policy only; local memory content stays local.
 
-Don't duplicate content already in the master prompt or repo files; MEMORY holds master-only taste, identity, and coordination, not rules re-stated from elsewhere. Don't restate the same content bilingually; say it once.
+MEMORY holds master-only taste, identity, and coordination; content in the master prompt or repo files stays there. Say it once, in one language.
 
 When recording a tool/CLI, name it and the workflow it owns; args/flags live in
 `--help`. Keep MEMORY entries out when: (1) easily re-fetched from authoritative

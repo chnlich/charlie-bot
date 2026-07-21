@@ -27,7 +27,7 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.ndjson import parse_ndjson_file
-from src.core.plans import (
+from src.core.verify_trailer import (
     VERIFY_RESULT_TRAILER_EXPECTED as _VERIFY_RESULT_TRAILER_EXPECTED,
     read_verify_final_report as _read_verify_final_report,
     verify_result_trailer_error as _verify_result_trailer_error,
@@ -749,13 +749,6 @@ async def _finalize_worker(
   else:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
-
-  if task_type == TaskType.VERIFY:
-    try:
-      from src.api.deps import get_plan_manager
-      await get_plan_manager().flip_on_verify_completion(session_id, thread.id)
-    except Exception as e:
-      log.error("plan_verify_flip_failed", session=session_id, thread_id=thread.id, error=str(e))
 
   skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
   cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))

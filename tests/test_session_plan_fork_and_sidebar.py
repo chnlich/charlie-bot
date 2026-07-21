@@ -212,21 +212,6 @@ async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_all_sessions_status_pending_plan_approval_in_flight_is_unset(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="InFlight"))
-
-  # not closed, no takeoff, verify_state pending -> derived "in flight"
-  _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "pending")]),
-  ]})
-
-  status = await sessions_api.all_sessions_status(session_mgr=mgr)
-  assert status[session.id]["has_pending_plan_approval"] is False
-
-
-@pytest.mark.asyncio
 async def test_all_sessions_status_pending_plan_approval_no_plans_json_is_unset(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)

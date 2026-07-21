@@ -7,7 +7,7 @@ MEMORY is a small, stable working context. It preserves durable user preferences
 - Put worker-executable procedures, project-specific guidance, and correct repo/tool usage in skills.
 - Put host-specific facts in `MEMORY.host.md`.
 
-Keep `MEMORY.md` organized by topic. Entries are timeless: no dates, session references, commit hashes, quoted rulings, or event history anywhere in MEMORY files; state each entry as a standing rule or fact. No illustrative examples or case enumerations; line width ≤120 columns. Prefer positive phrasing (state what to do) over negative (state what to avoid). When context changes, revise or delete the entry in place instead of appending chronological notes; provenance and incident history belong in LESSONS.md.
+Keep `MEMORY.md` organized by topic. Entries are timeless: no dates, session references, commit hashes, quoted rulings, or event history anywhere in MEMORY files; state each entry as a standing rule or fact. No illustrative examples or case enumerations; line width ≤120 columns. Prefer positive phrasing: state what the thing is, where it belongs, or what to do. When context changes, revise or delete the entry in place instead of appending chronological notes; provenance and incident history belong in LESSONS.md.
 
 Shared repo files should describe memory policy only; do not copy local memory content into the repository.
 
@@ -19,3 +19,16 @@ source; (2) project-specific (goes in a skill); (3) one-off task or incident
 (LESSONS.md); (4) trivial or volatile config; (5) narrow situational caveat
 dressed as a general principle; (6) project progress/status (tracker); (7) common
 sense a competent engineer already applies.
+
+A user preference must come from the user's own statement or repeated choice.
+Drop the entry if the only evidence is an incident (rendering bug, tool
+failure, environment glitch).
+
+A "convention" or "fixed rule" that already lives in a config file or source
+stays there; MEMORY points to the config path instead of recording the value.
+
+Task workflows live elsewhere (LESSONS.md or session); MEMORY holds standing
+rules and facts.
+
+Host-specific facts (hostnames, local paths, hardware specs, internal
+endpoints) go in MEMORY.host.md, not MEMORY.md.

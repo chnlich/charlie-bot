@@ -55,9 +55,11 @@ not restate it here.
 - Trade-off resolutions may ride in the approval message ("1 default, 2 both, take
   off"): resolve them first; the approval covers the result.
 - Approval binds to the approval object as it stands: progress never expires it,
-  change does. If a term must change mid-flight, re-present the affected terms and
-  wait for a fresh "take off". Amendments to Context, Design Details, or unpromoted
-  Other Details need no re-approval.
+  change does. If an approval-object term must change mid-flight, surface it to the user;
+  nothing forces a re-presentation, the user decides whether to revisit.
+- Verify is an optional independent tool; its results live in the verify thread's own log, never in the
+  plan registry. `approve` records a takeoff unconditionally; the runtime delegation gate reads the chat
+  log, not the registry, so approve bookkeeping does not gate execution.
 
 ## Runtime delegation authorization
 

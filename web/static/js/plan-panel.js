@@ -151,8 +151,6 @@ const planPanel = (() => {
     if (s === 'approved') return 'bg-green-900 text-green-300';
     if (s === 'awaiting approval') return 'bg-blue-900 text-blue-300';
     if (s === 'in flight') return 'bg-slate-700 text-slate-300';
-    if (s === 'needs amendment') return 'bg-yellow-900 text-yellow-300';
-    if (s.indexOf('verify failed') !== -1) return 'bg-red-900 text-red-300';
     if (s.indexOf('approved') === 0) return 'bg-green-900 text-green-300';
     if (s === 'superseded' || s === 'abandoned') return 'bg-gray-700 text-gray-400';
     return 'bg-gray-700 text-gray-400';

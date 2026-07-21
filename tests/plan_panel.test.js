@@ -373,8 +373,6 @@ test('stateBadgeClass maps derived state strings to badge classes', () => {
   assert.match(planPanel.stateBadgeClass('approved'), /bg-green-900/);
   assert.match(planPanel.stateBadgeClass('awaiting approval'), /bg-blue-900/);
   assert.match(planPanel.stateBadgeClass('in flight'), /bg-slate-700/);
-  assert.match(planPanel.stateBadgeClass('needs amendment'), /bg-yellow-900/);
-  assert.match(planPanel.stateBadgeClass('verify failed'), /bg-red-900/);
   assert.match(planPanel.stateBadgeClass('approved \u00B7 awaiting clean verify'), /bg-green-900/);
   assert.match(planPanel.stateBadgeClass('superseded'), /bg-gray-700/);
   assert.match(planPanel.stateBadgeClass('abandoned'), /bg-gray-700/);

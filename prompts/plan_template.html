@@ -75,7 +75,6 @@
       <span class="mtag">repo · charlie-bot</span>
       <span class="mtag">scope · trigger CLI</span>
       <span class="mtag">deps · none</span>
-      <span class="mtag">verification · in flight</span>
     </div>
   </header>
 
@@ -94,7 +93,7 @@
       introduction does not follow, so anything referenced outside the artifact goes by its slug. Code
       identifiers may locate an explanation but never replace it.
 
-      Header: show the title, a one-line summary, and meta chips for repo, scope, branch or deps, and verification.
+      Header: show the title, a one-line summary, and meta chips for repo, scope, branch or deps.
 
       Use these six sections, in this order:
       1. Problem / Goal — one or two sentences stating what the plan resolves. Include no background or method.
@@ -143,9 +142,6 @@
                     Restate any conclusion imported from an earlier plan, run, comment, or review in the current
                     plan and anchor it directly to stable, checkable evidence. Session-local identifiers cannot
                     carry meaning for the reader, and source anchors support rather than replace the explanation.
-      Verification: div.meta includes one verification-status chip as span.mtag with the plan status:
-                    "verification · in flight", "verification · clean", or "verification · amended". The
-                    chip reflects status at publication time; live status is owned by the plan registry.
       Revision marks: when an already-presented plan is updated, its body remains the complete current design.
                     Every changed section gets a span.revbadge in its h2, such as "changed · r3", and a
                     div.revnote immediately after the h2 stating "rN · trigger — what changed". The note only

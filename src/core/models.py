@@ -376,7 +376,6 @@ class PlanPresentRequest(BaseModel):
 
   session_id: str
   file: str
-  verify_thread: str
   title: str
   base_repo: Optional[str] = None
   base_branch: Optional[str] = None
@@ -389,7 +388,6 @@ class PlanAmendRequest(BaseModel):
 
   session_id: str
   file: str
-  verify_thread: str
   plan_id: Optional[int] = None
   trigger: Literal["initial", "auto_amend", "feedback"] = "feedback"
   base_repo: Optional[str] = None
@@ -402,15 +400,6 @@ class PlanApproveRequest(BaseModel):
   model_config = ConfigDict(extra="forbid")
 
   session_id: str
-  plan_id: Optional[int] = None
-
-
-class PlanReverifyRequest(BaseModel):
-  """Request body for the internal plan/reverify endpoint."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  verify_thread: str
   plan_id: Optional[int] = None
 
 

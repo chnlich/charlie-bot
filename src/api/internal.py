@@ -25,7 +25,6 @@ from src.core.models import (
     PlanApproveRequest,
     PlanCloseRequest,
     PlanPresentRequest,
-    PlanReverifyRequest,
     ScheduleTriggerRequest,
     SessionMetadata,
     SpawnRequest,
@@ -317,7 +316,6 @@ async def plan_present(
     return await plan_mgr.present(
         req.session_id,
         file=req.file,
-        verify_thread=req.verify_thread,
         title=req.title,
         base=_build_base(req),
     )
@@ -337,7 +335,6 @@ async def plan_amend(
     return await plan_mgr.amend(
         req.session_id,
         file=req.file,
-        verify_thread=req.verify_thread,
         plan_id=req.plan_id,
         trigger=req.trigger,
         base=_build_base(req),
@@ -356,20 +353,6 @@ async def plan_approve(
   await _authorize_plan_session(req.session_id, session_mgr)
   try:
     return await plan_mgr.approve(req.session_id, plan_id=req.plan_id)
-  except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
-
-
-@router.post("/plan/reverify")
-async def plan_reverify(
-    req: PlanReverifyRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    plan_mgr=Depends(get_plan_manager),
-):
-  """Rebind a new verify thread to a failed plan version."""
-  await _authorize_plan_session(req.session_id, session_mgr)
-  try:
-    return await plan_mgr.reverify(req.session_id, verify_thread=req.verify_thread, plan_id=req.plan_id)
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 

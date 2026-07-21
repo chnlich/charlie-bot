@@ -1,6 +1,5 @@
 """Tests for the plan internal-API endpoints and the sessions plans read path."""
 
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -18,8 +17,6 @@ from src.core.models import (
     CreateSessionRequest,
     SessionMetadata,
     TaskType,
-    ThreadStatus,
-    utc_now,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
@@ -57,16 +54,6 @@ def _write_artifact(cfg: CharlieBotConfig, session_id: str, name: str = "plan_01
   return f"artifacts/{name}"
 
 
-async def _create_verify_thread(
-    thread_mgr: ThreadManager, session_meta: SessionMetadata, status: ThreadStatus = ThreadStatus.IDLE) -> str:
-  thread = await thread_mgr.create_thread(session_meta, "verify task", require_review=False, task_type=TaskType.VERIFY)
-  if status != ThreadStatus.IDLE:
-    thread.status = status
-    thread.completed_at = utc_now()
-    await thread_mgr.save_metadata(thread)
-  return thread.id
-
-
 async def _setup(
     tmp_path: Path,) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, PlanRegistryManager, SessionMetadata]:
   cfg = _build_cfg(tmp_path)
@@ -85,7 +72,6 @@ async def _setup(
 @pytest.mark.asyncio
 async def test_plan_present_endpoint_happy_path(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
@@ -93,20 +79,17 @@ async def test_plan_present_endpoint_happy_path(tmp_path: Path) -> None:
         "/api/internal/plan/present", json={
             "session_id": meta.id,
             "file": f,
-            "verify_thread": vt,
             "title": "P1",
         })
   assert resp.status_code == 200
-  assert resp.json() == {"plan": 1, "v": 1, "state": "in flight"}
+  assert resp.json() == {"plan": 1, "v": 1, "state": "awaiting approval"}
 
 
 @pytest.mark.asyncio
 async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt1 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, verify_thread=vt1, title="P1")
-  vt2 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
+  await plan_mgr.present(meta.id, file=f1, title="P1")
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
@@ -114,58 +97,30 @@ async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
         "/api/internal/plan/amend", json={
             "session_id": meta.id,
             "file": f2,
-            "verify_thread": vt2,
             "plan_id": 1,
         })
   assert resp.status_code == 200
   body = resp.json()
-  assert body == {"plan": 1, "v": 2, "state": "in flight"}
+  assert body == {"plan": 1, "v": 2, "state": "awaiting approval"}
 
 
 @pytest.mark.asyncio
 async def test_plan_approve_endpoint_happy_path(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, verify_thread=vt, title="P1")
+  await plan_mgr.present(meta.id, file=f, title="P1")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post("/api/internal/plan/approve", json={"session_id": meta.id})
   assert resp.status_code == 200
-  assert resp.json() == {"plan": 1, "v": 1, "state": "approved · awaiting clean verify"}
-
-
-@pytest.mark.asyncio
-async def test_plan_reverify_endpoint_happy_path(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt1 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, verify_thread=vt1, title="P1")
-  await plan_mgr.approve(meta.id)
-  t1 = await thread_mgr.get_thread(meta.id, vt1)
-  t1.status = ThreadStatus.FAILED
-  t1.completed_at = utc_now()
-  await thread_mgr.save_metadata(t1)
-  await plan_mgr.flip_on_verify_completion(meta.id, vt1)
-  vt2 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/reverify", json={
-            "session_id": meta.id,
-            "verify_thread": vt2,
-            "plan_id": 1,
-        })
-  assert resp.status_code == 200
-  assert resp.json() == {"plan": 1, "v": 1, "state": "approved · awaiting clean verify"}
+  assert resp.json() == {"plan": 1, "v": 1, "state": "approved"}
 
 
 @pytest.mark.asyncio
 async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, verify_thread=vt, title="P1")
+  await plan_mgr.present(meta.id, file=f, title="P1")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
@@ -181,16 +136,15 @@ async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_get_plans_endpoint_returns_registry(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, verify_thread=vt, title="P1")
+  await plan_mgr.present(meta.id, file=f, title="P1")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/plans")
   assert resp.status_code == 200
   body = resp.json()
   assert len(body["plans"]) == 1
-  assert body["plans"][0]["state"] == "in flight"
+  assert body["plans"][0]["state"] == "awaiting approval"
   assert body["plans"][0]["id"] == 1
 
 
@@ -205,11 +159,9 @@ async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
-        "/api/internal/plan/present",
-        json={
+        "/api/internal/plan/present", json={
             "session_id": "nonexistent",
             "file": "f.html",
-            "verify_thread": "t1",
             "title": "P1",
         })
   assert resp.status_code == 404
@@ -217,31 +169,26 @@ async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_present_rejects_missing_thread_400(tmp_path: Path) -> None:
+async def test_plan_present_rejects_missing_file_400(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
-        "/api/internal/plan/present",
-        json={
+        "/api/internal/plan/present", json={
             "session_id": meta.id,
-            "file": f,
-            "verify_thread": "nonexistent",
+            "file": "artifacts/missing.html",
             "title": "P1",
         })
   assert resp.status_code == 400
-  assert "not found in session" in resp.json()["detail"]
+  assert "not found inside the session directory" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
 async def test_plan_amend_rejects_closed_400(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt1 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, verify_thread=vt1, title="P1")
+  await plan_mgr.present(meta.id, file=f1, title="P1")
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
-  vt2 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
@@ -249,7 +196,6 @@ async def test_plan_amend_rejects_closed_400(tmp_path: Path) -> None:
         "/api/internal/plan/amend", json={
             "session_id": meta.id,
             "file": f2,
-            "verify_thread": vt2,
             "plan_id": 1,
         })
   assert resp.status_code == 400
@@ -257,56 +203,10 @@ async def test_plan_amend_rejects_closed_400(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_approve_rejects_mismatch_400(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, verify_thread=vt, title="P1")
-  events_path = await thread_mgr.get_events_log_path(meta.id, vt)
-  events_path.parent.mkdir(parents=True, exist_ok=True)
-  events_path.write_text(
-      json.dumps({
-          "type": "result",
-          "result": "mismatch | c | a | e\nRESULT: 1 mismatch (0 approval)"
-      }) + "\n",
-      encoding="utf-8")
-  t = await thread_mgr.get_thread(meta.id, vt)
-  t.status = ThreadStatus.COMPLETED
-  t.completed_at = utc_now()
-  await thread_mgr.save_metadata(t)
-  await plan_mgr.flip_on_verify_completion(meta.id, vt)
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.post("/api/internal/plan/approve", json={"session_id": meta.id})
-  assert resp.status_code == 400
-  assert "mismatch verify_state" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_plan_reverify_rejects_non_failed_400(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt1 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, verify_thread=vt1, title="P1")
-  vt2 = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/reverify", json={
-            "session_id": meta.id,
-            "verify_thread": vt2,
-            "plan_id": 1,
-        })
-  assert resp.status_code == 400
-  assert "reverify only from failed" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
 async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, verify_thread=vt, title="P1")
+  await plan_mgr.present(meta.id, file=f, title="P1")
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
@@ -320,6 +220,21 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
   assert "already closed" in resp.json()["detail"]
 
 
+@pytest.mark.asyncio
+async def test_plan_reverify_endpoint_removed(tmp_path: Path) -> None:
+  """The /plan/reverify endpoint is gone; FastAPI returns 404 (or 405) for the old path."""
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  with TestClient(app) as client:
+    resp = client.post(
+        "/api/internal/plan/reverify", json={
+            "session_id": meta.id,
+            "verify_thread": "t1",
+            "plan_id": 1,
+        })
+  assert resp.status_code in (404, 405)
+
+
 # ---------------------------------------------------------------------------
 # Session view payload includes plans
 # ---------------------------------------------------------------------------
@@ -328,9 +243,8 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_session_view_includes_plans(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, verify_thread=vt, title="P1")
+  await plan_mgr.present(meta.id, file=f, title="P1")
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/view")
@@ -338,7 +252,7 @@ async def test_session_view_includes_plans(tmp_path: Path) -> None:
   body = resp.json()
   assert "plans" in body
   assert len(body["plans"]) == 1
-  assert body["plans"][0]["state"] == "in flight"
+  assert body["plans"][0]["state"] == "awaiting approval"
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +269,6 @@ async def test_plan_updated_broadcast_on_present_and_absent_from_chat_events(tmp
     broadcast_calls.append((session_id, event))
 
   session_mgr.broadcast_only = _capture_broadcast  # type: ignore[method-assign]
-  vt = await _create_verify_thread(thread_mgr, meta, status=ThreadStatus.IDLE)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
   app = _build_app(cfg, session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
@@ -363,7 +276,6 @@ async def test_plan_updated_broadcast_on_present_and_absent_from_chat_events(tmp
         "/api/internal/plan/present", json={
             "session_id": meta.id,
             "file": f,
-            "verify_thread": vt,
             "title": "P1",
         })
   assert resp.status_code == 200

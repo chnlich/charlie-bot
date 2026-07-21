@@ -29,11 +29,10 @@ def _mock_response(payload: dict) -> MagicMock:
 
 def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "in flight"})
+  resp = _mock_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
-      "--verify-thread", "t1",
       "--title", "P1",
   ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
@@ -43,7 +42,7 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
   payload = post_mock.call_args.kwargs["json"]
   assert payload["session_id"] == "abc"
   assert payload["file"] == "artifacts/plan_01.html"
-  assert payload["verify_thread"] == "t1"
+  assert "verify_thread" not in payload
   assert payload["title"] == "P1"
   assert payload["base_repo"] is None
   assert payload["base_branch"] is None
@@ -52,11 +51,10 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
 
 def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "in flight"})
+  resp = _mock_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
-      "--verify-thread", "t1",
       "--title", "P1",
       "--base-repo", "r",
       "--base-branch", "b",
@@ -74,11 +72,10 @@ def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 def test_plan_amend_posts_with_default_trigger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 2, "state": "in flight"})
+  resp = _mock_response({"plan": 1, "v": 2, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "amend",
       "--file", "artifacts/plan_02.html",
-      "--verify-thread", "t2",
   ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
@@ -87,18 +84,17 @@ def test_plan_amend_posts_with_default_trigger(tmp_path: Path, monkeypatch: pyte
   payload = post_mock.call_args.kwargs["json"]
   assert payload["session_id"] == "abc"
   assert payload["file"] == "artifacts/plan_02.html"
-  assert payload["verify_thread"] == "t2"
+  assert "verify_thread" not in payload
   assert payload["plan_id"] is None
   assert payload["trigger"] == "feedback"
 
 
 def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 2, "v": 3, "state": "in flight"})
+  resp = _mock_response({"plan": 2, "v": 3, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "amend",
       "--file", "artifacts/plan_03.html",
-      "--verify-thread", "t3",
       "--plan", "2",
       "--trigger", "auto_amend",
   ]), \
@@ -121,22 +117,6 @@ def test_plan_approve_posts_plan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload == {"session_id": "abc", "plan_id": 1}
-
-
-def test_plan_reverify_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "approved · awaiting clean verify"})
-  with patch("sys.argv", [
-      "plan", "reverify",
-      "--verify-thread", "t2",
-      "--plan", "1",
-  ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
-    main()
-
-  payload = post_mock.call_args.kwargs["json"]
-  assert payload == {"session_id": "abc", "verify_thread": "t2", "plan_id": 1}
 
 
 def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,11 +149,10 @@ def test_plan_list_uses_get_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_plan_present_stdout_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "in flight"})
+  resp = _mock_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
-      "--verify-thread", "t1",
       "--title", "P1",
   ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
@@ -182,7 +161,7 @@ def test_plan_present_stdout_json(
 
   out = capsys.readouterr().out
   parsed = json.loads(out)
-  assert parsed == {"plan": 1, "v": 1, "state": "in flight"}
+  assert parsed == {"plan": 1, "v": 1, "state": "awaiting approval"}
 
 
 def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
@@ -194,12 +173,13 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
     def __init__(self) -> None:
       super().__init__("bad")
       self.response = MagicMock()
-      self.response.json.return_value = {"detail": "verify thread 't1' not found in session 'abc'"}
+      self.response.json.return_value = {
+          "detail": "file 'artifacts/missing.html' not found inside the session directory"
+      }
 
   with patch("sys.argv", [
       "plan", "present",
-      "--file", "artifacts/plan_01.html",
-      "--verify-thread", "t1",
+      "--file", "artifacts/missing.html",
       "--title", "P1",
   ]), \
        patch("src.cli.common.get_config", return_value=cfg), \
@@ -210,7 +190,7 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
   assert exc_info.value.code == 1
   err = capsys.readouterr().err
   parsed = json.loads(err)
-  assert parsed["error"] == "verify thread 't1' not found in session 'abc'"
+  assert parsed["error"] == "file 'artifacts/missing.html' not found inside the session directory"
 
 
 def test_plan_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -257,21 +237,14 @@ def test_plan_no_session_outside_session_dir(
 
 
 def test_plan_present_requires_file(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "present", "--verify-thread", "t1", "--title", "P1"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_present_requires_verify_thread(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "present", "--file", "f.html", "--title", "P1"]):
+  with patch("sys.argv", ["plan", "present", "--title", "P1"]):
     with pytest.raises(SystemExit) as exc_info:
       main()
   assert exc_info.value.code != 0
 
 
 def test_plan_present_requires_title(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "present", "--file", "f.html", "--verify-thread", "t1"]):
+  with patch("sys.argv", ["plan", "present", "--file", "f.html"]):
     with pytest.raises(SystemExit) as exc_info:
       main()
   assert exc_info.value.code != 0
@@ -304,11 +277,33 @@ def test_plan_amend_rejects_invalid_trigger(capsys: pytest.CaptureFixture[str]) 
       "amend",
       "--file",
       "f.html",
-      "--verify-thread",
-      "t1",
       "--trigger",
       "initial",
   ]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+  assert exc_info.value.code != 0
+
+
+def test_plan_reverify_subcommand_removed(capsys: pytest.CaptureFixture[str]) -> None:
+  """The reverify subcommand is gone; argparse rejects it with exit code 2."""
+  with patch("sys.argv", ["plan", "reverify", "--verify-thread", "t2", "--plan", "1"]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+  assert exc_info.value.code != 0
+
+
+def test_plan_present_rejects_verify_thread_arg(capsys: pytest.CaptureFixture[str]) -> None:
+  """--verify-thread is no longer a recognized argument on present."""
+  with patch("sys.argv", ["plan", "present", "--file", "f.html", "--verify-thread", "t1", "--title", "P1"]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+  assert exc_info.value.code != 0
+
+
+def test_plan_amend_rejects_verify_thread_arg(capsys: pytest.CaptureFixture[str]) -> None:
+  """--verify-thread is no longer a recognized argument on amend."""
+  with patch("sys.argv", ["plan", "amend", "--file", "f.html", "--verify-thread", "t1"]):
     with pytest.raises(SystemExit) as exc_info:
       main()
   assert exc_info.value.code != 0

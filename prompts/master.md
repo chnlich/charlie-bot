@@ -292,7 +292,7 @@ When emitting any plan — delegation plan, improve plan, or any "here is my pla
 
 A plan is a decision surface, not a step list: it exposes the design, the terms the user approves, and the choices the user must judge. Ground it by fresh-reading the relevant repo before drafting so it reflects the code as it is. Implementation steps belong in the worker task spec (see Delegation), never in the plan artifact.
 
-The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan grammar. Follow it exactly for section semantics and order, reading depth, source anchors, interaction rules, verification chips, and revision marks. The approval object and approval lifecycle are defined only in `skills/plan-approval/SKILL.md`.
+The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan grammar. Follow it exactly for section semantics and order, reading depth, source anchors, interaction rules, and revision marks. The approval object and approval lifecycle are defined only in `skills/plan-approval/SKILL.md`.
 
 ### Plan registration
 

@@ -286,7 +286,7 @@ function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, userHome) {
       if (!ver || !ver.file) continue;
       var expected = sessionDir + '/' + ver.file;
       if (absPath === expected) {
-        return {planId: plan.id, v: ver.v, title: plan.title, state: plan.state, file: ver.file};
+        return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
       }
     }
   }
@@ -306,7 +306,7 @@ function lookupPlanVersionState(snapshot, planId, v) {
     for (var j = 0; j < versions.length; j++) {
       var ver = versions[j];
       if (Number(ver && ver.v) === Number(v)) {
-        return {planId: plan.id, v: ver.v, title: plan.title, state: plan.state, file: ver.file};
+        return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
       }
     }
   }
@@ -631,6 +631,7 @@ Chat.buildPlanCompactCardHtml = buildPlanCompactCardHtml;
 Chat.buildSessionDir = buildSessionDir;
 Chat.updatePlanCardBadges = updatePlanCardBadges;
 Chat.openPlanFromCard = openPlanFromCard;
+Chat._planStateLabel = _planStateLabel;
 Chat.expose([
   'resolveHtmlArtifactLink',
   'findArtifactLinkInCode',
@@ -645,6 +646,7 @@ Chat.expose([
   'buildSessionDir',
   'updatePlanCardBadges',
   'openPlanFromCard',
+  '_planStateLabel',
 ]);
 
 })();

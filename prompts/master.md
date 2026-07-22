@@ -332,6 +332,9 @@ Use markdown only when the user opts out or the response is a brief acknowledgme
 HTML requirements:
 - Full document with doctype, html, body tags.
 - Self-contained: inline CSS/JS. External resources from `cdn.jsdelivr.net` or `unpkg.com` only.
-- Sandboxed: no access to parent window, cookies, or storage.
+- Sandboxing: chat embeds render via srcdoc + sandbox attribute (no access to parent
+  window, cookies, or storage). The plan panel viewer runs same-origin without sandbox
+  because its in-frame comment tray requires same-origin; plan artifact content is trusted
+  master-authored output.
 
 Multiple artifacts per response are supported.

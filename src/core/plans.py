@@ -12,6 +12,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Optional
 
+from src.core import plan_paths
 from src.core.config import CharlieBotConfig
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
@@ -150,20 +151,21 @@ class PlanRegistryManager:
 
   # -- helpers -----------------------------------------------------------
 
-  def _validate_file_in_session_dir(self, session_id: str, file: str) -> None:
-    session_dir = (self._cfg.sessions_dir / session_id).resolve()
-    candidate = (session_dir / file).resolve()
-    try:
-      candidate.relative_to(session_dir)
-    except ValueError as e:
-      raise ValueError(f"file {file!r} resolves outside the session directory") from e
+  def _validate_file_in_session_dir(self, session_id: str, file: str) -> str:
+    session_dir = self._cfg.sessions_dir / session_id
+    candidate, relative = plan_paths.resolve_plan_file(session_dir, file)
+    if relative is None:
+      raise ValueError(f"file {file!r} resolves outside the session directory")
     if not candidate.exists():
       raise ValueError(f"file {file!r} not found inside the session directory")
+    return relative.as_posix()
 
-  def _find_binding_by_file(self, data: dict, file: str) -> Optional[tuple[int, int]]:
+  def _find_binding_by_file(self, session_id: str, data: dict, file: str) -> Optional[tuple[int, int]]:
+    session_dir = self._cfg.sessions_dir / session_id
     for plan in data["plans"]:
       for ver in plan["versions"]:
-        if ver["file"] == file:
+        _candidate, relative = plan_paths.resolve_plan_file(session_dir, ver["file"])
+        if relative is not None and relative.as_posix() == file:
           return plan["id"], ver["v"]
     return None
 
@@ -184,21 +186,22 @@ class PlanRegistryManager:
   ) -> dict:
     async with self._lock_for(session_id):
       data = await self._load(session_id)
-      self._validate_file_in_session_dir(session_id, file)
-      existing_file = self._find_binding_by_file(data, file)
+      file_relative = self._validate_file_in_session_dir(session_id, file)
+      existing_file = self._find_binding_by_file(session_id, data, file_relative)
       if existing_file is not None:
         raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
       next_id = max((p["id"] for p in data["plans"]), default=0) + 1
       plan = {
           "id": next_id,
           "title": title,
-          "versions": [{
-              "v": 1,
-              "file": file,
-              "created_at": _utc_now_iso(),
-              "trigger": "initial",
-              "base": base,
-          }],
+          "versions":
+              [{
+                  "v": 1,
+                  "file": file_relative,
+                  "created_at": _utc_now_iso(),
+                  "trigger": "initial",
+                  "base": base,
+              }],
           "takeoff": None,
           "closed": None,
       }
@@ -219,8 +222,8 @@ class PlanRegistryManager:
       raise ValueError(f"trigger must be one of initial|auto_amend|feedback, got {trigger!r}")
     async with self._lock_for(session_id):
       data = await self._load(session_id)
-      self._validate_file_in_session_dir(session_id, file)
-      existing_file = self._find_binding_by_file(data, file)
+      file_relative = self._validate_file_in_session_dir(session_id, file)
+      existing_file = self._find_binding_by_file(session_id, data, file_relative)
       if existing_file is not None:
         raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
       plan = self._resolve_target_plan_for_amend(data, plan_id)
@@ -228,7 +231,7 @@ class PlanRegistryManager:
       plan["versions"].append(
           {
               "v": new_v,
-              "file": file,
+              "file": file_relative,
               "created_at": _utc_now_iso(),
               "trigger": trigger,
               "base": base,

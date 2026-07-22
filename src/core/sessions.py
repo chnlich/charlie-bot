@@ -13,6 +13,7 @@ import aiofiles
 import structlog
 
 from src.core import event_types as ET
+from src.core import plan_paths
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
 from src.core.init import iter_recent_thread_metas
@@ -338,42 +339,52 @@ class SessionManager:
   async def _copy_plans_to_child(self, parent_id: str, child_session_dir: Path) -> None:
     """Copy parent plans.json and every referenced artifact file into the child.
 
-    Copied registry content is not rewritten: ids, versions, states, takeoff,
-    and closed carry over as-is. Relative file paths resolve under the child
-    dir naturally. A missing referenced artifact logs a warning and does not
-    abort the fork. No plans.json in the parent means nothing to copy.
+    The child registry rewrites each ``versions[].file`` to a POSIX path
+    relative to the child session directory. All other registry fields carry
+    over unchanged. A missing or outside-parent artifact logs a warning and
+    does not abort the fork. No plans.json in the parent means nothing to copy.
     """
-    parent_plans_path = self._session_dir(parent_id) / "plans.json"
+    parent_dir = self._session_dir(parent_id).resolve()
+    parent_plans_path = parent_dir / "plans.json"
     if not parent_plans_path.exists():
       return
-    await asyncio.to_thread(
-        self._copy_plans_sync, parent_plans_path, self._session_dir(parent_id), child_session_dir)
+    await asyncio.to_thread(self._copy_plans_sync, parent_plans_path, parent_dir, child_session_dir.resolve())
 
   @staticmethod
   def _copy_plans_sync(parent_plans_path: Path, parent_dir: Path, child_dir: Path) -> None:
     raw = parent_plans_path.read_text(encoding="utf-8")
     data = json.loads(raw)
-    child_plans_path = child_dir / "plans.json"
-    child_plans_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = child_plans_path.with_suffix(child_plans_path.suffix + ".tmp")
-    tmp.write_text(raw, encoding="utf-8")
-    os.replace(tmp, child_plans_path)
     for plan in data.get("plans", []):
       for ver in plan.get("versions", []):
         file_rel = ver.get("file")
         if not file_rel:
           continue
-        src = parent_dir / file_rel
-        dst = child_dir / file_rel
-        if not src.exists():
+        _candidate, normalized_rel = plan_paths.resolve_plan_file(parent_dir, file_rel)
+        inside_parent = normalized_rel is not None
+        if normalized_rel is None:
+          normalized_rel = plan_paths.fallback_relative_path(parent_dir, _candidate)
           log.warning(
-              "plan_artifact_missing_on_fork",
-              file=str(src),
+              "plan_artifact_outside_parent_on_fork",
+              file=str(_candidate),
+              relative_file=normalized_rel.as_posix(),
               plan=plan.get("id"),
-              v=ver.get("v"))
+              v=ver.get("v"),
+          )
+        src = parent_dir / normalized_rel
+        dst = child_dir / normalized_rel
+        ver["file"] = normalized_rel.as_posix()
+        if not inside_parent:
+          continue
+        if not src.exists():
+          log.warning("plan_artifact_missing_on_fork", file=str(src), plan=plan.get("id"), v=ver.get("v"))
           continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+    child_plans_path = child_dir / "plans.json"
+    child_plans_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = child_plans_path.with_suffix(child_plans_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, child_plans_path)
 
   @staticmethod
   def _write_reference_events_sync(path: Path, events: list[dict]) -> None:

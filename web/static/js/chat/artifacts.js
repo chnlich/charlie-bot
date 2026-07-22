@@ -264,6 +264,16 @@ function buildSessionDir(sessionId, userHome) {
   return home + '/.charliebot/sessions/' + sessionId;
 }
 
+function _planStateLabel(plan) {
+  if (typeof planPanel !== 'undefined' && planPanel && typeof planPanel.formatPlanStateLabel === 'function') {
+    return planPanel.formatPlanStateLabel(plan);
+  }
+  if (plan && plan.takeoff != null && plan.state === 'approved') {
+    return 'approved \u00B7 v' + plan.takeoff.v;
+  }
+  return plan ? plan.state : '';
+}
+
 function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, userHome) {
   var plans = (snapshot && snapshot.plans) || [];
   var sessionDir = buildSessionDir(sessionId, userHome);

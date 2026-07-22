@@ -638,3 +638,65 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message() -> None
     result = await backend.one_shot_text("hi", "sys", timeout=5.0)
 
   assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeypatch) -> None:
+  """`opencode run --format json` emits flat part-shaped events
+  ({"type":"text","part":{...}}), not the SSE-bus shape serve uses."""
+  from src.agents.backends.opencode import OpenCodeBackend
+
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.resolve_binary",
+      lambda name, fallback: "/usr/bin/opencode",
+  )
+  lines = [
+      b'{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"id":"prt_a","messageID":"m1","sessionID":"s1","type":"step-start"}}\n',
+      b'{"type":"text","timestamp":2,"sessionID":"s1","part":{"id":"prt_b","messageID":"m1","sessionID":"s1","type":"text","text":"OK title","time":{"start":1,"end":2}}}\n',
+      b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop","messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n',
+  ]
+  proc = MagicMock()
+  proc.stdout = _FakeStdout(lines)
+  proc.stderr = MagicMock()
+  proc.stderr.read = AsyncMock(return_value=b"")
+  proc.wait = AsyncMock(return_value=0)
+  proc.pid = 7777
+
+  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
+    backend = OpenCodeBackend(model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+    result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
+
+  assert result == "OK title"
+  args = mock_exec.await_args.args
+  assert args[0] == "/usr/bin/opencode"
+  assert "run" in args and "--format" in args and "json" in args
+  assert args[args.index("-m") + 1] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"
+  # opencode run has no system-prompt flag: it is framed into the final (post "--") prompt arg.
+  assert args[-1] == "<system-instructions>\nsys prompt\n</system-instructions>\n\nhello prompt"
+  proc.wait.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatch) -> None:
+  from src.agents.backends.opencode import OpenCodeBackend
+
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.resolve_binary",
+      lambda name, fallback: "/usr/bin/opencode",
+  )
+  lines = [
+      b'{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"id":"prt_a","messageID":"m1","sessionID":"s1","type":"step-start"}}\n',
+      b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop","messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n',
+  ]
+  proc = MagicMock()
+  proc.stdout = _FakeStdout(lines)
+  proc.stderr = MagicMock()
+  proc.stderr.read = AsyncMock(return_value=b"")
+  proc.wait = AsyncMock(return_value=0)
+  proc.pid = 7776
+
+  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+    backend = OpenCodeBackend(model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+    result = await backend.one_shot_text("hi", "sys", timeout=5.0)
+
+  assert result == ""

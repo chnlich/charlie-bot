@@ -101,7 +101,10 @@ const planPanel = (() => {
       var resolvedEl = fork.querySelector('p.resolved');
       if (!fnEl || !qEl || !recEl || resolvedEl) continue;
       var n = (fnEl.textContent || '').trim();
-      var question = (qEl.textContent || '').trim();
+      var clone = qEl.cloneNode(true);
+      var fnInClone = clone.querySelector('span.fn');
+      if (fnInClone) fnInClone.remove();
+      var question = (clone.textContent || '').trim();
       result.push({n: n, question: question});
     }
     return result;
@@ -156,6 +159,18 @@ const planPanel = (() => {
     return buildStandaloneUrl(ver.file, sessionId, userHome);
   }
 
+  function _buildFilesFetchUrl(file, sessionId, userHome) {
+    var home = userHome;
+    if (typeof window !== 'undefined' && window.USER_HOME && !home) {
+      home = window.USER_HOME;
+    }
+    if (!home) {
+      throw new Error('USER_HOME not available for plan panel files fetch');
+    }
+    var absPath = home + '/.charliebot/sessions/' + sessionId + '/' + file;
+    return '/files' + absPath;
+  }
+
   function stateBadgeClass(stateStr) {
     var s = String(stateStr || '');
     if (s === 'approved') return 'bg-green-900 text-green-300';
@@ -184,6 +199,14 @@ const planPanel = (() => {
     var plans = _registry.plans || [];
     for (var i = 0; i < plans.length; i++) {
       if (String(plans[i].id) === String(id)) return plans[i];
+    }
+    return null;
+  }
+
+  function _findVersion(plan, version) {
+    if (!plan || !plan.versions) return null;
+    for (var i = 0; i < plan.versions.length; i++) {
+      if (plan.versions[i].v === version) return plan.versions[i];
     }
     return null;
   }
@@ -261,26 +284,45 @@ const planPanel = (() => {
     }
   }
 
-  function _renderActionBar() {
+  async function _renderActionBar() {
+    var generation = ++_actionBarGeneration;
     var bar = _getEl('plan-action-bar');
     if (!bar) return;
     bar.innerHTML = '';
-    var iframe = _getEl('plan-viewer');
-    if (!iframe) return;
+    var plan = _findPlan(_selectedPlanId);
+    if (!plan || _selectedVersion == null) return;
+    var ver = _findVersion(plan, _selectedVersion);
+    if (!ver) return;
+    var url;
     try {
-      var doc = iframe.contentDocument;
+      url = _buildFilesFetchUrl(ver.file, SESSION_ID);
     } catch (e) {
+      console.error('plan-panel: action bar URL failed', e);
       return;
     }
-    if (!doc) return;
+    var resp;
+    try {
+      resp = await fetch(url);
+    } catch (e) {
+      console.error('plan-panel: action bar fetch failed', e);
+      return;
+    }
+    if (generation !== _actionBarGeneration) return;
+    if (!resp.ok) return;
+    var html = await resp.text();
+    if (generation !== _actionBarGeneration) return;
+    var doc = new DOMParser().parseFromString(html, 'text/html');
     var forks = parseOpenForks(doc);
+    if (generation !== _actionBarGeneration) return;
+    bar.innerHTML = '';
     if (!forks.length) return;
     forks.forEach(function(fork) {
       var chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors';
-      var hint = fork.question.slice(0, 40);
-      chip.textContent = 'Trade-off ' + fork.n + ': ' + hint;
+      var question = fork.question || '';
+      var hint = question.length > 40 ? question.slice(0, 40) + '\u2026' : question;
+      chip.textContent = hint;
       chip.title = 'Prefill: Trade-off ' + fork.n;
       chip.addEventListener('click', function() {
         _prefillChat('Trade-off ' + fork.n + ': ');
@@ -435,6 +477,7 @@ const planPanel = (() => {
     }
     _ensureSelection();
     render();
+    await _renderActionBar();
   }
 
   async function onPlanUpdated(planId) {
@@ -462,6 +505,7 @@ const planPanel = (() => {
       _ensureSelection();
     }
     render();
+    await _renderActionBar();
   }
 
   function _refreshPlanCardBadges() {
@@ -503,12 +547,14 @@ const planPanel = (() => {
     _renderVersionSwitcher();
     _renderStaleNotice();
     _renderViewer();
+    _renderActionBar();
   }
 
   function selectVersion(version) {
     _selectedVersion = version != null ? Number(version) : null;
     _renderStaleNotice();
     _renderViewer();
+    _renderActionBar();
   }
 
   function openPlan(planId, v) {
@@ -519,6 +565,7 @@ const planPanel = (() => {
     _renderVersionSwitcher();
     _renderStaleNotice();
     _renderViewer();
+    _renderActionBar();
   }
 
   // -- Iframe load hook ----------------------------------------------------
@@ -528,7 +575,6 @@ const planPanel = (() => {
     if (!iframe) return;
     iframe.addEventListener('load', function() {
       _highlightTabBadge(false);
-      _renderActionBar();
     });
   }
 

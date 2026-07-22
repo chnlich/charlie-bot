@@ -615,6 +615,19 @@ async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch) -> None:
+  proc = _fake_one_shot_proc([
+      b'{"type":"item.completed","item":{"type":"todo_list","id":"todo-1",'
+      b'"items":[{"text":"not an assistant response","status":"completed"}]}}\n',
+  ])
+
+  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+    backend = _build_backend(monkeypatch)
+    with pytest.raises(RuntimeError, match="no assistant text"):
+      await backend.one_shot_text("prompt", "system", timeout=5.0)
+
+
+@pytest.mark.asyncio
 async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None:
   class _BlockingStdout:
 

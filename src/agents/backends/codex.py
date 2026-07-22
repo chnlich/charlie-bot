@@ -167,7 +167,7 @@ class CodexBackend(AgentBackend):
             if message and structured_error is None:
               structured_error = str(message).strip()
             continue
-          if translated_type == ET.ASSISTANT:
+          if translated_type == ET.ASSISTANT and ev.get("item", {}).get("type") == "agent_message":
             parts.append(extract_text_from_message(translated.get("message")))
       wait_result = await proc.wait()
       returncode = proc.returncode if isinstance(proc.returncode, int) else wait_result

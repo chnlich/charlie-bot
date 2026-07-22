@@ -1,4 +1,7 @@
+import asyncio
+import signal
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -8,6 +11,32 @@ from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
+
+
+class _FakeStdout:
+  """Async iterator over canned NDJSON byte lines."""
+
+  def __init__(self, lines: list[bytes]) -> None:
+    self._lines = list(lines)
+
+  def __aiter__(self) -> "_FakeStdout":
+    return self
+
+  async def __anext__(self) -> bytes:
+    if not self._lines:
+      raise StopAsyncIteration
+    return self._lines.pop(0)
+
+
+def _fake_one_shot_proc(lines: list[bytes], *, stderr: bytes = b"", returncode: int = 0) -> MagicMock:
+  proc = MagicMock()
+  proc.stdout = _FakeStdout(lines)
+  proc.stderr = MagicMock()
+  proc.stderr.read = AsyncMock(side_effect=[stderr, b""])
+  proc.wait = AsyncMock(return_value=returncode)
+  proc.returncode = returncode
+  proc.pid = 9000
+  return proc
 
 
 def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
@@ -528,12 +557,83 @@ def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) 
       label="Codex",
       type="codex",
       model="codex-test-model",
+      model_reasoning_effort="high",
       model_auto_compact_token_limit=50000,
   )
 
   backend = build_backend(option, CharlieBotConfig())
 
   assert isinstance(backend, CodexBackend)
+  assert backend._model_reasoning_effort == "high"
   assert backend._model_auto_compact_token_limit == 50000
   cmd = backend._build_command("do the thing")
+  assert 'model_reasoning_effort="high"' in cmd
   assert cmd.count("model_auto_compact_token_limit=50000") == 1
+
+
+@pytest.mark.asyncio
+async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
+  proc = _fake_one_shot_proc([
+      b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
+  ], stderr=b"generic stderr")
+
+  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+    backend = _build_backend(monkeypatch, model_reasoning_effort="ultra")
+    with pytest.raises(RuntimeError, match="unsupported reasoning effort: ultra") as exc_info:
+      await backend.one_shot_text("prompt", "system", timeout=5.0)
+
+  assert "generic stderr" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch) -> None:
+  proc = _fake_one_shot_proc([
+      b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
+  ], stderr=b"generic stderr")
+
+  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+    backend = _build_backend(monkeypatch)
+    with pytest.raises(RuntimeError, match="context window exceeded") as exc_info:
+      await backend.one_shot_text("prompt", "system", timeout=5.0)
+
+  assert "generic stderr" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch) -> None:
+  stderr = b"codex process failed\n" + b"x" * 10000
+  proc = _fake_one_shot_proc([], stderr=stderr, returncode=2)
+
+  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+    backend = _build_backend(monkeypatch)
+    with pytest.raises(RuntimeError, match="codex process failed") as exc_info:
+      await backend.one_shot_text("prompt", "system", timeout=5.0)
+
+  message = str(exc_info.value)
+  assert "exit 2" in message
+  assert len(message) < 5000
+
+
+@pytest.mark.asyncio
+async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None:
+  class _BlockingStdout:
+
+    def __aiter__(self) -> "_BlockingStdout":
+      return self
+
+    async def __anext__(self) -> bytes:
+      await asyncio.Event().wait()
+      raise AssertionError("unreachable")
+
+  proc = _fake_one_shot_proc([])
+  proc.stdout = _BlockingStdout()
+
+  with (
+      patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+      patch("src.agents.backends.codex.kill_process_group") as mock_kill,
+  ):
+    backend = _build_backend(monkeypatch)
+    with pytest.raises(asyncio.TimeoutError):
+      await backend.one_shot_text("prompt", "system", timeout=0.01)
+
+  mock_kill.assert_called_once_with(9000, signal.SIGKILL)

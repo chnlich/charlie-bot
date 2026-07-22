@@ -18,6 +18,8 @@ from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
+_MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
+
 
 class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
@@ -100,12 +102,13 @@ class CodexBackend(AgentBackend):
     return codex_env
 
   async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
-    """Generate text via `codex exec --json` with minimal reasoning effort.
+    """Generate text via `codex exec --json` with the configured model and effort.
 
     Codex has no system-prompt flag, so the system prompt is framed into the user
     prompt. agent_message text is accumulated with the same cumulative-delta logic
     as the streaming path (_handle_agent_message). The process group is killed on
-    timeout.
+    timeout. Structured backend failures are raised instead of being mistaken for
+    non-JSON assistant text.
     """
     from src.core.message_aggregator import extract_text_from_message
 
@@ -118,8 +121,7 @@ class CodexBackend(AgentBackend):
         "--dangerously-bypass-approvals-and-sandbox",
         "--model",
         self._model,
-        "--config",
-        'model_reasoning_effort="minimal"',
+        *self._model_config_args(),
         "--",
         framed,
     ]
@@ -134,8 +136,21 @@ class CodexBackend(AgentBackend):
         start_new_session=True,
     )
 
-    async def _collect() -> str:
+    async def _read_bounded_stderr() -> bytes:
+      assert proc.stderr is not None
+      captured = bytearray()
+      while True:
+        chunk = await proc.stderr.read(8192)
+        if not chunk:
+          break
+        if len(captured) < _MAX_ONE_SHOT_STDERR_BYTES:
+          remaining = _MAX_ONE_SHOT_STDERR_BYTES - len(captured)
+          captured.extend(chunk[:remaining])
+      return bytes(captured)
+
+    async def _collect() -> tuple[str, str | None, int | None]:
       parts: list[str] = []
+      structured_error: str | None = None
       assert proc.stdout is not None
       async for raw_line in proc.stdout:
         line = raw_line.decode("utf-8", errors="replace").strip()
@@ -145,16 +160,39 @@ class CodexBackend(AgentBackend):
           ev = json.loads(line)
         except json.JSONDecodeError:
           continue
-        if ev.get("type") not in ("item.started", "item.updated", "item.completed"):
-          continue
-        for translated in self._handle_agent_message(ev):
-          parts.append(extract_text_from_message(translated.get("message")))
-      await proc.wait()
-      return "".join(parts).strip()
+        for translated in self.translate_event(ev):
+          translated_type = translated.get("type")
+          if translated_type == ET.ERROR:
+            message = translated.get("message") or translated.get("content")
+            if message and structured_error is None:
+              structured_error = str(message).strip()
+            continue
+          if translated_type == ET.ASSISTANT:
+            parts.append(extract_text_from_message(translated.get("message")))
+      wait_result = await proc.wait()
+      returncode = proc.returncode if isinstance(proc.returncode, int) else wait_result
+      return "".join(parts).strip(), structured_error, returncode
 
-    stderr_task = asyncio.create_task(proc.stderr.read())
+    stderr_task = asyncio.create_task(_read_bounded_stderr())
+
+    async def _run() -> tuple[str, str | None, int | None, bytes]:
+      text, structured_error, returncode = await _collect()
+      stderr = await stderr_task
+      return text, structured_error, returncode, stderr
+
     try:
-      return await asyncio.wait_for(_collect(), timeout)
+      text, structured_error, returncode, stderr = await asyncio.wait_for(_run(), timeout)
+      if structured_error:
+        raise RuntimeError(f"Codex one-shot failed: {structured_error}")
+
+      stderr_text = stderr.decode("utf-8", errors="replace").strip()
+      if returncode != 0:
+        detail = f": {stderr_text}" if stderr_text else ""
+        raise RuntimeError(f"Codex one-shot failed (exit {returncode}){detail}")
+      if not text:
+        detail = f": {stderr_text}" if stderr_text else ""
+        raise RuntimeError(f"Codex one-shot returned no assistant text{detail}")
+      return text
     except asyncio.TimeoutError:
       kill_process_group(proc.pid, signal.SIGKILL)
       raise
@@ -193,6 +231,8 @@ class CodexBackend(AgentBackend):
       error = ev.get("error", {})
       msg = error.get("message") if isinstance(error, dict) else str(error)
       if not msg:
+        msg = ev.get("message")
+      if not msg:
         msg = f"Codex turn.failed with no message. Full event: {json.dumps(ev, default=str)}"
       return [make_error_event(msg)]
 
@@ -200,6 +240,8 @@ class CodexBackend(AgentBackend):
     if ev_type == "error":
       error = ev.get("error", {})
       msg = error.get("message") if isinstance(error, dict) else str(error)
+      if not msg:
+        msg = ev.get("message")
       if not msg:
         msg = f"Codex error event with no message. Full event: {json.dumps(ev, default=str)}"
       return [make_error_event(msg)]

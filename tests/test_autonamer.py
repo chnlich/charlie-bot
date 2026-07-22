@@ -239,6 +239,42 @@ async def test_maybe_auto_name_keeps_default_name_when_both_titles_unfaithful() 
   )
 
 
+@pytest.mark.asyncio
+async def test_maybe_auto_name_keeps_default_metadata_when_backend_fails_and_retries() -> None:
+  cfg = _cc_cfg()
+  session_meta = SessionMetadata(id="session-backend-failure", name="Session 10", backend="light-cc")
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(
+      id="session-backend-failure", name="Session 10", group=None)
+  one_shot = AsyncMock(
+      side_effect=[
+          RuntimeError("unsupported reasoning effort"),
+          '{"name":"Recovered Title","group":"Recovered"}',
+      ])
+
+  with (
+      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
+      patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
+  ):
+    await maybe_auto_name(cfg, session_meta, "First naming attempt", "Backend failed.", session_mgr, [])
+
+    session_mgr.rename_session.assert_not_awaited()
+    session_mgr.set_group.assert_not_awaited()
+    mock_broadcast.assert_not_awaited()
+    mock_log.warning.assert_called_once_with(
+        "autonamer_failed",
+        session_id="session-backend-failure",
+        error="unsupported reasoning effort",
+    )
+
+    await maybe_auto_name(cfg, session_meta, "Retry naming attempt", "Backend recovered.", session_mgr, [])
+
+  session_mgr.rename_session.assert_awaited_once_with("session-backend-failure", "10: Recovered Title")
+  session_mgr.set_group.assert_awaited_once_with("session-backend-failure", "Recovered")
+  assert one_shot.await_count == 2
+
+
 # ---------------------------------------------------------------------------
 # select_light_backend — same-type-first selection
 # ---------------------------------------------------------------------------
@@ -603,16 +639,17 @@ async def test_codex_one_shot_text_accumulates_agent_message() -> None:
   proc.stderr.read = AsyncMock(return_value=b"")
   proc.wait = AsyncMock(return_value=0)
   proc.pid = 9999
+  proc.returncode = 0
 
   with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
-    backend = CodexBackend(model="gpt-x")
+    backend = CodexBackend(model="gpt-x", model_reasoning_effort="high")
     result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
 
   assert result == "OK title"
   args = mock_exec.await_args.args
   assert "exec" in args and "--json" in args
   assert args[args.index("--model") + 1] == "gpt-x"
-  assert 'model_reasoning_effort="minimal"' in args
+  assert 'model_reasoning_effort="high"' in args
   # Codex has no system-prompt flag: it is framed into the final (post "--") prompt arg.
   assert args[-1] == "<system-instructions>\nsys prompt\n</system-instructions>\n\nhello prompt"
   proc.wait.assert_awaited()
@@ -632,12 +669,12 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message() -> None
   proc.stderr.read = AsyncMock(return_value=b"")
   proc.wait = AsyncMock(return_value=0)
   proc.pid = 9998
+  proc.returncode = 0
 
   with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
     backend = CodexBackend(model="gpt-x")
-    result = await backend.one_shot_text("hi", "sys", timeout=5.0)
-
-  assert result == ""
+    with pytest.raises(RuntimeError, match="no assistant text"):
+      await backend.one_shot_text("hi", "sys", timeout=5.0)
 
 
 @pytest.mark.asyncio

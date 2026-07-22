@@ -375,8 +375,7 @@ class SessionManager:
           fallback_rel = plan_paths.fallback_relative_path(parent_dir, _candidate)
           normalized_rel = fallback_rel
           suffix_number = 1
-          while (normalized_rel.as_posix() in reserved_relative_paths or
-                 (child_dir / normalized_rel).exists()):
+          while (normalized_rel.as_posix() in reserved_relative_paths or (child_dir / normalized_rel).exists()):
             normalized_rel = fallback_rel.with_name(f"{fallback_rel.name}.outside-{suffix_number}")
             suffix_number += 1
           reserved_relative_paths.add(normalized_rel.as_posix())

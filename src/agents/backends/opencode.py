@@ -556,10 +556,15 @@ class OpenCodeBackend(AgentBackend):
     Uses the one-shot ``run`` command (not the ``serve`` server the agent loop
     drives) and injects a deny-all permission policy so the naming/recap one-shot
     cannot call tools. opencode run has no system-prompt flag, so the system
-    prompt is framed into the user prompt. The NDJSON event stream carries the
-    same bus events as ``serve``'s SSE, so text is extracted by reusing
-    ``_translate_sse_event`` (which drives ``_part_delta`` for cumulative text
-    parts). The process group is killed on timeout.
+    prompt is framed into the user prompt.
+
+    ``opencode run --format json`` emits flat part-shaped NDJSON events (one per
+    line) with the part dict at the top level — e.g. ``{"type": "text", "part":
+    {"type": "text", "text": "..."}}`` — NOT the SSE-bus events that ``serve``
+    uses (which nest the part under ``properties``). The parser therefore feeds
+    the top-level ``part`` directly to ``_translate_part`` so ``_part_delta``'s
+    cumulative logic applies to ``text``-type parts. The process group is killed
+    on timeout.
     """
     from src.core.message_aggregator import extract_text_from_message
 
@@ -603,11 +608,12 @@ class OpenCodeBackend(AgentBackend):
           event = json.loads(line)
         except json.JSONDecodeError:
           continue
-        for translated in self._translate_sse_event(event):
+        part = event.get("part")
+        if not isinstance(part, dict):
+          continue
+        for translated in self._translate_part(part):
           if translated.get("type") == ET.ASSISTANT:
             parts.append(extract_text_from_message(translated.get("message")))
-        if event.get("type") == "session.idle":
-          break
       await proc.wait()
       return "".join(parts).strip()
 

@@ -181,6 +181,7 @@ class SessionManager:
       scheduled: Optional[bool] = None,
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
+      include_pending_plan_approval: bool = False,
   ) -> list[SessionMetadata]:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
     all_meta = await self._iter_session_metas()
@@ -192,6 +193,7 @@ class SessionManager:
         sessions,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
+        include_pending_plan_approval=include_pending_plan_approval,
     )
 
   async def search_sessions(
@@ -994,31 +996,36 @@ class SessionManager:
   def _has_pending_plan_approval(self, session_id: str) -> bool:
     """Return True if the session has a lineage whose derived state is 'awaiting approval'.
 
-    Existence-check short-circuits sessions without plans.json. Derived state
-    is computed via the single authority in src.core.plans (no re-derivation).
+    Delegates to the tolerant read in src.core.plans (single authority for catch-and-derive).
+    Any error entry is logged via ``plan_registry_read_failed`` and contributes no pending
+    approval. The probe must never raise — a corrupt single-session file cannot 5xx the
+    sidebar poll for all sessions.
     """
+    from src.core.plans import read_plans_tolerant
+
     plans_path = self._session_dir(session_id) / "plans.json"
-    if not plans_path.exists():
-      return False
-    from src.core.plans import derive_state_str
-    raw = plans_path.read_text(encoding="utf-8")
-    data = json.loads(raw)
-    for plan in data.get("plans", []):
-      if derive_state_str(plan) == "awaiting approval":
-        return True
-    return False
+    result = read_plans_tolerant(plans_path, session_id)
+    for error in result["errors"]:
+      log.warning(
+          "plan_registry_read_failed",
+          session_id=error.get("session_id"),
+          error=error.get("error"),
+      )
+    return any(plan.get("state") == "awaiting approval" for plan in result["plans"])
 
   async def _enrich_and_sort(
       self,
       sessions: list[SessionMetadata],
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
+      include_pending_plan_approval: bool = False,
   ) -> list[SessionMetadata]:
     """Populate sidebar state and sort newest first."""
     await self._populate_sidebar_state(
         sessions,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
+        include_pending_plan_approval=include_pending_plan_approval,
     )
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions

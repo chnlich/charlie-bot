@@ -3,20 +3,28 @@
 The registry owns three things per session: plan lineage (multiple plans, multiple versions
 each), takeoff (the user approved a version), and closed (the lineage is terminated). It is a
 display and management tool; it does not gate the master agent.
+
+Error domains are split: verbs (present/amend/approve/close) read plans.json via the strict
+``_load`` and fail loud on corrupt files. All read surfaces (list endpoint, sidebar probe)
+consume the tolerant read in ``read_plans_tolerant`` — the single authority for catch-and-derive.
 """
 
 import asyncio
 import json
 import os
+import posixpath
 from enum import IntEnum
 from pathlib import Path
 from typing import Optional
+
+import structlog
 
 from src.core import plan_paths
 from src.core.config import CharlieBotConfig
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
+
+log = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
 # DerivedState — internal enum (0 = UNKNOWN reserved); API use strings
@@ -40,8 +48,16 @@ _DERIVED_STATE_STR: dict[_DerivedState, str] = {
 
 
 def _derive_state(closed: Optional[dict], takeoff: Optional[dict]) -> _DerivedState:
-  """Pure function of (closed, takeoff) -> _DerivedState. Fail-loud."""
+  """Pure function of (closed, takeoff) -> _DerivedState. Fail-loud.
+
+  Wrong types (non-dict closed/takeoff) raise ValueError so the tolerant read's
+  ``except (OSError, ValueError)`` can attribute them to a single plan instead of
+  aborting the whole listing. Verbs never pass wrong-typed data here — they construct
+  the dicts themselves.
+  """
   if closed is not None:
+    if not isinstance(closed, dict):
+      raise ValueError(f"closed must be a dict or None, got {type(closed).__name__}")
     close_as = closed.get("as")
     if close_as == "superseded":
       return _DerivedState.SUPERSEDED
@@ -50,11 +66,15 @@ def _derive_state(closed: Optional[dict], takeoff: Optional[dict]) -> _DerivedSt
     raise ValueError(f"unknown closed.as: {close_as!r}")
   if takeoff is None:
     return _DerivedState.AWAITING_APPROVAL
+  if not isinstance(takeoff, dict):
+    raise ValueError(f"takeoff must be a dict or None, got {type(takeoff).__name__}")
   return _DerivedState.APPROVED
 
 
 def derive_state_str(plan: dict) -> str:
   """Return the derived-state display string for a plan dict (registry shape)."""
+  if not isinstance(plan, dict):
+    raise ValueError(f"plan must be a dict, got {type(plan).__name__}")
   versions = plan.get("versions") or []
   if not versions:
     raise ValueError(f"plan {plan.get('id')} has no versions")
@@ -78,6 +98,8 @@ def _project_version(ver: dict) -> dict:
 
 
 def _project_plan(plan: dict) -> dict:
+  if not isinstance(plan, dict):
+    raise ValueError(f"plan must be a dict, got {type(plan).__name__}")
   projected = {k: plan.get(k) for k in _PLAN_FIELDS}
   projected["versions"] = [_project_version(v) for v in plan.get("versions", [])]
   return projected
@@ -89,6 +111,65 @@ def _project_registry(data: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tolerant read — single authority for listing/probe surfaces
+# ---------------------------------------------------------------------------
+
+
+def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
+  """Tolerant read of a session's plans.json.
+
+  Returns ``{"plans": [<projected plan enriched with "state">...], "errors": [<entry>...]}``.
+
+  - Missing file: ``plans: []``, ``errors: []``.
+  - Unreadable file / invalid JSON / non-dict top level: ``plans: []``, one error entry.
+  - Per-plan derive failure (empty versions, unknown closed.as, wrong types): skip that
+    plan, append an error entry; remaining plans are still returned enriched.
+
+  Error entry fields: ``session_id``, ``plan_id`` (null for file-level errors), ``error`` (str).
+
+  Catches exactly ``(OSError, ValueError)`` — ``json.JSONDecodeError`` is a ``ValueError``
+  subclass. Never raises for expected corruption; the caller may iterate the result directly.
+  """
+  errors: list[dict] = []
+  if not plans_path.exists():
+    return {"plans": [], "errors": errors}
+  try:
+    raw = plans_path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+  except (OSError, ValueError) as e:
+    return {
+        "plans": [],
+        "errors": [{
+            "session_id": session_id,
+            "plan_id": None,
+            "error": str(e)
+        }],
+    }
+  if not isinstance(data, dict):
+    return {
+        "plans": [],
+        "errors":
+            [
+                {
+                    "session_id": session_id,
+                    "plan_id": None,
+                    "error": f"registry top level is {type(data).__name__}, expected dict",
+                }
+            ],
+    }
+  plans_out: list[dict] = []
+  for plan in data.get("plans", []):
+    try:
+      projected = _project_plan(plan)
+      enriched = {**projected, "state": derive_state_str(projected)}
+      plans_out.append(enriched)
+    except (OSError, ValueError) as e:
+      plan_id = plan.get("id") if isinstance(plan, dict) else None
+      errors.append({"session_id": session_id, "plan_id": plan_id, "error": str(e)})
+  return {"plans": plans_out, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
 # Plan registry manager
 # ---------------------------------------------------------------------------
 
@@ -96,10 +177,9 @@ def _project_registry(data: dict) -> dict:
 class PlanRegistryManager:
   """Per-session plan registry: lineage state and version mutations."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager, thread_mgr: ThreadManager):
+  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager):
     self._cfg = cfg
     self._session_mgr = session_mgr
-    self._thread_mgr = thread_mgr
     self._locks: dict[str, asyncio.Lock] = {}
 
   # -- locking ------------------------------------------------------------
@@ -121,7 +201,7 @@ class PlanRegistryManager:
 
     The plain-dict loader preserves whatever is on disk; projection to the current schema
     happens on save and on list_plans output, never on load, so untouched files are not
-    rewritten unnecessarily.
+    rewritten unnecessarily. Fails loud on corrupt files (verbs only).
     """
     path = self._plans_path(session_id)
     if not path.exists():
@@ -161,11 +241,14 @@ class PlanRegistryManager:
     return relative.as_posix()
 
   def _find_binding_by_file(self, session_id: str, data: dict, file: str) -> Optional[tuple[int, int]]:
-    session_dir = self._cfg.sessions_dir / session_id
+    """Return (plan_id, v) for the first version whose normalized file path equals ``file``.
+
+    Both sides are normalized via ``posixpath.normpath`` so legacy rows with non-canonical
+    spellings (e.g. ``./artifacts/c.html``) match a canonical target without any data migration.
+    """
     for plan in data["plans"]:
       for ver in plan["versions"]:
-        _candidate, relative = plan_paths.resolve_plan_file(session_dir, ver["file"])
-        if relative is not None and relative.as_posix() == file:
+        if posixpath.normpath(ver["file"]) == file:
           return plan["id"], ver["v"]
     return None
 
@@ -184,6 +267,7 @@ class PlanRegistryManager:
       title: str,
       base: Optional[dict] = None,
   ) -> dict:
+    file = posixpath.normpath(file)
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       file_relative = self._validate_file_in_session_dir(session_id, file)
@@ -218,8 +302,9 @@ class PlanRegistryManager:
       trigger: str = "feedback",
       base: Optional[dict] = None,
   ) -> dict:
-    if trigger not in ("initial", "auto_amend", "feedback"):
-      raise ValueError(f"trigger must be one of initial|auto_amend|feedback, got {trigger!r}")
+    if trigger not in ("auto_amend", "feedback"):
+      raise ValueError(f"trigger must be one of auto_amend|feedback, got {trigger!r}")
+    file = posixpath.normpath(file)
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       file_relative = self._validate_file_in_session_dir(session_id, file)
@@ -301,15 +386,11 @@ class PlanRegistryManager:
     return {"plan": plan_id, "state": derive_state_str(plan)}
 
   async def list_plans(self, session_id: str) -> dict:
-    async with self._lock_for(session_id):
-      data = await self._load(session_id)
-    return self._with_derived_states(data)
+    """Tolerant read of the registry. Returns ``{"plans": [...], "errors": [...]}``.
 
-  @staticmethod
-  def _with_derived_states(data: dict) -> dict:
-    plans = []
-    for plan in data.get("plans", []):
-      projected = _project_plan(plan)
-      enriched = {**projected, "state": derive_state_str(projected)}
-      plans.append(enriched)
-    return {"plans": plans}
+    The strict ``_load`` used by verbs is unchanged; this is the only read path for listing
+    and probe surfaces. Errors are returned (never raised) so a corrupt single-session file
+    cannot 5xx the sidebar poll for all sessions.
+    """
+    plans_path = self._plans_path(session_id)
+    return await asyncio.to_thread(read_plans_tolerant, plans_path, session_id)

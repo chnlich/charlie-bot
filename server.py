@@ -17,6 +17,7 @@ from src.api import anthropic_proxy, backlog, chat, code_server, cron, ext_usage
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
 from src.core import event_types as ET
+from src.core.buildinfo import init_build_info
 from src.core.config import get_config
 from src.core.http import close_http_client
 from src.core.init import init_charliebot_home, run_crash_recovery
@@ -120,6 +121,10 @@ async def lifespan(app: FastAPI):
   """Application lifespan: startup and shutdown tasks."""
   cfg = get_config()
   boot_time = utc_now()
+
+  # Capture build info (git SHA + start time) for the /api/internal/version endpoint
+  # and the CLI version-skew hint. Runs synchronously; ~2 s worst case for git rev-parse.
+  init_build_info()
 
   # Ensure home directory structure exists (fast, mandatory part of startup).
   await init_charliebot_home()

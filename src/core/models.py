@@ -389,7 +389,7 @@ class PlanAmendRequest(BaseModel):
   session_id: str
   file: str
   plan_id: Optional[int] = None
-  trigger: Literal["initial", "auto_amend", "feedback"] = "feedback"
+  trigger: Literal["auto_amend", "feedback"] = "feedback"
   base_repo: Optional[str] = None
   base_branch: Optional[str] = None
   base_sha: Optional[str] = None

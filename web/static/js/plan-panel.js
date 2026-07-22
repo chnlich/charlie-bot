@@ -110,6 +110,14 @@ const planPanel = (() => {
     return result;
   }
 
+  function formatPlanStateLabel(plan) {
+    if (!plan) return '';
+    if (plan.takeoff != null && plan.state === 'approved') {
+      return 'approved \u00B7 v' + plan.takeoff.v;
+    }
+    return plan.state || '';
+  }
+
   function buildIframeUrl(file, sessionId, userHome) {
     var home = userHome;
     if (typeof window !== 'undefined' && window.USER_HOME && !home) {
@@ -223,7 +231,7 @@ const planPanel = (() => {
     }
     sel.innerHTML = plans.map(function(p) {
       var label = '#' + p.id + ' ' + _esc(p.title || '(untitled)') +
-        ' [' + _esc(p.state || '') + ']';
+        ' [' + _esc(formatPlanStateLabel(p)) + ']';
       return '<option value="' + _esc(p.id) + '"' +
         (String(p.id) === String(_selectedPlanId) ? ' selected' : '') +
         '>' + label + '</option>';
@@ -628,6 +636,7 @@ const planPanel = (() => {
     isStaleVersion,
     detectNewPlanOrVersion,
     parseOpenForks,
+    formatPlanStateLabel,
     buildIframeUrl,
     buildIframeUrlFromVersion,
     buildStandaloneUrl,

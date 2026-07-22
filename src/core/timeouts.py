@@ -54,8 +54,14 @@ NOTIFICATION_TIMEOUT = 10.0  # seconds — fast external API, fail quickly
 # Anthropic OAuth usage API and token refresh.
 HTTP_OAUTH_TIMEOUT = 30  # seconds — remote API may be slow under load
 
-# CLI → CharlieBot server internal endpoints (delegate, improve).
+# CLI -> CharlieBot server internal endpoints (delegate, improve).
 HTTP_INTERNAL_API_TIMEOUT = 30  # seconds — local loopback, generous for cold starts
+
+# Best-effort fetch of /api/internal/version on the CLI error path, plus the local
+# `git rev-parse --short HEAD` used to compose the version-skew hint. Both are bounded
+# so a hung server or a hung git never stalls CLI error reporting.
+HTTP_VERSION_SKEW_TIMEOUT = 2.0  # seconds
+SUBPROCESS_VERSION_SKEW_TIMEOUT = 2.0  # seconds
 
 # ---------------------------------------------------------------------------
 # Slash commands

@@ -59,7 +59,7 @@ async def _setup(
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
-  plan_mgr = PlanRegistryManager(cfg, session_mgr, thread_mgr)
+  plan_mgr = PlanRegistryManager(cfg, session_mgr)
   meta = await session_mgr.create_session(CreateSessionRequest(name="Test"), backend="claude-opus-4.6")
   return cfg, session_mgr, thread_mgr, plan_mgr, meta
 
@@ -236,12 +236,12 @@ async def test_plan_reverify_endpoint_removed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Session view payload includes plans
+# Session view payload no longer carries plans (A6 — /view is plans-less)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_session_view_includes_plans(tmp_path: Path) -> None:
+async def test_session_view_omits_plans(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   f = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f, title="P1")
@@ -250,9 +250,7 @@ async def test_session_view_includes_plans(tmp_path: Path) -> None:
     resp = client.get(f"/api/sessions/{meta.id}/view")
   assert resp.status_code == 200
   body = resp.json()
-  assert "plans" in body
-  assert len(body["plans"]) == 1
-  assert body["plans"][0]["state"] == "awaiting approval"
+  assert "plans" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -336,3 +334,72 @@ async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: py
   thread = await thread_mgr.get_thread(meta.id, result["thread_id"])
   assert thread is not None
   assert thread.task_type == TaskType.VERIFY
+
+
+# ---------------------------------------------------------------------------
+# List endpoint contract (A2) — 404 unknown / 200+errors corrupt / 200+empty errors normal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_plans_endpoint_unknown_session_404(tmp_path: Path) -> None:
+  cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
+  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  with TestClient(app) as client:
+    resp = client.get("/api/sessions/nonexistent/plans")
+  assert resp.status_code == 404
+  assert resp.json()["detail"] == "Session not found"
+
+
+@pytest.mark.asyncio
+async def test_get_plans_endpoint_corrupt_file_200_with_error_entry(tmp_path: Path) -> None:
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  plans_path = cfg.sessions_dir / meta.id / "plans.json"
+  plans_path.parent.mkdir(parents=True, exist_ok=True)
+  plans_path.write_text("{not valid json", encoding="utf-8")
+  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  with TestClient(app) as client:
+    resp = client.get(f"/api/sessions/{meta.id}/plans")
+  assert resp.status_code == 200
+  body = resp.json()
+  assert body["plans"] == []
+  assert len(body["errors"]) == 1
+  assert body["errors"][0]["plan_id"] is None
+  assert body["errors"][0]["session_id"] == meta.id
+
+
+@pytest.mark.asyncio
+async def test_get_plans_endpoint_normal_file_200_with_empty_errors(tmp_path: Path) -> None:
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  f = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=f, title="P1")
+  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  with TestClient(app) as client:
+    resp = client.get(f"/api/sessions/{meta.id}/plans")
+  assert resp.status_code == 200
+  body = resp.json()
+  assert len(body["plans"]) == 1
+  assert body["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# Amend trigger tightening (A4) — API request with trigger=initial → 422 (pydantic)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plan_amend_rejects_initial_trigger_422(tmp_path: Path) -> None:
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=f1, title="P1")
+  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
+  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  with TestClient(app) as client:
+    resp = client.post(
+        "/api/internal/plan/amend", json={
+            "session_id": meta.id,
+            "file": f2,
+            "plan_id": 1,
+            "trigger": "initial",
+        })
+  assert resp.status_code == 422

@@ -146,6 +146,33 @@ def test_plan_list_uses_get_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyP
   assert get_mock.call_args.args[0].endswith("/api/sessions/abc/plans")
 
 
+def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """Acceptance #4: CLI plan list on a corrupt registry prints the errors entries and exits 0."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  payload = {
+      "plans": [],
+      "errors": [{
+          "session_id": "abc",
+          "plan_id": None,
+          "error": "Expecting value: line 1 column 1 (char 0)"
+      }],
+  }
+  resp = _mock_response(payload)
+  with patch("sys.argv", ["plan", "list"]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.get", return_value=resp):
+    main()  # no SystemExit — exits 0
+
+  out = capsys.readouterr().out
+  parsed = json.loads(out)
+  assert parsed["plans"] == []
+  assert len(parsed["errors"]) == 1
+  assert parsed["errors"][0]["session_id"] == "abc"
+  assert parsed["errors"][0]["plan_id"] is None
+  assert "Expecting value" in parsed["errors"][0]["error"]
+
+
 def test_plan_present_stdout_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")

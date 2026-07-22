@@ -6,6 +6,7 @@ entry point, including consistent error-detail extraction on 4xx/5xx responses.
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 import requests
 
 from src.core.config import CharlieBotConfig, get_config
-from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
+from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT, HTTP_VERSION_SKEW_TIMEOUT, SUBPROCESS_VERSION_SKEW_TIMEOUT
 
 TASK_SPEC_REQUIRED_HEADINGS = (
     "Goal",
@@ -23,6 +24,9 @@ TASK_SPEC_REQUIRED_HEADINGS = (
     "Reviewer Checklist",
     "Out of Scope",
 )
+
+# Repo root derived from this file: src/cli/common.py -> parents[2] == repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def internal_api_auth_headers(cfg: CharlieBotConfig) -> dict[str, str]:
@@ -91,11 +95,81 @@ def validate_task_spec_markdown(content: str) -> None:
     exit_usage_error("task spec Source Files section must list source files or - (none)")
 
 
+def compose_version_skew_hint(
+    server_sha: str | None,
+    started_at: str | None,
+    local_sha: str | None,
+) -> str | None:
+  """Pure function: compose a version-skew hint string, or return None when there is no skew.
+
+  Returns None when either SHA is missing (best-effort fetch failed) or when the SHAs match.
+  When they differ, returns a single-line hint naming both SHAs (and the server start time
+  when known) so the user knows a server restart may be required.
+
+  Unit-testable without a server: callers pass the SHAs they gathered.
+  """
+  if not server_sha or not local_sha:
+    return None
+  if server_sha == local_sha:
+    return None
+  started_clause = f" (started {started_at})" if started_at else ""
+  return (f"server running {server_sha}{started_clause}, repo at {local_sha} "
+          f"— server restart may be required")
+
+
+def _read_local_repo_sha() -> str | None:
+  """Return `git rev-parse --short HEAD` in the repo root, or None on any failure.
+
+  Every failure mode (missing git, non-zero exit, timeout) is swallowed so the CLI
+  error path never stalls on a best-effort hint computation.
+  """
+  try:
+    proc = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=str(_REPO_ROOT),
+        capture_output=True,
+        timeout=SUBPROCESS_VERSION_SKEW_TIMEOUT,
+    )
+  except (OSError, subprocess.SubprocessError):
+    return None
+  if proc.returncode != 0:
+    return None
+  return proc.stdout.decode().strip() or None
+
+
+def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str | None]:
+  """Best-effort fetch of /api/internal/version. Returns (sha, started_at) or (None, None).
+
+  Swallows every failure (network, non-200, non-JSON) so the CLI error path never raises
+  from the hint computation. Bounded by HTTP_VERSION_SKEW_TIMEOUT.
+  """
+  try:
+    resp = requests.get(
+        f"{cfg.server_base_url}/api/internal/version",
+        headers=internal_api_auth_headers(cfg),
+        timeout=HTTP_VERSION_SKEW_TIMEOUT,
+        verify=False,
+    )
+    resp.raise_for_status()
+    info = resp.json()
+  except (requests.RequestException, ValueError):
+    return None, None
+  return info.get("sha"), info.get("started_at")
+
+
+def _maybe_version_skew_hint(cfg: CharlieBotConfig) -> str | None:
+  """Gather server + local SHAs and compose the hint. Pure-failure-safe (never raises)."""
+  server_sha, started_at = _best_effort_server_version(cfg)
+  local_sha = _read_local_repo_sha()
+  return compose_version_skew_hint(server_sha, started_at, local_sha)
+
+
 def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
   """POST to an internal CharlieBot API endpoint and return the parsed JSON response.
 
   On requests.RequestException, extracts the server's ``detail`` field when
-  available, writes a JSON error to stderr, and calls ``sys.exit(1)``.
+  available, writes a JSON error to stderr (with an optional version-skew ``hint``
+  when the server and repo SHAs differ), and calls ``sys.exit(1)``.
   """
   cfg = get_config()
   try:
@@ -114,15 +188,19 @@ def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         msg = e.response.json()["detail"]
       except (ValueError, KeyError):
         pass
-    print(json.dumps({"error": msg}), file=sys.stderr)
+    error_obj: dict[str, Any] = {"error": msg}
+    hint = _maybe_version_skew_hint(cfg)
+    if hint is not None:
+      error_obj["hint"] = hint
+    print(json.dumps(error_obj), file=sys.stderr)
     sys.exit(1)
 
 
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
   """GET a CharlieBot API endpoint and return the parsed JSON response.
 
-  Mirrors ``post_internal_api`` error handling. Used by read-only CLI verbs
-  (e.g. ``plan list``) that hit the public sessions router.
+  Mirrors ``post_internal_api`` error handling (including the version-skew hint).
+  Used by read-only CLI verbs (e.g. ``plan list``) that hit the public sessions router.
   """
   cfg = get_config()
   try:
@@ -141,7 +219,11 @@ def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, An
         msg = e.response.json()["detail"]
       except (ValueError, KeyError):
         pass
-    print(json.dumps({"error": msg}), file=sys.stderr)
+    error_obj: dict[str, Any] = {"error": msg}
+    hint = _maybe_version_skew_hint(cfg)
+    if hint is not None:
+      error_obj["hint"] = hint
+    print(json.dumps(error_obj), file=sys.stderr)
     sys.exit(1)
 
 

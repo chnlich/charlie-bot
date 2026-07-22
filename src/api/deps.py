@@ -46,7 +46,7 @@ def set_trigger_manager(mgr: TriggerManager) -> None:
 def get_plan_manager() -> PlanRegistryManager:
   global _plan_manager
   if _plan_manager is None:
-    _plan_manager = PlanRegistryManager(get_config(), get_session_manager(), get_thread_manager())
+    _plan_manager = PlanRegistryManager(get_config(), get_session_manager())
   return _plan_manager
 
 

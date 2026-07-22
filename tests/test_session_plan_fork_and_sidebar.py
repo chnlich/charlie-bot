@@ -8,9 +8,13 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
 
 from src.api import sessions as sessions_api
+from src.api.deps import get_session_manager
+from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionStatus
 from src.core.sessions import SessionManager
@@ -408,3 +412,120 @@ async def test_pending_plan_approval_no_parse_cost_without_plans_json(tmp_path: 
 
   status = await sessions_api.all_sessions_status(session_mgr=mgr)
   assert status[session.id]["has_pending_plan_approval"] is False
+
+
+# ---------------------------------------------------------------------------
+# A1: corrupt registry — sidebar survives, plan_registry_read_failed warning
+# ---------------------------------------------------------------------------
+
+
+def _build_sessions_app(session_mgr: SessionManager) -> FastAPI:
+  """Minimal FastAPI app wiring only the sessions router + session manager override."""
+  app = FastAPI()
+  app.include_router(sessions_router, prefix="/api/sessions")
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  return app
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_survives_corrupt_plans_json_other_sessions_unaffected(tmp_path: Path) -> None:
+  """Acceptance #1: corrupt plans.json on one session must not 5xx the sidebar poll."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  good = await mgr.create_session(CreateSessionRequest(name="Good"))
+  bad = await mgr.create_session(CreateSessionRequest(name="Bad"))
+
+  # good has an awaiting-approval lineage; bad has a corrupt plans.json.
+  _write_plans(cfg, good.id, {"plans": [
+      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+  ]})
+  bad_plans = cfg.sessions_dir / bad.id / "plans.json"
+  bad_plans.parent.mkdir(parents=True, exist_ok=True)
+  bad_plans.write_text("{not valid json", encoding="utf-8")
+
+  app = _build_sessions_app(mgr)
+  with TestClient(app) as client:
+    resp = client.get("/api/sessions/status")
+
+  assert resp.status_code == 200
+  body = resp.json()
+  assert body[good.id]["has_pending_plan_approval"] is True
+  assert body[bad.id]["has_pending_plan_approval"] is False
+
+
+@pytest.mark.asyncio
+async def test_corrupt_plans_json_logs_plan_registry_read_failed_warning(tmp_path: Path) -> None:
+  """Reviewer A1: the probe logs plan_registry_read_failed with session_id and error."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="Bad"))
+  plans_path = cfg.sessions_dir / session.id / "plans.json"
+  plans_path.parent.mkdir(parents=True, exist_ok=True)
+  plans_path.write_text("{not valid json", encoding="utf-8")
+
+  with capture_logs() as logs:
+    await asyncio.to_thread(mgr._has_pending_plan_approval, session.id)
+
+  matching = [
+      entry for entry in logs
+      if entry.get("event") == "plan_registry_read_failed" and entry.get("log_level") == "warning"
+  ]
+  assert len(matching) == 1
+  assert matching[0].get("session_id") == session.id
+  assert isinstance(matching[0].get("error"), str) and matching[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_probe_partial_degradation_still_reports_pending_approval_true(tmp_path: Path) -> None:
+  """Acceptance #2: one valid awaiting plan + one bad plan → probe still True (valid plan counts)."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="Mixed"))
+  _write_plans(cfg, session.id, {"plans": [
+      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      {"id": 2, "title": "Bad", "versions": [], "takeoff": None, "closed": None},
+  ]})
+
+  assert await asyncio.to_thread(mgr._has_pending_plan_approval, session.id) is True
+
+
+# ---------------------------------------------------------------------------
+# A5: first-paint sidebar badge — GET /api/sessions/ carries has_pending_plan_approval
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_endpoint_includes_pending_plan_approval_true(tmp_path: Path) -> None:
+  """Acceptance #7: GET /api/sessions/ items include has_pending_plan_approval: true."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="Awaiting"))
+  _write_plans(cfg, session.id, {"plans": [
+      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+  ]})
+
+  app = _build_sessions_app(mgr)
+  with TestClient(app) as client:
+    resp = client.get("/api/sessions/")
+
+  assert resp.status_code == 200
+  body = resp.json()
+  item = next(s for s in body if s["id"] == session.id)
+  assert item["has_pending_plan_approval"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_endpoint_pending_plan_approval_false_without_plans_json(tmp_path: Path) -> None:
+  """Sanity: a session with no plans.json reports has_pending_plan_approval: false on GET /."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="NoPlans"))
+
+  app = _build_sessions_app(mgr)
+  with TestClient(app) as client:
+    resp = client.get("/api/sessions/")
+
+  assert resp.status_code == 200
+  body = resp.json()
+  item = next(s for s in body if s["id"] == session.id)
+  assert item["has_pending_plan_approval"] is False

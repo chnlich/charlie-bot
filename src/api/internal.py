@@ -49,6 +49,17 @@ log = structlog.get_logger()
 router = APIRouter()
 
 
+@router.get("/version")
+async def get_version():
+  """Return the running server's build info (git SHA + UTC start time).
+
+  Read-only; used by the CLI to detect version skew when an internal-API call fails
+  (server older than the checkout → hint to restart).
+  """
+  from src.core.buildinfo import build_info
+  return build_info()
+
+
 def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
   """Return typed delegate invocation metadata for chat event persistence."""
   invocation = req.delegate_invocation

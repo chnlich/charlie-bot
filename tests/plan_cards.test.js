@@ -18,7 +18,8 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function loadArtifactsScript() {
+function loadArtifactsScript(opts) {
+  const o = opts || {};
   const context = {
     SESSION_ID: 'test-session',
     escapeHtml,
@@ -28,6 +29,8 @@ function loadArtifactsScript() {
     console,
     URL: globalThis.URL,
   };
+  if (o.document) context.document = o.document;
+  if (o.planPanel) context.planPanel = o.planPanel;
   vm.createContext(context);
   vm.runInContext(
     'globalThis.Chat = globalThis.Chat || {};' +
@@ -189,6 +192,77 @@ test('lookupPlanVersionState reflects the refreshed state after a plan_updated r
 });
 
 // ---------------------------------------------------------------------------
+// _planStateLabel (approved · vN suffix for the compact card badge)
+// ---------------------------------------------------------------------------
+
+test('_planStateLabel appends the approved takeoff version when state is approved and takeoff exists', () => {
+  const ctx = loadArtifactsScript();
+  const plan = makePlan(1, [makeVersion(1), makeVersion(2)], {state: 'approved', takeoff: {v: 2, at: 'x'}});
+  assert.equal(ctx._planStateLabel(plan), 'approved \u00B7 v2');
+});
+
+test('_planStateLabel leaves awaiting-approval state unchanged', () => {
+  const ctx = loadArtifactsScript();
+  const plan = makePlan(1, [makeVersion(1)], {state: 'awaiting approval'});
+  assert.equal(ctx._planStateLabel(plan), 'awaiting approval');
+});
+
+test('_planStateLabel leaves closed state unchanged', () => {
+  const ctx = loadArtifactsScript();
+  const plan = makePlan(2, [makeVersion(1)], {state: 'abandoned', closed: {as: 'abandoned', at: 'x'}});
+  assert.equal(ctx._planStateLabel(plan), 'abandoned');
+});
+
+test('_planStateLabel leaves approved state unchanged when takeoff is absent', () => {
+  const ctx = loadArtifactsScript();
+  const plan = makePlan(1, [makeVersion(1)], {state: 'approved'});
+  assert.equal(ctx._planStateLabel(plan), 'approved');
+});
+
+test('_planStateLabel prefers planPanel.formatPlanStateLabel when available', () => {
+  const calls = [];
+  const planPanel = {
+    formatPlanStateLabel: (plan) => { calls.push(plan && plan.id); return 'panel-label'; },
+  };
+  const ctx = loadArtifactsScript({planPanel});
+  const plan = makePlan(7, [makeVersion(1)], {state: 'approved', takeoff: {v: 1, at: 'x'}});
+  assert.equal(ctx._planStateLabel(plan), 'panel-label');
+  assert.deepEqual(calls, [7]);
+});
+
+test('_planStateLabel falls back when planPanel exists but formatPlanStateLabel is missing', () => {
+  const ctx = loadArtifactsScript({planPanel: {}});
+  const plan = makePlan(1, [makeVersion(1)], {state: 'approved', takeoff: {v: 1, at: 'x'}});
+  assert.equal(ctx._planStateLabel(plan), 'approved \u00B7 v1');
+});
+
+test('_planStateLabel returns empty string for a null plan', () => {
+  const ctx = loadArtifactsScript();
+  assert.equal(ctx._planStateLabel(null), '');
+});
+
+// ---------------------------------------------------------------------------
+// lookup functions return the labeled state (approved · vN)
+// ---------------------------------------------------------------------------
+
+test('lookupRegisteredPlanVersion returns the labeled state for an approved plan with takeoff', () => {
+  const ctx = loadArtifactsScript();
+  const plan = makePlan(1, [makeVersion(2, 'artifacts/plan_02.html')], {state: 'approved', takeoff: {v: 2, at: 'x'}});
+  const snapshot = {plans: [plan]};
+  const absPath = SESSION_DIR + '/artifacts/plan_02.html';
+  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, USER_HOME);
+  assert.equal(result.state, 'approved \u00B7 v2');
+});
+
+test('lookupPlanVersionState returns the labeled state for an approved plan with takeoff', () => {
+  const ctx = loadArtifactsScript();
+  const plan = makePlan(1, [makeVersion(2)], {state: 'approved', takeoff: {v: 2, at: 'x'}});
+  const snapshot = {plans: [plan]};
+  const info = ctx.lookupPlanVersionState(snapshot, 1, 2);
+  assert.equal(info.state, 'approved \u00B7 v2');
+});
+
+// ---------------------------------------------------------------------------
 // buildPlanCompactCardHtml (compact card content)
 // ---------------------------------------------------------------------------
 
@@ -235,4 +309,47 @@ test('buildPlanCompactCardHtml falls back to (untitled) when the title is missin
   const ctx = loadArtifactsScript();
   const html = ctx.buildPlanCompactCardHtml(1, 1, null, 'in flight', '/x.html');
   assert.match(html, /<span class="filename">\(untitled\)<\/span>/, 'missing title renders as (untitled)');
+});
+
+// ---------------------------------------------------------------------------
+// updatePlanCardBadges (badge writes the labeled state)
+// ---------------------------------------------------------------------------
+
+function makeBadgeCard(planId, v) {
+  const badge = {textContent: ''};
+  return {
+    dataset: {planCardPlan: String(planId), planCardVersion: String(v)},
+    querySelector: (sel) => (sel === '.plan-compact-state' ? badge : null),
+    _badge: badge,
+  };
+}
+
+test('updatePlanCardBadges writes the labeled state into the plan-compact-state badge', () => {
+  const card = makeBadgeCard(1, 2);
+  const document = {querySelectorAll: () => [card]};
+  const ctx = loadArtifactsScript({document});
+  const plan = makePlan(1, [makeVersion(2)], {state: 'approved', takeoff: {v: 2, at: 'x'}});
+  const snapshot = {plans: [plan]};
+  ctx.updatePlanCardBadges(snapshot);
+  assert.equal(card._badge.textContent, 'approved \u00B7 v2');
+});
+
+test('updatePlanCardBadges leaves the badge untouched when the plan version is not found', () => {
+  const card = makeBadgeCard(99, 1);
+  card._badge.textContent = 'old';
+  const document = {querySelectorAll: () => [card]};
+  const ctx = loadArtifactsScript({document});
+  const snapshot = {plans: [makePlan(1, [makeVersion(1)], {state: 'in flight'})]};
+  ctx.updatePlanCardBadges(snapshot);
+  assert.equal(card._badge.textContent, 'old');
+});
+
+test('updatePlanCardBadges writes the plain state when the plan is not approved', () => {
+  const card = makeBadgeCard(1, 1);
+  const document = {querySelectorAll: () => [card]};
+  const ctx = loadArtifactsScript({document});
+  const plan = makePlan(1, [makeVersion(1)], {state: 'awaiting approval'});
+  const snapshot = {plans: [plan]};
+  ctx.updatePlanCardBadges(snapshot);
+  assert.equal(card._badge.textContent, 'awaiting approval');
 });

@@ -457,7 +457,7 @@ const planPanel = (() => {
       var lv = _latestVersion(plan);
       _selectedVersion = lv ? lv.v : isNew.version;
       _highlightTabBadge(true);
-      if (typeof switchTab === 'function') switchTab('chat-plans');
+      // No forced tab switch — keep the badge highlight + selection jump only.
     } else {
       _ensureSelection();
     }

@@ -1,6 +1,10 @@
 """CodexBackend — AgentBackend wrapping the `codex exec --json` CLI."""
 
+import asyncio
+import contextlib
 import json
+import os
+import signal
 from pathlib import Path
 
 import structlog
@@ -10,6 +14,7 @@ from src.agents.backends.base import (
     resolve_binary)
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
+from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
@@ -93,6 +98,70 @@ class CodexBackend(AgentBackend):
     if self._codex_home:
       codex_env['CODEX_HOME'] = self._codex_home
     return codex_env
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+    """Generate text via `codex exec --json` with minimal reasoning effort.
+
+    Codex has no system-prompt flag, so the system prompt is framed into the user
+    prompt. agent_message text is accumulated with the same cumulative-delta logic
+    as the streaming path (_handle_agent_message). The process group is killed on
+    timeout.
+    """
+    from src.core.message_aggregator import extract_text_from_message
+
+    framed = self._frame_system_prompt(system_prompt, prompt)
+    cmd = [
+        self._codex_bin,
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--model",
+        self._model,
+        "--config",
+        'model_reasoning_effort="minimal"',
+        "--",
+        framed,
+    ]
+    self._last_agent_text.clear()
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=self._prepare_env(dict(os.environ)),
+        limit=self._buffer_limit,
+        start_new_session=True,
+    )
+
+    async def _collect() -> str:
+      parts: list[str] = []
+      assert proc.stdout is not None
+      async for raw_line in proc.stdout:
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line:
+          continue
+        try:
+          ev = json.loads(line)
+        except json.JSONDecodeError:
+          continue
+        if ev.get("type") not in ("item.started", "item.updated", "item.completed"):
+          continue
+        for translated in self._handle_agent_message(ev):
+          parts.append(extract_text_from_message(translated.get("message")))
+      await proc.wait()
+      return "".join(parts).strip()
+
+    stderr_task = asyncio.create_task(proc.stderr.read())
+    try:
+      return await asyncio.wait_for(_collect(), timeout)
+    except asyncio.TimeoutError:
+      kill_process_group(proc.pid, signal.SIGKILL)
+      raise
+    finally:
+      stderr_task.cancel()
+      with contextlib.suppress(asyncio.CancelledError):
+        await stderr_task
 
   def translate_event(self, ev: dict) -> list[dict]:
     """Translate a single Codex NDJSON event into CC-compatible event(s)."""

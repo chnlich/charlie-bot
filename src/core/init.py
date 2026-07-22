@@ -84,8 +84,6 @@ def iter_recent_thread_metas(
 def _default_config_yaml() -> dict:
   """Build the default config dict with placeholder values."""
   return {
-      "gemini_api_key": "",
-      "gemini_model": "gemini-flash-latest",
       "workspace_dirs": ["~/workspace"],
       "worktree_dir": "~/worktrees",
   }

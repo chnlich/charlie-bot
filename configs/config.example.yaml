@@ -3,14 +3,6 @@
 # Every field below is uncommented and set to its default. Edit per host, fill in
 # secrets, and never commit your filled-in config.yaml.
 
-# --- LLM (Gemini API: session autoname; NOT the CLI backend model) ---
-
-# Gemini API model. "gemini-flash-latest" always tracks the newest Flash release.
-gemini_model: gemini-flash-latest
-
-# Gemini API key. Secret. Required for session autoname.
-gemini_api_key: ""
-
 # --- Server ---
 
 # Bind port.

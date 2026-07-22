@@ -1,9 +1,10 @@
-"""In-session recap: cheap pure-extraction plus an opt-in cached Haiku summary.
+"""In-session recap: cheap pure-extraction plus an opt-in cached light-backend summary.
 
 The default path is zero-token. ``extract_recap`` scans a session's (sparse)
 user events and returns the ordered asks plus the last exchange — no LLM call.
-A concise Haiku summary is generated only on an explicit request and cached per
-``(session_id, upto)`` so reopening an unchanged divider costs nothing.
+A concise summary is generated only on an explicit request (via a same-type light
+backend from model_preference) and cached per ``(session_id, upto)`` so reopening
+an unchanged divider costs nothing.
 """
 
 import asyncio
@@ -12,10 +13,13 @@ from pathlib import Path
 
 import structlog
 
+from src.agents.backends.registry import build_backend
 from src.api.message_utils import events_to_messages
-from src.core.autonamer import _generate_name_via_claude_cli
+from src.core.autonamer import select_light_backend
+from src.core.config import CharlieBotConfig
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
+from src.core.timeouts import AUTONAMER_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -154,11 +158,25 @@ def _write_cache_entry(session_mgr: SessionManager, session_id: str, upto: int, 
   path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-async def generate_and_cache_summary(session_mgr: SessionManager, session_id: str, upto: int) -> str:
-  """Generate a Haiku recap for the divider at *upto*, cache it, and return it.
+async def generate_and_cache_summary(
+    session_mgr: SessionManager, session_id: str, upto: int, cfg: CharlieBotConfig) -> str:
+  """Generate a recap summary for the divider at *upto*, cache it, and return it.
 
-  Feeds the LLM ONLY the bounded extraction (asks + last), never raw events.
+  Feeds the LLM ONLY the bounded extraction (asks + last), never raw events. The
+  summary comes from a same-type light backend picked from model_preference. If the
+  session backend is unknown or has no same-type preference entry, this logs a
+  warning and returns "" without writing the cache (it never raises).
   """
+  meta = await session_mgr.get_session(session_id)
+  if meta is None or not meta.backend:
+    log.warning("recap_skipped", reason="no_session_backend", session_id=session_id)
+    return ""
+  option = select_light_backend(cfg, meta.backend)
+  if option is None:
+    log.warning("recap_skipped", reason="no_same_type_preference", session_id=session_id, backend=meta.backend)
+    return ""
+  backend = build_backend(option, cfg)
+
   extract = await asyncio.to_thread(extract_recap, session_mgr, session_id, upto)
   asks = extract["asks"]
   last = extract["last"] or {}
@@ -167,7 +185,8 @@ async def generate_and_cache_summary(session_mgr: SessionManager, session_id: st
       last_user=last.get("user") or "(none)",
       last_assistant=last.get("assistant") or "(none)",
   )
-  summary = await _generate_name_via_claude_cli(prompt, _SUMMARY_SYSTEM_PROMPT)
-  await asyncio.to_thread(_write_cache_entry, session_mgr, session_id, upto, summary)
-  log.info("recap_summary_generated", session_id=session_id, upto=upto)
+  summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=AUTONAMER_TIMEOUT)
+  if summary:
+    await asyncio.to_thread(_write_cache_entry, session_mgr, session_id, upto, summary)
+    log.info("recap_summary_generated", session_id=session_id, upto=upto)
   return summary

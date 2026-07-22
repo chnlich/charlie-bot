@@ -94,6 +94,8 @@ _VERSION_FIELDS = ("v", "file", "created_at", "trigger", "base")
 
 
 def _project_version(ver: dict) -> dict:
+  if not isinstance(ver, dict):
+    raise ValueError(f"version must be a dict, got {type(ver).__name__}")
   return {k: ver.get(k) for k in _VERSION_FIELDS}
 
 
@@ -101,7 +103,10 @@ def _project_plan(plan: dict) -> dict:
   if not isinstance(plan, dict):
     raise ValueError(f"plan must be a dict, got {type(plan).__name__}")
   projected = {k: plan.get(k) for k in _PLAN_FIELDS}
-  projected["versions"] = [_project_version(v) for v in plan.get("versions", [])]
+  versions = plan.get("versions", [])
+  if not isinstance(versions, list):
+    raise ValueError(f"versions must be a list, got {type(versions).__name__}")
+  projected["versions"] = [_project_version(v) for v in versions]
   return projected
 
 

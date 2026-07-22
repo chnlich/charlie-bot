@@ -2,10 +2,11 @@
 
 Two strategies, picked by who triggers them:
 
-1. Gemini-based (SDK sessions: cc-claude / codex / opencode / etc.)
+1. Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.)
    - Entry: maybe_auto_name(...) — called from src/api/chat.py after a master_done event.
    - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
-   - Sends user+assistant text to Gemini; receives {name, group}.
+   - Picks a same-type light backend from model_preference (select_light_backend)
+     and asks it, via one_shot_text, for {name, group}.
    - Group may reuse an existing group name from other sessions.
 
 2. Claude ai-title (TUI sessions, backend.type = "tui-cli")
@@ -21,19 +22,16 @@ Both strategies share _apply_name_to_session(), which guards against overwriting
 a name the user has already set (matched via is_default_session_name).
 """
 
-import asyncio
 import json
 import re
-import signal
 from pathlib import Path
 
 import structlog
 
-from src.agents.gemini_provider import GeminiProvider
+from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata
-from src.core.process import kill_process_group
+from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 from src.core.timeouts import AUTONAMER_TIMEOUT
@@ -125,33 +123,24 @@ def _parse_name_and_group(raw: str) -> tuple[str | None, str | None, bool]:
   return None, None, True
 
 
-async def _generate_name_via_claude_cli(prompt: str, system_prompt: str) -> str:
-  """Generate text using the claude CLI in print mode."""
-  proc = await asyncio.create_subprocess_exec(
-      "claude",
-      "-p",
-      "--output-format",
-      "text",
-      "--no-session-persistence",
-      "--model",
-      "haiku",
-      "--system-prompt",
-      system_prompt,
-      "--disallowed-tools",
-      "Bash,Read,Write,Edit,Glob,Grep,Agent",
-      stdin=asyncio.subprocess.PIPE,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-      start_new_session=True,
-  )
-  try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=AUTONAMER_TIMEOUT)
-  except asyncio.TimeoutError:
-    kill_process_group(proc.pid, signal.SIGKILL)
-    raise
-  if proc.returncode != 0:
-    raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
-  return stdout.decode().strip()
+def select_light_backend(cfg: CharlieBotConfig, session_backend_id: str) -> BackendOption | None:
+  """Pick a light one-shot backend for a session, preferring the same backend type.
+
+  Resolves the session's backend option, then returns the first ``model_preference``
+  entry whose ``BackendOption.type`` matches it — whether that entry is the session's
+  own id or a different same-type backend. Returns ``None`` when the session backend
+  is unknown or no same-type preference entry exists. This is a same-type-first
+  selector, distinct from ``review.select_reviewer_backend`` (which differs-from the
+  checked party).
+  """
+  session_opt = cfg.get_backend_option(session_backend_id)
+  if session_opt is None:
+    return None
+  for entry_id in cfg.model_preference:
+    option = cfg.get_backend_option(entry_id)
+    if option is not None and option.type == session_opt.type:
+      return option
+  return None
 
 
 def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
@@ -300,11 +289,19 @@ async def maybe_auto_name(
     )
     source_text = "\n".join([user_slice, assistant_slice, *existing_groups])
 
+    option = select_light_backend(cfg, session_meta.backend)
+    if option is None:
+      log.warning(
+          "autonamer_skipped",
+          reason="no_same_type_preference",
+          session_id=session_meta.id,
+          backend=session_meta.backend,
+      )
+      return
+    backend = build_backend(option, cfg)
+
     async def _generate(prompt_text: str) -> str:
-      if cfg.gemini_api_key:
-        provider = GeminiProvider(api_key=cfg.gemini_api_key, model=cfg.gemini_model)
-        return await provider.generate_text(prompt_text)
-      return await _generate_name_via_claude_cli(prompt_text, system_prompt)
+      return await backend.one_shot_text(prompt_text, system_prompt, timeout=AUTONAMER_TIMEOUT)
 
     raw = await _generate(f"{title_instruction}\n\n{prompt}")
     name = _sanitize_session_title(raw, session_meta.name)

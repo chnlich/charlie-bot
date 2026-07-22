@@ -1,9 +1,11 @@
 """OpenCodeBackend wrapping the `opencode serve` HTTP/SSE API."""
 
 import asyncio
+import contextlib
 import json
 import os
 import re
+import signal
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import structlog
 
 from src.agents.backends.base import AgentBackend, make_error_event, make_result_event, make_text_event, resolve_binary
 from src.core import event_types as ET
+from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
@@ -546,3 +549,75 @@ class OpenCodeBackend(AgentBackend):
             cost=part.get("cost", 0),
         )
     ]
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+    """Generate text via `opencode run --format json` with all tools denied.
+
+    Uses the one-shot ``run`` command (not the ``serve`` server the agent loop
+    drives) and injects a deny-all permission policy so the naming/recap one-shot
+    cannot call tools. opencode run has no system-prompt flag, so the system
+    prompt is framed into the user prompt. The NDJSON event stream carries the
+    same bus events as ``serve``'s SSE, so text is extracted by reusing
+    ``_translate_sse_event`` (which drives ``_part_delta`` for cumulative text
+    parts). The process group is killed on timeout.
+    """
+    from src.core.message_aggregator import extract_text_from_message
+
+    self._reset_run_state()
+    framed = self._frame_system_prompt(system_prompt, prompt)
+    cmd = [
+        self._opencode_bin,
+        "run",
+        "--format",
+        "json",
+        "-m",
+        self._model,
+        "--dangerously-skip-permissions",
+        "--",
+        framed,
+    ]
+    env = dict(os.environ)
+    opencode_bin_dir = str(Path.home() / ".opencode" / "bin")
+    if opencode_bin_dir not in env.get("PATH", "").split(":"):
+      env["PATH"] = f"{opencode_bin_dir}:{env.get('PATH', '')}"
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"permission": {"*": "deny"}})
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        limit=self._buffer_limit,
+        start_new_session=True,
+    )
+
+    async def _collect() -> str:
+      parts: list[str] = []
+      assert proc.stdout is not None
+      async for raw_line in proc.stdout:
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line:
+          continue
+        try:
+          event = json.loads(line)
+        except json.JSONDecodeError:
+          continue
+        for translated in self._translate_sse_event(event):
+          if translated.get("type") == ET.ASSISTANT:
+            parts.append(extract_text_from_message(translated.get("message")))
+        if event.get("type") == "session.idle":
+          break
+      await proc.wait()
+      return "".join(parts).strip()
+
+    stderr_task = asyncio.create_task(proc.stderr.read())
+    try:
+      return await asyncio.wait_for(_collect(), timeout)
+    except asyncio.TimeoutError:
+      kill_process_group(proc.pid, signal.SIGKILL)
+      raise
+    finally:
+      stderr_task.cancel()
+      with contextlib.suppress(asyncio.CancelledError):
+        await stderr_task

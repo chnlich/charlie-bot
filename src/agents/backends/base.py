@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import signal
+import tempfile
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -161,6 +162,11 @@ class AgentBackend(ABC):
     if self._instructions_content:
       return f"<system-instructions>\n{self._instructions_content}\n</system-instructions>\n\n{prompt}"
     return prompt
+
+  @staticmethod
+  def _frame_system_prompt(system_prompt: str, prompt: str) -> str:
+    """Frame a system prompt into the user prompt for backends lacking a system-prompt flag."""
+    return f"<system-instructions>\n{system_prompt}\n</system-instructions>\n\n{prompt}"
 
   @abstractmethod
   def _build_command(self, prompt: str) -> list[str]:
@@ -419,6 +425,41 @@ class AgentBackend(ABC):
     self.stderr_text = bytes(self._stderr_tail).decode("utf-8", errors="replace").strip()
     if stdin_error is not None:
       raise stdin_error
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+    """Generate text for a single prompt with no tools and no instructions file.
+
+    Backend-agnostic default: run the agent in a throwaway empty cwd (so no
+    AGENTS.md/CLAUDE.md is written) with the system prompt framed into the user
+    prompt, collecting assistant text until the RESULT event. Subclasses with a
+    cheaper CLI-native one-shot (claude/codex/opencode) override this.
+    """
+    from src.core.message_aggregator import extract_text_from_message
+
+    # A one-shot writes no instructions file; the framed system prompt is the only steering.
+    self._instructions_content = None
+    cwd = tempfile.mkdtemp(prefix="charliebot-oneshot-")
+    env = dict(os.environ)
+    framed = self._frame_system_prompt(system_prompt, prompt)
+
+    async def _collect() -> str:
+      parts: list[str] = []
+      seen_result = False
+      async for event in self.run(framed, cwd, env):
+        evt_type = event.get("type")
+        if not seen_result and evt_type == ET.ASSISTANT:
+          parts.append(extract_text_from_message(event.get("message")))
+        elif evt_type == ET.RESULT:
+          seen_result = True
+      return "".join(parts).strip()
+
+    try:
+      return await asyncio.wait_for(_collect(), timeout)
+    except asyncio.TimeoutError:
+      await self.terminate()
+      raise
+    finally:
+      shutil.rmtree(cwd, ignore_errors=True)
 
   async def terminate(self) -> None:
     """Send SIGTERM to process group; escalate to SIGKILL if not exited within 5 s."""

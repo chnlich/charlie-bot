@@ -402,13 +402,14 @@ async def summarize_session_recap(
     session_id: str,
     upto: int,
     session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Generate (via Haiku), cache, and return the recap summary for a divider."""
+  """Generate (via a light backend), cache, and return the recap summary for a divider."""
   from src.core import recap
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  summary = await recap.generate_and_cache_summary(session_mgr, session_id, upto)
+  summary = await recap.generate_and_cache_summary(session_mgr, session_id, upto, cfg)
   return {"summary": summary}
 
 

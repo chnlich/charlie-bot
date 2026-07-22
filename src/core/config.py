@@ -65,12 +65,6 @@ class BacklogRepoConfig(BaseModel):
 class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
 
-  # LLM
-  gemini_api_key: str = ""
-  # Gemini API model for autonamer
-  # (NOT the CLI backend model — that lives in backend_options[].model)
-  gemini_model: str = "gemini-flash-latest"
-
   # Kimi (Moonshot) — optional, not wired in by default
   moonshot_api_key: Optional[str] = None
 
@@ -119,11 +113,12 @@ class CharlieBotConfig(BaseModel):
       BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
   ]
 
-  # Ordered preference list for checking-role backend selection: the delegation
-  # reviewer and the default backend of verify (plan verifier) delegations.
-  # Each entry is a BackendOption.id. The first entry that differs from the
-  # checked party's backend and resolves successfully is used.
-  # Empty list (default) preserves same-backend behavior.
+  # Ordered preference list of BackendOption ids, consumed by two selectors:
+  #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
+  #     checked party's backend and resolves — see review.select_reviewer_backend.
+  #   - light one-shot (autonamer, recap): first entry whose TYPE matches the
+  #     session's backend type — see autonamer.select_light_backend.
+  # Empty list (default) preserves same-backend behavior and skips the one-shot.
   model_preference: list[str] = []
 
   # Telegram notifications

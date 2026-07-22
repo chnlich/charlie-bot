@@ -1,11 +1,14 @@
 """ClaudeCodeBackend — concrete AgentBackend wrapping the Claude Code CLI."""
 
+import asyncio
 import os
+import signal
 from pathlib import Path
 
 import structlog
 
 from src.agents.backends.base import AgentBackend
+from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
@@ -101,3 +104,35 @@ class ClaudeCodeBackend(AgentBackend):
 
   def _stdin_prompt(self, prompt: str) -> str | None:
     return prompt
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+    """Generate text via `claude -p` in text mode, using this backend's model.
+
+    Print mode with tools disabled: no session persistence, prompt on stdin,
+    plain-text stdout. The process group is killed on timeout.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "claude",
+        "-p",
+        "--output-format",
+        "text",
+        "--no-session-persistence",
+        "--model",
+        self._model,
+        "--system-prompt",
+        system_prompt,
+        "--disallowed-tools",
+        "Bash,Read,Write,Edit,Glob,Grep,Agent",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+      stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=timeout)
+    except asyncio.TimeoutError:
+      kill_process_group(proc.pid, signal.SIGKILL)
+      raise
+    if proc.returncode != 0:
+      raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
+    return stdout.decode().strip()

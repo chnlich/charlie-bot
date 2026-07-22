@@ -2,7 +2,6 @@
 // Tabs
 // ---------------------------------------------------------------------------
 let _backlogLoaded = false;
-let _plansLoaded = false;
 
 function switchTab(tab) {
   const allTabs = ['terminal', 'chat-tex', 'chat', 'workers', 'chat-backlog', 'chat-plans'];
@@ -64,9 +63,8 @@ function switchTab(tab) {
     backlogPanel.refresh();
   }
 
-  if (tab === 'chat-plans' && !_plansLoaded) {
-    _plansLoaded = true;
-    planPanel.refresh();
+  if (tab === 'chat-plans') {
+    planPanel.onTabShown();
   }
 
   if (tab === 'workers' && typeof ensureWorkersLoadedForActiveSession === 'function') {

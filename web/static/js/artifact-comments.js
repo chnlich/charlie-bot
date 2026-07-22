@@ -45,6 +45,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     window.__cbcResolveEntryDraft = resolveEntryDraft;
     window.__cbcBuildTrayItem = buildTrayItem;
     window.__cbcFindBlock = findBlock;
+    window.__cbcDraftKey = draftKey;
+    window.__cbcSerializeDraft = serializeDraft;
+    window.__cbcDeserializeDraft = deserializeDraft;
+    window.__cbcSaveDraft = saveDraft;
+    window.__cbcLoadDraft = loadDraft;
+    window.__cbcClearDraft = clearDraft;
 
     installStyles();
     installListeners();
@@ -82,6 +88,73 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function artifactPathFromPath(pathname) {
       return decodeURIComponent(String(pathname || '').replace(/%2F/gi, '/'));
+    }
+
+    function draftKey(absPath) {
+      return 'cbc-draft:' + String(absPath || '');
+    }
+
+    function serializeDraft(entries) {
+      var out = [];
+      for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i] || {};
+        out.push({
+          kind: entry.kind === 'improve' ? 'improve' : 'block',
+          quote: String(entry.quote == null ? '' : entry.quote),
+          context: String(entry.context == null ? '' : entry.context),
+          comment: String(entry.comment == null ? '' : entry.comment),
+        });
+      }
+      return out;
+    }
+
+    function deserializeDraft(stored) {
+      if (stored == null) return [];
+      var list;
+      try {
+        list = JSON.parse(stored);
+      } catch (e) {
+        return [];
+      }
+      if (!list || typeof list.length !== 'number') return [];
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        var item = list[i];
+        if (!item || typeof item !== 'object') continue;
+        out.push({
+          kind: item.kind === 'improve' ? 'improve' : 'block',
+          el: null,
+          quote: String(item.quote == null ? '' : item.quote),
+          context: String(item.context == null ? '' : item.context),
+          comment: String(item.comment == null ? '' : item.comment),
+        });
+      }
+      return out;
+    }
+
+    function saveDraft(entries, absPath) {
+      try {
+        var data = JSON.stringify(serializeDraft(entries));
+        sessionStorage.setItem(draftKey(absPath), data);
+      } catch (e) {
+        // sessionStorage unavailable or quota exceeded — degrade silently
+      }
+    }
+
+    function loadDraft(absPath) {
+      try {
+        return deserializeDraft(sessionStorage.getItem(draftKey(absPath)));
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function clearDraft(absPath) {
+      try {
+        sessionStorage.removeItem(draftKey(absPath));
+      } catch (e) {
+        // sessionStorage unavailable — degrade silently
+      }
     }
 
     function fallbackSessionLabel(id) {
@@ -578,6 +651,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         context: shortcut.label,
         comment: shortcut.prompt,
       });
+      saveDraft(pending, artifactPath);
       refreshTray();
     }
 
@@ -669,10 +743,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       block.classList.add(GLOBAL_PREFIX + '-marked');
       closePopover();
       clearHover();
+      saveDraft(pending, artifactPath);
       refreshTray();
     }
 
     function installBatchTray() {
+      pending = loadDraft(artifactPath);
       var container = document.createElement('div');
       container.className = GLOBAL_PREFIX + '-tray';
 
@@ -794,6 +870,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         }
         done = true;
         pending[idx].comment = next;
+        saveDraft(pending, artifactPath);
         refreshTray();
       }
 
@@ -837,21 +914,23 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function removeEntry(idx) {
       if (idx < 0 || idx >= pending.length) return;
       var removed = pending.splice(idx, 1)[0];
-      if (removed.kind === 'block') {
+      if (removed.kind === 'block' && removed.el) {
         var stillMarked = false;
         for (var i = 0; i < pending.length; i++) {
           if (pending[i].kind === 'block' && pending[i].el === removed.el) { stillMarked = true; break; }
         }
         if (!stillMarked) removed.el.classList.remove(GLOBAL_PREFIX + '-marked');
       }
+      saveDraft(pending, artifactPath);
       refreshTray();
     }
 
     function clearAll() {
       for (var i = 0; i < pending.length; i++) {
-        if (pending[i].kind === 'block') pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+        if (pending[i].kind === 'block' && pending[i].el) pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
       }
       pending = [];
+      clearDraft(artifactPath);
       refreshTray();
     }
 
@@ -863,6 +942,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         if (a.kind === 'improve' && b.kind === 'block') return -1;
         if (a.kind === 'block' && b.kind === 'improve') return 1;
         if (a.kind === 'improve' && b.kind === 'improve') return 0;
+        if (!a.el || !b.el) return 0;
         var mask = a.el.compareDocumentPosition(b.el);
         if (mask & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
         if (mask & Node.DOCUMENT_POSITION_PRECEDING) return 1;
@@ -875,9 +955,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       try {
         await postChatMessage(buildBatchMessage(ordered));
         for (var i = 0; i < pending.length; i++) {
-          if (pending[i].kind === 'block') pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+          if (pending[i].kind === 'block' && pending[i].el) pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
         }
         pending = [];
+        clearDraft(artifactPath);
         refreshTray();
         showToast(count + ' comments sent to chat', false);
       } catch (err) {

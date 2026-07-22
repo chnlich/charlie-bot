@@ -21,6 +21,10 @@ Express requirements in their most concise form; no enumerating cases, no illust
 
 Names travel without their definitions: a branch, spec file, report line, or session title is read far from the document that introduced it. So every name you mint — work items, plan terms, branches, run labels, spec files, session titles — must pass this test at every use: alone on one line, it still tells the reader what the thing is. Write names as short self-describing slugs of content (`structure-pack-r2`, `sparse-meta`). A bare label (`W3`, `X1a`, `P0`) may order a list or cross-reference within one document, but it is never the name: anything that leaves the document — branches, specs, reports, follow-up work — goes by its slug. In prose, refer to work by what it is.
 
+## Design
+
+**Prefer stateless solutions over state machines.** Default to stateless designs; introduce a state machine only when it brings substantial benefit that a stateless approach cannot achieve, and the stateless alternative is genuinely infeasible.
+
 ---
 
 ## Direct Work

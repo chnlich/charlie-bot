@@ -235,19 +235,29 @@ const planPanel = (() => {
     notice.classList.toggle('hidden', !isStaleVersion(plan, _selectedVersion));
   }
 
+  function _viewerKey(planId, version) {
+    if (planId == null || version == null) return null;
+    return String(planId) + ':' + String(version);
+  }
+
   function _renderViewer() {
     var iframe = _getEl('plan-viewer');
     if (!iframe) return;
     var plan = _findPlan(_selectedPlanId);
     if (!plan || _selectedVersion == null) {
       iframe.src = '';
+      _loadedViewerKey = null;
       return;
     }
+    var key = _viewerKey(_selectedPlanId, _selectedVersion);
+    if (key === _loadedViewerKey) return;
     try {
       iframe.src = buildIframeUrlFromVersion(plan, _selectedVersion, SESSION_ID);
+      _loadedViewerKey = key;
     } catch (e) {
       console.error('plan-panel: failed to build iframe URL', e);
       iframe.src = '';
+      _loadedViewerKey = null;
     }
   }
 
@@ -312,6 +322,7 @@ const planPanel = (() => {
     if (!plans.length) {
       if (empty) empty.style.display = '';
       if (viewer) { viewer.src = ''; viewer.style.display = 'none'; }
+      _loadedViewerKey = null;
       var vsel = _getEl('plan-version-selector');
       if (vsel) vsel.innerHTML = '';
       var notice = _getEl('plan-stale-notice');

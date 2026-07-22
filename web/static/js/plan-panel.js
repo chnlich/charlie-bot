@@ -13,8 +13,13 @@ const planPanel = (() => {
   let _registry = {plans: []};
   let _loaded = false;
   let _loadedSessionId = null;
+  let _errors = [];
   let _selectedPlanId = null;
   let _selectedVersion = null;
+  let _loadedViewerKey = null;
+  let _stale = true;
+  let _fetchGeneration = 0;
+  let _actionBarGeneration = 0;
   let _loadPromise = null;
   let _loadPromiseSessionId = null;
 
@@ -31,6 +36,11 @@ const planPanel = (() => {
   function _latestVersion(plan) {
     if (!plan || !plan.versions || !plan.versions.length) return null;
     return plan.versions[plan.versions.length - 1];
+  }
+
+  function _currentSessionId() {
+    if (typeof SESSION_ID === 'undefined' || SESSION_ID == null) return null;
+    return SESSION_ID;
   }
 
   function selectDefaultLineage(plans) {
@@ -318,10 +328,27 @@ const planPanel = (() => {
     _renderViewer();
   }
 
-  // -- Data ---------------------------------------------------------------
+  // -- Data: single commit point ------------------------------------------
 
-  async function _fetchRegistry() {
-    var resp = await fetch('/api/sessions/' + encodeURIComponent(SESSION_ID) + '/plans');
+  // The only writer of _registry / _loaded / _loadedSessionId. Discards the
+  // write when the session has changed (sid !== current) or when a newer
+  // fetch generation has superseded this one (monotonic guard against stale
+  // completions from a slow/older fetch landing after a newer one).
+  function _commitRegistry(sid, data, generation) {
+    if (sid !== _currentSessionId()) return false;
+    if (generation !== _fetchGeneration) return false;
+    _registry = data || {plans: []};
+    _errors = Array.isArray(data && data.errors) ? data.errors : [];
+    if (_errors.length) {
+      console.warn('plan-panel: registry returned ' + _errors.length + ' error(s)', _errors);
+    }
+    _loaded = true;
+    _loadedSessionId = sid;
+    return true;
+  }
+
+  async function _fetchRegistry(sid) {
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/plans');
     if (!resp.ok) {
       throw new Error('plan registry fetch failed: HTTP ' + resp.status);
     }
@@ -329,7 +356,7 @@ const planPanel = (() => {
   }
 
   function ensureLoaded() {
-    var sid = (typeof SESSION_ID === 'undefined') ? null : SESSION_ID;
+    var sid = _currentSessionId();
     // Reuse an in-flight/completed load only when it is for the current
     // session. Session switching is an in-place SPA swap (SESSION_ID changes
     // without a page reload), so a promise/snapshot from the previous session
@@ -340,21 +367,17 @@ const planPanel = (() => {
     _loadPromiseSessionId = sid;
     if (!sid) {
       _loadPromise = Promise.resolve();
-      _loaded = true;
-      _loadedSessionId = null;
+      _commitRegistry(null, {plans: []}, ++_fetchGeneration);
       return _loadPromise;
     }
+    var generation = ++_fetchGeneration;
     _loadPromise = (async () => {
       try {
-        var data = await _fetchRegistry();
-        _registry = data || {plans: []};
-        _loaded = true;
-        _loadedSessionId = sid;
+        var data = await _fetchRegistry(sid);
+        _commitRegistry(sid, data, generation);
       } catch (e) {
         console.error('plan-panel ensureLoaded failed:', e);
-        _registry = {plans: []};
-        _loaded = true;
-        _loadedSessionId = sid;
+        _commitRegistry(sid, {plans: []}, generation);
       }
     })();
     return _loadPromise;
@@ -389,26 +412,28 @@ const planPanel = (() => {
   }
 
   async function refresh() {
+    var sid = _currentSessionId();
+    if (!sid) return;
+    var generation = ++_fetchGeneration;
     try {
-      var data = await _fetchRegistry();
-      _registry = data || {plans: []};
-      _loaded = true;
-      _loadedSessionId = SESSION_ID;
+      var data = await _fetchRegistry(sid);
+      if (!_commitRegistry(sid, data, generation)) return;
     } catch (e) {
       console.error('plan-panel refresh failed:', e);
-      _registry = {plans: []};
+      return;
     }
     _ensureSelection();
     render();
   }
 
   async function onPlanUpdated(planId) {
+    var sid = _currentSessionId();
+    if (!sid) return;
     var prev = _registry;
+    var generation = ++_fetchGeneration;
     try {
-      var data = await _fetchRegistry();
-      _registry = data || {plans: []};
-      _loaded = true;
-      _loadedSessionId = SESSION_ID;
+      var data = await _fetchRegistry(sid);
+      if (!_commitRegistry(sid, data, generation)) return;
     } catch (e) {
       console.error('plan-panel onPlanUpdated fetch failed:', e);
       return;
@@ -437,14 +462,23 @@ const planPanel = (() => {
     }
   }
 
-  async function onReconnect() {
+  function onReconnect() {
     if (!_loaded) return;
-    if (_loadedSessionId !== SESSION_ID) {
-      _registry = {plans: []};
+    if (_loadedSessionId !== _currentSessionId()) {
       _selectedPlanId = null;
       _selectedVersion = null;
-      if (typeof _plansLoaded !== 'undefined') _plansLoaded = false;
+      _loadedViewerKey = null;
     }
+    _stale = true;
+  }
+
+  function invalidate() {
+    _stale = true;
+  }
+
+  async function onTabShown() {
+    if (!_stale) return;
+    _stale = false;
     await refresh();
   }
 
@@ -523,6 +557,8 @@ const planPanel = (() => {
     render,
     onPlanUpdated,
     onReconnect,
+    invalidate,
+    onTabShown,
     selectPlan,
     selectVersion,
     openPlan,

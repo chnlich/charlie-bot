@@ -61,7 +61,7 @@ function connectWS() {
       globalThis.TuiSession.onWsOpenIfTui();
     }
     // Re-sync plan panel state on (re)connect.
-    if (typeof _plansLoaded !== 'undefined') _plansLoaded = false;
+    if (typeof planPanel !== 'undefined') planPanel.invalidate();
     if (typeof planPanel !== 'undefined') planPanel.onReconnect();
   };
 

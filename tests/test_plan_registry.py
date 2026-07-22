@@ -606,6 +606,28 @@ def test_read_plans_tolerant_unknown_closed_as_is_per_plan_error(tmp_path: Path)
   assert result["errors"][0]["plan_id"] == 1
 
 
+@pytest.mark.parametrize(
+    "versions",
+    [
+        None,
+        "not-a-list",
+        [1, 2],
+    ],
+    ids=["null", "string", "list-of-non-dicts"],
+)
+def test_read_plans_tolerant_wrong_typed_versions_is_per_plan_error(tmp_path: Path, versions) -> None:
+  """A plan with a wrong-typed ``versions`` field yields a per-plan error, never crashes the read."""
+  p = tmp_path / "plans.json"
+  data = {"plans": [{"id": 1, "title": "Bad", "versions": versions, "takeoff": None, "closed": None}]}
+  p.write_text(json.dumps(data), encoding="utf-8")
+  result = read_plans_tolerant(p, "sess")
+  assert result["plans"] == []
+  assert len(result["errors"]) == 1
+  assert result["errors"][0]["plan_id"] == 1
+  assert result["errors"][0]["session_id"] == "sess"
+  assert isinstance(result["errors"][0]["error"], str) and result["errors"][0]["error"]
+
+
 @pytest.mark.asyncio
 async def test_list_plans_partial_degradation_returns_valid_plan_and_error(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)

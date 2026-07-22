@@ -354,6 +354,16 @@ class SessionManager:
   def _copy_plans_sync(parent_plans_path: Path, parent_dir: Path, child_dir: Path) -> None:
     raw = parent_plans_path.read_text(encoding="utf-8")
     data = json.loads(raw)
+    reserved_relative_paths = {"plans.json"}
+    for plan in data.get("plans", []):
+      for ver in plan.get("versions", []):
+        file_rel = ver.get("file")
+        if not file_rel:
+          continue
+        _candidate, normalized_rel = plan_paths.resolve_plan_file(parent_dir, file_rel)
+        if normalized_rel is not None:
+          reserved_relative_paths.add(normalized_rel.as_posix())
+
     for plan in data.get("plans", []):
       for ver in plan.get("versions", []):
         file_rel = ver.get("file")
@@ -362,7 +372,14 @@ class SessionManager:
         _candidate, normalized_rel = plan_paths.resolve_plan_file(parent_dir, file_rel)
         inside_parent = normalized_rel is not None
         if normalized_rel is None:
-          normalized_rel = plan_paths.fallback_relative_path(parent_dir, _candidate)
+          fallback_rel = plan_paths.fallback_relative_path(parent_dir, _candidate)
+          normalized_rel = fallback_rel
+          suffix_number = 1
+          while (normalized_rel.as_posix() in reserved_relative_paths or
+                 (child_dir / normalized_rel).exists()):
+            normalized_rel = fallback_rel.with_name(f"{fallback_rel.name}.outside-{suffix_number}")
+            suffix_number += 1
+          reserved_relative_paths.add(normalized_rel.as_posix())
           log.warning(
               "plan_artifact_outside_parent_on_fork",
               file=str(_candidate),

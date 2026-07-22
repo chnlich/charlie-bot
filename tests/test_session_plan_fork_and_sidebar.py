@@ -217,6 +217,42 @@ async def test_fork_outside_parent_artifact_logs_warning_and_keeps_version(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  other = await mgr.create_session(CreateSessionRequest(name="Other"), backend="claude-opus-4.6")
+  _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
+
+  artifact_rel = "artifacts/collision.html"
+  _write_artifact(cfg, parent.id, artifact_rel, "<html>parent</html>")
+  external = _write_artifact(cfg, other.id, artifact_rel, "<html>external</html>")
+  _write_plans(cfg, parent.id, {"plans": [
+      _make_plan(1, [
+          _make_version(1, artifact_rel, "clean"),
+          _make_version(2, str(external.resolve()), "pending"),
+      ]),
+  ]})
+
+  with capture_logs() as logs:
+    child = await mgr.fork_session(parent.id)
+
+  child_dir = cfg.sessions_dir / child.id
+  child_plans = json.loads((child_dir / "plans.json").read_text(encoding="utf-8"))
+  copied_file, external_file = [ver["file"] for ver in child_plans["plans"][0]["versions"]]
+  assert copied_file == artifact_rel
+  assert (child_dir / copied_file).read_text(encoding="utf-8") == "<html>parent</html>"
+  assert external_file == "artifacts/collision.html.outside-1"
+  assert not Path(external_file).is_absolute()
+  assert ".." not in Path(external_file).parts
+  assert not (child_dir / external_file).exists()
+  assert external.read_text(encoding="utf-8") == "<html>external</html>"
+  assert any(
+      entry.get("event") == "plan_artifact_outside_parent_on_fork" and entry.get("log_level") == "warning"
+      for entry in logs), f"expected outside-parent warning, got: {logs}"
+
+
+@pytest.mark.asyncio
 async def test_fork_without_plans_json_copies_nothing(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)

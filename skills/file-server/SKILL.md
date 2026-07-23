@@ -44,3 +44,4 @@ Whenever you need to present a file to the user (logs, traces, checkpoints, imag
 4. **If the file is a Perfetto/Chrome trace** (`.json` trace from training/profiling, or a directory of rank traces), ALWAYS also include a Perfetto viewer link alongside the file link. Read the `perfetto` skill for how to construct the viewer URL.
 
    Trace indicators: filename matches `trace_rank*.json` / `*trace*.json`, lives under a `trace/` or `profile/` dir, or the user called it a "trace"/"profile"/"perf capture".
+5. **Never wrap a raw filesystem path in markdown `[](...)`** — CharlieBot UI renders raw local paths as dead links. Write the path as plain text `path:line`, or build a `/files/<abs-path-no-leading-slash>` URL. (This applies to raw paths, not to generated file-server URLs, which should be wrapped as `[descriptive text](url)` per rule #3.)

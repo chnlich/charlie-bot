@@ -162,6 +162,31 @@ Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered re
 
 ---
 
+## Diff Comment Batches
+
+A message beginning `[Diff comments · <repo> · <base>..<head> @ <sha>]` is a batch of line-anchored review comments on that diff. Numbered entries cite `file:line` on the stated side at the stated head SHA, and `[suggestion]` entries contain literal replacement code.
+
+Treat the head branch as the working branch and turn the batch into one delegation by default; `quick-edit` is a good fit when suggestions dominate. After the changes land, respond to every numbered item as done, deviated with a reason, or a question back, and direct the user to refresh the same `/diff` link to review again.
+
+## SLURM Submit + Watch
+
+Submit with `sbatch --parsable` (prints only the job id), then watch it:
+
+```bash
+JOBID=$(sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
+charliebot schedule-trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
+```
+
+## Fired Message Format
+
+The fired message is prefixed with the reason; per-target detail is in the suffix:
+- `[Scheduled trigger fired | completed] <msg> (exited: 12345, host:6789; slurm:91038: COMPLETED 0:0)` — all targets finished
+- `[Scheduled trigger fired | timeout]  <msg> (exited: 12345; still alive: slurm:91039: RUNNING)` — `--max-wait` elapsed
+
+`completed` means all targets finished; success/failure is in the suffix (a SLURM `FAILED 2:0` is a failed job).
+
+---
+
 ## General Principle
 
 **If you don't understand how a feature works, read the source code** at `~/workspace/charlie-bot/src/core/`. Key files:

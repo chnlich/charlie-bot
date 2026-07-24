@@ -1,5 +1,6 @@
 """Tests for src/cli/delegate.py."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -86,6 +87,39 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
       "backend": "codex-o3",
   }
   assert "context" not in payload
+
+
+def test_main_prints_async_wake_up_hint_to_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _mock_config(tmp_path)
+  monkeypatch.chdir(tmp_path)
+  task_spec_file = _write_task_spec(tmp_path)
+  resp_mock = MagicMock()
+  resp_mock.json.return_value = {"thread_id": "t1", "description": "do work"}
+  resp_mock.raise_for_status = MagicMock()
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--repo",
+          "/tmp/repo",
+          "--base-branch",
+          "main",
+          "--task-spec-file",
+          str(task_spec_file),
+          "--keep-worktree",
+          "0",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp_mock):
+    main()
+
+  captured = capsys.readouterr()
+  assert "async wake-up" in captured.err
+  assert json.loads(captured.out)["thread_id"] == "t1"
 
 
 @pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])

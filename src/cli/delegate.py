@@ -14,6 +14,7 @@ Called by the master Claude Code instance via its run_command tool:
 
 import argparse
 import json
+import sys
 
 from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id, validate_task_spec_markdown
 
@@ -131,6 +132,7 @@ def main() -> None:
     payload["context"] = reviewer_context
 
   result = post_internal_api("/api/internal/delegate", payload)
+  print("Worker spawned in the background; the completion summary arrives as an async wake-up.", file=sys.stderr)
   print(json.dumps(result, indent=2))
 
 

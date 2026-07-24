@@ -27,7 +27,7 @@ model_preference: []
 # Backends available for model switching. Editing this list REPLACES the default;
 # keep the entries you want. Codex reasoning effort is always xhigh (hardcoded).
 backend_options:
-  - {id: claude-opus-4.8, label: "CC · Opus 4.8", type: cc-claude, model: claude-opus-4-8, effort: max}
+  - {id: claude-opus-4.8, label: "CC · Opus 5", type: cc-claude, model: claude-opus-5, effort: xhigh}
   - {id: codex-gpt-5.5,  label: "Codex · GPT-5.5", type: codex, model: gpt-5.5}
   - {id: claude-tui,     label: "Claude TUI", type: tui-cli}
 

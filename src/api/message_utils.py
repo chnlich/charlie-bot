@@ -166,7 +166,7 @@ class SessionBootstrapData:
   messages: list[dict]
   pending_draft: dict | None = None
   total_event_count: int = 0
-  oldest_event_index: int = 0
+  oldest_message_ordinal: int = 0
   has_more: bool = False
 
 
@@ -179,7 +179,7 @@ class SessionViewData:
   usage: dict | None
   pending_draft: dict | None = None
   total_event_count: int | None = None
-  oldest_event_index: int = 0
+  oldest_message_ordinal: int = 0
   has_more: bool = False
 
 
@@ -187,16 +187,49 @@ async def build_session_bootstrap_data(
     session_id: str,
     session_mgr: 'SessionManager',
     *,
-    tail_limit: int = 200,
+    message_limit: int = 40,
 ) -> SessionBootstrapData:
-  """Load the minimal session data needed for first paint or SPA switching."""
-  events_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, tail_limit)
-  session_task = session_mgr.get_session(session_id)
-  events_result, session_meta = await asyncio.gather(events_task, session_task)
+  """Load the minimal session data needed for first paint or SPA switching.
+
+  When a message projection is available (``archive_offset == 0``), first
+  paint is served from ``projection.tail(message_limit)`` — an exact message
+  count slice with O(page) cost and zero file reads. Otherwise the legacy
+  tail-events path is used.
+  """
+  session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 
-  tail_events, total_count, has_more = events_result
+  if session_meta.archive_offset == 0:
+
+    def _from_projection():
+      projection = session_mgr.get_message_projection(session_id)
+      if projection is None:
+        return None
+      messages, oldest_ordinal, has_more = projection.tail(message_limit)
+      total_event_count = session_mgr.get_chat_event_count_sync(session_id, session_meta)
+      return messages, projection.pending_draft, total_event_count, oldest_ordinal, has_more
+
+    result = await asyncio.to_thread(_from_projection)
+    if result is not None:
+      messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
+      try:
+        read_meta = await session_mgr.mark_read(session_id)
+        if read_meta is not None:
+          session_meta = read_meta
+      except Exception:
+        log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+      return SessionBootstrapData(
+          session=session_meta,
+          messages=messages,
+          pending_draft=pending_draft,
+          total_event_count=total_event_count,
+          oldest_message_ordinal=oldest_ordinal,
+          has_more=has_more,
+      )
+
+  tail_events, total_count, has_more = await asyncio.to_thread(
+      session_mgr.load_chat_events_tail, session_id, message_limit)
   offset = session_meta.archive_offset + total_count - len(tail_events)
   messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
 
@@ -212,7 +245,7 @@ async def build_session_bootstrap_data(
       messages=messages,
       pending_draft=pending_draft,
       total_event_count=session_meta.archive_offset + total_count,
-      oldest_event_index=offset,
+      oldest_message_ordinal=offset,
       has_more=has_more or session_meta.archive_offset > 0,
   )
 
@@ -222,12 +255,14 @@ async def build_session_view_data(
     session_mgr: 'SessionManager',
     thread_mgr: 'ThreadManager',
     *,
-    tail_limit: int | None = None,
+    message_limit: int | None = 40,
 ) -> SessionViewData:
   """Load events + threads in parallel, derive messages and usage, and mark read.
 
-  When tail_limit is None, loads all events. When set, loads only the last
-  tail_limit events (fast path for SPA session switching).
+  When *message_limit* is None, loads all events. When set, loads the last
+  *message_limit* messages — served from the message projection when
+  ``archive_offset == 0`` (exact message count, O(page) cost), or from the
+  legacy tail-events path otherwise.
 
   Returns committed messages plus an optional pending_draft (the in-progress
   assistant draft that has not yet been flushed). Live render paths show the
@@ -235,29 +270,61 @@ async def build_session_view_data(
   keeps SSR aligned with the per-session live aggregator and avoids the
   duplicate-bubble seen on mid-stream reload.
   """
-  if tail_limit is not None:
-    events_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, tail_limit)
-  else:
-    events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
   threads_task = thread_mgr.list_threads(session_id)
   session_task = session_mgr.get_session(session_id)
-  events_result, threads, session_meta = await asyncio.gather(events_task, threads_task, session_task)
+  threads, session_meta = await asyncio.gather(threads_task, session_task)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during view build")
 
-  if tail_limit is not None:
+  if message_limit is not None and session_meta.archive_offset == 0:
+
+    def _from_projection():
+      projection = session_mgr.get_message_projection(session_id)
+      if projection is None:
+        return None
+      messages, oldest_ordinal, has_more = projection.tail(message_limit)
+      total_event_count = session_mgr.get_chat_event_count_sync(session_id, session_meta)
+      events = session_mgr.load_chat_events_sync(session_id)
+      return messages, projection.pending_draft, total_event_count, oldest_ordinal, has_more, events
+
+    result = await asyncio.to_thread(_from_projection)
+    if result is not None:
+      messages, pending_draft, total_event_count, oldest_ordinal, has_more, events = result
+      usage = await session_mgr.resolve_session_usage(session_id, session_meta, events)
+      try:
+        await session_mgr.mark_read(session_id)
+      except Exception:
+        log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+      return SessionViewData(
+          raw_events=events,
+          messages=messages,
+          threads=threads,
+          usage=usage,
+          pending_draft=pending_draft,
+          total_event_count=total_event_count,
+          oldest_message_ordinal=oldest_ordinal,
+          has_more=has_more,
+      )
+
+  if message_limit is not None:
+    events_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, message_limit)
+  else:
+    events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  events_result = await events_task
+
+  if message_limit is not None:
     tail_events, total_count, has_more = events_result
     offset = session_meta.archive_offset + total_count - len(tail_events)
     messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
     raw_events = tail_events
     total_event_count = session_meta.archive_offset + total_count
-    oldest_event_index = offset
+    oldest_message_ordinal = offset
     has_more = has_more or session_meta.archive_offset > 0
   else:
     raw_events = events_result
     total_event_count = session_meta.archive_offset + len(raw_events)
-    oldest_event_index = session_meta.archive_offset
+    oldest_message_ordinal = session_meta.archive_offset
     has_more = session_meta.archive_offset > 0
     messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
@@ -274,7 +341,7 @@ async def build_session_view_data(
       usage=usage,
       pending_draft=pending_draft,
       total_event_count=total_event_count,
-      oldest_event_index=oldest_event_index,
+      oldest_message_ordinal=oldest_message_ordinal,
       has_more=has_more,
   )
 

@@ -756,7 +756,7 @@ test('loadOlderIfNeeded post-processes prepended messages through the shared hel
     postProcessedHtml.push(root.innerHTML);
   };
   context.fetch = async (url) => {
-    assert.equal(url, '/api/sessions/session-a/events?before=4&limit=200');
+    assert.equal(url, '/api/sessions/session-a/events?before=4&limit=40');
     return {
       ok: true,
       async json() {
@@ -779,7 +779,7 @@ test('loadOlderIfNeeded post-processes prepended messages through the shared hel
     messages: [{role: 'assistant', content: 'newer', event_index: 5}],
     pending_draft: null,
     event_count: 6,
-    oldest_event_index: 4,
+    oldest_message_ordinal: 4,
     active_backend: 'claude-opus-4.6',
     active_backend_type: '',
     has_more: true,
@@ -809,7 +809,7 @@ test('loadOlderIfNeeded skips messages whose rendered id is already in the DOM',
     return createElement();
   };
   context.fetch = async (url) => {
-    assert.equal(url, '/api/sessions/session-a/events?before=4&limit=200');
+    assert.equal(url, '/api/sessions/session-a/events?before=4&limit=40');
     return {
       ok: true,
       async json() {
@@ -840,7 +840,7 @@ test('loadOlderIfNeeded skips messages whose rendered id is already in the DOM',
     messages: [{id: 'assistant-event-1', role: 'assistant', content: 'already visible', event_index: 5}],
     pending_draft: null,
     event_count: 6,
-    oldest_event_index: 4,
+    oldest_message_ordinal: 4,
     active_backend: 'claude-opus-4.6',
     active_backend_type: '',
     has_more: true,
@@ -1050,7 +1050,7 @@ test('createSession switches open chat through SPA state without full reload', a
     messages: [],
     pending_draft: null,
     event_count: 0,
-    oldest_event_index: 0,
+    oldest_message_ordinal: 0,
     active_backend: 'codex-o3',
     active_backend_type: 'codex',
     has_more: false,

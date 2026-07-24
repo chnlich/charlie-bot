@@ -9,6 +9,8 @@ let switchGeneration = 0;
 let sessionHasMore = false;
 let sessionOlderBeforeCursor = Infinity;
 let sessionLoadingMore = false;
+let suppressScrollLoad = false;
+let viewportFillCount = 0;
 let lazySessionDataTimer = null;
 function getDefaultBackendId() {
   const backendIds = Object.keys(BACKEND_OPTIONS || {});
@@ -73,7 +75,7 @@ function buildEmptySessionBootstrap(session) {
     messages: [],
     pending_draft: null,
     event_count: session.archive_offset || 0,
-    oldest_event_index: session.archive_offset || 0,
+    oldest_message_ordinal: 0,
     active_backend: backend,
     active_backend_type: BACKEND_TYPES ? (BACKEND_TYPES[backend] || '') : '',
     has_more: false,
@@ -202,8 +204,10 @@ function renderSessionView(data) {
 
   // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;
-  sessionOlderBeforeCursor = data.oldest_event_index;
+  sessionOlderBeforeCursor = data.oldest_message_ordinal;
   sessionLoadingMore = false;
+  suppressScrollLoad = false;
+  viewportFillCount = 0;
 
   // Update header
   const headerName = document.getElementById('header-session-name');
@@ -231,7 +235,8 @@ function renderSessionView(data) {
     const sentinel = document.createElement('div');
     sentinel.id = 'load-more-sentinel';
     sentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
-    sentinel.innerHTML = 'Loading older messages&hellip;';
+    sentinel.setAttribute('data-state', 'idle');
+    sentinel.innerHTML = 'Scroll up for older messages';
     container.prepend(sentinel);
   }
 
@@ -261,24 +266,56 @@ function renderSessionView(data) {
 // ---------------------------------------------------------------------------
 // Scroll-to-top pagination (loads older messages)
 // ---------------------------------------------------------------------------
+function ensureSentinel(container, state) {
+  let sentinel = document.getElementById('load-more-sentinel');
+  if (!sentinel) {
+    sentinel = document.createElement('div');
+    sentinel.id = 'load-more-sentinel';
+    sentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
+    container.prepend(sentinel);
+  }
+  sentinel.setAttribute('data-state', state);
+  if (state === 'idle') {
+    sentinel.innerHTML = 'Scroll up for older messages';
+    sentinel.style.cursor = 'default';
+    sentinel.onclick = null;
+  } else if (state === 'loading') {
+    sentinel.innerHTML = 'Loading older messages&hellip;';
+    sentinel.style.cursor = 'default';
+    sentinel.onclick = null;
+  } else if (state === 'failed') {
+    sentinel.innerHTML = 'Failed to load older messages &mdash; click to retry';
+    sentinel.style.cursor = 'pointer';
+    sentinel.onclick = () => loadOlderIfNeeded(container);
+  }
+  return sentinel;
+}
+
 function initScrollPagination() {
   const container = document.getElementById('messages');
   if (!container) return;
   let debounceTimer = null;
   container.addEventListener('scroll', () => {
+    if (suppressScrollLoad) {
+      suppressScrollLoad = false;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      return;
+    }
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => loadOlderIfNeeded(container), 150);
   });
 }
 
-async function loadOlderIfNeeded(container) {
+async function loadOlderIfNeeded(container, isViewportFill) {
+  if (!isViewportFill) viewportFillCount = 0;
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
   if (!Number.isFinite(sessionOlderBeforeCursor)) return;
 
   sessionLoadingMore = true;
-  const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionOlderBeforeCursor + '&limit=200';
+  ensureSentinel(container, 'loading');
+  const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionOlderBeforeCursor + '&limit=40';
   const abortCtrl = new AbortController();
   const timeout = setTimeout(() => abortCtrl.abort(), 10000);
   try {
@@ -298,46 +335,52 @@ async function loadOlderIfNeeded(container) {
       sessionHasMore = false;
     }
 
-    // Build HTML for prepended messages
-    const sentinel = document.getElementById('load-more-sentinel');
     const prevHeight = container.scrollHeight;
 
-    // Remove old sentinel
+    // Remove old sentinel before prepending messages
+    const sentinel = document.getElementById('load-more-sentinel');
     if (sentinel) sentinel.remove();
-
-    // Insert new sentinel if more pages remain
-    if (sessionHasMore) {
-      const newSentinel = document.createElement('div');
-      newSentinel.id = 'load-more-sentinel';
-      newSentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
-      newSentinel.innerHTML = 'Loading older messages&hellip;';
-      container.prepend(newSentinel);
-    }
 
     // Build and prepend message elements that are not already present. Page
     // boundaries can re-emit a message whose aggregator id is already shown.
     const newMessages = data.messages.filter(msg => !isRenderedMessage(msg));
     const tempDiv = renderMessagesToDetachedContainer(newMessages, SESSION_ID);
 
-    // Insert after sentinel (or at top)
-    const insertRef = document.getElementById('load-more-sentinel');
+    // Insert at top (sentinel was removed; recreate below if needed)
     while (tempDiv.lastChild) {
-      if (insertRef) insertRef.after(tempDiv.lastChild);
-      else container.prepend(tempDiv.lastChild);
+      container.prepend(tempDiv.lastChild);
     }
 
     applyCompactMode(container);
 
-    // Preserve scroll position
+    // Recreate sentinel if more pages remain
+    if (sessionHasMore) {
+      ensureSentinel(container, 'idle');
+    }
+
+    // Preserve scroll position — suppress the scroll event this dispatches
+    suppressScrollLoad = true;
     container.scrollTop = container.scrollHeight - prevHeight;
+    setTimeout(() => { suppressScrollLoad = false; }, 0);
   } catch (err) {
     clearTimeout(timeout);
     console.error('loadOlderMessages failed:', err);
-    sessionHasMore = false;
-    const sentinel = document.getElementById('load-more-sentinel');
-    if (sentinel) sentinel.remove();
+    // Failure must NOT clear sessionHasMore — only a server has_more:false
+    // or the no-progress guard may do that. Switch sentinel to failed state
+    // so the user can retry the same cursor.
+    if (sessionHasMore) {
+      ensureSentinel(container, 'failed');
+    }
   } finally {
     sessionLoadingMore = false;
+  }
+
+  // Bounded viewport fill: if the container is still not scrollable and more
+  // pages remain, fetch the next page automatically (at most 5 consecutive).
+  if (sessionHasMore && viewportFillCount < 5 &&
+      container.scrollHeight <= container.clientHeight + 80) {
+    viewportFillCount++;
+    await loadOlderIfNeeded(container, true);
   }
 }
 

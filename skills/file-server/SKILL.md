@@ -1,6 +1,6 @@
 ---
 name: file-server
-description: Use when you need to share a file or directory with the user via a clickable link. The CharlieBot server has a built-in file browser that serves any file on the host filesystem.
+description: Must invoke when presenting a file to the user. The CharlieBot server has a built-in file browser that serves any file on the host filesystem.
 version: 1.0.0
 ---
 

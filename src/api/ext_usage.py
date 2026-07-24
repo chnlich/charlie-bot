@@ -15,7 +15,7 @@ from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.streaming import streaming_manager
-from src.core.timeouts import EXT_USAGE_POLL_INTERVAL, HTTP_OAUTH_TIMEOUT
+from src.core.timeouts import EXT_USAGE_ROUND_GAP_SECONDS, HTTP_OAUTH_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -31,7 +31,7 @@ _poller_task: asyncio.Task | None = None
 # across cycles so per-instance 429 backoff survives between polls.
 _instances: dict[tuple[str, str], "_UsageInstance"] = {}
 
-POLL_INTERVAL_SECONDS = EXT_USAGE_POLL_INTERVAL
+ROUND_GAP_SECONDS = EXT_USAGE_ROUND_GAP_SECONDS
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://console.anthropic.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -526,9 +526,16 @@ def _transform_response(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _poll_loop() -> None:
-  """Background loop that fetches usage data at a fixed cadence for every derived account."""
-  global _cached_usage
+  """Background loop that refreshes one derived account per round-gap sleep.
 
+  Accounts are fetched round-robin in derivation order: each fetch updates that
+  account's ``_cached_usage`` entry and broadcasts the full cache over the sidebar
+  websocket, then sleeps ``EXT_USAGE_ROUND_GAP_SECONDS`` before the next account.
+  The account set is re-derived once per full round (every N fetches) so config
+  edits apply at round boundaries; dropped accounts are pruned from both
+  ``_instances`` and ``_cached_usage``. A zero-account round still sleeps once
+  before re-deriving so the loop never busy-spins.
+  """
   while True:
     try:
       accounts = _derive_accounts()
@@ -548,39 +555,38 @@ async def _poll_loop() -> None:
         if key not in live_keys:
           del _instances[key]
 
-      results = await asyncio.gather(
-          *(inst.fetch() for inst in cycle),
-          return_exceptions=True,
-      )
+      live_cache_keys = {f"{inst.provider}:{inst.label}" for inst in cycle}
+      for cache_key in list(_cached_usage):
+        if cache_key not in live_cache_keys:
+          del _cached_usage[cache_key]
 
-      new_cache: dict[str, dict] = {}
-      for inst, result in zip(cycle, results):
+      if not cycle:
+        await asyncio.sleep(ROUND_GAP_SECONDS)
+        continue
+
+      for inst in cycle:
         cache_key = f"{inst.provider}:{inst.label}"
-        if isinstance(result, Exception):
-          log.error("ext_usage_poll_error", provider=inst.provider, account=inst.label, error=str(result))
+        try:
+          result = await inst.fetch()
+        except Exception as e:
+          log.error("ext_usage_poll_error", provider=inst.provider, account=inst.label, error=str(e))
           result = None
         if result is not None:
-          new_cache[cache_key] = {**result, "account": inst.label}
+          _cached_usage[cache_key] = {**result, "account": inst.label}
         else:
           prev = _cached_usage.get(cache_key)
-          if prev is not None and "error" not in prev:
-            new_cache[cache_key] = prev
-          else:
-            new_cache[cache_key] = {
+          if prev is None or "error" in prev:
+            _cached_usage[cache_key] = {
                 "provider": inst.provider,
                 "account": inst.label,
                 "error": inst.last_error,
             }
-
-      _cached_usage = new_cache
-
-      if _cached_usage:
-        await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)})
-        log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
+        if _cached_usage:
+          await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)})
+          log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
+        await asyncio.sleep(ROUND_GAP_SECONDS)
     except Exception:
       log.exception("ext_usage_poll_error")
-
-    await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
 # ---------------------------------------------------------------------------

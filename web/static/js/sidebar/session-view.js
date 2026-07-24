@@ -318,6 +318,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
   const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionOlderBeforeCursor + '&limit=40';
   const abortCtrl = new AbortController();
   const timeout = setTimeout(() => abortCtrl.abort(), 10000);
+  let pageLanded = false;
   try {
     const res = await fetch(url, {signal: abortCtrl.signal});
     clearTimeout(timeout);
@@ -362,6 +363,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     suppressScrollLoad = true;
     container.scrollTop = container.scrollHeight - prevHeight;
     setTimeout(() => { suppressScrollLoad = false; }, 0);
+    pageLanded = true;
   } catch (err) {
     clearTimeout(timeout);
     console.error('loadOlderMessages failed:', err);
@@ -375,9 +377,11 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     sessionLoadingMore = false;
   }
 
-  // Bounded viewport fill: if the container is still not scrollable and more
-  // pages remain, fetch the next page automatically (at most 5 consecutive).
-  if (sessionHasMore && viewportFillCount < 5 &&
+  // Bounded viewport fill: only after a page actually lands (not on failure —
+  // the failed sentinel must wait for a user click, not auto-retry). If the
+  // container is still not scrollable and more pages remain, fetch the next
+  // page automatically (at most 5 consecutive).
+  if (pageLanded && sessionHasMore && viewportFillCount < 5 &&
       container.scrollHeight <= container.clientHeight + 80) {
     viewportFillCount++;
     await loadOlderIfNeeded(container, true);

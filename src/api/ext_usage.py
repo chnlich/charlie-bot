@@ -587,6 +587,10 @@ async def _poll_loop() -> None:
         await asyncio.sleep(ROUND_GAP_SECONDS)
     except Exception:
       log.exception("ext_usage_poll_error")
+      # All sleeps now live inside the try block, so an exception raised before
+      # reaching one (e.g. from _derive_accounts()) would otherwise skip every
+      # await point and busy-spin the event loop instead of backing off.
+      await asyncio.sleep(ROUND_GAP_SECONDS)
 
 
 # ---------------------------------------------------------------------------

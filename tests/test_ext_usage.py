@@ -727,3 +727,33 @@ def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch) -> No
   assert derive_count["i"] == 2
   assert state["sleeps"] == 2
   assert state["broadcasts"] == 0
+
+
+def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> None:
+  """A non-fetch exception (e.g. from ``_derive_accounts``) must hit a backoff
+  sleep, not spin the outer loop with no await point."""
+  good = {
+      "five_hour": {"utilization": 1.0, "resets_at": ""},
+      "seven_day": {"utilization": 0.0, "resets_at": ""},
+      "fetched_at": "2026-01-01T00:00:00+00:00",
+      "provider": "claude",
+  }
+  accounts = {"claude": [("main", "/fake/main")], "codex": []}
+  derive_count = {"i": 0}
+
+  def accounts_fn():
+    derive_count["i"] += 1
+    if derive_count["i"] == 1:
+      raise RuntimeError("boom")
+    return accounts
+
+  def create_provider(provider, label, dir_path):
+    return _FakeProvider(lambda: good)
+
+  # If the outer except swallowed the exception without sleeping, derivation
+  # would be retried a 3rd time before the 2nd fake sleep fires; the backoff
+  # sleep bounds it to exactly 2 derivations.
+  state = _run_poll_cycles(monkeypatch, accounts_fn=accounts_fn, create_provider=create_provider, n=2)
+
+  assert derive_count["i"] == 2
+  assert state["sleeps"] == 2

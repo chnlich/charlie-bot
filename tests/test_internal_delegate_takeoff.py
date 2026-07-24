@@ -38,6 +38,13 @@ def _user_event(content: str, timestamp: Optional[str] = None) -> dict[str, Any]
   return event
 
 
+def _scheduled_trigger_event(content: str, timestamp: Optional[str] = None) -> dict[str, Any]:
+  event: dict[str, Any] = {"type": ET.SCHEDULED_TRIGGER, "content": content}
+  if timestamp is not None:
+    event["timestamp"] = timestamp
+  return event
+
+
 class FakeSessionManager:
 
   def __init__(self, events: list[dict[str, Any]]) -> None:
@@ -64,17 +71,36 @@ def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None
 def test_takeoff_gate_allows_takeoff_followed_by_trigger_user_message() -> None:
   session_mgr = FakeSessionManager([
       _user_event("take off"),
-      _user_event("[Scheduled trigger fired] training completed"),
+      _scheduled_trigger_event("[Scheduled trigger fired] training completed"),
   ])
 
   check_takeoff_gate("session-id", session_mgr)
 
 
 def test_takeoff_gate_scheduled_trigger_does_not_mint_takeoff() -> None:
-  session_mgr = FakeSessionManager([_user_event("[Scheduled trigger fired] take off")])
+  session_mgr = FakeSessionManager([_scheduled_trigger_event("[Scheduled trigger fired] take off")])
 
   with pytest.raises(DelegationBlockedError):
     check_takeoff_gate("session-id", session_mgr)
+
+
+def test_takeoff_gate_scheduled_trigger_excluded_by_type_regardless_of_content() -> None:
+  """An ET.SCHEDULED_TRIGGER event is excluded by event type, not by content prefix."""
+  session_mgr = FakeSessionManager([_scheduled_trigger_event("take off")])
+
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", session_mgr)
+
+
+def test_takeoff_gate_real_user_literal_banner_now_mints_takeoff() -> None:
+  """Forward fix: a real human typing the literal banner text now mints a takeoff window.
+
+  Previously the prefix check silently ignored a real ET.USER message whose content
+  started with the scheduled-trigger banner; the type-based gate no longer does.
+  """
+  session_mgr = FakeSessionManager([_user_event("[Scheduled trigger fired] take off")])
+
+  check_takeoff_gate("session-id", session_mgr)
 
 
 def test_takeoff_gate_nested_tool_result_does_not_mint_takeoff() -> None:

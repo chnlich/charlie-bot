@@ -35,7 +35,7 @@ from src.core.streaming import streaming_manager
 # Raw event types whose render content is now produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
 # do not broadcast them raw -- the deltas are the wire-format replacement.
-_RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER})
+_RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER, ET.SCHEDULED_TRIGGER})
 
 log = structlog.get_logger()
 

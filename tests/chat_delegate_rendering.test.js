@@ -353,6 +353,11 @@ test('renderMessage returns well-formed markup for every role branch', () => {
       parent_session_id: 'parent/session?tab=chat',
     },
     {
+      role: 'scheduled_trigger',
+      content: '[Scheduled trigger fired | timeout] Check PID 12345 (finished: 12345 (gone at start), host:6789, slurm:91038: COMPLETED 0:0; still alive: slurm:91039: RUNNING)',
+      timestamp: '2026-07-01T12:36:00Z',
+    },
+    {
       role: 'separator',
       thinking_seconds: 12,
       event_index: 4,

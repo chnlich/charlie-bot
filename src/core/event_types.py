@@ -27,6 +27,7 @@ COMPLETE = "complete"
 
 # -- Scheduler / handler ----------------------------------------------------
 HANDLER_RESULT = "handler_result"
+SCHEDULED_TRIGGER = "scheduled_trigger"
 
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"

@@ -27,9 +27,9 @@ _ASK_CHARS = 80
 _LAST_CHARS = 250
 
 # User messages auto-injected by the system are not real "asks". Matched by prefix
-# against the trigger banner and the fork/elone bootstrap prompts.
+# against the fork/elone bootstrap prompts. Scheduled-trigger self-wakes are
+# excluded by event type (ET.SCHEDULED_TRIGGER), not by this prefix list.
 _AUTO_INJECTED_PREFIXES = (
-    "[Scheduled trigger fired",
     "This session was cloned from a previous conversation.",
     "This session continues a prior conversation.",
     "You're taking over a task from a previous session where user wasn't satisfied.",

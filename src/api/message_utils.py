@@ -28,6 +28,7 @@ __all__ = [
     "serialize_uploaded_files",
     "build_agent_input_content",
     "build_user_event",
+    "build_scheduled_trigger_event",
     "strip_attached_files_block",
     "normalize_user_message_event",
     "SessionBootstrapData",
@@ -73,6 +74,20 @@ def build_user_event(content: str, uploaded_files: list[dict] | None = None) -> 
   if uploaded_files:
     event["uploaded_files"] = uploaded_files
   return event
+
+
+def build_scheduled_trigger_event(content: str) -> dict:
+  """Build the persisted scheduled-trigger auto-wake event.
+
+  Parallel to ``build_user_event`` but carries the dedicated ``ET.SCHEDULED_TRIGGER``
+  type and never accepts attachments or voice flags -- scheduled-trigger events
+  are system self-wakes, not real user messages.
+  """
+  return {
+      "type": ET.SCHEDULED_TRIGGER,
+      "content": content,
+      "timestamp": datetime.now(timezone.utc).isoformat(),
+  }
 
 
 def strip_attached_files_block(content: str) -> tuple[str, list[dict]]:

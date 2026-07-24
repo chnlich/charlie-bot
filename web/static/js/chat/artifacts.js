@@ -436,6 +436,14 @@ function renderArtifactLink(link, ordinal, prose) {
   });
 }
 
+function makePlainTextArtifactHandle(prose) {
+  return {
+    dataset: {},
+    get isConnected() { return prose.isConnected; },
+    closest: function(sel) { return sel === '.prose-msg' ? prose : null; },
+  };
+}
+
 function embedLinkedHtmlArtifacts(root) {
   root.querySelectorAll('.prose-msg').forEach(function(prose) {
     if (prose.id === 'streaming-msg' || prose.closest('#streaming-msg')) return;
@@ -466,6 +474,38 @@ function embedLinkedHtmlArtifacts(root) {
         fetchUrl: resolved.fetchUrl,
       });
     });
+    (function scanPlainText(node) {
+      if (!node) return;
+      var type = node.nodeType;
+      if (type === Node.TEXT_NODE) {
+        var text = node.nodeValue || '';
+        if (text) {
+          var matches = text.match(HTML_ARTIFACT_CODE_RE);
+          if (matches) {
+            for (var i = 0; i < matches.length; i++) {
+              var ptResolved = resolveHtmlArtifactLink(matches[i]);
+              if (!ptResolved) continue;
+              if (seen.has(ptResolved.absPath)) continue;
+              seen.add(ptResolved.absPath);
+              links.push({
+                el: makePlainTextArtifactHandle(prose),
+                absPath: ptResolved.absPath,
+                fetchUrl: ptResolved.fetchUrl,
+              });
+            }
+          }
+        }
+        return;
+      }
+      if (type === Node.ELEMENT_NODE) {
+        var tag = node.tagName;
+        if (tag === 'A' || tag === 'CODE') return;
+      }
+      var children = node.childNodes;
+      if (children) {
+        for (var ci = 0; ci < children.length; ci++) scanPlainText(children[ci]);
+      }
+    })(prose);
     links.forEach(function(link, ordinal) {
       if (findEmbeddedHtmlArtifactCard(prose, link.absPath)) {
         link.el.dataset.embedded = '1';

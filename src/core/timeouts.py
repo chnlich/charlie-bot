@@ -74,5 +74,7 @@ SLASH_COMMAND_DEFAULT_TIMEOUT = 10  # seconds — overridable per-command in YAM
 # Polling intervals
 # ---------------------------------------------------------------------------
 
-# Background poller for external usage data (Claude Code / Codex quotas).
-EXT_USAGE_POLL_INTERVAL = 10 * 60  # 600 seconds (10 minutes)
+# Per-account gap for the external-usage round-robin poller (Claude Code / Codex
+# quotas). The poller fetches one derived account per gap, so each account
+# refreshes every N x 60 s where N is the derived account count.
+EXT_USAGE_ROUND_GAP_SECONDS = 60  # seconds between consecutive single-account fetches

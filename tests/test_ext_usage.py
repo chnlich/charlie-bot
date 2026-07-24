@@ -3,7 +3,6 @@ import json
 import os
 import types
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -477,8 +476,13 @@ def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-class _StopAfter(Exception):
-  pass
+class _StopAfter(BaseException):
+  """Control-flow signal that pierces the poller's broad ``except Exception``.
+
+  The round-robin loop sleeps inside its ``try`` block, so a plain ``Exception``
+  stop signal would be swallowed by the loop's error handler and the test would
+  hang. ``BaseException`` (like ``asyncio.CancelledError``) propagates out.
+  """
 
 
 class _FakeProvider:
@@ -493,19 +497,24 @@ class _FakeProvider:
     return value
 
 
-def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> None:
-  counter = {"i": 0}
+def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> dict:
+  """Drive the real ``_poll_loop`` for ``n`` round-gap sleeps, then return counters.
+
+  Under round-robin scheduling one sleep == one single-account fetch, so a full
+  round of N accounts takes N sleeps (plus one sleep per empty round).
+  """
+  state = {"sleeps": 0, "broadcasts": 0}
 
   async def _fake_sleep(_):
-    counter["i"] += 1
-    if counter["i"] >= n:
+    state["sleeps"] += 1
+    if state["sleeps"] >= n:
       raise _StopAfter()
 
-  async def _noop_broadcast(*a, **k):
-    pass
+  async def _track_broadcast(*a, **k):
+    state["broadcasts"] += 1
 
   monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
-  monkeypatch.setattr(ext_usage_mod, "streaming_manager", types.SimpleNamespace(broadcast=_noop_broadcast))
+  monkeypatch.setattr(ext_usage_mod, "streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
   monkeypatch.setattr(ext_usage_mod, "_derive_accounts", accounts_fn)
   monkeypatch.setattr(ext_usage_mod, "_create_provider", create_provider)
   ext_usage_mod._cached_usage.clear()
@@ -513,6 +522,8 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> No
 
   with pytest.raises(_StopAfter):
     asyncio.run(_poll_loop())
+
+  return state
 
 
 def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeypatch) -> None:
@@ -529,7 +540,8 @@ def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeyp
     return _FakeProvider(lambda: None, error="credentials not found")
 
   accounts = {"claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")], "codex": []}
-  _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=1)
+  # Round-robin: one fetch per sleep, so a round of 2 accounts spans 2 sleeps.
+  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=2)
 
   assert set(ext_usage_mod._cached_usage.keys()) == {"claude:main", "claude:invite-1"}
   main = ext_usage_mod._cached_usage["claude:main"]
@@ -541,6 +553,8 @@ def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeyp
       "account": "invite-1",
       "error": "credentials not found",
   }
+  # Each fetch broadcasts once; 2 fetches -> 2 broadcasts (not 1 per round).
+  assert state["broadcasts"] == 2
 
 
 def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
@@ -559,12 +573,14 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
     return _FakeProvider(get_value, error="rate limited")
 
   accounts = {"claude": [("main", "/fake/main")], "codex": []}
-  _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=2)
+  # 1 account per round, so 2 sleeps == 2 rounds == 2 fetches of the same account.
+  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=2)
 
   kept = ext_usage_mod._cached_usage["claude:main"]
   assert kept["five_hour"]["utilization"] == 42.0
   assert kept["fetched_at"] == "2026-01-01T00:00:00+00:00"
   assert "error" not in kept
+  assert state["broadcasts"] == 2
 
 
 def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
@@ -591,6 +607,123 @@ def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
     call["i"] += 1
     return accounts_by_cycle[call["i"]]
 
-  _run_poll_cycles(monkeypatch, accounts_fn=accounts_fn, create_provider=create_provider, n=2)
+  # Round 1 spans 2 fetches (2 sleeps); round 2 re-derives to 1 account, prunes
+  # the dropped key, then fetches once (3rd sleep) before stopping.
+  _run_poll_cycles(monkeypatch, accounts_fn=accounts_fn, create_provider=create_provider, n=3)
 
   assert set(ext_usage_mod._cached_usage.keys()) == {"claude:main"}
+
+
+# ---------------------------------------------------------------------------
+# Round-robin scheduling (T4): per-account fetch order, per-fetch broadcast,
+# cache pruning at the round boundary, and the empty-round guard.
+# ---------------------------------------------------------------------------
+
+
+def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> None:
+  fetch_order: list[str] = []
+
+  def create_provider(provider, label, dir_path):
+    def get_value():
+      fetch_order.append(label)
+      return {
+          "five_hour": {"utilization": 1.0, "resets_at": ""},
+          "seven_day": {"utilization": 0.0, "resets_at": ""},
+          "fetched_at": "2026-01-01T00:00:00+00:00",
+          "provider": "claude",
+      }
+    return _FakeProvider(get_value)
+
+  accounts = {
+      "claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1"), ("invite-2", "/fake/invite-2")],
+      "codex": [],
+  }
+  # One full round of 3 accounts == 3 fetches == 3 sleeps.
+  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=3)
+
+  assert fetch_order == ["main", "invite-1", "invite-2"]
+  assert state["sleeps"] == 3
+  assert state["broadcasts"] == 3
+
+
+def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
+  def create_provider(provider, label, dir_path):
+    return _FakeProvider(lambda: {
+        "five_hour": {"utilization": 1.0, "resets_at": ""},
+        "seven_day": {"utilization": 0.0, "resets_at": ""},
+        "fetched_at": "2026-01-01T00:00:00+00:00",
+        "provider": "claude",
+    })
+
+  accounts = {"claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")], "codex": []}
+  derive_count = {"i": 0}
+
+  def accounts_fn():
+    derive_count["i"] += 1
+    return accounts
+
+  # 2 accounts x 2 rounds == 4 fetches == 4 sleeps; 2 derivations (rounds).
+  state = _run_poll_cycles(monkeypatch, accounts_fn=accounts_fn, create_provider=create_provider, n=4)
+
+  # Broadcast count tracks fetches, not rounds.
+  assert state["broadcasts"] == 4
+  assert derive_count["i"] == 2
+  assert state["broadcasts"] != derive_count["i"]
+
+
+def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) -> None:
+  good = {
+      "five_hour": {"utilization": 7.0, "resets_at": ""},
+      "seven_day": {"utilization": 0.0, "resets_at": ""},
+      "fetched_at": "2026-01-01T00:00:00+00:00",
+      "provider": "claude",
+  }
+  main_calls = {"i": 0}
+
+  def main_get():
+    main_calls["i"] += 1
+    return good if main_calls["i"] == 1 else None
+
+  def create_provider(provider, label, dir_path):
+    if label == "main":
+      return _FakeProvider(main_get, error="rate limited")
+    return _FakeProvider(lambda: good)
+
+  call = {"i": 0}
+  accounts_by_cycle = {
+      1: {"claude": [("main", "/fake/main"), ("a", "/fake/a")], "codex": []},
+      2: {"claude": [("main", "/fake/main")], "codex": []},
+  }
+
+  def accounts_fn():
+    call["i"] += 1
+    return accounts_by_cycle[call["i"]]
+
+  # Round 1: main + a both fetch good values (sleeps 1, 2). Round 2 re-derives to
+  # just main, prunes "claude:a" at the boundary, then fetches main (None ->
+  # stale-keep) on the 3rd sleep.
+  _run_poll_cycles(monkeypatch, accounts_fn=accounts_fn, create_provider=create_provider, n=3)
+
+  # Removed account "a" is pruned even though it held a good (non-error) entry.
+  assert set(ext_usage_mod._cached_usage.keys()) == {"claude:main"}
+  kept = ext_usage_mod._cached_usage["claude:main"]
+  assert kept["five_hour"]["utilization"] == 7.0
+  assert "error" not in kept
+
+
+def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch) -> None:
+  def create_provider(provider, label, dir_path):
+    return _FakeProvider(lambda: {})
+
+  derive_count = {"i": 0}
+
+  def accounts_fn():
+    derive_count["i"] += 1
+    return {"claude": [], "codex": []}
+
+  # An empty derived round must sleep once (not busy-spin) before re-deriving.
+  state = _run_poll_cycles(monkeypatch, accounts_fn=accounts_fn, create_provider=create_provider, n=2)
+
+  assert derive_count["i"] == 2
+  assert state["sleeps"] == 2
+  assert state["broadcasts"] == 0

@@ -84,7 +84,7 @@ function loadChatScript() {
       location: {href: 'https://example.com/sessions/test-session'},
     },
     URL: globalThis.URL,
-    Node: {ELEMENT_NODE: 1},
+    Node: {ELEMENT_NODE: 1, TEXT_NODE: 3},
     document: {
       addEventListener() {},
       createElement(tagName) {
@@ -166,6 +166,63 @@ function makeProseRoot(anchors) {
     },
   };
   for (const anchor of anchors) anchor.prose = prose;
+  return {
+    parent,
+    root: {
+      querySelectorAll(selector) {
+        return selector === '.prose-msg' ? [prose] : [];
+      },
+    },
+  };
+}
+
+function makeText(value) {
+  return {nodeType: 3, nodeValue: value};
+}
+
+function makeCodeEl(value) {
+  return {
+    nodeType: 1,
+    tagName: 'CODE',
+    childNodes: [makeText(value)],
+    textContent: value,
+    dataset: {},
+    isConnected: true,
+    closest(selector) {
+      return selector === '.prose-msg' ? this.prose : null;
+    },
+  };
+}
+
+function makeProseRootWithChildren(opts) {
+  opts = opts || {};
+  const parent = {
+    inserted: [],
+    insertBefore(child) {
+      this.inserted.push(child);
+      child.parentNode = this;
+      return child;
+    },
+  };
+  const prose = {
+    id: opts.id || '',
+    isConnected: true,
+    nodeType: 1,
+    tagName: 'DIV',
+    childNodes: opts.childNodes || [],
+    parentNode: parent,
+    nextSibling: null,
+    nextElementSibling: null,
+    closest() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === 'a[href]') return opts.anchors || [];
+      if (selector === 'code') return opts.codes || [];
+      return [];
+    },
+  };
+  for (const el of [...(opts.anchors || []), ...(opts.codes || [])]) el.prose = prose;
   return {
     parent,
     root: {
@@ -439,4 +496,82 @@ test('findArtifactLinkInCode extracts artifact URLs from inline code text', () =
 
   assert.equal(context.findArtifactLinkInCode(code('just some code')), null);
   assert.equal(context.findArtifactLinkInCode(code('https://example.com/files/report/artifacts/plot.txt')), null);
+});
+
+test('embedLinkedHtmlArtifacts embeds a bare artifact path in plain prose text', async () => {
+  const context = loadChatScript();
+  const barePath = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
+  const {root, parent} = makeProseRootWithChildren({childNodes: [makeText(barePath)]});
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(parent.inserted.length, 1);
+  assert.match(parent.inserted[0].renderedHtml, /html-artifact/);
+  assert.match(
+    parent.inserted[0].renderedHtml,
+    /artifacts\/report\.html#cbsession=test-session/
+  );
+});
+
+test('embedLinkedHtmlArtifacts embeds an artifact path inside a <code> span', async () => {
+  const context = loadChatScript();
+  const path = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
+  const codeSpan = makeCodeEl(path);
+  const {root, parent} = makeProseRootWithChildren({childNodes: [codeSpan], codes: [codeSpan]});
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(parent.inserted.length, 1);
+});
+
+test('embedLinkedHtmlArtifacts does not double-embed a path in both plain text and a <code> span', async () => {
+  const context = loadChatScript();
+  const path = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
+  const codeSpan = makeCodeEl(path);
+  const {root, parent} = makeProseRootWithChildren({
+    childNodes: [makeText(path), codeSpan],
+    codes: [codeSpan],
+  });
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(parent.inserted.length, 1);
+});
+
+test('embedLinkedHtmlArtifacts ignores plain text that does not match the artifact pattern', async () => {
+  const context = loadChatScript();
+  const {root, parent} = makeProseRootWithChildren({
+    childNodes: [makeText('See /files/home/x/readme.txt and arbitrary /files/some/random/path')],
+  });
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(parent.inserted.length, 0);
+});
+
+test('embedLinkedHtmlArtifacts does not double-embed a path in both plain text and an <a> link', async () => {
+  const context = loadChatScript();
+  const path = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
+  const anchor = makeAnchor(path);
+  const {root, parent} = makeProseRootWithChildren({anchors: [anchor], childNodes: [makeText(path)]});
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(parent.inserted.length, 1);
+});
+
+test('embedLinkedHtmlArtifacts does not embed bare paths in the streaming message', async () => {
+  const context = loadChatScript();
+  const barePath = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
+  const {root, parent} = makeProseRootWithChildren({id: 'streaming-msg', childNodes: [makeText(barePath)]});
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(parent.inserted.length, 0);
 });

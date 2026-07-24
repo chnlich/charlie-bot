@@ -16,7 +16,7 @@ import argparse
 import json
 import sys
 
-from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id, validate_task_spec_markdown
+from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id, validate_repo_path, validate_task_spec_markdown
 
 DELEGATE_EPILOG = """\
 Task spec format (--task-spec-file):
@@ -99,6 +99,7 @@ def main() -> None:
       parser.error(f"--repo is required when --task-type {args.task_type}")
     if args.base_branch is None:
       parser.error(f"--base-branch is required when --task-type {args.task_type}")
+    validate_repo_path(parser, args.repo)
 
   session_id = resolve_session_id(args.session)
   task_spec = read_required_text_file("--task-spec-file", args.task_spec_file)

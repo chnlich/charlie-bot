@@ -4,6 +4,7 @@ Provides a single place for the POST-to-internal-API pattern used by every CLI
 entry point, including consistent error-detail extraction on 4xx/5xx responses.
 """
 
+import argparse
 import json
 import re
 import subprocess
@@ -56,6 +57,18 @@ def read_required_text_file(flag_name: str, file_path: str) -> str:
   if not content.strip():
     exit_usage_error(f"{flag_name} is empty: {file_path}")
   return content
+
+
+def validate_repo_path(parser: argparse.ArgumentParser, value: str) -> None:
+  """Reject a --repo value that is not an absolute path or does not exist as a directory.
+
+  Calls ``parser.error`` (which raises ``SystemExit``) before any network call so a
+  bad repo path never reaches the internal API.
+  """
+  if not value.startswith("/"):
+    parser.error(f"--repo must be an absolute path (starting with '/'), got: {value!r}")
+  if not Path(value).is_dir():
+    parser.error(f"--repo does not exist: {value!r}")
 
 
 def validate_task_spec_markdown(content: str) -> None:

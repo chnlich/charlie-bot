@@ -56,7 +56,7 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--backend",
@@ -72,14 +72,14 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["session_id"] == "s1"
-  assert payload["repo_path"] == "/tmp/repo"
+  assert payload["repo_path"] == str(tmp_path)
   assert payload["base_branch"] == "main"
   assert payload["backend"] == "codex-o3"
   assert payload["description"] == task_spec
   assert payload["task_type"] == "implement"
   assert payload["delegate_invocation"] == {
       "task_type": "implement",
-      "repo_path": "/tmp/repo",
+      "repo_path": str(tmp_path),
       "base_branch": "main",
       "task_spec_file": str(task_spec_file),
       "reviewer_context_file": None,
@@ -105,7 +105,7 @@ def test_main_prints_async_wake_up_hint_to_stderr(
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -138,7 +138,7 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -155,7 +155,7 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
   payload = post_mock.call_args.kwargs["json"]
   assert payload["task_type"] == task_type
   assert payload["delegate_invocation"]["task_type"] == task_type
-  assert payload["delegate_invocation"]["repo_path"] == "/tmp/repo"
+  assert payload["delegate_invocation"]["repo_path"] == str(tmp_path)
   assert payload["delegate_invocation"]["base_branch"] == "main"
   assert payload["delegate_invocation"]["task_spec_file"] == str(task_spec_file)
 
@@ -200,14 +200,14 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
   }
 
 
-@pytest.mark.parametrize(("flag", "value"), [("--repo", "/tmp/repo"), ("--base-branch", "main")])
+@pytest.mark.parametrize("flag", ["--repo", "--base-branch"])
 def test_main_verify_rejects_repo_scoped_arguments(
     tmp_path: Path,
     flag: str,
-    value: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
   task_spec_file = _write_task_spec(tmp_path)
+  value = str(tmp_path) if flag == "--repo" else "main"
 
   with patch(
       "sys.argv",
@@ -235,20 +235,24 @@ def test_main_verify_rejects_repo_scoped_arguments(
 
 @pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
 @pytest.mark.parametrize(
-    ("argv_tail", "missing_flag"),
+    ("provide_repo", "missing_flag"),
     [
-        (["--base-branch", "main"], "--repo"),
-        (["--repo", "/tmp/repo"], "--base-branch"),
+        (False, "--repo"),
+        (True, "--base-branch"),
     ],
 )
 def test_main_repo_task_types_require_repo_and_base_branch(
     tmp_path: Path,
     task_type: str,
-    argv_tail: list[str],
+    provide_repo: bool,
     missing_flag: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
   task_spec_file = _write_task_spec(tmp_path)
+  if provide_repo:
+    argv_tail = ["--repo", str(tmp_path)]
+  else:
+    argv_tail = ["--base-branch", "main"]
 
   with patch(
       "sys.argv",
@@ -271,6 +275,71 @@ def test_main_repo_task_types_require_repo_and_base_branch(
   err = capsys.readouterr().err
   assert missing_flag in err
   assert "required" in err
+
+
+def test_main_rejects_relative_repo_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  task_spec_file = _write_task_spec(tmp_path)
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--repo",
+          "meshy-research",
+          "--base-branch",
+          "main",
+          "--task-spec-file",
+          str(task_spec_file),
+          "--keep-worktree",
+          "0",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "must be an absolute path" in err
+  assert "meshy-research" in err
+
+
+def test_main_rejects_nonexistent_repo_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  task_spec_file = _write_task_spec(tmp_path)
+  nonexistent = str(tmp_path / "nonexistent")
+
+  with patch(
+      "sys.argv",
+      [
+          "delegate",
+          "--session",
+          "s1",
+          "--repo",
+          nonexistent,
+          "--base-branch",
+          "main",
+          "--task-spec-file",
+          str(task_spec_file),
+          "--keep-worktree",
+          "0",
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "does not exist" in err
+  assert nonexistent in err
 
 
 def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> None:
@@ -301,7 +370,7 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -321,13 +390,13 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
   assert payload["delegate_invocation"]["reviewer_context_file"] == str(reviewer_context_file)
 
 
-def test_main_requires_task_spec_file(capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_requires_task_spec_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   with patch("sys.argv", [
       "delegate",
       "--session",
       "s1",
       "--repo",
-      "/tmp/repo",
+      str(tmp_path),
       "--base-branch",
       "main",
       "--keep-worktree",
@@ -354,7 +423,7 @@ def test_main_rejects_legacy_description_argparse(
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -388,7 +457,7 @@ def test_main_rejects_legacy_context_argparse(
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -422,7 +491,7 @@ def test_main_rejects_invalid_task_type(
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -454,7 +523,7 @@ def test_main_rejects_legacy_require_review_flag(
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -492,7 +561,7 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--backend",
@@ -518,7 +587,7 @@ def test_main_requires_keep_worktree_flag(tmp_path: Path, capsys: pytest.Capture
       "--session",
       "s1",
       "--repo",
-      "/tmp/repo",
+      str(tmp_path),
       "--base-branch",
       "main",
       "--task-spec-file",
@@ -539,7 +608,7 @@ def test_main_rejects_missing_task_spec_file(
 
   with patch(
       "sys.argv",
-      ["delegate", "--repo", "/tmp/repo", "--base-branch", "main", "--task-spec-file", str(missing),
+      ["delegate", "--repo", str(tmp_path), "--base-branch", "main", "--task-spec-file", str(missing),
        "--keep-worktree", "0"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
@@ -560,7 +629,7 @@ def test_main_rejects_empty_task_spec_file(
 
   with patch(
       "sys.argv",
-      ["delegate", "--repo", "/tmp/repo", "--base-branch", "main", "--task-spec-file", str(empty),
+      ["delegate", "--repo", str(tmp_path), "--base-branch", "main", "--task-spec-file", str(empty),
        "--keep-worktree", "0"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
@@ -584,7 +653,7 @@ def test_main_rejects_missing_reviewer_context_file(
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -617,7 +686,7 @@ def test_main_rejects_empty_reviewer_context_file(
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -648,7 +717,7 @@ def test_main_rejects_task_spec_missing_required_heading(
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -677,7 +746,7 @@ def test_main_rejects_nonexistent_absolute_source_file(
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -706,7 +775,7 @@ def test_main_rejects_relative_source_file_entry(
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -735,7 +804,7 @@ def test_main_rejects_empty_source_files_section(
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -766,7 +835,7 @@ def test_main_allows_source_files_none(tmp_path: Path, monkeypatch: pytest.Monke
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -795,7 +864,7 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -833,7 +902,7 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -863,7 +932,7 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
           "--session",
           "abc",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -891,7 +960,7 @@ def test_session_mismatch_with_cwd_rejected(
           "--session",
           "xyz",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",
@@ -924,7 +993,7 @@ def test_no_session_outside_session_dir(
       [
           "delegate",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--task-spec-file",

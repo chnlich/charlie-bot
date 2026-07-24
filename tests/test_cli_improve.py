@@ -39,7 +39,7 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--backend",
@@ -59,7 +59,7 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
   assert "/api/internal/improve" in call_args[0][0]
   payload = call_args[1]["json"]
   assert payload["session_id"] == "s1"
-  assert payload["repo_path"] == "/tmp/repo"
+  assert payload["repo_path"] == str(tmp_path)
   assert payload["base_branch"] == "main"
   assert payload["backend"] == "codex-o3"
   assert payload["iterations"] == 2
@@ -90,7 +90,7 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
           "--session",
           "s1",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--iterations",
@@ -122,7 +122,7 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
   import requests as req_lib
   with patch(
       "sys.argv",
-      ["improve", "--session", "s1", "--repo", "/tmp/repo", "--base-branch", "main", "--goal-file", str(goal_file)]), \
+      ["improve", "--session", "s1", "--repo", str(tmp_path), "--base-branch", "main", "--goal-file", str(goal_file)]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", side_effect=req_lib.RequestException("conn error")):
     with pytest.raises(SystemExit) as exc_info:
@@ -154,7 +154,7 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
       [
           "improve",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--goal-file",
@@ -183,7 +183,7 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
           "--session",
           "abc",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--goal-file",
@@ -210,7 +210,7 @@ def test_session_mismatch_with_cwd_rejected(
           "--session",
           "xyz",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--goal-file",
@@ -243,7 +243,7 @@ def test_no_session_outside_session_dir(
       [
           "improve",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--goal-file",
@@ -266,7 +266,7 @@ def test_main_rejects_missing_goal_file(
 
   with patch(
       "sys.argv",
-      ["improve", "--repo", "/tmp/repo", "--base-branch", "main", "--goal-file", str(missing)]), \
+      ["improve", "--repo", str(tmp_path), "--base-branch", "main", "--goal-file", str(missing)]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:
@@ -287,7 +287,7 @@ def test_main_rejects_empty_goal_file(
 
   with patch(
       "sys.argv",
-      ["improve", "--repo", "/tmp/repo", "--base-branch", "main", "--goal-file", str(empty)]), \
+      ["improve", "--repo", str(tmp_path), "--base-branch", "main", "--goal-file", str(empty)]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:
@@ -312,7 +312,7 @@ def test_main_rejects_missing_plan_file(
       [
           "improve",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--goal-file",
@@ -345,7 +345,7 @@ def test_main_rejects_empty_plan_file(
       [
           "improve",
           "--repo",
-          "/tmp/repo",
+          str(tmp_path),
           "--base-branch",
           "main",
           "--goal-file",
@@ -362,6 +362,71 @@ def test_main_rejects_empty_plan_file(
   post_mock.assert_not_called()
   err = capsys.readouterr().err
   assert "plan-file" in err and "empty" in err
+
+
+def test_main_rejects_relative_repo_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """A relative --repo is rejected before any network call to the internal API."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--session",
+          "s1",
+          "--repo",
+          "meshy-research",
+          "--base-branch",
+          "main",
+          "--goal-file",
+          str(goal_file),
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "must be an absolute path" in err
+  assert "meshy-research" in err
+
+
+def test_main_rejects_nonexistent_repo_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """An absolute but non-existent --repo is rejected before any network call to the internal API."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  goal_file = tmp_path / "goal.md"
+  goal_file.write_text("fix")
+  nonexistent = str(tmp_path / "nonexistent")
+
+  with patch(
+      "sys.argv",
+      [
+          "improve",
+          "--session",
+          "s1",
+          "--repo",
+          nonexistent,
+          "--base-branch",
+          "main",
+          "--goal-file",
+          str(goal_file),
+      ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code != 0
+  post_mock.assert_not_called()
+  err = capsys.readouterr().err
+  assert "does not exist" in err
+  assert nonexistent in err
 
 
 # ---------------------------------------------------------------------------

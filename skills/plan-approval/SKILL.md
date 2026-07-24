@@ -68,9 +68,9 @@ derived statelessly from the existing chat event log and applies at `/api/intern
 and `/api/internal/improve`:
 
 - `verify` is always allowed without authorization and remains repo-less.
-- A real user event is `ET.USER` with string `content` that does not start with
-  `[Scheduled trigger fired`. Nested tool-result events and scheduled-trigger events
-  are not real user messages for authorization.
+- A real user event is `ET.USER` with string `content`. Scheduled-trigger events
+  are `ET.SCHEDULED_TRIGGER`, not `ET.USER`, and are excluded on that basis. Nested
+  tool-result events are not real user messages for authorization.
 - Match `pre take off` and `take off` independently, case-insensitively, after
   normalizing consecutive whitespace. The `take off` substring inside `pre take off`
   counts, so one message can create both windows.

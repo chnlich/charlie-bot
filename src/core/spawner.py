@@ -48,7 +48,6 @@ log = structlog.get_logger()
 
 _PRE_TAKEOFF_PHRASE = "pre take off"
 _TAKEOFF_PHRASE = "take off"
-_SCHEDULED_TRIGGER_PREFIX = "[Scheduled trigger fired"
 _PRE_TAKEOFF_WINDOW = timedelta(hours=12)
 
 _CODING_PRINCIPLES = (
@@ -825,11 +824,10 @@ class DelegationBlockedError(Exception):
 
 
 def _is_real_user_message(event: dict) -> bool:
-  """Return whether an event is a direct user message for authorization purposes."""
+  """Real user message = ET.USER with string content (excludes trigger events and nested tool_result blocks)."""
   if event.get("type") != ET.USER:
     return False
-  content = event.get("content")
-  return isinstance(content, str) and not content.startswith(_SCHEDULED_TRIGGER_PREFIX)
+  return isinstance(event.get("content"), str)
 
 
 def _normalize_takeoff_content(content: str) -> str:

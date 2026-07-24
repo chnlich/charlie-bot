@@ -132,6 +132,11 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "content": ev.get("parent_session_name", "Unknown session"),
             "parent_session_id": ev.get("parent_session_id", ""),
         },
+    ET.SCHEDULED_TRIGGER:
+        lambda ev: {
+            "role": "scheduled_trigger",
+            "content": ev.get("content", ""),
+        },
 }
 
 

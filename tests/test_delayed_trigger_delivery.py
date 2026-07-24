@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.api.message_utils import events_to_messages
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
@@ -37,19 +38,17 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
 
   events = session_mgr.load_chat_events_sync(session.id)
   assert len(events) == 1
-  assert events[0]["type"] == "user"
+  assert events[0]["type"] == ET.SCHEDULED_TRIGGER
   assert events[0]["content"] == "[Scheduled trigger fired] Check PID 12345"
   assert VOICE_KEY not in events[0]
 
   expected_message = {
-      "role": "user",
+      "role": "scheduled_trigger",
       "content": "[Scheduled trigger fired] Check PID 12345",
-      "uploaded_files": [],
       "event_index": 0,
       "id": events[0]["id"],
       "timestamp": events[0]["timestamp"],
   }
-  expected_message[VOICE_KEY] = False
   messages = events_to_messages(events)
   assert messages == [expected_message]
 

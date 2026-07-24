@@ -377,6 +377,10 @@ function renderMessage(msg, sessionId) {
       + escapeHtml(msg.content || "") + "</a></span></div>"
       + "<div class=\"flex-1 border-t border-purple-500/40\"></div></div>";
   }
+  if (msg.role === "scheduled_trigger") {
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-400 whitespace-pre-wrap break-words\">"
+      + escapeHtml(msg.content) + timeDiv() + "</div></div>";
+  }
   if (msg.role === "separator") {
     var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
     var buttons = "";

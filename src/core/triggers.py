@@ -11,7 +11,7 @@ from pathlib import Path
 import aiofiles
 import structlog
 
-from src.api.message_utils import build_user_event
+from src.api.message_utils import build_scheduled_trigger_event
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
 from src.core.models import LocalPid, PendingTrigger, RemotePid, SlurmJob, TriggerStatus, WatchKind, WatchTarget
@@ -492,7 +492,7 @@ class TriggerManager:
 
     await self._session_mgr.persist_and_broadcast(
         fresh.session_id,
-        build_user_event(trigger_message),
+        build_scheduled_trigger_event(trigger_message),
     )
 
     # Wake the master CC

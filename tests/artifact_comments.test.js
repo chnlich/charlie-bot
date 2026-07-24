@@ -121,7 +121,7 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
     },
   };
   window.self = window;
-  window.parent = framed ? {} : window;
+  window.parent = framed ? (opts.parent || {}) : window;
 
   const head = makeElement();
   const body = makeElement();
@@ -653,4 +653,137 @@ test('resolveSessionId still extracts the session from a plain cbsession fragmen
   const resolve = window.__cbcResolveSessionId;
 
   assert.equal(resolve(pathName, '#cbsession=plain-session'), 'plain-session');
+});
+
+// ---------------------------------------------------------------------------
+// Framed live-target routing: when embedded in the plan panel, the tray must
+// POST to window.parent.planPanel.currentSessionId() (the live active session)
+// whenever it returns a truthy value, and fall back to the artifact-URL-derived
+// session otherwise. The displayed label must always agree with the POST target.
+// ---------------------------------------------------------------------------
+
+function pendingTrayParts(body) {
+  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
+  clickElement(shortcutBtn);
+  const tray = findChildByClass(body, '__cbc-tray');
+  return {
+    header: findChildByClass(tray, '__cbc-tray-header'),
+    sendBtn: findChildByClass(findChildByClass(tray, '__cbc-tray-actions'), '__cbc-tray-send'),
+  };
+}
+
+test('framed tray POSTs to the live parent session when it differs from the artifact-URL session', async () => {
+  const calls = [];
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {body} = loadArtifactCommentsScript(pathName, true, {
+    hash: '#cbsession=path-session&cbpanel=1',
+    parent: {planPanel: {currentSessionId: () => 'live-session'}},
+    fetch: async (url, options = {}) => {
+      calls.push({url, method: options.method || 'GET'});
+      if (url === '/api/sessions/live-session') {
+        return {ok: true, status: 200, async json() { return {name: 'Live Session'}; }};
+      }
+      if (url === '/api/chat/live-session/message') {
+        return {ok: true, status: 200};
+      }
+      throw new Error('Unexpected fetch: ' + url);
+    },
+  });
+
+  const {header, sendBtn} = pendingTrayParts(body);
+  await flushPromises(5);
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 Live Session');
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Live Session');
+
+  await clickElement(sendBtn);
+  assert.ok(calls.some((call) => call.url === '/api/chat/live-session/message' && call.method === 'POST'),
+    'POST targets the live parent session');
+  assert.equal(calls.some((call) => call.url === '/api/chat/path-session/message'), false,
+    'POST does not target the stale artifact-URL session');
+});
+
+test('framed tray falls back to the artifact session when window.parent.planPanel is absent', async () => {
+  const calls = [];
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {body} = loadArtifactCommentsScript(pathName, true, {
+    hash: '#cbsession=path-session&cbpanel=1',
+    // No opts.parent → window.parent is the bare {} from the harness default.
+    fetch: async (url, options = {}) => {
+      calls.push({url, method: options.method || 'GET'});
+      if (url === '/api/sessions/path-session') {
+        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
+      }
+      if (url === '/api/chat/path-session/message') {
+        return {ok: true, status: 200};
+      }
+      throw new Error('Unexpected fetch: ' + url);
+    },
+  });
+
+  const {header, sendBtn} = pendingTrayParts(body);
+  await flushPromises(5);
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
+
+  await clickElement(sendBtn);
+  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'),
+    'POST falls back to the artifact-URL session');
+});
+
+test('framed tray falls back to the artifact session when currentSessionId throws', async () => {
+  const calls = [];
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {body} = loadArtifactCommentsScript(pathName, true, {
+    hash: '#cbsession=path-session&cbpanel=1',
+    parent: {planPanel: {currentSessionId: () => { throw new Error('cross-window boom'); }}},
+    console: {warn() {}, error() {}, log() {}},
+    fetch: async (url, options = {}) => {
+      calls.push({url, method: options.method || 'GET'});
+      if (url === '/api/sessions/path-session') {
+        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
+      }
+      if (url === '/api/chat/path-session/message') {
+        return {ok: true, status: 200};
+      }
+      throw new Error('Unexpected fetch: ' + url);
+    },
+  });
+
+  const {header, sendBtn} = pendingTrayParts(body);
+  await flushPromises(5);
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
+
+  await clickElement(sendBtn);
+  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'),
+    'POST falls back when the live accessor throws');
+});
+
+test('framed tray falls back to the artifact session when currentSessionId returns a falsy value', async () => {
+  const calls = [];
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {body} = loadArtifactCommentsScript(pathName, true, {
+    hash: '#cbsession=path-session&cbpanel=1',
+    parent: {planPanel: {currentSessionId: () => null}},
+    fetch: async (url, options = {}) => {
+      calls.push({url, method: options.method || 'GET'});
+      if (url === '/api/sessions/path-session') {
+        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
+      }
+      if (url === '/api/chat/path-session/message') {
+        return {ok: true, status: 200};
+      }
+      throw new Error('Unexpected fetch: ' + url);
+    },
+  });
+
+  const {header, sendBtn} = pendingTrayParts(body);
+  await flushPromises(5);
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
+
+  await clickElement(sendBtn);
+  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'),
+    'POST falls back when the live accessor returns null');
 });

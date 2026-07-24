@@ -161,9 +161,28 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return String(id || '').slice(0, 8);
     }
 
+    // When embedded in the plan panel (framed), prefer the live active session
+    // from the parent window so the tray always targets the session currently
+    // active in the app — not the session baked into the artifact URL when the
+    // iframe was built. Degrades silently to the artifact-URL-derived session id
+    // when not framed or when the parent accessor is unavailable or throws.
+    function resolveTargetSessionId() {
+      if (framed) {
+        try {
+          var live = window.parent && window.parent.planPanel &&
+            window.parent.planPanel.currentSessionId();
+          if (live) return live;
+        } catch (e) {
+          // Cross-window access unavailable — fall back below.
+        }
+      }
+      return sessionId;
+    }
+
     function targetSessionLabel() {
-      if (!sessionId) return '';
-      return sessionNameCache[sessionId] || fallbackSessionLabel(sessionId);
+      var id = resolveTargetSessionId();
+      if (!id) return '';
+      return sessionNameCache[id] || fallbackSessionLabel(id);
     }
 
     function targetSessionSuffix() {
@@ -202,11 +221,18 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     function ensureTargetSessionName() {
-      if (!sessionId || sessionNameCache[sessionId] || sessionNameRequests[sessionId]) return;
-      var requestedId = sessionId;
+      var targetId = resolveTargetSessionId();
+      if (!targetId || sessionNameCache[targetId] || sessionNameRequests[targetId]) return;
+      var requestedId = targetId;
       fetchSessionName(requestedId).then(function() {
-        if (sessionId === requestedId) refreshTray();
+        if (resolveTargetSessionId() === requestedId) refreshTray();
       }).catch(function(err) {
+        // The 404-driven fallback reassignment (sessionId = pathSessionId) is
+        // the base case for standalone mode and when the live accessor is
+        // unavailable. When framed and the parent supplies a truthy live
+        // session, requestedId is that live id (not the artifact-URL hash
+        // session), so the `requestedId === hashSessionId` guard below keeps
+        // this branch from clobbering the live session.
         if (err.status === 404 && hashSessionId && requestedId === hashSessionId && pathSessionId && pathSessionId !== requestedId) {
           console.warn('Artifact comment target session not found; falling back to path session:', requestedId);
           sessionId = pathSessionId;
@@ -217,7 +243,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         }
         console.error('Artifact comment session name fetch failed:', err);
         sessionNameCache[requestedId] = fallbackSessionLabel(requestedId);
-        if (sessionId === requestedId) refreshTray();
+        if (resolveTargetSessionId() === requestedId) refreshTray();
       });
     }
 
@@ -713,7 +739,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     async function postChatMessage(content) {
-      var response = await fetch('/api/chat/' + encodeURIComponent(sessionId) + '/message', {
+      var targetId = resolveTargetSessionId();
+      var response = await fetch('/api/chat/' + encodeURIComponent(targetId) + '/message', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         credentials: 'same-origin',

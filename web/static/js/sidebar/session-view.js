@@ -144,6 +144,7 @@ async function switchSession(sessionId) {
 
   // Update globals
   SESSION_ID = sessionId;
+  if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
   DRAFT_KEY = 'charliebot-draft-' + sessionId;
   THINKING_SINCE = data.session.thinking_since || null;
   eventCursor = data.event_count;
@@ -408,6 +409,7 @@ async function createSession() {
 
     const bootstrap = buildEmptySessionBootstrap(data);
     SESSION_ID = data.id;
+    if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
     DRAFT_KEY = 'charliebot-draft-' + data.id;
     THINKING_SINCE = data.thinking_since || null;
     eventCursor = bootstrap.event_count;
@@ -451,6 +453,7 @@ function renderNoActiveSessionView() {
   pendingUserMsg = false;
 
   SESSION_ID = null;
+  if (typeof planPanel !== 'undefined') planPanel.onActiveSessionChanged();
   DRAFT_KEY = null;
   THINKING_SINCE = null;
   eventCursor = 0;

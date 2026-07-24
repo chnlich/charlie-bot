@@ -266,9 +266,9 @@ const planPanel = (() => {
     notice.classList.toggle('hidden', !isStaleVersion(plan, _selectedVersion));
   }
 
-  function _viewerKey(planId, version) {
+  function _viewerKey(planId, version, sessionId) {
     if (planId == null || version == null) return null;
-    return String(planId) + ':' + String(version);
+    return String(sessionId) + ':' + String(planId) + ':' + String(version);
   }
 
   function _renderViewer() {
@@ -280,10 +280,13 @@ const planPanel = (() => {
       _loadedViewerKey = null;
       return;
     }
-    var key = _viewerKey(_selectedPlanId, _selectedVersion);
+    // The session component is always read live so a session switch reloads
+    // the iframe even when (planId, version) is unchanged across sessions.
+    var sid = _currentSessionId();
+    var key = _viewerKey(_selectedPlanId, _selectedVersion, sid);
     if (key === _loadedViewerKey) return;
     try {
-      iframe.src = buildIframeUrlFromVersion(plan, _selectedVersion, SESSION_ID);
+      iframe.src = buildIframeUrlFromVersion(plan, _selectedVersion, sid);
       _loadedViewerKey = key;
     } catch (e) {
       console.error('plan-panel: failed to build iframe URL', e);
@@ -526,13 +529,19 @@ const planPanel = (() => {
   }
 
   function onReconnect() {
-    if (!_loaded) return;
-    if (_loadedSessionId !== _currentSessionId()) {
-      _selectedPlanId = null;
-      _selectedVersion = null;
-      _loadedViewerKey = null;
-    }
     _stale = true;
+  }
+
+  function onActiveSessionChanged() {
+    // Sole owner of clearing the cached selection / loaded viewer key and
+    // blanking the iframe on a session change. onReconnect() no longer handles
+    // session mismatches — it only marks stale on a WS reconnect.
+    _selectedPlanId = null;
+    _selectedVersion = null;
+    _loadedViewerKey = null;
+    var iframe = _getEl('plan-viewer');
+    if (iframe) iframe.src = '';
+    return refresh();
   }
 
   function invalidate() {
@@ -622,6 +631,7 @@ const planPanel = (() => {
     render,
     onPlanUpdated,
     onReconnect,
+    onActiveSessionChanged,
     invalidate,
     onTabShown,
     selectPlan,
@@ -642,5 +652,6 @@ const planPanel = (() => {
     buildStandaloneUrl,
     buildStandaloneUrlFromVersion,
     stateBadgeClass,
+    currentSessionId: _currentSessionId,
   };
 })();

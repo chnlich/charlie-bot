@@ -867,3 +867,174 @@ test('plan_template.html contract: open forks extracted, no question starts with
   assert.ok(ns.includes('1'), 'open fork #1 (scope question) is present');
   assert.equal(ns.includes('2'), false, 'resolved fork #2 is excluded');
 });
+
+// ---------------------------------------------------------------------------
+// Session-change resync: the viewer reloads on a session switch even when
+// (planId, version) is unchanged; onActiveSessionChanged() blanks the iframe
+// synchronously and re-fetches; a plain reconnect only marks stale.
+// ---------------------------------------------------------------------------
+
+function makeRecordingViewer() {
+  const writes = [];
+  let srcVal = '';
+  const viewer = {
+    style: {},
+    addEventListener: () => {},
+    classList: {add() {}, toggle() {}, contains() { return false; }},
+  };
+  Object.defineProperty(viewer, 'src', {
+    get() { return srcVal; },
+    set(v) { writes.push(v); srcVal = v; },
+    configurable: true, enumerable: true,
+  });
+  return {viewer, writes};
+}
+
+function makePlanDocument(elements) {
+  return {
+    readyState: 'loading',
+    addEventListener: () => {},
+    getElementById: (id) => elements[id] || null,
+    createElement: () => ({addEventListener() {}, appendChild() {}}),
+  };
+}
+
+function makeSessionFetchWithFiles(registries) {
+  const plansFetch = makeSessionFetch(registries);
+  return async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) return plansFetch(url);
+    return {ok: true, text: async () => ''};
+  };
+}
+
+test('viewer reloads on a session change even when (planId, version) is unchanged across sessions', async () => {
+  const registries = {
+    A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]},
+    B: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]},
+  };
+  const elements = makePanelElements();
+  const {viewer, writes} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch: makeSessionFetchWithFiles(registries),
+    sessionId: 'A',
+  });
+
+  await planPanel.refresh();
+  const writesAfterA = writes.length;
+  assert.ok(writesAfterA >= 1, 'initial render loads the iframe for session A');
+  assert.ok(viewer.src.indexOf('sessions/A/') !== -1, 'iframe URL targets session A');
+
+  // SPA session switch: same (planId, version) in B, but the session differs.
+  context.SESSION_ID = 'B';
+  await planPanel.onActiveSessionChanged();
+  assert.ok(writes.length > writesAfterA, 'viewer reloads on session change even with same planId/version');
+  assert.ok(viewer.src.indexOf('sessions/B/') !== -1, 'new iframe URL targets session B');
+  assert.ok(viewer.src.indexOf('sessions/A/') === -1, 'new iframe URL no longer targets session A');
+});
+
+test('onActiveSessionChanged blanks iframe.src synchronously before the new registry fetch resolves', async () => {
+  const fetchQueue = [];
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      return new Promise((resolve) => { fetchQueue.push({url, resolve}); });
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const elements = makePanelElements();
+  const {viewer, writes} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch,
+    sessionId: 'A',
+  });
+
+  // Load session A with a plan so the viewer has content to blank.
+  const refreshA = planPanel.refresh();
+  assert.equal(fetchQueue.length, 1, 'refresh fetched A registry');
+  fetchQueue[0].resolve({ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]})});
+  await refreshA;
+  assert.ok(viewer.src.indexOf('sessions/A/') !== -1, 'viewer loaded session A');
+  const writesAfterA = writes.length;
+
+  // SPA session switch to B. onActiveSessionChanged blanks the iframe
+  // synchronously, then starts an async refresh for B's registry.
+  context.SESSION_ID = 'B';
+  const pendingChange = planPanel.onActiveSessionChanged();
+  // Synchronous assertion: the iframe is blanked before B's fetch resolves.
+  assert.equal(viewer.src, '', 'iframe.src is blanked synchronously before the fetch resolves');
+  assert.ok(writes.length > writesAfterA, 'a blank src write happened synchronously');
+
+  // Now resolve B's registry (also has a plan) and await.
+  assert.equal(fetchQueue.length, 2, 'refresh fetched B registry');
+  fetchQueue[1].resolve({ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]})});
+  await pendingChange;
+  assert.ok(viewer.src.indexOf('sessions/B/') !== -1, 'viewer reloaded with session B URL after fetch resolved');
+});
+
+test('onReconnect only marks stale and does not refresh or reset selection on a plain WS reconnect', async () => {
+  const fetchCalls = [];
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      fetchCalls.push(url);
+      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1), makeVersion(2)])]})};
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const elements = makePanelElements();
+  const {viewer} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch,
+    sessionId: 'A',
+  });
+
+  await planPanel.refresh();
+  const callsBeforeReconnect = fetchCalls.length;
+  // Select an older version so selection state is populated and observable.
+  planPanel.selectVersion('1');
+  planPanel.render();
+  const vsel = elements['plan-version-selector'];
+  assert.ok(vsel.innerHTML.indexOf('value="1" selected') !== -1, 'v1 is selected before reconnect');
+
+  // A plain WS reconnect (no session change) must only mark stale.
+  planPanel.onReconnect();
+  assert.equal(fetchCalls.length, callsBeforeReconnect, 'onReconnect does not trigger a fetch (no eager refresh)');
+
+  // Selection survives: re-render and confirm v1 is still selected.
+  planPanel.render();
+  assert.ok(vsel.innerHTML.indexOf('value="1" selected') !== -1, 'selection survives onReconnect');
+
+  // _stale was set: onTabShown now triggers a refresh (fetch count increases).
+  const callsBeforeTabShown = fetchCalls.length;
+  await planPanel.onTabShown();
+  assert.ok(fetchCalls.length > callsBeforeTabShown, 'onReconnect marked stale so onTabShown refreshes');
+});
+
+test('onActiveSessionChanged renders the empty state and clears the iframe when the new session has no plans', async () => {
+  const registries = {
+    A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]},
+    B: {plans: []},
+  };
+  const elements = makePanelElements();
+  const {viewer} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch: makeSessionFetchWithFiles(registries),
+    sessionId: 'A',
+  });
+
+  await planPanel.refresh();
+  assert.ok(viewer.src.indexOf('sessions/A/') !== -1, 'viewer loaded for session A');
+  assert.equal(elements['plan-empty-state'].style.display, 'none', 'empty state hidden when A has plans');
+
+  context.SESSION_ID = 'B';
+  await planPanel.onActiveSessionChanged();
+  assert.equal(elements['plan-empty-state'].style.display, '', 'empty state is shown for the plan-less session B');
+  assert.equal(viewer.src, '', 'iframe src is cleared');
+  assert.equal(elements['plan-viewer'].style.display, 'none', 'viewer is hidden');
+});

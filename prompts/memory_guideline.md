@@ -32,3 +32,15 @@ rules and facts.
 
 Host-specific facts (hostnames, local paths, hardware specs, internal
 endpoints) go in MEMORY.host.md, not MEMORY.md.
+
+## Prompt and Skill Layer Classification
+
+Each type of content has a home:
+
+- Policy/judgment → master.md
+- CLI documentation → `--help`
+- Workflow guides → a skill
+- Harness behavior → code or a skill
+- Source/config annotations → the source or config file
+
+After content moves, run a verify worker to audit for orphans.

@@ -27,6 +27,10 @@ When writing the `--goal-file` content for an improve loop:
 
 Once the loop is running, do not repeatedly propose stop when iterations look unproductive. The user authorized the iteration count at take-off and will say "stop" if they want to stop. If a failure pattern emerges, diagnose it once and continue reporting iter-by-iter without re-proposing stop.
 
+After launch, report the `goal_path` to the user as the editable live goal.
+
+Never edit `goal.md` yourself. A mid-loop goal change requires explicit user confirmation; the user edits the file (or asks you to, after confirming).
+
 ## Planner / Executor Separation
 
 For large "elephant" improvements, split planning from execution:

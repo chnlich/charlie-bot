@@ -23,6 +23,10 @@ Source code: `~/workspace/charlie-bot/src/core/`
 4. Reviewer: checks diff, fixes issues, rebases, merges `--ff-only`
 5. On merge → master agent gets summary
 
+### Merge-back failover
+
+If the reviewer's ff-merge fails (base moved), the work branch and worktree are kept. Rebase and push from the kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user or delegate the resolution.
+
 **Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
 
 **Skill-doc update timing**: only promote a finding to a SKILL.md after the underlying debug is fully resolved. Tentative observations (e.g. "per-channel score looks ~1.34× baseline, pending 7-fold confirmation") belong in `~/.charliebot/LESSONS.md` or the session transcript, not in a skill. Skills are confirmed conventions readers can act on without re-deriving.
@@ -58,6 +62,10 @@ Better practice — choose one of:
 - Verify the snippet locally before pasting (cheapest if the env is convenient)
 - Describe the test conceptually ("assert per_channel_chosen[0] equals an independent argsort of channel 0's predictions") and let the worker write the actual code
 - Reference an existing test that does something similar and ask the worker to mirror its style
+
+### Don't include improve-loop revert semantics in delegate prompts
+
+Never include revert/keep-only-report decision rules in delegate prompts — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit. Be specific in the task spec (file paths, function names, acceptance criteria); one task per delegation.
 
 ---
 

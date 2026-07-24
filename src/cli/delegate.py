@@ -17,9 +17,34 @@ import json
 
 from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id, validate_task_spec_markdown
 
+DELEGATE_EPILOG = """\
+Task spec format (--task-spec-file):
+
+  ## Goal
+  One concise deliverable.
+  ## Source Files
+  - <absolute-source-path>
+  ## Required Behavior
+  Executable contract, state-machine semantics, and boundary rules.
+  ## Acceptance Tests
+  Focused tests or verification commands.
+  ## Reviewer Checklist
+  Concrete checks beyond "tests passed".
+  ## Out of Scope
+  Things the worker must not change.
+
+  Source Files entries: absolute paths or `- (none)`.
+  Runtime authorization (takeoff gate) is derived from the chat
+  event log; see skills/plan-approval/SKILL.md for the full contract.
+"""
+
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="Delegate a task to a CharlieBot worker agent")
+  parser = argparse.ArgumentParser(
+      description="Delegate a task to a CharlieBot worker agent",
+      epilog=DELEGATE_EPILOG,
+      formatter_class=argparse.RawDescriptionHelpFormatter,
+  )
   parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument(
       "--repo",

@@ -69,6 +69,7 @@ For handling diff-comment batches, see the `charliebot` skill.
 Session identity is supplied by cwd (`~/.charliebot/sessions/{session_id}`); an explicit `--session` is rejected on mismatch. Omit `--session` in normal master use. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
 
 ### Runtime delegation authorization
+Runtime authorization is derived from the chat event log — see skills/plan-approval/SKILL.md for the full contract.
 
 **Always delegate** feature implementation, bug fixes, refactoring, writing tests, any code change — including tooling setup commands that create or modify tracked files.
 
@@ -97,6 +98,7 @@ Iterative change→run→verify loop; workers are fully autonomous (human on the
 `charliebot improve` is non-blocking; the completion summary arrives as an async event — receive it, do not poll.
 
 ### Steering a running loop
+Steer a running loop by editing goal.md — see improve --help for the live-goal mechanism and skills/improve-goal/SKILL.md for master-side policy.
 
 ### Take-off confirmation
 

@@ -33,8 +33,22 @@ def _read_plan_file(plan_file: str) -> str:
   return read_required_text_file("--plan-file", plan_file)
 
 
+IMPROVE_EPILOG = """\
+The CLI creates a live goal at loops/{loop_id}/goal.md. Each
+iteration re-reads it, so editing the file steers the remaining
+iterations. The launch response includes loop_id and goal_path.
+
+Runtime authorization (takeoff gate) is derived from the chat
+event log; see skills/plan-approval/SKILL.md for the full contract.
+"""
+
+
 def main() -> None:
-  parser = argparse.ArgumentParser(description="Run an iterative improvement loop via CharlieBot workers")
+  parser = argparse.ArgumentParser(
+      description="Run an iterative improvement loop via CharlieBot workers",
+      epilog=IMPROVE_EPILOG,
+      formatter_class=argparse.RawDescriptionHelpFormatter,
+  )
   parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")

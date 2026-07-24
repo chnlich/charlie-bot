@@ -57,7 +57,7 @@ not restate it here.
 - Approval binds to the approval object as it stands: progress never expires it,
   change does. If an approval-object term must change mid-flight, surface it to the user;
   nothing forces a re-presentation, the user decides whether to revisit.
-- Verify is an optional independent tool; its results live in the verify thread's own log, never in the
+- Verify is a required independent step; its results live in the verify thread's own log, never in the
   plan registry. `approve` records a takeoff unconditionally; the runtime delegation gate reads the chat
   log, not the registry, so approve bookkeeping does not gate execution.
 

@@ -157,9 +157,9 @@ The `BLOCK KIT` comment in `prompts/plan_template.html` is the canonical plan gr
 
 ### Plan registration
 
-- Before presentation, write the HTML artifact. Optionally launch a read-only `verify` worker to reality-check
-  the plan; if you do, read its result from the verify thread's own log. Verify is optional and independent;
-  its outcome never enters the plan registry.
+- Before presentation, write the HTML artifact. Launch a read-only `verify`
+  worker to reality-check the plan; see `skills/plan-approval/SKILL.md` for the
+  verify contract.
 - Register the plan via `charliebot plan` (see `charliebot plan --help` for
   present/amend/approve/close). The artifact's status chip is a presentation-time snapshot;
   the live truth is the plan registry. Record the code baseline when the plan pins one.

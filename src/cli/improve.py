@@ -20,7 +20,7 @@ completes.
 import argparse
 import json
 
-from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id
+from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id, validate_repo_path
 
 
 def _read_goal_file(goal_file: str) -> str:
@@ -77,6 +77,7 @@ def main() -> None:
       default=False,
       help="Merge work_branch into base_branch after all iterations complete")
   args = parser.parse_args()
+  validate_repo_path(parser, args.repo)
   session_id = resolve_session_id(args.session)
   goal = _read_goal_file(args.goal_file)
   plan = _read_plan_file(args.plan_file) if args.plan_file is not None else None

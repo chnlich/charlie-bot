@@ -123,7 +123,7 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
         messages=[],
         pending_draft=None,
         total_event_count=0,
-        oldest_event_index=0,
+        oldest_message_ordinal=0,
         has_more=False,
     )
 

@@ -279,8 +279,9 @@ async def get_session_view(
 ):
   """Return data needed to render a session chat panel (SPA switch).
 
-  Uses tail-loading: only the last 200 events are parsed and returned.
-  The response includes has_more and oldest_event_index so the frontend can paginate backwards.
+  Uses tail-loading: only the last 40 messages are parsed and returned.
+  The response includes has_more and oldest_message_ordinal so the frontend
+  can paginate backwards.
   """
   meta = await session_mgr.get_session(session_id)
   if not meta:
@@ -290,7 +291,7 @@ async def get_session_view(
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  view = await build_session_view_data(session_id, session_mgr, thread_mgr, tail_limit=200)
+  view = await build_session_view_data(session_id, session_mgr, thread_mgr)
   trigger_mgr = get_trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
@@ -303,7 +304,7 @@ async def get_session_view(
       "threads": [t.model_dump(mode="json") for t in view.threads],
       "triggers": [tr.model_dump(mode="json") for tr in triggers],
       "event_count": view.total_event_count,
-      "oldest_event_index": view.oldest_event_index,
+      "oldest_message_ordinal": view.oldest_message_ordinal,
       "usage": view.usage,
       "active_backend": active_backend,
       "active_backend_type": active_backend_type,
@@ -321,13 +322,13 @@ async def get_session_bootstrap(
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
-  bootstrap = await build_session_bootstrap_data(session_id, session_mgr, tail_limit=200)
+  bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
   payload = {
       "session": bootstrap.session.model_dump(mode="json"),
       "messages": bootstrap.messages,
       "pending_draft": bootstrap.pending_draft,
       "event_count": bootstrap.total_event_count,
-      "oldest_event_index": bootstrap.oldest_event_index,
+      "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
       "has_more": bootstrap.has_more,
   }
   payload.update(_active_backend_payload(bootstrap.session, cfg))
@@ -357,17 +358,29 @@ async def get_session_usage(
 async def get_session_events_page(
     session_id: str,
     before: int,
-    limit: int = 200,
+    limit: int = 40,
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
-  """Paginate backwards through session events.
+  """Paginate backwards through session messages by message ordinal.
 
-  Returns events with line indices [max(0, before-limit), before) and a
-  next_before cursor set to the raw start index of the served page.
+  ``before`` is a message ordinal (exclusive upper bound). ``limit`` is the
+  number of MESSAGES per page (default 40, clamped 1..200). Returns
+  ``{"messages", "has_more", "next_before"}`` where messages are ascending,
+  ``next_before = max(0, before - limit)``, and ``has_more = next_before > 0``.
+
+  Sessions with ``archive_offset > 0`` fall back entirely to the legacy
+  event-index cursor path (``load_chat_events_range`` + ``events_to_messages``)
+  and never mix the two cursor domains.
   """
   meta = await session_mgr.get_session(session_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Session not found")
+  limit = max(1, min(limit, 200))
+  if meta.archive_offset == 0:
+    projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
+    if projection is not None:
+      messages, next_before, has_more = projection.slice_before(before, limit)
+      return {"messages": messages, "has_more": has_more, "next_before": next_before}
   start = max(0, before - limit)
   events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)
   messages = events_to_messages(events, event_index_offset=start)

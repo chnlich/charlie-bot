@@ -17,8 +17,7 @@ from src.core.models import CreateSessionRequest, ThreadMetadata, ThreadStatus
 from src.core.sessions import SessionManager
 
 
-def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus,
-                  completed_at: datetime | None) -> None:
+def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
   thread_dir = threads_dir / thread_id
   thread_dir.mkdir(parents=True, exist_ok=True)
   meta = ThreadMetadata(
@@ -85,12 +84,18 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
   base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
   cutoff = base + timedelta(days=3)
   events = [
-      {"type": "user", "content": f"e{i}", "timestamp": (base + timedelta(hours=i)).isoformat()}
-      for i in range(5)
+      {
+          "type": "user",
+          "content": f"e{i}",
+          "timestamp": (base + timedelta(hours=i)).isoformat()
+      } for i in range(5)
   ]
   events += [
-      {"type": "user", "content": f"f{i}", "timestamp": (cutoff + timedelta(hours=i)).isoformat()}
-      for i in range(3)
+      {
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
+      } for i in range(3)
   ]
   live_path = mgr.get_chat_events_path(session.id)
   _append_events(live_path, events)
@@ -117,7 +122,11 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
   with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(
         session.id,
-        {"type": "user", "content": "after", "timestamp": (cutoff + timedelta(days=1)).isoformat()},
+        {
+            "type": "user",
+            "content": "after",
+            "timestamp": (cutoff + timedelta(days=1)).isoformat()
+        },
     )
   msg_payloads = [c.args[1] for c in mock.await_args_list if c.args[1].get("type") == "message"]
   assert msg_payloads, "expected at least one message delta"
@@ -133,7 +142,11 @@ async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
 
   cutoff = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
   events = [
-      {"type": "user", "content": "future", "timestamp": (cutoff + timedelta(hours=1)).isoformat()},
+      {
+          "type": "user",
+          "content": "future",
+          "timestamp": (cutoff + timedelta(hours=1)).isoformat()
+      },
   ]
   live_path = mgr.get_chat_events_path(session.id)
   _append_events(live_path, events)
@@ -159,12 +172,18 @@ async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> 
   base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
   cutoff = base + timedelta(days=3)
   events = [
-      {"type": "user", "content": f"e{i}", "timestamp": (base + timedelta(hours=i)).isoformat()}
-      for i in range(5)
+      {
+          "type": "user",
+          "content": f"e{i}",
+          "timestamp": (base + timedelta(hours=i)).isoformat()
+      } for i in range(5)
   ]
   events += [
-      {"type": "user", "content": f"f{i}", "timestamp": (cutoff + timedelta(hours=i)).isoformat()}
-      for i in range(3)
+      {
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
+      } for i in range(3)
   ]
   live_path = mgr.get_chat_events_path(session.id)
   _append_events(live_path, events)
@@ -195,12 +214,18 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
   base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
   cutoff = base + timedelta(days=3)
   events = [
-      {"type": "user", "content": f"e{i}", "timestamp": (base + timedelta(hours=i)).isoformat()}
-      for i in range(5)
+      {
+          "type": "user",
+          "content": f"e{i}",
+          "timestamp": (base + timedelta(hours=i)).isoformat()
+      } for i in range(5)
   ]
   events += [
-      {"type": "user", "content": f"f{i}", "timestamp": (cutoff + timedelta(hours=i)).isoformat()}
-      for i in range(3)
+      {
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
+      } for i in range(3)
   ]
   _append_events(mgr.get_chat_events_path(session.id), events)
   await mgr.recycle_scheduled_session(session.id, cutoff)
@@ -213,11 +238,11 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
   assert full_view.has_more is True
   assert [m["event_index"] for m in full_view.messages] == [5, 6, 7]
 
-  tail_view = await build_session_view_data(session.id, mgr, thread_mgr, tail_limit=2)
+  tail_view = await build_session_view_data(session.id, mgr, thread_mgr, message_limit=2)
   assert tail_view.total_event_count == 8
   assert tail_view.has_more is True
-  assert full_view.oldest_event_index == 5
-  assert tail_view.oldest_event_index == 6
+  assert full_view.oldest_message_ordinal == 5
+  assert tail_view.oldest_message_ordinal == 6
   assert [m["event_index"] for m in tail_view.messages] == [6, 7]
 
 
@@ -229,12 +254,12 @@ async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path
   events = [{"type": "user", "content": f"e{i}", "timestamp": f"2026-05-10T00:0{i}:00Z"} for i in range(4)]
   _append_events(mgr.get_chat_events_path(session.id), events)
 
-  bootstrap = await build_session_bootstrap_data(session.id, mgr, tail_limit=2)
+  bootstrap = await build_session_bootstrap_data(session.id, mgr, message_limit=2)
 
   assert bootstrap.session.id == session.id
   assert bootstrap.total_event_count == 4
   assert bootstrap.has_more is True
-  assert bootstrap.oldest_event_index == 2
+  assert bootstrap.oldest_message_ordinal == 2
   assert [m["content"] for m in bootstrap.messages] == ["e2", "e3"]
   assert [m["event_index"] for m in bootstrap.messages] == [2, 3]
 
@@ -245,12 +270,40 @@ async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_p
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
   events = [
-      {"type": ET.TOOL_USE, "id": "tool-0", "name": "Read", "input": {"file_path": "a.txt"}},
-      {"type": ET.USER, "id": "tool-result-1", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
-      {"type": ET.ASSISTANT, "id": "assistant-2", "message": {"content": [{"type": "text", "text": "done"}]}},
+      {
+          "type": ET.TOOL_USE,
+          "id": "tool-0",
+          "name": "Read",
+          "input": {
+              "file_path": "a.txt"
+          }
+      },
+      {
+          "type": ET.USER,
+          "id": "tool-result-1",
+          "message": {
+              "content": [{
+                  "type": "tool_result",
+                  "content": "ok"
+              }]
+          }
+      },
+      {
+          "type": ET.ASSISTANT,
+          "id": "assistant-2",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "done"
+              }]
+          }
+      },
   ]
   _append_events(mgr.get_chat_events_path(session.id), events)
 
+  # before is a message ordinal (exclusive upper bound); limit is a message count.
+  # The 3 events aggregate into 1 message (the assistant draft), so before=3
+  # clamps to 1 and the page returns that single message.
   page = await get_session_events_page(session.id, before=3, limit=3, session_mgr=mgr)
 
   assert page["next_before"] == 0

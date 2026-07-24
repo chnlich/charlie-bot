@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -19,6 +20,7 @@ from src.core.config import CharlieBotConfig
 from src.core.init import iter_recent_thread_metas
 from src.core.json_utils import load_json_meta
 from src.core.message_aggregator import MessageAggregator
+from src.core.message_projection import MessageProjection
 from src.core.models import (
     CreateSessionRequest,
     SessionCallbacks,
@@ -41,6 +43,7 @@ log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 30.0  # seconds
 _UNSET = object()
+_PROJECTION_LRU_LIMIT = 8
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
@@ -84,6 +87,11 @@ class SessionManager:
     # in memory across calls so consecutive assistant chunks accumulate into
     # a single bubble and tool-only events attach to the prior text bubble.
     self._aggregators: dict[str, MessageAggregator] = {}
+    # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT).
+    # Lazy-built from events_to_view; dirty-marked on master_done, cleared at
+    # the same four sites as _aggregators. Only applies when archive_offset == 0.
+    self._projection_cache: OrderedDict[str, MessageProjection] = OrderedDict()
+    self._projection_dirty: set[str] = set()
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -278,6 +286,7 @@ class SessionManager:
     self._chat_events.clear_cache(parent_id)
     self._session_usage.clear_cache(parent_id)
     self._aggregators.pop(parent_id, None)
+    self._clear_projection(parent_id)
 
     log.info(
         'session_eloned',
@@ -466,6 +475,7 @@ class SessionManager:
     self._chat_events.clear_cache(session_id)
     self._session_usage.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
+    self._clear_projection(session_id)
     return meta
 
   async def delete_session_permanently(self, session_id: str) -> bool:
@@ -479,6 +489,7 @@ class SessionManager:
     self._chat_events.clear_cache(session_id)
     self._session_usage.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
+    self._clear_projection(session_id)
     self._invalidate_cache(session_id)
     self._metadata_locks.pop(session_id, None)
     log.info("session_deleted_permanently", session_id=session_id)
@@ -511,6 +522,7 @@ class SessionManager:
       self._chat_events.clear_cache(session_id)
       self._session_usage.clear_cache(session_id)
       self._aggregators.pop(session_id, None)
+      self._clear_projection(session_id)
 
     log.info(
         "scheduled_session_recycle_done",
@@ -726,6 +738,8 @@ class SessionManager:
       await streaming_manager.broadcast(channel, delta)
     if event.get('type') not in _RAW_EVENTS_REPLACED_BY_DELTAS:
       await streaming_manager.broadcast(channel, event)
+    if event.get('type') == ET.MASTER_DONE:
+      self._projection_dirty.add(session_id)
 
   async def broadcast_only(self, session_id: str, event: dict) -> None:
     """Broadcast an event on the session channel without persisting it as a chat event.
@@ -793,6 +807,33 @@ class SessionManager:
     ``data/archives/`` are read in chronological order to fill the gap.
     """
     return self._chat_events.load_chat_events_range(session_id, start, end)
+
+  def get_message_projection(self, session_id: str) -> MessageProjection | None:
+    """Return the memoized message-list projection for *session_id*.
+
+    Lazily builds from ``events_to_view(load_chat_events_sync(session_id))``
+    and caches per session (LRU, cap ``_PROJECTION_LRU_LIMIT``). Returns None
+    when ``archive_offset != 0`` — those sessions fall back entirely to the
+    event-index cursor path and never mix the two cursor domains.
+    """
+    if self._read_archive_offset_sync(session_id) != 0:
+      return None
+    cached = self._projection_cache.get(session_id)
+    if cached is not None and session_id not in self._projection_dirty:
+      self._projection_cache.move_to_end(session_id)
+      return cached
+    events = self.load_chat_events_sync(session_id)
+    projection = MessageProjection(events)
+    self._projection_cache[session_id] = projection
+    self._projection_dirty.discard(session_id)
+    while len(self._projection_cache) > _PROJECTION_LRU_LIMIT:
+      self._projection_cache.popitem(last=False)
+    return projection
+
+  def _clear_projection(self, session_id: str) -> None:
+    """Drop the cached projection and any pending dirty mark for *session_id*."""
+    self._projection_cache.pop(session_id, None)
+    self._projection_dirty.discard(session_id)
 
   def _read_archive_offset_sync(self, session_id: str) -> int:
     """Synchronously read the archive_offset from metadata.json.

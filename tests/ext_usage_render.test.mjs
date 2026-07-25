@@ -384,3 +384,46 @@ test('renderExtUsage renders a provider pill on every account row', () => {
     assert.ok(pill.classList.contains(want.cls), key + ' pill has ' + want.cls);
   }
 });
+
+// A rule that keys off an attribute the renderer no longer sets is dead CSS that
+// no rendering test can see. Cross-check the two against each other.
+test('mobile CSS selectors for the strip match the attributes the renderer emits', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': _claudePayload(),
+      'codex:main': _codexPayload(),
+    },
+  });
+
+  const emitted = new Set();
+  const collect = (node) => {
+    const field = node.getAttribute('data-field');
+    if (field) emitted.add(field);
+    for (const child of node.children) collect(child);
+  };
+  collect(strip);
+  assert.ok(emitted.size > 0, 'renderer emitted data-field attributes');
+
+  const cssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/css/styles.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+  const selectors = [...css.matchAll(/#ext-usage-strip[^{}]*?\[([a-z-]+)([$^*]?=)"([^"]+)"\]/g)];
+  assert.ok(selectors.length > 0, 'styles.css scopes attribute selectors to #ext-usage-strip');
+
+  for (const [whole, attr, op, value] of selectors) {
+    assert.equal(attr, 'data-field',
+      `#ext-usage-strip rules must key off data-field, not ${attr}: the renderer sets no other identifying attribute (selector: ${whole})`);
+    const matches = [...emitted].filter((f) => (
+      op === '$=' ? f.endsWith(value)
+        : op === '^=' ? f.startsWith(value)
+          : op === '*=' ? f.includes(value)
+            : f === value));
+    assert.ok(matches.length > 0,
+      `selector ${whole} matches none of the emitted data-field values: ${[...emitted].sort().join(', ')}`);
+    if (op === '^=' && value === '7d-') {
+      assert.ok(!matches.includes('spend-7d'),
+        'the 7d-bucket rule must not sweep up the codex spend column');
+    }
+  }
+});

@@ -251,42 +251,85 @@ async def _probe_remaining_remote_pids(
 # ---------------------------------------------------------------------------
 # SLURM probe via sacct
 # ---------------------------------------------------------------------------
-async def _probe_sacct(job_ids: list[int], trigger_id: str) -> dict[int, tuple[str, str]]:
-  """Run ``sacct`` once for the given job ids.
+async def _probe_sacct(
+    job_ids: list[int],
+    trigger_id: str,
+    host: str | None = None,
+) -> tuple[dict[int, tuple[str, str]], str | None]:
+  """Run ``sacct`` once for the given job ids, locally or over ssh.
 
-  Returns ``{job_id: (state, exit_code)}`` for every row sacct reports. Jobs
-  absent from the output (slurmdbd accounting lag, job id not yet registered)
-  are simply omitted — callers keep polling them rather than treating the gap
-  as terminal. A non-zero sacct exit is logged and yields an empty result.
+  Returns ``(states, error)``. ``states`` maps ``job_id -> (state, exit_code)`` for
+  every row sacct reported; jobs absent from the output (slurmdbd accounting lag, job
+  id not yet registered) are simply omitted — callers keep polling them rather than
+  treating the gap as terminal. ``error`` is None on a successful probe, else a short
+  description of why the probe itself failed (spawn error, ssh timeout, non-zero exit),
+  with ``states`` empty.
   """
   ids = ",".join(str(j) for j in job_ids)
-  cmd = ["sacct", "-j", ids, "-X", "-n", "-P", "--format=JobID,State,ExitCode"]
-  proc = await asyncio.create_subprocess_exec(
-      *cmd,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-  )
-  stdout_b, stderr_b = await proc.communicate()
+  sacct_args = ["sacct", "-j", ids, "-X", "-n", "-P", "--format=JobID,State,ExitCode"]
+  if host is None:
+    cmd = sacct_args
+  else:
+    cmd = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
+        host,
+        " ".join(sacct_args),
+    ]
+
+  try:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+  except OSError as e:
+    return {}, f"spawn failed: {e}"
+
+  if host is None:
+    stdout_b, stderr_b = await proc.communicate()
+  else:
+    try:
+      stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=_SSH_OVERALL_TIMEOUT)
+    except asyncio.TimeoutError:
+      proc.kill()
+      try:
+        await proc.wait()
+      except Exception as e:
+        log.debug("sacct_probe_wait_after_kill_failed", trigger_id=trigger_id, host=host, error=str(e))
+      return {}, f"ssh timeout after {_SSH_OVERALL_TIMEOUT}s"
+
   if proc.returncode != 0:
+    stderr = stderr_b.decode("utf-8", errors="replace").strip()
     log.warning(
         "sacct_probe_nonzero",
         trigger_id=trigger_id,
+        host=host,
         returncode=proc.returncode,
-        stderr=stderr_b.decode("utf-8", errors="replace").strip(),
+        stderr=stderr,
     )
-    return {}
+    return {}, f"sacct exit {proc.returncode}: {stderr}"
+
   states: dict[int, tuple[str, str]] = {}
   for line in stdout_b.decode("utf-8", errors="replace").splitlines():
     fields = line.strip().split("|")
     if len(fields) < 3:
       continue
-    try:
-      job_id = int(fields[0])
-    except ValueError:
-      # Step rows / array sub-ids — not the allocation we asked about.
+    # Step rows (`123.batch`), array tasks (`123_4`) and heterogeneous components
+    # (`123+0`) are not the allocation we asked about. `int()` accepts underscores as
+    # digit separators, so `123_4` must be rejected by shape before conversion.
+    if not fields[0].isdigit():
       continue
-    states[job_id] = (fields[1].strip(), fields[2].strip())
-  return states
+    states[int(fields[0])] = (fields[1].strip(), fields[2].strip())
+  return states, None
+
+
+def _slurm_label(host: str | None, job_id: int) -> str:
+  """Watch label for a SLURM job: bare when local, host-prefixed when remote."""
+  return f"slurm:{job_id}" if host is None else f"{host}:slurm:{job_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +383,7 @@ class TriggerManager:
 
     if WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
       raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
-    if WatchKind.SLURM_JOB in kinds and not _SACCT_AVAILABLE:
+    if any(t.kind == WatchKind.SLURM_JOB and t.host is None for t in targets) and not _SACCT_AVAILABLE:
       raise RuntimeError("sacct unavailable: cannot watch a SLURM job on a host without slurm")
 
     if WatchKind.REMOTE_PID in kinds:
@@ -628,27 +671,51 @@ class TriggerManager:
       trigger: PendingTrigger,
       targets: list[SlurmJob],
   ) -> tuple[list[str], list[str]]:
-    """Polling wait via ``sacct`` for SLURM jobs. Returns (finished, still_alive).
+    """Polling wait via ``sacct`` for SLURM jobs, local and remote.
 
-    Probes once immediately, then every ``_SACCT_POLL_INTERVAL`` seconds.
-    Finished labels carry the authoritative State + ExitCode; still-alive labels
-    are bare ``slurm:<id>``. On a host without sacct (server restart recovering a
-    slurm trigger) this skips polling and waits out the deadline rather than
-    spinning on a missing binary.
+    Targets are grouped by ``host`` (``None`` = the trigger-server host); each group
+    runs its own probe loop concurrently, with one batched ``sacct`` per round.
     """
-    remaining: set[int] = {t.job_id for t in targets}
+    groups: dict[str | None, set[int]] = {}
+    for t in targets:
+      groups.setdefault(t.host, set()).add(t.job_id)
 
-    if not _SACCT_AVAILABLE:
+    results = await asyncio.gather(*[
+        self._wait_sacct_group(trigger, host, ids) for host, ids in groups.items()
+    ])
+    finished = [label for group_finished, _ in results for label in group_finished]
+    still_alive = [label for _, group_alive in results for label in group_alive]
+    return finished, still_alive
+
+  async def _wait_sacct_group(
+      self,
+      trigger: PendingTrigger,
+      host: str | None,
+      job_ids: set[int],
+  ) -> tuple[list[str], list[str]]:
+    """Probe one host's SLURM jobs until all are terminal or ``fire_at`` arrives.
+
+    Finished labels carry the authoritative State + ExitCode; still-alive labels are
+    bare. The local group polls at a fixed interval; remote groups use the ssh backoff
+    ladder because each probe costs an ssh round trip. On a host without sacct the
+    local group skips polling and waits out the deadline rather than spinning on a
+    missing binary; remote groups are unaffected.
+    """
+    remaining = set(job_ids)
+
+    if host is None and not _SACCT_AVAILABLE:
       log.warning("slurm_watch_no_sacct_skip", trigger_id=trigger.id, job_ids=sorted(remaining))
-      now = datetime.now(timezone.utc)
-      time_to_fire = (trigger.fire_at - now).total_seconds()
+      time_to_fire = (trigger.fire_at - datetime.now(timezone.utc)).total_seconds()
       if time_to_fire > 0:
         await asyncio.sleep(time_to_fire)
-      return [], [f"slurm:{j}" for j in sorted(remaining)]
+      return [], [_slurm_label(host, j) for j in sorted(remaining)]
 
     finished: list[str] = []
+    step = 0
     while True:
-      states = await _probe_sacct(sorted(remaining), trigger.id)
+      states, error = await _probe_sacct(sorted(remaining), trigger.id, host=host)
+      if error is not None:
+        log.debug("sacct_probe_transient_error", trigger_id=trigger.id, host=host, error=error)
       for job_id in sorted(remaining):
         row = states.get(job_id)
         if row is None:
@@ -660,18 +727,23 @@ class TriggerManager:
         if state_key not in _SLURM_TERMINAL_STATES:
           log.warning("slurm_unknown_state", trigger_id=trigger.id, job_id=job_id, state=state)
           continue
-        finished.append(f"slurm:{job_id}: {state} {exit_code}")
+        finished.append(f"{_slurm_label(host, job_id)}: {state} {exit_code}")
         remaining.discard(job_id)
 
       if not remaining:
         break
-      now = datetime.now(timezone.utc)
-      time_to_fire = (trigger.fire_at - now).total_seconds()
+      time_to_fire = (trigger.fire_at - datetime.now(timezone.utc)).total_seconds()
       if time_to_fire <= 0:
         break
-      await asyncio.sleep(min(_SACCT_POLL_INTERVAL, time_to_fire))
+      if host is None:
+        sleep_for = float(_SACCT_POLL_INTERVAL)
+      else:
+        base = _REMOTE_PROBE_INTERVALS[step] if step < len(_REMOTE_PROBE_INTERVALS) else _REMOTE_PROBE_PLATEAU
+        sleep_for = base + random.uniform(0, _REMOTE_PROBE_NOISE_MAX)
+      step += 1
+      await asyncio.sleep(min(sleep_for, time_to_fire))
 
-    still_alive = [f"slurm:{j}" for j in sorted(remaining)]
+    still_alive = [_slurm_label(host, j) for j in sorted(remaining)]
     return finished, still_alive
 
   def _triggers_dir(self, session_id: str) -> Path:

@@ -11,7 +11,9 @@ Optional: watch one or more targets. The trigger fires when ALL targets have
 finished OR when --max-wait elapses (whichever comes first). Each --watch spec
 self-describes its kind: a bare integer is a local PID (e.g. ``12345``),
 ``host:pid`` is a remote PID (e.g. ``neptune:12345``), and ``slurm:<jobid>`` is a
-SLURM job (e.g. ``slurm:98765``). Kinds may be mixed freely in one trigger.
+SLURM job (e.g. ``slurm:98765``). ``host:slurm:<jobid>`` is a SLURM job on a
+remote cluster login host (e.g. ``neptune:slurm:98765``). Kinds may be mixed
+freely in one trigger.
 
   charliebot schedule-trigger \
     --max-wait 3600 \
@@ -54,7 +56,9 @@ def _parse_watch_target(raw: str) -> dict:
   """Parse a single --watch spec into a watch-target dict carrying its kind.
 
   Forms: ``12345`` (local pid), ``host:12345`` (remote pid), ``slurm:12345``
-  (slurm job). ``slurm`` is a reserved scheme keyword.
+  (slurm job on this host), ``host:slurm:12345`` (slurm job on a remote cluster
+  login host). ``slurm`` is a reserved scheme keyword, so a host literally named
+  ``slurm`` cannot be used as a remote target.
   """
   if ":" in raw:
     scheme, _, rest = raw.partition(":")
@@ -62,6 +66,13 @@ def _parse_watch_target(raw: str) -> dict:
       return {"kind": WatchKind.SLURM_JOB.value, "job_id": _positive_int(rest, raw, "slurm job id")}
     if not scheme:
       raise argparse.ArgumentTypeError(f"--watch host must be non-empty (got {raw!r})")
+    sub_scheme, sep, sub_rest = rest.partition(":")
+    if sep and sub_scheme == "slurm":
+      return {
+          "kind": WatchKind.SLURM_JOB.value,
+          "host": scheme,
+          "job_id": _positive_int(sub_rest, raw, "slurm job id"),
+      }
     return {"kind": WatchKind.REMOTE_PID.value, "host": scheme, "pid": _positive_int(rest, raw, "pid")}
   return {"kind": WatchKind.LOCAL_PID.value, "pid": _positive_int(raw, raw, "pid")}
 
@@ -91,6 +102,8 @@ def _build_parser() -> argparse.ArgumentParser:
           "Optional targets to watch. Each SPEC self-describes its kind: a bare "
           "integer is a local PID (e.g. 12345), HOST:PID is a remote PID (e.g. "
           "neptune:12345), and slurm:JOBID is a SLURM job (e.g. slurm:98765). "
+          "HOST:slurm:JOBID is a SLURM job on a remote cluster login host "
+          "(e.g. neptune:slurm:98765). "
           "Kinds may be mixed freely. The trigger fires when ALL targets have "
           "finished (ALL semantics) OR when --max-wait elapses, whichever comes "
           "first."),

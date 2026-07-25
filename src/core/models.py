@@ -125,8 +125,13 @@ class RemotePid(BaseModel):
 
 
 class SlurmJob(BaseModel):
-  """A SLURM job, watched via `sacct` for its authoritative terminal state."""
+  """A SLURM job, watched via `sacct` for its authoritative terminal state.
+
+  `host` routes the probe: None runs `sacct` on the trigger-server host, a value
+  runs it over `ssh <host>` against that cluster's login node.
+  """
   kind: Literal[WatchKind.SLURM_JOB] = WatchKind.SLURM_JOB
+  host: Optional[str] = None
   job_id: int
 
 

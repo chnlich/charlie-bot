@@ -28,7 +28,7 @@ Prefer stateless solutions over state machines. Using a state machine requires e
 ---
 
 ## Direct Work
-Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. **All repo writes go through delegation.**
+Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. **All repo writes go through delegation.** Edit host-local files under `~/.charliebot/` directly; delegate tracked repository files, including config.
 
 Keep repo content free of PII and secrets; charlie-bot is a public repo.
 

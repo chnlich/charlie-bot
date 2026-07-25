@@ -94,7 +94,7 @@ Never include revert/keep-only-report decision rules in delegate prompts — tho
 
   Constraints: wrapped cmd must run in foreground (no detached `&` inside `--cmd`). For parallel jobs, call `charliebot remote-launch` N times. The wrapper log captures stdout/stderr only — if the cmd internally redirects output to its own log path (e.g. `/storage/...`), that file is the source of truth and the wrapper log will be near-empty. For sub-2-minute commands, just `ssh host 'cmd'` synchronously instead — the launch+trigger overhead is not worth it.
 
-- **One trigger watches many targets — do not spawn a trigger per job.** When master is waiting on N parallel runs, pass all targets to a single `charliebot schedule-trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event.
+- **One trigger watches many targets — do not spawn a trigger per job.** When master is waiting on N parallel runs, pass all targets to a single `charliebot schedule-trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event.
 
 ---
 
@@ -178,18 +178,26 @@ Treat the head branch as the working branch and turn the batch into one delegati
 
 ## SLURM Submit + Watch
 
-Submit with `sbatch --parsable` (prints only the job id), then watch it:
+Submit with `sbatch --parsable` (prints only the job id), then watch it. The remote form is the primary one — submit over ssh on a cluster login host and watch with `host2:slurm:`; the trigger server does not need slurm installed for the remote form, since `sacct` runs on the cluster over ssh:
 
 ```bash
-JOBID=$(sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
-charliebot schedule-trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
+JOBID=$(ssh host2 sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
+charliebot schedule-trigger --max-wait 86400 --watch host2:slurm:"$JOBID" --message "train done"
+# Local form (the trigger-server host itself runs slurm):
+# JOBID=$(sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
+# charliebot schedule-trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
 ```
+
+Caveats:
+- Watching an array job by its base id is NOT supported — only whole non-array allocations (sacct `-X` reports the allocation, not individual array tasks).
+- On Okta-gated hosts a cold SSH key cache makes verify-on-create reject the trigger (the first ssh probe fails before the key is enrolled), so enroll the key first with a manual `ssh host2 true`.
 
 ## Fired Message Format
 
 The fired message is prefixed with the reason; per-target detail is in the suffix:
 - `[Scheduled trigger fired | completed] <msg> (exited: 12345, host:6789; slurm:91038: COMPLETED 0:0)` — all targets finished
 - `[Scheduled trigger fired | timeout]  <msg> (exited: 12345; still alive: slurm:91039: RUNNING)` — `--max-wait` elapsed
+- `[Scheduled trigger fired | timeout] <msg> (still alive: host2:slurm:122111 (unreachable 18m: ssh timeout after 60.0s))` — the remote host stopped answering sacct, not that the job is known to be running
 
 `completed` means all targets finished; success/failure is in the suffix (a SLURM `FAILED 2:0` is a failed job).
 

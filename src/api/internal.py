@@ -262,12 +262,14 @@ async def schedule_trigger(
       elif t.pid <= 0:
         raise HTTPException(status_code=400, detail="watch_targets pids must be positive integers")
 
+  watch_probe: dict[str, str] = {}
   try:
     trigger = await trigger_mgr.create_trigger(
         req.session_id,
         req.delay_seconds,
         req.message,
         watch_targets=req.watch_targets,
+        probe_out=watch_probe,
     )
   except RemoteVerifyError as e:
     # Verify-on-create rejection: surface as 422 so the CLI exits with code 2.
@@ -281,7 +283,10 @@ async def schedule_trigger(
       watch_targets=[t.model_dump() for t in (req.watch_targets or [])],
   )
 
-  return {"trigger_id": trigger.id, "fire_at": trigger.fire_at.isoformat()}
+  response: dict = {"trigger_id": trigger.id, "fire_at": trigger.fire_at.isoformat()}
+  if watch_probe:
+    response["watch_probe"] = watch_probe
+  return response
 
 
 @router.post("/triggers/{session_id}/{trigger_id}/cancel")

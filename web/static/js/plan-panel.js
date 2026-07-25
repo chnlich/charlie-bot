@@ -376,6 +376,8 @@ const planPanel = (() => {
       if (empty) empty.style.display = '';
       if (viewer) { viewer.src = ''; viewer.style.display = 'none'; }
       _loadedViewerKey = null;
+      var sel = _getEl('plan-selector');
+      if (sel) sel.innerHTML = '';
       var vsel = _getEl('plan-version-selector');
       if (vsel) vsel.innerHTML = '';
       var notice = _getEl('plan-stale-notice');
@@ -409,6 +411,21 @@ const planPanel = (() => {
     _loaded = true;
     _loadedSessionId = sid;
     return true;
+  }
+
+  // Second writer of the cached registry, complementing _commitRegistry: this
+  // one only *clears*, and it never writes _loadedSessionId—leaving the
+  // session mismatch in place is what makes the next onTabShown retry.
+  function _resetForSessionChange() {
+    _registry = {plans: []};
+    _errors = [];
+    _loaded = false;
+    _selectedPlanId = null;
+    _selectedVersion = null;
+    _loadedViewerKey = null;
+    ++_actionBarGeneration;      // discard in-flight action-bar renders for the old session
+    _highlightTabBadge(false);   // fallback for any path that skips the hook
+    render();                    // empty state, synchronously
   }
 
   async function _fetchRegistry(sid) {
@@ -541,6 +558,7 @@ const planPanel = (() => {
     _loadedViewerKey = null;
     var iframe = _getEl('plan-viewer');
     if (iframe) iframe.src = '';
+    _highlightTabBadge(false);
     return refresh();
   }
 
@@ -549,7 +567,13 @@ const planPanel = (() => {
   }
 
   async function onTabShown() {
-    if (!_stale) return;
+    // Fallback for the paths the hook cannot fix: its refresh() failed, or
+    // SESSION_ID went null (refresh() returns immediately). Reset first so the
+    // panel never shows the previous session, then re-fetch.
+    var sid = _currentSessionId();
+    var switched = (_loadedSessionId !== sid);
+    if (switched) _resetForSessionChange();
+    if (!_stale && !switched) return;
     _stale = false;
     await refresh();
   }
@@ -575,9 +599,11 @@ const planPanel = (() => {
   }
 
   function openPlan(planId, v) {
+    // switchTab synchronously runs onTabShown, which may reset the selection on
+    // a session mismatch — so switch first, then assign what the user clicked.
+    if (typeof switchTab === 'function') switchTab('chat-plans');
     _selectedPlanId = planId != null ? Number(planId) : null;
     if (v != null) _selectedVersion = Number(v);
-    if (typeof switchTab === 'function') switchTab('chat-plans');
     _renderSelector();
     _renderVersionSwitcher();
     _renderStaleNotice();

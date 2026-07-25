@@ -1038,3 +1038,199 @@ test('onActiveSessionChanged renders the empty state and clears the iframe when 
   assert.equal(viewer.src, '', 'iframe src is cleared');
   assert.equal(elements['plan-viewer'].style.display, 'none', 'viewer is hidden');
 });
+
+// ---------------------------------------------------------------------------
+// Session-switch residue: a session switch must leave no visible trace of the
+// previous session's plans in the panel (empty state + cleared selectors +
+// cleared tab dot), with the next tab-open retrying until the new session
+// loads. P1–P4 pin the new behavior; P5 guards the same-session fast path.
+// ---------------------------------------------------------------------------
+
+test('P1: hook refresh fails on switch, then onTabShown shows empty state before re-fetch and new plans after', async () => {
+  const fetchQueue = [];
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      return new Promise((resolve, reject) => { fetchQueue.push({url, resolve, reject}); });
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const elements = makePanelElements();
+  const {viewer} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch,
+    sessionId: 'A',
+  });
+
+  // Load session A with a plan so the registry has content to clear.
+  const refreshA = planPanel.refresh();
+  assert.equal(fetchQueue.length, 1, 'refresh fetched A registry');
+  fetchQueue[0].resolve({ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]})});
+  await refreshA;
+  assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'A rendered in the selector');
+
+  // SPA switch to B; the hook's refresh() fails.
+  context.SESSION_ID = 'B';
+  const hookPromise = planPanel.onActiveSessionChanged();
+  assert.equal(fetchQueue.length, 2, 'hook fetched B registry');
+  fetchQueue[1].reject(new Error('boom'));
+  await hookPromise;
+  // The failed refresh skipped the commit, so A's stale registry remains.
+  assert.equal(planPanel.getRegistrySnapshot().plans.length, 1, 'failed refresh left the previous session registry in place');
+
+  // Open the plans tab: onTabShown resets first (empty state), then re-fetches.
+  const tabPromise = planPanel.onTabShown();
+  assert.equal(planPanel.getRegistrySnapshot().plans.length, 0, 'panel reset to empty state before the re-fetch resolves');
+  assert.equal(elements['plan-empty-state'].style.display, '', 'empty state shown before the re-fetch resolves');
+  assert.equal(elements['plan-selector'].innerHTML, '', 'selector cleared before the re-fetch resolves');
+  assert.equal(fetchQueue.length, 3, 'onTabShown re-fetched the new session registry');
+  fetchQueue[2].resolve({ok: true, json: async () => ({plans: [makePlan(9, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan B'})]})});
+  await tabPromise;
+  const snap = planPanel.getRegistrySnapshot();
+  assert.equal(snap.plans.length, 1, 'new session plans rendered after the re-fetch');
+  assert.equal(snap.plans[0].id, 9, 'the new session plan is shown, not the previous session');
+});
+
+test('P2: SESSION_ID = null then onTabShown clears plan-selector and issues no fetch', async () => {
+  const registries = {
+    A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]},
+  };
+  const fetchCalls = [];
+  const fetch = async (url) => {
+    fetchCalls.push(url);
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      const plansFetch = makeSessionFetch(registries);
+      return plansFetch(url);
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const elements = makePanelElements();
+  const {viewer} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch,
+    sessionId: 'A',
+  });
+
+  await planPanel.refresh();
+  assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'plan-selector populated for A');
+  const callsBefore = fetchCalls.length;
+
+  // Session deleted: SESSION_ID goes null. Opening the plans tab must show the
+  // empty state, clear the selector, and issue no HTTP request.
+  context.SESSION_ID = null;
+  await planPanel.onTabShown();
+  assert.equal(planPanel.getRegistrySnapshot().plans.length, 0, 'empty registry after session deletion');
+  assert.equal(elements['plan-selector'].innerHTML, '', 'plan-selector cleared');
+  assert.equal(elements['plan-empty-state'].style.display, '', 'empty state shown');
+  assert.equal(fetchCalls.length, callsBefore, 'onTabShown issued no fetch when SESSION_ID is null');
+});
+
+test('P3: switch to a session with no plans clears #plan-selector', async () => {
+  const registries = {
+    A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]},
+    B: {plans: []},
+  };
+  const elements = makePanelElements();
+  const {viewer} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch: makeSessionFetchWithFiles(registries),
+    sessionId: 'A',
+  });
+
+  await planPanel.refresh();
+  assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'plan-selector populated for A');
+
+  context.SESSION_ID = 'B';
+  await planPanel.onActiveSessionChanged();
+  assert.equal(planPanel.getRegistrySnapshot().plans.length, 0, 'empty registry for plan-less B');
+  assert.equal(elements['plan-empty-state'].style.display, '', 'empty state shown for B');
+  assert.equal(elements['plan-selector'].innerHTML, '', 'plan-selector cleared for plan-less B');
+});
+
+test('P4: tab dot cleared on a session change (hook-success via Edit 2 and hook-skipped via Edit 1 fallback)', async () => {
+  const dot = {style: {display: ''}, className: ''};
+  const elements = makePanelElements();
+  elements['btn-chat-plans'] = {
+    querySelector: () => dot,
+    appendChild() {},
+  };
+  const {viewer} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+
+  const registries = {
+    A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]},
+    B: {plans: [makePlan(9, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan B'})]},
+  };
+
+  // --- Part A: hook succeeds — Edit 2 clears the dot ---
+  dot.style.display = '';
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch: makeSessionFetchWithFiles(registries),
+    sessionId: 'A',
+  });
+  await planPanel.refresh();
+  context.SESSION_ID = 'B';
+  await planPanel.onActiveSessionChanged();
+  assert.equal(dot.style.display, 'none', 'hook-success path clears the dot (Edit 2)');
+
+  // --- Part B: a path that skips the hook — Edit 1 fallback clears the dot ---
+  dot.style.display = '';
+  const fetchQueue = [];
+  const fetchB = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      return new Promise((resolve, reject) => { fetchQueue.push({url, resolve, reject}); });
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const {context: ctxB, planPanel: ppB} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch: fetchB,
+    sessionId: 'A',
+  });
+  // The session changes but onActiveSessionChanged is NOT called (a path that
+  // skips the hook). onTabShown detects the mismatch and resets.
+  ctxB.SESSION_ID = 'B';
+  const tabPromise = ppB.onTabShown();
+  assert.equal(dot.style.display, 'none', 'hook-skipped path clears the dot via onTabShown (Edit 1 fallback)');
+  assert.equal(fetchQueue.length, 1, 'onTabShown re-fetches after the reset');
+  fetchQueue[0].resolve({ok: true, json: async () => ({plans: [makePlan(9, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan B'})]})});
+  await tabPromise;
+});
+
+test('P5: same session, onTabShown twice — the second call issues no fetch', async () => {
+  const fetchCalls = [];
+  const fetch = async (url) => {
+    fetchCalls.push(url);
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]})};
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const elements = makePanelElements();
+  const {viewer} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch,
+    sessionId: 'A',
+  });
+
+  // Load A so _loadedSessionId === 'A' (no session mismatch on later tab shows).
+  await planPanel.refresh();
+  const callsAfterLoad = fetchCalls.length;
+
+  // First onTabShown: _stale is still true (initial), so it re-fetches.
+  await planPanel.onTabShown();
+  assert.ok(fetchCalls.length > callsAfterLoad, 'first onTabShown fetches while stale');
+
+  // Second onTabShown: _stale now false, same session → fast path, no fetch.
+  const callsAfterFirst = fetchCalls.length;
+  await planPanel.onTabShown();
+  assert.equal(fetchCalls.length, callsAfterFirst, 'second onTabShown issues no fetch (stale fast path survives)');
+});

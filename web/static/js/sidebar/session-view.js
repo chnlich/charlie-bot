@@ -261,6 +261,11 @@ function renderSessionView(data) {
   const activeBtn = document.querySelector('#btn-terminal.bg-blue-600\\/20, #btn-chat-tex.bg-blue-600\\/20, #btn-chat.bg-blue-600\\/20, #btn-workers.bg-blue-600\\/20, #btn-chat-backlog.bg-blue-600\\/20');
   const activeTab = activeBtn ? activeBtn.id.replace('btn-', '') : 'chat';
   switchTab(activeTab);
+
+  // A tail page shorter than the viewport leaves the container unscrollable, so
+  // no scroll event ever fires and the idle sentinel would wait forever. This
+  // attempt returns immediately when the container is already scrollable.
+  if (sessionHasMore) loadOlderIfNeeded(container);
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +316,14 @@ async function loadOlderIfNeeded(container, isViewportFill) {
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
-  if (!Number.isFinite(sessionOlderBeforeCursor)) return;
+  // An unusable cursor can never produce a page. Surface it instead of returning
+  // silently — a silent return renders as "the sentinel does nothing", which is
+  // exactly how a stale backend's renamed cursor field stayed invisible.
+  if (!Number.isFinite(sessionOlderBeforeCursor)) {
+    console.error('loadOlderMessages: unusable pagination cursor', sessionOlderBeforeCursor);
+    ensureSentinel(container, 'failed');
+    return;
+  }
 
   sessionLoadingMore = true;
   ensureSentinel(container, 'loading');

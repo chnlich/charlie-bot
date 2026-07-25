@@ -434,3 +434,87 @@ test('successful page with no more messages removes the sentinel', async () => {
   const sentinel = findSentinel(elements);
   assert.ok(!sentinel || sentinel.removed, 'sentinel must be removed when has_more becomes false');
 });
+
+function renderStaleBootstrap(context, messages, extra = {}) {
+  context.renderSessionView({
+    session: {id: 'session-a', backend: 'claude-opus-4.6', round_ratings: {}},
+    messages: [{role: 'assistant', content: 'hello', event_index: 5}],
+    pending_draft: null,
+    event_count: 6,
+    active_backend: 'claude-opus-4.6',
+    active_backend_type: '',
+    has_more: true,
+    ...extra,
+  });
+}
+
+test('missing pagination cursor fails loudly instead of silently doing nothing', async () => {
+  const messages = makeMessages({scrollTop: 0});
+  let fetchCount = 0;
+  const {context, elements} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: async () => {
+      fetchCount++;
+      return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
+    },
+  });
+  const errors = [];
+  context.console.error = (...args) => { errors.push(args); };
+
+  // A backend older than the cursor rename answers with oldest_event_index, so
+  // oldest_message_ordinal is absent and the cursor is unusable.
+  renderStaleBootstrap(context, messages, {oldest_event_index: 4});
+  messages.scrollTop = 0;
+
+  await context.loadOlderIfNeeded(messages);
+
+  assert.equal(fetchCount, 0, 'an unusable cursor must not reach the network');
+  const sentinel = findSentinel(elements);
+  assert.ok(sentinel, 'sentinel must remain');
+  assert.equal(sentinel.getAttribute('data-state'), 'failed');
+  assert.match(sentinel.innerHTML, /Failed to load older messages/);
+  assert.ok(errors.length >= 1, 'the unusable cursor must be logged');
+});
+
+test('first paint fills the viewport when the tail page is shorter than the container', async () => {
+  // scrollHeight <= clientHeight: the container cannot scroll, so no scroll event
+  // will ever fire and an idle sentinel would wait forever.
+  const messages = makeMessages({scrollTop: 0, scrollHeight: 40, clientHeight: 500});
+  const fetched = [];
+  const {context, elements} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: async (url) => {
+      fetched.push(url);
+      return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
+    },
+  });
+
+  renderStaleBootstrap(context, messages, {oldest_message_ordinal: 4});
+
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(fetched.length, 1, 'first paint must fetch one older page');
+  assert.match(fetched[0], /before=4/);
+  const sentinel = findSentinel(elements);
+  assert.ok(!sentinel || sentinel.removed, 'sentinel goes away once has_more is false');
+});
+
+test('first paint does not fetch when the tail page already fills the container', async () => {
+  const messages = makeMessages({scrollTop: 0, scrollHeight: 1000, clientHeight: 500});
+  const fetched = [];
+  const {context, elements} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: async (url) => {
+      fetched.push(url);
+      return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
+    },
+  });
+
+  renderStaleBootstrap(context, messages, {oldest_message_ordinal: 4});
+
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(fetched.length, 0, 'a scrollable container must not auto-fetch on first paint');
+  const sentinel = findSentinel(elements);
+  assert.equal(sentinel.getAttribute('data-state'), 'idle');
+});

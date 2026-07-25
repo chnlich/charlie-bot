@@ -5,8 +5,8 @@ Two strategies, picked by who triggers them:
 1. Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.)
    - Entry: maybe_auto_name(...) — called from src/api/chat.py after a master_done event.
    - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
-   - Picks a same-type light backend from model_preference (select_light_backend)
-     and asks it, via one_shot_text, for {name, group}.
+   - Picks resolved light backends from model_preference in order
+     (iter_light_backends) and asks them, via one_shot_text, for {name, group}.
    - Group may reuse an existing group name from other sessions.
 
 2. Claude ai-title (TUI sessions, backend.type = "tui-cli")
@@ -25,6 +25,7 @@ a name the user has already set (matched via is_default_session_name).
 import json
 import re
 from pathlib import Path
+from typing import Iterator
 
 import structlog
 
@@ -123,24 +124,15 @@ def _parse_name_and_group(raw: str) -> tuple[str | None, str | None, bool]:
   return None, None, True
 
 
-def select_light_backend(cfg: CharlieBotConfig, session_backend_id: str) -> BackendOption | None:
-  """Pick a light one-shot backend for a session, preferring the same backend type.
-
-  Resolves the session's backend option, then returns the first ``model_preference``
-  entry whose ``BackendOption.type`` matches it — whether that entry is the session's
-  own id or a different same-type backend. Returns ``None`` when the session backend
-  is unknown or no same-type preference entry exists. This is a same-type-first
-  selector, distinct from ``review.select_reviewer_backend`` (which differs-from the
-  checked party).
-  """
-  session_opt = cfg.get_backend_option(session_backend_id)
-  if session_opt is None:
-    return None
+def iter_light_backends(cfg: CharlieBotConfig) -> Iterator[BackendOption]:
+  """Yield each resolved light one-shot backend once, in preference order."""
+  yielded_ids: set[str] = set()
   for entry_id in cfg.model_preference:
     option = cfg.get_backend_option(entry_id)
-    if option is not None and option.type == session_opt.type:
-      return option
-  return None
+    if option is None or option.id in yielded_ids:
+      continue
+    yielded_ids.add(option.id)
+    yield option
 
 
 def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
@@ -289,23 +281,37 @@ async def maybe_auto_name(
     )
     source_text = "\n".join([user_slice, assistant_slice, *existing_groups])
 
-    option = select_light_backend(cfg, session_meta.backend)
-    if option is None:
+    options = list(iter_light_backends(cfg))
+    if not options:
       log.warning(
           "autonamer_skipped",
-          reason="no_same_type_preference",
+          reason="no_resolvable_preference",
           session_id=session_meta.id,
-          backend=session_meta.backend,
       )
       return
-    backend = build_backend(option, cfg)
 
-    async def _generate(prompt_text: str) -> str:
-      return await backend.one_shot_text(prompt_text, system_prompt, timeout=AUTONAMER_TIMEOUT)
+    for option in options:
+      try:
+        backend = build_backend(option, cfg)
 
-    raw = await _generate(f"{title_instruction}\n\n{prompt}")
-    name = _sanitize_session_title(raw, session_meta.name)
-    if name is None:
+        async def _generate(prompt_text: str) -> str:
+          return await backend.one_shot_text(prompt_text, system_prompt, timeout=AUTONAMER_TIMEOUT)
+
+        raw = await _generate(f"{title_instruction}\n\n{prompt}")
+      except Exception as e:
+        log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
+        continue
+
+      name = _sanitize_session_title(raw, session_meta.name)
+      if name is None:
+        log.warning(
+            "autonamer_failed",
+            session_id=session_meta.id,
+            error="empty or unparseable response",
+        )
+        continue
+      break
+    else:
       return
 
     tokens = _unfaithful_tokens(name, source_text)

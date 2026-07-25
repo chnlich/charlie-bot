@@ -42,13 +42,12 @@ async def test_recap_skipped_when_session_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recap_returns_empty_on_no_same_type_preference() -> None:
+async def test_recap_returns_empty_on_no_resolvable_preference() -> None:
   cfg = CharlieBotConfig(
       backend_options=[
-          BackendOption(id="codex-session", label="Session", type="codex", model="gpt-5.5"),
           BackendOption(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
       ],
-      model_preference=["claude-haiku"],
+      model_preference=["does-not-exist"],
   )
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="codex-session")
@@ -63,8 +62,7 @@ async def test_recap_returns_empty_on_no_same_type_preference() -> None:
   assert result == ""
   mock_build.assert_not_called()
   mock_write.assert_not_called()
-  mock_log.warning.assert_called_once_with(
-      "recap_skipped", reason="no_same_type_preference", session_id="s", backend="codex-session")
+  mock_log.warning.assert_called_once_with("recap_skipped", reason="no_resolvable_preference", session_id="s")
 
 
 @pytest.mark.asyncio
@@ -89,11 +87,11 @@ async def test_recap_generates_and_caches_on_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recap_skips_cache_write_when_summary_empty() -> None:
+async def test_recap_uses_preferences_when_session_backend_is_empty() -> None:
   cfg = _cc_cfg()
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="light-cc")
-  one_shot = AsyncMock(return_value="")
+  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
+  one_shot = AsyncMock(return_value="summary")
 
   with (
       patch("src.core.recap.build_backend", return_value=_mock_backend(one_shot)),
@@ -102,5 +100,141 @@ async def test_recap_skips_cache_write_when_summary_empty() -> None:
   ):
     result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
 
+  assert result == "summary"
+  one_shot.assert_awaited_once()
+  mock_write.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_recap_falls_back_after_first_candidate_failure() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="second", label="Second", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first", "second"],
+  )
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
+  first_one_shot = AsyncMock(side_effect=RuntimeError("first candidate failed"))
+  second_one_shot = AsyncMock(return_value="fallback summary")
+
+  with (
+      patch(
+          "src.core.recap.build_backend",
+          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+      ) as mock_build,
+      patch("src.core.recap.extract_recap", return_value={"asks": ["do X"], "last": None}),
+      patch("src.core.recap._write_cache_entry") as mock_write,
+  ):
+    result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+
+  assert result == "fallback summary"
+  first_one_shot.assert_awaited_once()
+  second_one_shot.assert_awaited_once()
+  assert [entry.args[0].id for entry in mock_build.call_args_list] == ["first", "second"]
+  mock_write.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_recap_returns_empty_without_cache_when_all_candidates_are_empty() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="second", label="Second", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first", "second"],
+  )
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
+  first_one_shot = AsyncMock(return_value="")
+  second_one_shot = AsyncMock(return_value="")
+
+  with (
+      patch(
+          "src.core.recap.build_backend",
+          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+      ) as mock_build,
+      patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
+      patch("src.core.recap._write_cache_entry") as mock_write,
+  ):
+    result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+
   assert result == ""
+  first_one_shot.assert_awaited_once()
+  second_one_shot.assert_awaited_once()
+  assert [entry.args[0].id for entry in mock_build.call_args_list] == ["first", "second"]
+  mock_write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recap_raises_last_exception_when_all_candidates_raise() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="last", label="Last", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first", "last"],
+  )
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
+  first_error = RuntimeError("first error")
+  last_error = RuntimeError("last error")
+  first_one_shot = AsyncMock(side_effect=first_error)
+  last_one_shot = AsyncMock(side_effect=last_error)
+
+  with (
+      patch(
+          "src.core.recap.build_backend",
+          side_effect=[_mock_backend(first_one_shot), _mock_backend(last_one_shot)],
+      ),
+      patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
+      patch("src.core.recap._write_cache_entry") as mock_write,
+  ):
+    with pytest.raises(RuntimeError) as exc_info:
+      await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+
+  assert exc_info.value is last_error
+  first_one_shot.assert_awaited_once()
+  last_one_shot.assert_awaited_once()
+  mock_write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recap_raises_last_exception_after_error_and_empty_result() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="empty", label="Empty", type="codex", model="gpt-x"),
+          BackendOption(id="last", label="Last", type="kimi", model="k2"),
+      ],
+      model_preference=["first", "empty", "last"],
+  )
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
+  first_error = RuntimeError("first error")
+  last_error = RuntimeError("last error")
+  first_one_shot = AsyncMock(side_effect=first_error)
+  empty_one_shot = AsyncMock(return_value="")
+  last_one_shot = AsyncMock(side_effect=last_error)
+
+  with (
+      patch(
+          "src.core.recap.build_backend",
+          side_effect=[
+              _mock_backend(first_one_shot),
+              _mock_backend(empty_one_shot),
+              _mock_backend(last_one_shot),
+          ],
+      ),
+      patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
+      patch("src.core.recap._write_cache_entry") as mock_write,
+  ):
+    with pytest.raises(RuntimeError) as exc_info:
+      await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+
+  assert exc_info.value is last_error
+  first_one_shot.assert_awaited_once()
+  empty_one_shot.assert_awaited_once()
+  last_one_shot.assert_awaited_once()
   mock_write.assert_not_called()

@@ -116,9 +116,9 @@ class CharlieBotConfig(BaseModel):
   # Ordered preference list of BackendOption ids, consumed by two selectors:
   #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
   #     checked party's backend and resolves — see review.select_reviewer_backend.
-  #   - light one-shot (autonamer, recap): first entry whose TYPE matches the
-  #     session's backend type — see autonamer.select_light_backend.
-  # Empty list (default) preserves same-backend behavior and skips the one-shot.
+  #   - light one-shot (autonamer, recap): resolved entries in list order — see
+  #     autonamer.iter_light_backends.
+  # Empty list (default) skips the one-shot.
   model_preference: list[str] = []
 
   # Telegram notifications

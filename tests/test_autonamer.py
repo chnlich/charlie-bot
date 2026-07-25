@@ -8,7 +8,7 @@ import pytest
 
 from src.core import autonamer
 from src.core.autonamer import (
-    _unfaithful_tokens, maybe_auto_name, maybe_auto_name_from_claude_ai_title, select_light_backend)
+    _unfaithful_tokens, iter_light_backends, maybe_auto_name, maybe_auto_name_from_claude_ai_title)
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
 
@@ -240,99 +240,113 @@ async def test_maybe_auto_name_keeps_default_name_when_both_titles_unfaithful() 
 
 
 @pytest.mark.asyncio
-async def test_maybe_auto_name_keeps_default_metadata_when_backend_fails_and_retries() -> None:
-  cfg = _cc_cfg()
-  session_meta = SessionMetadata(id="session-backend-failure", name="Session 10", backend="light-cc")
+async def test_maybe_auto_name_falls_back_after_first_backend_failure() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first-backend", "second-backend"],
+  )
+  session_meta = SessionMetadata(id="session-backend-failure", name="Session 10", backend="first-backend")
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(
-      id="session-backend-failure", name="Session 10", group=None)
-  one_shot = AsyncMock(
-      side_effect=[
-          RuntimeError("unsupported reasoning effort"),
-          '{"name":"Recovered Title","group":"Recovered"}',
-      ])
+  session_mgr.get_session.return_value = SessionMetadata(id="session-backend-failure", name="Session 10", group=None)
+  one_shot = AsyncMock(return_value='{"name":"Recovered Title","group":"Recovered"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch(
+          "src.core.autonamer.build_backend",
+          side_effect=[RuntimeError("unsupported reasoning effort"), _mock_backend(one_shot)],
+      ) as mock_build,
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
       patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
   ):
     await maybe_auto_name(cfg, session_meta, "First naming attempt", "Backend failed.", session_mgr, [])
 
-    session_mgr.rename_session.assert_not_awaited()
-    session_mgr.set_group.assert_not_awaited()
-    mock_broadcast.assert_not_awaited()
-    mock_log.warning.assert_called_once_with(
-        "autonamer_failed",
-        session_id="session-backend-failure",
-        error="unsupported reasoning effort",
-    )
-
-    await maybe_auto_name(cfg, session_meta, "Retry naming attempt", "Backend recovered.", session_mgr, [])
-
   session_mgr.rename_session.assert_awaited_once_with("session-backend-failure", "10: Recovered Title")
   session_mgr.set_group.assert_awaited_once_with("session-backend-failure", "Recovered")
-  assert one_shot.await_count == 2
-
-
-# ---------------------------------------------------------------------------
-# select_light_backend — same-type-first selection
-# ---------------------------------------------------------------------------
-
-
-def test_select_light_backend_same_type_different_id_wins() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[
-          BackendOption(id="codex-session", label="Session", type="codex", model="gpt-5.5"),
-          BackendOption(id="codex-gpt-5.6-luna-personal", label="Luna", type="codex", model="gpt-5.6-luna"),
-      ],
-      model_preference=["codex-gpt-5.6-luna-personal"],
+  assert [call.args[0].id for call in mock_build.call_args_list] == ["first-backend", "second-backend"]
+  one_shot.assert_awaited_once()
+  mock_log.warning.assert_called_once_with(
+      "autonamer_failed",
+      session_id="session-backend-failure",
+      error="unsupported reasoning effort",
   )
-  option = select_light_backend(cfg, "codex-session")
-  assert option is not None
-  assert option.id == "codex-gpt-5.6-luna-personal"
-  assert option.model == "gpt-5.6-luna"
-
-
-def test_select_light_backend_same_id_is_selectable() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[BackendOption(id="opencode-glm52", label="OC", type="opencode", model="prov/model")],
-      model_preference=["opencode-glm52"],
-  )
-  option = select_light_backend(cfg, "opencode-glm52")
-  assert option is not None
-  assert option.id == "opencode-glm52"
-
-
-def test_select_light_backend_returns_none_when_no_same_type() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[
-          BackendOption(id="codex-session", label="Session", type="codex", model="gpt-5.5"),
-          BackendOption(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
-      ],
-      model_preference=["claude-haiku"],
-  )
-  assert select_light_backend(cfg, "codex-session") is None
-
-
-def test_select_light_backend_returns_none_for_unknown_session_backend() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[BackendOption(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku")],
-      model_preference=["claude-haiku"],
-  )
-  assert select_light_backend(cfg, "does-not-exist") is None
+  assert mock_broadcast.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_maybe_auto_name_builds_same_type_luna_backend() -> None:
+async def test_maybe_auto_name_keeps_default_name_when_all_first_responses_are_unusable() -> None:
   cfg = CharlieBotConfig(
       backend_options=[
-          BackendOption(id="codex-session", label="Session", type="codex", model="gpt-5.5"),
+          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first-backend", "second-backend"],
+  )
+  session_meta = SessionMetadata(id="session-exhausted", name="Session 11", backend="first-backend")
+  session_mgr = AsyncMock()
+  first_one_shot = AsyncMock(return_value="")
+  second_one_shot = AsyncMock(return_value='{"group":"only"}')
+
+  with (
+      patch(
+          "src.core.autonamer.build_backend",
+          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+      ) as mock_build,
+      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
+      patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
+  ):
+    await maybe_auto_name(cfg, session_meta, "Some ask", "Some answer.", session_mgr, [])
+
+  assert [call.args[0].id for call in mock_build.call_args_list] == ["first-backend", "second-backend"]
+  first_one_shot.assert_awaited_once()
+  second_one_shot.assert_awaited_once()
+  session_mgr.rename_session.assert_not_awaited()
+  session_mgr.set_group.assert_not_awaited()
+  mock_broadcast.assert_not_awaited()
+  assert mock_log.warning.call_count == 2
+  assert all(call.args[0] == "autonamer_failed" for call in mock_log.warning.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# iter_light_backends — ordered resolved preference iteration
+# ---------------------------------------------------------------------------
+
+
+def test_iter_light_backends_preserves_cross_type_preference_order() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="claude", label="Claude", type="cc-claude", model="haiku"),
+          BackendOption(id="codex", label="Codex", type="codex", model="gpt-x"),
+          BackendOption(id="kimi", label="Kimi", type="kimi", model="k2"),
+      ],
+      model_preference=["codex", "claude", "kimi"],
+  )
+  assert [option.id for option in iter_light_backends(cfg)] == ["codex", "claude", "kimi"]
+
+
+def test_iter_light_backends_skips_unresolved_ids_and_duplicates() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="claude", label="Claude", type="cc-claude", model="haiku"),
+          BackendOption(id="codex", label="Codex", type="codex", model="gpt-x"),
+      ],
+      model_preference=["missing", "claude", "claude", "codex", "missing"],
+  )
+  assert [option.id for option in iter_light_backends(cfg)] == ["claude", "codex"]
+
+
+@pytest.mark.asyncio
+async def test_maybe_auto_name_builds_codex_backend_for_claude_session() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="claude-session", label="Session", type="cc-claude", model="haiku"),
           BackendOption(id="codex-gpt-5.6-luna-personal", label="Luna", type="codex", model="gpt-5.6-luna"),
       ],
       model_preference=["codex-gpt-5.6-luna-personal"],
   )
-  session_meta = SessionMetadata(id="session-luna", name="Session 5", backend="codex-session")
+  session_meta = SessionMetadata(id="session-luna", name="Session 5", backend="claude-session")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-luna", name="Session 5")
   one_shot = AsyncMock(return_value='{"name":"Codex Title"}')
@@ -373,15 +387,14 @@ async def test_maybe_auto_name_builds_same_id_opencode_backend() -> None:
 
 
 @pytest.mark.asyncio
-async def test_maybe_auto_name_skips_loudly_when_no_same_type_preference() -> None:
+async def test_maybe_auto_name_skips_loudly_when_no_preference_resolves() -> None:
   cfg = CharlieBotConfig(
       backend_options=[
-          BackendOption(id="codex-session", label="Session", type="codex", model="gpt-5.5"),
-          BackendOption(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
+          BackendOption(id="claude-session", label="Session", type="cc-claude", model="haiku"),
       ],
-      model_preference=["claude-haiku"],
+      model_preference=["does-not-exist"],
   )
-  session_meta = SessionMetadata(id="session-skip", name="Session 3", backend="codex-session")
+  session_meta = SessionMetadata(id="session-skip", name="Session 3", backend="claude-session")
   session_mgr = AsyncMock()
 
   with (
@@ -397,9 +410,8 @@ async def test_maybe_auto_name_skips_loudly_when_no_same_type_preference() -> No
   mock_broadcast.assert_not_awaited()
   mock_log.warning.assert_called_once_with(
       "autonamer_skipped",
-      reason="no_same_type_preference",
+      reason="no_resolvable_preference",
       session_id="session-skip",
-      backend="codex-session",
   )
 
 

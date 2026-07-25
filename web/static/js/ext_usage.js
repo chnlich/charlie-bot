@@ -1,11 +1,13 @@
 // ---------------------------------------------------------------------------
 // External tool usage strip (multi-provider, multi-account: Claude, Codex).
 // The strip DOM is built dynamically from the payload: one self-describing row
-// per account, with a provider pill on each row.
+// per account, with a provider pill on each row. A quota bar is identified by
+// the window length the provider reported, never by the position the limit
+// arrived in, so a provider dropping or adding a window changes which bars
+// appear instead of relabelling the ones that remain.
 // ---------------------------------------------------------------------------
-// Per-row reset element refs + captured data, rebuilt on every render so the
-// 60s client-side countdown refresh can recompute reset labels without a
-// server round-trip.
+// Per-row element refs + captured data, rebuilt on every render so the 60s
+// client-side refresh can recompute labels without a server round-trip.
 let _extUsageRows = [];
 
 function _parseTimestampMs(isoString) {
@@ -13,57 +15,73 @@ function _parseTimestampMs(isoString) {
   return new Date(isoString).getTime();
 }
 
-function _shouldWaitForFreshCodexCapData(providerData, bucket) {
-  if (providerData.provider !== 'codex') return false;
-
-  const reset = _parseTimestampMs(bucket.resets_at);
-  if (!Number.isFinite(reset) || reset > Date.now()) return false;
-
-  const observedAt = _parseTimestampMs(providerData.token_count_observed_at);
-  return Number.isFinite(observedAt) && observedAt < reset;
+// When a provider's numbers were sampled. Claude answers a live query, so its
+// fetch time is the sample time; Codex is scraped from a rollout log whose last
+// token_count event can be days old.
+function _sampledAtMs(providerData) {
+  const observed = _parseTimestampMs(providerData.token_count_observed_at);
+  if (Number.isFinite(observed)) return observed;
+  return _parseTimestampMs(providerData.fetched_at);
 }
 
-function _formatLocalHMS(isoString) {
-  const d = new Date(isoString);
+function _windowLabel(windowMinutes) {
+  if (!Number.isFinite(windowMinutes) || windowMinutes <= 0) return '?';
+  if (windowMinutes % 1440 === 0) return (windowMinutes / 1440) + 'd';
+  if (windowMinutes % 60 === 0) return (windowMinutes / 60) + 'h';
+  return windowMinutes + 'm';
+}
+
+// A scraped reading can outlive the window it describes. Either the window's
+// reset has already passed while the sample predates it, or — decidable without
+// any reset timestamp — the reading is older than the window is long.
+function _isExpiredReading(providerData, win) {
+  if (providerData.provider !== 'codex') return false;
+  const sampled = _sampledAtMs(providerData);
+  if (!Number.isFinite(sampled)) return false;
+
+  const reset = _parseTimestampMs(win.resets_at);
+  if (Number.isFinite(reset) && reset <= Date.now() && sampled < reset) return true;
+
+  if (Number.isFinite(win.window_minutes)) {
+    return Date.now() - sampled > win.window_minutes * 60000;
+  }
+  return false;
+}
+
+function _formatLocalHMS(ms) {
+  const d = new Date(ms);
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   const ss = String(d.getSeconds()).padStart(2, '0');
   return hh + ':' + mm + ':' + ss;
 }
 
-function _providerRateLimitState(providerData) {
-  if (providerData.provider !== 'codex') return '';
-  return providerData.rate_limits_state || '';
+function _formatAge(ms) {
+  const elapsed = ms > 0 ? ms : 0;
+  const minutes = Math.floor(elapsed / 60000);
+  if (minutes < 60) return minutes + 'm';
+  const hours = Math.floor(elapsed / 3600000);
+  if (hours < 24) return hours + 'h';
+  return Math.floor(elapsed / 86400000) + 'd';
 }
 
-function _providerStateLabel(state) {
-  if (state === 'business-unlimited') return 'business / unlimited';
-  return '';
+function _asOfText(providerData) {
+  const sampled = _sampledAtMs(providerData);
+  if (!Number.isFinite(sampled)) return '';
+  return 'as of ' + _formatAge(Date.now() - sampled) + ' ago';
 }
 
-function _bucketStateResetLabel(bucketKey, state) {
-  if (state !== 'business-unlimited') return '';
-  return bucketKey === 'five_hour' ? 'no 5h cap' : 'no 7d cap';
+// Short windows reset too often for a countdown to mean anything, so they show
+// the sampled and reset clock times instead.
+function _formatClockWindow(providerData, win) {
+  const sampled = _sampledAtMs(providerData);
+  const sampledHMS = Number.isFinite(sampled) ? _formatLocalHMS(sampled) : '?';
+  return '(' + sampledHMS + ' – ' + _formatLocalHMS(_parseTimestampMs(win.resets_at)) + ')';
 }
 
-function _formatFiveHourReset(providerData, bucket) {
-  const stale = _shouldWaitForFreshCodexCapData(providerData, bucket);
-  const resetHMS = _formatLocalHMS(bucket.resets_at);
-  if (stale) return '(stale \u2013 ' + resetHMS + ')';
-  const sampledAt = (providerData.provider === 'codex' && providerData.token_count_observed_at)
-    ? providerData.token_count_observed_at
-    : providerData.fetched_at;
-  const sampledHMS = _formatLocalHMS(sampledAt);
-  return '(' + sampledHMS + ' \u2013 ' + resetHMS + ')';
-}
-
-function formatResetTime(providerData, bucket) {
-  const now = Date.now();
-  const reset = _parseTimestampMs(bucket.resets_at);
-  if (_shouldWaitForFreshCodexCapData(providerData, bucket)) {
-    return 'waiting for fresh cap data';
-  }
-  let diff = reset - now;
+function _formatCountdown(win) {
+  let diff = _parseTimestampMs(win.resets_at) - Date.now();
+  if (!Number.isFinite(diff)) return '—';
   if (diff < 0) return 'reset overdue';
   const days = Math.floor(diff / 86400000);
   diff -= days * 86400000;
@@ -75,6 +93,14 @@ function formatResetTime(providerData, bucket) {
   return 'resets in ' + minutes + 'm';
 }
 
+function _formatWindowReset(providerData, win) {
+  if (!win.resets_at) return '—';
+  if (Number.isFinite(win.window_minutes) && win.window_minutes < 1440) {
+    return _formatClockWindow(providerData, win);
+  }
+  return _formatCountdown(win);
+}
+
 function _barColor(pct) {
   if (pct > 80) return 'bg-red-500';
   if (pct >= 50) return 'bg-yellow-500';
@@ -82,7 +108,7 @@ function _barColor(pct) {
 }
 
 function _formatSpendUsd(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '\u2014';
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
   return '$' + value.toFixed(2);
 }
 
@@ -90,6 +116,11 @@ function _providerGroupLabel(provider) {
   if (provider === 'claude') return 'Claude';
   if (provider === 'codex') return 'Codex';
   throw new Error('unknown usage provider: ' + provider);
+}
+
+function _providerStateLabel(state) {
+  if (state === 'business-unlimited') return 'business / unlimited';
+  return '';
 }
 
 function _el(tag, className) {
@@ -105,44 +136,62 @@ function _providerPill(provider) {
   return pill;
 }
 
-function _buildBucket(row, label, bucket, providerData, bucketKey) {
+function _blankBar(bar) {
+  bar.style.width = '0.0%';
+  bar.className = 'h-full rounded-full transition-all duration-300 bg-slate-600';
+}
+
+// Precedence: expired beats unknown beats a live number. Neither of the first
+// two reaches the colour thresholds, because neither is a quota reading.
+function _paintBucket(refs, win, providerData) {
+  if (_isExpiredReading(providerData, win)) {
+    _blankBar(refs.bar);
+    refs.pctEl.textContent = '—';
+    refs.resetEl.textContent = 'window reset — reading expired';
+    return;
+  }
+  if (typeof win.utilization !== 'number' || !Number.isFinite(win.utilization)) {
+    _blankBar(refs.bar);
+    refs.pctEl.textContent = '?';
+    refs.resetEl.textContent = _formatWindowReset(providerData, win);
+    return;
+  }
+  const pct = win.utilization;
+  refs.bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
+  refs.bar.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
+  refs.pctEl.textContent = Math.round(pct) + '%';
+  refs.resetEl.textContent = _formatWindowReset(providerData, win);
+}
+
+function _buildBucket(row, win, providerData) {
+  const label = _windowLabel(win.window_minutes);
   const group = _el('div', 'flex items-center gap-1.5');
   const lbl = _el('span', '');
-  lbl.textContent = label;
+  lbl.textContent = label + ':';
   group.appendChild(lbl);
   const barWrap = _el('div', 'w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden');
   const bar = _el('div', 'h-full rounded-full transition-all duration-300');
-  bar.setAttribute('data-field', bucketKey === 'five_hour' ? '5h-bar' : '7d-bar');
+  bar.setAttribute('data-field', label + '-bar');
   barWrap.appendChild(bar);
   group.appendChild(barWrap);
   const pctEl = _el('span', '');
-  pctEl.setAttribute('data-field', bucketKey === 'five_hour' ? '5h-pct' : '7d-pct');
+  pctEl.setAttribute('data-field', label + '-pct');
   group.appendChild(pctEl);
   const resetEl = _el('span', 'text-slate-500');
-  resetEl.setAttribute('data-field', bucketKey === 'five_hour' ? '5h-reset' : '7d-reset');
+  resetEl.setAttribute('data-field', label + '-reset');
   group.appendChild(resetEl);
   row.appendChild(group);
 
-  const state = _providerRateLimitState(providerData);
-  if (state) {
-    bar.style.width = '0.0%';
-    bar.className = 'h-full rounded-full transition-all duration-300 bg-slate-600';
-    pctEl.textContent = 'plan';
-    resetEl.textContent = _bucketStateResetLabel(bucketKey, state);
-  } else {
-    let pct = typeof bucket.utilization === 'number' ? bucket.utilization : 0;
-    const stale = _shouldWaitForFreshCodexCapData(providerData, bucket);
-    if (stale) pct = 0;
-    bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
-    bar.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
-    pctEl.textContent = stale ? '\u2014' : Math.round(pct) + '%';
-    resetEl.textContent = bucket.resets_at
-      ? (bucketKey === 'five_hour'
-        ? _formatFiveHourReset(providerData, bucket)
-        : formatResetTime(providerData, bucket))
-      : '\u2014';
-  }
-  return resetEl;
+  const refs = {bar: bar, pctEl: pctEl, resetEl: resetEl};
+  _paintBucket(refs, win, providerData);
+  return refs;
+}
+
+function _buildNoCapMarker(row) {
+  const marker = _el('span', 'text-slate-500');
+  marker.setAttribute('data-field', 'no-cap');
+  marker.textContent = 'plan · no cap';
+  row.appendChild(marker);
 }
 
 function _buildRow(key, providerData) {
@@ -157,7 +206,7 @@ function _buildRow(key, providerData) {
     err.setAttribute('data-field', 'error');
     err.textContent = providerData.error;
     row.appendChild(err);
-    return {row, fiveHourResetEl: null, sevenDayResetEl: null};
+    return {row: row, buckets: [], asOfEl: null};
   }
 
   const row = _el('div', 'flex items-center gap-1.5');
@@ -166,16 +215,32 @@ function _buildRow(key, providerData) {
   const label = _el('span', 'text-slate-300 font-medium');
   label.textContent = providerData.account || key;
   row.appendChild(label);
-  const fiveHourResetEl = _buildBucket(row, '5h:', providerData.five_hour || {}, providerData, 'five_hour');
-  const sevenDayResetEl = _buildBucket(row, '7d:', providerData.seven_day || {}, providerData, 'seven_day');
 
+  const windows = Array.isArray(providerData.windows) ? providerData.windows : [];
+  const buckets = [];
+  if (windows.length === 0) {
+    _buildNoCapMarker(row);
+  } else {
+    for (const win of windows) {
+      buckets.push({win: win, refs: _buildBucket(row, win, providerData)});
+    }
+  }
+
+  let asOfEl = null;
   if (providerData.provider === 'codex') {
-    const state = _providerRateLimitState(providerData);
+    const state = providerData.rate_limits_state || '';
     if (state) {
       const badge = _el('span', 'px-1.5 py-0.5 rounded bg-slate-700 text-[10px] font-medium text-slate-300');
       badge.setAttribute('data-field', 'state');
       badge.textContent = _providerStateLabel(state);
       row.appendChild(badge);
+    }
+    const asOf = _asOfText(providerData);
+    if (asOf) {
+      asOfEl = _el('span', 'text-slate-500');
+      asOfEl.setAttribute('data-field', 'as-of');
+      asOfEl.textContent = asOf;
+      row.appendChild(asOfEl);
     }
     const spend = providerData.spend || {};
     const spendGroup = _el('div', 'flex items-center gap-1.5 text-slate-400');
@@ -185,7 +250,7 @@ function _buildRow(key, providerData) {
     s24.setAttribute('data-field', 'spend-24h');
     s24.textContent = _formatSpendUsd(spend.last_24h_usd);
     const dot = _el('span', 'text-slate-700');
-    dot.textContent = '\u00b7';
+    dot.textContent = '·';
     const l7 = _el('span', '');
     l7.textContent = '7d:';
     const s7 = _el('span', '');
@@ -200,7 +265,7 @@ function _buildRow(key, providerData) {
   } else if (providerData.provider !== 'claude') {
     throw new Error('unknown usage provider: ' + providerData.provider);
   }
-  return {row, fiveHourResetEl, sevenDayResetEl};
+  return {row: row, buckets: buckets, asOfEl: asOfEl};
 }
 
 function renderExtUsage(data) {
@@ -213,8 +278,8 @@ function renderExtUsage(data) {
   for (const [key, providerData] of Object.entries(providers)) {
     const built = _buildRow(key, providerData);
     nodes.push(built.row);
-    if (built.fiveHourResetEl) {
-      rows.push({providerData, fiveHourResetEl: built.fiveHourResetEl, sevenDayResetEl: built.sevenDayResetEl});
+    if (built.buckets.length > 0 || built.asOfEl) {
+      rows.push({providerData: providerData, buckets: built.buckets, asOfEl: built.asOfEl});
     }
   }
 
@@ -225,16 +290,15 @@ function renderExtUsage(data) {
   }
 }
 
+// Repaint rather than patch text: a reading can cross into "expired" purely by
+// the passage of time, which changes the bar as well as the label.
 function _refreshResetTimers() {
   for (const entry of _extUsageRows) {
-    const providerData = entry.providerData;
-    const fiveHour = providerData.five_hour;
-    if (fiveHour && fiveHour.resets_at && entry.fiveHourResetEl) {
-      entry.fiveHourResetEl.textContent = _formatFiveHourReset(providerData, fiveHour);
+    for (const bucket of entry.buckets) {
+      _paintBucket(bucket.refs, bucket.win, entry.providerData);
     }
-    const sevenDay = providerData.seven_day;
-    if (sevenDay && sevenDay.resets_at && entry.sevenDayResetEl) {
-      entry.sevenDayResetEl.textContent = formatResetTime(providerData, sevenDay);
+    if (entry.asOfEl) {
+      entry.asOfEl.textContent = _asOfText(entry.providerData);
     }
   }
 }

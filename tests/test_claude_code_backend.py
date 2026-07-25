@@ -170,6 +170,28 @@ def test_prepare_env_forwards_simple_system_prompt(monkeypatch: pytest.MonkeyPat
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 
+def test_prepare_env_defaults_auto_compact_window(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+  backend = ClaudeCodeBackend()
+
+  env = backend._prepare_env({})
+
+  assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "433000"
+  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
+def test_prepare_env_host_export_beats_auto_compact_window_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1000000")
+  backend = ClaudeCodeBackend()
+
+  env = backend._prepare_env({})
+
+  assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1000000"
+  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
 def test_prepare_env_applies_headless_policy_over_incoming_env(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.delenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", raising=False)
   backend = ClaudeCodeBackend()

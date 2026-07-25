@@ -2,7 +2,7 @@
 
 The default path is zero-token. ``extract_recap`` scans a session's (sparse)
 user events and returns the ordered asks plus the last exchange — no LLM call.
-A concise summary is generated only on an explicit request (via a same-type light
+A concise summary is generated only on an explicit request (via a resolved light
 backend from model_preference) and cached per ``(session_id, upto)`` so reopening
 an unchanged divider costs nothing.
 """
@@ -15,7 +15,7 @@ import structlog
 
 from src.agents.backends.registry import build_backend
 from src.api.message_utils import events_to_messages
-from src.core.autonamer import select_light_backend
+from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
@@ -163,19 +163,19 @@ async def generate_and_cache_summary(
   """Generate a recap summary for the divider at *upto*, cache it, and return it.
 
   Feeds the LLM ONLY the bounded extraction (asks + last), never raw events. The
-  summary comes from a same-type light backend picked from model_preference. If the
-  session backend is unknown or has no same-type preference entry, this logs a
-  warning and returns "" without writing the cache (it never raises).
+  summary comes from a resolved light backend picked from model_preference. If no
+  preference entry resolves, this logs a warning and returns "" without writing
+  the cache.
   """
   meta = await session_mgr.get_session(session_id)
-  if meta is None or not meta.backend:
+  if meta is None:
     log.warning("recap_skipped", reason="no_session_backend", session_id=session_id)
     return ""
-  option = select_light_backend(cfg, meta.backend)
-  if option is None:
-    log.warning("recap_skipped", reason="no_same_type_preference", session_id=session_id, backend=meta.backend)
+
+  options = list(iter_light_backends(cfg))
+  if not options:
+    log.warning("recap_skipped", reason="no_resolvable_preference", session_id=session_id)
     return ""
-  backend = build_backend(option, cfg)
 
   extract = await asyncio.to_thread(extract_recap, session_mgr, session_id, upto)
   asks = extract["asks"]
@@ -185,8 +185,22 @@ async def generate_and_cache_summary(
       last_user=last.get("user") or "(none)",
       last_assistant=last.get("assistant") or "(none)",
   )
-  summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=AUTONAMER_TIMEOUT)
-  if summary:
-    await asyncio.to_thread(_write_cache_entry, session_mgr, session_id, upto, summary)
-    log.info("recap_summary_generated", session_id=session_id, upto=upto)
-  return summary
+
+  last_exception: Exception | None = None
+  for option in options:
+    try:
+      backend = build_backend(option, cfg)
+      summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=AUTONAMER_TIMEOUT)
+    except Exception as e:
+      last_exception = e
+      log.warning("recap_backend_failed", session_id=session_id, error=str(e))
+      continue
+
+    if summary:
+      await asyncio.to_thread(_write_cache_entry, session_mgr, session_id, upto, summary)
+      log.info("recap_summary_generated", session_id=session_id, upto=upto)
+      return summary
+
+  if last_exception is not None:
+    raise last_exception
+  return ""

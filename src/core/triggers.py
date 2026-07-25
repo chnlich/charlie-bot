@@ -33,6 +33,9 @@ _SSH_OVERALL_TIMEOUT = 60.0  # asyncio.wait_for timeout wrapping the subprocess
 
 # SLURM watch (sacct polling).
 _SACCT_POLL_INTERVAL = 30  # seconds between sacct probes
+# A remote sacct host that answers nothing for this long is treated as unobservable: the
+# group stops waiting and reports itself so the master wakes up instead of going blind.
+_REMOTE_SACCT_UNREACHABLE_GRACE = 900  # seconds
 # Non-terminal job states: the job is still in flight, keep polling.
 _SLURM_ACTIVE_STATES = frozenset({
     "PENDING",
@@ -376,8 +379,14 @@ class TriggerManager:
       delay_seconds: int,
       message: str,
       watch_targets: list[WatchTarget] | None = None,
+      probe_out: dict[str, str] | None = None,
   ) -> PendingTrigger:
-    """Create a pending trigger, persist to disk, and start the sleep task."""
+    """Create a pending trigger, persist to disk, and start the sleep task.
+
+    ``probe_out``, when given, is filled with ``label -> observed state`` for every
+    remote SLURM target probed at create time, so the caller can report what was
+    actually seen without probing twice.
+    """
     targets = list(watch_targets or [])
     kinds = {t.kind for t in targets}
 
@@ -388,6 +397,12 @@ class TriggerManager:
 
     if WatchKind.REMOTE_PID in kinds:
       await self._verify_remote_targets([t for t in targets if t.kind == WatchKind.REMOTE_PID])
+
+    remote_slurm = [t for t in targets if t.kind == WatchKind.SLURM_JOB and t.host is not None]
+    if remote_slurm:
+      observed = await self._verify_remote_slurm_targets(remote_slurm)
+      if probe_out is not None:
+        probe_out.update(observed)
 
     fire_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
     trigger = PendingTrigger(
@@ -416,6 +431,37 @@ class TriggerManager:
         bad.append(f"{t.host}:{t.pid} -> {status} ({raw.strip()!r})")
     if bad:
       raise RemoteVerifyError("verify-on-create failed for remote watch target(s): " + "; ".join(bad))
+
+  async def _verify_remote_slurm_targets(self, targets: list[SlurmJob]) -> dict[str, str]:
+    """Probe each remote SLURM host once before persisting; reject if a probe failed.
+
+    Returns ``label -> observed state``, using ``not-yet-registered`` when the probe
+    worked but slurmdbd has no row for the job yet — accounting lag is normal right
+    after ``sbatch`` and must not fail creation. Only a failed probe (ssh down, sacct
+    missing, non-zero exit, timeout) is fatal, because that is the case where the
+    trigger would silently degrade to a pure delay.
+    """
+    by_host: dict[str, list[int]] = {}
+    for t in targets:
+      by_host.setdefault(t.host, []).append(t.job_id)
+
+    hosts = sorted(by_host)
+    results = await asyncio.gather(*[
+        _probe_sacct(sorted(by_host[h]), "verify-on-create", host=h) for h in hosts
+    ])
+
+    observed: dict[str, str] = {}
+    bad: list[str] = []
+    for host, (states, error) in zip(hosts, results):
+      if error is not None:
+        bad.append(f"{host} -> {error}")
+        continue
+      for job_id in sorted(by_host[host]):
+        row = states.get(job_id)
+        observed[_slurm_label(host, job_id)] = row[0] if row is not None else "not-yet-registered"
+    if bad:
+      raise RemoteVerifyError("verify-on-create failed for remote SLURM host(s): " + "; ".join(bad))
+    return observed
 
   async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
     """Read all triggers for a session from disk."""
@@ -699,7 +745,9 @@ class TriggerManager:
     bare. The local group polls at a fixed interval; remote groups use the ssh backoff
     ladder because each probe costs an ssh round trip. On a host without sacct the
     local group skips polling and waits out the deadline rather than spinning on a
-    missing binary; remote groups are unaffected.
+    missing binary; remote groups are unaffected. A remote group that has answered
+    nothing for ``_REMOTE_SACCT_UNREACHABLE_GRACE`` stops waiting and reports its
+    targets as unreachable so the trigger fires instead of going blind.
     """
     remaining = set(job_ids)
 
@@ -712,10 +760,28 @@ class TriggerManager:
 
     finished: list[str] = []
     step = 0
+    last_success = datetime.now(timezone.utc)
     while True:
       states, error = await _probe_sacct(sorted(remaining), trigger.id, host=host)
-      if error is not None:
+      if error is None:
+        last_success = datetime.now(timezone.utc)
+      else:
         log.debug("sacct_probe_transient_error", trigger_id=trigger.id, host=host, error=error)
+        dark_for = (datetime.now(timezone.utc) - last_success).total_seconds()
+        if host is not None and dark_for >= _REMOTE_SACCT_UNREACHABLE_GRACE:
+          log.warning(
+              "slurm_watch_host_unreachable",
+              trigger_id=trigger.id,
+              host=host,
+              dark_seconds=int(dark_for),
+              error=error,
+          )
+          note = error.splitlines()[0][:120]
+          still_alive = [
+              f"{_slurm_label(host, j)} (unreachable {int(dark_for // 60)}m: {note})"
+              for j in sorted(remaining)
+          ]
+          return finished, still_alive
       for job_id in sorted(remaining):
         row = states.get(job_id)
         if row is None:

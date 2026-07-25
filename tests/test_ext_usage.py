@@ -31,6 +31,7 @@ def _build_token_count_event(
     secondary_used_percent: float,
     secondary_resets_at: int,
 ) -> dict:
+  """A legacy two-window Codex payload: a 5h primary plus a 7d secondary."""
   return {
     "timestamp": timestamp,
     "type": "event_msg",
@@ -39,12 +40,38 @@ def _build_token_count_event(
       "rate_limits": {
         "primary": {
           "used_percent": primary_used_percent,
+          "window_minutes": 300,
           "resets_at": primary_resets_at,
         },
         "secondary": {
           "used_percent": secondary_used_percent,
+          "window_minutes": 10080,
           "resets_at": secondary_resets_at,
         },
+      },
+    },
+  }
+
+
+def _build_weekly_token_count_event(
+    *,
+    timestamp: str,
+    used_percent: float,
+    resets_at: int,
+) -> dict:
+  """The shape Codex reports today: one weekly window in the primary slot."""
+  return {
+    "timestamp": timestamp,
+    "type": "event_msg",
+    "payload": {
+      "type": "token_count",
+      "rate_limits": {
+        "primary": {
+          "used_percent": used_percent,
+          "window_minutes": 10080,
+          "resets_at": resets_at,
+        },
+        "secondary": None,
       },
     },
   }
@@ -63,14 +90,18 @@ def test_extract_latest_codex_usage_adds_token_count_observed_at() -> None:
   usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
 
   assert usage == {
-    "five_hour": {
-      "utilization": 8.0,
-      "resets_at": datetime.fromtimestamp(1774653423, tz=timezone.utc).isoformat(),
-    },
-    "seven_day": {
-      "utilization": 2.0,
-      "resets_at": datetime.fromtimestamp(1775240223, tz=timezone.utc).isoformat(),
-    },
+    "windows": [
+      {
+        "window_minutes": 300,
+        "utilization": 8.0,
+        "resets_at": datetime.fromtimestamp(1774653423, tz=timezone.utc).isoformat(),
+      },
+      {
+        "window_minutes": 10080,
+        "utilization": 2.0,
+        "resets_at": datetime.fromtimestamp(1775240223, tz=timezone.utc).isoformat(),
+      },
+    ],
     "fetched_at": fetched_at,
     "provider": "codex",
     "token_count_observed_at": "2026-03-27T18:29:35.694Z",
@@ -105,8 +136,8 @@ def test_extract_latest_codex_usage_uses_latest_token_count_event() -> None:
   usage = _extract_latest_codex_usage(lines, fetched_at="2026-03-27T18:10:00+00:00")
 
   assert usage is not None
-  assert usage["five_hour"]["utilization"] == 18.0
-  assert usage["seven_day"]["utilization"] == 6.0
+  assert [w["utilization"] for w in usage["windows"]] == [18.0, 6.0]
+  assert [w["window_minutes"] for w in usage["windows"]] == [300, 10080]
   assert usage["token_count_observed_at"] == "2026-03-27T18:00:00Z"
 
 
@@ -131,14 +162,7 @@ def test_extract_latest_codex_usage_handles_null_rate_limit_buckets() -> None:
   usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
 
   assert usage == {
-    "five_hour": {
-      "utilization": 0.0,
-      "resets_at": "",
-    },
-    "seven_day": {
-      "utilization": 0.0,
-      "resets_at": "",
-    },
+    "windows": [],
     "fetched_at": fetched_at,
     "provider": "codex",
     "rate_limits_state": "business-unlimited",
@@ -163,14 +187,7 @@ def test_extract_latest_codex_usage_does_not_assume_business_state_without_metad
   usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
 
   assert usage == {
-    "five_hour": {
-      "utilization": 0.0,
-      "resets_at": "",
-    },
-    "seven_day": {
-      "utilization": 0.0,
-      "resets_at": "",
-    },
+    "windows": [],
     "fetched_at": fetched_at,
     "provider": "codex",
     "token_count_observed_at": "2026-03-27T18:39:35.694Z",
@@ -256,8 +273,7 @@ async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_mal
   usage = await provider.fetch()
 
   assert usage is not None
-  assert usage["five_hour"]["utilization"] == 8.0
-  assert usage["seven_day"]["utilization"] == 2.0
+  assert [w["utilization"] for w in usage["windows"]] == [8.0, 2.0]
   assert usage["spend"] == {
       "last_24h_usd": 0.0,
       "last_7d_usd": 0.0,
@@ -296,8 +312,7 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
   usage = await provider.fetch()
 
   assert usage is not None
-  assert usage["five_hour"]["utilization"] == 8.0
-  assert usage["seven_day"]["utilization"] == 2.0
+  assert [w["utilization"] for w in usage["windows"]] == [8.0, 2.0]
   assert usage["spend"] is None
 
 
@@ -395,14 +410,18 @@ def test_transform_response_preserves_claude_payload_shape() -> None:
     },
   })
 
-  assert usage["five_hour"] == {
-    "utilization": 42.0,
-    "resets_at": "2026-03-27T20:00:00+00:00",
-  }
-  assert usage["seven_day"] == {
-    "utilization": 10.0,
-    "resets_at": "2026-04-01T20:00:00+00:00",
-  }
+  assert usage["windows"] == [
+    {
+      "window_minutes": 300,
+      "utilization": 42.0,
+      "resets_at": "2026-03-27T20:00:00+00:00",
+    },
+    {
+      "window_minutes": 10080,
+      "utilization": 10.0,
+      "resets_at": "2026-04-01T20:00:00+00:00",
+    },
+  ]
   assert usage["provider"] == "claude"
   assert "token_count_observed_at" not in usage
 
@@ -528,8 +547,7 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> di
 
 def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeypatch) -> None:
   main_value = {
-      "five_hour": {"utilization": 42.0, "resets_at": ""},
-      "seven_day": {"utilization": 1.0, "resets_at": ""},
+      "windows": [{"window_minutes": 300, "utilization": 42.0, "resets_at": ""}],
       "fetched_at": "2026-01-01T00:00:00+00:00",
       "provider": "claude",
   }
@@ -547,7 +565,7 @@ def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeyp
   main = ext_usage_mod._cached_usage["claude:main"]
   assert main["provider"] == "claude"
   assert main["account"] == "main"
-  assert main["five_hour"]["utilization"] == 42.0
+  assert main["windows"][0]["utilization"] == 42.0
   assert ext_usage_mod._cached_usage["claude:invite-1"] == {
       "provider": "claude",
       "account": "invite-1",
@@ -560,8 +578,7 @@ def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeyp
 def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
   fetch_no = {"i": 0}
   original = {
-      "five_hour": {"utilization": 42.0, "resets_at": ""},
-      "seven_day": {"utilization": 1.0, "resets_at": ""},
+      "windows": [{"window_minutes": 300, "utilization": 42.0, "resets_at": ""}],
       "fetched_at": "2026-01-01T00:00:00+00:00",
       "provider": "claude",
   }
@@ -577,7 +594,7 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
   state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=2)
 
   kept = ext_usage_mod._cached_usage["claude:main"]
-  assert kept["five_hour"]["utilization"] == 42.0
+  assert kept["windows"][0]["utilization"] == 42.0
   assert kept["fetched_at"] == "2026-01-01T00:00:00+00:00"
   assert "error" not in kept
   assert state["broadcasts"] == 2
@@ -590,8 +607,7 @@ def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
     def get_value():
       fetch_no["i"] += 1
       return {
-          "five_hour": {"utilization": float(fetch_no["i"]), "resets_at": ""},
-          "seven_day": {"utilization": 0.0, "resets_at": ""},
+          "windows": [{"window_minutes": 300, "utilization": float(fetch_no["i"]), "resets_at": ""}],
           "fetched_at": "2026-01-01T00:00:00+00:00",
           "provider": "claude",
       }
@@ -627,8 +643,7 @@ def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> N
     def get_value():
       fetch_order.append(label)
       return {
-          "five_hour": {"utilization": 1.0, "resets_at": ""},
-          "seven_day": {"utilization": 0.0, "resets_at": ""},
+          "windows": [{"window_minutes": 300, "utilization": 1.0, "resets_at": ""}],
           "fetched_at": "2026-01-01T00:00:00+00:00",
           "provider": "claude",
       }
@@ -649,8 +664,7 @@ def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> N
 def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
   def create_provider(provider, label, dir_path):
     return _FakeProvider(lambda: {
-        "five_hour": {"utilization": 1.0, "resets_at": ""},
-        "seven_day": {"utilization": 0.0, "resets_at": ""},
+        "windows": [{"window_minutes": 300, "utilization": 1.0, "resets_at": ""}],
         "fetched_at": "2026-01-01T00:00:00+00:00",
         "provider": "claude",
     })
@@ -673,8 +687,7 @@ def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
 
 def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) -> None:
   good = {
-      "five_hour": {"utilization": 7.0, "resets_at": ""},
-      "seven_day": {"utilization": 0.0, "resets_at": ""},
+      "windows": [{"window_minutes": 300, "utilization": 7.0, "resets_at": ""}],
       "fetched_at": "2026-01-01T00:00:00+00:00",
       "provider": "claude",
   }
@@ -707,7 +720,7 @@ def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) ->
   # Removed account "a" is pruned even though it held a good (non-error) entry.
   assert set(ext_usage_mod._cached_usage.keys()) == {"claude:main"}
   kept = ext_usage_mod._cached_usage["claude:main"]
-  assert kept["five_hour"]["utilization"] == 7.0
+  assert kept["windows"][0]["utilization"] == 7.0
   assert "error" not in kept
 
 
@@ -733,8 +746,7 @@ def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> No
   """A non-fetch exception (e.g. from ``_derive_accounts``) must hit a backoff
   sleep, not spin the outer loop with no await point."""
   good = {
-      "five_hour": {"utilization": 1.0, "resets_at": ""},
-      "seven_day": {"utilization": 0.0, "resets_at": ""},
+      "windows": [{"window_minutes": 300, "utilization": 1.0, "resets_at": ""}],
       "fetched_at": "2026-01-01T00:00:00+00:00",
       "provider": "claude",
   }
@@ -757,3 +769,144 @@ def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> No
 
   assert derive_count["i"] == 2
   assert state["sleeps"] == 2
+
+def test_extract_latest_codex_usage_reports_weekly_only_shape() -> None:
+  """Codex now reports a single weekly window in the primary slot.
+
+  The window is identified by its reported length, so it lands on a 7d entry
+  rather than inheriting the meaning of the slot it arrived in.
+  """
+  fetched_at = "2026-07-20T22:10:00+00:00"
+  lines = [json.dumps(_build_weekly_token_count_event(
+      timestamp="2026-07-20T22:08:57.925Z",
+      used_percent=96.0,
+      resets_at=1785016000,
+  ))]
+
+  usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
+
+  assert usage["windows"] == [{
+      "window_minutes": 10080,
+      "utilization": 96.0,
+      "resets_at": datetime.fromtimestamp(1785016000, tz=timezone.utc).isoformat(),
+  }]
+  assert "rate_limits_state" not in usage
+
+
+def test_extract_latest_codex_usage_drops_slot_without_window_minutes() -> None:
+  """An unidentifiable window is dropped, never guessed at from slot order."""
+  lines = [json.dumps({
+    "timestamp": "2026-07-20T22:08:57.925Z",
+    "type": "event_msg",
+    "payload": {
+      "type": "token_count",
+      "rate_limits": {
+        "primary": {"used_percent": 96.0, "resets_at": 1785016000},
+        "secondary": None,
+      },
+    },
+  })]
+
+  usage = _extract_latest_codex_usage(lines, fetched_at="2026-07-20T22:10:00+00:00")
+
+  assert usage["windows"] == []
+
+
+def test_extract_latest_codex_usage_marks_missing_percentage_unknown() -> None:
+  """A window with no reported usage is unknown, not zero."""
+  lines = [json.dumps({
+    "timestamp": "2026-07-20T22:08:57.925Z",
+    "type": "event_msg",
+    "payload": {
+      "type": "token_count",
+      "rate_limits": {
+        "primary": {"window_minutes": 10080, "resets_at": 1785016000},
+        "secondary": None,
+      },
+    },
+  })]
+
+  usage = _extract_latest_codex_usage(lines, fetched_at="2026-07-20T22:10:00+00:00")
+
+  assert usage["windows"] == [{
+      "window_minutes": 10080,
+      "utilization": None,
+      "resets_at": datetime.fromtimestamp(1785016000, tz=timezone.utc).isoformat(),
+  }]
+
+
+def test_transform_response_marks_missing_claude_percentage_unknown() -> None:
+  usage = _transform_response({"fiveHour": {}, "sevenDay": {"utilization": 10.0}})
+
+  assert [w["utilization"] for w in usage["windows"]] == [None, 10.0]
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_reads_newest_rollout_beyond_three_days(tmp_path) -> None:
+  """No date cliff: the last known reading stays visible however old it is.
+
+  Under a weekly window a reading from days ago is the only information there
+  is; its age is reported rather than used to hide it.
+  """
+  provider = CodexUsageProvider(label="personal", home_dir=str(tmp_path))
+  now = datetime.now(timezone.utc)
+  old_day = now - timedelta(days=9)
+  rollout_dir = (tmp_path / "sessions" / f"{old_day.year:04d}" / f"{old_day.month:02d}" /
+                 f"{old_day.day:02d}")
+  rollout_dir.mkdir(parents=True)
+
+  rollout_path = rollout_dir / "rollout-old.jsonl"
+  rollout_path.write_text(
+      json.dumps(_build_weekly_token_count_event(
+          timestamp=old_day.isoformat().replace("+00:00", "Z"),
+          used_percent=96.0,
+          resets_at=int(now.timestamp()) + 3600,
+      )) + "\n"
+  )
+  os.utime(rollout_path, (old_day.timestamp(), old_day.timestamp()))
+
+  usage = await provider.fetch()
+
+  assert usage is not None
+  assert [w["window_minutes"] for w in usage["windows"]] == [10080]
+  assert usage["windows"][0]["utilization"] == 96.0
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_reports_no_sessions_for_empty_home(tmp_path) -> None:
+  provider = CodexUsageProvider(label="personal", home_dir=str(tmp_path))
+
+  assert await provider.fetch() is None
+  assert provider.last_error == "no sessions found"
+
+
+def test_compute_codex_spend_windows_accepts_a_prebuilt_file_list(tmp_path) -> None:
+  """The usage scrape and the spend aggregation share one directory walk."""
+  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+  rollout_dir = tmp_path / "2026" / "06" / "01"
+  rollout_dir.mkdir(parents=True)
+  rollout_path = rollout_dir / "rollout-shared.jsonl"
+  rollout_path.write_text("\n".join([
+      json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}}),
+      json.dumps({
+          "timestamp": now.isoformat(),
+          "type": "event_msg",
+          "payload": {
+              "type": "token_count",
+              "info": {
+                  "last_token_usage": {
+                      "input_tokens": 1000,
+                      "cached_input_tokens": 0,
+                      "output_tokens": 100,
+                  },
+              },
+          },
+      }),
+  ]) + "\n")
+  os.utime(rollout_path, (now.timestamp(), now.timestamp()))
+
+  from_list = _compute_codex_spend_windows(rollout_paths=[rollout_path], now=now)
+  from_walk = _compute_codex_spend_windows(sessions_dir=tmp_path, now=now)
+
+  assert from_list == from_walk
+  assert from_list["last_7d_usd"] > 0.0

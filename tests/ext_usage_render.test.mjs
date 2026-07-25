@@ -135,13 +135,25 @@ function loadExtUsageScript() {
   return { context, strip };
 }
 
+const MINUTE = 60000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+// Payloads are built relative to now so a fixed calendar date can never drift
+// into "expired" and silently change what these tests assert.
+function _iso(offsetMs) {
+  return new Date(Date.now() + offsetMs).toISOString();
+}
+
 function _claudePayload(overrides = {}) {
   return {
     provider: 'claude',
     account: 'main',
-    five_hour: { utilization: 42.0, resets_at: '2026-03-31T10:00:00+00:00' },
-    seven_day: { utilization: 10.0, resets_at: '2026-04-03T10:00:00+00:00' },
-    fetched_at: '2026-03-31T08:00:00+00:00',
+    windows: [
+      { window_minutes: 300, utilization: 42.0, resets_at: _iso(2 * HOUR) },
+      { window_minutes: 10080, utilization: 10.0, resets_at: _iso(3 * DAY) },
+    ],
+    fetched_at: _iso(-1 * MINUTE),
     ...overrides,
   };
 }
@@ -150,21 +162,20 @@ function _codexPayload(overrides = {}) {
   return {
     provider: 'codex',
     account: 'main',
-    five_hour: { utilization: 0.0, resets_at: '' },
-    seven_day: { utilization: 0.0, resets_at: '' },
-    fetched_at: '2026-03-31T08:00:00+00:00',
-    token_count_observed_at: '2026-03-31T07:59:00Z',
+    windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY) }],
+    fetched_at: _iso(-1 * MINUTE),
+    token_count_observed_at: _iso(-2 * MINUTE),
     ...overrides,
   };
 }
 
-test('renderExtUsage shows business/unlimited Codex state explicitly', () => {
+test('renderExtUsage shows business/unlimited Codex state with no quota bars', () => {
   const { context, strip } = loadExtUsageScript();
 
   context.renderExtUsage({
     providers: {
       'claude:main': _claudePayload(),
-      'codex:main': _codexPayload({ rate_limits_state: 'business-unlimited' }),
+      'codex:main': _codexPayload({ windows: [], rate_limits_state: 'business-unlimited' }),
     },
   });
 
@@ -181,8 +192,101 @@ test('renderExtUsage shows business/unlimited Codex state explicitly', () => {
   const stateBadge = _field(codexRow, 'state');
   assert.ok(stateBadge, 'state badge rendered');
   assert.equal(stateBadge.textContent, 'business / unlimited');
-  assert.equal(_field(codexRow, '5h-reset').textContent, 'no 5h cap');
-  assert.equal(_field(codexRow, '7d-reset').textContent, 'no 7d cap');
+  assert.equal(_field(codexRow, 'no-cap').textContent, 'plan \u00b7 no cap');
+  assert.equal(_field(codexRow, '5h-bar'), null, 'no invented 5h bar');
+  assert.equal(_field(codexRow, '7d-bar'), null, 'no invented 7d bar');
+});
+
+test('renderExtUsage renders only the windows the provider reported', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': _claudePayload(),
+      'codex:personal': _codexPayload({ account: 'personal' }),
+    },
+  });
+
+  // Codex now reports a weekly window only: one 7d bar, and no 5h bar at all.
+  const codexRow = _rowByKey(strip, 'codex:personal');
+  assert.equal(_field(codexRow, '7d-pct').textContent, '96%');
+  assert.match(_field(codexRow, '7d-reset').textContent, /^resets in /);
+  assert.equal(_field(codexRow, '5h-bar'), null, 'weekly-only codex row has no 5h bar');
+  assert.equal(_field(codexRow, '5h-pct'), null);
+
+  // Claude still reports both, so both bars stay.
+  const claudeRow = _rowByKey(strip, 'claude:main');
+  assert.ok(_field(claudeRow, '5h-bar'), 'claude keeps its 5h bar');
+  assert.equal(_field(claudeRow, '7d-pct').textContent, '10%');
+});
+
+test('renderExtUsage labels a window by its reported length, not its position', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        windows: [
+          { window_minutes: 60, utilization: 5.0, resets_at: _iso(30 * MINUTE) },
+          { window_minutes: 43200, utilization: 20.0, resets_at: _iso(10 * DAY) },
+        ],
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, '1h-pct').textContent, '5%');
+  assert.equal(_field(row, '30d-pct').textContent, '20%');
+});
+
+test('renderExtUsage shows unknown utilization as ? instead of 0%', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        windows: [{ window_minutes: 10080, utilization: null, resets_at: _iso(2 * DAY) }],
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, '7d-pct').textContent, '?');
+  assert.equal(_field(row, '7d-bar').style.width, '0.0%');
+  assert.ok(_field(row, '7d-bar').classList.contains('bg-slate-600'), 'unknown bar is grey, not green');
+});
+
+test('renderExtUsage marks a reading older than its window as expired', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        // Sampled 9 days ago: the 7d window has certainly rolled over since.
+        token_count_observed_at: _iso(-9 * DAY),
+        windows: [{ window_minutes: 10080, utilization: 96.0, resets_at: _iso(2 * DAY) }],
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, '7d-pct').textContent, '\u2014');
+  assert.equal(_field(row, '7d-reset').textContent, 'window reset \u2014 reading expired');
+  assert.ok(_field(row, '7d-bar').classList.contains('bg-slate-600'));
+});
+
+test('renderExtUsage shows reading age on Codex rows only', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': _claudePayload(),
+      'codex:main': _codexPayload({ token_count_observed_at: _iso(-5 * DAY) }),
+    },
+  });
+
+  assert.equal(_field(_rowByKey(strip, 'codex:main'), 'as-of').textContent, 'as of 5d ago');
+  assert.equal(_field(_rowByKey(strip, 'claude:main'), 'as-of'), null, 'live Claude query carries no age');
 });
 
 test('renderExtUsage formats Codex spend values and dashes when absent', () => {
@@ -190,13 +294,7 @@ test('renderExtUsage formats Codex spend values and dashes when absent', () => {
 
   context.renderExtUsage({
     providers: {
-      'codex:main': _codexPayload({
-        five_hour: { utilization: 8.0, resets_at: '2030-03-31T10:00:00+00:00' },
-        seven_day: { utilization: 2.0, resets_at: '2030-04-02T10:00:00+00:00' },
-        fetched_at: '2030-03-31T08:05:00+00:00',
-        token_count_observed_at: '2030-03-31T08:04:00Z',
-        spend: { last_24h_usd: 4.85, last_7d_usd: 13.2 },
-      }),
+      'codex:main': _codexPayload({ spend: { last_24h_usd: 4.85, last_7d_usd: 13.2 } }),
     },
   });
 
@@ -204,16 +302,7 @@ test('renderExtUsage formats Codex spend values and dashes when absent', () => {
   assert.equal(_field(row, 'spend-24h').textContent, '$4.85');
   assert.equal(_field(row, 'spend-7d').textContent, '$13.20');
 
-  context.renderExtUsage({
-    providers: {
-      'codex:main': _codexPayload({
-        five_hour: { utilization: 8.0, resets_at: '2030-03-31T10:00:00+00:00' },
-        seven_day: { utilization: 2.0, resets_at: '2030-04-02T10:00:00+00:00' },
-        fetched_at: '2030-03-31T08:05:00+00:00',
-        token_count_observed_at: '2030-03-31T08:04:00Z',
-      }),
-    },
-  });
+  context.renderExtUsage({ providers: { 'codex:main': _codexPayload() } });
 
   const refreshed = _rowByKey(strip, 'codex:main');
   assert.equal(_field(refreshed, 'spend-24h').textContent, '\u2014');
@@ -225,27 +314,18 @@ test('renderExtUsage clears the Codex business/unlimited state when caps return'
 
   context.renderExtUsage({
     providers: {
-      'codex:main': _codexPayload({ rate_limits_state: 'business-unlimited' }),
+      'codex:main': _codexPayload({ windows: [], rate_limits_state: 'business-unlimited' }),
     },
   });
 
   assert.ok(_field(_rowByKey(strip, 'codex:main'), 'state'));
 
-  context.renderExtUsage({
-    providers: {
-      'codex:main': _codexPayload({
-        five_hour: { utilization: 8.0, resets_at: '2030-03-31T10:00:00+00:00' },
-        seven_day: { utilization: 2.0, resets_at: '2030-04-02T10:00:00+00:00' },
-        fetched_at: '2026-03-31T08:05:00+00:00',
-        token_count_observed_at: '2026-03-31T08:04:00Z',
-      }),
-    },
-  });
+  context.renderExtUsage({ providers: { 'codex:main': _codexPayload() } });
 
   const row = _rowByKey(strip, 'codex:main');
   assert.equal(_field(row, 'state'), null);
-  assert.equal(_field(row, '5h-pct').textContent, '8%');
-  assert.notEqual(_field(row, '5h-reset').textContent, 'no 5h cap');
+  assert.equal(_field(row, 'no-cap'), null);
+  assert.equal(_field(row, '7d-pct').textContent, '96%');
 });
 
 test('renderExtUsage renders error rows greyed with the error text', () => {
@@ -276,12 +356,15 @@ test('renderExtUsage renders a provider pill on every account row', () => {
   context.renderExtUsage({
     providers: {
       'claude:main': _claudePayload({ account: 'main' }),
-      'claude:invite-1': _claudePayload({ account: 'invite-1', five_hour: { utilization: 7.0, resets_at: '' } }),
+      'claude:invite-1': _claudePayload({
+        account: 'invite-1',
+        windows: [{ window_minutes: 300, utilization: 7.0, resets_at: '' }],
+      }),
       'codex:main': _codexPayload(),
     },
   });
 
-  // The old strip-level group-label spans and │ separators are gone: every
+  // The old strip-level group-label spans and \u2502 separators are gone: every
   // strip child is now an account row carrying a data-key attribute.
   for (const child of strip.children) {
     assert.ok(child.getAttribute('data-key'), 'strip child is an account row with a data-key');

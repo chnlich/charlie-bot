@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import time
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -167,7 +167,7 @@ class ClaudeUsageProvider:
 
     self._backoff_seconds = 0.0
     resp.raise_for_status()
-    return _transform_response(resp.json())
+    return _transform_response(resp.json(), account=self.label)
 
 
 class CodexUsageProvider:
@@ -176,12 +176,13 @@ class CodexUsageProvider:
   def __init__(self, label: str, home_dir: str) -> None:
     self.label = label
     self.sessions_dir = Path(home_dir) / "sessions"
-    self.last_error = "no recent sessions"
+    self.last_error = "no sessions found"
 
   async def fetch(self) -> dict[str, Any] | None:
+    rollout_paths = await asyncio.to_thread(_list_rollout_files, self.sessions_dir)
     usage, spend = await asyncio.gather(
-        asyncio.to_thread(self._fetch_usage),
-        asyncio.to_thread(_compute_codex_spend_windows, sessions_dir=self.sessions_dir),
+        asyncio.to_thread(self._fetch_usage, rollout_paths),
+        asyncio.to_thread(_compute_codex_spend_windows, rollout_paths=rollout_paths),
         return_exceptions=True,
     )
     if isinstance(usage, Exception):
@@ -189,7 +190,7 @@ class CodexUsageProvider:
       self.last_error = "usage read failed"
       return None
     if usage is None:
-      self.last_error = "no recent sessions"
+      self.last_error = "no sessions found"
       return None
     if isinstance(spend, Exception):
       log.error("ext_usage_codex_spend_failed", account=self.label, error=str(spend))
@@ -197,30 +198,42 @@ class CodexUsageProvider:
     usage["spend"] = spend
     return usage
 
-  def _fetch_usage(self) -> dict[str, Any] | None:
-    jsonl_path = self._find_latest_session_file()
+  def _fetch_usage(self, rollout_paths: list[Path]) -> dict[str, Any] | None:
+    jsonl_path = _newest_rollout(rollout_paths)
     if jsonl_path is None:
       return None
     text = jsonl_path.read_text()
-    return _extract_latest_codex_usage(text.splitlines())
+    return _extract_latest_codex_usage(text.splitlines(), account=self.label)
 
-  def _find_latest_session_file(self) -> Path | None:
-    """Walk sessions_dir/YYYY/MM/DD/ backwards from today, checking 3 days."""
-    if not self.sessions_dir.exists():
-      return None
 
-    today = date.today()
-    for days_ago in range(3):
-      d = today - timedelta(days=days_ago)
-      day_dir = self.sessions_dir / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.day:02d}"
-      if not day_dir.exists():
-        continue
+def _list_rollout_files(sessions_dir: Path) -> list[Path]:
+  """List every rollout log under one account's sessions dir.
 
-      candidates = sorted(day_dir.glob("rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-      if candidates:
-        return candidates[0]
+  A single walk feeds both readers: the usage scrape wants the newest file
+  whatever its age, while the spend aggregation applies its own mtime cutoff.
+  """
+  if not sessions_dir.exists():
+    return []
+  return list(sessions_dir.glob("**/rollout-*.jsonl"))
 
-    return None
+
+def _newest_rollout(rollout_paths: list[Path]) -> Path | None:
+  """Newest rollout by mtime, with no date bound.
+
+  A reading's age is shown rather than used to hide it: under a weekly window
+  the last sample is the only information there is, however old.
+  """
+  newest: Path | None = None
+  newest_mtime = float("-inf")
+  for path in rollout_paths:
+    try:
+      mtime = path.stat().st_mtime
+    except OSError as e:
+      log.warning("ext_usage_codex_rollout_stat_failed", path=str(path), error=str(e))
+      continue
+    if mtime > newest_mtime:
+      newest, newest_mtime = path, mtime
+  return newest
 
 
 class _UsageInstance:
@@ -279,6 +292,7 @@ def _extract_latest_codex_usage(
     lines: list[str],
     *,
     fetched_at: str | None = None,
+    account: str = "",
 ) -> dict[str, Any] | None:
   """Parse the latest Codex token_count event from a session JSONL file."""
   effective_fetched_at = fetched_at or datetime.now(timezone.utc).isoformat()
@@ -297,7 +311,7 @@ def _extract_latest_codex_usage(
     payload = event.get("payload", {})
     if payload.get("type") != "token_count":
       continue
-    return _transform_codex_response(event, fetched_at=effective_fetched_at)
+    return _transform_codex_response(event, fetched_at=effective_fetched_at, account=account)
 
   return None
 
@@ -346,6 +360,7 @@ def _log_codex_spend_row_skip(path: Path, line_number: int, error: Exception | s
 
 def _compute_codex_spend_windows(
     *,
+    rollout_paths: list[Path] | None = None,
     sessions_dir: Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, float]:
@@ -357,14 +372,13 @@ def _compute_codex_spend_windows(
   one_day_ago = effective_now - timedelta(days=1)
   seven_days_ago = effective_now - timedelta(days=7)
   min_mtime = seven_days_ago.timestamp()
-  root = sessions_dir or (Path.home() / ".codex" / "sessions")
+  if rollout_paths is None:
+    rollout_paths = _list_rollout_files(sessions_dir or (Path.home() / ".codex" / "sessions"))
 
   last_24h_by_model: dict[str, dict[str, int]] = {}
   last_7d_by_model: dict[str, dict[str, int]] = {}
-  if not root.exists():
-    return {"last_24h_usd": 0.0, "last_7d_usd": 0.0}
 
-  for path in root.glob("**/rollout-*.jsonl"):
+  for path in rollout_paths:
     try:
       if path.stat().st_mtime < min_mtime:
         continue
@@ -428,10 +442,74 @@ def _compute_codex_spend_windows(
   }
 
 
+CODEX_LIMIT_SLOTS = ("primary", "secondary")
+
+CLAUDE_WINDOW_FIELDS = (
+    ("fiveHour", "five_hour", 300),
+    ("sevenDay", "seven_day", 10080),
+)
+
+
+def _as_utilization(value: Any) -> float | None:
+  """Percentage used, or None when upstream did not report one.
+
+  Absent usage stays absent: rendering it as 0.0 would claim a full quota,
+  which is the most dangerous wrong answer this strip can give.
+  """
+  if isinstance(value, bool) or not isinstance(value, (int, float)):
+    return None
+  return float(value)
+
+
+def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[str, Any]]:
+  """Turn every non-null rate-limit slot into a self-describing window entry.
+
+  Slot position carries no meaning; a window is identified by the
+  ``window_minutes`` it reports. A slot that omits it is dropped with a warning
+  rather than guessed at, because inferring a window from slot order is exactly
+  the failure this shape exists to remove.
+  """
+  windows: list[dict[str, Any]] = []
+  for slot in CODEX_LIMIT_SLOTS:
+    limit = rate_limits.get(slot)
+    if not isinstance(limit, dict):
+      continue
+    window_minutes = limit.get("window_minutes")
+    if isinstance(window_minutes, bool) or not isinstance(window_minutes, int):
+      log.warning(
+          "ext_usage_unknown_limit_shape",
+          provider="codex",
+          account=account,
+          slot=slot,
+          reason="missing window_minutes",
+      )
+      continue
+    utilization = _as_utilization(limit.get("used_percent"))
+    if utilization is None:
+      log.warning(
+          "ext_usage_unknown_limit_shape",
+          provider="codex",
+          account=account,
+          slot=slot,
+          reason="missing used_percent",
+      )
+    resets_at = limit.get("resets_at")
+    windows.append({
+        "window_minutes": window_minutes,
+        "utilization": utilization,
+        "resets_at":
+            datetime.fromtimestamp(resets_at, tz=timezone.utc).isoformat()
+            if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) else "",
+    })
+  windows.sort(key=lambda w: w["window_minutes"])
+  return windows
+
+
 def _transform_codex_response(
     event: dict[str, Any],
     *,
     fetched_at: str,
+    account: str = "",
 ) -> dict[str, Any]:
   """Transform a Codex token_count event into our cached usage format."""
   payload = event.get("payload", {})
@@ -441,20 +519,7 @@ def _transform_codex_response(
   credits = rate_limits.get("credits")
 
   usage = {
-      "five_hour":
-          {
-              "utilization": (primary or {}).get("used_percent", 0.0),
-              "resets_at":
-                  datetime.fromtimestamp(primary["resets_at"], tz=timezone.utc).isoformat()
-                  if isinstance(primary, dict) and "resets_at" in primary else "",
-          },
-      "seven_day":
-          {
-              "utilization": (secondary or {}).get("used_percent", 0.0),
-              "resets_at":
-                  datetime.fromtimestamp(secondary["resets_at"], tz=timezone.utc).isoformat()
-                  if isinstance(secondary, dict) and "resets_at" in secondary else "",
-          },
+      "windows": _codex_windows(rate_limits, account=account),
       "fetched_at": fetched_at,
       "provider": "codex",
       "token_count_observed_at": event.get("timestamp", ""),
@@ -498,23 +563,31 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
   return new_access
 
 
-def _transform_response(raw: dict[str, Any]) -> dict[str, Any]:
-  """Transform the raw Anthropic usage API response into our cached format."""
+def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, Any]:
+  """Transform the raw Anthropic usage API response into our cached format.
+
+  Claude reports its two windows under fixed field names, so their lengths are
+  known here; everything downstream still reads them off ``window_minutes``.
+  """
   now = datetime.now(timezone.utc).isoformat()
-  five_hour = raw.get("fiveHour", raw.get("five_hour", {}))
-  seven_day = raw.get("sevenDay", raw.get("seven_day", {}))
+
+  windows: list[dict[str, Any]] = []
+  for camel, snake, window_minutes in CLAUDE_WINDOW_FIELDS:
+    bucket = raw.get(camel, raw.get(snake)) or {}
+    windows.append({
+        "window_minutes": window_minutes,
+        "utilization": _as_utilization(bucket.get("utilization")),
+        "resets_at": bucket.get("resetsAt", bucket.get("resets_at", "")),
+    })
+
+  known = {name for camel, snake, _ in CLAUDE_WINDOW_FIELDS for name in (camel, snake)}
+  for key, value in raw.items():
+    if key not in known and isinstance(value, dict) and "utilization" in value:
+      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account, slot=key,
+                  reason="unrecognized window field")
 
   return {
-      "five_hour":
-          {
-              "utilization": five_hour.get("utilization", 0.0),
-              "resets_at": five_hour.get("resetsAt", five_hour.get("resets_at", "")),
-          },
-      "seven_day":
-          {
-              "utilization": seven_day.get("utilization", 0.0),
-              "resets_at": seven_day.get("resetsAt", seven_day.get("resets_at", "")),
-          },
+      "windows": windows,
       "fetched_at": now,
       "provider": "claude",
   }

@@ -37,15 +37,30 @@ SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
 HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 }
+# CharlieBot-chosen defaults, applied only when the host has not set the variable.
+# Claude Code compacts at window - min(max_output_tokens, 20000) - 13000, so declaring
+# a 433000 window puts the compaction point at 400000 tokens (433000 = 400000 + 13000
+# + 20000) instead of ~967000 under the model's full 1M window. The 13000 and 20000
+# terms are Claude Code internals: if a CLI upgrade changes them the compaction point
+# drifts silently and this constant has to be recomputed.
+HEADLESS_CLAUDE_DEFAULT_ENV: dict[str, str] = {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+}
 HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
     "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
 )
 
 
 def headless_claude_env() -> dict[str, str]:
-  env = dict(HEADLESS_CLAUDE_INVARIANT_ENV)
+  """Environment for every headless Claude Code subprocess.
+
+  Layered so a host export beats CharlieBot's own default: invariants first,
+  CharlieBot defaults next, allowlisted host values last.
+  """
+  env = {**HEADLESS_CLAUDE_INVARIANT_ENV, **HEADLESS_CLAUDE_DEFAULT_ENV}
   for name in HEADLESS_CLAUDE_FORWARDED_ENV_NAMES:
     if name in os.environ:
       env[name] = os.environ[name]

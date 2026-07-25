@@ -674,6 +674,34 @@ async def test_respawn_passes_one_prompt_directly_and_does_not_use_a_shell(
 
 
 @pytest.mark.asyncio
+async def test_respawn_passes_auto_compact_window_default_to_the_pane(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  calls: list[tuple[str, ...]] = []
+
+  async def fake_tmux_checked(*args: str, **kwargs) -> str:
+    calls.append(args)
+    return ""
+
+  monkeypatch.setattr(claude_sub, "_tmux_checked", fake_tmux_checked)
+  monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
+  args = claude_sub.ClaudeSubArgs(
+      output_format="stream-json",
+      prompt="hello",
+      model="claude-opus-4-8",
+      effort="max",
+      disallowed_tools=["AskUserQuestion,ExitPlanMode"],
+  )
+
+  await claude_sub._respawn_claude(args, SESSION_ID, True, tmp_path / "plugin", Path.cwd())
+
+  command = calls[0]
+  assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW=433000" in command
+  assert command[command.index("CLAUDE_CODE_AUTO_COMPACT_WINDOW=433000") - 1] == "-e"
+
+
+@pytest.mark.asyncio
 async def test_old_style_live_pane_is_migration_blocked_without_killing_it(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

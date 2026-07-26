@@ -28,6 +28,10 @@ See [genres/code.md](genres/code.md).
 
 See [genres/sharing-articles.md](genres/sharing-articles.md).
 
+## Explaining to the user
+
+See [genres/explaining-to-the-user.md](genres/explaining-to-the-user.md).
+
 ## Coordination messages
 
 See [genres/coordination-messages.md](genres/coordination-messages.md).

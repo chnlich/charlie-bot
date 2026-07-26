@@ -522,15 +522,16 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> di
   Under round-robin scheduling one sleep == one single-account fetch, so a full
   round of N accounts takes N sleeps (plus one sleep per empty round).
   """
-  state = {"sleeps": 0, "broadcasts": 0}
+  state: dict = {"sleeps": 0, "broadcasts": 0, "payloads": []}
 
   async def _fake_sleep(_):
     state["sleeps"] += 1
     if state["sleeps"] >= n:
       raise _StopAfter()
 
-  async def _track_broadcast(*a, **k):
+  async def _track_broadcast(_channel, event):
     state["broadcasts"] += 1
+    state["payloads"].append(event)
 
   monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
   monkeypatch.setattr(ext_usage_mod, "streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
@@ -910,3 +911,56 @@ def test_compute_codex_spend_windows_accepts_a_prebuilt_file_list(tmp_path) -> N
 
   assert from_list == from_walk
   assert from_list["last_7d_usd"] > 0.0
+
+
+def test_poll_seeds_pending_rows_so_no_account_is_missing_from_the_first_broadcast(monkeypatch) -> None:
+  """A restart must not hide accounts the round-robin has not reached yet.
+
+  One fetch per round gap means the last account is N-1 gaps behind the first, so
+  a strip built only from fetched accounts silently omits real accounts for
+  minutes after every restart — always the same ones, since the round order is
+  fixed. Seeding costs no extra request: the placeholders ride along in the
+  broadcast the first real fetch already sends.
+  """
+  main_value = {
+      "windows": [{"window_minutes": 300, "utilization": 42.0, "resets_at": ""}],
+      "fetched_at": "2026-01-01T00:00:00+00:00",
+      "provider": "claude",
+  }
+
+  def create_provider(provider, label, dir_path):
+    if provider == "claude" and label == "main":
+      return _FakeProvider(lambda: main_value)
+    return _FakeProvider(lambda: None, error="credentials not found")
+
+  accounts = {
+      "claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")],
+      "codex": [("main", "/fake/codex")],
+  }
+  # One sleep == one fetch, so this stops right after the first account's fetch.
+  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=1)
+
+  assert state["broadcasts"] == 1
+  providers = state["payloads"][0]["providers"]
+  # Seeding before any fetch resolves also fixes row order at derivation order.
+  assert list(providers) == ["claude:main", "claude:invite-1", "codex:main"]
+  assert providers["claude:main"]["windows"][0]["utilization"] == 42.0
+  assert "pending" not in providers["claude:main"]
+  assert providers["claude:invite-1"] == {"provider": "claude", "account": "invite-1", "pending": True}
+  assert providers["codex:main"] == {"provider": "codex", "account": "main", "pending": True}
+
+
+def test_poll_pending_placeholder_is_replaced_by_the_real_error(monkeypatch) -> None:
+  """A pending row is a not-yet-read marker, not data worth keeping."""
+
+  def create_provider(provider, label, dir_path):
+    return _FakeProvider(lambda: None, error="credentials not found")
+
+  accounts = {"claude": [("main", "/fake/main")], "codex": []}
+  _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=1)
+
+  assert ext_usage_mod._cached_usage["claude:main"] == {
+      "provider": "claude",
+      "account": "main",
+      "error": "credentials not found",
+  }

@@ -427,3 +427,26 @@ test('mobile CSS selectors for the strip match the attributes the renderer emits
     }
   }
 });
+
+test('renderExtUsage renders a not-yet-read account as loading, never as no-cap', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': _claudePayload(),
+      'codex:personal': { provider: 'codex', account: 'personal', pending: true },
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:personal');
+  assert.ok(row, 'pending row rendered');
+  assert.equal(row.classList.contains('opacity-60'), true);
+  assert.equal(_field(row, 'pending').textContent, 'loading');
+  // The dangerous wrong answer: an empty windows list on the quota path renders
+  // "plan / no cap", which would claim an uncapped plan for an unread account.
+  assert.equal(_field(row, 'no-cap'), null, 'pending row must not claim no cap');
+  assert.equal(_field(row, 'spend-7d'), null, 'pending row invents no spend figures');
+  const pill = row.children.find((c) => c.classList.contains('provider-pill'));
+  assert.ok(pill, 'pending row carries a provider pill');
+  assert.equal(pill.textContent, 'Codex');
+});

@@ -194,20 +194,26 @@ function _buildNoCapMarker(row) {
   row.appendChild(marker);
 }
 
+// A row that names an account without reporting a quota: not yet read, or read
+// and failed. Both must short-circuit the quota path, where an empty windows list
+// renders as "plan · no cap" — an uncapped-plan claim about an unknown quota.
+function _buildStatusRow(key, providerData, field, text) {
+  const row = _el('div', 'flex items-center gap-1.5 text-slate-600 opacity-60');
+  row.setAttribute('data-key', key);
+  row.appendChild(_providerPill(providerData.provider));
+  const label = _el('span', 'text-slate-500 font-medium');
+  label.textContent = providerData.account || key;
+  row.appendChild(label);
+  const note = _el('span', 'italic');
+  note.setAttribute('data-field', field);
+  note.textContent = text;
+  row.appendChild(note);
+  return {row: row, buckets: [], asOfEl: null};
+}
+
 function _buildRow(key, providerData) {
-  if (providerData.error) {
-    const row = _el('div', 'flex items-center gap-1.5 text-slate-600 opacity-60');
-    row.setAttribute('data-key', key);
-    row.appendChild(_providerPill(providerData.provider));
-    const label = _el('span', 'text-slate-500 font-medium');
-    label.textContent = providerData.account || key;
-    row.appendChild(label);
-    const err = _el('span', 'italic');
-    err.setAttribute('data-field', 'error');
-    err.textContent = providerData.error;
-    row.appendChild(err);
-    return {row: row, buckets: [], asOfEl: null};
-  }
+  if (providerData.pending) return _buildStatusRow(key, providerData, 'pending', 'loading');
+  if (providerData.error) return _buildStatusRow(key, providerData, 'error', providerData.error);
 
   const row = _el('div', 'flex items-center gap-1.5');
   row.setAttribute('data-key', key);

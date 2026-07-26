@@ -258,7 +258,7 @@ Each Thread's `CLAUDE.md` contains:
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `_trigger_master()` for user notification and follow-up decisions
 - `SessionManager`, `ThreadManager`, `MemoryManager`, `GitManager`
 - `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
-- Memory updates: Master Agent can include `memory_update` field in any response to persist user preferences/facts to `MEMORY.md`
+- Memory updates: sessions append candidates to `MEMORY.tmp.md`; the daily memory maintenance task merges them into `MEMORY.md` / `MEMORY.host.md`
 
 **WebSocket Endpoints**
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)

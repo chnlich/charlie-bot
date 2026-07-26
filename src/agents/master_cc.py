@@ -137,7 +137,7 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
     return None
 
   # 3. Memory files
-  for mf in [cfg.memory_file, cfg.memory_host_file]:
+  for mf in [cfg.memory_file, cfg.memory_host_file, cfg.memory_tmp_file]:
     if mf.exists():
       parts.append(mf.read_text(encoding="utf-8"))
 

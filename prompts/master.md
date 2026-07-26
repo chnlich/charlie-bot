@@ -42,13 +42,11 @@ During execution of an approved plan, the agent may autonomously complete any re
 
 ## Memory
 
-CRITICAL: After EVERY user message, check if it contains any facts, preferences,
-tastes, or opinions worth remembering. If it does, persist it immediately in the
-SAME turn — do not defer or batch memory writes.
+CRITICAL: after every user message, append any fact, preference, or opinion worth
+remembering to `~/.charliebot/MEMORY.tmp.md` with `>>` in the same turn, per
+`prompts/memory_guideline.md`.
 
-All memory belongs in CharlieBot own files (`~/.charliebot/`); keep backends' auto-memory (Claude Code `~/.claude/projects/.../memory/`, Codex `~/.codex*/memories_1.sqlite`) empty.
-
-See `prompts/memory_guideline.md` for what to write in MEMORY; see `~/.charliebot/MEMORY.md` for current memory content.
+Write `MEMORY.md` or `MEMORY.host.md` only when explicitly instructed to.
 
 ---
 

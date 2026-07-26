@@ -91,6 +91,11 @@ def _default_config_yaml() -> dict:
 
 DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
 DEFAULT_MEMORY_HOST = "# HOST MEMORY\n\nHost-specific settings, hardware, local tools, and repo paths.\n"
+DEFAULT_MEMORY_TMP = (
+    "# PENDING MEMORY (staging)\n\n"
+    "Candidates appended by sessions; merged into MEMORY.md by the daily memory "
+    "maintenance task.\n"
+)
 
 DEFAULT_SLASH_COMMANDS = """\
 commands:
@@ -137,6 +142,7 @@ async def init_charliebot_home() -> None:
   # Seed global knowledge files
   _seed_if_missing(cfg.memory_file, DEFAULT_MEMORY)
   _seed_if_missing(cfg.memory_host_file, DEFAULT_MEMORY_HOST)
+  _seed_if_missing(cfg.memory_tmp_file, DEFAULT_MEMORY_TMP)
   _seed_if_missing(cfg.charliebot_home / 'slash_commands.yaml', DEFAULT_SLASH_COMMANDS)
 
   # Seed config.yaml from the committed template if missing

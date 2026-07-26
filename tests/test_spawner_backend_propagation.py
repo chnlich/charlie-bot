@@ -907,6 +907,9 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   assert "Delta verification (the spec declares delta)" in prompt
   assert "check only the declared terms, their dependent claims, prior mismatches, and document structure" in prompt
   assert "do not reopen unchanged content" in prompt
+  assert "- Adequacy (both plan scopes, delta included)" in prompt
+  assert "`scenario:` — the counterexample you built" in prompt
+  assert "Adequacy findings use the labelled block form defined in the plan scope block" in prompt
   assert "missing or unreadable plan artifact or canonical template" in prompt
   assert "missing required in-scope source anchor" in prompt
   assert "in-scope canonical-rule deviation as `mismatch`" in prompt

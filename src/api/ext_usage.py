@@ -607,7 +607,8 @@ async def _poll_loop() -> None:
   The account set is re-derived once per full round (every N fetches) so config
   edits apply at round boundaries; dropped accounts are pruned from both
   ``_instances`` and ``_cached_usage``. A zero-account round still sleeps once
-  before re-deriving so the loop never busy-spins.
+  before re-deriving so the loop never busy-spins. Accounts not yet read carry a
+  pending marker so the strip never understates the account set.
   """
   while True:
     try:
@@ -633,6 +634,21 @@ async def _poll_loop() -> None:
         if cache_key not in live_cache_keys:
           del _cached_usage[cache_key]
 
+      # Seed a pending marker for every account not yet read, so the strip lists
+      # the whole account set from the first broadcast instead of growing one row
+      # per round gap after a restart. Costs no extra request: the markers ride
+      # along in the broadcast the first real fetch already sends. Seeding in
+      # cycle order also fixes row order at derivation order rather than at
+      # fetch-completion order.
+      for inst in cycle:
+        seed_key = f"{inst.provider}:{inst.label}"
+        if seed_key not in _cached_usage:
+          _cached_usage[seed_key] = {
+              "provider": inst.provider,
+              "account": inst.label,
+              "pending": True,
+          }
+
       if not cycle:
         await asyncio.sleep(ROUND_GAP_SECONDS)
         continue
@@ -648,7 +664,10 @@ async def _poll_loop() -> None:
           _cached_usage[cache_key] = {**result, "account": inst.label}
         else:
           prev = _cached_usage.get(cache_key)
-          if prev is None or "error" in prev:
+          # A pending marker is a not-yet-read placeholder, so it gives way to the
+          # real error the same way a previous error does; only a real reading is
+          # worth keeping when a later fetch fails.
+          if prev is None or "error" in prev or "pending" in prev:
             _cached_usage[cache_key] = {
                 "provider": inst.provider,
                 "account": inst.label,

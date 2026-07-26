@@ -78,7 +78,9 @@ _VERIFY_PROMPT_PREAMBLE = (
     "and M is the count of `mismatch-approval` lines, with 0 <= M <= N; when N = 1, both "
     "singular `mismatch` and plural `mismatches` are legal.\n"
     "This report format is fixed by the harness and overrides any output format the task spec requests; "
-    "a task spec may add checks or scope, never change the report format.")
+    "a task spec may add checks or scope, never change the report format.\n"
+    "Adequacy findings use the labelled block form defined in the plan scope block instead of this "
+    "single-line form; fidelity findings keep it.")
 
 
 def _build_worker_prompt(
@@ -538,6 +540,18 @@ async def _create_repoless_process(
         "rule in the template's BLOCK KIT.\n"
         "- Delta verification (the spec declares delta): check only the declared terms, their dependent claims, "
         "prior mismatches, and document structure; do not reopen unchanged content.\n"
+        "- Adequacy (both plan scopes, delta included): assume the plan's claims are true and its design "
+        "implemented as written, then test each outcome its section 1 claims by attempted refutation. Report "
+        "one labelled block per claimed outcome, one aspect per line:\n"
+        "  `mismatch:` or `confirmed:` — the outcome being judged\n"
+        "  `gap-design:` — why the described mechanism does not entail it, or `gap-goal:` — why the goal "
+        "statement itself is the defect (omit both when confirmed)\n"
+        "  `scenario:` — the counterexample you built, or the strongest you tried and why it failed, stated "
+        "as a scenario rather than a restatement of the plan\n"
+        "  `anchor:` — where in the plan\n"
+        "A boundary section 1 states explicitly is correct-as-scoped. When the spec quotes the originating "
+        "request, also report `gap-goal:` for an outcome it asks that section 1 neither claims nor scopes "
+        "out.\n"
         "Use reasonable allowed local and network reads through already-available tools, commands, connectivity, "
         "and credentials when checking evidence, including web search/fetch, read-only API queries, and read-only "
         "SSH commands. The boundary remains "

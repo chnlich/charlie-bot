@@ -61,6 +61,16 @@ not restate it here.
   plan registry. `approve` records a takeoff unconditionally; the runtime delegation gate reads the chat
   log, not the registry, so approve bookkeeping does not gate execution.
 
+## Verify
+
+- Verify checks fidelity — claims against evidence — and adequacy: whether the design,
+  assumed accurate and implemented, entails what section 1 claims. Quote the originating
+  request in the spec, or adequacy cannot judge section 1 against what was asked.
+- Adequacy findings are advisory. `gap-design:` says the mechanism looks short of the
+  goal — weigh it and revise the design if it holds. `gap-goal:` says the goal itself may
+  be misread — put that question to the user.
+- Report the adequacy findings when presenting the plan, so the user can weigh them too.
+
 ## Runtime delegation authorization
 
 This runtime contract is separate from the plan-approval interaction above. It is

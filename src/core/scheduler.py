@@ -53,8 +53,11 @@ def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: Charlie
 class Scheduler:
   """Runs enabled ScheduledTaskConfigs on their cron schedules."""
 
-  def __init__(self, cfg: CharlieBotConfig):
+  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager):
+    """Take the process-wide SessionManager; a private instance would keep its own
+    chat-event cache, so scheduled rounds would never reach the HTTP/WS read paths."""
     self._cfg = cfg
+    self._session_mgr = session_mgr
     self._task: Optional[asyncio.Task] = None
 
   async def start(self) -> None:
@@ -99,7 +102,7 @@ class Scheduler:
     if not tasks:
       return
 
-    session_mgr = SessionManager(cfg)
+    session_mgr = self._session_mgr
 
     # Cache all sessions once to avoid O(N) list_sessions() calls per tick.
     all_sessions = await session_mgr.list_sessions(include_running_status=False)
@@ -170,7 +173,7 @@ class Scheduler:
   ) -> tuple[CharlieBotConfig, SessionManager, SessionMetadata]:
     """Shared preamble: reload config, get/create session, persist bookkeeping fields."""
     cfg = self._reload_config()
-    session_mgr = SessionManager(cfg)
+    session_mgr = self._session_mgr
     session = await self._get_or_create_session(task_cfg, cfg, session_mgr)
     if session is None:
       raise RuntimeError(f"scheduled task '{task_cfg.name}' session is busy during backend rotation")

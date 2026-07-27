@@ -69,7 +69,8 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg = _build_cfg(tmp_path)
-  scheduler = Scheduler(cfg)
+  session_mgr = AsyncMock()
+  scheduler = Scheduler(cfg, session_mgr)
   session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend="claude-opus-4.6")
   task_cfg = ScheduledTaskConfig(
       name="nightly",
@@ -77,7 +78,6 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
       prompt="nightly prompt",
       backend="codex-o3",
   )
-  session_mgr = AsyncMock()
   fake_thread_mgr = FakeThreadManager()
   resolve_backend = AsyncMock(return_value=("codex-o3", "o3"))
   spawn_request: Optional[SpawnRequest] = None
@@ -122,10 +122,10 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg = _build_cfg(tmp_path)
-  scheduler = Scheduler(cfg)
+  session_mgr = AsyncMock()
+  scheduler = Scheduler(cfg, session_mgr)
   session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend="claude-opus-4.6")
   task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
-  session_mgr = AsyncMock()
   fake_thread_mgr = FakeThreadManager()
   resolve_backend = AsyncMock(return_value=("claude-opus-4.6", "claude-opus-4-6"))
 
@@ -157,7 +157,7 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
 async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeeping(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  scheduler = Scheduler(cfg)
+  scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
       backend="claude-opus-4.6",
@@ -203,7 +203,7 @@ async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_
 ) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  scheduler = Scheduler(cfg)
+  scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
       backend="claude-opus-4.6",
@@ -239,7 +239,7 @@ async def test_scheduler_skips_backend_rotation_while_old_session_is_running(
 ) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  scheduler = Scheduler(cfg)
+  scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
       backend="claude-opus-4.6",

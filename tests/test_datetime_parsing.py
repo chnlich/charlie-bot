@@ -63,7 +63,7 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
     tmp_path: Path,
 ) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-  scheduler = Scheduler(cfg)
+  scheduler = Scheduler(cfg, AsyncMock())
   session = SessionMetadata(name="Backup session")
   session.last_scheduled_run = (datetime.now(timezone.utc) - timedelta(seconds=1)).replace(tzinfo=None).isoformat()
   task_cfg = ScheduledTaskConfig(

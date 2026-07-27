@@ -137,11 +137,12 @@ async def lifespan(app: FastAPI):
   app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time))
   app.state.speech_model_task = transcriber.start_model_provisioning(cfg)
 
-  scheduler = Scheduler(cfg)
+  session_mgr = get_session_manager()
+
+  scheduler = Scheduler(cfg, session_mgr)
   app.state.scheduler = scheduler
   await scheduler.start()
 
-  session_mgr = get_session_manager()
   trigger_mgr = TriggerManager(cfg, session_mgr)
   set_trigger_manager(trigger_mgr)
   app.state.trigger_mgr = trigger_mgr

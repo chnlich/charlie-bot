@@ -207,7 +207,7 @@ async def build_session_bootstrap_data(
       if projection is None:
         return None
       messages, oldest_ordinal, has_more = projection.tail(message_limit)
-      total_event_count = session_mgr.get_chat_event_count_sync(session_id, session_meta)
+      total_event_count = projection.event_count
       return messages, projection.pending_draft, total_event_count, oldest_ordinal, has_more
 
     result = await asyncio.to_thread(_from_projection)
@@ -283,7 +283,7 @@ async def build_session_view_data(
       if projection is None:
         return None
       messages, oldest_ordinal, has_more = projection.tail(message_limit)
-      total_event_count = session_mgr.get_chat_event_count_sync(session_id, session_meta)
+      total_event_count = projection.event_count
       events = session_mgr.load_chat_events_sync(session_id)
       return messages, projection.pending_draft, total_event_count, oldest_ordinal, has_more, events
 

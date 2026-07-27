@@ -124,7 +124,6 @@ async function switchSession(sessionId) {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
   // Reset streaming state
-  catchupDone = false;
   pendingUserMsg = false;
   hideStreaming();
 
@@ -462,7 +461,6 @@ async function createSession() {
     hideSlashPopup();
     disconnectWS();
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    catchupDone = false;
     pendingUserMsg = false;
     hideStreaming();
 
@@ -508,7 +506,6 @@ function renderNoActiveSessionView() {
   hideStreaming();
   disconnectWS();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  catchupDone = false;
   pendingUserMsg = false;
 
   SESSION_ID = null;

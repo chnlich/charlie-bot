@@ -302,10 +302,11 @@ async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_p
   _append_events(mgr.get_chat_events_path(session.id), events)
 
   # before is a message ordinal (exclusive upper bound); limit is a message count.
-  # The 3 events aggregate into 1 message (the assistant draft), so before=3
-  # clamps to 1 and the page returns that single message.
+  # The 3 events aggregate into a single still-unflushed assistant draft. The
+  # draft belongs to the streaming-preview surface, not to the bubble list, so
+  # the committed-message ordinal domain is empty and the page is empty.
   page = await get_session_events_page(session.id, before=3, limit=3, session_mgr=mgr)
 
   assert page["next_before"] == 0
-  assert len(page["messages"]) == 1
-  assert page["messages"][0]["event_index"] == 2
+  assert page["messages"] == []
+  assert page["has_more"] is False

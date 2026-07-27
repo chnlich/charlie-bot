@@ -274,103 +274,102 @@ def test_lossless_walk_on_reorder_session() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Dirty-mark correctness
+# 3. Cache validity is derived, not tracked
 # ---------------------------------------------------------------------------
 
+# Every event type the aggregator can commit a message for. The assertions below
+# never branch on this list -- it only makes the fixture exercise the aggregator
+# broadly. A new event type cannot regress the invariant, because validity is
+# derived from the consumed event count rather than from a per-type hook.
+_COMMITTING_EVENT_SEQUENCE: list[dict] = [
+    {"type": ET.USER, "content": "q1", "timestamp": "t1"},
+    _assistant_event("first block", "a1"),
+    _assistant_event("second block", "a2"),
+    {"type": ET.TOOL_USE, "name": "Read", "input": {}, "timestamp": "t2"},
+    {"type": ET.TOOL_RESULT, "content": "out", "timestamp": "t3"},
+    {"type": ET.TASK_DELEGATED, "thread_id": "th1", "description": "d", "timestamp": "t4"},
+    {"type": ET.WORKER_SUMMARY, "content": "merged", "timestamp": "t5"},
+    {"type": ET.HANDLER_RESULT, "task": "x", "message": "y", "status": "ok", "timestamp": "t6"},
+    {"type": ET.CONTEXT_COMPACTED, "trigger": "auto", "pre_tokens": 1000, "timestamp": "t7"},
+    {"type": ET.USER, "content": "q2 queued", "timestamp": "t8"},
+    {"type": ET.MASTER_DONE, "still_thinking": True, "timestamp": "t9"},
+    _assistant_event("second run", "a3"),
+    {"type": ET.ERROR, "content": "boom", "timestamp": "t10"},
+    {"type": ET.MASTER_DONE, "thinking_seconds": 3, "timestamp": "t11"},
+    {"type": ET.USER, "content": "q3 after the run", "timestamp": "t12"},
+]
+
 
 @pytest.mark.asyncio
-async def test_dirty_mark_prefix_stability_and_rebuild(tmp_path: Path) -> None:
-  """A projection built mid-run stays prefix-stable; after master_done it equals fresh aggregation."""
+async def test_projection_equals_reference_after_every_append(tmp_path: Path) -> None:
+  """After EVERY persisted event the projection equals a fresh full aggregation.
+
+  This asserts the mechanism (derived validity) rather than a dirty-mark policy:
+  no event type is special, so adding one later cannot reintroduce staleness.
+  """
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="t"))
+
+  for i, event in enumerate(_COMMITTING_EVENT_SEQUENCE):
+    with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+      await mgr.persist_and_broadcast(session.id, dict(event))
+    # Read the projection between every append, so a stale cache would be served.
+    projection = mgr.get_message_projection(session.id)
+    assert projection is not None
+    all_events = mgr.load_chat_events_sync(session.id)
+    reference = events_to_messages(all_events)
+    assert [_identity_tuple(m) for m in projection.history] == [_identity_tuple(m) for m in reference], (
+        f"projection diverged from the reference after event {i} ({event['type']})")
+    assert projection.event_count == len(all_events)
+
+
+@pytest.mark.asyncio
+async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
+  """The bubble list and the streaming preview never carry the same message."""
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
   with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
-    # Feed a user event and an assistant event (run is still open).
-    await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "q1", "timestamp": "t1"})
-    await mgr.persist_and_broadcast(
-        session.id,
-        {
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": "draft1"
-                }]
-            },
-            "timestamp": "t2"
-        },
-    )
+    await mgr.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q1", "timestamp": "t1"})
+    await mgr.persist_and_broadcast(session.id, _assistant_event("reply1", "a1"))
+    await mgr.persist_and_broadcast(session.id, {"type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": "t2"})
+    await mgr.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q2", "timestamp": "t3"})
+    await mgr.persist_and_broadcast(session.id, _assistant_event("IN PROGRESS", "a2"))
 
-  # Build a projection mid-run.
   projection = mgr.get_message_projection(session.id)
   assert projection is not None
-  committed_before = list(projection.committed)
-  history_len_before = len(projection.history)
-
-  # The committed prefix must be stable: only 1 committed user message, draft is pending.
-  assert len(committed_before) == 1
-  assert committed_before[0]["role"] == "user"
   assert projection.pending_draft is not None
-  assert projection.pending_draft["content"] == "draft1"
+  assert projection.pending_draft["content"] == "IN PROGRESS"
 
-  # Projection is cached — second call returns the same object.
-  assert mgr.get_message_projection(session.id) is projection
+  page, _oldest, _has_more = projection.tail(40)
+  assert projection.pending_draft not in page
+  assert "IN PROGRESS" not in [m.get("content") for m in page]
 
-  # Now close the run with master_done — this dirty-marks the projection.
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
-    await mgr.persist_and_broadcast(session.id, {"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"})
+  # slice_before shares the committed ordinal domain with tail.
+  older, _next_before, _more = projection.slice_before(len(projection.committed), 40)
+  assert "IN PROGRESS" not in [m.get("content") for m in older]
 
-  # Dirty mark is set.
-  assert session.id in mgr._projection_dirty
-
-  # Rebuild — the projection must now equal a fresh full aggregation.
-  rebuilt = mgr.get_message_projection(session.id)
-  assert rebuilt is not None
-  assert rebuilt is not projection, "projection must be rebuilt after dirty mark"
-  assert session.id not in mgr._projection_dirty
-
-  fresh_events = mgr.load_chat_events_sync(session.id)
-  fresh_reference = events_to_messages(fresh_events)
-  rebuilt_identities = [_identity_tuple(m) for m in rebuilt.history]
-  ref_identities = [_identity_tuple(m) for m in fresh_reference]
-  assert rebuilt_identities == ref_identities
-  # The assistant draft is now committed (flushed by master_done).
-  assert rebuilt.pending_draft is None
-  assert len(rebuilt.committed) == 3  # user + assistant + separator
+  # history keeps its definitional meaning: committed + draft.
+  assert projection.history[-1] is projection.pending_draft
 
 
 @pytest.mark.asyncio
-async def test_dirty_mark_only_on_master_done(tmp_path: Path) -> None:
-  """Non-master_done events do not dirty-mark the projection."""
+async def test_event_count_is_the_snapshot_the_projection_consumed(tmp_path: Path) -> None:
+  """event_count is the boundary the first-paint cursor is derived from."""
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
-    await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "t1"})
-  projection = mgr.get_message_projection(session.id)
-  assert projection is not None
-  assert session.id not in mgr._projection_dirty
+  for n in range(1, 5):
+    with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+      await mgr.persist_and_broadcast(session.id, _assistant_event(f"chunk {n}", f"a{n}"))
+    projection = mgr.get_message_projection(session.id)
+    assert projection is not None
+    assert projection.event_count == n
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
-    await mgr.persist_and_broadcast(
-        session.id,
-        {
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": "x"
-                }]
-            },
-            "timestamp": "t2"
-        },
-    )
-  # assistant event does NOT dirty-mark (only master_done does).
-  assert session.id not in mgr._projection_dirty
-  # Cached projection is still the same object.
-  assert mgr.get_message_projection(session.id) is projection
+  assert MessageProjection([], event_index_offset=7).event_count == 7
 
 
 # ---------------------------------------------------------------------------

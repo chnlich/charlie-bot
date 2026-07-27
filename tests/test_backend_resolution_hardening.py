@@ -1,0 +1,288 @@
+"""Backend resolution hardening: fresh config on wake, no silent substitution, safe resume."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from src.agents import master_cc
+from src.agents.backends import base as backend_base
+from src.core import config as core_config
+from src.core import event_types as ET
+from src.core import models
+from src.core.models import CreateSessionRequest, PendingTrigger
+from src.core.sessions import SessionManager
+from src.core.spawner import _resolve_session_backend_with_fallback
+from src.core.triggers import TriggerManager
+
+
+def _make_callbacks() -> models.SessionCallbacks:
+  return models.SessionCallbacks(
+      persist_and_broadcast=AsyncMock(),
+      update_thinking_state=AsyncMock(),
+      mark_unread=AsyncMock(),
+      clear_thinking_since=AsyncMock(),
+  )
+
+
+class _FakeBackend:
+  exit_code = 0
+  stderr_text = ""
+
+  async def run(self, prompt: str, cwd: str, env: dict):
+    yield backend_base.make_result_event()
+
+
+def _item(cfg, session_meta, backend_option):
+  return master_cc._WorkItem(
+      cfg=cfg,
+      session_meta=session_meta,
+      user_content="hello",
+      callbacks=_make_callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=backend_option,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
+  )
+
+
+def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
+  project = config_dir / "projects" / "-home-user--charliebot-sessions-session-id"
+  project.mkdir(parents=True, exist_ok=True)
+  (project / f"{cc_session_id}.jsonl").write_text("{}\n", encoding="utf-8")
+
+
+# --------------------------------------------------------------- config reload
+
+def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypatch) -> None:
+  """A reload must update the existing instance so earlier holders see new values."""
+  home = tmp_path / "home"
+  (home / ".charliebot").mkdir(parents=True)
+  cfg_path = home / ".charliebot" / "config.yaml"
+  cfg_path.write_text("server_port: 1111\n", encoding="utf-8")
+  monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+  monkeypatch.setattr(core_config, "_config", None)
+  monkeypatch.setattr(core_config, "_config_mtime", 0.0)
+
+  first = core_config.get_config()
+  holder = first  # a long-lived singleton captures the object here
+  assert first.server_port == 1111
+
+  cfg_path.write_text("server_port: 2222\n", encoding="utf-8")
+  import os
+  os.utime(cfg_path, (0, 0))  # force a different mtime
+
+  second = core_config.get_config()
+  assert second is first
+  assert holder.server_port == 2222
+
+
+def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monkeypatch) -> None:
+  home = tmp_path / "home"
+  (home / ".charliebot").mkdir(parents=True)
+  cfg_path = home / ".charliebot" / "config.yaml"
+  cfg_path.write_text("server_port: 1111\n", encoding="utf-8")
+  monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+  monkeypatch.setattr(core_config, "_config", None)
+  monkeypatch.setattr(core_config, "_config_mtime", 0.0)
+
+  first = core_config.get_config()
+  cfg_path.write_text("server_port: 2222\n", encoding="utf-8")
+  import os
+  os.utime(cfg_path, (0, 0))
+  monkeypatch.setattr(core_config, "load_config", lambda: (_ for _ in ()).throw(ValueError("bad yaml")))
+
+  second = core_config.get_config()
+  assert second is first
+  assert second.server_port == 1111
+
+
+# ------------------------------------------------------------- trigger wake-up
+
+@pytest.mark.asyncio
+async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_path: Path) -> None:
+  """A backend added after the manager was constructed must reach trigger_master."""
+  stale = core_config.CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  session_mgr = SessionManager(stale)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Trigger"))
+  trigger_mgr = TriggerManager(stale, session_mgr)
+  trigger = PendingTrigger(
+      id="trigger-1",
+      session_id=session.id,
+      fire_at=datetime.now(timezone.utc),
+      message="wake",
+  )
+  await trigger_mgr._save_trigger(trigger)
+
+  current = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      backend_options=[models.BackendOption(id="added-later", label="New", type="cc-claude", model="m")],
+  )
+  with (
+      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
+      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
+      patch("src.core.triggers.get_config", return_value=current),
+  ):
+    await trigger_mgr._wait_and_fire(trigger)
+
+  passed_cfg = mock_master.await_args.args[2]
+  assert passed_cfg is current
+  assert passed_cfg.get_backend_option("added-later") is not None
+
+
+# --------------------------------------------------------- no silent fallback
+
+@pytest.mark.asyncio
+async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: Path, monkeypatch) -> None:
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")],
+  )
+  session_meta = models.SessionMetadata(id="session-id", name="S", backend="deleted-id",
+                                        cc_session_id="conv-1")
+  spawned: list[object] = []
+  monkeypatch.setattr("src.agents.backends.registry.build_backend",
+                      lambda *a, **k: spawned.append(1) or _FakeBackend())
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+
+  item = _item(cfg, session_meta, None)
+  cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
+
+  assert spawned == []
+  assert cc_session_id is None
+  assert exit_code == 1
+  assert "deleted-id" in error_msg and "refusing to substitute" in error_msg
+  assert extras == {}
+  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
+  assert any(e["type"] == ET.ASSISTANT_ERROR and "deleted-id" in e["content"] for e in events)
+
+
+@pytest.mark.asyncio
+async def test_run_cc_still_defaults_when_session_pins_no_backend(tmp_path: Path, monkeypatch) -> None:
+  """An empty session backend is the documented default, not a substitution."""
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")],
+  )
+  session_meta = models.SessionMetadata(id="session-id", name="S", backend="")
+  captures: dict[str, object] = {}
+  monkeypatch.setattr("src.agents.backends.registry.build_backend",
+                      lambda option, cfg, **k: captures.update(option=option) or _FakeBackend())
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+
+  _cc, exit_code, error_msg, _extras = await master_cc._run_cc(_item(cfg, session_meta, None))
+
+  assert exit_code == 0
+  assert error_msg is None
+  assert captures["option"].id == "cc"
+
+
+def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
+  cfg = core_config.CharlieBotConfig(
+      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")])
+  session_meta = models.SessionMetadata(id="s", name="S", backend="deleted-id")
+  with pytest.raises(ValueError, match="refusing to substitute"):
+    _resolve_session_backend_with_fallback(cfg, session_meta, "s")
+
+
+def test_spawner_defaults_when_session_pins_no_backend() -> None:
+  cfg = core_config.CharlieBotConfig(
+      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")])
+  session_meta = models.SessionMetadata(id="s", name="S", backend="")
+  assert _resolve_session_backend_with_fallback(cfg, session_meta, "s") == ("cc", "claude-fable-5")
+
+
+# ------------------------------------------------------------ resume guarding
+
+def test_claude_config_dir_prefers_option_then_env_then_home(monkeypatch) -> None:
+  opt = models.BackendOption(id="a", label="A", type="cc-claude", model="m",
+                             claude_config_dir="~/.claude-ext-1")
+  assert master_cc._claude_config_dir(opt) == Path.home() / ".claude-ext-1"
+
+  bare = models.BackendOption(id="b", label="B", type="cc-claude", model="m")
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/env-claude")
+  assert master_cc._claude_config_dir(bare) == Path("/tmp/env-claude")
+
+  monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+  assert master_cc._claude_config_dir(bare) == Path.home() / ".claude"
+
+
+def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: Path) -> None:
+  cfg_dir = tmp_path / ".claude-ext-1"
+  _write_transcript(cfg_dir, "conv-1")
+  nested = cfg_dir / "projects" / "-slug" / "parent-uuid" / "subagents"
+  nested.mkdir(parents=True)
+  (nested / "agent-deep.jsonl").write_text("{}\n", encoding="utf-8")
+
+  assert master_cc._cc_transcript_exists(cfg_dir, "conv-1") is True
+  assert master_cc._cc_transcript_exists(cfg_dir, "agent-deep") is False
+  assert master_cc._cc_transcript_exists(cfg_dir, "absent") is False
+
+
+@pytest.mark.asyncio
+async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
+    tmp_path: Path, monkeypatch) -> None:
+  other = tmp_path / ".claude-ext-1"
+  _write_transcript(other, "conv-1")
+  target = tmp_path / ".claude"
+  (target / "projects").mkdir(parents=True)
+
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude",
+                                            model="claude-fable-5", claude_config_dir=str(target))],
+  )
+  session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
+  captures: dict[str, object] = {}
+  monkeypatch.setattr("src.agents.backends.registry.build_backend",
+                      lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+
+  item = _item(cfg, session_meta, cfg.backend_options[0])
+  _cc, exit_code, error_msg, _extras = await master_cc._run_cc(item)
+
+  assert exit_code == 0 and error_msg is None
+  assert "--resume" not in (captures["kwargs"]["extra_flags"] or [])
+  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
+  dropped = [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED]
+  assert len(dropped) == 1
+  assert dropped[0]["config_dir"] == str(target)
+
+
+@pytest.mark.asyncio
+async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, monkeypatch) -> None:
+  target = tmp_path / ".claude-ext-1"
+  _write_transcript(target, "conv-1")
+
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude",
+                                            model="claude-fable-5", claude_config_dir=str(target))],
+  )
+  session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
+  captures: dict[str, object] = {}
+  monkeypatch.setattr("src.agents.backends.registry.build_backend",
+                      lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+
+  item = _item(cfg, session_meta, cfg.backend_options[0])
+  await master_cc._run_cc(item)
+
+  extra_flags = captures["kwargs"]["extra_flags"] or []
+  assert extra_flags[:2] == ["--resume", "conv-1"]
+  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
+  assert not [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED]
+
+
+def test_resume_context_dropped_renders_as_a_system_message() -> None:
+  from src.core.message_aggregator import _SIMPLE_HANDLERS
+  msg = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED]({"type": ET.RESUME_CONTEXT_DROPPED,
+                                                      "config_dir": "/home/u/.claude"})
+  assert msg["role"] == "system"
+  assert "/home/u/.claude" in msg["content"]

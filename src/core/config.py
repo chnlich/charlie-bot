@@ -251,7 +251,13 @@ def load_config() -> CharlieBotConfig:
 
 
 def get_config() -> CharlieBotConfig:
-  """Return cached config, auto-reloading when config.yaml changes."""
+  """Return the process-wide config, refreshed in place when config.yaml changes.
+
+  The returned instance keeps a stable identity across reloads: holders that
+  captured it earlier (manager singletons, in-flight coroutines) observe the new
+  values without re-fetching. Replacing the object instead would leave every such
+  holder pinned to a stale snapshot.
+  """
   global _config, _config_mtime
   config_path = Path.home() / ".charliebot" / "config.yaml"
   try:
@@ -260,12 +266,20 @@ def get_config() -> CharlieBotConfig:
     mtime = 0.0
   if _config is None or mtime != _config_mtime:
     try:
-      _config = load_config()
-      _config_mtime = mtime
+      fresh = load_config()
     except Exception as e:
       log.warning("config_reload_failed", error=str(e))
       if _config is None:
         raise
+    else:
+      if _config is None:
+        _config = fresh
+      else:
+        # Copy field-by-field from the validated instance; assignment validation is
+        # off, so the source must already be a fully validated CharlieBotConfig.
+        for name in type(fresh).model_fields:
+          setattr(_config, name, getattr(fresh, name))
+      _config_mtime = mtime
   return _config
 
 

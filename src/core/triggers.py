@@ -12,7 +12,7 @@ import aiofiles
 import structlog
 
 from src.api.message_utils import build_scheduled_trigger_event
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_config
 from src.core.master_trigger import trigger_master
 from src.core.models import LocalPid, PendingTrigger, RemotePid, SlurmJob, TriggerStatus, WatchKind, WatchTarget
 from src.core.sessions import SessionManager
@@ -584,11 +584,13 @@ class TriggerManager:
         build_scheduled_trigger_event(trigger_message),
     )
 
-    # Wake the master CC
+    # Wake the master CC. Re-read the config here rather than using the snapshot
+    # captured at construction: backends added to or renamed in config.yaml after
+    # server start are invisible to that snapshot.
     await trigger_master(
         fresh.session_id,
         trigger_message,
-        self._cfg,
+        get_config(),
         self._session_mgr,
     )
 

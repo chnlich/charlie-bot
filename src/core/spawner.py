@@ -289,24 +289,29 @@ def _resolve_session_backend_with_fallback(
     session_meta: SessionMetadata,
     session_id: str,
 ) -> tuple[str, Optional[str]]:
-  """Resolve backend+model from a session's default, falling back on stale metadata.
+  """Resolve backend+model from a session's default.
 
-  When session_meta.backend is absent or no longer present in cfg.backend_options (e.g. after a
-  config.yaml rename), log a warning and silently use cfg.backend_options[0]. Raises only when
-  cfg.backend_options is empty or the selected option has no default model.
+  A session with no backend recorded takes cfg.backend_options[0] as its default. A session
+  pinned to an id that cfg.backend_options no longer defines (e.g. after a config.yaml rename)
+  is a hard error: substituting a different backend would run the worker on another model and
+  another account without the operator knowing. Raises when cfg.backend_options is empty, when
+  the pinned id is unknown, or when the selected option has no default model.
   """
   option = cfg.get_backend_option(session_meta.backend) if session_meta.backend else None
   if option is None:
     if not cfg.backend_options:
       raise ValueError("session backend resolution requires a configured backend_options entry")
-    fallback = cfg.backend_options[0]
-    log.warning(
-        "session_backend_fallback",
-        stored=session_meta.backend,
-        fallback=fallback.id,
-        session_id=session_id,
-    )
-    option = fallback
+    if session_meta.backend:
+      log.error(
+          "session_backend_unresolved",
+          stored=session_meta.backend,
+          fallback=cfg.backend_options[0].id,
+          session_id=session_id,
+      )
+      raise ValueError(
+          f"session backend '{session_meta.backend}' is not in config.yaml backend_options — "
+          f"refusing to substitute '{cfg.backend_options[0].id}'")
+    option = cfg.backend_options[0]
   if backend_type_allows_missing_model(option.type):
     return option.id, None
   if not option.model:

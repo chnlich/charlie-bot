@@ -33,6 +33,9 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   with (
       patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
       patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_trigger_master,
+      # The wake path re-reads the config instead of using the snapshot captured at
+      # construction, so the fresh read is what must reach trigger_master.
+      patch("src.core.triggers.get_config", return_value=cfg),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 

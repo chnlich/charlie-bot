@@ -69,6 +69,14 @@ def _context_compacted_msg(ev: dict) -> dict:
   return {'role': 'system', 'content': msg}
 
 
+def _resume_context_dropped_msg(ev: dict) -> dict:
+  config_dir = ev.get('config_dir')
+  msg = 'Context not resumed: this session\'s Claude conversation record is not in the account directory'
+  if config_dir:
+    msg += f' {config_dir}'
+  return {'role': 'system', 'content': f'{msg} — started a new conversation'}
+
+
 def _system_msg(ev: dict) -> dict | None:
   if ev.get("subtype") != "tui_menu_dismissed":
     return None
@@ -124,6 +132,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _handler_result_msg,
     ET.CONTEXT_COMPACTED:
         _context_compacted_msg,
+    ET.RESUME_CONTEXT_DROPPED:
+        _resume_context_dropped_msg,
     ET.SYSTEM:
         _system_msg,
     ET.CLONE_START:

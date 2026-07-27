@@ -41,14 +41,27 @@ async def test_session_default_returns_configured_backend() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_default_falls_back_for_stale_backend(caplog: pytest.LogCaptureFixture) -> None:
-  """Stale session metadata (old backend id) should fall back to cfg.backend_options[0] with a warning."""
+async def test_session_default_raises_for_stale_backend(caplog: pytest.LogCaptureFixture) -> None:
+  """A session pinned to an id config no longer defines must fail loudly, never substitute."""
   cfg = _build_cfg([
       BackendOption(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
       BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
   ])
   # Stored id no longer exists (e.g. renamed from claude-opus-4.6 to claude-opus-4.7).
   session = SessionMetadata(name="s", backend="claude-opus-4.6")
+  mgr = _mock_session_mgr(session)
+
+  with pytest.raises(ValueError, match="refusing to substitute"):
+    await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+
+
+@pytest.mark.asyncio
+async def test_session_default_uses_first_option_when_no_backend_pinned() -> None:
+  """An empty session backend is the documented default, not a substitution."""
+  cfg = _build_cfg([
+      BackendOption(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
+  ])
+  session = SessionMetadata(name="s", backend="")
   mgr = _mock_session_mgr(session)
 
   backend, model = await resolve_session_subagent_backend_model(session.id, cfg, mgr)
@@ -81,18 +94,16 @@ async def test_requested_backend_raises_for_unknown_typo() -> None:
 
 
 @pytest.mark.asyncio
-async def test_requested_backend_none_uses_session_default_with_fallback() -> None:
-  """When no --backend is passed, stale session backend still falls back gracefully."""
+async def test_requested_backend_none_raises_for_stale_session_backend() -> None:
+  """With no --backend passed, a stale session backend must fail loudly rather than substitute."""
   cfg = _build_cfg([
       BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
   ])
   session = SessionMetadata(name="s", backend="claude-opus-4.6")
   mgr = _mock_session_mgr(session)
 
-  backend, model = await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
-
-  assert backend == "claude-opus-4.7"
-  assert model == "claude-opus-4-7"
+  with pytest.raises(ValueError, match="refusing to substitute"):
+    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ import dataclasses
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -157,6 +158,50 @@ def _build_prompt(user_content: str, is_voice: bool) -> str:
   return user_content
 
 
+def _claude_config_dir(option: BackendOption) -> Path:
+  """Resolve the CLAUDE_CONFIG_DIR the spawned cc-claude process will use."""
+  if option.claude_config_dir:
+    return Path(option.claude_config_dir).expanduser()
+  env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+  if env_dir:
+    return Path(env_dir).expanduser()
+  return Path.home() / ".claude"
+
+
+def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
+  """True when *config_dir* holds a resumable transcript for *cc_session_id*.
+
+  Top-level conversations live at projects/<cwd-slug>/<uuid>.jsonl; the glob avoids
+  depending on Claude Code's undocumented cwd-slug rule. Files nested deeper are
+  subagent logs named agent-*.jsonl and cannot collide with a conversation uuid.
+  """
+  return any((config_dir / "projects").glob(f"*/{cc_session_id}.jsonl"))
+
+
+def _resolve_resume_id(option: BackendOption, session_meta: SessionMetadata) -> Optional[str]:
+  """Return the cc_session_id to resume, or None when it is not reachable.
+
+  Each cc-claude account has its own CLAUDE_CONFIG_DIR and cannot see another's
+  conversations, so resuming an id recorded under a different account always fails.
+  Backends with native resume ids carry no local transcript and pass through.
+  """
+  cc_session_id = session_meta.cc_session_id
+  if not cc_session_id:
+    return None
+  if option.type not in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    return cc_session_id
+  config_dir = _claude_config_dir(option)
+  if _cc_transcript_exists(config_dir, cc_session_id):
+    return cc_session_id
+  log.warning(
+      "master_cc_resume_transcript_missing",
+      session=session_meta.id,
+      cc_session_id=cc_session_id,
+      config_dir=str(config_dir),
+  )
+  return None
+
+
 def _route_resume_session(backend_type: str, cc_session_id: Optional[str]) -> tuple[list[str], Optional[str]]:
   """Return CLI resume flags and native resume ID for a backend type."""
   if not cc_session_id:
@@ -228,11 +273,37 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg)
 
   from src.agents.backends.registry import build_backend
-  option = item.backend_option or cfg.backend_options[0]
+  option = item.backend_option
+  if option is None:
+    if session_meta.backend and cfg.get_backend_option(session_meta.backend) is None:
+      # The session pins a backend id config.yaml no longer defines. Substituting a
+      # different backend would silently run on another model and another account.
+      fallback_id = cfg.backend_options[0].id if cfg.backend_options else "(none)"
+      msg = (f"backend '{session_meta.backend}' is not in config.yaml backend_options — "
+             f"refusing to substitute '{fallback_id}'; this run did not execute.")
+      log.error(
+          "master_cc_backend_unresolved",
+          session=session_meta.id,
+          requested=session_meta.backend,
+          fallback=fallback_id,
+      )
+      await item.callbacks.persist_and_broadcast(
+          session_meta.id, {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {msg}"})
+      await item.callbacks.mark_unread(session_meta.id)
+      return None, 1, msg, {}
+    option = cfg.backend_options[0]
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
 
-  extra_flags, resume_session_id = _route_resume_session(option.type, session_meta.cc_session_id)
+  resume_id = _resolve_resume_id(option, session_meta)
+  if (session_meta.cc_session_id and resume_id is None
+      and option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES):
+    await item.callbacks.persist_and_broadcast(
+        session_meta.id, {
+            "type": ET.RESUME_CONTEXT_DROPPED,
+            "config_dir": str(_claude_config_dir(option)),
+        })
+  extra_flags, resume_session_id = _route_resume_session(option.type, resume_id)
   # Move per-machine sections (cwd, env info, memory paths, git status) out of the
   # system prompt into the first user message. Keeps the system prompt stable across
   # sessions so cross-run prompt-cache reuse improves. Only the Claude Code CLI

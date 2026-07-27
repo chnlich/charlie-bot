@@ -353,6 +353,17 @@ def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> N
   assert "read-only plan verifier" in out
 
 
+def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[str]) -> None:
+  with patch("sys.argv", ["delegate", "--help"]):
+    with pytest.raises(SystemExit) as exc_info:
+      main()
+
+  assert exc_info.value.code == 0
+  out = " ".join(capsys.readouterr().out.split())
+  assert "Omit --backend unless the user explicitly named a backend for this delegation" in out
+  assert "verify is routed to the first model_preference entry that differs from it" in out
+
+
 def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)

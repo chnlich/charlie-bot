@@ -43,6 +43,14 @@ Task spec format (--task-spec-file):
   Source Files entries: absolute paths or `- (none)`.
   Runtime authorization (takeoff gate) is derived from the chat
   event log; see skills/plan-approval/SKILL.md for the full contract.
+
+Backend selection (--backend):
+
+  Omit --backend unless the user explicitly named a backend for this
+  delegation. Omitted: implement / quick-edit / script-run inherit the
+  session backend; verify is routed to the first model_preference entry
+  that differs from it. An explicit --backend replaces that routing for
+  every task type, verify included.
 """
 
 
@@ -63,7 +71,11 @@ def main() -> None:
       "--base-branch",
       required=False,
       help="Base branch for the worktree; required for implement/quick-edit/script-run, forbidden for verify")
-  parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
+  parser.add_argument(
+      "--backend",
+      default=None,
+      help=("Configured backend option id from ~/.charliebot/config.yaml; omit unless the user "
+            "explicitly named a backend for this delegation (see epilog)"))
   parser.add_argument(
       "--reviewer-context-file",
       dest="reviewer_context_file",

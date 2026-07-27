@@ -9,7 +9,6 @@
 let ws = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
-let catchupDone = false;
 let pendingUserMsg = false;
 let wsGeneration = 0;
 
@@ -32,7 +31,6 @@ function disconnectWS() {
 function connectWS() {
   if (!SESSION_ID) return;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  catchupDone = false;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
@@ -95,16 +93,19 @@ function _bumpEventCursor(ev) {
 }
 
 function _commitMessage(msg) {
-  // Skip separators emitted during catchup -- the chat already shows the
-  // committed history without per-turn dividers between historical bubbles.
-  if (msg.role === 'separator' && !catchupDone) return;
+  // Catchup frames are rendered exactly like live frames: the cursor the client
+  // reports is the snapshot the first paint was built from, so every frame the
+  // server replays is one the client does not already have. There is no
+  // connection-phase state to gate rendering on.
   if (msg.role === 'user' && pendingUserMsg) {
     // The local tab already rendered this user message optimistically; skip
     // the server-side echo so the bubble doesn't double up.
     pendingUserMsg = false;
     return;
   }
-  if (catchupDone) hideStreaming();
+  // A committed bubble supersedes the streaming preview: the draft it carries is
+  // the same text the preview holds.
+  hideStreaming();
   appendMessageObject(msg);
 }
 
@@ -113,7 +114,7 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   const t = ev.type;
 
   if (t === 'catchup_complete') {
-    catchupDone = true;
+    // Still part of the wire protocol; carries no client state any more.
     return;
   }
   if (t === 'ping') return;
@@ -179,16 +180,16 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     _commitMessage(ev.message || {});
   } else if (t === 'stream') {
     const draft = ev.message || {};
-    if (catchupDone && (draft.content || draft.thinking)) showStreaming(draft);
+    if (draft.content || draft.thinking) showStreaming(draft);
   } else if (t === 'master_done') {
     if (!ev.still_thinking) {
       stopThinking({preserveSessionIndicator: true});
     }
   } else if (t === 'assistant_error') {
-    if (catchupDone) hideStreaming();
+    hideStreaming();
     stopThinking();
   } else if (t === 'error') {
-    if (catchupDone) hideStreaming();
+    hideStreaming();
   } else if (t === 'task_delegated') {
     refreshSessionStatusNow({refreshWorkers: true});
   } else if (t === 'worker_summary') {

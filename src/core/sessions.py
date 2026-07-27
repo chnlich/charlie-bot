@@ -91,7 +91,6 @@ class SessionManager:
     # Lazy-built from events_to_view; dirty-marked on master_done, cleared at
     # the same four sites as _aggregators. Only applies when archive_offset == 0.
     self._projection_cache: OrderedDict[str, MessageProjection] = OrderedDict()
-    self._projection_dirty: set[str] = set()
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -738,8 +737,6 @@ class SessionManager:
       await streaming_manager.broadcast(channel, delta)
     if event.get('type') not in _RAW_EVENTS_REPLACED_BY_DELTAS:
       await streaming_manager.broadcast(channel, event)
-    if event.get('type') == ET.MASTER_DONE:
-      self._projection_dirty.add(session_id)
 
   async def broadcast_only(self, session_id: str, event: dict) -> None:
     """Broadcast an event on the session channel without persisting it as a chat event.
@@ -818,14 +815,14 @@ class SessionManager:
     """
     if self._read_archive_offset_sync(session_id) != 0:
       return None
+    live = self.load_chat_events_sync(session_id)
+    snapshot = list(live)
     cached = self._projection_cache.get(session_id)
-    if cached is not None and session_id not in self._projection_dirty:
+    if cached is not None and cached.event_count == len(snapshot):
       self._projection_cache.move_to_end(session_id)
       return cached
-    events = self.load_chat_events_sync(session_id)
-    projection = MessageProjection(events)
+    projection = MessageProjection(snapshot)
     self._projection_cache[session_id] = projection
-    self._projection_dirty.discard(session_id)
     while len(self._projection_cache) > _PROJECTION_LRU_LIMIT:
       self._projection_cache.popitem(last=False)
     return projection
@@ -833,7 +830,6 @@ class SessionManager:
   def _clear_projection(self, session_id: str) -> None:
     """Drop the cached projection and any pending dirty mark for *session_id*."""
     self._projection_cache.pop(session_id, None)
-    self._projection_dirty.discard(session_id)
 
   def _read_archive_offset_sync(self, session_id: str) -> int:
     """Synchronously read the archive_offset from metadata.json.

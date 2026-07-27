@@ -19,9 +19,10 @@ class MessageProjection:
   ``events_to_messages(all_events)`` because it calls the same reference path.
   """
 
-  __slots__ = ("committed", "pending_draft", "_history")
+  __slots__ = ("committed", "pending_draft", "event_count", "_history")
 
   def __init__(self, events: list[dict], event_index_offset: int = 0) -> None:
+    self.event_count = event_index_offset + len(events)
     self.committed, self.pending_draft = events_to_view(events, event_index_offset=event_index_offset)
     if self.pending_draft is not None:
       self._history: list[dict] = [*self.committed, self.pending_draft]
@@ -43,9 +44,9 @@ class MessageProjection:
     ordinal of the first message in the page and ``has_more`` is True when
     older messages exist.
     """
-    total = len(self._history)
+    total = len(self.committed)
     start = max(0, total - limit)
-    return self._history[start:], start, start > 0
+    return self.committed[start:], start, start > 0
 
   def slice_before(self, before: int, limit: int) -> tuple[list[dict], int, bool]:
     """Return up to *limit* messages with ordinals strictly below *before*.
@@ -54,7 +55,7 @@ class MessageProjection:
     (page, next_before, has_more) where ``next_before = max(0, before - limit)``
     and ``has_more = next_before > 0``.
     """
-    total = len(self._history)
+    total = len(self.committed)
     before = max(0, min(before, total))
     lo = max(0, before - limit)
-    return self._history[lo:before], lo, lo > 0
+    return self.committed[lo:before], lo, lo > 0

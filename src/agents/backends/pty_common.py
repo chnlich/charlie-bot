@@ -29,6 +29,9 @@ _INITIAL_ROWS = 24
 _HISTORY_LIMIT = 50000
 _PTY_READ_CHUNK = 4096
 _WS_RECV_TIMEOUT = 30.0
+# The browser end of every PTY is xterm.js; tmux only emits OSC 52 to a client whose
+# terminfo advertises `Ms`, which screen-256color does not.
+_PTY_CLIENT_TERM = "xterm-256color"
 
 
 def _tmux_binary() -> str:
@@ -48,6 +51,16 @@ def _tmux_client_env() -> dict[str, str]:
   env = {**os.environ}
   env.pop("CHARLIEBOT_SESSION_ID", None)
   return env
+
+
+def _tmux_pty_env() -> dict[str, str]:
+  """Env for the browser-facing `tmux attach` client; never inherits the server's TERM.
+
+  The other end of this PTY is xterm.js. Inheriting the server's TERM (screen-256color
+  whenever the server itself was started inside tmux) hides the `Ms` terminfo capability
+  that tmux needs before it will push a copy out as OSC 52.
+  """
+  return {**_tmux_client_env(), "TERM": _PTY_CLIENT_TERM}
 
 
 async def _run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
@@ -110,9 +123,8 @@ class PtyAttachment:
     pid, fd = pty.fork()
     if pid == 0:
       # Child process — exec tmux attach.
-      os.environ.setdefault("TERM", "xterm-256color")
       try:
-        os.execve(tmux, [tmux, "-L", _TMUX_SOCKET, "attach", "-t", name], _tmux_client_env())
+        os.execve(tmux, [tmux, "-L", _TMUX_SOCKET, "attach", "-t", name], _tmux_pty_env())
       except Exception as e:  # noqa: BLE001 — last-ditch report before _exit
         os.write(2, f"tmux exec failed: {e}\n".encode())
         os._exit(1)

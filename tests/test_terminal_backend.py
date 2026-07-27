@@ -2,8 +2,10 @@ import asyncio
 import base64
 import json
 import os
+import select
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -315,3 +317,62 @@ async def test_terminal_websocket_rejects_failed_ws_auth(monkeypatch: pytest.Mon
 
   assert ws.accepted is False
   assert attached == []
+
+
+def test_pty_client_can_push_clipboard_to_the_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A tmux-side copy must reach the browser-facing PTY as OSC 52.
+
+  tmux only emits OSC 52 to a client whose terminfo advertises `Ms`, so the attach client
+  has to declare itself as xterm-256color no matter what TERM the server inherited.
+  """
+  tmux = shutil.which("tmux")
+  if tmux is None:
+    pytest.skip("tmux binary not available")
+
+  # What the server inherits whenever it was started from inside a tmux pane.
+  monkeypatch.setenv("TERM", "screen-256color")
+  socket_name = f"charliebot-test-{os.getpid()}-{uuid.uuid4().hex}"
+  session_id = uuid.uuid4().hex
+  session_name = pty_common.tmux_session_name(session_id)
+  monkeypatch.setattr(pty_common, "_TMUX_SOCKET", socket_name)
+
+  def run_tmux(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([tmux, "-L", socket_name, *args], capture_output=True, text=True, check=False)
+
+  attachment = pty_common.PtyAttachment(session_id)
+  try:
+    created = run_tmux("new-session", "-d", "-s", session_name, "-x", "80", "-y", "24", "sleep 60")
+    assert created.returncode == 0, created.stderr
+
+    attachment.spawn()
+    termname = ""
+    for _ in range(60):
+      listed = run_tmux("list-clients", "-t", session_name, "-F", "#{client_termname}")
+      if listed.stdout.strip():
+        termname = listed.stdout.strip().splitlines()[-1]
+        break
+      time.sleep(0.1)
+    assert termname == "xterm-256color"
+
+    copied = run_tmux("set-buffer", "-w", "CLIPBOARD-PROBE")
+    assert copied.returncode == 0, copied.stderr
+
+    seen = b""
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and b"\x1b]52" not in seen:
+      ready, _, _ = select.select([attachment.fd], [], [], 0.2)
+      if ready:
+        try:
+          seen += os.read(attachment.fd, 65536)
+        except (BlockingIOError, OSError):
+          pass
+    assert b"\x1b]52" in seen, "tmux never pushed OSC 52 to the browser-facing PTY"
+    assert base64.b64encode(b"CLIPBOARD-PROBE") in seen
+  finally:
+    attachment.close()
+    subprocess.run(
+        [tmux, "-L", socket_name, "kill-server"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )

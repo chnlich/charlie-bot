@@ -787,3 +787,55 @@ test('framed tray falls back to the artifact session when currentSessionId retur
   assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'),
     'POST falls back when the live accessor returns null');
 });
+
+// ---------------------------------------------------------------------------
+// Shortcut buttons: one per SHORTCUTS entry, each deduped on its own kind
+// ---------------------------------------------------------------------------
+
+const SHORTCUT_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+
+function loadWithShortcuts() {
+  return loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    console: {warn() {}, error() {}},
+    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+  });
+}
+
+function shortcutButtons(body) {
+  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  return shortcuts.children.filter((child) => child.className === '__cbc-shortcut');
+}
+
+function trayItemCount(body) {
+  const tray = findChildByClass(body, '__cbc-tray');
+  const list = findChildByClass(tray, '__cbc-tray-list');
+  return list.children.filter((child) => child.className === '__cbc-tray-item').length;
+}
+
+test('shortcut tray renders one button per shortcut: Improve, Shorten, Verify', () => {
+  const {body} = loadWithShortcuts();
+  const buttons = shortcutButtons(body);
+
+  assert.equal(buttons.map((button) => button.textContent).join(','), 'Improve,Shorten,Verify');
+  for (const button of buttons) {
+    assert.ok(button.title.length > 0, 'button carries its prompt as the tooltip');
+    assert.equal(button.attributes['aria-label'], button.title);
+  }
+});
+
+test('each shortcut dedups on its own kind without blocking the other shortcuts', () => {
+  const {body} = loadWithShortcuts();
+  const [improve, shorten, verify] = shortcutButtons(body);
+
+  clickElement(shorten);
+  clickElement(shorten);
+  assert.equal(trayItemCount(body), 1, 'a second Shorten click is a no-op');
+
+  clickElement(verify);
+  clickElement(improve);
+  assert.equal(trayItemCount(body), 3, 'all three shortcuts coexist in one batch');
+
+  clickElement(verify);
+  clickElement(improve);
+  assert.equal(trayItemCount(body), 3, 'repeat clicks stay deduped per kind');
+});

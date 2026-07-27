@@ -19,7 +19,27 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var POPOVER_WIDTH = 460;
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
-    var SHORTCUTS = [{label: 'Improve', prompt: 'Think from scratch, how to improve this?'}];
+    // Each shortcut owns a `kind`, which doubles as its dedup key and as the
+    // persisted draft discriminator. Manual block comments keep kind 'block';
+    // adding a button here needs no other change.
+    var SHORTCUTS = [
+      {
+        kind: 'improve',
+        label: 'Improve',
+        prompt: 'Think from scratch, how to improve this?',
+      },
+      {
+        kind: 'shorten',
+        label: 'Shorten',
+        prompt: 'This plan is too long. Rewrite it to state the key points concretely; ' +
+          'delete anything that is not a key point or demote it into the Other Details list.',
+      },
+      {
+        kind: 'verify',
+        label: 'Verify',
+        prompt: 'Delegate a fresh verify worker for this plan and report its findings.',
+      },
+    ];
     var pathSessionId = extractSessionIdFromPath(window.location.pathname);
     var hashSessionId = extractSessionIdFromHash(window.location.hash);
     var sessionId = resolveSessionIdFromLocation(window.location.pathname, window.location.hash);
@@ -94,12 +114,23 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return 'cbc-draft:' + String(absPath || '');
     }
 
+    function isShortcutKind(kind) {
+      for (var i = 0; i < SHORTCUTS.length; i++) {
+        if (SHORTCUTS[i].kind === kind) return true;
+      }
+      return false;
+    }
+
+    function normalizeKind(kind) {
+      return isShortcutKind(kind) ? kind : 'block';
+    }
+
     function serializeDraft(entries) {
       var out = [];
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i] || {};
         out.push({
-          kind: entry.kind === 'improve' ? 'improve' : 'block',
+          kind: normalizeKind(entry.kind),
           quote: String(entry.quote == null ? '' : entry.quote),
           context: String(entry.context == null ? '' : entry.context),
           comment: String(entry.comment == null ? '' : entry.comment),
@@ -122,7 +153,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         var item = list[i];
         if (!item || typeof item !== 'object') continue;
         out.push({
-          kind: item.kind === 'improve' ? 'improve' : 'block',
+          kind: normalizeKind(item.kind),
           el: null,
           quote: String(item.quote == null ? '' : item.quote),
           context: String(item.context == null ? '' : item.context),
@@ -668,10 +699,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function addShortcutComment(shortcut) {
       for (var i = 0; i < pending.length; i++) {
-        if (pending[i].kind === 'improve') return;
+        if (pending[i].kind === shortcut.kind) return;
       }
       pending.push({
-        kind: 'improve',
+        kind: shortcut.kind,
         el: null,
         quote: '',
         context: shortcut.label,
@@ -966,9 +997,13 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var count = pending.length;
       var ordered = pending.slice();
       ordered.sort(function(a, b) {
-        if (a.kind === 'improve' && b.kind === 'block') return -1;
-        if (a.kind === 'block' && b.kind === 'improve') return 1;
-        if (a.kind === 'improve' && b.kind === 'improve') return 0;
+        // Shortcut entries lead the batch; among themselves the sort is stable,
+        // so they keep click order. Block comments follow in document order.
+        var aShortcut = a.kind !== 'block';
+        var bShortcut = b.kind !== 'block';
+        if (aShortcut && !bShortcut) return -1;
+        if (!aShortcut && bShortcut) return 1;
+        if (aShortcut && bShortcut) return 0;
         if (!a.el || !b.el) return 0;
         var mask = a.el.compareDocumentPosition(b.el);
         if (mask & Node.DOCUMENT_POSITION_FOLLOWING) return -1;

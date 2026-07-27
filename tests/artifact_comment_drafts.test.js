@@ -445,3 +445,68 @@ test('tray restores pending draft on init with el null', () => {
   const list = findChildByClass(tray, '__cbc-tray-list');
   assert.equal(list.children.length, 2, 'two tray items rendered from the restored draft');
 });
+
+// ---------------------------------------------------------------------------
+// Shortcut kinds: persistence round-trip and batch ordering
+// ---------------------------------------------------------------------------
+
+test('draft round-trip preserves every shortcut kind and coerces unknown kinds to block', () => {
+  const {window} = loadScript();
+  const serialize = window.__cbcSerializeDraft;
+  const deserialize = window.__cbcDeserializeDraft;
+
+  const stored = serialize([
+    {kind: 'improve', el: null, quote: '', context: 'Improve', comment: 'a'},
+    {kind: 'shorten', el: null, quote: '', context: 'Shorten', comment: 'b'},
+    {kind: 'verify', el: null, quote: '', context: 'Verify', comment: 'c'},
+    {kind: 'nope', el: makeElement(), quote: 'q', context: 'ctx', comment: 'd'},
+  ]);
+  assert.equal(
+    stored.map((entry) => entry.kind).join(','),
+    'improve,shorten,verify,block'
+  );
+
+  const restored = deserialize(JSON.stringify(stored));
+  assert.equal(
+    restored.map((entry) => entry.kind).join(','),
+    'improve,shorten,verify,block'
+  );
+  assert.equal(restored.map((entry) => entry.comment).join(','), 'a,b,c,d');
+});
+
+test('send puts shortcut entries ahead of block comments and keeps their order', async () => {
+  const storage = makeStorage();
+  storage.setItem(
+    DRAFT_KEY,
+    JSON.stringify([
+      {kind: 'block', quote: 'quoted text', context: 'Section 2', comment: 'block note'},
+      {kind: 'verify', quote: '', context: 'Verify', comment: 'verify prompt'},
+      {kind: 'improve', quote: '', context: 'Improve', comment: 'improve prompt'},
+    ])
+  );
+
+  let posted = null;
+  const fetch = async (url, options = {}) => {
+    if (url === '/api/sessions/sess-draft') {
+      return {ok: true, status: 200, async json() { return {name: 'Draft Session'}; }};
+    }
+    if (url === '/api/chat/sess-draft/message') {
+      posted = JSON.parse(options.body).content;
+      return {ok: true, status: 200};
+    }
+    throw new Error('unexpected fetch: ' + url);
+  };
+
+  const res = loadScript({storage, fetch, console: silentConsole()});
+  const tray = findChildByClass(res.body, '__cbc-tray');
+  const actions = findChildByClass(tray, '__cbc-tray-actions');
+  await clickElement(findChildByClass(actions, '__cbc-tray-send'));
+  await flushPromises();
+
+  assert.ok(posted, 'the batch was posted');
+  const numbered = posted.split('\n').filter((line) => /^\d+\. /.test(line));
+  assert.equal(numbered.length, 3);
+  assert.equal(numbered[0], '1. ▸ Verify');
+  assert.equal(numbered[1], '2. ▸ Improve');
+  assert.equal(numbered[2], '3. ▸ Section 2 › "quoted text"');
+});

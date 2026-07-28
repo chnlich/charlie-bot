@@ -31,6 +31,10 @@ inside one situation lives with that situation.
 A user preference comes from the user's own statement or repeated choice. Drop the entry when the only
 evidence is an incident — a rendering bug, tool failure, or environment glitch.
 
+A decision entry names the future behavior it binds. A measurement enters as a characteristic of standing
+infrastructure that steers method choice. A run's outcome is history; its home is the run dir, the owning
+session, or a results doc. The admission test judges content; timeless rewriting follows and changes form only.
+
 ## Form
 
 One topic per section, one standing rule or fact per entry, positively phrased, said once, in one language,

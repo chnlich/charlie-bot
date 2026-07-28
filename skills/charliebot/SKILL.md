@@ -27,6 +27,8 @@ Source code: `~/workspace/charlie-bot/src/core/`
 
 If the reviewer's ff-merge fails (base moved), the work branch and worktree are kept. Rebase and push from the kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user or delegate the resolution.
 
+Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, self-check `git rev-parse <branch> origin/<branch>`: ff-merge and push origin when behind; when already merged, ff the local worktree to origin — the reviewer push updates the remote only, and the server and delegation both run from the local worktree.
+
 **Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
 
 **Skill-doc update timing**: only promote a finding to a SKILL.md after the underlying debug is fully resolved. Tentative observations (e.g. "per-channel score looks ~1.34× baseline, pending 7-fold confirmation") belong in `~/.charliebot/LESSONS.md` or the session transcript, not in a skill. Skills are confirmed conventions readers can act on without re-deriving.
@@ -67,6 +69,18 @@ Better practice — choose one of:
 
 Never include revert/keep-only-report decision rules in delegate prompts — those are improve-loop semantics. The delegate worker's code change IS the artifact regardless of run outcome; failed attempts must still commit. Be specific in the task spec (file paths, function names, acceptance criteria); one task per delegation.
 
+### Delegation spec hard format
+
+All six `##`-level headings are required (`## Goal / Source Files / Required Behavior / Acceptance Tests / Reviewer Checklist / Out of Scope`); `#`-level headings are rejected. `## Source Files` takes only existing absolute paths or `-` (new files created by a patch go in a side note instead). The verify task type requires `--keep-worktree` and does not accept `--repo`. Run `charliebot` subcommands inside the session dir — cwd drives session identity.
+
+### Validate spec-embedded tests and patches outside the repo first
+
+Validate both red and green states before writing a test or patch into a spec. `git archive HEAD | tar -x -C /tmp/<scratch>` yields a clean snapshot of tracked files only; edit and run tests there, then confirm the produced patch applies with `git apply --check` on a second clean snapshot.
+
+### Output-capped backends: attach verified code
+
+Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below the advertised `limit.output` (~32k real vs 131072 advertised) and spend that budget on reasoning; splitting into smaller tasks leaves the cap in place. Strongest recipe for implementation delegations: store the verified unified diff as a file; hardcode the spec's first line to direct the worker to skip planning and make its first tool call a shell command; Step 1 = `git apply <patch>`, with verbatim EDIT blocks only as a fallback for apply failure. Delegate mechanical diff/comparison tasks to a master-run script instead — the output cap is absent there. Diagnosis entry: `sessions/<id>/threads/<tid>/data/events.jsonl` `result` + `usage`. Put the main repo venv's absolute path in the spec (worktrees lack a `.venv`). Cost: the master writes the code and the worker only lands and verifies it — the completion report flags this deviation.
+
 ---
 
 ## Repo-Specific Merge Policy
@@ -98,9 +112,27 @@ Never include revert/keep-only-report decision rules in delegate prompts — tho
 
 ---
 
+## Plan Registry
+
+`charliebot plan` (present/amend/approve/close): `amend` rejects duplicate artifact filenames — each version is a new `plan_NN_vK.html`. A delivered plan stays open; `close` covers superseded/abandoned only, and `approved` is the terminal delivery state.
+
+---
+
+## Claude Code Backend Context Window
+
+The Claude backend defaults to a 400k window. The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k (400k → ~367k; 1M default → ~784k), with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `src/agents/backends/claude_code.py` `headless_claude_env()` — the master path inherits os.environ, but `claude_sub.py`'s tmux `respawn-pane -e` path passes an allowlist only, so the variable must enter the allowlist for full coverage.
+
+---
+
 ## Sidebar & Frontend
 
 - New sidebar filter panels: Register the filter once in `web/static/js/sidebar/filters.js`; the filter pills, switching URLs, and URL restoration all derive from that registry.
+
+---
+
+## Web Terminal
+
+The web terminal keeps tmux mouse mode on: tmux-side selection preserves logical lines across soft wraps, while xterm.js native selection under tmux breaks at screen width (tmux repaints line-by-line via CUP), so handing selection to the browser is a net loss. tmux OSC 52 handles payloads of hundreds of KB.
 
 ---
 

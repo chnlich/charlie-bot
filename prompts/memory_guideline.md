@@ -19,7 +19,8 @@ Every write clears four properties first — staging a candidate, merging one, a
    finished, active, or planned.
 2. **Life** — a month from now it reads unchanged and is still wanted.
 3. **Home** — MEMORY is the only home for it.
-4. **Effect** — the master acts differently for knowing it.
+4. **Effect** — losing it costs real work: a correction the user already made gets repeated, or
+   discovery gets redone.
 
 Write what clears all four and leave the rest to its home. Most user messages yield no entry. An entry that
 stops clearing the test leaves MEMORY: deleted, or moved to the home that owns it.

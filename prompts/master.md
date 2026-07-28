@@ -42,9 +42,9 @@ During execution of an approved plan, the agent may autonomously complete any re
 
 ## Memory
 
-CRITICAL: after every user message, append any fact, preference, or opinion worth
-remembering to `~/.charliebot/MEMORY.tmp.md` with `>>` in the same turn, per
-`prompts/memory_guideline.md`.
+Append any fact, preference, or opinion worth
+remembering to `~/.charliebot/MEMORY.tmp.md` per
+`prompts/memory_guideline.md` when you feel it is necessary.
 
 Write `MEMORY.md` or `MEMORY.host.md` only when explicitly instructed to.
 

@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import structlog
 from pydantic import BaseModel, model_validator
@@ -11,6 +12,17 @@ log = structlog.get_logger()
 
 from src.core.models import BackendOption
 from src.core.yaml_utils import load_yaml
+
+
+class ScheduledTaskResolutionError(Exception):
+  """Raised when a cron entry cannot be resolved into a ``ScheduledTaskConfig``.
+
+  Covers loader-level resolution failures that must escape the generic reload
+  fallback in :func:`get_scheduled_tasks` so the failure is loud and self-healing
+  (the scheduler logs and retries each tick) rather than silently serving a
+  stale task list: a ``prompt_file`` that is missing/unreadable, or an entry
+  carrying both ``prompt`` and ``prompt_file``.
+  """
 
 
 class ImprovementLoopConfig(BaseModel):
@@ -285,11 +297,114 @@ def get_config() -> CharlieBotConfig:
 
 _cron_tasks: list[ScheduledTaskConfig] = []
 _cron_mtime: float = 0.0
+_cron_prompt_mtimes: dict[Path, float] = {}
+
+
+def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
+  """Resolve a cron entry's ``prompt_file`` into ``prompt`` in place.
+
+  Reads the referenced file, sets ``entry['prompt']`` to its contents, and
+  removes the ``prompt_file`` key so the model never sees it. Returns the
+  resolved :class:`Path` (for mtime tracking) or ``None`` if the entry had no
+  ``prompt_file``.
+
+  Path resolution has no search order and no shadowing: a relative path is
+  resolved against *repo_root* (``cfg.charlie_bot_repo``); a ``~``-prefixed or
+  absolute path is taken literally via :func:`os.path.expanduser`.
+
+  Raises :class:`ScheduledTaskResolutionError` if the entry carries both a
+  non-empty ``prompt`` and a ``prompt_file`` (two prompt sources is a
+  configuration error), or if the file is missing or unreadable.
+  """
+  pf = entry.get("prompt_file")
+  if not pf:
+    return None
+  if entry.get("prompt"):
+    raise ScheduledTaskResolutionError(
+        f"cron entry {entry.get('name')!r} has both 'prompt' and 'prompt_file'; "
+        "exactly one prompt source is allowed")
+  if pf.startswith("~") or Path(pf).is_absolute():
+    path = Path(os.path.expanduser(pf))
+  else:
+    path = repo_root / pf
+  try:
+    body = path.read_text(encoding="utf-8")
+  except OSError as e:
+    raise ScheduledTaskResolutionError(
+        f"cron entry {entry.get('name')!r} prompt_file unreadable: {path} ({e})") from e
+  entry["prompt"] = body
+  del entry["prompt_file"]
+  return path
+
+
+def _detect_local_timezone() -> str:
+  """Return the host's IANA timezone, derived from ``/etc/localtime``.
+
+  Resolves the ``/etc/localtime`` symlink to its real path, takes the part after
+  ``zoneinfo/``, and validates it with :class:`ZoneInfo`. On any failure (no
+  symlink, no ``zoneinfo/`` segment, invalid key) logs one warning and returns
+  ``"UTC"`` — this is an environment limitation, not a user configuration error.
+  """
+  try:
+    real = os.path.realpath("/etc/localtime")
+    marker = "/zoneinfo/"
+    idx = real.rfind(marker)
+    if idx < 0:
+      raise ValueError(f"no {marker!r} segment in {real!r}")
+    tz_name = real[idx + len(marker):]
+    if not tz_name:
+      raise ValueError(f"empty timezone name in {real!r}")
+    ZoneInfo(tz_name)  # validate — raises ZoneInfoNotFoundError on a bad key
+    return tz_name
+  except Exception as e:
+    log.warning("local_timezone_resolve_failed", error=str(e), fallback="UTC")
+    return "UTC"
+
+
+def _resolve_local_timezone(entry: dict) -> None:
+  """Rewrite the ``local`` sentinel into the host's IANA zone in place.
+
+  Only entries literally carrying ``timezone: local`` are affected; every other
+  value (including the model/API/UI default ``America/Los_Angeles``) is left
+  untouched.
+  """
+  if entry.get("timezone") != "local":
+    return
+  entry["timezone"] = _detect_local_timezone()
+
+
+def _stat_prompt_files(paths: dict[Path, float]) -> Optional[dict[Path, float]]:
+  """Return current mtimes for *paths*, or ``None`` if any is missing.
+
+  Returning ``None`` forces a reload so a missing ``prompt_file`` surfaces as a
+  :class:`ScheduledTaskResolutionError` instead of silently serving a cached
+  body from a file that no longer exists.
+  """
+  current: dict[Path, float] = {}
+  for p in paths:
+    try:
+      current[p] = p.stat().st_mtime
+    except OSError:
+      return None
+  return current
 
 
 def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
-  """Load scheduled tasks from config.d/cron.yaml, with mtime cache."""
-  global _cron_tasks, _cron_mtime
+  """Load scheduled tasks from config.d/cron.yaml, with an mtime cache.
+
+  The cache invalidates on the cron file's mtime **and** on the mtime of every
+  ``prompt_file`` referenced by the last successful load, so editing a prompt
+  ``.md`` (or a ``git pull`` that changes it) takes effect without touching
+  ``cron.yaml`` and without a server restart.
+
+  Each entry is resolved before model construction: ``prompt_file`` is read
+  into ``prompt`` (and the key removed) and a literal ``timezone: local`` is
+  rewritten to the host's IANA zone. Resolution failures raise
+  :class:`ScheduledTaskResolutionError`, which escapes the generic reload
+  fallback so the failure is loud and self-healing (the scheduler logs and
+  retries each tick).
+  """
+  global _cron_tasks, _cron_mtime, _cron_prompt_mtimes
   cron_path = Path.home() / ".charliebot" / "config.d" / "cron.yaml"
   try:
     mtime = cron_path.stat().st_mtime
@@ -298,15 +413,41 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
   except OSError as e:
     log.warning("cron_config_stat_failed", error=str(e))
     return _cron_tasks
-  if mtime != _cron_mtime:
-    try:
-      data = load_yaml(cron_path, default={})
-      raw_tasks = data.get("scheduled_tasks", [])
-      for t in raw_tasks:
-        if isinstance(t, dict) and t.get("repo"):
+
+  # Invalidate when the cron file or any referenced prompt file changed. A
+  # previously-referenced prompt file that is now missing (stat fails) forces a
+  # reload so the missing-file error surfaces instead of serving a stale body.
+  prompt_mtimes = _stat_prompt_files(_cron_prompt_mtimes)
+  if (mtime == _cron_mtime
+      and prompt_mtimes is not None
+      and prompt_mtimes == _cron_prompt_mtimes):
+    return _cron_tasks
+
+  try:
+    data = load_yaml(cron_path, default={})
+    raw_tasks = data.get("scheduled_tasks", [])
+    repo_root = get_config().charlie_bot_repo
+    resolved_prompt_mtimes: dict[Path, float] = {}
+    for t in raw_tasks:
+      if isinstance(t, dict):
+        resolved = _resolve_prompt_file(t, repo_root)
+        if resolved is not None:
+          try:
+            resolved_prompt_mtimes[resolved] = resolved.stat().st_mtime
+          except OSError:
+            # The file existed moments ago (we just read it); a transient race
+            # falls back to a sentinel so the next tick re-reads.
+            resolved_prompt_mtimes[resolved] = 0.0
+        _resolve_local_timezone(t)
+        if t.get("repo"):
           t["repo"] = os.path.expanduser(t["repo"])
-      _cron_tasks = [ScheduledTaskConfig(**t) for t in raw_tasks]
-      _cron_mtime = mtime
-    except Exception as e:
-      log.warning("cron_config_reload_failed", error=str(e))
+    _cron_tasks = [ScheduledTaskConfig(**t) for t in raw_tasks]
+    _cron_mtime = mtime
+    _cron_prompt_mtimes = resolved_prompt_mtimes
+  except ScheduledTaskResolutionError:
+    # Configuration error in a prompt_file: fail loud, escape the generic
+    # fallback. Scheduler._loop logs and retries each tick, so this self-heals.
+    raise
+  except Exception as e:
+    log.warning("cron_config_reload_failed", error=str(e))
   return _cron_tasks

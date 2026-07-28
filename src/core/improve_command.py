@@ -671,6 +671,7 @@ async def run_improve_loop(
   except Exception as e:
     state.status = 'failed'
     await save_loop_state(session_id, state, cfg)
+    await clear_active_loop_lock(session_id, cfg)
     log.error("improve_loop_worktree_failed", session=session_id, error=str(e))
     failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
     failure_payload['error'] = f"Failed to create worktree: {e}"

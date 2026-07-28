@@ -80,7 +80,7 @@ Never include revert/keep-only-report decision rules in delegate prompts — tho
 ## Workers & Sessions — Architecture Notes
 
 - **NEVER use `discover_repos()[0]` to get repo context for a derived/downstream task** (review workers, retries, continuations, chained tasks). `discover_repos()` returns repos in non-deterministic order. Always propagate `repo_path` explicitly from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` is only safe at the top-level entry point (user delegation, CLI). This is a recurring bug — always propagate repo_path explicitly.
-- Session instructions: `_build_instructions_content()` (master_cc.py) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + `MEMORY.md` + `MEMORY.host.md` + `MEMORY.tmp.md` on every `run_message()`. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
+- Session instructions: `_build_instructions_content()` (master_cc.py) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + `MEMORY.md` + `MEMORY.host.md` on every `run_message()`. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
 - **Long-running remote command**:

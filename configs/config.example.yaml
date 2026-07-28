@@ -1,5 +1,6 @@
 # CharlieBot config template.
-# setup.sh copies this to ~/.charliebot/config.yaml when that file does not exist.
+# setup.sh copies this to ~/.charliebot/config.yaml when that file does not exist,
+# and the server startup path (init_charliebot_home) seeds it too if still missing.
 # Every field below is uncommented and set to its default. Edit per host, fill in
 # secrets, and never commit your filled-in config.yaml.
 

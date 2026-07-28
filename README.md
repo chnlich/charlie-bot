@@ -4,7 +4,7 @@ A Python-based orchestration system that coordinates multiple Claude Code worker
 
 ## Setup
 
-Run `./scripts/setup.sh` on a new host. It seeds `~/.charliebot/config.yaml` from `configs/config.example.yaml` when the config is missing. Fill in secrets such as `gemini_api_key` and `charliebot_access_key` before the first start.
+Run `./scripts/setup.sh` on a new host. It syncs skills, provisions `~/.charliebot/` (home layout, memory files, and `config.yaml` from `configs/config.example.yaml`), seeds repo-owned default cron tasks into `~/.charliebot/config.d/cron.yaml`, and prints the effective scheduled task list. The server startup path provisions the home layout too, but it never writes `cron.yaml` — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up newly added repo-default cron tasks (same rule that already applies to new repo skills). Fill in secrets such as `gemini_api_key` and `charliebot_access_key` before the first start.
 
 ## Features
 

@@ -46,7 +46,8 @@ Append any fact, preference, or opinion worth
 remembering to `~/.charliebot/MEMORY.tmp.md` per
 `prompts/memory_guideline.md` when you feel it is necessary.
 
-Write `MEMORY.md` or `MEMORY.host.md` only when explicitly instructed to.
+Write `MEMORY.md` or `MEMORY.host.md` only when explicitly instructed to, with a pre-edit copy of
+the file in `/tmp/charliebot-memory-bak/`.
 
 ---
 

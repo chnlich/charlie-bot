@@ -1,4 +1,4 @@
-"""Master prompt assembly includes the MEMORY staging file."""
+"""Master prompt assembly excludes the MEMORY staging file."""
 from types import SimpleNamespace
 
 from src.agents import master_cc
@@ -19,7 +19,7 @@ def _cfg(tmp_path):
   )
 
 
-def test_staging_file_is_appended_after_memory(tmp_path):
+def test_memory_and_host_present_staging_absent(tmp_path):
   cfg = _cfg(tmp_path)
   cfg.memory_file.write_text("MEMORY BODY", encoding="utf-8")
   cfg.memory_host_file.write_text("HOST BODY", encoding="utf-8")
@@ -27,7 +27,10 @@ def test_staging_file_is_appended_after_memory(tmp_path):
 
   out = master_cc._build_instructions_content(SimpleNamespace(id="session-1"), cfg)
 
-  assert out.index("MEMORY BODY") < out.index("HOST BODY") < out.index("STAGED BODY")
+  assert "MEMORY BODY" in out
+  assert "HOST BODY" in out
+  assert out.index("MEMORY BODY") < out.index("HOST BODY")
+  assert "STAGED BODY" not in out
 
 
 def test_missing_staging_file_is_skipped(tmp_path):

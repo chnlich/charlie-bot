@@ -2,8 +2,10 @@
 
 import asyncio
 import os
+import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import structlog
@@ -48,91 +50,176 @@ async def git_current_branch(repo_path: Path) -> str:
   return stdout.decode().strip()
 
 
-async def _resolve_worktree_start_point(repo_path: Path, base_branch: str) -> str:
-  """Pick a start-point for `git worktree add` that prefers origin when local is behind.
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
-  Fetches origin/<base_branch>, then compares the local branch tip to the remote tip:
-    - local is ancestor of origin   → start from origin/<base_branch> (avoids stale local)
-    - local is strictly ahead       → start from <base_branch> (preserve unpushed commits)
-    - diverged                      → start from <base_branch> + warning
-    - fetch failure / unknown state → start from <base_branch> + warning
 
-  If <base_branch> already includes a remote prefix (e.g. 'origin/main'), the caller
-  has already chosen an explicit ref; return it unchanged without fetching.
+class BaseBranchResolutionError(RuntimeError):
+  """Raised when a --base-branch value is ambiguous or unresolvable.
+
+  The strict resolution matrix (resolve_base_branch) deliberately fails loudly
+  instead of silently picking a base: a stale local ref as a worktree base is a
+  correctness hazard that used to pass unnoticed.
   """
-  if base_branch.startswith("origin/"):
-    return base_branch
-
-  fetch_ok, fetch_err = await _run_git_cmd(
-      repo_path,
-      "fetch",
-      "origin",
-      base_branch,
-      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git fetch",
-  )
-  if not fetch_ok:
-    log.warning(
-        "git_fetch_failed_using_local_base",
-        repo=str(repo_path),
-        base=base_branch,
-        stderr=fetch_err,
-    )
-    return base_branch
-
-  remote_ref = f"origin/{base_branch}"
-  local_is_ancestor = await _git_is_ancestor(repo_path, base_branch, remote_ref)
-  if local_is_ancestor == 0:
-    return remote_ref
-  if local_is_ancestor == 1:
-    origin_is_ancestor = await _git_is_ancestor(repo_path, remote_ref, base_branch)
-    if origin_is_ancestor == 0:
-      # Local strictly ahead — user has unpushed commits we must preserve.
-      return base_branch
-    if origin_is_ancestor == 1:
-      log.warning("git_local_diverged_from_origin", repo=str(repo_path), base=base_branch)
-      return base_branch
-
-  log.warning(
-      "git_ancestor_check_failed_using_local_base",
-      repo=str(repo_path),
-      base=base_branch,
-      returncode=local_is_ancestor,
-  )
-  return base_branch
 
 
-async def _git_is_ancestor(repo_path: Path, ancestor: str, descendant: str) -> int:
-  """Run `git merge-base --is-ancestor <ancestor> <descendant>` and return the exit code.
+@dataclass(frozen=True)
+class BaseResolution:
+  """Result of resolving a --base-branch value into a worktree start point."""
 
-  Exit code 0 → ancestor relationship holds; 1 → does not hold; other → error.
-  Returns -1 on timeout to distinguish from git's documented exit codes.
-  """
+  canonical: str  # bare branch name, or the 40-hex SHA itself
+  start_point: str  # ref handed to `git worktree add` (origin/<b>, <b>, or the SHA)
+  detail: str  # human-readable resolution summary for prompt/log audit
+
+
+async def _git_stdout(
+    repo_path: Path,
+    *args: str,
+    timeout: int,
+    timeout_label: str,
+) -> tuple[bool, str, str]:
+  """Run a git command with timeout. Returns (success, stdout, stderr)."""
   proc = await asyncio.create_subprocess_exec(
       "git",
-      "merge-base",
-      "--is-ancestor",
-      ancestor,
-      descendant,
+      *args,
       cwd=str(repo_path),
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
   )
   try:
-    await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
   except asyncio.TimeoutError:
     proc.kill()
-    return -1
-  return proc.returncode if proc.returncode is not None else -1
+    return False, "", f"{timeout_label} timed out after {timeout}s"
+  if proc.returncode != 0:
+    return False, stdout.decode().strip(), stderr.decode().strip()
+  return True, stdout.decode().strip(), ""
 
 
-async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> None:
+async def _git_rev_parse(repo_path: Path, ref: str) -> str | None:
+  """Resolve a ref to a commit SHA; return None when it does not resolve."""
+  ok, out, _ = await _git_stdout(
+      repo_path,
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      ref,
+      timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+      timeout_label="git rev-parse",
+  )
+  return out if ok and out else None
+
+
+async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResolution:
+  """Resolve a --base-branch value to a worktree start point, failing loudly on ambiguity.
+
+  Resolution matrix (the only accepted forms; everything else raises
+  BaseBranchResolutionError):
+    - 40-hex SHA      → pinned base, verified present; no freshness semantics, no network.
+    - origin/<b>      → explicit remote: must exist on origin; start at the freshly fetched
+                        origin/<b> regardless of any local state.
+    - <b> (bare)      → if the remote branch exists, the local branch must be absent or
+                        point at exactly the same commit (else hard error naming both SHAs);
+                        start at freshly fetched origin/<b>. If the remote branch does not
+                        exist (or no origin remote is configured), require the branch to
+                        exist locally and start there (unpublished-branch case).
+  A reachable-check that fails (network/auth) is a hard error, never a silent local
+  fallback; use a full SHA to pin a base while offline.
+  """
+  raw = (base_branch or "").strip()
+  if not raw:
+    raise BaseBranchResolutionError("base branch is empty")
+
+  # Full commit SHA: pinned base. Verified by cat-file; no fetch, no remote probe.
+  if _FULL_SHA_RE.fullmatch(raw):
+    ok, _, err = await _git_stdout(
+        repo_path,
+        "cat-file",
+        "-e",
+        f"{raw}^{{commit}}",
+        timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+        timeout_label="git cat-file",
+    )
+    if not ok:
+      raise BaseBranchResolutionError(f"base commit {raw} not found in repo: {err}")
+    return BaseResolution(canonical=raw, start_point=raw, detail=f"pinned commit {raw[:12]}")
+
+  explicit_remote = raw.startswith("origin/")
+  branch = raw[len("origin/"):] if explicit_remote else raw
+  if not branch or ".." in branch or any(c.isspace() for c in branch):
+    raise BaseBranchResolutionError(f"invalid branch name in --base-branch: {raw!r}")
+
+  # Probe origin state: configured? reachable? branch published?
+  ok, _, url_err = await _git_stdout(
+      repo_path,
+      "remote",
+      "get-url",
+      "origin",
+      timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+      timeout_label="git remote get-url",
+  )
+  origin_configured = ok
+  remote_exists = False
+  if origin_configured:
+    ok, out, ls_err = await _git_stdout(
+        repo_path,
+        "ls-remote",
+        "origin",
+        f"refs/heads/{branch}",
+        timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+        timeout_label="git ls-remote",
+    )
+    if not ok:
+      raise BaseBranchResolutionError(
+          f"cannot reach origin to resolve base branch {branch!r}: {ls_err}. "
+          "Retry when the remote is reachable, or pass a full commit SHA to pin the base.")
+    remote_exists = bool(out.strip())
+
+  if remote_exists:
+    fetched, fetch_err = await git_fetch(repo_path, "origin", branch)
+    if not fetched:
+      raise BaseBranchResolutionError(f"git fetch origin {branch} failed: {fetch_err}")
+    remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
+    if remote_sha is None:
+      raise BaseBranchResolutionError(
+          f"origin/{branch} listed by ls-remote but missing after fetch in {repo_path}")
+    local_sha = await _git_rev_parse(repo_path, f"refs/heads/{branch}")
+    if not explicit_remote and local_sha is not None and local_sha != remote_sha:
+      raise BaseBranchResolutionError(
+          f"local {branch} ({local_sha[:12]}) differs from origin/{branch} ({remote_sha[:12]}). "
+          "A local base must match its remote exactly: push the local commits, fast-forward the "
+          f"local branch, pass origin/{branch} to use the remote explicitly, "
+          "or pass a full commit SHA to pin the base.")
+    return BaseResolution(
+        canonical=branch,
+        start_point=f"origin/{branch}",
+        detail=f"branch {branch} at origin tip {remote_sha[:12]}")
+
+  # Remote branch absent (or no origin remote configured): unpublished-branch path.
+  if explicit_remote:
+    raise BaseBranchResolutionError(
+        f"origin/{branch} was requested explicitly but that remote branch does not exist on origin.")
+  local_sha = await _git_rev_parse(repo_path, f"refs/heads/{branch}")
+  if local_sha is None:
+    raise BaseBranchResolutionError(
+        f"base branch {branch!r} exists neither locally nor on origin "
+        f"(origin {'unreachable or not configured' if not origin_configured else 'has no such branch'}).")
+  return BaseResolution(
+      canonical=branch,
+      start_point=branch,
+      detail=f"local branch {branch} at {local_sha[:12]} (no matching origin branch)")
+
+
+async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
   """Create a git worktree and fail loudly if git reports an error.
 
-  Resolves the start-point via `_resolve_worktree_start_point` so that a stale local
-  copy of <base_branch> doesn't silently produce a worker rooted at an old commit.
+  Resolves the start-point via `resolve_base_branch` so that a stale local copy
+  of <base_branch> can never silently become a worker's base: ambiguous input
+  raises BaseBranchResolutionError before any worktree is created. Returns the
+  BaseResolution so callers can persist the canonical (bare) branch name and
+  audit the chosen start point.
   """
-  start_point = await _resolve_worktree_start_point(repo_path, base_branch)
+  resolution = await resolve_base_branch(repo_path, base_branch)
+  start_point = resolution.start_point
   proc = await asyncio.create_subprocess_exec(
       "git",
       "worktree",
@@ -169,9 +256,12 @@ async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: st
       "git_worktree_created",
       repo=str(repo_path),
       base=base_branch,
+      canonical=resolution.canonical,
       start_point=start_point,
+      resolution=resolution.detail,
       worktree=str(wt_path),
   )
+  return resolution
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

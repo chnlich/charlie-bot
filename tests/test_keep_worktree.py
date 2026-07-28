@@ -11,6 +11,7 @@ from typing import Any, Optional
 import pytest
 
 from src.core import review, spawner
+from src.core.git import BaseResolution
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 
@@ -254,8 +255,9 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
   async def fake_git_current_branch(repo: Path) -> str:
     return "main"
 
-  async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> None:
+  async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     wt_path.mkdir(parents=True, exist_ok=True)
+    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
   class FakeWorker:
     def __init__(

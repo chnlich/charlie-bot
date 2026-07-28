@@ -20,7 +20,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import (
     git_create_worktree,
-    git_fetch,
+    git_current_branch,
     git_push_branch,
     git_push_refspec,
     git_worktree_dir_name,
@@ -656,15 +656,18 @@ async def run_improve_loop(
   )
 
   # Create the single worktree for all iterations.
-  # Fetch + branch off origin/<base> so iterations start from the latest remote tip,
-  # not a stale local copy of base_branch.
+  # resolve_base_branch (inside git_create_worktree) fetches the remote tip and
+  # hard-fails on ambiguity (stale/mismatched local base), so iterations always
+  # start from a fresh, unambiguous base. Persist the canonical bare branch name
+  # so merge-back pushes and reviewer instructions never see an origin/ form.
   wt_path = Path(cfg.worktree_dir) / work_branch.replace('/', '-')
   Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
   try:
-    fetched, fetch_err = await git_fetch(resolved_repo, "origin", base_branch)
-    if not fetched:
-      raise RuntimeError(f"git fetch origin {base_branch} failed: {fetch_err}")
-    await git_create_worktree(resolved_repo, f"origin/{base_branch}", work_branch, wt_path)
+    resolution = await git_create_worktree(
+        resolved_repo, base_branch or await git_current_branch(resolved_repo), work_branch, wt_path)
+    state.base_branch = resolution.canonical
+    await save_loop_state(session_id, state, cfg)
+    base_branch = resolution.canonical
   except Exception as e:
     state.status = 'failed'
     await save_loop_state(session_id, state, cfg)

@@ -95,6 +95,7 @@ def _build_worker_prompt(
     iteration_number: Optional[int] = None,
     is_continuation: bool = False,
     keep_worktree: bool = False,
+    start_point: Optional[str] = None,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   session_info = (f"## Session Info\n"
@@ -107,8 +108,9 @@ def _build_worker_prompt(
   else:
     intro_line = "A dedicated git worktree is already created for you."
 
+  branch_origin = f"`{base_branch}`" + (f" @ `{start_point}`" if start_point else "")
   branch_lines = (
-      f"- Branch: `{branch_name}` (from `{base_branch}`)\n"
+      f"- Branch: `{branch_name}` (from {branch_origin})\n"
       f"- Worktree: `{wt_path}`\n"
       f"- Repo: `{repo_path}`")
 
@@ -468,13 +470,13 @@ async def _create_worktree_and_process(
 
     # Ensure worktree parent dir exists and create worktree before launch.
     Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
-    await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
+    resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
 
     # Store branch_name, repo_path, worktree path, and optional context on thread metadata.
     thread.branch_name = branch_name
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
-    thread.base_branch = base_branch
+    thread.base_branch = resolution.canonical
     thread.keep_worktree = req.keep_worktree
     thread.context = req.context
 
@@ -483,14 +485,15 @@ async def _create_worktree_and_process(
     worker_prompt = _build_worker_prompt(
         description,
         resolved_repo,
-        base_branch,
+        resolution.canonical,
         branch_name,
         str(wt_path),
         session_meta,
         task_type=req.task_type,
         loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,
-        keep_worktree=req.keep_worktree)
+        keep_worktree=req.keep_worktree,
+        start_point=resolution.start_point)
     worktree_path = wt_path.resolve()
 
   if worktree_path is None:

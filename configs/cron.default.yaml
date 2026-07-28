@@ -1,0 +1,9 @@
+# Repo-owned default scheduled tasks. ./scripts/setup.sh seeds any entry whose
+# `name` is absent from ~/.charliebot/config.d/cron.yaml, and never touches an
+# entry that is already there. Host-specific fields (backend, schedule) belong
+# in the host file, not here.
+scheduled_tasks:
+  - name: memory-guideline-check
+    cron: "27 6 * * *"
+    timezone: local
+    prompt_file: prompts/cron/memory_guideline_check.md

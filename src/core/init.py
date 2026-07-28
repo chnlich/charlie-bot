@@ -1,6 +1,7 @@
 """Initialize ~/.charliebot/ directory structure on first run."""
 
 import asyncio
+import copy
 import json
 import os
 import signal
@@ -12,12 +13,19 @@ from pathlib import Path
 
 import structlog
 
-from src.core.config import get_config
+from src.core.config import (
+    CharlieBotConfig,
+    ScheduledTaskConfig,
+    _resolve_local_timezone,
+    _resolve_prompt_file,
+    get_config,
+)
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
 from src.core.models import parse_utc_datetime, utc_now
 from src.core.process import kill_process_group
 from src.core.worktree_trash import dir_size_bytes, format_size, trash_dir
+from src.core.yaml_utils import load_yaml, save_yaml
 
 log = structlog.get_logger()
 
@@ -159,6 +167,67 @@ def _seed_if_missing(path: Path, content: str) -> None:
   """Write content to path only if the file does not already exist."""
   if not path.exists():
     path.write_text(content, encoding="utf-8")
+
+
+def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
+  """Seed repo-owned default cron tasks into the host cron.yaml by name.
+
+  Reads ``configs/cron.default.yaml`` from the repo and the host
+  ``~/.charliebot/config.d/cron.yaml``. For each default entry: if no host entry
+  shares its ``name``, append it verbatim; if one exists, change nothing about
+  it. Never reorders, rewrites, or drops host-only entries.
+
+  Creates ``config.d/`` and the cron file when absent. Writes through
+  :func:`src.core.yaml_utils.save_yaml` (the same writer ``src/api/cron.py``
+  uses). Validates every default entry before writing: each must construct a
+  :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution and
+  every ``prompt_file`` must resolve to an existing file. Fails loudly without
+  writing if validation fails.
+
+  Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}, ...]``.
+
+  This is a library function invoked only by ``./scripts/setup.sh``. It is NOT
+  called by :func:`init_charliebot_home`, so the server startup path never
+  writes ``cron.yaml`` — that is an invariant the tests assert directly.
+  """
+  repo_root = cfg.charlie_bot_repo
+  defaults_data = load_yaml(repo_root / "configs" / "cron.default.yaml", default={})
+  default_entries = list(defaults_data.get("scheduled_tasks", []))
+
+  # Validate every default entry on a resolved copy before touching the host
+  # file, so a bad repo default fails loudly without any partial write.
+  for entry in default_entries:
+    if not isinstance(entry, dict):
+      raise ValueError(f"invalid default cron entry (not a mapping): {entry!r}")
+    resolved = copy.deepcopy(entry)
+    _resolve_prompt_file(resolved, repo_root)  # raises ScheduledTaskResolutionError
+    _resolve_local_timezone(resolved)
+    ScheduledTaskConfig(**resolved)  # raises on validation error
+
+  cfg.config_d_dir.mkdir(parents=True, exist_ok=True)
+  cron_path = cfg.config_d_dir / "cron.yaml"
+  data = load_yaml(cron_path, default={"scheduled_tasks": []})
+  if not isinstance(data, dict):
+    raise ValueError(f"cron config must be a mapping: {cron_path}")
+  host_tasks = list(data.get("scheduled_tasks", []) or [])
+  host_names = {t.get("name") for t in host_tasks if isinstance(t, dict)}
+
+  report: list[dict] = []
+  changed = False
+  for entry in default_entries:
+    name = entry.get("name")
+    if name in host_names:
+      report.append({"name": name, "status": "exists"})
+      continue
+    host_tasks.append(copy.deepcopy(entry))
+    host_names.add(name)
+    report.append({"name": name, "status": "created"})
+    changed = True
+
+  if changed:
+    data["scheduled_tasks"] = host_tasks
+    save_yaml(cron_path, data)
+  return report
 
 
 async def run_crash_recovery(cfg, boot_time: datetime) -> int:

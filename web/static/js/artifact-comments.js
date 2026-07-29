@@ -333,7 +333,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}' +
-        '.' + GLOBAL_PREFIX + '-gutter{position:absolute;right:8px;width:300px;z-index:2147483646}' +
+        '.' + GLOBAL_PREFIX + '-gutter{position:absolute;top:0;right:8px;width:300px;z-index:2147483646}' +
         '.' + GLOBAL_PREFIX + '-gutter .' + GLOBAL_PREFIX + '-tray-item{position:absolute;left:0;right:0;box-sizing:border-box}';
       document.head.appendChild(style);
     }

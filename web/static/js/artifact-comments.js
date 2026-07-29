@@ -72,6 +72,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     window.__cbcSaveDraft = saveDraft;
     window.__cbcLoadDraft = loadDraft;
     window.__cbcClearDraft = clearDraft;
+    window.__cbcStackCards = stackCards;
 
     installStyles();
     installListeners();
@@ -309,8 +310,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-item-main{display:flex;align-items:flex-start;gap:7px;min-width:0}' +
         '.' + GLOBAL_PREFIX + '-tray-item-body{flex:1;min-width:0}' +
         '.' + GLOBAL_PREFIX + '-tray-item-controls{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:5px}' +
-        '.' + GLOBAL_PREFIX + '-tray-item-quote{color:#8b949e;font-size:11px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-        '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:pre-line;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;max-height:3.4em;cursor:default}' +
+        '.' + GLOBAL_PREFIX + '-tray-item-quote{color:#8b949e;font-size:11px;font-style:italic;overflow-wrap:anywhere}' +
+        '.' + GLOBAL_PREFIX + '-tray-item-comment{color:#e6edf3;font-size:12px;margin-top:3px;white-space:pre-line;overflow-wrap:anywhere;cursor:default}' +
         '.' + GLOBAL_PREFIX + '-tray-edit{box-sizing:border-box;width:100%;min-height:130px;resize:vertical;margin-top:3px;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:6px 7px;font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
         '.' + GLOBAL_PREFIX + '-tray-edit:focus{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.18)}' +
         '.' + GLOBAL_PREFIX + '-tray-edit-btn{border:1px solid #2d3340;border-radius:4px;padding:2px 6px;background:#1c2230;color:#e6edf3;font:10px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer}' +
@@ -462,6 +463,27 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function clamp(value, min, max) {
       return Math.max(min, Math.min(value, max));
+    }
+
+    // Pure greedy placement for the anchored comment gutter (part 2 wires it
+    // to the DOM). Sorts cards by anchor ascending, then places each at
+    // max(anchor, prevBottom + gap). Returns tops in ascending-anchor order.
+    // No DOM access, no module state.
+    function stackCards(anchors, heights, gap) {
+      var n = anchors.length;
+      if (n === 0) return [];
+      var order = [];
+      for (var i = 0; i < n; i++) order.push(i);
+      order.sort(function(a, b) { return anchors[a] - anchors[b]; });
+      var tops = [];
+      var prevBottom = -Infinity;
+      for (var k = 0; k < n; k++) {
+        var idx = order[k];
+        var top = Math.max(anchors[idx], prevBottom + gap);
+        tops.push(top);
+        prevBottom = top + heights[idx];
+      }
+      return tops;
     }
 
     function rectForTrigger(left, top) {

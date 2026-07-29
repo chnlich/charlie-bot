@@ -600,10 +600,18 @@ test('tray item layout keeps controls in normal flow beside bounded preview text
   const styleText = head.children[0].textContent;
   assert.match(cssRule(styleText, '.__cbc-tray-item-main'), /display:flex/);
   assert.match(cssRule(styleText, '.__cbc-tray-item-body'), /min-width:0/);
-  assert.match(cssRule(styleText, '.__cbc-tray-item-comment'), /-webkit-line-clamp:2/);
+  assert.doesNotMatch(cssRule(styleText, '.__cbc-tray-item-comment'), /-webkit-line-clamp/);
   assert.match(cssRule(styleText, '.__cbc-tray-item-comment'), /overflow-wrap:anywhere/);
   assert.doesNotMatch(cssRule(styleText, '.__cbc-tray-edit-btn'), /position:absolute/);
   assert.doesNotMatch(cssRule(styleText, '.__cbc-tray-remove'), /position:absolute/);
+
+  const quoteRule = cssRule(styleText, '.__cbc-tray-item-quote');
+  const commentRule = cssRule(styleText, '.__cbc-tray-item-comment');
+  for (const token of ['line-clamp', 'max-height', 'nowrap', 'text-overflow']) {
+    assert.doesNotMatch(quoteRule, new RegExp(token), 'quote rule omits ' + token);
+    assert.doesNotMatch(commentRule, new RegExp(token), 'comment rule omits ' + token);
+  }
+  assert.match(quoteRule, /overflow-wrap:anywhere/, 'quote rule still wraps long words');
 });
 
 test('popover and tray edit windows are widened and share a single width source', () => {
@@ -887,4 +895,115 @@ test('each shortcut dedups on its own kind without blocking the other shortcuts'
   clickElement(verify);
   clickElement(improve);
   assert.equal(trayItemCount(body), 3, 'repeat clicks stay deduped per kind');
+});
+
+// ---------------------------------------------------------------------------
+// stackCards: pure greedy placement for the anchored comment gutter (part 1).
+// Four properties must hold jointly: order preserved, no overlap, never floats
+// up, and exact when uncontested. "no overlap" and "order preserved" are driven
+// with 200 randomised anchor/height sets; the property is asserted, never a
+// pixel literal.
+// ---------------------------------------------------------------------------
+
+function mulberry32(seed) {
+  let s = seed | 0;
+  return function () {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function loadStackCards() {
+  const {window} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+  assert.equal(typeof window.__cbcStackCards, 'function', 'stackCards is exported');
+  return window.__cbcStackCards;
+}
+
+function randomisedSets(rng, sets) {
+  const out = [];
+  for (let s = 0; s < sets; s++) {
+    const n = 1 + Math.floor(rng() * 8);
+    const anchors = [];
+    const heights = [];
+    for (let i = 0; i < n; i++) {
+      anchors.push(Math.floor(rng() * 1000));
+      heights.push(1 + Math.floor(rng() * 200));
+    }
+    const gap = Math.floor(rng() * 20);
+    out.push({anchors, heights, gap});
+  }
+  return out;
+}
+
+function sortByAnchor(anchors, heights) {
+  const pairs = anchors.map((a, i) => [a, heights[i]]).sort((x, y) => x[0] - y[0]);
+  return {
+    sortedAnchors: pairs.map((p) => p[0]),
+    sortedHeights: pairs.map((p) => p[1]),
+  };
+}
+
+test('stackCards preserves ascending-anchor order over 200 randomised sets', () => {
+  const stackCards = loadStackCards();
+  const rng = mulberry32(20260728);
+  for (const {anchors, heights, gap} of randomisedSets(rng, 200)) {
+    const tops = stackCards(anchors, heights, gap);
+    // Output is in ascending-anchor order, so placed tops are non-decreasing.
+    for (let i = 1; i < tops.length; i++) {
+      assert.ok(tops[i] >= tops[i - 1], 'tops non-decreasing: ' + JSON.stringify({anchors, tops}));
+    }
+  }
+});
+
+test('stackCards prevents overlap over 200 randomised sets', () => {
+  const stackCards = loadStackCards();
+  const rng = mulberry32(20260729);
+  for (const {anchors, heights, gap} of randomisedSets(rng, 200)) {
+    const tops = stackCards(anchors, heights, gap);
+    const {sortedHeights} = sortByAnchor(anchors, heights);
+    for (let i = 1; i < tops.length; i++) {
+      assert.ok(
+        tops[i] >= tops[i - 1] + sortedHeights[i - 1] + gap,
+        'no overlap: ' + JSON.stringify({anchors, heights, gap, tops})
+      );
+    }
+  }
+});
+
+test('stackCards never floats a card above its own anchor', () => {
+  const stackCards = loadStackCards();
+  const rng = mulberry32(20260730);
+  for (const {anchors, heights, gap} of randomisedSets(rng, 200)) {
+    const tops = stackCards(anchors, heights, gap);
+    const {sortedAnchors} = sortByAnchor(anchors, heights);
+    for (let i = 0; i < tops.length; i++) {
+      assert.ok(tops[i] >= sortedAnchors[i], 'top >= anchor: ' + JSON.stringify({anchors, tops, i}));
+    }
+  }
+});
+
+test('stackCards places an uncontested card exactly at its anchor', () => {
+  const stackCards = loadStackCards();
+  // Deterministic sanity: well-separated anchors never collide, so every card
+  // lands on its own anchor (the "exact when uncontested" property, not a pixel
+  // literal). Compared via JSON because the array is created inside the vm
+  // context and has a different prototype than the test's outer Array.
+  const detAnchors = [100, 500, 900];
+  const detTops = stackCards(detAnchors, [40, 40, 40], 10);
+  assert.equal(JSON.stringify(detTops), JSON.stringify(detAnchors));
+  // Randomised: any card that does not collide with the previous lands on its anchor.
+  const rng = mulberry32(20260731);
+  for (const {anchors, heights, gap} of randomisedSets(rng, 200)) {
+    const tops = stackCards(anchors, heights, gap);
+    const {sortedAnchors, sortedHeights} = sortByAnchor(anchors, heights);
+    for (let i = 1; i < tops.length; i++) {
+      if (sortedAnchors[i] >= tops[i - 1] + sortedHeights[i - 1] + gap) {
+        assert.equal(tops[i], sortedAnchors[i], 'uncontested at anchor: ' + JSON.stringify({anchors, heights, gap, tops, i}));
+      }
+    }
+  }
 });

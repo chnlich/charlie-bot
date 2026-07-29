@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import signal
+import subprocess
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
@@ -97,13 +98,15 @@ def _default_config_yaml() -> dict:
   }
 
 
-DEFAULT_MEMORY = "# MEMORY\n\nUser preferences, facts, and personalization notes are recorded here.\n"
-DEFAULT_MEMORY_HOST = "# HOST MEMORY\n\nHost-specific settings, hardware, local tools, and repo paths.\n"
-DEFAULT_MEMORY_TMP = (
-    "# PENDING MEMORY (staging)\n\n"
-    "Candidates appended by sessions; merged into MEMORY.md by the daily memory "
-    "maintenance task.\n"
-)
+DEFAULT_MEMORY_TOPICS = (
+    "profile resident\n"
+    "communication resident\n"
+    "workflow resident\n"
+    "rulings resident\n"
+    "host resident\n"
+    "charliebot\n")
+
+DEFAULT_MEMORY_GITIGNORE = "staging/\nusage.jsonl\n"
 
 DEFAULT_SLASH_COMMANDS = """\
 commands:
@@ -147,10 +150,8 @@ async def init_charliebot_home() -> None:
   for d in dirs:
     d.mkdir(parents=True, exist_ok=True)
 
-  # Seed global knowledge files
-  _seed_if_missing(cfg.memory_file, DEFAULT_MEMORY)
-  _seed_if_missing(cfg.memory_host_file, DEFAULT_MEMORY_HOST)
-  _seed_if_missing(cfg.memory_tmp_file, DEFAULT_MEMORY_TMP)
+  # Seed the memory store scaffold (git repo + topics vocabulary + .gitignore)
+  _seed_memory_scaffold(cfg)
   _seed_if_missing(cfg.charliebot_home / 'slash_commands.yaml', DEFAULT_SLASH_COMMANDS)
 
   # Seed config.yaml from the committed template if missing
@@ -167,6 +168,24 @@ def _seed_if_missing(path: Path, content: str) -> None:
   """Write content to path only if the file does not already exist."""
   if not path.exists():
     path.write_text(content, encoding="utf-8")
+
+
+def _seed_memory_scaffold(cfg: CharlieBotConfig) -> None:
+  """Seed the labeled-entry memory store at cfg.memory_dir (idempotent).
+
+  Creates the directory, runs ``git init`` when it is not already a repo, seeds
+  the topics vocabulary and .gitignore (never overwriting existing files), and
+  creates the ``entries/`` and ``staging/`` directories. The canon (entries/
+  and topics) is populated only by user-approved curation diffs, never here.
+  """
+  memory_dir = cfg.memory_dir
+  memory_dir.mkdir(parents=True, exist_ok=True)
+  if not (memory_dir / ".git").exists():
+    subprocess.run(["git", "init"], cwd=str(memory_dir), check=True, capture_output=True)
+  _seed_if_missing(memory_dir / "topics", DEFAULT_MEMORY_TOPICS)
+  _seed_if_missing(memory_dir / ".gitignore", DEFAULT_MEMORY_GITIGNORE)
+  (memory_dir / "entries").mkdir(exist_ok=True)
+  (memory_dir / "staging").mkdir(exist_ok=True)
 
 
 def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:

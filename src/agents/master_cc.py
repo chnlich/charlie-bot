@@ -14,6 +14,7 @@ from src.agents.backends.base import AgentBackend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
+from src.core.memory import assemble_master
 from src.core.models import BackendOption, SessionCallbacks, SessionMetadata, backend_type_allows_missing_model
 from src.core.streaming import handle_compact_boundary, streaming_manager
 
@@ -116,7 +117,12 @@ class _WorkItem:
 
 
 def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
-  """Build master agent instructions by concatenating base prompt + per-host override + memory files."""
+  """Build master agent instructions: base prompt + per-host override + memory store.
+
+  The memory block is assembled from the labeled-entry store via
+  :func:`src.core.memory.assemble_master` (resident topics full text + index
+  lines for the rest); it replaces the former three-file concatenation.
+  """
   parts: list[str] = []
 
   # 1. Git-shared base prompt (prompts/master.md in the repo)
@@ -137,10 +143,10 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
     log.warning("master_prompt_files_missing", base=str(base_prompt_file), host=str(host_prompt_file))
     return None
 
-  # 3. Memory files
-  for mf in [cfg.memory_file, cfg.memory_host_file]:
-    if mf.exists():
-      parts.append(mf.read_text(encoding="utf-8"))
+  # 3. Memory store (resident topics full text + index lines for the rest)
+  memory_block = assemble_master(cfg.memory_dir)
+  if memory_block:
+    parts.append(memory_block)
 
   return "\n\n".join(parts)
 
@@ -148,8 +154,7 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
 _VOICE_DISCLAIMER = (
     "[Voice input: this message was dictated via speech transcription and may "
     "contain recognition errors. Interpret unclear words from context; ask only "
-    "when the intent is genuinely ambiguous.]"
-)
+    "when the intent is genuinely ambiguous.]")
 
 
 def _build_prompt(user_content: str, is_voice: bool) -> str:
@@ -279,8 +284,9 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
       # The session pins a backend id config.yaml no longer defines. Substituting a
       # different backend would silently run on another model and another account.
       fallback_id = cfg.backend_options[0].id if cfg.backend_options else "(none)"
-      msg = (f"backend '{session_meta.backend}' is not in config.yaml backend_options — "
-             f"refusing to substitute '{fallback_id}'; this run did not execute.")
+      msg = (
+          f"backend '{session_meta.backend}' is not in config.yaml backend_options — "
+          f"refusing to substitute '{fallback_id}'; this run did not execute.")
       log.error(
           "master_cc_backend_unresolved",
           session=session_meta.id,
@@ -288,7 +294,10 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
           fallback=fallback_id,
       )
       await item.callbacks.persist_and_broadcast(
-          session_meta.id, {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {msg}"})
+          session_meta.id, {
+              "type": ET.ASSISTANT_ERROR,
+              "content": f"Agent error: {msg}"
+          })
       await item.callbacks.mark_unread(session_meta.id)
       return None, 1, msg, {}
     option = cfg.backend_options[0]
@@ -296,8 +305,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
     option = option.model_copy(update={"model": None})
 
   resume_id = _resolve_resume_id(option, session_meta)
-  if (session_meta.cc_session_id and resume_id is None
-      and option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES):
+  if (session_meta.cc_session_id and resume_id is None and option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES):
     await item.callbacks.persist_and_broadcast(
         session_meta.id, {
             "type": ET.RESUME_CONTEXT_DROPPED,

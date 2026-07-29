@@ -23,6 +23,7 @@ _COMMANDS = {
     "remote-launch": "src.cli.remote_launch",
     "gc-trash": "src.cli.gc_trash",
     "plan": "src.cli.plan",
+    "memory": "src.cli.memory",
 }
 
 

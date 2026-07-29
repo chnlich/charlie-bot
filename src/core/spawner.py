@@ -42,6 +42,7 @@ from src.core.git import (
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
+from src.core.memory import assemble_worker
 from src.core.notifications import send_telegram
 
 log = structlog.get_logger()
@@ -90,6 +91,7 @@ def _build_worker_prompt(
     branch_name: str,
     wt_path: str,
     session_meta: SessionMetadata,
+    cfg: CharlieBotConfig,
     task_type: TaskType,
     loop_dir: Optional[str] = None,
     iteration_number: Optional[int] = None,
@@ -194,6 +196,11 @@ def _build_worker_prompt(
       "- You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.\n"
       "- Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.\n")
 
+  memory_section = ""
+  memory_block = assemble_worker(cfg.memory_dir, repo_path.name)
+  if memory_block:
+    memory_section = f"\n## Memory\n{memory_block}"
+
   keep_worktree_section = ""
   if keep_worktree:
     keep_worktree_section = (
@@ -202,7 +209,7 @@ def _build_worker_prompt(
         "You may safely use it as the WorkDir for external long-running processes (e.g. SLURM jobs).")
 
   return (
-      f"{session_info}\n{_CODING_PRINCIPLES}\n{skills_section}\n{role_section}\n"
+      f"{session_info}\n{_CODING_PRINCIPLES}\n{skills_section}\n{role_section}{memory_section}\n"
       f"{worktree_section}{iteration_reports_section}{keep_worktree_section}")
 
 
@@ -453,6 +460,7 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
+        cfg,
         task_type=req.task_type,
         loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,
@@ -489,6 +497,7 @@ async def _create_worktree_and_process(
         branch_name,
         str(wt_path),
         session_meta,
+        cfg,
         task_type=req.task_type,
         loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,

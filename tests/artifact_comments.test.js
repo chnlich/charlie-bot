@@ -135,10 +135,17 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
       listeners.push({target: 'document', type, handler, options});
     },
     querySelectorAll(selector) {
-      if (selector === '.__cbc-shortcuts') {
-        return body.children.filter((child) => child.className === '__cbc-shortcuts');
+      if (!selector.startsWith('.')) return [];
+      const targetClass = selector.slice(1);
+      const matches = [];
+      const stack = body.children.slice();
+      while (stack.length > 0) {
+        const child = stack.shift();
+        const classes = String(child.className || '').split(/\s+/);
+        if (classes.includes(targetClass)) matches.push(child);
+        stack.push(...child.children);
       }
-      return [];
+      return matches;
     },
   };
 
@@ -171,6 +178,10 @@ async function flushPromises(times = 3) {
 
 function findChildByClass(parent, className) {
   return parent.children.find((child) => child.className === className);
+}
+
+function dockOf(body) {
+  return findChildByClass(body, '__cbc-dock');
 }
 
 function rectsIntersect(a, b) {
@@ -237,12 +248,12 @@ test('batch tray labels and POST target use the hash session when it resolves', 
     },
   });
 
-  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
   await flushPromises();
 
-  const tray = findChildByClass(body, '__cbc-tray');
+  const tray = findChildByClass(dockOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
@@ -274,12 +285,12 @@ test('hash session name 404 falls back to the artifact path session', async () =
     },
   });
 
-  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
   await flushPromises(5);
 
-  const tray = findChildByClass(body, '__cbc-tray');
+  const tray = findChildByClass(dockOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
@@ -398,7 +409,7 @@ test('comment trigger avoids overlapping artifact shortcut controls', () => {
   const {window, body, listeners} = loadArtifactCommentsScript(
     '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
   );
-  const shortcuts = body.children.find((child) => child.className === '__cbc-shortcuts');
+  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
   assert.ok(shortcuts, 'shortcut controls are installed');
 
   const shortcutRect = {left: 960, top: 700, right: 1018, bottom: 760};
@@ -425,6 +436,44 @@ test('comment trigger avoids overlapping artifact shortcut controls', () => {
   assert.ok(triggerRect.top >= 8);
   assert.ok(triggerRect.right <= window.innerWidth - 8);
   assert.ok(triggerRect.bottom <= window.innerHeight - 8);
+});
+
+test('dock owns the corner coordinates for the shortcut column and the tray', () => {
+  const {head, body} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+
+  const dock = dockOf(body);
+  assert.ok(dock, '__cbc-dock is installed as a direct child of body');
+
+  const shortcuts = findChildByClass(dock, '__cbc-shortcuts');
+  const tray = findChildByClass(dock, '__cbc-tray');
+  assert.ok(shortcuts, 'shortcut column is a child of the dock');
+  assert.ok(tray, 'tray is a child of the dock');
+  assert.equal(shortcuts.parentNode, dock, 'shortcuts and tray share the dock as parent');
+  assert.equal(tray.parentNode, dock, 'tray and shortcuts share the dock as parent');
+  assert.equal(shortcuts.parentNode, tray.parentNode, 'shortcuts and tray share one parent node');
+
+  const styleText = head.children[0].textContent;
+  const shortcutsRule = cssRule(styleText, '.__cbc-shortcuts');
+  const trayRule = cssRule(styleText, '.__cbc-tray');
+  assert.doesNotMatch(shortcutsRule, /position:/, 'shortcuts rule carries no position declaration');
+  assert.doesNotMatch(shortcutsRule, /right:/, 'shortcuts rule carries no right declaration');
+  assert.doesNotMatch(shortcutsRule, /bottom:/, 'shortcuts rule carries no bottom declaration');
+  assert.doesNotMatch(shortcutsRule, /z-index:/, 'shortcuts rule carries no z-index declaration');
+  assert.doesNotMatch(trayRule, /position:/, 'tray rule carries no position declaration');
+  assert.doesNotMatch(trayRule, /right:/, 'tray rule carries no right declaration');
+  assert.doesNotMatch(trayRule, /bottom:/, 'tray rule carries no bottom declaration');
+  assert.doesNotMatch(trayRule, /z-index:/, 'tray rule carries no z-index declaration');
+
+  const dockRule = cssRule(styleText, '.__cbc-dock');
+  assert.match(dockRule, /position:fixed/, 'dock owns the corner position');
+  assert.match(dockRule, /right:14px/, 'dock owns the right offset');
+  assert.match(dockRule, /bottom:64px/, 'dock owns the bottom offset');
+  assert.match(dockRule, /z-index:2147483646/, 'dock owns the stacking layer');
+
+  const triggerRule = cssRule(styleText, '.__cbc-trigger');
+  assert.match(triggerRule, /z-index:2147483645/, 'trigger sits one level below the dock');
 });
 
 function loadFindBlock() {
@@ -663,10 +712,10 @@ test('resolveSessionId still extracts the session from a plain cbsession fragmen
 // ---------------------------------------------------------------------------
 
 function pendingTrayParts(body) {
-  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
-  const tray = findChildByClass(body, '__cbc-tray');
+  const tray = findChildByClass(dockOf(body), '__cbc-tray');
   return {
     header: findChildByClass(tray, '__cbc-tray-header'),
     sendBtn: findChildByClass(findChildByClass(tray, '__cbc-tray-actions'), '__cbc-tray-send'),
@@ -802,12 +851,12 @@ function loadWithShortcuts() {
 }
 
 function shortcutButtons(body) {
-  const shortcuts = findChildByClass(body, '__cbc-shortcuts');
+  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
   return shortcuts.children.filter((child) => child.className === '__cbc-shortcut');
 }
 
 function trayItemCount(body) {
-  const tray = findChildByClass(body, '__cbc-tray');
+  const tray = findChildByClass(dockOf(body), '__cbc-tray');
   const list = findChildByClass(tray, '__cbc-tray-list');
   return list.children.filter((child) => child.className === '__cbc-tray-item').length;
 }

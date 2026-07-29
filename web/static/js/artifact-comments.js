@@ -49,6 +49,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var hovered = null;
     var hideTimer = null;
     var trigger = null;
+    var dock = null;
     var popover = null;
     var toast = null;
     var pending = [];
@@ -282,7 +283,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var style = document.createElement('style');
       style.textContent =
         '.' + GLOBAL_PREFIX + '-hover{outline:2px solid rgba(88,166,255,.95)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.16)!important}' +
-        '.' + GLOBAL_PREFIX + '-trigger{position:fixed;z-index:2147483646;width:34px;height:34px;border-radius:999px;border:1px solid rgba(88,166,255,.75);background:#0d1117;color:#e6edf3;display:none;align-items:center;justify-content:center;font-size:16px;line-height:1;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;padding:0}' +
+        '.' + GLOBAL_PREFIX + '-trigger{position:fixed;z-index:2147483645;width:34px;height:34px;border-radius:999px;border:1px solid rgba(88,166,255,.75);background:#0d1117;color:#e6edf3;display:none;align-items:center;justify-content:center;font-size:16px;line-height:1;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;padding:0}' +
         '.' + GLOBAL_PREFIX + '-trigger:hover{background:#1c2230;border-color:#58a6ff}' +
         '.' + GLOBAL_PREFIX + '-popover{position:fixed;z-index:2147483647;width:min(' + POPOVER_WIDTH + 'px,calc(100vw - 16px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
         '.' + GLOBAL_PREFIX + '-popover textarea{box-sizing:border-box;width:100%;min-height:140px;resize:vertical;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:7px 8px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
@@ -294,13 +295,14 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-error{display:none;margin-top:8px;color:#ffb4ab;font-size:12px}' +
         '.' + GLOBAL_PREFIX + '-toast{position:fixed;z-index:2147483647;max-width:min(360px,calc(100vw - 16px));left:50%;bottom:18px;transform:translateX(-50%);background:#1f6f3a;color:#dfffe5;border:1px solid rgba(63,185,80,.65);border-radius:999px;padding:7px 12px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-toast-error{background:#5f2120;color:#ffe2df;border-color:rgba(248,81,73,.7);border-radius:8px}' +
-        '.' + GLOBAL_PREFIX + '-shortcuts{position:fixed;right:14px;bottom:64px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:6px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+        '.' + GLOBAL_PREFIX + '-dock{position:fixed;right:14px;bottom:64px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-end;gap:8px}' +
+        '.' + GLOBAL_PREFIX + '-shortcuts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
         '.' + GLOBAL_PREFIX + '-shortcut{border:1px solid #2ea043;border-radius:7px;padding:7px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35);cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-shortcut:hover:not(:disabled){background:#2ea043}' +
         '.' + GLOBAL_PREFIX + '-shortcut:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
-        '.' + GLOBAL_PREFIX + '-shortcut-reason{max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
+        '.' + GLOBAL_PREFIX + '-shortcut-reason{flex-basis:100%;max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-marked{outline:2px solid rgba(88,166,255,.45)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.08)!important}' +
-        '.' + GLOBAL_PREFIX + '-tray{position:fixed;right:14px;bottom:110px;z-index:2147483646;width:min(400px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
+        '.' + GLOBAL_PREFIX + '-tray{width:min(400px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
         '.' + GLOBAL_PREFIX + '-tray-header{font-weight:600;font-size:12px;color:#8b949e}' +
         '.' + GLOBAL_PREFIX + '-tray-list{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
         '.' + GLOBAL_PREFIX + '-tray-item{background:#0d1117;border:1px solid #2d3340;border-radius:6px;padding:7px;min-height:0}' +
@@ -664,6 +666,15 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return lines.join('\n');
     }
 
+    function ensureDock() {
+      if (dock) return dock;
+      var node = document.createElement('div');
+      node.className = GLOBAL_PREFIX + '-dock';
+      document.body.appendChild(node);
+      dock = node;
+      return dock;
+    }
+
     function installShortcuts() {
       var container = document.createElement('div');
       container.className = GLOBAL_PREFIX + '-shortcuts';
@@ -694,7 +705,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         container.appendChild(reason);
       }
 
-      document.body.appendChild(container);
+      ensureDock().appendChild(container);
     }
 
     function addShortcutComment(shortcut) {
@@ -840,7 +851,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       actions.appendChild(sendBtn);
       container.appendChild(actions);
 
-      document.body.appendChild(container);
+      ensureDock().appendChild(container);
       tray = container;
       trayHeader = header;
       trayList = list;

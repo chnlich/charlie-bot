@@ -149,10 +149,17 @@ function loadScript(opts = {}) {
     },
     addEventListener() {},
     querySelectorAll(selector) {
-      if (selector === '.__cbc-shortcuts') {
-        return body.children.filter((child) => child.className === '__cbc-shortcuts');
+      if (!selector.startsWith('.')) return [];
+      const targetClass = selector.slice(1);
+      const matches = [];
+      const stack = body.children.slice();
+      while (stack.length > 0) {
+        const child = stack.shift();
+        const classes = String(child.className || '').split(/\s+/);
+        if (classes.includes(targetClass)) matches.push(child);
+        stack.push(...child.children);
       }
-      return [];
+      return matches;
     },
   };
 
@@ -175,6 +182,10 @@ function loadScript(opts = {}) {
 
 function findChildByClass(parent, className) {
   return parent.children.find((child) => child.className === className);
+}
+
+function dockOf(body) {
+  return findChildByClass(body, '__cbc-dock');
 }
 
 function clickElement(el) {
@@ -322,12 +333,12 @@ function sessionFetch(ok) {
 
 async function addShortcutAndSend(fetch, storage) {
   const res = loadScript({storage, fetch, console: silentConsole()});
-  const shortcuts = findChildByClass(res.body, '__cbc-shortcuts');
+  const shortcuts = findChildByClass(dockOf(res.body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
   assert.equal(res.storage.store.has(DRAFT_KEY), true, 'add persisted the draft');
 
-  const tray = findChildByClass(res.body, '__cbc-tray');
+  const tray = findChildByClass(dockOf(res.body), '__cbc-tray');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
   await clickElement(sendBtn);
@@ -436,7 +447,7 @@ test('tray restores pending draft on init with el null', () => {
     },
   });
 
-  const tray = findChildByClass(body, '__cbc-tray');
+  const tray = findChildByClass(dockOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
   assert.ok(
     header.textContent.startsWith('Pending comments (2)'),
@@ -498,7 +509,7 @@ test('send puts shortcut entries ahead of block comments and keeps their order',
   };
 
   const res = loadScript({storage, fetch, console: silentConsole()});
-  const tray = findChildByClass(res.body, '__cbc-tray');
+  const tray = findChildByClass(dockOf(res.body), '__cbc-tray');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   await clickElement(findChildByClass(actions, '__cbc-tray-send'));
   await flushPromises();

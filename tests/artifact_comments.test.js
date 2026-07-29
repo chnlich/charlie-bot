@@ -1164,6 +1164,37 @@ test('gutter mode reserves and restores body right padding across the 900px thre
   assert.equal(body.style.paddingRight, '10px', 'prior inline padding value restored exactly');
 });
 
+test('gutter mode reserves and restores the dock inline right across the 900px threshold', async () => {
+  const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+  });
+  const fireResize = () => {
+    for (const l of listeners) {
+      if (l.target === 'window' && l.type === 'resize') l.handler();
+    }
+  };
+  const dock = dockOf(body);
+
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 2000, bottom: 250});
+  addBlockComment(body, listeners, block, 'cmt');
+  await flushPromises();
+
+  assert.equal(dock.style.right, '330px', 'dock inline right reserved in gutter mode');
+
+  window.innerWidth = 800;
+  fireResize();
+  assert.ok(!dock.style.right, 'dock inline right removed when no inline value existed before');
+
+  dock.style.right = '14px';
+  window.innerWidth = 1024;
+  fireResize();
+  assert.equal(dock.style.right, '330px', 'dock inline right reserved again after crossing back');
+  window.innerWidth = 800;
+  fireResize();
+  assert.equal(dock.style.right, '14px', 'prior inline dock right restored exactly');
+});
+
 // ---------------------------------------------------------------------------
 // Re-anchor, hover, and click affordances (comment-gutter part 2b)
 // ---------------------------------------------------------------------------
@@ -1246,26 +1277,67 @@ test('re-anchor is idempotent: running twice does not change anchors or marks', 
   assert.equal(gutterAfter.children.length, cardsBefore, 'card count unchanged after second re-anchor');
 });
 
-test('unanchored entry in gutter mode is placed in the gutter, not the corner list', () => {
-  const blockMatch = makeBlock('anchored block text');
-  blockMatch.getBoundingClientRect = rectAt(200);
-  const blockNoMatch = makeBlock('some other unrelated text');
-  blockNoMatch.getBoundingClientRect = rectAt(400);
+test('gutter mode routes anchored entries to the gutter and unanchored entries to the corner list', () => {
+  const blockA = makeBlock('anchored block A for routing');
+  blockA.getBoundingClientRect = rectAt(200);
+  const blockB = makeBlock('anchored block B for routing');
+  blockB.getBoundingClientRect = rectAt(400);
   const storage = seedDraft(REANCHOR_PATH, [
-    {kind: 'block', quote: 'anchored block text', context: '', comment: 'matched'},
-    {kind: 'block', quote: 'nonexistent quote matching nothing', context: '', comment: 'unmatched'},
+    {kind: 'block', quote: 'anchored block A for routing', context: '', comment: 'matched A'},
+    {kind: 'block', quote: 'nonexistent quote one matching nothing', context: '', comment: 'unmatched A'},
+    {kind: 'block', quote: 'anchored block B for routing', context: '', comment: 'matched B'},
+    {kind: 'block', quote: 'nonexistent quote two matching nothing', context: '', comment: 'unmatched B'},
   ]);
   const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
     sessionStorage: storage,
-    bodyChildren: [blockMatch, blockNoMatch],
+    bodyChildren: [blockA, blockB],
     fetch: FETCH_OK,
   });
   const gutter = findChildByClass(body, '__cbc-gutter');
-  assert.ok(gutter, 'gutter is active');
-  assert.equal(gutter.children.length, 2, 'both anchored and unanchored cards are in the gutter');
+  assert.ok(gutter, 'gutter is active in gutter mode');
+  assert.equal(gutter.children.length, 2, 'gutter child count equals the anchored count');
   const trayList = body.querySelector('.__cbc-tray-list');
   assert.ok(trayList, 'tray list exists');
-  assert.equal(trayList.children.length, 0, 'corner list is empty in gutter mode');
+  assert.equal(trayList.children.length, 2, 'corner list card count equals the unanchored count');
+});
+
+test('gutter mode writes only stackCards tops to gutter children (single writer)', () => {
+  const tops = [100, 110, 120];
+  const blocks = tops.map((t) => {
+    const b = makeBlock('single writer anchor ' + t);
+    b.getBoundingClientRect = () => ({left: 0, top: t, right: 2000, bottom: t + 50});
+    return b;
+  });
+  const storage = seedDraft(REANCHOR_PATH, [
+    ...tops.map((t) => ({kind: 'block', quote: 'single writer anchor ' + t, context: '', comment: 'anchored ' + t})),
+    {kind: 'block', quote: 'single writer unanchored one', context: '', comment: 'unanchored one'},
+    {kind: 'block', quote: 'single writer unanchored two', context: '', comment: 'unanchored two'},
+  ]);
+  const {window, body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: blocks,
+    fetch: FETCH_OK,
+  });
+  const stackCards = window.__cbcStackCards;
+  const gap = window.__cbcGutterGap;
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutter, 'gutter is active');
+  const cards = gutter.children.filter((c) => c.className === '__cbc-tray-item');
+  assert.equal(cards.length, blocks.length, 'one gutter card per anchored entry');
+  const trayList = body.querySelector('.__cbc-tray-list');
+  assert.equal(trayList.children.length, 2, 'unanchored entries routed to the corner list');
+
+  const anchors = blocks.map((b) => b.getBoundingClientRect().top + (window.scrollY || 0));
+  const heights = cards.map((c) => c.offsetHeight);
+  const expected = stackCards(anchors, heights, gap);
+  const px = (s) => parseInt(String(s), 10);
+  const actualTops = cards.map((c) => c.style.top);
+  const expectedTops = expected.map((t) => t + 'px');
+  assert.deepEqual(
+    [...actualTops].sort((a, b) => px(a) - px(b)),
+    [...expectedTops].sort((a, b) => px(a) - px(b)),
+    'every gutter child top is a value produced by this render\'s stackCards output'
+  );
 });
 
 test('hover affordance: hovering a card highlights its anchor block with a distinct class', () => {

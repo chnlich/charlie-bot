@@ -24,6 +24,8 @@ function makeElement() {
     parentNode: null,
     parentElement: null,
     display: 'block',
+    offsetHeight: 40,
+    offsetWidth: 300,
     get textContent() {
       if (this.childNodes.length === 0) return this._textContent;
       return this.childNodes.map((node) => node.textContent || '').join('');
@@ -48,6 +50,7 @@ function makeElement() {
       return this.textContent;
     },
     classList: {add() {}, remove() {}},
+    closest() { return null; },
     appendChild(child) {
       this.children.push(child);
       this.childNodes.push(child);
@@ -66,6 +69,15 @@ function makeElement() {
       prev.parentNode = null;
       prev.parentElement = null;
       return prev;
+    },
+    removeChild(child) {
+      const index = this.children.indexOf(child);
+      if (index !== -1) this.children.splice(index, 1);
+      const nodeIndex = this.childNodes.indexOf(child);
+      if (nodeIndex !== -1) this.childNodes.splice(nodeIndex, 1);
+      child.parentNode = null;
+      child.parentElement = null;
+      return child;
     },
     addEventListener(type, handler) {
       if (!this._listeners[type]) this._listeners[type] = [];
@@ -110,12 +122,13 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
   const listeners = [];
   const window = {
     location: {pathname, hash: opts.hash || ''},
-    innerWidth: 1024,
+    innerWidth: opts.innerWidth !== undefined ? opts.innerWidth : 1024,
     innerHeight: 768,
     addEventListener(type, handler, options) {
       listeners.push({target: 'window', type, handler, options});
     },
     setTimeout() {},
+    requestAnimationFrame(fn) { fn(); return 0; },
     getComputedStyle(el) {
       return {display: el.display || 'block'};
     },
@@ -863,8 +876,9 @@ test('framed tray falls back to the artifact session when currentSessionId retur
 
 const SHORTCUT_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
 
-function loadWithShortcuts() {
+function loadWithShortcuts(width = 1024) {
   return loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    innerWidth: width,
     console: {warn() {}, error() {}},
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
@@ -893,7 +907,7 @@ test('shortcut tray renders one button per shortcut: Improve, Shorten, Verify', 
 });
 
 test('each shortcut dedups on its own kind without blocking the other shortcuts', () => {
-  const {body} = loadWithShortcuts();
+  const {body} = loadWithShortcuts(800);
   const [improve, shorten, verify] = shortcutButtons(body);
 
   clickElement(shorten);
@@ -1018,4 +1032,84 @@ test('stackCards places an uncontested card exactly at its anchor', () => {
       }
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// comment-gutter (part 2a): wiring stackCards to a right-hand gutter at >=900px.
+// Gutter mode activates only when an anchored (el != null) entry exists, so the
+// corner-list tests below never flip; the threshold still governs placement.
+// ---------------------------------------------------------------------------
+
+function addBlockComment(body, listeners, block, text) {
+  const click = listeners.find((l) => l.target === 'document' && l.type === 'click').handler;
+  click({target: block, preventDefault() {}, stopPropagation() {}});
+  const popover = body.children.find((c) => c.className === '__cbc-popover');
+  popover.children[0].value = text;
+  const actions = popover.children.find((c) => c.className === '__cbc-actions');
+  clickElement(actions.children.find((c) => c.textContent === 'Add'));
+}
+
+test('gutter cards are positioned by the stackCards pure function (render glue)', async () => {
+  const {window, head, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+  });
+  const stackCards = window.__cbcStackCards;
+  const gap = window.__cbcGutterGap;
+
+  // Colliding anchors force stackCards to push cards apart; raw anchors would not match.
+  const tops = [100, 110, 120];
+  const blocks = tops.map((t) => {
+    const b = makeBlock('section at ' + t);
+    b.getBoundingClientRect = () => ({left: 0, top: t, right: 2000, bottom: t + 50});
+    return b;
+  });
+  for (const b of blocks) addBlockComment(body, listeners, b, 'cmt');
+  await flushPromises();
+
+  const gutter = body.children.find((c) => c.className === '__cbc-gutter');
+  assert.ok(gutter, 'gutter is installed in gutter mode');
+  const cards = gutter.children.filter((c) => c.className === '__cbc-tray-item');
+  assert.equal(cards.length, blocks.length, 'one gutter card per anchored entry');
+
+  const anchors = blocks.map((b) => b.getBoundingClientRect().top + (window.scrollY || 0));
+  const heights = cards.map((c) => c.offsetHeight);
+  const expected = stackCards(anchors, heights, gap);
+  for (let i = 0; i < cards.length; i++) {
+    assert.equal(cards[i].style.top, expected[i] + 'px', 'card ' + i + ' top is the stackCards output');
+  }
+
+  const styleText = head.children[0].textContent;
+  const gutterCardRule = cssRule(styleText, '.__cbc-gutter .__cbc-tray-item');
+  assert.doesNotMatch(gutterCardRule, /max-height/, 'gutter cards never cap their own height');
+  assert.doesNotMatch(gutterCardRule, /overflow:hidden/, 'gutter cards never clip their own content');
+});
+
+test('gutter mode reserves and restores body right padding across the 900px threshold', async () => {
+  const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+  });
+  const fireResize = () => {
+    for (const l of listeners) {
+      if (l.target === 'window' && l.type === 'resize') l.handler();
+    }
+  };
+
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 2000, bottom: 250});
+  addBlockComment(body, listeners, block, 'cmt');
+  await flushPromises();
+
+  assert.equal(body.style.paddingRight, '316px', 'body right padding reserved in gutter mode');
+
+  window.innerWidth = 800;
+  fireResize();
+  assert.ok(!body.style.paddingRight, 'padding removed when no inline value existed before');
+
+  body.style.paddingRight = '10px';
+  window.innerWidth = 1024;
+  fireResize();
+  assert.equal(body.style.paddingRight, '316px', 'padding reserved again after crossing back');
+  window.innerWidth = 800;
+  fireResize();
+  assert.equal(body.style.paddingRight, '10px', 'prior inline padding value restored exactly');
 });

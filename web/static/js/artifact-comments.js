@@ -17,6 +17,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var HIDE_DELAY_MS = 300;
     var TRIGGER_SIZE = 34;
     var POPOVER_WIDTH = 460;
+    var GUTTER_THRESHOLD = 900;
+    var GUTTER_GAP = 8;
+    var GUTTER_PADDING_RIGHT = '316px';
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
     // Each shortcut owns a `kind`, which doubles as its dedup key and as the
@@ -59,6 +62,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var traySendBtn = null;
     var trayClearBtn = null;
     var trayReason = null;
+    var gutter = null;
+    var paddingActive = false;
+    var prevPaddingRight = '';
+    var reflowScheduled = false;
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
     window.__cbcResolveSessionId = resolveSessionIdFromLocation;
@@ -73,6 +80,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     window.__cbcLoadDraft = loadDraft;
     window.__cbcClearDraft = clearDraft;
     window.__cbcStackCards = stackCards;
+    window.__cbcGutterGap = GUTTER_GAP;
 
     installStyles();
     installListeners();
@@ -324,7 +332,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-send:hover:not(:disabled){background:#2ea043}' +
         '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
-        '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}';
+        '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}' +
+        '.' + GLOBAL_PREFIX + '-gutter{position:absolute;right:8px;width:300px;z-index:2147483646}' +
+        '.' + GLOBAL_PREFIX + '-gutter .' + GLOBAL_PREFIX + '-tray-item{position:absolute;left:0;right:0;box-sizing:border-box}';
       document.head.appendChild(style);
     }
 
@@ -360,6 +370,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       });
       window.addEventListener('scroll', reposition, true);
       window.addEventListener('resize', reposition);
+      window.addEventListener('resize', scheduleReflow);
+      document.addEventListener('toggle', scheduleReflow, true);
+      document.addEventListener('load', scheduleReflow, true);
     }
 
     function textFor(el, cap) {
@@ -987,10 +1000,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (pending.length > 0 && sessionId) ensureTargetSessionName();
       var targetSuffix = targetSessionSuffix();
       trayHeader.textContent = 'Pending comments (' + pending.length + ')' + targetSuffix;
-      trayList.innerHTML = '';
-      for (var i = 0; i < pending.length; i++) {
-        trayList.appendChild(buildTrayItem(i, pending[i]));
-      }
       traySendBtn.textContent = 'Send ' + pending.length + targetSuffix;
       tray.style.display = pending.length > 0 ? 'flex' : 'none';
       if (!sessionId) {
@@ -1000,6 +1009,110 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         traySendBtn.disabled = false;
         trayReason.style.display = 'none';
       }
+      if (gutterActive()) {
+        scheduleReflow();
+      } else {
+        presentCorner();
+      }
+    }
+
+    function gutterActive() {
+      if (window.innerWidth < GUTTER_THRESHOLD || pending.length === 0) return false;
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].el) return true;
+      }
+      return false;
+    }
+
+    function scheduleReflow() {
+      if (reflowScheduled) return;
+      reflowScheduled = true;
+      window.requestAnimationFrame(reflowGutter);
+    }
+
+    function reflowGutter() {
+      reflowScheduled = false;
+      if (gutterActive()) {
+        presentGutter();
+      } else {
+        presentCorner();
+      }
+    }
+
+    function presentCorner() {
+      if (gutter) {
+        gutter.innerHTML = '';
+        gutter.style.display = 'none';
+      }
+      restorePadding();
+      trayList.innerHTML = '';
+      for (var i = 0; i < pending.length; i++) {
+        trayList.appendChild(buildTrayItem(i, pending[i]));
+      }
+    }
+
+    function presentGutter() {
+      if (!gutter) {
+        gutter = document.createElement('div');
+        gutter.className = GLOBAL_PREFIX + '-gutter';
+        document.body.appendChild(gutter);
+      }
+      gutter.style.display = '';
+      captureAndSetPadding();
+      gutter.innerHTML = '';
+      trayList.innerHTML = '';
+      var offsetParentDocTop = gutterOffsetParentDocTop();
+      var unanchoredTop = 0;
+      var anchored = [];
+      for (var i = 0; i < pending.length; i++) {
+        var entry = pending[i];
+        var card = buildTrayItem(i, entry);
+        if (entry.el) {
+          gutter.appendChild(card);
+          var rect = entry.el.getBoundingClientRect();
+          var anchorTop = rect.top + (window.scrollY || 0) - offsetParentDocTop;
+          anchored.push({card: card, anchor: anchorTop, height: card.offsetHeight});
+        } else if (entry.quote === '') {
+          gutter.appendChild(card);
+          card.style.top = unanchoredTop + 'px';
+          unanchoredTop += card.offsetHeight + GUTTER_GAP;
+        } else {
+          trayList.appendChild(card);
+        }
+      }
+      if (anchored.length > 0) {
+        var anchors = [];
+        var heights = [];
+        for (var k = 0; k < anchored.length; k++) {
+          anchors.push(anchored[k].anchor);
+          heights.push(anchored[k].height);
+        }
+        var tops = stackCards(anchors, heights, GUTTER_GAP);
+        var order = [];
+        for (var m = 0; m < anchored.length; m++) order.push(m);
+        order.sort(function(a, b) { return anchored[a].anchor - anchored[b].anchor; });
+        for (var n = 0; n < order.length; n++) {
+          anchored[order[n]].card.style.top = tops[n] + 'px';
+        }
+      }
+    }
+
+    function gutterOffsetParentDocTop() {
+      if (!gutter || !gutter.offsetParent) return 0;
+      return gutter.offsetParent.getBoundingClientRect().top + (window.scrollY || 0);
+    }
+
+    function captureAndSetPadding() {
+      if (paddingActive) return;
+      prevPaddingRight = document.body.style.paddingRight;
+      document.body.style.paddingRight = GUTTER_PADDING_RIGHT;
+      paddingActive = true;
+    }
+
+    function restorePadding() {
+      if (!paddingActive) return;
+      document.body.style.paddingRight = prevPaddingRight;
+      paddingActive = false;
     }
 
     function removeEntry(idx) {

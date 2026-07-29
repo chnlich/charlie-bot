@@ -56,7 +56,7 @@ function initAuth() {
 
 // ---------------------------------------------------------------------------
 // Config (non-Jinja2 parts; SESSION_ID, DRAFT_KEY, THINKING_SINCE,
-// eventCursor, usageTotalCost, BACKEND_OPTIONS are injected inline by index.html)
+// eventCursor, BACKEND_OPTIONS are injected inline by index.html)
 // ---------------------------------------------------------------------------
 let _draftTimer = null;
 

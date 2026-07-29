@@ -84,7 +84,6 @@ function buildContext(sessionId) {
     addWorkerCard: () => {},
     updateWorkerStatus: () => {},
     updateSpinner: () => {},
-    updateUsageDisplay: () => {},
     showDiffModal: () => {},
     startThinking: () => {},
     stopThinking: () => {},
@@ -182,22 +181,22 @@ test('session_group_changed preserves active sidebar search', () => {
   assert.deepEqual(sidebarActions, [{type: 'search', value: 'alpha'}]);
 });
 
-test('result event triggers an immediate session usage refresh', () => {
+test('result event forces a poll without writing the header directly', () => {
   const {context} = buildContext('session-a');
-  let usageEvent = null;
-  let pollCalls = 0;
+  let pollOpts = null;
 
-  context.updateUsageDisplay = (ev) => {
-    usageEvent = ev;
+  // The WebSocket handler must not call updateUsageDisplay (removed) or any
+  // header writer; the forced poll is what updates the header.
+  context.updateUsageDisplay = () => {
+    throw new Error('updateUsageDisplay must not be called on result events');
   };
-  context.pollActiveSessionView = () => {
-    pollCalls += 1;
+  context.pollActiveSessionView = (opts) => {
+    pollOpts = opts;
   };
 
   context.handleWSEvent({type: 'result', total_cost_usd: 1.25}, 'session-a', 0);
 
-  assert.deepEqual(usageEvent, {type: 'result', total_cost_usd: 1.25});
-  assert.equal(pollCalls, 1);
+  assert.ok(pollOpts && pollOpts.force === true, 'result event must force the usage poll');
 });
 
 test('user message deltas forward structured uploaded_files to the renderer', () => {

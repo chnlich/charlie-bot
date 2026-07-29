@@ -53,6 +53,11 @@ HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
     "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
 )
 
+# The two Claude Code internals subtracted from the declared auto-compact window to
+# reach the real compaction point (see comment above HEADLESS_CLAUDE_DEFAULT_ENV).
+CLAUDE_COMPACT_OUTPUT_RESERVE = 20_000
+CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
+
 
 def headless_claude_env() -> dict[str, str]:
   """Environment for every headless Claude Code subprocess.
@@ -65,6 +70,52 @@ def headless_claude_env() -> dict[str, str]:
     if name in os.environ:
       env[name] = os.environ[name]
   return env
+
+
+def headless_claude_context_ceiling() -> int:
+  """Return the Claude Code compaction point (the real context ceiling) in tokens.
+
+  Reads the same environment ``headless_claude_env()`` gives the CLI, so a host
+  export of ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` overrides CharlieBot's default and
+  the ceiling follows it. Computed per call — never cached in a module constant —
+  because the host environment can change between calls.
+
+  Ceiling = declared window − OUTPUT_RESERVE − CONTEXT_RESERVE (with the 433000
+  default this is 400000). Degrades loudly, never silently: when the declared
+  window fails to parse as a positive int the default declared window is returned
+  as a fallback, and when an override variable CharlieBot forwards but does not
+  model is present the declared window is returned without subtraction. Each
+  degradation emits one ``log.warning`` naming the responsible variable.
+  """
+  env = headless_claude_env()
+  raw_window = env.get(
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+      HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"],
+  )
+  default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
+
+  try:
+    window = int(raw_window)
+    if window <= 0:
+      raise ValueError(f"non-positive window: {raw_window!r}")
+  except (ValueError, TypeError):
+    log.warning(
+        "claude_context_ceiling_unparseable_window",
+        variable="CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        window=raw_window,
+    )
+    return default_window
+
+  for override_name in ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
+    if override_name in env:
+      log.warning(
+          "claude_context_ceiling_degraded",
+          variable=override_name,
+          reason="forwarded but semantics not modelled; returning declared window without subtraction",
+      )
+      return window
+
+  return window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
 
 
 class ClaudeCodeBackend(AgentBackend):

@@ -149,7 +149,6 @@ async function switchSession(sessionId) {
   DRAFT_KEY = 'charliebot-draft-' + sessionId;
   THINKING_SINCE = data.session.thinking_since || null;
   eventCursor = data.event_count;
-  usageTotalCost = 0;
 
   // Update URL
   history.pushState({session: sessionId}, '', '/?session=' + sessionId);
@@ -404,18 +403,29 @@ function renderUsageFromData(usage) {
   if (!usage) { if (indicator) indicator.classList.add('hidden'); return; }
   if (indicator) indicator.classList.remove('hidden');
 
-  const contextTokens = usage.context_tokens || 0;
-  const contextLimit = usage.context_limit || 200000;
-  const pct = contextLimit > 0 ? (contextTokens / contextLimit * 100) : 0;
+  const contextTokens = usage.context_tokens;
+  const contextLimit = usage.context_limit;
+  const hasContext = contextTokens != null && contextLimit != null;
 
   const bar = document.getElementById('usage-bar');
   if (bar) {
-    bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
-    bar.className = 'h-full rounded-full transition-all duration-300 '
-      + (pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500');
+    if (hasContext) {
+      const pct = contextLimit > 0 ? (contextTokens / contextLimit * 100) : 0;
+      bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
+      bar.className = 'h-full rounded-full transition-all duration-300 '
+        + (pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500');
+    } else {
+      // No per-request source: hide the bar rather than draw a 0% fill.
+      bar.style.width = '0%';
+      bar.className = 'h-full rounded-full transition-all duration-300 hidden';
+    }
   }
   const text = document.getElementById('usage-text');
-  if (text) text.textContent = formatTokens(contextTokens) + ' / ' + formatTokens(contextLimit);
+  if (text) {
+    text.textContent = hasContext
+      ? formatTokens(contextTokens) + ' / ' + formatTokens(contextLimit)
+      : 'unknown';
+  }
   const cost = document.getElementById('usage-cost');
   if (cost) cost.textContent = formatUsageCostValue(usage.total_cost_usd);
 }
@@ -470,7 +480,6 @@ async function createSession() {
     DRAFT_KEY = 'charliebot-draft-' + data.id;
     THINKING_SINCE = data.thinking_since || null;
     eventCursor = bootstrap.event_count;
-    usageTotalCost = 0;
     history.pushState({session: data.id}, '', '/?session=' + data.id);
     globalThis.renderSessionView(bootstrap);
     reconnectDelay = 1000;
@@ -513,7 +522,6 @@ function renderNoActiveSessionView() {
   DRAFT_KEY = null;
   THINKING_SINCE = null;
   eventCursor = 0;
-  usageTotalCost = 0;
   history.pushState({session: null}, '', '/');
 
   const main = document.querySelector('main');

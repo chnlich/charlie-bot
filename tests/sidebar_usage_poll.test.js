@@ -12,6 +12,10 @@ const SIDEBAR_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'sidebar.js'),
   'utf8'
 );
+const WEBSOCKET_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'websocket.js'),
+  'utf8'
+);
 
 function createClassList(initial = '') {
   const names = new Set(String(initial).split(/\s+/).filter(Boolean));
@@ -149,7 +153,6 @@ function buildContext(overrides = {}) {
     DRAFT_KEY: null,
     ACTIVE_BACKEND_ID: overrides.ACTIVE_BACKEND_ID || 'claude-opus-4.6',
     masterThinking: false,
-    usageTotalCost: 0,
     switching: false,
     reconnectTimer: null,
     workersPollInterval: null,
@@ -340,8 +343,34 @@ test('pollActiveSessionView refreshes usage from the lazy usage endpoint', async
     context_limit: 258400,
     total_cost_usd: 1.25,
   });
-  assert.equal(context.usageTotalCost, 1.25);
   assert.equal(context.THINKING_SINCE, '2026-03-31T20:42:52Z');
+});
+
+test('a result WebSocket event forces a poll without writing the header directly', async () => {
+  const elements = new Map([
+    ['usage-indicator', createElement({className: 'hidden'})],
+    ['usage-bar', createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}})],
+    ['usage-text', createElement({textContent: 'before'})],
+    ['usage-cost', createElement({textContent: 'before'})],
+  ]);
+  const {context} = buildContext({elements});
+  vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+
+  let pollCall = null;
+  context.pollActiveSessionView = (opts) => { pollCall = opts; };
+  let renderCall = null;
+  context.renderUsageFromData = (usage) => { renderCall = usage; };
+
+  context.handleWSEvent({type: 'result', total_cost_usd: 5.0}, 'session-a', 0);
+
+  // The WebSocket handler must not write the header; renderUsageFromData is the
+  // only writer and it was not called by the result event.
+  assert.equal(elements.get('usage-text').textContent, 'before');
+  assert.equal(elements.get('usage-cost').textContent, 'before');
+  assert.equal(elements.get('usage-bar').style.width, '0%');
+  assert.equal(renderCall, null);
+  // The forced poll is what updates the header.
+  assert.ok(pollCall && pollCall.force === true, 'result event must force the poll');
 });
 
 test('ensureActiveSessionViewPolling only schedules while the active session is running', () => {

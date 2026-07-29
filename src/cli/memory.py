@@ -4,7 +4,7 @@ Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
 (``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
 
   charliebot memory query --topic <t> [--audience A] [--index] [--resident]
-  charliebot memory add --topic <t> --scope <s> --audience <a> [--revises SLUG] [--file F | stdin]
+  charliebot memory add --topic <t> --scope <s> --audience <a[,a]> [--revises SLUG] [--file F | stdin]
   charliebot memory lint
   charliebot memory usage [--idle-days N]
 """
@@ -29,14 +29,16 @@ def main() -> None:
   p_query = sub.add_parser("query", help="Print matched entries' full text (or index lines with --index)")
   p_query.add_argument(
       "--topic", action="append", required=True, help="Topic to match (repeatable); must exist in the vocabulary")
-  p_query.add_argument("--audience", default=None, choices=["master", "worker", "both"])
+  p_query.add_argument(
+      "--audience", default=None, choices=["master", "worker"], help="Only entries whose audience contains this")
   p_query.add_argument("--index", action="store_true", help="Print index lines only; no usage recorded")
   p_query.add_argument("--resident", action="store_true", help="Only entries in resident topics")
 
   p_add = sub.add_parser("add", help="Stage a candidate entry (never touches entries/)")
   p_add.add_argument("--topic", required=True, help="Topic slug; need not exist in the vocabulary yet")
   p_add.add_argument("--scope", required=True, choices=["user", "host"])
-  p_add.add_argument("--audience", required=True, choices=["master", "worker", "both"])
+  p_add.add_argument(
+      "--audience", required=True, help="Comma list of master/worker, e.g. 'master, worker' ('both' is removed)")
   p_add.add_argument("--revises", default=None, help="Slug of an existing entry in this topic this candidate revises")
   p_add.add_argument("--file", default=None, help="Read body from file (default: stdin)")
 
@@ -71,7 +73,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
   for e in store.entries:
     if e.topic not in wanted_topics:
       continue
-    if args.audience and e.audience != args.audience:
+    if args.audience and (e.audience is None or args.audience not in e.audience):
       continue
     if args.resident and e.topic not in resident_names:
       continue
@@ -79,18 +81,30 @@ def _cmd_query(args: argparse.Namespace) -> None:
   matched.sort(key=lambda e: (e.topic, e.slug))
   if args.index:
     for e in matched:
-      print(f"{e.topic}/{e.slug} \u00b7 {e.title}")
+      print(f"{e.topic}/{e.slug} · {e.title}")
     return
   if not matched:
     return
+  # Synthesize the `# {title}` heading so query output stays navigable now
+  # that v2 bodies no longer carry it; legacy bodies keep their own heading.
   for e in matched:
-    print(e.body.rstrip("\n"))
+    print(memory.full_text(e))
   memory.record_usage(memory_dir, memory.CALLER_QUERY, [e.id for e in matched])
 
 
 def _cmd_add(args: argparse.Namespace) -> None:
   if not _TOPIC_NAME_RE.match(args.topic):
     print(f"error: --topic {args.topic!r} is not a valid topic name (lowercase, digits, hyphens)", file=sys.stderr)
+    sys.exit(1)
+  if args.audience.strip() == "both":
+    print("error: --audience 'both' was removed in entry format v2; use '--audience \"master, worker\"'",
+          file=sys.stderr)
+    sys.exit(1)
+  elements = [part.strip() for part in args.audience.split(",")]
+  bad = [el for el in elements if el not in memory._AUDIENCE_ELEMENTS]
+  if bad or not any(elements):
+    print(f"error: --audience {args.audience!r} must be a comma list with each element in {{master, worker}}",
+          file=sys.stderr)
     sys.exit(1)
   if args.revises is not None and not memory._SLUG_RE.match(args.revises):
     print(f"error: --revises {args.revises!r} does not match slug charset [A-Za-z0-9._-]", file=sys.stderr)
@@ -114,15 +128,12 @@ def _cmd_add(args: argparse.Namespace) -> None:
   cfg = get_config()
   sess8 = _session_slug8(cfg)
   ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-  today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
   filename = f"{ts}-{sess8}-{slug}.md"
   header = [
       "---",
       f"topic: {args.topic}",
       f"scope: {args.scope}",
-      f"audience: {args.audience}",
-      f"created: {today}",
-      f"source: cli-{sess8}",
+      f"audience: {', '.join(elements)}",
   ]
   if args.revises:
     header.append(f"revises: {args.revises}")

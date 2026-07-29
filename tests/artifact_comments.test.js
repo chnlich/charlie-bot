@@ -614,6 +614,18 @@ test('tray item layout keeps controls in normal flow beside bounded preview text
   assert.match(quoteRule, /overflow-wrap:anywhere/, 'quote rule still wraps long words');
 });
 
+test('tray item rule refuses to shrink so cards keep natural height and the list scrolls', () => {
+  const {head} = loadArtifactCommentsScript(
+    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+  );
+  const styleText = head.children[0].textContent;
+  const itemRule = cssRule(styleText, '.__cbc-tray-item');
+  assert.match(itemRule, /flex-shrink:0/, 'tray item carries a no-shrink declaration');
+  const listRule = cssRule(styleText, '.__cbc-tray-list');
+  assert.match(listRule, /max-height:320px/, 'list keeps the 320px cap');
+  assert.match(listRule, /overflow:auto/, 'list keeps overflow:auto so it scrolls');
+});
+
 test('popover and tray edit windows are widened and share a single width source', () => {
   const {head} = loadArtifactCommentsScript(
     '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'

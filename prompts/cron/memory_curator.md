@@ -8,35 +8,32 @@ prior day's undecided proposal), fail loud: stop, re-present the pending diff, a
 approve or reject before doing anything else. Do not proceed to staging while the canon has
 uncommitted changes.
 
-Step 1 — curate staging candidates.
-Read every file in `~/.charliebot/memory/staging/`. For each candidate, build a working-tree diff
-against the canon:
-- **admit**: a new entry — create `entries/<topic>/<slug>.md` with a complete header (scope,
-  topic, audience, created, source) and the candidate body. Add the topic to the `topics`
+Step 1 — curate staging candidates, merge-first.
+Read every file in `~/.charliebot/memory/staging/`. For each candidate, first apply the admission
+test from memory_guideline.md with evidence. For each passing candidate, the default action is a
+merge, not a new entry:
+- **revise (merge)**: fold the candidate into the existing entry whose theme covers it — normally
+  `entries/<topic>/<revises>.md` when the candidate carries `revises: <slug>`, otherwise the
+  thematically-matching entry — editing it in place so `git diff` shows the before and after.
+- **admit (new entry)**: ONLY when no existing entry's theme covers the candidate AND the title
+  honestly describes the whole content. Create `entries/<topic>/<slug>.md` with a complete header
+  (scope, topic, audience, title) and the candidate body. Add the topic to the `topics`
   vocabulary if it is not already there.
-- **revise**: an in-place edit of an existing entry — when the candidate carries `revises: <slug>`,
-  edit `entries/<topic>/<revises>.md` in place so `git diff` shows the before and after.
 - **reject**: do not admit — list the candidate in the report with a one-line reason (failed the
-  admission test, wrong home, and so on).
+  admission test, wrong home, theme already covered, dishonest title, and so on).
 
-Apply the admission test from memory_guideline.md to each candidate with evidence. Run
-`charliebot memory lint`; it must pass before you present. If lint reports violations, fix the
+Run `charliebot memory lint`; it must pass before you present. If lint reports violations, fix the
 working tree until it is clean.
 
-Step 2 — propose evictions.
-Run `charliebot memory usage --idle-days 60`. For each non-resident entry that is over the idle
-threshold and older than 60 days by its `created` date, propose `git rm entries/<topic>/<slug>.md`.
-Resident topics and entries younger than 60 days are exempt.
+Step 2 — report to the user.
+Present, in one report: the full working-tree diff (admits and revises) and the rejected
+candidates with reasons. Do not commit. Wait for explicit user approval.
 
-Step 3 — report to the user.
-Present, in one report: the full working-tree diff (admits, revises, evictions), the rejected
-candidates with reasons, and the usage table. Do not commit. Wait for explicit user approval.
-
-Step 4 — land only after approval.
+Step 3 — land only after approval.
 Only after the user explicitly approves: commit the working tree with the prefixed messages
-(`admit:` / `revise:` / `evict:`), then delete the processed staging files — including the rejected
-ones. If approval is partial, commit only the approved changes and delete only their staging files;
-leave the rest staged for the next day.
+(`admit:` / `revise:` / `migrate:`), then delete the processed staging files — including the
+rejected ones. If approval is partial, commit only the approved changes and delete only their
+staging files; leave the rest staged for the next day.
 
 Never mine sessions for memory. Never auto-commit. Never edit any file outside
 `~/.charliebot/memory/`.

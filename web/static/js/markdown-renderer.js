@@ -68,7 +68,24 @@ function fixNestedFences(md) {
 // Marked.js renderer: highlight.js syntax highlighting + code block headers
 // ---------------------------------------------------------------------------
 (function() {
+  // This file loads before chat/shared.js (index.html:503 vs :512), so escapeHtml
+  // is unavailable here. Local text/attribute escapers keep message-text tags and
+  // attributes from ever becoming DOM nodes (invariant: rendered chat message body
+  // contains no tag and no attribute that originated from the message text itself).
+  function escapeText(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function escapeAttr(s) {
+    return escapeText(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   const renderer = new marked.Renderer();
+  renderer.html = function(token) {
+    // Support both marked v4 (html string) and v5+ ({ text } object), same
+    // tolerance as renderer.code. Escape so raw tags render as literal text.
+    const text = typeof token === 'object' ? token.text : token;
+    return escapeText(text);
+  };
   renderer.code = function(token) {
     // Support both marked v4 (code, lang, escaped) and v5+ ({ text, lang })
     const code = typeof token === 'object' ? token.text : token;
@@ -80,7 +97,7 @@ function fixNestedFences(md) {
     } else {
       highlighted = hljs.highlightAuto(trimmed).value;
     }
-    const displayLang = lang || 'text';
+    const displayLang = escapeText(lang || 'text');
     const isMarkdown = (lang === 'markdown' || lang === 'md');
     const renderBtn = isMarkdown
       ? '<button class="copy-btn" onclick="renderMarkdown(this)">Render</button>'
@@ -88,8 +105,22 @@ function fixNestedFences(md) {
     return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
   };
   renderer.link = function(token) {
-    const title = token.title ? ` title="${token.title}"` : '';
-    return `<a href="${token.href}" target="_blank" rel="noopener noreferrer"${title}>${token.text}</a>`;
+    const href = escapeAttr(token.href);
+    const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
+    // Parse inline tokens so nested **bold** / inline code keep rendering while a
+    // raw tag in link text gets escaped by renderer.html. Fall back to escaped
+    // token.text when token.tokens is missing. this.parser is available to a
+    // renderer registered via marked.use({ renderer }) on the served marked v15.
+    const text = token.tokens
+      ? this.parser.parseInline(token.tokens)
+      : escapeText(token.text);
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer"${title}>${text}</a>`;
+  };
+  renderer.image = function(token) {
+    const alt = escapeAttr(token.text);
+    const src = escapeAttr(token.href);
+    const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
+    return `<img src="${src}" alt="${alt}"${title}>`;
   };
   marked.use({ renderer });
 })();

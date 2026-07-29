@@ -67,7 +67,6 @@ function buildClient() {
     appendMessage: () => {},
     startThinking: () => {},
     stopThinking: () => {},
-    updateUsageDisplay: () => {},
     pollActiveSessionView: () => {},
     renderExtUsage: () => {},
     refreshSessionStatusNow: () => {},

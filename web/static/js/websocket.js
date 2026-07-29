@@ -195,9 +195,8 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
   } else if (t === 'worker_summary') {
     refreshSessionStatusNow({refreshWorkers: true});
   } else if (t === 'result') {
-    updateUsageDisplay(ev);
-    // Codex result events carry translated usage; refresh from the lazy usage endpoint
-    // immediately so fast turns do not leave the header on stale values.
+    // The usage header is a projection over the full event list, so the forced
+    // poll is what updates it — the WebSocket handler must not write the header.
     pollActiveSessionView({force: true});
   } else if (t === 'tex_edit_proposed') {
     showDiffModal();

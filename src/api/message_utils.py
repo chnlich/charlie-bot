@@ -290,7 +290,7 @@ async def build_session_view_data(
     result = await asyncio.to_thread(_from_projection)
     if result is not None:
       messages, pending_draft, total_event_count, oldest_ordinal, has_more, events = result
-      usage = await session_mgr.resolve_session_usage(session_id, session_meta, events)
+      usage = await session_mgr.resolve_session_usage(session_id, session_meta)
       try:
         await session_mgr.mark_read(session_id)
       except Exception:
@@ -316,7 +316,7 @@ async def build_session_view_data(
     tail_events, total_count, has_more = events_result
     offset = session_meta.archive_offset + total_count - len(tail_events)
     messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
-    usage = await session_mgr.resolve_session_usage(session_id, session_meta, tail_events)
+    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
     raw_events = tail_events
     total_event_count = session_meta.archive_offset + total_count
     oldest_message_ordinal = offset
@@ -327,7 +327,7 @@ async def build_session_view_data(
     oldest_message_ordinal = session_meta.archive_offset
     has_more = session_meta.archive_offset > 0
     messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
-    usage = await session_mgr.resolve_session_usage(session_id, session_meta, raw_events)
+    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
 
   try:
     await session_mgr.mark_read(session_id)

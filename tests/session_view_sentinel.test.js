@@ -127,7 +127,6 @@ function buildContext(overrides = {}) {
     DRAFT_KEY: null,
     ACTIVE_BACKEND_ID: overrides.ACTIVE_BACKEND_ID || 'claude-opus-4.6',
     masterThinking: false,
-    usageTotalCost: 0,
     switching: false,
     reconnectTimer: null,
     workersPollInterval: null,
@@ -517,4 +516,79 @@ test('first paint does not fetch when the tail page already fills the container'
   assert.equal(fetched.length, 0, 'a scrollable container must not auto-fetch on first paint');
   const sentinel = findSentinel(elements);
   assert.equal(sentinel.getAttribute('data-state'), 'idle');
+});
+
+// ---------------------------------------------------------------------------
+// renderUsageFromData: unknown context + cost cell rendering
+// ---------------------------------------------------------------------------
+
+function buildUsageElements() {
+  return new Map([
+    ['usage-indicator', createElement({className: 'hidden'})],
+    ['usage-bar', createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}})],
+    ['usage-text', createElement({textContent: ''})],
+    ['usage-cost', createElement({textContent: ''})],
+  ]);
+}
+
+test('renderUsageFromData shows unknown and hides the bar when context_tokens is null', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: null,
+    context_limit: null,
+    total_cost_usd: 0.5,
+    model: '',
+  });
+
+  assert.equal(elements.get('usage-text').textContent, 'unknown');
+  assert.match(elements.get('usage-bar').className, /hidden/);
+  assert.equal(elements.get('usage-bar').style.width, '0%');
+  // The cost cell still renders.
+  assert.equal(elements.get('usage-cost').textContent, '$0.50');
+  assert.equal(elements.get('usage-indicator').classList.contains('hidden'), false);
+});
+
+test('renderUsageFromData shows unknown when only context_limit is null', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: 50000,
+    context_limit: null,
+    total_cost_usd: null,
+    model: '',
+  });
+
+  assert.equal(elements.get('usage-text').textContent, 'unknown');
+  assert.match(elements.get('usage-bar').className, /hidden/);
+  // N/A cost still renders in the cell.
+  assert.equal(elements.get('usage-cost').textContent, 'N/A');
+});
+
+test('renderUsageFromData draws the bar when both context fields are present', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: 100000,
+    context_limit: 200000,
+    total_cost_usd: 1.25,
+    model: 'claude-opus-4-6',
+  });
+
+  assert.equal(elements.get('usage-text').textContent, '100k / 200k');
+  assert.doesNotMatch(elements.get('usage-bar').className, /hidden/);
+  assert.equal(elements.get('usage-bar').style.width, '50.0%');
+  assert.equal(elements.get('usage-cost').textContent, '$1.25');
+});
+
+test('renderUsageFromData hides the indicator when usage is null', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData(null);
+
+  assert.equal(elements.get('usage-indicator').classList.contains('hidden'), true);
 });

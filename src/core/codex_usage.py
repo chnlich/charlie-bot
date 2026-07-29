@@ -11,7 +11,8 @@ from src.core.codex_pricing import calculate_codex_usage_cost_usd
 
 log = structlog.get_logger()
 
-_CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
+# Default codex home searched last in the candidate directory list.
+_DEFAULT_CODEX_HOME = Path.home() / ".codex"
 
 
 def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -141,32 +142,49 @@ class CodexUsageResolver:
   def resolve(
       self,
       session_id: str,
-      cc_session_id: str | None,
-      events: list[dict] | None,
-      base_usage: dict | None,
+      session_meta: Any,
+      events: list[dict],
   ) -> dict | None:
     """Resolve Codex-native usage and merge with base usage.
 
     Returns the merged usage dict with Codex context_tokens/context_limit
     overriding the base values, or None if native usage is unavailable.
+
+    ``context_limit`` uses the session backend's ``model_auto_compact_token_limit``
+    when configured, falling back to the rollout's ``model_context_window``. The
+    cost computation stays native (``calculate_codex_usage_cost_usd``).
     """
-    native_thread_id = self._resolve_codex_thread_id(session_id, cc_session_id, events)
+    backend_id = session_meta.backend
+    native_thread_id = self._resolve_codex_thread_id(
+        session_id, session_meta.cc_session_id, events)
     if not native_thread_id:
       return None
 
-    native_usage = self._load_codex_rollout_usage(native_thread_id)
+    native_usage = self._load_codex_rollout_usage(native_thread_id, backend_id)
     if native_usage is None:
       return None
 
-    merged_usage = dict(base_usage or {})
-    merged_usage["context_tokens"] = native_usage["context_tokens"]
-    merged_usage["context_limit"] = native_usage["context_limit"]
+    auto_compact_limit = self._backend_auto_compact_limit(backend_id)
+    context_limit = auto_compact_limit if auto_compact_limit else native_usage["context_limit"]
     model = native_usage.get("model") or ""
     total_token_usage = native_usage.get("total_token_usage")
-    merged_usage["total_cost_usd"] = (
-        calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None)
-    merged_usage["model"] = model
+    merged_usage: dict[str, Any] = {
+        "context_tokens": native_usage["context_tokens"],
+        "context_limit": context_limit,
+        "total_cost_usd": (
+            calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
+        "model": model,
+    }
     return merged_usage
+
+  def _backend_auto_compact_limit(self, backend_id: str) -> int | None:
+    """Return the session backend's ``model_auto_compact_token_limit`` when configured."""
+    if not backend_id:
+      return None
+    option = self._cfg.get_backend_option(backend_id)
+    if option is None:
+      return None
+    return option.model_auto_compact_token_limit
 
   @staticmethod
   def _extract_translated_session_id(events: list[dict]) -> str | None:
@@ -216,25 +234,58 @@ class CodexUsageResolver:
         return live_session_id
     return self._read_translated_session_id(session_id)
 
-  def _find_codex_rollout_path(self, native_thread_id: str) -> Path | None:
+  def _codex_candidate_session_dirs(self, backend_id: str) -> list[Path]:
+    """Ordered candidate ``<home>/sessions`` directories searched for rollout logs.
+
+    Searched in order, stopping at the first directory that yields a match:
+
+    1. the session's own backend option ``codex_home``, when that backend id is
+       still in config;
+    2. the union of ``codex_home`` across every configured backend of type codex;
+    3. ``~/.codex``.
+
+    Each candidate is searched as ``<home>/sessions``. Rollout file names embed a
+    globally unique codex thread id, so searching several trees cannot mis-match.
+    """
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(home: Path) -> None:
+      sessions_dir = home / "sessions"
+      if sessions_dir not in seen:
+        seen.add(sessions_dir)
+        dirs.append(sessions_dir)
+
+    own_option = self._cfg.get_backend_option(backend_id) if backend_id else None
+    if own_option is not None and own_option.codex_home:
+      _add(Path(own_option.codex_home).expanduser())
+
+    for opt in self._cfg.backend_options:
+      if opt.type == "codex" and opt.codex_home:
+        _add(Path(opt.codex_home).expanduser())
+
+    _add(_DEFAULT_CODEX_HOME)
+    return dirs
+
+  def _find_codex_rollout_path(self, native_thread_id: str, backend_id: str) -> Path | None:
     cached_path = self._codex_rollout_path_cache.get(native_thread_id)
     if cached_path is not None and cached_path.exists():
       return cached_path
 
-    if not _CODEX_SESSIONS_DIR.exists():
-      return None
+    for candidate_dir in self._codex_candidate_session_dirs(backend_id):
+      if not candidate_dir.exists():
+        continue
+      matches = list(candidate_dir.rglob(f"rollout-*{native_thread_id}.jsonl"))
+      if not matches:
+        continue
+      matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+      rollout_path = matches[0]
+      self._codex_rollout_path_cache[native_thread_id] = rollout_path
+      return rollout_path
+    return None
 
-    matches = list(_CODEX_SESSIONS_DIR.rglob(f"rollout-*{native_thread_id}.jsonl"))
-    if not matches:
-      return None
-
-    matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-    rollout_path = matches[0]
-    self._codex_rollout_path_cache[native_thread_id] = rollout_path
-    return rollout_path
-
-  def _load_codex_rollout_usage(self, native_thread_id: str) -> dict | None:
-    rollout_path = self._find_codex_rollout_path(native_thread_id)
+  def _load_codex_rollout_usage(self, native_thread_id: str, backend_id: str) -> dict | None:
+    rollout_path = self._find_codex_rollout_path(native_thread_id, backend_id)
     if rollout_path is None:
       return None
 

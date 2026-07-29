@@ -37,7 +37,6 @@
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
-    let usageTotalCost = {{ (session_usage.total_cost_usd|tojson) if session_usage else 0 }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
     const INITIAL_SESSIONS = {{ initial_sessions|tojson }};
     const INITIAL_LOAD_ERRORS = {{ load_errors|tojson }};
@@ -161,20 +160,15 @@
                 onclick="stopActiveTui()"
                 class="ml-2 text-xs px-2 py-1 rounded bg-red-900/40 text-red-200 border border-red-700/50 hover:bg-red-800/60 transition-colors whitespace-nowrap {% if active_backend_type != 'tui-cli' %}hidden{% endif %}"
                 title="Stop Claude">Stop Claude</button>
-        <!-- Context usage indicator -->
-        <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 {% if not session_usage %}hidden{% endif %}">
+        <!-- Context usage indicator — starts hidden; the first /usage render fills it -->
+        <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 hidden">
           <div class="flex items-center gap-1.5" title="Context window usage">
             <div class="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-              <div id="usage-bar" class="h-full rounded-full transition-all duration-300
-                {% if session_usage %}
-                  {% set pct = (session_usage.context_tokens / session_usage.context_limit * 100) if session_usage.context_limit else 0 %}
-                  {% if pct > 80 %}bg-red-500{% elif pct > 50 %}bg-yellow-500{% else %}bg-blue-500{% endif %}
-                {% else %}bg-blue-500{% endif %}"
-                style="width: {% if session_usage %}{{ (session_usage.context_tokens / session_usage.context_limit * 100)|round(1) }}%{% else %}0%{% endif %}"></div>
+              <div id="usage-bar" class="h-full rounded-full transition-all duration-300 bg-blue-500" style="width: 0%"></div>
             </div>
-            <span id="usage-text" class="text-xs text-slate-400 whitespace-nowrap">{% if session_usage %}{{ '%dk' % (session_usage.context_tokens // 1000) }} / {{ '%dk' % (session_usage.context_limit // 1000) }}{% endif %}</span>
+            <span id="usage-text" class="text-xs text-slate-400 whitespace-nowrap"></span>
           </div>
-          <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap">{% if session_usage %}{% if session_usage.total_cost_usd is none %}N/A{% else %}${{ '%.2f' % session_usage.total_cost_usd }}{% endif %}{% endif %}</span>
+          <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap" title="API list-price equivalent for this session's own turns; excludes delegated workers"></span>
         </div>
         <a href="/sessions/{{ active_session.id }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">

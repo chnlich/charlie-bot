@@ -283,7 +283,6 @@ class SessionManager:
         fresh_parent.updated_at = utc_now()
         await self._save_metadata(fresh_parent)
     self._chat_events.clear_cache(parent_id)
-    self._session_usage.clear_cache(parent_id)
     self._aggregators.pop(parent_id, None)
     self._clear_projection(parent_id)
 
@@ -472,7 +471,6 @@ class SessionManager:
     """Mark a session as archived (does not delete files)."""
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._chat_events.clear_cache(session_id)
-    self._session_usage.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     self._clear_projection(session_id)
     return meta
@@ -486,7 +484,6 @@ class SessionManager:
     await self._backend_destroy_hook(session_id, meta)
     await asyncio.to_thread(shutil.rmtree, session_dir)
     self._chat_events.clear_cache(session_id)
-    self._session_usage.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     self._clear_projection(session_id)
     self._invalidate_cache(session_id)
@@ -519,7 +516,6 @@ class SessionManager:
           fresh.archive_offset += events_archived
           await self._save_metadata(fresh)
       self._chat_events.clear_cache(session_id)
-      self._session_usage.clear_cache(session_id)
       self._aggregators.pop(session_id, None)
       self._clear_projection(session_id)
 
@@ -709,9 +705,6 @@ class SessionManager:
   async def save_chat_event(self, session_id: str, event: dict) -> None:
     """Append a single NDJSON event line to chat_events.jsonl."""
     await self._chat_events.save_chat_event(session_id, event)
-    # Incrementally update usage cache on result events
-    if event.get('type') == 'result':
-      self._session_usage._update_usage_cache(session_id, event)
 
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     """Persist event, run it through the session's aggregator, broadcast deltas + raw event.
@@ -779,11 +772,7 @@ class SessionManager:
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up. Uses in-memory cache after first read."""
-    was_cached = self._chat_events.has_cache(session_id)
-    events = self._chat_events.load_chat_events_sync(session_id)
-    if not was_cached:
-      self._session_usage.cache_usage_from_events(session_id, events)
-    return events
+    return self._chat_events.load_chat_events_sync(session_id)
 
   def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk. Does NOT populate _events_cache.
@@ -855,43 +844,13 @@ class SessionManager:
       self,
       session_id: str,
       session_meta: SessionMetadata,
-      events: list[dict] | None = None,
   ) -> dict | None:
-    """Resolve display usage for a session view.
+    """Resolve display usage for a session view as a projection over its events.
 
-    Non-Codex backends keep the existing CharlieBot result-derived behavior.
-    Codex backends override context usage from the native rollout log when the
-    native thread id can be resolved.
+    Usage is computed on demand from the full chat-event stream (no incremental
+    cache). See ``src/core/session_usage.py`` for the tier contract.
     """
-    return await self._session_usage.resolve_session_usage(session_id, session_meta, events)
-
-  # ---------------------------------------------------------------------------
-  # Usage / token tracking
-  # ---------------------------------------------------------------------------
-
-  @staticmethod
-  def usage_from_events(events: list[dict]) -> dict | None:
-    """Extract context-window token usage from pre-loaded events.
-
-    Scans for the most recent 'result' event and accumulates total_cost_usd
-    across ALL result events.
-
-    Returns a dict with:
-      context_tokens  – input + cache_creation + cache_read from last result
-      context_limit   – from modelUsage contextWindow (default 200000)
-      total_cost_usd  – sum across every result event
-      model           – primary model name
-    Returns None if no result events exist.
-    """
-    return SessionUsageResolver.usage_from_events(events)
-
-  def get_usage_cached(self, session_id: str) -> dict | None:
-    """Return cached usage data for a session, or None if not yet computed."""
-    return self._session_usage.get_usage_cached(session_id)
-
-  def _update_usage_cache(self, session_id: str, result_event: dict) -> None:
-    """Incrementally update the usage cache from a single 'result' event."""
-    self._session_usage._update_usage_cache(session_id, result_event)
+    return await self._session_usage.resolve_session_usage(session_id, session_meta)
 
   # ---------------------------------------------------------------------------
   # Private helpers

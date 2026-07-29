@@ -186,7 +186,6 @@ async function pollActiveSessionView(opts) {
     THINKING_SINCE = data.session.thinking_since || null;
     setActiveBackendId(data.active_backend);
     updateActiveBackendBadges();
-    usageTotalCost = data.usage ? data.usage.total_cost_usd : 0;
     globalThis.renderUsageFromData(data.usage);
 
     if (!THINKING_SINCE && masterThinking) {

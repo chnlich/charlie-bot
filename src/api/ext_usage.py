@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,11 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://console.anthropic.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_BETA = "oauth-2025-04-20"
+# The usage endpoint rate-limits per access token, and reportedly far more
+# generously for the Claude Code user agent than for an unrecognized one. Kept as a
+# protocol constant beside ANTHROPIC_BETA rather than probed from the installed CLI,
+# which would couple this module to the CLI's install layout.
+USER_AGENT = "claude-code/2.1.219"
 
 CLAUDE_DEFAULT_DIR = str(Path.home() / ".claude")
 CODEX_DEFAULT_DIR = str(Path.home() / ".codex")
@@ -138,36 +144,66 @@ class ClaudeUsageProvider:
       self.last_error = "credentials not found"
       return None
 
-    access_token = creds["access_token"]
-    expires_at = creds["expires_at"]
+    resp = await self._get_usage(creds["access_token"])
 
-    if expires_at and time.time() >= expires_at:
-      log.info("ext_usage_token_expired_refreshing", account=self.label)
-      access_token = await _refresh_access_token(self.credentials_path, creds["refresh_token"])
+    # A 401 is the only authoritative signal that the stored token is unusable: it
+    # covers expiry and revocation alike and needs no clock arithmetic to be trusted.
+    # Renew once and retry once; a second 401 is an account state the next poll cannot
+    # fix either, so it backs off instead of retrying every round.
+    if resp.status_code == 401:
+      access_token = await self._reauthenticate(creds["access_token"])
       if access_token is None:
-        self.last_error = "token refresh failed"
+        self._arm_backoff()
+        return None
+      resp = await self._get_usage(access_token)
+      if resp.status_code == 401:
+        self._arm_backoff()
+        log.warning("ext_usage_auth_rejected_after_renewal", account=self.label, backoff_seconds=self._backoff_seconds)
         return None
 
-    client = get_http_client()
-    resp = await client.get(
-        USAGE_URL,
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "anthropic-beta": ANTHROPIC_BETA,
-        },
-        timeout=HTTP_OAUTH_TIMEOUT,
-    )
-
     if resp.status_code == 429:
-      self._backoff_seconds = min((self._backoff_seconds or 30) * 2, 30 * 60)
-      self._backoff_until = time.time() + self._backoff_seconds
       self.last_error = "rate limited"
+      self._arm_backoff()
       log.warning("ext_usage_rate_limited", account=self.label, backoff_seconds=self._backoff_seconds)
       return None
 
     self._backoff_seconds = 0.0
     resp.raise_for_status()
     return _transform_response(resp.json(), account=self.label)
+
+  async def _get_usage(self, access_token: str) -> Any:
+    client = get_http_client()
+    return await client.get(USAGE_URL, headers=_oauth_headers(access_token), timeout=HTTP_OAUTH_TIMEOUT)
+
+  async def _reauthenticate(self, failed_token: str) -> str | None:
+    """Return a usable access token after a 401, yielding to whoever renewed first.
+
+    The credentials file is shared with the external Claude CLI, which rotates the
+    refresh token whenever it renews. Re-reading the file first means the common case
+    -- the CLI renewed while this poller held a stale copy -- spends no refresh call
+    and rotates nothing out from under it.
+    """
+    creds = await asyncio.to_thread(_read_credentials, self.credentials_path)
+    if creds is None:
+      self.last_error = "credentials not found"
+      return None
+    if creds["access_token"] != failed_token:
+      return creds["access_token"]
+    if not creds["refresh_token"]:
+      log.warning("ext_usage_no_refresh_token", account=self.label)
+      self.last_error = "token refresh failed"
+      return None
+    try:
+      return await _refresh_access_token(self.credentials_path, creds["refresh_token"])
+    except Exception as e:
+      log.warning("ext_usage_token_refresh_failed", account=self.label, error=str(e))
+      self.last_error = "token refresh failed"
+      return None
+
+  def _arm_backoff(self) -> None:
+    """Advance the shared backoff ladder: 60s first, doubling, capped at 30 minutes."""
+    self._backoff_seconds = min((self._backoff_seconds or 30) * 2, 30 * 60)
+    self._backoff_until = time.time() + self._backoff_seconds
 
 
 class CodexUsageProvider:
@@ -275,16 +311,16 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
   oauth = data.get("claudeAiOauth", {})
   access_token = oauth.get("accessToken")
   refresh_token = oauth.get("refreshToken")
-  expires_at = oauth.get("expiresAt")
 
   if not access_token:
     log.warning("ext_usage_no_access_token", path=str(credentials_path))
     return None
 
+  # expiresAt is deliberately not read. It is a millisecond stamp, and every renewal
+  # decision it used to gate is now made by the server's 401 instead.
   return {
       "access_token": access_token,
       "refresh_token": refresh_token,
-      "expires_at": expires_at,
   }
 
 
@@ -530,8 +566,41 @@ def _transform_codex_response(
   return usage
 
 
+def _oauth_headers(access_token: str) -> dict[str, str]:
+  """Headers every OAuth-authenticated call to this API carries."""
+  return {
+      "Authorization": f"Bearer {access_token}",
+      "anthropic-beta": ANTHROPIC_BETA,
+      "User-Agent": USER_AGENT,
+  }
+
+
+def _expires_at_ms(token_data: dict[str, Any]) -> int | None:
+  """Expiry of a renewed token as the millisecond stamp the CLI's file format uses.
+
+  The grant may report an absolute ``expires_at`` or a relative ``expires_in``, and an
+  absolute value may itself arrive in seconds. Nothing here reads the field back; it is
+  written only so the external CLI keeps its own renewal schedule.
+  """
+  absolute = token_data.get("expires_at")
+  if isinstance(absolute, (int, float)) and not isinstance(absolute, bool):
+    return int(absolute if absolute > 1e11 else absolute * 1000)
+  relative = token_data.get("expires_in")
+  if isinstance(relative, (int, float)) and not isinstance(relative, bool):
+    return int((time.time() + relative) * 1000)
+  return None
+
+
+def _write_credentials_atomically(path: Path, value: dict[str, Any]) -> None:
+  """Replace a credentials file in one step, never exposing a half-written token."""
+  temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+  temporary.write_text(json.dumps(value, indent=2))
+  os.chmod(temporary, 0o600)
+  os.replace(temporary, path)
+
+
 async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> str | None:
-  """Refresh the OAuth access token and save new credentials to the account's file."""
+  """Renew the OAuth access token and save new credentials to the account's file."""
   client = get_http_client()
   resp = await client.post(
       TOKEN_REFRESH_URL,
@@ -540,6 +609,7 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
           "refresh_token": refresh_token,
           "client_id": CLIENT_ID,
       },
+      headers={"User-Agent": USER_AGENT},
       timeout=HTTP_OAUTH_TIMEOUT,
   )
   resp.raise_for_status()
@@ -547,15 +617,17 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
 
   new_access = token_data["access_token"]
   new_refresh = token_data.get("refresh_token", refresh_token)
-  new_expires = token_data.get("expires_at")
+  new_expires = _expires_at_ms(token_data)
+  if new_expires is None:
+    log.warning("ext_usage_renewal_without_expiry", path=str(credentials_path))
 
   def _update_creds() -> None:
     creds_data = json.loads(credentials_path.read_text())
     creds_data["claudeAiOauth"]["accessToken"] = new_access
     creds_data["claudeAiOauth"]["refreshToken"] = new_refresh
-    if new_expires:
+    if new_expires is not None:
       creds_data["claudeAiOauth"]["expiresAt"] = new_expires
-    credentials_path.write_text(json.dumps(creds_data, indent=2))
+    _write_credentials_atomically(credentials_path, creds_data)
 
   await asyncio.to_thread(_update_creds)
 

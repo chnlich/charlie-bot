@@ -119,6 +119,19 @@ function makeElement() {
       }
       return null;
     },
+    querySelectorAll(selector) {
+      const all = [];
+      const stack = this.children.slice();
+      while (stack.length > 0) {
+        const child = stack.shift();
+        all.push(child);
+        stack.push(...child.children);
+      }
+      if (selector === '*') return all;
+      if (!selector.startsWith('.')) return [];
+      const targetClass = selector.slice(1);
+      return all.filter((el) => String(el.className || '').split(/\s+/).includes(targetClass));
+    },
   };
 }
 
@@ -1100,19 +1113,22 @@ function addBlockComment(body, listeners, block, text) {
 }
 
 test('gutter cards are positioned by the stackCards pure function (render glue)', async () => {
+  // Colliding anchors force stackCards to push cards apart; raw anchors would not match.
+  // The rects also give the fake layout a 640px-wide article column so that
+  // measureContent() keeps the one-band reserve clean and gutter mode engages.
+  const tops = [100, 110, 120];
+  const blocks = tops.map((t) => {
+    const b = makeBlock('section at ' + t);
+    b.getBoundingClientRect = () => ({left: 0, top: t, right: 640, bottom: t + 50, width: 640, height: 50});
+    return b;
+  });
   const {window, head, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    bodyChildren: blocks,
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
   const stackCards = window.__cbcStackCards;
   const gap = window.__cbcGutterGap;
 
-  // Colliding anchors force stackCards to push cards apart; raw anchors would not match.
-  const tops = [100, 110, 120];
-  const blocks = tops.map((t) => {
-    const b = makeBlock('section at ' + t);
-    b.getBoundingClientRect = () => ({left: 0, top: t, right: 2000, bottom: t + 50});
-    return b;
-  });
   for (const b of blocks) addBlockComment(body, listeners, b, 'cmt');
   await flushPromises();
 
@@ -1135,7 +1151,13 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
 });
 
 test('gutter mode reserves and restores body right padding across the 900px threshold', async () => {
+  // A 640px-wide article column at the 1024px viewport keeps the one-band
+  // reserve clean (640 <= 1024 - 316) but not the two-band one
+  // (640 > 1024 - 624), so the dock-in-gutter reserve is 316px.
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
   const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    bodyChildren: [block],
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
   const fireResize = () => {
@@ -1144,8 +1166,6 @@ test('gutter mode reserves and restores body right padding across the 900px thre
     }
   };
 
-  const block = makeBlock('anchored section');
-  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 2000, bottom: 250});
   addBlockComment(body, listeners, block, 'cmt');
   await flushPromises();
 
@@ -1164,8 +1184,15 @@ test('gutter mode reserves and restores body right padding across the 900px thre
   assert.equal(body.style.paddingRight, '10px', 'prior inline padding value restored exactly');
 });
 
-test('gutter mode reserves and restores the dock inline right across the 900px threshold', async () => {
+test('gutter mode reserves and restores the dock inline right and widths across the 900px threshold', async () => {
+  // A 640px-wide article column at the 1024px viewport keeps the one-band
+  // reserve clean (640 <= 1024 - 316) but not the two-band one
+  // (640 > 1024 - 624), so the dock sits inside the card column: inline right
+  // 8px, with inline widths on the dock and the tray.
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
   const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    bodyChildren: [block],
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
   const fireResize = () => {
@@ -1174,25 +1201,96 @@ test('gutter mode reserves and restores the dock inline right across the 900px t
     }
   };
   const dock = dockOf(body);
+  const tray = findChildByClass(dock, '__cbc-tray');
 
-  const block = makeBlock('anchored section');
-  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 2000, bottom: 250});
   addBlockComment(body, listeners, block, 'cmt');
   await flushPromises();
 
-  assert.equal(dock.style.right, '330px', 'dock inline right reserved in gutter mode');
+  assert.equal(dock.style.right, '8px', 'dock inline right reserved inside the card column');
+  assert.equal(dock.style.width, '300px', 'dock inline width reserved in gutter mode');
+  assert.equal(tray.style.width, '100%', 'tray inline width reserved in gutter mode');
 
   window.innerWidth = 800;
   fireResize();
   assert.ok(!dock.style.right, 'dock inline right removed when no inline value existed before');
+  assert.ok(!dock.style.width, 'dock inline width removed when no inline value existed before');
+  assert.ok(!tray.style.width, 'tray inline width removed when no inline value existed before');
 
   dock.style.right = '14px';
   window.innerWidth = 1024;
   fireResize();
-  assert.equal(dock.style.right, '330px', 'dock inline right reserved again after crossing back');
+  assert.equal(dock.style.right, '8px', 'dock inline right reserved again after crossing back');
+  assert.equal(dock.style.width, '300px', 'dock inline width reserved again after crossing back');
+  assert.equal(tray.style.width, '100%', 'tray inline width reserved again after crossing back');
   window.innerWidth = 800;
   fireResize();
   assert.equal(dock.style.right, '14px', 'prior inline dock right restored exactly');
+  assert.ok(!dock.style.width, 'dock inline width removed again');
+  assert.ok(!tray.style.width, 'tray inline width removed again');
+});
+
+test('gutter mode moves the dock between the reserved column and the card column as width shrinks', async () => {
+  // A 700px-wide article column: at a 1400px viewport the two-band reserve is
+  // clean (700 <= 1400 - 624) so the dock gets its own column (padding 624px,
+  // inline right 316px); at 1024px only the one-band reserve stays clean
+  // (700 > 1024 - 624 but 700 <= 1024 - 316) so the dock shares the card
+  // column (padding 316px, inline right 8px); below 900px every inline value
+  // returns to its pre-entry state.
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 700, bottom: 250, width: 700, height: 50});
+  const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    bodyChildren: [block],
+    innerWidth: 1400,
+    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+  });
+  const fireResize = () => {
+    for (const l of listeners) {
+      if (l.target === 'window' && l.type === 'resize') l.handler();
+    }
+  };
+  const dock = dockOf(body);
+  const tray = findChildByClass(dock, '__cbc-tray');
+
+  addBlockComment(body, listeners, block, 'cmt');
+  await flushPromises();
+
+  assert.equal(body.style.paddingRight, '624px', 'two-band reserve padding at 1400px');
+  assert.equal(dock.style.right, '316px', 'dock gets its own column at 1400px');
+  assert.equal(dock.style.width, '300px', 'dock inline width reserved at 1400px');
+  assert.equal(tray.style.width, '100%', 'tray inline width reserved at 1400px');
+
+  window.innerWidth = 1024;
+  fireResize();
+  assert.equal(body.style.paddingRight, '316px', 'one-band reserve padding at 1024px');
+  assert.equal(dock.style.right, '8px', 'dock shares the card column at 1024px');
+  assert.equal(dock.style.width, '300px', 'dock inline width survives the tier switch');
+  assert.equal(tray.style.width, '100%', 'tray inline width survives the tier switch');
+
+  window.innerWidth = 800;
+  fireResize();
+  assert.ok(!body.style.paddingRight, 'padding removed when no inline value existed before');
+  assert.ok(!dock.style.right, 'dock inline right removed when no inline value existed before');
+  assert.ok(!dock.style.width, 'dock inline width removed when no inline value existed before');
+  assert.ok(!tray.style.width, 'tray inline width removed when no inline value existed before');
+
+  // Same sequence with a preset inline dock right: exit must restore it exactly.
+  dock.style.right = '14px';
+  window.innerWidth = 1400;
+  fireResize();
+  assert.equal(body.style.paddingRight, '624px', 'two-band reserve padding again at 1400px');
+  assert.equal(dock.style.right, '316px', 'dock gets its own column again at 1400px');
+
+  window.innerWidth = 1024;
+  fireResize();
+  assert.equal(body.style.paddingRight, '316px', 'one-band reserve padding again at 1024px');
+  assert.equal(dock.style.right, '8px', 'dock shares the card column again at 1024px');
+
+  window.innerWidth = 800;
+  fireResize();
+  assert.ok(!body.style.paddingRight, 'padding removed again below 900px');
+  assert.equal(dock.style.right, '14px', 'preset inline dock right restored exactly, not emptied');
+  assert.ok(!dock.style.width, 'dock inline width removed again');
+  assert.ok(!tray.style.width, 'tray inline width removed again');
 });
 
 // ---------------------------------------------------------------------------
@@ -1202,8 +1300,11 @@ test('gutter mode reserves and restores the dock inline right across the 900px t
 const REANCHOR_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
 const FETCH_OK = async () => ({ok: true, status: 200, json: async () => ({name: 'S'})});
 
+// A 640px-wide article column at the default 1024px viewport keeps the one-band
+// reserve clean (640 <= 1024 - 316) but not the two-band one (640 > 1024 - 624),
+// so measureContent() puts the dock inside the card column in these tests.
 function rectAt(top) {
-  return () => ({left: 0, top, right: 800, bottom: top + 40, width: 800, height: 40});
+  return () => ({left: 0, top, right: 640, bottom: top + 40, width: 640, height: 40});
 }
 
 test('re-anchor hit: restores el and marks the block when quote matches', () => {
@@ -1302,10 +1403,12 @@ test('gutter mode routes anchored entries to the gutter and unanchored entries t
 });
 
 test('gutter mode writes only stackCards tops to gutter children (single writer)', () => {
+  // The rects give the fake layout a 640px-wide article column so that
+  // measureContent() keeps the one-band reserve clean and gutter mode engages.
   const tops = [100, 110, 120];
   const blocks = tops.map((t) => {
     const b = makeBlock('single writer anchor ' + t);
-    b.getBoundingClientRect = () => ({left: 0, top: t, right: 2000, bottom: t + 50});
+    b.getBoundingClientRect = () => ({left: 0, top: t, right: 640, bottom: t + 50, width: 640, height: 50});
     return b;
   });
   const storage = seedDraft(REANCHOR_PATH, [

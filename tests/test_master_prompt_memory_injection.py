@@ -2,14 +2,16 @@
 
 The master instructions now assemble from the memory store at cfg.memory_dir
 via src.core.memory.assemble_master: resident-topic entries inject in full,
-non-resident master/both entries appear as index lines only, and staging
-candidates are never injected.
+non-resident master-audience entries appear as index lines only, and staging
+candidates are never injected. Fixtures are entry format v2 (title in
+frontmatter, comma-list audience, heading-free body).
 """
 
 from types import SimpleNamespace
 from pathlib import Path
 
 from src.agents import master_cc
+from src.core import memory
 
 
 def _make_store(memory_dir: Path) -> None:
@@ -19,17 +21,18 @@ def _make_store(memory_dir: Path) -> None:
   (memory_dir / "entries" / "charliebot").mkdir()
   (memory_dir / "staging").mkdir()
   (memory_dir / "topics").write_text("profile resident\ncommunication resident\ncharliebot\n", encoding="utf-8")
-  # Resident entry (full body injected).
+  # Resident entry (full body injected, '# {title}' heading synthesized).
   (memory_dir / "entries" / "profile" / "dark-mode.md").write_text(
-      "---\nscope: user\ntopic: profile\naudience: both\ncreated: 2026-07-28\nsource: test\n---\n"
-      "# Dark Mode\n\nUser prefers dark UI.\n",
+      "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Dark Mode\n---\n"
+      "User prefers dark UI.\n",
       encoding="utf-8")
   # Non-resident entry (index line only).
   (memory_dir / "entries" / "charliebot" / "cli-flags.md").write_text(
-      "---\nscope: user\ntopic: charliebot\naudience: both\ncreated: 2026-07-28\nsource: test\n---\n"
-      "# CLI Flags\n\nFull body that must NOT be injected.\n",
+      "---\nscope: user\ntopic: charliebot\naudience: master, worker\ntitle: CLI Flags\n---\n"
+      "Full body that must NOT be injected.\n",
       encoding="utf-8")
-  # Staging candidate (never injected).
+  # Staging candidate (never injected). Legacy body shape on purpose: the
+  # relaxed staging rules keep such candidates parseable.
   (memory_dir / "staging" / "20260728T120000Z-abcd1234-pending.md").write_text(
       "---\ntopic: profile\nscope: user\naudience: both\n---\n# Pending\n\nSTAGED BODY\n", encoding="utf-8")
 
@@ -54,11 +57,14 @@ def test_resident_body_present_non_resident_index_only(tmp_path: Path) -> None:
   out = master_cc._build_instructions_content(SimpleNamespace(id="session-1"), cfg)
   assert out is not None
   assert "BASE PROMPT" in out
-  # Resident entry: full body injected.
-  assert "User prefers dark UI." in out
+  # Resident entry: full body injected, heading synthesized from the frontmatter title.
+  assert "# Dark Mode\n\nUser prefers dark UI." in out
   # Non-resident entry: index line present, full body absent.
-  assert "charliebot/cli-flags \u00b7 CLI Flags" in out
+  assert "charliebot/cli-flags · CLI Flags" in out
   assert "Full body that must NOT be injected." not in out
+  # The index header line appears exactly once, immediately before the index lines.
+  assert out.count(memory.INDEX_HEADER) == 1
+  assert f"{memory.INDEX_HEADER}\ncharliebot/cli-flags · CLI Flags" in out
 
 
 def test_staging_content_absent(tmp_path: Path) -> None:

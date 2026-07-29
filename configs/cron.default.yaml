@@ -3,7 +3,7 @@
 # entry that is already there. Host-specific fields (backend, schedule) belong
 # in the host file, not here.
 scheduled_tasks:
-  - name: memory-guideline-check
+  - name: memory-curator
     cron: "27 6 * * *"
     timezone: local
-    prompt_file: prompts/cron/memory_guideline_check.md
+    prompt_file: prompts/cron/memory_curator.md

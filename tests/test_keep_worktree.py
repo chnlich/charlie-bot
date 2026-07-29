@@ -26,7 +26,7 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def test_build_worker_prompt_includes_keep_worktree_note() -> None:
+def test_build_worker_prompt_includes_keep_worktree_note(tmp_path: Path) -> None:
   prompt = spawner._build_worker_prompt(
       description="Run SLURM benchmark",
       repo_path=Path("/tmp/repo"),
@@ -34,6 +34,7 @@ def test_build_worker_prompt_includes_keep_worktree_note() -> None:
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="bench"),
+      cfg=_build_cfg(tmp_path),
       task_type=TaskType.IMPLEMENT,
       keep_worktree=True,
   )
@@ -41,7 +42,7 @@ def test_build_worker_prompt_includes_keep_worktree_note() -> None:
   assert "SLURM" in prompt
 
 
-def test_build_worker_prompt_omits_keep_worktree_note_by_default() -> None:
+def test_build_worker_prompt_omits_keep_worktree_note_by_default(tmp_path: Path) -> None:
   prompt = spawner._build_worker_prompt(
       description="Run SLURM benchmark",
       repo_path=Path("/tmp/repo"),
@@ -49,6 +50,7 @@ def test_build_worker_prompt_omits_keep_worktree_note_by_default() -> None:
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="bench"),
+      cfg=_build_cfg(tmp_path),
       task_type=TaskType.IMPLEMENT,
   )
   assert "This worktree will persist after the reviewer merges." not in prompt
@@ -79,6 +81,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
   captures: dict[str, Any] = {}
 
   class FakeThreadManager:
+
     async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
       del session_id, thread_id
       return thread
@@ -226,6 +229,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
   captures: dict[str, Any] = {}
 
   class FakeSessionManager:
+
     async def get_session(self, session_id: str) -> SessionMetadata:
       return SessionMetadata(id=session_id, name="Bench Session")
 
@@ -233,6 +237,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
       captures.setdefault("broadcasts", []).append(event)
 
   class FakeThreadManager:
+
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
 
@@ -260,6 +265,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
   class FakeWorker:
+
     def __init__(
         self,
         thread_metadata: ThreadMetadata,

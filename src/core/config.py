@@ -185,16 +185,9 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
 
   @property
-  def memory_file(self) -> Path:
-    return self.charliebot_home / "MEMORY.md"
-
-  @property
-  def memory_host_file(self) -> Path:
-    return self.charliebot_home / "MEMORY.host.md"
-
-  @property
-  def memory_tmp_file(self) -> Path:
-    return self.charliebot_home / "MEMORY.tmp.md"
+  def memory_dir(self) -> Path:
+    """Root of the labeled-entry memory store: ~/.charliebot/memory/."""
+    return self.charliebot_home / "memory"
 
   @property
   def charlie_bot_repo(self) -> Path:
@@ -330,8 +323,7 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
   try:
     body = path.read_text(encoding="utf-8")
   except OSError as e:
-    raise ScheduledTaskResolutionError(
-        f"cron entry {entry.get('name')!r} prompt_file unreadable: {path} ({e})") from e
+    raise ScheduledTaskResolutionError(f"cron entry {entry.get('name')!r} prompt_file unreadable: {path} ({e})") from e
   entry["prompt"] = body
   del entry["prompt_file"]
   return path
@@ -418,9 +410,7 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
   # previously-referenced prompt file that is now missing (stat fails) forces a
   # reload so the missing-file error surfaces instead of serving a stale body.
   prompt_mtimes = _stat_prompt_files(_cron_prompt_mtimes)
-  if (mtime == _cron_mtime
-      and prompt_mtimes is not None
-      and prompt_mtimes == _cron_prompt_mtimes):
+  if (mtime == _cron_mtime and prompt_mtimes is not None and prompt_mtimes == _cron_prompt_mtimes):
     return _cron_tasks
 
   try:

@@ -83,6 +83,7 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
       branch_name="improve/test/iter2",
       wt_path="/tmp/worktrees/improve-test-iter2",
       session_meta=SessionMetadata(id="session-id", name="Improve Session"),
+      cfg=_build_cfg(),
       task_type=TaskType.IMPLEMENT,
       loop_dir="/tmp/loops/2",
       iteration_number=2,
@@ -104,6 +105,7 @@ def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="impl"),
+      cfg=_build_cfg(),
       task_type=TaskType.IMPLEMENT,
   )
   assert "Commit your changes with descriptive messages." in prompt
@@ -120,6 +122,7 @@ def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="impl"),
+      cfg=_build_cfg(),
       task_type=TaskType.IMPLEMENT,
   )
 
@@ -137,6 +140,7 @@ def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> No
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="quick"),
+      cfg=_build_cfg(),
       task_type=TaskType.QUICK_EDIT,
   )
   assert "Commit your changes with descriptive messages." in prompt
@@ -152,6 +156,7 @@ def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() ->
       branch_name="charliebot/task-xyz",
       wt_path="/tmp/worktrees/charliebot-task-xyz",
       session_meta=SessionMetadata(id="session-id", name="script"),
+      cfg=_build_cfg(),
       task_type=TaskType.SCRIPT_RUN,
   )
   assert "Do NOT modify tracked files" in prompt
@@ -169,6 +174,7 @@ def test_build_worker_prompt_rejects_verify_task_type() -> None:
         branch_name="charliebot/task-xyz",
         wt_path="/tmp/worktrees/charliebot-task-xyz",
         session_meta=SessionMetadata(id="session-id", name="verify"),
+        cfg=_build_cfg(),
         task_type=TaskType.VERIFY,
     )
 

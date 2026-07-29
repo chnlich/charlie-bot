@@ -1,46 +1,60 @@
-# Memory Writing Guidelines
+# Memory Curation Policy
 
-MEMORY is a small, stable working context. It admits three kinds of entry: a preference the user stated or
-repeatedly chose, a durable fact whose only home is here, and master guidance that holds whatever task is
-running. Everything else has a home below.
+The memory store (`~/.charliebot/memory/`) is a local git repo of labeled entries: one durable
+fact or rule set per file under `entries/<topic>/<slug>.md`, with a restricted front matter
+(`scope`, `topic`, `audience`, `created`, `source`; optional `revises` in staging only) and an
+opaque markdown body whose first line is `# <title>`. Sessions only stage candidates
+(`charliebot memory add` writes to `staging/`); the canon changes only through user-approved diffs.
 
-- Put user preferences, durable facts, and cross-session master guidance in `MEMORY.md`.
-- Put host-specific facts — hostnames, local paths, hardware specs, internal endpoints — in `MEMORY.host.md`.
-- Put incident post-mortems, forensics, and resolved lessons in `LESSONS.md`.
-- Put worker-executable procedures, project-specific guidance, and correct repo/tool usage in skills.
-- Leave policy and judgment in master.md, CLI arguments in `--help`, harness behavior in code, and values in
-  the source, config file, or tracker that owns them.
+This file governs the daily curator AND ad-hoc user-directed promotions: the same admission test
+and labeling rules apply in both flows.
 
 ## Admission test
 
-Every write clears four properties first — staging a candidate, merging one, adding an entry, repairing one:
+Admission is judged at curation time, with evidence — never mid-session. A candidate is admitted
+only when all four hold:
 
-1. **Subject** — standing reality, true across tasks, runs, plans, and incidents alike, whether one is
-   finished, active, or planned.
-2. **Life** — a month from now it reads unchanged and is still wanted.
-3. **Home** — MEMORY is the only home for it.
-4. **Effect** — losing it costs real work: a correction the user already made gets repeated, or
-   discovery gets redone.
+1. **Future behavior** — it changes what the user or an agent does next, across tasks, runs, and
+   sessions. A fact that never steers a decision does not belong in the store.
+2. **Only home** — the store is the only home for it. Live state that has an authoritative source
+   elsewhere is rejected: in-flight plans, loops, and jobs live in their owning systems; run
+   results and receipts live in the run dir, owning session, or a results doc.
+3. **Stable** — a month from now it reads unchanged and is still wanted.
+4. **Cost of loss** — losing it costs real work: a correction the user already made gets repeated,
+   or discovery gets redone.
 
-Write what clears all four and leave the rest to its home. Most user messages yield no entry. An entry that
-stops clearing the test leaves MEMORY: deleted, or moved to the home that owns it.
+An incident (a rendering bug, tool failure, environment glitch) is not evidence of a preference;
+its home is `LESSONS.md` or the owning system, not the store. A measurement enters only as a
+characteristic of standing infrastructure that steers method choice, not as a run outcome.
 
-Pointers carry content: an entry names the doc, tracker, skill, or config that owns something and leaves the
-content there. Name a tool by the workflow it owns and leave its arguments in `--help`. A rule that holds
-inside one situation lives with that situation.
+## Labeling — the three axes
 
-A user preference comes from the user's own statement or repeated choice. Drop the entry when the only
-evidence is an incident — a rendering bug, tool failure, or environment glitch.
+Every entry carries `scope`, `topic`, and `audience` in its front matter:
 
-A decision entry names the future behavior it binds. A measurement enters as a characteristic of standing
-infrastructure that steers method choice. A run's outcome is history; its home is the run dir, the owning
-session, or a results doc. The admission test judges content; timeless rewriting follows and changes form only.
+- **scope** in `user` | `host` — `user` follows the human across machines; `host` is tied to this
+  machine (hostnames, local paths, hardware, internal endpoints).
+- **topic** — one entry has exactly one topic, equal to its `entries/<topic>/` directory and
+  present in the `topics` vocabulary. Cross-topic content belongs in a resident topic
+  (`workflow`, `rulings`). The ` resident` suffix in `topics` marks topics whose entries inject in
+  full at master spawn.
+- **audience** in `master` | `worker` | `both` — who receives the entry's full body at spawn:
+  master spawn gets `master`/`both` entries in resident topics as full text, others as index lines;
+  worker spawn gets `worker`/`both` entries matching the repo basename as full text, others as
+  index lines.
 
-## Form
+## Entry form
 
-One topic per section, one standing rule or fact per entry, positively phrased, said once, in one language,
-lines ≤120 columns. Dates, session ids, commit hashes, quoted rulings, event history, illustrative examples,
-and case enumerations belong in LESSONS.md. When context changes, revise the entry in place.
+One coherent fact or rule set per entry. The body's first line is `# <title>`. Timeless phrasing:
+state the standing reality, not the moment it was learned. Dates, session ids, commit hashes,
+quoted rulings, event history, and case enumerations belong in `LESSONS.md`, not the store.
+Positively phrased, said once, in one language, lines 120 columns or fewer. When context changes,
+revise the entry in place (a `revises` candidate stages the proposed new text).
 
-Shared repo files describe memory policy only; local memory content stays local. After content moves between
-layers, run a verify worker to audit for orphans.
+## Commit message prefixes
+
+Curation commits use one of three prefixes so `git log` enumerates the canon's history:
+
+- `admit: <topic>/<slug> — <title>` — a new entry promoted from staging.
+- `revise: <topic>/<slug> — <title>` — an in-place edit of an existing entry (honoring a `revises`
+  candidate).
+- `evict: <topic>/<slug> — <title>` — removal of an idle, non-resident entry.

@@ -28,7 +28,11 @@ All instance-specific data (configs, logs, sessions) is stored here.
 ```text
 ~/.charliebot/
 ├── config.yaml          # API keys, settings, and project_dirs list
-├── MEMORY.md            # Globally shared memory (user preferences, facts)
+├── memory/             # Labeled-entry memory store (local git repo)
+│   ├── entries/<topic>/<slug>.md   # canonical entries (one fact per file)
+│   ├── topics                       # controlled topic vocabulary
+│   ├── staging/                     # candidate entries (.gitignore'd)
+│   └── usage.jsonl                  # query/injection hit log (.gitignore'd)
 └── sessions/            # Session directories
     └── {session_uuid}/
         ├── metadata.json      # Session info (name, repo, branch)
@@ -159,12 +163,14 @@ For complex tasks, CharlieBot uses a planning phase:
 
 ## 6. Memory & Knowledge Management
 
-### 6.1 Global Knowledge Files (Concurrency Guarded)
-All files use synchronization locks to prevent race conditions:
+### 6.1 Labeled-Entry Memory Store
+A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set per file under
+`entries/<topic>/<slug>.md`, tagged by `scope`/`topic`/`audience` in a restricted front matter.
 
-| File | Purpose | Access Pattern |
+| Path | Purpose | Access Pattern |
 |------|---------|----------------|
-| **MEMORY.md** | User preferences ("dark mode"), facts ("works at Citadel"), personalization | Read at session start; updated when preferences/facts revealed |
+| **memory/entries/** | Canonical entries (user preferences, host facts, master guidance) | Resident topics injected in full at master spawn; topic-matched entries at worker spawn; queryable mid-session via `charliebot memory query` |
+| **memory/staging/** | Candidate entries proposed by sessions | Written by `charliebot memory add`; never auto-merged; admitted only via user-approved curation diffs |
 
 ### 6.2 Context Management Strategies
 - **Master Layer**: Conversation summarization (compress early history, keep last ~10 turns); hierarchical context (System > Session Summary > Recent Dialogue > Retrieved snippets)
@@ -257,8 +263,8 @@ Each Thread's `CLAUDE.md` contains:
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `model_preference`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `_trigger_master()` for user notification and follow-up decisions
 - `SessionManager`, `ThreadManager`, `MemoryManager`, `GitManager`
-- `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
-- Memory updates: sessions append candidates to `MEMORY.tmp.md`; the daily memory maintenance task merges them into `MEMORY.md` / `MEMORY.host.md`
+- `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml` and the memory store scaffold (git repo + topics vocabulary)
+- Memory updates: sessions stage candidates via `charliebot memory add` (writes `staging/`, never `entries/`); the daily memory curator builds a user-approved diff that admits, revises, or evicts entries
 
 **WebSocket Endpoints**
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)

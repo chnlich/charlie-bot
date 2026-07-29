@@ -4,7 +4,7 @@ A Python-based orchestration system that coordinates multiple Claude Code worker
 
 ## Setup
 
-Run `./scripts/setup.sh` on a new host. It syncs skills, provisions `~/.charliebot/` (home layout, memory files, and `config.yaml` from `configs/config.example.yaml`), seeds repo-owned default cron tasks into `~/.charliebot/config.d/cron.yaml`, and prints the effective scheduled task list. The server startup path provisions the home layout too, but it never writes `cron.yaml` — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up newly added repo-default cron tasks (same rule that already applies to new repo skills). Fill in secrets such as `gemini_api_key` and `charliebot_access_key` before the first start.
+Run `./scripts/setup.sh` on a new host. It syncs skills, provisions `~/.charliebot/` (home layout, memory store scaffold, and `config.yaml` from `configs/config.example.yaml`), seeds repo-owned default cron tasks into `~/.charliebot/config.d/cron.yaml`, and prints the effective scheduled task list. The server startup path provisions the home layout too, but it never writes `cron.yaml` — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up newly added repo-default cron tasks (same rule that already applies to new repo skills). Fill in secrets such as `gemini_api_key` and `charliebot_access_key` before the first start.
 
 ## Features
 
@@ -18,7 +18,7 @@ Run `./scripts/setup.sh` on a new host. It syncs skills, provisions `~/.charlieb
 - **Web UI** — Vanilla JavaScript UI with sessions sidebar, streaming chat, threads panel, and real-time WebSocket updates
 - **Voice Input** — Push-to-talk recording with Gemini transcription supporting Chinese, English, and mixed input
 - **Skills System** — Shared and host-specific skill knowledge files, auto-loaded by context relevance
-- **Memory and Knowledge** — Persistent user preferences (MEMORY.md), host facts (MEMORY.host.md), and per-project skill docs
+- **Memory and Knowledge** — Labeled-entry store at `~/.charliebot/memory/` (one fact per file, tagged by scope/topic/audience): resident topics inject in full at master spawn, topic-matched entries at worker spawn, queryable mid-session via `charliebot memory`; plus per-project skill docs
 - **Session Operations** — Clone/fork, Elon-e takeover, archive, star, rate, and search
 - **File Uploads** — Attach files to sessions for agent access
 - **Backup** — Compressed archive backups with tiered retention policy

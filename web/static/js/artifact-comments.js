@@ -20,6 +20,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var GUTTER_THRESHOLD = 900;
     var GUTTER_GAP = 8;
     var GUTTER_PADDING_RIGHT = '316px';
+    var GUTTER_DOCK_RIGHT = '330px';
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
     // Each shortcut owns a `kind`, which doubles as its dedup key and as the
@@ -65,6 +66,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var gutter = null;
     var paddingActive = false;
     var prevPaddingRight = '';
+    var prevDockRight = '';
     var reflowScheduled = false;
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
@@ -1111,7 +1113,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       gutter.innerHTML = '';
       trayList.innerHTML = '';
       var offsetParentDocTop = gutterOffsetParentDocTop();
-      var unanchoredTop = 0;
       var anchored = [];
       for (var i = 0; i < pending.length; i++) {
         var entry = pending[i];
@@ -1122,9 +1123,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
           var anchorTop = rect.top + (window.scrollY || 0) - offsetParentDocTop;
           anchored.push({card: card, anchor: anchorTop, height: card.offsetHeight});
         } else {
-          gutter.appendChild(card);
-          card.style.top = unanchoredTop + 'px';
-          unanchoredTop += card.offsetHeight + GUTTER_GAP;
+          trayList.appendChild(card);
         }
       }
       if (anchored.length > 0) {
@@ -1153,12 +1152,15 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (paddingActive) return;
       prevPaddingRight = document.body.style.paddingRight;
       document.body.style.paddingRight = GUTTER_PADDING_RIGHT;
+      prevDockRight = dock.style.right;
+      dock.style.right = GUTTER_DOCK_RIGHT;
       paddingActive = true;
     }
 
     function restorePadding() {
       if (!paddingActive) return;
       document.body.style.paddingRight = prevPaddingRight;
+      dock.style.right = prevDockRight;
       paddingActive = false;
     }
 

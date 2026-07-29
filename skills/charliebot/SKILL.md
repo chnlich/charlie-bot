@@ -50,7 +50,7 @@ If both confirm, work is done; the truncated chat output is harmless. If commit 
 
 ### Surface file-op failures, don't silently work around
 
-When a worker hits a failure on a command that touches real data — `cp -r`, `mv`, `rm`, `rsync`, dir rename — STOP and ask the user before retrying, switching strategy, or falling back to a workaround. "It probably means X, let me try Y" is exactly when state gets corrupted. The T0 deletion rule (MEMORY.md) is the floor; this generalizes it: any non-trivial file op on persisted data (model_report dirs, checkpoints, eval npz, datasets) gets the same treatment.
+When a worker hits a failure on a command that touches real data — `cp -r`, `mv`, `rm`, `rsync`, dir rename — STOP and ask the user before retrying, switching strategy, or falling back to a workaround. "It probably means X, let me try Y" is exactly when state gets corrupted. The T0 deletion rule (in the memory store's `rulings` topic) is the floor; this generalizes it: any non-trivial file op on persisted data (model_report dirs, checkpoints, eval npz, datasets) gets the same treatment.
 
 ### Don't push worker-side rules for failures master CC should fix itself
 
@@ -94,7 +94,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 ## Workers & Sessions — Architecture Notes
 
 - **NEVER use `discover_repos()[0]` to get repo context for a derived/downstream task** (review workers, retries, continuations, chained tasks). `discover_repos()` returns repos in non-deterministic order. Always propagate `repo_path` explicitly from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` is only safe at the top-level entry point (user delegation, CLI). This is a recurring bug — always propagate repo_path explicitly.
-- Session instructions: `_build_instructions_content()` (master_cc.py) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + `MEMORY.md` + `MEMORY.host.md` on every `run_message()`. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
+- Session instructions: `_build_instructions_content()` (master_cc.py) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + the assembled memory block on every `run_message()`. The block is built by `src/core/memory.py::assemble_master` — full bodies of entries in resident topics (audience `master`/`both`) plus index lines for the rest. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
 - **Long-running remote command**:
@@ -168,7 +168,7 @@ A self-hosted VS Code instance running as a web service for browsing code in the
    cert: <path-to-tls-cert>
    cert-key: <path-to-tls-key>
    ```
-   Port and TLS cert paths are host-specific — see HOST MEMORY in MEMORY.md for the current host values.
+   Port and TLS cert paths are host-specific — see the `host` topic in the memory store (`~/.charliebot/memory/entries/host/`) for the current host values.
 
 3. Start:
    ```bash

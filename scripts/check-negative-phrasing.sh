@@ -76,9 +76,12 @@ for f in "${repo_files[@]}"; do
   check_file "$f"
 done
 
-# Local memory files
-check_file "$HOME/.charliebot/MEMORY.md"
-check_file "$HOME/.charliebot/MEMORY.host.md"
+# Local memory store entries
+shopt -s globstar nullglob
+for f in "$HOME/.charliebot/memory/entries"/**/*.md; do
+  check_file "$f"
+done
+shopt -u globstar nullglob
 
 echo "---"
 echo "$count candidates found"

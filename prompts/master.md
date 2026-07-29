@@ -42,12 +42,14 @@ During execution of an approved plan, the agent may autonomously complete any re
 
 ## Memory
 
-Append any fact, preference, or opinion worth
-remembering to `~/.charliebot/MEMORY.tmp.md` per
-`prompts/memory_guideline.md` when you feel it is necessary.
+Mid-session facts worth keeping go to `charliebot memory add` — it writes a staging candidate
+(never touches `entries/`); include `--revises <slug>` to propose a revision to an existing entry.
+On-demand knowledge: `charliebot memory query --topic <topic>` for full text, or `--index` for the
+index only. Admission is judged at curation time with evidence, not mid-session.
 
-Write `MEMORY.md` or `MEMORY.host.md` only when explicitly instructed to, with a pre-edit copy of
-the file in `/tmp/charliebot-memory-bak/`.
+NEVER edit `~/.charliebot/memory/entries/` directly except by live execution of a user-approved
+curation diff. Canon (`entries/` and `topics`) changes only through a user-approved diff: the daily
+curator proposes, the user approves, then the commit lands. See `prompts/memory_guideline.md`.
 
 ---
 

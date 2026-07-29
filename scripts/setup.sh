@@ -40,7 +40,7 @@ else
 fi
 
 # Provision ~/.charliebot/ and seed repo-default cron tasks. init_charliebot_home
-# provisions the home layout (dirs, memory files, config.yaml) and is the same
+# provisions the home layout (dirs, memory store scaffold, config.yaml) and is the same
 # path the server runs at startup; seed_default_cron_tasks is the ONLY writer of
 # cron.yaml and is never called from the server startup path — so running setup
 # is the only way repo-default cron skeletons reach the host.
@@ -65,9 +65,11 @@ home_items = [
     ("dir", "~/.charliebot/sessions/", cfg.sessions_dir),
     ("dir", "~/.charliebot/config.d/", cfg.config_d_dir),
     ("file", "~/.charliebot/config.yaml", cfg.config_file),
-    ("file", "~/.charliebot/MEMORY.md", cfg.memory_file),
-    ("file", "~/.charliebot/MEMORY.host.md", cfg.memory_host_file),
-    ("file", "~/.charliebot/MEMORY.tmp.md", cfg.memory_tmp_file),
+    ("dir", "~/.charliebot/memory/", cfg.memory_dir),
+    ("file", "~/.charliebot/memory/topics", cfg.memory_dir / "topics"),
+    ("file", "~/.charliebot/memory/.gitignore", cfg.memory_dir / ".gitignore"),
+    ("dir", "~/.charliebot/memory/entries/", cfg.memory_dir / "entries"),
+    ("dir", "~/.charliebot/memory/staging/", cfg.memory_dir / "staging"),
     ("file", "~/.charliebot/slash_commands.yaml", cfg.charliebot_home / "slash_commands.yaml"),
 ]
 existed_before = {str(p): p.exists() for _, _, p in home_items}

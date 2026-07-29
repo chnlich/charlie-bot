@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import types
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
@@ -11,6 +12,7 @@ from src.api import ext_usage as ext_usage_mod
 from src.api.ext_usage import (
     CLAUDE_DEFAULT_DIR,
     CODEX_DEFAULT_DIR,
+    ClaudeUsageProvider,
     CodexUsageProvider,
     _account_label,
     _compute_codex_spend_windows,
@@ -964,3 +966,170 @@ def test_poll_pending_placeholder_is_replaced_by_the_real_error(monkeypatch) -> 
       "account": "main",
       "error": "credentials not found",
   }
+
+
+# ---------------------------------------------------------------------------
+# ClaudeUsageProvider: 401-triggered renewal. The provider owns no clock; the
+# server's 401 is the only signal that a stored token is unusable.
+# ---------------------------------------------------------------------------
+
+_CLAUDE_USAGE_PAYLOAD = {
+    "five_hour": {"utilization": 12.0, "resets_at": "2026-07-29T23:00:00+00:00"},
+    "seven_day": {"utilization": 34.0, "resets_at": "2026-08-03T19:00:00+00:00"},
+}
+
+# Long past in milliseconds, so any surviving clock check would fire on it.
+_STALE_EXPIRES_AT_MS = 1_700_000_000_000
+
+
+class _FakeResponse:
+
+  def __init__(self, status_code: int, payload: dict) -> None:
+    self.status_code = status_code
+    self._payload = payload
+
+  def json(self) -> dict:
+    return self._payload
+
+  def raise_for_status(self) -> None:
+    if self.status_code >= 400:
+      raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeUsageHTTP:
+  """Scripted stand-in for the shared client that records every outbound call."""
+
+  def __init__(self, get_statuses: list[int], *, renewal: dict | None = None,
+               on_get: Callable[[int], None] | None = None) -> None:
+    self._get_statuses = list(get_statuses)
+    self._renewal = renewal if renewal is not None else {"access_token": "tok-new",
+                                                         "refresh_token": "ref-new",
+                                                         "expires_in": 28800}
+    self._on_get = on_get
+    self.gets: list[dict] = []
+    self.posts: list[dict] = []
+
+  async def get(self, url, headers=None, timeout=None):
+    self.gets.append({"url": url, "headers": dict(headers or {})})
+    status = self._get_statuses.pop(0)
+    if self._on_get is not None:
+      self._on_get(len(self.gets))
+    return _FakeResponse(status, _CLAUDE_USAGE_PAYLOAD if status == 200 else {})
+
+  async def post(self, url, json=None, headers=None, timeout=None):
+    self.posts.append({"url": url, "json": dict(json or {}), "headers": dict(headers or {})})
+    return _FakeResponse(200, self._renewal)
+
+
+def _write_credentials(path, *, access="tok-stored", refresh="ref-stored",
+                       expires_at=_STALE_EXPIRES_AT_MS) -> None:
+  payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh}}
+  if expires_at is not None:
+    payload["claudeAiOauth"]["expiresAt"] = expires_at
+  path.write_text(json.dumps(payload))
+
+
+def _claude_provider(monkeypatch, tmp_path, fake, **creds) -> ClaudeUsageProvider:
+  credentials_path = tmp_path / ".credentials.json"
+  _write_credentials(credentials_path, **creds)
+  monkeypatch.setattr(ext_usage_mod, "get_http_client", lambda: fake)
+  return ClaudeUsageProvider("ext-test", credentials_path)
+
+
+@pytest.mark.asyncio
+async def test_claude_fetch_renews_once_and_retries_once_after_401(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401, 200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  result = await provider.fetch()
+
+  assert result is not None
+  assert [w["utilization"] for w in result["windows"]] == [12.0, 34.0]
+  # The mechanism, not a literal: exactly one renewal and one retry, no loop.
+  assert len(fake.posts) == 1
+  assert len(fake.gets) == 2
+  assert fake.gets[0]["headers"]["Authorization"] == "Bearer tok-stored"
+  assert fake.gets[1]["headers"]["Authorization"] == "Bearer tok-new"
+
+
+@pytest.mark.asyncio
+async def test_claude_fetch_yields_to_a_concurrent_renewal_without_rotating(monkeypatch, tmp_path) -> None:
+  credentials_path = tmp_path / ".credentials.json"
+
+  def _cli_renews_after_first_get(call_number: int) -> None:
+    if call_number == 1:
+      _write_credentials(credentials_path, access="tok-from-cli", refresh="ref-from-cli")
+
+  fake = _FakeUsageHTTP([401, 200], on_get=_cli_renews_after_first_get)
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  result = await provider.fetch()
+
+  assert result is not None
+  # Someone else already renewed, so nothing was rotated out from under them.
+  assert fake.posts == []
+  assert fake.gets[1]["headers"]["Authorization"] == "Bearer tok-from-cli"
+
+
+@pytest.mark.asyncio
+async def test_claude_fetch_backs_off_after_a_second_401_and_then_issues_no_request(
+    monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401, 401])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  assert await provider.fetch() is None
+  assert provider._backoff_until > time.time()
+  calls_after_first_fetch = (len(fake.gets), len(fake.posts))
+
+  assert await provider.fetch() is None
+  # A backed-off account is silent: no request may leave while the gate is closed.
+  assert (len(fake.gets), len(fake.posts)) == calls_after_first_fetch
+
+
+@pytest.mark.asyncio
+async def test_claude_fetch_does_not_renew_on_a_long_past_stored_expiry(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  assert await provider.fetch() is not None
+  # No clock-driven renewal survives: a stale expiresAt alone changes nothing.
+  assert fake.posts == []
+  assert len(fake.gets) == 1
+
+
+@pytest.mark.asyncio
+async def test_claude_renewal_writes_back_advancing_expiry_and_rotated_token(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401, 200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  await provider.fetch()
+
+  stored = json.loads(provider.credentials_path.read_text())["claudeAiOauth"]
+  assert stored["accessToken"] == "tok-new"
+  assert stored["refreshToken"] == "ref-new"
+  # Milliseconds, and in the future: the field the external CLI schedules from.
+  assert stored["expiresAt"] > time.time() * 1000
+  assert oct(os.stat(provider.credentials_path).st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.asyncio
+async def test_claude_renewal_without_expiry_keeps_the_stored_value(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401, 200], renewal={"access_token": "tok-new"})
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  await provider.fetch()
+
+  stored = json.loads(provider.credentials_path.read_text())["claudeAiOauth"]
+  assert stored["accessToken"] == "tok-new"
+  assert stored["expiresAt"] == _STALE_EXPIRES_AT_MS
+
+
+@pytest.mark.asyncio
+async def test_claude_requests_identify_as_claude_code(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401, 200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  await provider.fetch()
+
+  assert all(call["headers"]["User-Agent"].startswith("claude-code/") for call in fake.gets)
+  assert all(call["headers"]["User-Agent"].startswith("claude-code/") for call in fake.posts)

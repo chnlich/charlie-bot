@@ -81,6 +81,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     window.__cbcClearDraft = clearDraft;
     window.__cbcStackCards = stackCards;
     window.__cbcGutterGap = GUTTER_GAP;
+    window.__cbcReanchor = reanchorPending;
 
     installStyles();
     installListeners();
@@ -311,6 +312,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-shortcut:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-shortcut-reason{flex-basis:100%;max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-marked{outline:2px solid rgba(88,166,255,.45)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.08)!important}' +
+        '.' + GLOBAL_PREFIX + '-card-hover{outline:3px solid rgba(255,196,0,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 5px rgba(255,196,0,.18)!important}' +
         '.' + GLOBAL_PREFIX + '-tray{width:min(400px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
         '.' + GLOBAL_PREFIX + '-tray-header{font-weight:600;font-size:12px;color:#8b949e}' +
         '.' + GLOBAL_PREFIX + '-tray-list{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
@@ -851,8 +853,43 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       refreshTray();
     }
 
+    function collectCommentableBlocks() {
+      var blocks = [];
+      function walk(el) {
+        if (isCommentableBlock(el)) blocks.push(el);
+        if (el.children) {
+          for (var i = 0; i < el.children.length; i++) {
+            walk(el.children[i]);
+          }
+        }
+      }
+      if (document.body && document.body.children) {
+        for (var i = 0; i < document.body.children.length; i++) {
+          walk(document.body.children[i]);
+        }
+      }
+      return blocks;
+    }
+
+    function reanchorPending() {
+      var blocks = collectCommentableBlocks();
+      for (var i = 0; i < pending.length; i++) {
+        var entry = pending[i];
+        if (entry.el) continue;
+        if (entry.quote === '') continue;
+        for (var j = 0; j < blocks.length; j++) {
+          if (cleanText(blocks[j], 400) === entry.quote) {
+            entry.el = blocks[j];
+            blocks[j].classList.add(GLOBAL_PREFIX + '-marked');
+            break;
+          }
+        }
+      }
+    }
+
     function installBatchTray() {
       pending = loadDraft(artifactPath);
+      reanchorPending();
       var container = document.createElement('div');
       container.className = GLOBAL_PREFIX + '-tray';
 
@@ -946,6 +983,18 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       main.appendChild(body);
       main.appendChild(controls);
       item.appendChild(main);
+      item.addEventListener('mouseenter', function() {
+        if (entry.el) entry.el.classList.add(GLOBAL_PREFIX + '-card-hover');
+      });
+      item.addEventListener('mouseleave', function() {
+        if (entry.el) entry.el.classList.remove(GLOBAL_PREFIX + '-card-hover');
+      });
+      item.addEventListener('click', function(e) {
+        if (e.target && e.target.closest && e.target.closest('.' + GLOBAL_PREFIX + '-tray-remove,.' + GLOBAL_PREFIX + '-tray-edit-btn')) return;
+        if (entry.el && entry.el.scrollIntoView) entry.el.scrollIntoView({block: 'center'});
+        e.stopPropagation();
+        e.preventDefault();
+      });
       return item;
     }
 
@@ -1072,12 +1121,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
           var rect = entry.el.getBoundingClientRect();
           var anchorTop = rect.top + (window.scrollY || 0) - offsetParentDocTop;
           anchored.push({card: card, anchor: anchorTop, height: card.offsetHeight});
-        } else if (entry.quote === '') {
+        } else {
           gutter.appendChild(card);
           card.style.top = unanchoredTop + 'px';
           unanchoredTop += card.offsetHeight + GUTTER_GAP;
-        } else {
-          trayList.appendChild(card);
         }
       }
       if (anchored.length > 0) {

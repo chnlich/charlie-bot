@@ -9,6 +9,21 @@ const ARTIFACT_COMMENTS_JS = fs.readFileSync(
   'utf8'
 );
 
+function makeClassList() {
+  const classes = new Set();
+  return {
+    add(...tokens) { for (const t of tokens) classes.add(t); },
+    remove(...tokens) { for (const t of tokens) classes.delete(t); },
+    contains(token) { return classes.has(token); },
+    toggle(token, force) {
+      if (force === true) { classes.add(token); return true; }
+      if (force === false) { classes.delete(token); return false; }
+      if (classes.has(token)) { classes.delete(token); return false; }
+      classes.add(token); return true;
+    },
+  };
+}
+
 function makeElement() {
   return {
     _textContent: '',
@@ -49,7 +64,7 @@ function makeElement() {
     get innerText() {
       return this.textContent;
     },
-    classList: {add() {}, remove() {}},
+    classList: makeClassList(),
     closest() { return null; },
     appendChild(child) {
       this.children.push(child);
@@ -88,6 +103,10 @@ function makeElement() {
     },
     focus() {},
     select() {},
+    getBoundingClientRect() {
+      return {left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0};
+    },
+    scrollIntoView() {},
     querySelector(selector) {
       if (!selector.startsWith('.')) return null;
       const targetClass = selector.slice(1);
@@ -138,6 +157,11 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
 
   const head = makeElement();
   const body = makeElement();
+  if (opts.bodyChildren) {
+    for (const child of opts.bodyChildren) {
+      body.appendChild(child);
+    }
+  }
   const document = {
     head,
     body,
@@ -171,6 +195,9 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
       throw new Error('fetch should not run while loading artifact-comments.js');
     },
   };
+  if (opts.sessionStorage !== undefined) {
+    context.sessionStorage = opts.sessionStorage;
+  }
   vm.createContext(context);
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
   return {window, head, body, listeners};
@@ -199,6 +226,29 @@ function dockOf(body) {
 
 function rectsIntersect(a, b) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function makeSessionStorage() {
+  const data = {};
+  return {
+    getItem(key) { return key in data ? data[key] : null; },
+    setItem(key, value) { data[key] = String(value); },
+    removeItem(key) { delete data[key]; },
+  };
+}
+
+function seedDraft(pathname, entries) {
+  const artifactPath = decodeURIComponent(String(pathname || '').replace(/%2F/gi, '/'));
+  const key = 'cbc-draft:' + artifactPath;
+  const data = JSON.stringify(entries.map((e) => ({
+    kind: e.kind || 'block',
+    quote: String(e.quote == null ? '' : e.quote),
+    context: String(e.context == null ? '' : e.context),
+    comment: String(e.comment == null ? '' : e.comment),
+  })));
+  const storage = makeSessionStorage();
+  storage.setItem(key, data);
+  return storage;
 }
 
 test('extractSessionIdFromPath parses session ids from artifact file paths', () => {
@@ -1112,4 +1162,214 @@ test('gutter mode reserves and restores body right padding across the 900px thre
   window.innerWidth = 800;
   fireResize();
   assert.equal(body.style.paddingRight, '10px', 'prior inline padding value restored exactly');
+});
+
+// ---------------------------------------------------------------------------
+// Re-anchor, hover, and click affordances (comment-gutter part 2b)
+// ---------------------------------------------------------------------------
+
+const REANCHOR_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+const FETCH_OK = async () => ({ok: true, status: 200, json: async () => ({name: 'S'})});
+
+function rectAt(top) {
+  return () => ({left: 0, top, right: 800, bottom: top + 40, width: 800, height: 40});
+}
+
+test('re-anchor hit: restores el and marks the block when quote matches', () => {
+  const block = makeBlock('Unique commentable text for reanchor hit');
+  block.getBoundingClientRect = rectAt(200);
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'Unique commentable text for reanchor hit', context: '', comment: 'test comment'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  assert.equal(block.classList.contains('__cbc-marked'), true, 'block carries __cbc-marked after re-anchor');
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutter, 'gutter is active in gutter mode');
+  assert.ok(gutter.children.length > 0, 'anchored card is placed in the gutter');
+});
+
+test('re-anchor miss: entry stays unanchored, no block is marked, nothing throws', () => {
+  const block = makeBlock('some commentable text');
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'quote that matches no block', context: '', comment: 'no match'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  assert.equal(block.classList.contains('__cbc-marked'), false, 'no block is marked on miss');
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(!gutter, 'gutter is not created when no entry is anchored');
+});
+
+test('re-anchor never mis-anchors to a prefix-sharing block', () => {
+  const blockLong = makeBlock('common prefix text with extra tail');
+  blockLong.getBoundingClientRect = rectAt(200);
+  const blockShort = makeBlock('common prefix text');
+  blockShort.getBoundingClientRect = rectAt(400);
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'common prefix text', context: '', comment: 'should anchor to exact match'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [blockLong, blockShort],
+    fetch: FETCH_OK,
+  });
+  assert.equal(blockShort.classList.contains('__cbc-marked'), true, 'exact-match block is marked');
+  assert.equal(blockLong.classList.contains('__cbc-marked'), false, 'prefix-sharing block is NOT marked');
+});
+
+test('re-anchor is idempotent: running twice does not change anchors or marks', () => {
+  const block = makeBlock('idempotent reanchor text');
+  block.getBoundingClientRect = rectAt(200);
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'idempotent reanchor text', context: '', comment: 'test idempotence'},
+  ]);
+  const {window, body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  assert.equal(block.classList.contains('__cbc-marked'), true, 'block is marked after first re-anchor');
+  const gutterBefore = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutterBefore, 'gutter exists after first re-anchor');
+  const cardsBefore = gutterBefore.children.length;
+  window.__cbcReanchor();
+  assert.equal(block.classList.contains('__cbc-marked'), true, 'block is still marked after second re-anchor');
+  const gutterAfter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutterAfter, 'gutter still exists after second re-anchor');
+  assert.equal(gutterAfter.children.length, cardsBefore, 'card count unchanged after second re-anchor');
+});
+
+test('unanchored entry in gutter mode is placed in the gutter, not the corner list', () => {
+  const blockMatch = makeBlock('anchored block text');
+  blockMatch.getBoundingClientRect = rectAt(200);
+  const blockNoMatch = makeBlock('some other unrelated text');
+  blockNoMatch.getBoundingClientRect = rectAt(400);
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'anchored block text', context: '', comment: 'matched'},
+    {kind: 'block', quote: 'nonexistent quote matching nothing', context: '', comment: 'unmatched'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [blockMatch, blockNoMatch],
+    fetch: FETCH_OK,
+  });
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutter, 'gutter is active');
+  assert.equal(gutter.children.length, 2, 'both anchored and unanchored cards are in the gutter');
+  const trayList = body.querySelector('.__cbc-tray-list');
+  assert.ok(trayList, 'tray list exists');
+  assert.equal(trayList.children.length, 0, 'corner list is empty in gutter mode');
+});
+
+test('hover affordance: hovering a card highlights its anchor block with a distinct class', () => {
+  const block = makeBlock('hover affordance target block');
+  block.getBoundingClientRect = rectAt(200);
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'hover affordance target block', context: '', comment: 'hover test'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutter, 'gutter exists');
+  const card = gutter.children[0];
+  assert.ok(card, 'card exists in gutter');
+  assert.equal(block.classList.contains('__cbc-marked'), true, 'block has persistent mark before hover');
+  assert.equal(block.classList.contains('__cbc-card-hover'), false, 'block does not have hover class before hover');
+  card._listeners.mouseenter[0]({});
+  assert.equal(block.classList.contains('__cbc-card-hover'), true, 'block gains hover class on mouseenter');
+  assert.equal(block.classList.contains('__cbc-marked'), true, 'persistent mark survives hover-in');
+  card._listeners.mouseleave[0]({});
+  assert.equal(block.classList.contains('__cbc-card-hover'), false, 'hover class removed on mouseleave');
+  assert.equal(block.classList.contains('__cbc-marked'), true, 'persistent mark survives hover-out');
+});
+
+test('click affordance: clicking a card scrolls its anchor block into view', () => {
+  const block = makeBlock('click affordance target block');
+  block.getBoundingClientRect = rectAt(200);
+  let scrollCalls = 0;
+  block.scrollIntoView = () => { scrollCalls++; };
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'click affordance target block', context: '', comment: 'click test'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutter, 'gutter exists');
+  const card = gutter.children[0];
+  assert.ok(card, 'card exists in gutter');
+  assert.equal(scrollCalls, 0, 'no scroll before click');
+  let stopPropCalled = false;
+  let preventDefaultCalled = false;
+  card._listeners.click[0]({
+    target: card,
+    stopPropagation() { stopPropCalled = true; },
+    preventDefault() { preventDefaultCalled = true; },
+  });
+  assert.equal(scrollCalls, 1, 'scrollIntoView called once on card click');
+  assert.equal(stopPropCalled, true, 'click stops propagation to prevent re-entering capture path');
+  assert.equal(preventDefaultCalled, true, 'click prevents default');
+});
+
+test('click affordance: clicking an unanchored card is a no-op for scroll but still blocks capture', () => {
+  const block = makeBlock('some block text');
+  let scrollCalls = 0;
+  block.scrollIntoView = () => { scrollCalls++; };
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'nonexistent quote', context: '', comment: 'unanchored'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  const trayList = body.querySelector('.__cbc-tray-list');
+  assert.ok(trayList, 'tray list exists in corner mode');
+  const card = trayList.children[0];
+  assert.ok(card, 'card exists in tray list');
+  let stopPropCalled = false;
+  let preventDefaultCalled = false;
+  card._listeners.click[0]({
+    target: card,
+    stopPropagation() { stopPropCalled = true; },
+    preventDefault() { preventDefaultCalled = true; },
+  });
+  assert.equal(scrollCalls, 0, 'no scroll for unanchored card');
+  assert.equal(stopPropCalled, true, 'click still stops propagation');
+  assert.equal(preventDefaultCalled, true, 'click still prevents default');
+});
+
+test('card click does not break the x button', () => {
+  const block = makeBlock('block for remove test');
+  block.getBoundingClientRect = rectAt(200);
+  const storage = seedDraft(REANCHOR_PATH, [
+    {kind: 'block', quote: 'block for remove test', context: '', comment: 'remove test'},
+  ]);
+  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+    sessionStorage: storage,
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.ok(gutter, 'gutter exists');
+  const card = gutter.children[0];
+  assert.ok(card, 'card exists');
+  const removeBtn = card.querySelector('.__cbc-tray-remove');
+  assert.ok(removeBtn, 'x button exists in card');
+  assert.ok(removeBtn._listeners.click && removeBtn._listeners.click.length > 0, 'x button has click handler');
+  clickElement(removeBtn);
+  assert.equal(block.classList.contains('__cbc-marked'), false, 'block is unmarked after removing the only entry');
+  assert.equal(gutter.children.length, 0, 'gutter is empty after removal');
 });

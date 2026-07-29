@@ -19,8 +19,11 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var POPOVER_WIDTH = 460;
     var GUTTER_THRESHOLD = 900;
     var GUTTER_GAP = 8;
-    var GUTTER_PADDING_RIGHT = '316px';
-    var GUTTER_DOCK_RIGHT = '330px';
+    var GUTTER_WIDTH = '300px';
+    var GUTTER_RIGHT = 8;
+    var RESERVE_ONE_BAND = 316;
+    var DOCK_BAND = 308;
+    var RESERVE_TWO_BAND = RESERVE_ONE_BAND + DOCK_BAND;
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
     // Each shortcut owns a `kind`, which doubles as its dedup key and as the
@@ -67,6 +70,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var paddingActive = false;
     var prevPaddingRight = '';
     var prevDockRight = '';
+    var prevDockWidth = '';
+    var prevTrayWidth = '';
     var reflowScheduled = false;
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
@@ -337,7 +342,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}' +
-        '.' + GLOBAL_PREFIX + '-gutter{position:absolute;top:0;right:8px;width:300px;z-index:2147483646}' +
+        '.' + GLOBAL_PREFIX + '-gutter{position:absolute;top:0;right:8px;width:300px;z-index:2147483644}' +
         '.' + GLOBAL_PREFIX + '-gutter .' + GLOBAL_PREFIX + '-tray-item{position:absolute;left:0;right:0;box-sizing:border-box}';
       document.head.appendChild(style);
     }
@@ -1109,7 +1114,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         document.body.appendChild(gutter);
       }
       gutter.style.display = '';
-      captureAndSetPadding();
+      if (!captureAndSetPadding()) {
+        presentCorner();
+        return;
+      }
       gutter.innerHTML = '';
       trayList.innerHTML = '';
       var offsetParentDocTop = gutterOffsetParentDocTop();
@@ -1148,19 +1156,61 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return gutter.offsetParent.getBoundingClientRect().top + (window.scrollY || 0);
     }
 
+    // Extent of everything the artifact itself renders. One rule: look at every
+    // element we did not inject. That replaces the earlier per-shape exclusions
+    // (out-of-flow boxes, zero-size wrappers, scrollWidth for overflowing children),
+    // each of which was a separate way for real content to go unmeasured.
+    function measureContent() {
+      var widest = 0, rightmost = 0, seen = false;
+      var all = document.body.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (el.className && String(el.className).indexOf(GLOBAL_PREFIX) === 0) continue;
+        if (el.closest('.' + GLOBAL_PREFIX + '-dock,.' + GLOBAL_PREFIX + '-gutter')) continue;
+        var r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) continue;
+        seen = true;
+        if (r.width > widest) widest = r.width;
+        if (r.right > rightmost) rightmost = r.right;
+      }
+      return seen ? {width: widest, right: rightmost} : null;
+    }
+
+    // A reserve of `px` is clean when the content neither loses width against the
+    // one-band baseline nor reaches into the reserved strip.
+    function reserveIsClean(px, baselineWidth) {
+      document.body.style.paddingRight = px + 'px';
+      var m = measureContent();
+      if (!m) return false;
+      return m.width >= baselineWidth && m.right <= window.innerWidth - px;
+    }
+
     function captureAndSetPadding() {
-      if (paddingActive) return;
-      prevPaddingRight = document.body.style.paddingRight;
-      document.body.style.paddingRight = GUTTER_PADDING_RIGHT;
-      prevDockRight = dock.style.right;
-      dock.style.right = GUTTER_DOCK_RIGHT;
-      paddingActive = true;
+      if (!paddingActive) {
+        prevPaddingRight = document.body.style.paddingRight;
+        prevDockRight = dock.style.right;
+        prevDockWidth = dock.style.width;
+        prevTrayWidth = tray.style.width;
+        paddingActive = true;
+      }
+      // Both writes and both reads happen in one task, so no intermediate state paints.
+      document.body.style.paddingRight = RESERVE_ONE_BAND + 'px';
+      var base = measureContent();
+      var baseWidth = base ? base.width : 0;
+      var ownBand = baseWidth > 0 && reserveIsClean(RESERVE_TWO_BAND, baseWidth);
+      var usable = ownBand || (baseWidth > 0 && reserveIsClean(RESERVE_ONE_BAND, baseWidth));
+      dock.style.right = (ownBand ? RESERVE_ONE_BAND : GUTTER_RIGHT) + 'px';
+      dock.style.width = GUTTER_WIDTH;
+      tray.style.width = '100%';
+      return usable;
     }
 
     function restorePadding() {
       if (!paddingActive) return;
       document.body.style.paddingRight = prevPaddingRight;
       dock.style.right = prevDockRight;
+      dock.style.width = prevDockWidth;
+      tray.style.width = prevTrayWidth;
       paddingActive = false;
     }
 

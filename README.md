@@ -46,7 +46,7 @@ Mobile: the same chat and session list in a phone-width layout.
 - Perfetto and NCU trace viewers
 - Built-in web terminal (tmux)
 - LaTeX panel
-- Voice input with Gemini transcription
+- Voice input with local speech transcription (sherpa-onnx SenseVoice)
 - Usage panels: external provider quotas and per-session context usage
 - File browser (`/files/`) and file uploads
 - Access-key auth

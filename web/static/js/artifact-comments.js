@@ -18,12 +18,19 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var TRIGGER_SIZE = 34;
     var POPOVER_WIDTH = 460;
     var GUTTER_THRESHOLD = 900;
+    // The column also needs vertical room. Gated on the window, never on how many
+    // comments are pending: the action bar's own list is capped at 320px, so the bar
+    // has a height ceiling (522px measured), and band = innerHeight - 72 - barHeight
+    // stays positive at 600px even in that worst case; the usual bar leaves 326px.
+    var GUTTER_MIN_HEIGHT = 600;
+    // Properties that can make body or documentElement the containing block for the
+    // injected layer's fixed boxes. Declared with the other constants: installBatchTray
+    // runs during this same IIFE, long before the function that reads them is defined.
+    var CB_PROPS = ['transform', 'translate', 'rotate', 'scale', 'perspective',
+                    'filter', 'backdropFilter'];
     var GUTTER_GAP = 8;
-    var GUTTER_WIDTH = '300px';
-    var GUTTER_RIGHT = 8;
-    var RESERVE_ONE_BAND = 316;
-    var DOCK_BAND = 308;
-    var RESERVE_TWO_BAND = RESERVE_ONE_BAND + DOCK_BAND;
+    var COL_MAX = 300;
+    var COL_MIN = 240;
     var AUTH_MESSAGE = 'log in to comment';
     var SECTION_SELECTOR = 'section';
     // Each shortcut owns a `kind`, which doubles as its dedup key and as the
@@ -67,11 +74,22 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var trayClearBtn = null;
     var trayReason = null;
     var gutter = null;
-    var paddingActive = false;
-    var prevPaddingRight = '';
+    var active = false;
+    var prevDockLeft = '';
     var prevDockRight = '';
     var prevDockWidth = '';
     var prevTrayWidth = '';
+    var prevGutterLeft = '';
+    var prevGutterWidth = '';
+    var prevGutterBottom = '';
+    var column = 0;
+    var columnLeft = 0;
+    var anchoredCards = [];
+    var docTops = null;
+    var bandHeight = 0;
+    var refEl = null;
+    var refDocTop = 0;
+    var cardHeights = null;
     var reflowScheduled = false;
 
     window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
@@ -87,6 +105,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     window.__cbcLoadDraft = loadDraft;
     window.__cbcClearDraft = clearDraft;
     window.__cbcStackCards = stackCards;
+    window.__cbcFitColumn = fitColumn;
+    window.__cbcChooseWidth = chooseWidth;
     window.__cbcGutterGap = GUTTER_GAP;
     window.__cbcReanchor = reanchorPending;
 
@@ -342,7 +362,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}' +
-        '.' + GLOBAL_PREFIX + '-gutter{position:absolute;top:0;right:8px;width:300px;z-index:2147483644}' +
+        '.' + GLOBAL_PREFIX + '-gutter{position:fixed;top:0;left:0;width:300px;overflow-x:hidden;'
+          + 'overflow-y:hidden;z-index:2147483644}' +
         '.' + GLOBAL_PREFIX + '-gutter .' + GLOBAL_PREFIX + '-tray-item{position:absolute;left:0;right:0;box-sizing:border-box}';
       document.head.appendChild(style);
     }
@@ -938,6 +959,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trayClearBtn = clearBtn;
       trayReason = reason;
 
+      placeColumn();
       refreshTray();
     }
 
@@ -1072,12 +1094,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       }
     }
 
+    // The column exists whenever the reserve does, so the action bar sits at its
+    // bottom from first paint and never hops between the corner and the column.
     function gutterActive() {
-      if (window.innerWidth < GUTTER_THRESHOLD || pending.length === 0) return false;
-      for (var i = 0; i < pending.length; i++) {
-        if (pending[i].el) return true;
-      }
-      return false;
+      return column > 0;
     }
 
     function scheduleReflow() {
@@ -1088,6 +1108,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function reflowGutter() {
       reflowScheduled = false;
+      placeColumn();
       if (gutterActive()) {
         presentGutter();
       } else {
@@ -1100,7 +1121,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         gutter.innerHTML = '';
         gutter.style.display = 'none';
       }
-      restorePadding();
       trayList.innerHTML = '';
       for (var i = 0; i < pending.length; i++) {
         trayList.appendChild(buildTrayItem(i, pending[i]));
@@ -1112,56 +1132,130 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         gutter = document.createElement('div');
         gutter.className = GLOBAL_PREFIX + '-gutter';
         document.body.appendChild(gutter);
+        prevGutterLeft = gutter.style.left;
+        prevGutterWidth = gutter.style.width;
+        prevGutterBottom = gutter.style.bottom;
       }
       gutter.style.display = '';
-      if (!captureAndSetPadding()) {
+      // The column exists now, so placeColumn() can read its geometry back. A refusal
+      // here means the artifact is out of range: keep today's corner list instead.
+      if (!placeColumn()) {
         presentCorner();
         return;
       }
       gutter.innerHTML = '';
       trayList.innerHTML = '';
-      var offsetParentDocTop = gutterOffsetParentDocTop();
-      var anchored = [];
+      anchoredCards = [];
       for (var i = 0; i < pending.length; i++) {
         var entry = pending[i];
         var card = buildTrayItem(i, entry);
         if (entry.el) {
           gutter.appendChild(card);
-          var rect = entry.el.getBoundingClientRect();
-          var anchorTop = rect.top + (window.scrollY || 0) - offsetParentDocTop;
-          anchored.push({card: card, anchor: anchorTop, height: card.offsetHeight});
+          anchoredCards.push({card: card, el: entry.el});
         } else {
           trayList.appendChild(card);
         }
       }
-      if (anchored.length > 0) {
-        var anchors = [];
-        var heights = [];
-        for (var k = 0; k < anchored.length; k++) {
-          anchors.push(anchored[k].anchor);
-          heights.push(anchored[k].height);
+      // Only now is the bar's height final: unanchored comments (every shortcut button
+      // makes one) live in the bar's own list.
+      setColumnBottom();
+      measureCards();
+      layoutColumn();
+    }
+
+    // Measured once per reflow: anchors in document space and card heights. Neither
+    // changes with scrolling, so they are read once, here. The scroll path reads two
+    // rects -- the reference anchor's and the column's own -- to measure displacement
+    // rather than assume it, independent of card count.
+    function measureCards() {
+      var y = window.scrollY || 0;
+      anchoredCards.sort(function (a, b) {
+        return (a.el.getBoundingClientRect().top) - (b.el.getBoundingClientRect().top);
+      });
+      // Anchor order becomes DOM order, so the list regime reads top-to-bottom in the
+      // order the anchored regime would have placed them.
+      for (var d = 0; d < anchoredCards.length; d++) gutter.appendChild(anchoredCards[d].card);
+      // The band belongs to the layout, not to the scroll position: read it here, once,
+      // so the scroll path's layout reads stay at two rects, independent of card count.
+      bandHeight = gutter.clientHeight;
+      var anchors = [], heights = [];
+      for (var i = 0; i < anchoredCards.length; i++) {
+        anchors.push(anchoredCards[i].el.getBoundingClientRect().top + y);
+        heights.push(anchoredCards[i].card.offsetHeight);
+      }
+      cardHeights = heights;
+      // The displacement between document space and the column is measured from a live
+      // anchor, not taken from window.scrollY: whichever element actually scrolls the
+      // content -- documentElement, body, or a wrapper the artifact introduced -- this
+      // reads the real offset. One rect read per scroll instead of none, which buys
+      // correctness under any scroll container.
+      refEl = anchoredCards.length ? anchoredCards[0].el : null;
+      refDocTop = anchors.length ? anchors[0] : 0;
+      // The downward pass is translation invariant, so it can be done once in document
+      // space and shifted by the scroll position on every frame.
+      docTops = stackCards(anchors, heights, GUTTER_GAP);
+    }
+
+    // Pure: shift the document-space stack into the column and cap it from below.
+    // The last card's top is capped at band - its height, each earlier card at its
+    // successor's top minus gap minus its own height; cascading upward keeps every
+    // pair apart and puts the last card wholly inside the column. There is no floor:
+    // an anchor scrolled above the viewport takes its card with it, as today. Pinning
+    // the top card to 0 instead would push it into its neighbour.
+    function fitColumn(docTops, heights, gap, band, scrolled) {
+      var tops = [], i;
+      for (i = 0; i < docTops.length; i++) tops.push(docTops[i] - scrolled);
+      for (i = tops.length - 1; i >= 0; i--) {
+        var ceiling = (i === tops.length - 1) ? band - heights[i]
+                                             : tops[i + 1] - gap - heights[i];
+        if (tops[i] > ceiling) tops[i] = ceiling;
+      }
+      return tops;
+    }
+
+    // Two regimes, chosen by whether the cards fit the column at all.
+    function layoutColumn() {
+      if (!column || !gutter || !docTops || docTops.length === 0) return;
+      var L = bandHeight, total = 0, i;
+      for (i = 0; i < cardHeights.length; i++) total += cardHeights[i] + (i ? GUTTER_GAP : 0);
+      if (total > L) {
+        // More comment than column: anchoring cannot fit, so the column becomes a plain
+        // scrollable list in anchor order. Nothing is unreachable and the scroll path
+        // has no work to do — a list does not move with the page.
+        gutter.style.overflowY = 'auto';
+        for (i = 0; i < anchoredCards.length; i++) {
+          var st = anchoredCards[i].card.style;
+          st.position = 'static';
+          st.marginBottom = GUTTER_GAP + 'px';
+          st.top = '';
         }
-        var tops = stackCards(anchors, heights, GUTTER_GAP);
-        var order = [];
-        for (var m = 0; m < anchored.length; m++) order.push(m);
-        order.sort(function(a, b) { return anchored[a].anchor - anchored[b].anchor; });
-        for (var n = 0; n < order.length; n++) {
-          anchored[order[n]].card.style.top = tops[n] + 'px';
-        }
+        return;
+      }
+      gutter.style.overflowY = 'hidden';
+      // Displacement is measured between document space and THE COLUMN, not the viewport:
+      // the reference anchor's offset from the column's own top edge. Whatever moves the
+      // column -- the window scrolling, body scrolling itself, a wrapper the artifact
+      // introduced, or the column riding a transformed containing block -- is accounted
+      // for once and only once. Two rect reads per scroll, independent of card count.
+      var displaced = window.scrollY || 0;
+      if (refEl) {
+        displaced = refDocTop - (refEl.getBoundingClientRect().top - gutter.getBoundingClientRect().top);
+      }
+      var tops = fitColumn(docTops, cardHeights, GUTTER_GAP, L, displaced);
+      for (i = 0; i < anchoredCards.length; i++) {
+        var s2 = anchoredCards[i].card.style;
+        s2.position = 'absolute';
+        s2.marginBottom = '';
+        s2.top = tops[i] + 'px';
       }
     }
 
-    function gutterOffsetParentDocTop() {
-      if (!gutter || !gutter.offsetParent) return 0;
-      return gutter.offsetParent.getBoundingClientRect().top + (window.scrollY || 0);
-    }
-
-    // Extent of everything the artifact itself renders. One rule: look at every
-    // element we did not inject. That replaces the earlier per-shape exclusions
-    // (out-of-flow boxes, zero-size wrappers, scrollWidth for overflowing children),
-    // each of which was a separate way for real content to go unmeasured.
-    function measureContent() {
-      var widest = 0, rightmost = 0, seen = false;
+    // Right edge of everything the artifact itself renders. Every element we did not
+    // inject is measured, nothing is filtered by position and scrollWidth is never
+    // read, so out-of-flow panels, tables wider than their container and
+    // display:contents subtrees are all covered.
+    function measureContentRight() {
+      var rightmost = 0, seen = false;
       var all = document.body.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
@@ -1170,48 +1264,163 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         var r = el.getBoundingClientRect();
         if (r.width === 0 && r.height === 0) continue;
         seen = true;
-        if (r.width > widest) widest = r.width;
         if (r.right > rightmost) rightmost = r.right;
       }
-      return seen ? {width: widest, right: rightmost} : null;
+      return seen ? rightmost : null;
     }
 
-    // A reserve of `px` is clean when the content neither loses width against the
-    // one-band baseline nor reaches into the reserved strip.
-    function reserveIsClean(px, baselineWidth) {
-      document.body.style.paddingRight = px + 'px';
-      var m = measureContent();
-      if (!m) return false;
-      return m.width >= baselineWidth && m.right <= window.innerWidth - px;
+    // Pure: the widest column that leaves a gap on both sides, or 0 when the free
+    // space to the right of the content cannot hold the narrowest one.
+    function chooseWidth(clientWidth, contentRight, gap, min, max) {
+      var w = Math.min(max, clientWidth - contentRight - 2 * gap);
+      return w < min ? 0 : Math.floor(w);
     }
 
-    function captureAndSetPadding() {
-      if (!paddingActive) {
-        prevPaddingRight = document.body.style.paddingRight;
+    function chooseColumn() {
+      if (window.innerWidth < GUTTER_THRESHOLD) return 0;
+      if (window.innerHeight < GUTTER_MIN_HEIGHT) return 0;
+      if (!viewportIsContainingBlock()) return 0;
+      var right = measureContentRight();
+      if (right === null) return 0;
+      var w = chooseWidth(document.documentElement.clientWidth, right, GUTTER_GAP, COL_MIN, COL_MAX);
+      if (w) columnLeft = right + GUTTER_GAP;
+      return w;
+    }
+
+    // Owned by page layout, not by the comment list: decided at load and on the
+    // existing reflow paths, never as a function of how many comments are pending.
+    // Nothing outside the injected layer is written — not one artifact style.
+    function placeColumn() {
+      if (!active) {
+        prevDockLeft = dock.style.left;
         prevDockRight = dock.style.right;
         prevDockWidth = dock.style.width;
         prevTrayWidth = tray.style.width;
-        paddingActive = true;
+        active = true;
       }
-      // Both writes and both reads happen in one task, so no intermediate state paints.
-      document.body.style.paddingRight = RESERVE_ONE_BAND + 'px';
-      var base = measureContent();
-      var baseWidth = base ? base.width : 0;
-      var ownBand = baseWidth > 0 && reserveIsClean(RESERVE_TWO_BAND, baseWidth);
-      var usable = ownBand || (baseWidth > 0 && reserveIsClean(RESERVE_ONE_BAND, baseWidth));
-      dock.style.right = (ownBand ? RESERVE_ONE_BAND : GUTTER_RIGHT) + 'px';
-      dock.style.width = GUTTER_WIDTH;
+      var w = chooseColumn();
+      if (!w) {
+        restoreColumn();
+        column = 0;
+        return 0;
+      }
+      // Width only. The bar's height depends on its own content, so its top -- and
+      // therefore this column's bottom -- can only be read after the bar is filled;
+      // that is setColumnBottom(), which the caller runs once routing is done.
+      dock.style.left = columnLeft + 'px';
+      dock.style.right = 'auto';
+      dock.style.width = w + 'px';
       tray.style.width = '100%';
-      return usable;
+      column = w;
+      if (gutter) {
+        gutter.style.left = columnLeft + 'px';
+        gutter.style.width = w + 'px';
+      }
+      if (!resolvesAgainstViewport(w)) {
+        restoreColumn();
+        column = 0;
+        return 0;
+      }
+      return w;
     }
 
-    function restorePadding() {
-      if (!paddingActive) return;
-      document.body.style.paddingRight = prevPaddingRight;
+    // The column's whole coordinate model -- margin measured against the viewport, cards
+    // placed from the viewport's top edge, the bar's offset read from the viewport's
+    // bottom -- holds only while the viewport is the containing block for the injected
+    // layer's fixed boxes. The walk below follows the layer's real ancestor chain rather
+    // than assuming it is exactly body and documentElement: an artifact can reparent the
+    // layer. The property enumeration is a known set plus an empirical backstop
+    // (resolvesAgainstViewport at placement time), not a complete test -- it can fall
+    // behind browser implementations. Residual: a property the set misses lets the
+    // column open anyway, so cards may stop tracking their paragraphs; non-overlap with
+    // the bar stays structural regardless, because the column clips and the two boxes do
+    // not intersect.
+    function viewportIsContainingBlock() {
+      // The chain is walked rather than assumed: if anything ever reparents the layer,
+      // the hosts between it and the root are inspected too.
+      var hosts = [], el = dock ? dock.parentElement : document.body;
+      while (el) { hosts.push(el); el = el.parentElement; }
+      if (document.documentElement && hosts.indexOf(document.documentElement) === -1) {
+        hosts.push(document.documentElement);
+      }
+      for (var i = 0; i < hosts.length; i++) {
+        if (!hosts[i]) continue;
+        var cs = window.getComputedStyle(hosts[i]);
+        for (var j = 0; j < CB_PROPS.length; j++) {
+          var v = cs[CB_PROPS[j]];
+          if (v && v !== 'none' && v !== 'normal') return false;
+        }
+        var contain = cs.contain || '';
+        if (/paint|layout|strict|content/.test(contain)) return false;
+        var willChange = cs.willChange || '';
+        if (/transform|translate|rotate|scale|perspective|filter|contain|offset-path/.test(willChange)) {
+          return false;
+        }
+        if (cs.transformStyle === 'preserve-3d') return false;
+        if (cs.contentVisibility === 'auto') return false;
+        if (cs.offsetPath && cs.offsetPath !== 'none') return false;
+        var zoom = cs.zoom;
+        if (zoom && zoom !== 'normal' && parseFloat(zoom) !== 1) return false;
+        // Not a containing-block property, but it redefines which edge `left` counts
+        // from, which the margin measurement assumes.
+        if (cs.writingMode && cs.writingMode !== 'horizontal-tb') return false;
+      }
+      return true;
+    }
+
+    // Read back as well. The enumeration above is a known set, not a complete test for
+    // the causes the spec defines; this is the backstop for whatever the enumeration
+    // misses, at placement time.
+    // The free margin is measured in viewport coordinates (getBoundingClientRect) but
+    // written in containing-block coordinates (style.left), and the whole card layout
+    // assumes the column's top edge is the viewport's. Those hold only while the layer's
+    // own boxes resolve against the viewport. Rather than guess which artifact CSS breaks
+    // that -- a transform, zoom, filter or contain:paint anywhere up the tree, on any
+    // axis -- write the values and read them back: the column must land where it was put,
+    // and the bar must sit its own offset above the viewport's bottom edge. Whatever
+    // fails this is out of range by section 1 and keeps today's corner list.
+    //
+    // Both readings must be non-degenerate before they can disagree, so an environment
+    // that reports no geometry at all (a test double) is not mistaken for a hostile one.
+    function resolvesAgainstViewport(w) {
+      if (!gutter) return true;
+      var gr = gutter.getBoundingClientRect();
+      if (gr.width > 0 && Math.abs(gr.left - columnLeft) > 1) return false;
+      var dr = dock.getBoundingClientRect();
+      var barBottom = parseFloat(window.getComputedStyle(dock).bottom);
+      if (dr.height > 0 && barBottom === barBottom
+          && Math.abs((window.innerHeight - dr.bottom) - barBottom) > 1) return false;
+      return true;
+    }
+
+    // The column stops one gap above the action bar. Run after the bar holds its final
+    // content, so the bar's own list can never grow into the column afterwards.
+    //
+    // Both boxes are fixed children of body, so they share one containing block, and
+    // `bottom` is measured from the same edge for both. Stating the column's bottom as
+    // "the bar's own bottom offset, plus the bar's height, plus a gap" therefore needs
+    // no viewport constant, and holds whatever that containing block turns out to be --
+    // including an artifact that makes itself one with a transform, filter or
+    // contain:paint on body, where viewport arithmetic would be wrong.
+    function setColumnBottom() {
+      if (!gutter || !column) return;
+      var barBottom = parseFloat(window.getComputedStyle(dock).bottom) || 0;
+      gutter.style.bottom = (barBottom + dock.offsetHeight + GUTTER_GAP) + 'px';
+    }
+
+    function restoreColumn() {
+      if (!active) return;
+      dock.style.left = prevDockLeft;
       dock.style.right = prevDockRight;
       dock.style.width = prevDockWidth;
       tray.style.width = prevTrayWidth;
-      paddingActive = false;
+      if (gutter) {
+        gutter.style.left = prevGutterLeft;
+        gutter.style.width = prevGutterWidth;
+        gutter.style.bottom = prevGutterBottom;
+      }
+      active = false;
+      column = 0;
     }
 
     function removeEntry(idx) {
@@ -1277,6 +1486,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     function reposition() {
+      layoutColumn();
       if (!hovered) return;
       if (popover) positionPopover(popover, hovered);
       else positionTrigger(hovered);

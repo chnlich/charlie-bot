@@ -67,6 +67,13 @@ function makeElement() {
     classList: makeClassList(),
     closest() { return null; },
     appendChild(child) {
+      const prior = child.parentNode;
+      if (prior) {
+        const ci = prior.children.indexOf(child);
+        if (ci !== -1) prior.children.splice(ci, 1);
+        const ni = prior.childNodes.indexOf(child);
+        if (ni !== -1) prior.childNodes.splice(ni, 1);
+      }
       this.children.push(child);
       this.childNodes.push(child);
       child.parentNode = this;
@@ -175,7 +182,11 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
       body.appendChild(child);
     }
   }
+  const documentElement = makeElement();
+  documentElement.tagName = 'HTML';
+  documentElement.clientWidth = opts.clientWidth || window.innerWidth;
   const document = {
+    documentElement,
     head,
     body,
     createElement() {
@@ -213,7 +224,8 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
   }
   vm.createContext(context);
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
-  return {window, head, body, listeners};
+  // documentElement rides along so tests can assert the layer never writes it.
+  return {window, head, body, documentElement, listeners};
 }
 
 function clickElement(el) {
@@ -1098,6 +1110,136 @@ test('stackCards places an uncontested card exactly at its anchor', () => {
 });
 
 // ---------------------------------------------------------------------------
+// fitColumn / chooseWidth: the margin column's two new pure functions, exported
+// as window.__cbcFitColumn / window.__cbcChooseWidth alongside __cbcStackCards.
+// Properties are asserted over seeded randomised sets, never pixel literals:
+// adjacent pairs stay at least gap apart, the last card lies wholly inside the
+// band, the cap only ever raises a card, the chosen width fits with a gap on
+// both sides and lands in [240,300], and it never narrows as the window widens.
+// fitColumn's input contract is the document-space stack in sorted anchor
+// order, with bands large enough for the anchored regime (band >= total).
+// ---------------------------------------------------------------------------
+
+function loadFitColumnAndChooseWidth() {
+  const {window} = loadArtifactCommentsScript(SHORTCUT_PATH);
+  assert.equal(typeof window.__cbcStackCards, 'function', 'stackCards is exported');
+  assert.equal(typeof window.__cbcFitColumn, 'function', 'fitColumn is exported');
+  assert.equal(typeof window.__cbcChooseWidth, 'function', 'chooseWidth is exported');
+  return {
+    stackCards: window.__cbcStackCards,
+    fitColumn: window.__cbcFitColumn,
+    chooseWidth: window.__cbcChooseWidth,
+  };
+}
+
+// Anchored-regime inputs: anchors and heights sorted together into anchor
+// order, a band at least as tall as the whole stack, and any scroll offset.
+function randomisedAnchoredSets(rng, sets) {
+  const out = [];
+  for (let s = 0; s < sets; s++) {
+    const {anchors, heights, gap} = randomisedSets(rng, 1)[0];
+    const {sortedAnchors, sortedHeights} = sortByAnchor(anchors, heights);
+    let total = 0;
+    for (let i = 0; i < sortedHeights.length; i++) total += sortedHeights[i] + (i ? gap : 0);
+    out.push({
+      anchors: sortedAnchors,
+      heights: sortedHeights,
+      gap,
+      band: total + Math.floor(rng() * 400),
+      scrolled: Math.floor(rng() * 2000) - 500,
+    });
+  }
+  return out;
+}
+
+test('fitColumn keeps every adjacent pair at least gap apart over 300 randomised sets', () => {
+  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  const rng = mulberry32(20260732);
+  for (const {anchors, heights, gap, band, scrolled} of randomisedAnchoredSets(rng, 300)) {
+    const docTops = stackCards(anchors, heights, gap);
+    const tops = fitColumn(docTops, heights, gap, band, scrolled);
+    for (let i = 1; i < tops.length; i++) {
+      assert.ok(
+        tops[i] >= tops[i - 1] + heights[i - 1] + gap - 1e-9,
+        'adjacent pair kept >= gap apart: ' + JSON.stringify({anchors, heights, gap, band, scrolled, tops, i})
+      );
+    }
+  }
+});
+
+test('fitColumn leaves the last card wholly inside the band over 300 randomised sets', () => {
+  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  const rng = mulberry32(20260733);
+  for (const {anchors, heights, gap, band, scrolled} of randomisedAnchoredSets(rng, 300)) {
+    const docTops = stackCards(anchors, heights, gap);
+    const tops = fitColumn(docTops, heights, gap, band, scrolled);
+    const last = tops.length - 1;
+    // The cap makes room from the bottom edge. There is deliberately no floor
+    // on the top edge: an anchor scrolled above the band takes its card with it.
+    assert.ok(
+      tops[last] + heights[last] <= band + 1e-9,
+      'last card bottom inside the band: ' + JSON.stringify({anchors, heights, gap, band, scrolled, tops})
+    );
+  }
+});
+
+test('fitColumn only ever raises a card, never lowers it, over 300 randomised sets', () => {
+  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  const rng = mulberry32(20260734);
+  for (const {anchors, heights, gap, band, scrolled} of randomisedAnchoredSets(rng, 300)) {
+    const docTops = stackCards(anchors, heights, gap);
+    const tops = fitColumn(docTops, heights, gap, band, scrolled);
+    for (let i = 0; i < tops.length; i++) {
+      assert.ok(
+        tops[i] <= docTops[i] - scrolled + 1e-9,
+        'the cap never pushed a card down: ' + JSON.stringify({anchors, heights, gap, band, scrolled, docTops, tops, i})
+      );
+    }
+  }
+});
+
+test('fitColumn keeps the r7 regression input at least gap apart (no floor guard)', () => {
+  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  // r7 pinned the top card to 0 here and drove it 42px into its neighbour;
+  // fitColumn must have no floor guard, and adding one reintroduces that bug.
+  const tops = fitColumn(stackCards([-50, 5], [100, 50], 8), [100, 50], 8, 600, 0);
+  assert.ok(
+    tops[1] - (tops[0] + 100) >= 8,
+    'the two cards stay at least gap apart: tops=' + JSON.stringify(tops)
+  );
+});
+
+test('chooseWidth fits with a gap on both sides and lands in [240,300] over 300 randomised sets', () => {
+  const {chooseWidth} = loadFitColumnAndChooseWidth();
+  const rng = mulberry32(20260735);
+  for (let s = 0; s < 300; s++) {
+    const clientWidth = 320 + Math.floor(rng() * 2400);
+    const contentRight = Math.floor(rng() * clientWidth);
+    const w = chooseWidth(clientWidth, contentRight, 8, 240, 300);
+    if (!w) continue; // margin cannot hold the narrowest column: the corner list takes over
+    assert.ok(w >= 240 && w <= 300, 'chosen width lands in [240,300]: ' + JSON.stringify({clientWidth, contentRight, w}));
+    assert.ok(
+      contentRight + 8 + w + 8 <= clientWidth + 1e-9,
+      'chosen column leaves a gap on both sides: ' + JSON.stringify({clientWidth, contentRight, w})
+    );
+  }
+});
+
+test('chooseWidth never narrows as the window widens over 300 randomised sets', () => {
+  const {chooseWidth} = loadFitColumnAndChooseWidth();
+  const rng = mulberry32(20260736);
+  for (let s = 0; s < 300; s++) {
+    const clientWidth = 320 + Math.floor(rng() * 2400);
+    const contentRight = Math.floor(rng() * clientWidth);
+    const w = chooseWidth(clientWidth, contentRight, 8, 240, 300);
+    assert.ok(
+      chooseWidth(clientWidth + 1, contentRight, 8, 240, 300) >= w,
+      'widening the window never narrows the column: ' + JSON.stringify({clientWidth, contentRight, w})
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // comment-gutter (part 2a): wiring stackCards to a right-hand gutter at >=900px.
 // Gutter mode activates only when an anchored (el != null) entry exists, so the
 // corner-list tests below never flip; the threshold still governs placement.
@@ -1150,13 +1292,15 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
   assert.doesNotMatch(gutterCardRule, /overflow:hidden/, 'gutter cards never clip their own content');
 });
 
-test('gutter mode reserves and restores body right padding across the 900px threshold', async () => {
-  // A 640px-wide article column at the 1024px viewport keeps the one-band
-  // reserve clean (640 <= 1024 - 316) but not the two-band one
-  // (640 > 1024 - 624), so the dock-in-gutter reserve is 316px.
+test('gutter mode never writes the artifact\'s own layout', async () => {
+  // The mechanism that replaces the removed body-padding reserve: the layer
+  // writes no artifact style at all. The body's and documentElement's style
+  // attribute strings (el.attributes.style is this double's getAttribute) are
+  // captured at entry and asserted identical at every step, including after
+  // entry, which is where the old code reserved 316px of padding.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
-  const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: [block],
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
@@ -1165,33 +1309,55 @@ test('gutter mode reserves and restores body right padding across the 900px thre
       if (l.target === 'window' && l.type === 'resize') l.handler();
     }
   };
+  const contentRight = block.getBoundingClientRect().right;
+  assert.ok(
+    window.__cbcChooseWidth(documentElement.clientWidth, contentRight, window.__cbcGutterGap, 240, 300) >= 240,
+    'the column engages in this fake layout'
+  );
+  // Entry happens at load (the decision depends only on the window) and the
+  // layer runs synchronously inside loadArtifactCommentsScript, so the
+  // attribute strings captured here are also the pre-entry ones.
+  const bodyStyleAttr = body.attributes.style;
+  const documentStyleAttr = documentElement.attributes.style;
 
   addBlockComment(body, listeners, block, 'cmt');
   await flushPromises();
-
-  assert.equal(body.style.paddingRight, '316px', 'body right padding reserved in gutter mode');
+  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical after entry');
+  assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical after entry');
+  assert.equal(body.style.paddingRight, undefined, 'paddingRight is never set');
 
   window.innerWidth = 800;
   fireResize();
-  assert.ok(!body.style.paddingRight, 'padding removed when no inline value existed before');
+  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical below the threshold');
+  assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical below the threshold');
+  assert.equal(body.style.paddingRight, undefined, 'paddingRight is never set on exit either');
 
+  window.innerWidth = 1024;
+  fireResize();
+  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical after re-entry');
+  assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical after re-entry');
+
+  window.innerWidth = 800;
+  fireResize();
+  // A pre-existing inline paddingRight on the body belongs to the artifact: it
+  // must survive entry and exit untouched, never reserved over, never emptied.
   body.style.paddingRight = '10px';
   window.innerWidth = 1024;
   fireResize();
-  assert.equal(body.style.paddingRight, '316px', 'padding reserved again after crossing back');
+  assert.equal(body.style.paddingRight, '10px', 'pre-existing inline paddingRight survives entry untouched');
+  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute still identical after entry with preset padding');
   window.innerWidth = 800;
   fireResize();
-  assert.equal(body.style.paddingRight, '10px', 'prior inline padding value restored exactly');
+  assert.equal(body.style.paddingRight, '10px', 'pre-existing inline paddingRight survives exit untouched');
 });
 
-test('gutter mode reserves and restores the dock inline right and widths across the 900px threshold', async () => {
-  // A 640px-wide article column at the 1024px viewport keeps the one-band
-  // reserve clean (640 <= 1024 - 316) but not the two-band one
-  // (640 > 1024 - 624), so the dock sits inside the card column: inline right
-  // 8px, with inline widths on the dock and the tray.
+test('gutter mode aligns the dock to the column and restores its prior inline values on exit', async () => {
+  // The mechanism that replaces the removed inline-right reserve: the bar is
+  // never moved, it only aligns its left edge and width to the column, and on
+  // exit every inline value returns to what was there before entry.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
-  const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: [block],
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
@@ -1206,39 +1372,49 @@ test('gutter mode reserves and restores the dock inline right and widths across 
   addBlockComment(body, listeners, block, 'cmt');
   await flushPromises();
 
-  assert.equal(dock.style.right, '8px', 'dock inline right reserved inside the card column');
-  assert.equal(dock.style.width, '300px', 'dock inline width reserved in gutter mode');
-  assert.equal(tray.style.width, '100%', 'tray inline width reserved in gutter mode');
+  // Every expectation derives from the fake layout's own numbers: the bar's
+  // left edge is the content's right edge plus the gap, its width is the width
+  // chooseWidth picks for this layout, its right is auto, and the tray fills it.
+  const contentRight = block.getBoundingClientRect().right;
+  const gap = window.__cbcGutterGap;
+  const columnWidth = window.__cbcChooseWidth(documentElement.clientWidth, contentRight, gap, 240, 300);
+  assert.ok(columnWidth >= 240, 'the column engages in this fake layout');
+  assert.equal(dock.style.left, contentRight + gap + 'px', 'dock left edge aligns to the column left edge');
+  assert.equal(dock.style.right, 'auto', 'dock right is auto in the column');
+  assert.equal(dock.style.width, columnWidth + 'px', 'dock width is the chosen column width');
+  assert.equal(tray.style.width, '100%', 'tray fills the bar in the column');
 
   window.innerWidth = 800;
   fireResize();
-  assert.ok(!dock.style.right, 'dock inline right removed when no inline value existed before');
-  assert.ok(!dock.style.width, 'dock inline width removed when no inline value existed before');
-  assert.ok(!tray.style.width, 'tray inline width removed when no inline value existed before');
+  assert.ok(!dock.style.left, 'dock inline left removed on exit when no inline value existed before');
+  assert.ok(!dock.style.right, 'dock inline right removed on exit when no inline value existed before');
+  assert.ok(!dock.style.width, 'dock inline width removed on exit when no inline value existed before');
+  assert.ok(!tray.style.width, 'tray inline width removed on exit when no inline value existed before');
 
+  // A preset inline value is captured on entry and restored exactly, not emptied.
   dock.style.right = '14px';
   window.innerWidth = 1024;
   fireResize();
-  assert.equal(dock.style.right, '8px', 'dock inline right reserved again after crossing back');
-  assert.equal(dock.style.width, '300px', 'dock inline width reserved again after crossing back');
-  assert.equal(tray.style.width, '100%', 'tray inline width reserved again after crossing back');
+  assert.equal(dock.style.left, contentRight + gap + 'px', 'dock left edge aligns to the column again on re-entry');
+  assert.equal(dock.style.right, 'auto', 'dock right is auto again in the column');
+  assert.equal(dock.style.width, columnWidth + 'px', 'dock width is the chosen column width again on re-entry');
+  assert.equal(tray.style.width, '100%', 'tray fills the bar again on re-entry');
   window.innerWidth = 800;
   fireResize();
-  assert.equal(dock.style.right, '14px', 'prior inline dock right restored exactly');
-  assert.ok(!dock.style.width, 'dock inline width removed again');
-  assert.ok(!tray.style.width, 'tray inline width removed again');
+  assert.ok(!dock.style.left, 'dock inline left removed again when no inline value existed before');
+  assert.equal(dock.style.right, '14px', 'preset inline dock right restored exactly, not emptied');
+  assert.ok(!dock.style.width, 'dock inline width removed again when no inline value existed before');
+  assert.ok(!tray.style.width, 'tray inline width removed again when no inline value existed before');
 });
 
-test('gutter mode moves the dock between the reserved column and the card column as width shrinks', async () => {
-  // A 700px-wide article column: at a 1400px viewport the two-band reserve is
-  // clean (700 <= 1400 - 624) so the dock gets its own column (padding 624px,
-  // inline right 316px); at 1024px only the one-band reserve stays clean
-  // (700 > 1024 - 624 but 700 <= 1024 - 316) so the dock shares the card
-  // column (padding 316px, inline right 8px); below 900px every inline value
-  // returns to its pre-entry state.
+test('gutter mode never relocates the action bar as window width changes', async () => {
+  // The reserved-column and card-column migration is gone: the bar stays a
+  // direct child of body at every width, its inline left tracks the column's
+  // left edge while the column exists, and no width change ever writes the
+  // artifact.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 700, bottom: 250, width: 700, height: 50});
-  const {window, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: [block],
     innerWidth: 1400,
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
@@ -1249,48 +1425,37 @@ test('gutter mode moves the dock between the reserved column and the card column
     }
   };
   const dock = dockOf(body);
-  const tray = findChildByClass(dock, '__cbc-tray');
+  const contentRight = block.getBoundingClientRect().right;
+  const columnLeft = contentRight + window.__cbcGutterGap + 'px';
+  const bodyStyleAttr = body.attributes.style;
+  const assertBarAtHome = (width) => {
+    assert.equal(dock.parentNode, body, 'the bar stays a direct child of body at ' + width + 'px');
+    assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical at ' + width + 'px');
+  };
+  assert.ok(
+    window.__cbcChooseWidth(documentElement.clientWidth, contentRight, window.__cbcGutterGap, 240, 300) >= 240,
+    'the column engages at 1400px in this fake layout'
+  );
 
   addBlockComment(body, listeners, block, 'cmt');
   await flushPromises();
-
-  assert.equal(body.style.paddingRight, '624px', 'two-band reserve padding at 1400px');
-  assert.equal(dock.style.right, '316px', 'dock gets its own column at 1400px');
-  assert.equal(dock.style.width, '300px', 'dock inline width reserved at 1400px');
-  assert.equal(tray.style.width, '100%', 'tray inline width reserved at 1400px');
+  assertBarAtHome(1400);
+  assert.equal(dock.style.left, columnLeft, 'bar inline left tracks the column left edge at 1400px');
 
   window.innerWidth = 1024;
   fireResize();
-  assert.equal(body.style.paddingRight, '316px', 'one-band reserve padding at 1024px');
-  assert.equal(dock.style.right, '8px', 'dock shares the card column at 1024px');
-  assert.equal(dock.style.width, '300px', 'dock inline width survives the tier switch');
-  assert.equal(tray.style.width, '100%', 'tray inline width survives the tier switch');
+  assertBarAtHome(1024);
+  assert.equal(dock.style.left, columnLeft, 'bar inline left still tracks the column left edge at 1024px');
 
   window.innerWidth = 800;
   fireResize();
-  assert.ok(!body.style.paddingRight, 'padding removed when no inline value existed before');
-  assert.ok(!dock.style.right, 'dock inline right removed when no inline value existed before');
-  assert.ok(!dock.style.width, 'dock inline width removed when no inline value existed before');
-  assert.ok(!tray.style.width, 'tray inline width removed when no inline value existed before');
+  assertBarAtHome(800);
+  assert.ok(!dock.style.left, 'bar inline left returns to its pre-entry state below the threshold');
 
-  // Same sequence with a preset inline dock right: exit must restore it exactly.
-  dock.style.right = '14px';
   window.innerWidth = 1400;
   fireResize();
-  assert.equal(body.style.paddingRight, '624px', 'two-band reserve padding again at 1400px');
-  assert.equal(dock.style.right, '316px', 'dock gets its own column again at 1400px');
-
-  window.innerWidth = 1024;
-  fireResize();
-  assert.equal(body.style.paddingRight, '316px', 'one-band reserve padding again at 1024px');
-  assert.equal(dock.style.right, '8px', 'dock shares the card column again at 1024px');
-
-  window.innerWidth = 800;
-  fireResize();
-  assert.ok(!body.style.paddingRight, 'padding removed again below 900px');
-  assert.equal(dock.style.right, '14px', 'preset inline dock right restored exactly, not emptied');
-  assert.ok(!dock.style.width, 'dock inline width removed again');
-  assert.ok(!tray.style.width, 'tray inline width removed again');
+  assertBarAtHome(1400);
+  assert.equal(dock.style.left, columnLeft, 'bar inline left tracks the column left edge again at 1400px');
 });
 
 // ---------------------------------------------------------------------------

@@ -99,6 +99,22 @@ function makeElement() {
       }
       return null;
     },
+    // The comment layer now measures layout at script load (placeColumn ->
+    // measureContentRight reads document.body.querySelectorAll('*')), so the
+    // stub needs the same '*' walk the main test double provides.
+    querySelectorAll(selector) {
+      const all = [];
+      const stack = this.children.slice();
+      while (stack.length > 0) {
+        const child = stack.shift();
+        all.push(child);
+        stack.push(...child.children);
+      }
+      if (selector === '*') return all;
+      if (!selector.startsWith('.')) return [];
+      const targetClass = selector.slice(1);
+      return all.filter((el) => String(el.className || '').split(/\s+/).includes(targetClass));
+    },
   };
 }
 

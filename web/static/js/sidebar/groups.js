@@ -439,6 +439,30 @@ async function deleteGroup(groupName) {
   switchSidebarFilter(currentFilter);
 }
 
+// Model label for a session row: BACKEND_OPTIONS carries the config-authored label
+// ("CC · Opus 5"); the row shows it without the backend-family prefix because the
+// 320px sidebar leaves only ~67px next to the timestamp. Returns null when the
+// session carries no backend id.
+function sessionBackendLabel(session) {
+  const backendId = (session && session.backend) || '';
+  if (!backendId) return null;
+  const options = typeof BACKEND_OPTIONS === 'undefined' ? null : BACKEND_OPTIONS;
+  const full = (options && options[backendId]) || backendId;
+  const sep = full.indexOf(' · ');
+  return { full, display: sep === -1 ? full : full.slice(sep + 3) };
+}
+
+function renderSessionTimeLine(s, timeIso, timeStr) {
+  const label = sessionBackendLabel(s);
+  const model = label
+    ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
+    : '';
+  return `<span class="flex items-center gap-1.5 text-xs text-slate-500">`
+    + `<span class="session-time flex-shrink-0" data-time="${timeIso}">${timeStr}</span>`
+    + model
+    + `</span>`;
+}
+
 function renderSessionItem(s, filter, options = {}) {
   const starSvg = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
   const isActive = SESSION_ID === s.id;
@@ -514,7 +538,7 @@ function renderSessionItem(s, filter, options = {}) {
     ${renderTuiStatusDot(s)}
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
-      ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : `<span class="block text-xs text-slate-500 session-time" data-time="${timeIso}">${timeStr}</span>`}
+      ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + formatNextRun(s.schedule_next_run)}</span>` : renderSessionTimeLine(s, timeIso, timeStr)}
     </span>
     ${actions}
   </a>`;

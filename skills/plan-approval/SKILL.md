@@ -64,8 +64,10 @@ not restate it here.
 ## Verify
 
 - Verify checks fidelity — claims against evidence — and adequacy: whether the design,
-  assumed accurate and implemented, entails what section 1 claims. Quote the originating
-  request in the spec, or adequacy cannot judge section 1 against what was asked.
+  assumed accurate and implemented, entails what section 1 claims. Quote the confirmed
+  understanding's file path in the spec as the adequacy reference when one exists;
+  otherwise quote the originating request. Without one of these, adequacy cannot judge
+  section 1 against what was asked.
 - Adequacy findings are advisory. `gap-design:` says the mechanism looks short of the
   goal — weigh it and revise the design if it holds. `gap-goal:` says the goal itself may
   be misread — put that question to the user.

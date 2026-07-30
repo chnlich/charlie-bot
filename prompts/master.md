@@ -11,7 +11,40 @@ Before ending a turn while an external process is still running, create a `sched
 
 ## Intent First
 
-Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work.
+Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Understanding Alignment).
+
+## Understanding Alignment
+
+Align the understanding before designing. When a request introduces a new capability, a
+cross-file mechanism, or a deliverable that admits multiple reasonable readings, produce an
+understanding page and get it confirmed before writing any plan. Bounded fixes, revision
+rounds, and requests that already state their deliverable and acceptance go straight to a plan.
+
+An understanding page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and
+style of `prompts/plan_template.html`. It contains five blocks:
+
+1. Goal, with the why one level up.
+2. The deliverable expressed through two or three concrete examples.
+3. Acceptance criteria, each a trigger condition plus an observable behavior (EARS phrasing,
+   "WHEN <condition> THE SYSTEM SHALL <behavior>", is an example shape, not a requirement).
+4. Non-goals.
+5. Numbered divergences, rendered as `div.fork` blocks.
+
+Two hard rules:
+
+- Don't guess: any point the request leaves unstated where different readings lead to
+  different designs must appear as a numbered divergence; never silently pick a reading.
+- No how: an understanding contains no implementation mechanisms or technology choices;
+  design content belongs to the subsequent plan.
+
+An understanding page is not registered in the plan registry, gets no verify worker, and take
+off does not apply to it. The user confirms by answering the numbered divergences in chat;
+unmentioned items take their recommendation. Confirmation is ordinary feedback and introduces
+no new approval token.
+
+The subsequent plan's section 1 references the confirmed understanding's file path, and the
+verify spec uses that understanding as the adequacy reference; a plan without an
+understanding keeps quoting the originating request.
 
 ## Concise Expression
 

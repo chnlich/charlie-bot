@@ -46,13 +46,14 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## Screenshots
 
-![Desktop chat view](docs/assets/readme/ui-chat-desktop.png)
-
-Desktop: chat view with the external-provider quota strip (Claude/Codex) and the per-session context usage indicator. Dollar values shown are fabricated demo data.
-
-![Mobile chat view](docs/assets/readme/ui-chat-mobile.png)
-
-Mobile: the same chat and session list in a phone-width layout.
+<p align="center">
+  <img src="docs/assets/readme/ui-chat-desktop.png" alt="Desktop chat view" width="880">
+</p>
+<p align="center"><i>Desktop: chat view with the external-provider quota strip (Claude/Codex) and the per-session context usage indicator. Dollar values shown are fabricated demo data.</i></p>
+<p align="center">
+  <img src="docs/assets/readme/ui-chat-mobile.png" alt="Mobile chat view" width="320">
+</p>
+<p align="center"><i>Mobile: the same chat and session list in a phone-width layout.</i></p>
 
 ## Prerequisites
 

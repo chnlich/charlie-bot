@@ -93,7 +93,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ## Workers & Sessions — Architecture Notes
 
-- **NEVER use `discover_repos()[0]` to get repo context for a derived/downstream task** (review workers, retries, continuations, chained tasks). `discover_repos()` returns repos in non-deterministic order. Always propagate `repo_path` explicitly from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` is only safe at the top-level entry point (user delegation, CLI). This is a recurring bug — always propagate repo_path explicitly.
+- **Propagate `repo_path` explicitly to every derived/downstream task** (review workers, retries, continuations, chained tasks) — pass it from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` returns repos in non-deterministic order, so it is only safe at the top-level entry point (user delegation, CLI); downstream tasks read the propagated value instead. This is a recurring bug — always propagate repo_path explicitly.
 - Session instructions: `_build_instructions_content()` (master_cc.py) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + the assembled memory block on every `run_message()`. The block is built by `src/core/memory.py::assemble_master` — full bodies of master-audience entries in resident topics plus a `# Memory index` header line and index lines for the rest. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
@@ -108,7 +108,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
   Constraints: wrapped cmd must run in foreground (no detached `&` inside `--cmd`). For parallel jobs, call `charliebot remote-launch` N times. The wrapper log captures stdout/stderr only — if the cmd internally redirects output to its own log path (e.g. `/storage/...`), that file is the source of truth and the wrapper log will be near-empty. For sub-2-minute commands, just `ssh host 'cmd'` synchronously instead — the launch+trigger overhead is not worth it.
 
-- **One trigger watches many targets — do not spawn a trigger per job.** When master is waiting on N parallel runs, pass all targets to a single `charliebot schedule-trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event.
+- **One trigger watches many targets — a single trigger covers every parallel job.** When master is waiting on N parallel runs, pass all targets to one `charliebot schedule-trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event.
 
 ---
 
@@ -121,6 +121,15 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 ## Claude Code Backend Context Window
 
 The Claude backend defaults to a 400k window. The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k (400k → ~367k; 1M default → ~784k), with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `src/agents/backends/claude_code.py` `headless_claude_env()` — the master path inherits os.environ, but `claude_sub.py`'s tmux `respawn-pane -e` path passes an allowlist only, so the variable must enter the allowlist for full coverage.
+
+---
+
+## Usage Panel Semantics
+
+- Claude result-event usage is invocation-cumulative; read live context from the last main-chain assistant usage.
+- `modelUsage` may begin with a haiku submodel, and delegated thread cost is omitted.
+- The panel should divide usage by the enforced ~433K auto-compact ceiling rather than the raw context window.
+- `context_compacted.pre_tokens` in a session's `chat_events.jsonl` is the observable ground truth for where auto-compact fires (trigger is approximate, ~0.7% above nominal); use it to validate any displayed ceiling instead of asserting a literal.
 
 ---
 
@@ -147,6 +156,15 @@ On some hosts it may happen to be a local git repo, but its contents are NOT mea
 be committed or pushed — workers must edit files in place and must never `git add` them
 to a `~/.charliebot` repo if one exists. Cross-host shared skills go in
 `<charlie-bot-repo>/skills/` instead.
+
+---
+
+## Repo-to-Host Content Split
+
+- The repo-to-host invariant (host files reference repo content; the bodies live in the repo) cuts by evolution: evolving bodies stay in the repo via pointers, while non-evolving entry skeletons (name/cron/timezone/prompt_file) may be seeded once into host files.
+- Seeding belongs to an explicitly invoked setup command; keep it out of the server-start path, where writers reorder user files and race concurrent writes.
+- `effective_scheduled_task_backend` (src/core/scheduler.py) resolves an omitted cron `backend` to `cfg.backend_options[0].id` (positional), so repo-shipped default tasks leave `backend` unset — the value is a host-local name.
+- Repo content reaching a host already depends on rerunning setup (`sync-skills.sh` symlinks skills), so "new default cron tasks need setup rerun" matches existing product rules.
 
 ---
 
@@ -177,8 +195,8 @@ A self-hosted VS Code instance running as a web service for browsing code in the
 
 **Usage:**
 - Open any folder via URL: `https://<host>:<port>/?folder=/path/to/dir`
-- Can browse any filesystem path — not limited to the startup directory
-- No authentication needed when behind Tailscale
+- Can browse any filesystem path — the startup directory is only the default view
+- Runs with open access when behind Tailscale
 - Shares the same TLS cert as CharlieBot
 
 **Features:** File tree, syntax highlighting, Ctrl+P (quick open), Ctrl+Shift+F (project search), Ctrl+Click (go-to-definition with language extensions), minimap, git diff view.
@@ -221,7 +239,7 @@ charliebot schedule-trigger --max-wait 86400 --watch host2:slurm:"$JOBID" --mess
 ```
 
 Caveats:
-- Watching an array job by its base id is NOT supported — only whole non-array allocations (sacct `-X` reports the allocation, not individual array tasks).
+- The watcher handles whole non-array allocations only — watching an array job by its base id fails, because sacct `-X` reports the allocation and individual array tasks stay invisible to it.
 - On Okta-gated hosts a cold SSH key cache makes verify-on-create reject the trigger (the first ssh probe fails before the key is enrolled), so enroll the key first with a manual `ssh host2 true`.
 
 ## Fired Message Format
@@ -229,9 +247,17 @@ Caveats:
 The fired message is prefixed with the reason; per-target detail is in the suffix:
 - `[Scheduled trigger fired | completed] <msg> (exited: 12345, host:6789; slurm:91038: COMPLETED 0:0)` — all targets finished
 - `[Scheduled trigger fired | timeout]  <msg> (exited: 12345; still alive: slurm:91039: RUNNING)` — `--max-wait` elapsed
-- `[Scheduled trigger fired | timeout] <msg> (still alive: host2:slurm:122111 (unreachable 18m: ssh timeout after 60.0s))` — the remote host stopped answering sacct, not that the job is known to be running
+- `[Scheduled trigger fired | timeout] <msg> (still alive: host2:slurm:122111 (unreachable 18m: ssh timeout after 60.0s))` — the remote host stopped answering sacct, leaving the job's true state unknown
 
 `completed` means all targets finished; success/failure is in the suffix (a SLURM `FAILED 2:0` is a failed job).
+
+---
+
+## Cron Task Behavior
+
+- A newly added cron task first fires on its next occurrence after one full tick: the scheduler looks back a single tick from load, so a new daily expression starts the following day.
+- Changed cron syntax takes effect through the change-then-restart order (`server.py` runs with `reload=False`): until the restart the server keeps the last successfully parsed task list and logs `cron_config_reload_failed` each tick, self-healing on restart. Tell the user about the order up front.
+- The cron timezone is fixed in the config model, API, and UI: pin `America/Los_Angeles` explicitly for local tasks. Reread `config.d/cron.yaml` at implementation time — concurrent sessions may mutate it.
 
 ---
 

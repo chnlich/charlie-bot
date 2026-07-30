@@ -54,6 +54,10 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
   <img src="docs/assets/readme/ui-chat-mobile.png" alt="Mobile chat view" width="320">
 </p>
 <p align="center"><i>Mobile: the same chat and session list in a phone-width layout.</i></p>
+<p align="center">
+  <img src="docs/assets/readme/ui-plans-desktop.png" alt="Plans tab" width="880">
+</p>
+<p align="center"><i>Plans: an approved plan's HTML artifact in the viewer — plan/version switchers, revision badges, and resolved trade-offs from the approval lifecycle.</i></p>
 
 ## Prerequisites
 

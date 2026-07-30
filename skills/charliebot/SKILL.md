@@ -228,11 +228,11 @@ Treat the head branch as the working branch and turn the batch into one delegati
 
 ## SLURM Submit + Watch
 
-Submit with `sbatch --parsable` (prints only the job id), then watch it. The remote form is the primary one — submit over ssh on a cluster login host and watch with `host2:slurm:`; the trigger server does not need slurm installed for the remote form, since `sacct` runs on the cluster over ssh:
+Submit with `sbatch --parsable` (prints only the job id), then watch it. The remote form is the primary one — submit over ssh on a cluster login host and watch with `HOST:slurm:`; the trigger server does not need slurm installed for the remote form, since `sacct` runs on the cluster over ssh:
 
 ```bash
-JOBID=$(ssh host2 sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
-charliebot schedule-trigger --max-wait 86400 --watch host2:slurm:"$JOBID" --message "train done"
+JOBID=$(ssh neptune sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
+charliebot schedule-trigger --max-wait 86400 --watch neptune:slurm:"$JOBID" --message "train done"
 # Local form (the trigger-server host itself runs slurm):
 # JOBID=$(sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
 # charliebot schedule-trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
@@ -240,14 +240,14 @@ charliebot schedule-trigger --max-wait 86400 --watch host2:slurm:"$JOBID" --mess
 
 Caveats:
 - The watcher handles whole non-array allocations only — watching an array job by its base id fails, because sacct `-X` reports the allocation and individual array tasks stay invisible to it.
-- On Okta-gated hosts a cold SSH key cache makes verify-on-create reject the trigger (the first ssh probe fails before the key is enrolled), so enroll the key first with a manual `ssh host2 true`.
+- On Okta-gated hosts a cold SSH key cache makes verify-on-create reject the trigger (the first ssh probe fails before the key is enrolled), so enroll the key first with a manual `ssh neptune true`.
 
 ## Fired Message Format
 
 The fired message is prefixed with the reason; per-target detail is in the suffix:
 - `[Scheduled trigger fired | completed] <msg> (exited: 12345, host:6789; slurm:91038: COMPLETED 0:0)` — all targets finished
 - `[Scheduled trigger fired | timeout]  <msg> (exited: 12345; still alive: slurm:91039: RUNNING)` — `--max-wait` elapsed
-- `[Scheduled trigger fired | timeout] <msg> (still alive: host2:slurm:122111 (unreachable 18m: ssh timeout after 60.0s))` — the remote host stopped answering sacct, leaving the job's true state unknown
+- `[Scheduled trigger fired | timeout] <msg> (still alive: neptune:slurm:122111 (unreachable 18m: ssh timeout after 60.0s))` — the remote host stopped answering sacct, leaving the job's true state unknown
 
 `completed` means all targets finished; success/failure is in the suffix (a SLURM `FAILED 2:0` is a failed job).
 

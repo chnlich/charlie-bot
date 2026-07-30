@@ -2,18 +2,6 @@
 
 CharlieBot is a self-hosted multi-agent orchestration system: a master agent drives worker and reviewer agents across pluggable LLM CLI backends, operated through a web UI.
 
-![CharlieBot web UI (desktop)](docs/assets/readme/ui-chat-desktop.png)
-
-## Screenshots
-
-![Desktop chat view](docs/assets/readme/ui-chat-desktop.png)
-
-Desktop: chat view with the external-provider quota strip (Claude/Codex) and the per-session context usage indicator. Dollar values shown are fabricated demo data.
-
-![Mobile chat view](docs/assets/readme/ui-chat-mobile.png)
-
-Mobile: the same chat and session list in a phone-width layout.
-
 ## Features
 
 ### Orchestration
@@ -55,6 +43,16 @@ Mobile: the same chat and session list in a phone-width layout.
 
 - code-server proxying (browser VS Code)
 - Anthropic Messages-compatible proxy endpoint (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`) fronting OpenAI-compatible backends
+
+## Screenshots
+
+![Desktop chat view](docs/assets/readme/ui-chat-desktop.png)
+
+Desktop: chat view with the external-provider quota strip (Claude/Codex) and the per-session context usage indicator. Dollar values shown are fabricated demo data.
+
+![Mobile chat view](docs/assets/readme/ui-chat-mobile.png)
+
+Mobile: the same chat and session list in a phone-width layout.
 
 ## Prerequisites
 

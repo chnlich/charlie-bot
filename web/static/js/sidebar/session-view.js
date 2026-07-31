@@ -404,26 +404,50 @@ function renderUsageFromData(usage) {
   if (indicator) indicator.classList.remove('hidden');
 
   const contextTokens = usage.context_tokens;
-  const contextLimit = usage.context_limit;
-  const hasContext = contextTokens != null && contextLimit != null;
+  const contextFull = usage.context_full;
+  const contextCompactAt = usage.context_compact_at;
+  const hasContext = contextTokens != null && contextFull != null;
 
   const bar = document.getElementById('usage-bar');
+  const compactLine = document.getElementById('usage-compact-line');
   if (bar) {
     if (hasContext) {
-      const pct = contextLimit > 0 ? (contextTokens / contextLimit * 100) : 0;
+      const pct = contextFull > 0 ? (contextTokens / contextFull * 100) : 0;
       bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
-      bar.className = 'h-full rounded-full transition-all duration-300 '
-        + (pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500');
+      let color;
+      if (contextCompactAt != null) {
+        // Colour relative to the compaction line: below 50% of it blue,
+        // 50%–100% yellow, past it red.
+        if (contextTokens > contextCompactAt) color = 'bg-red-500';
+        else if (contextTokens >= contextCompactAt / 2) color = 'bg-yellow-500';
+        else color = 'bg-blue-500';
+      } else {
+        // No line: fall back to today's thresholds (50% / 80% of full).
+        color = pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500';
+      }
+      bar.className = 'h-full rounded-full transition-all duration-300 ' + color;
     } else {
       // No per-request source: hide the bar rather than draw a 0% fill.
       bar.style.width = '0%';
       bar.className = 'h-full rounded-full transition-all duration-300 hidden';
     }
   }
+  if (compactLine) {
+    if (hasContext && contextCompactAt != null && contextFull > 0) {
+      const linePct = Math.min(contextCompactAt / contextFull * 100, 100);
+      compactLine.style.left = linePct.toFixed(1) + '%';
+      compactLine.title = String(contextCompactAt);
+      compactLine.className = 'absolute top-0 h-full w-0.5 bg-white';
+    } else {
+      compactLine.style.left = '0%';
+      compactLine.title = '';
+      compactLine.className = 'absolute top-0 h-full w-0.5 bg-white hidden';
+    }
+  }
   const text = document.getElementById('usage-text');
   if (text) {
     text.textContent = hasContext
-      ? formatTokens(contextTokens) + ' / ' + formatTokens(contextLimit)
+      ? formatTokens(contextTokens) + ' / ' + formatTokens(contextFull)
       : 'unknown';
   }
   const cost = document.getElementById('usage-cost');

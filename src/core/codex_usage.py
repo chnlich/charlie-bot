@@ -25,15 +25,18 @@ def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] 
   info = payload.get("info") or {}
   last_usage = info.get("last_token_usage") or {}
   input_tokens = last_usage.get("input_tokens")
-  context_limit = info.get("model_context_window")
-  if input_tokens is None or context_limit is None:
+  model_context_window = info.get("model_context_window")
+  if input_tokens is None or model_context_window is None:
     return None
   usage: dict[str, Any] = {
       # Codex reports the active prompt window in last_token_usage.input_tokens.
       # total_token_usage is cumulative for the whole session and cached_input_tokens
       # is an informational subset, not an additive context-window component.
       "context_tokens": input_tokens,
-      "context_limit": context_limit,
+      # The bar's full scale is the model's context window (the longest context the
+      # prompt can reach); the compaction line comes from the backend option and is
+      # merged in by the resolver.
+      "context_full": model_context_window,
   }
   total_token_usage = info.get("total_token_usage")
   if isinstance(total_token_usage, dict):
@@ -147,12 +150,16 @@ class CodexUsageResolver:
   ) -> dict | None:
     """Resolve Codex-native usage and merge with base usage.
 
-    Returns the merged usage dict with Codex context_tokens/context_limit
-    overriding the base values, or None if native usage is unavailable.
+    Returns the merged usage dict with Codex context_tokens/context_full/
+    context_compact_at overriding the base values, or None if native usage is
+    unavailable.
 
-    ``context_limit`` uses the session backend's ``model_auto_compact_token_limit``
-    when configured, falling back to the rollout's ``model_context_window``. The
-    cost computation stays native (``calculate_codex_usage_cost_usd``).
+    ``context_full`` uses the rollout's ``model_context_window`` (the longest
+    context the prompt can reach). ``context_compact_at`` uses the session
+    backend's ``model_auto_compact_token_limit`` when configured, otherwise
+    ``None`` — an unconfigured compaction limit is the normal state, not a
+    degradation, so no warning is logged. The cost computation stays native
+    (``calculate_codex_usage_cost_usd``).
     """
     backend_id = session_meta.backend
     native_thread_id = self._resolve_codex_thread_id(
@@ -165,12 +172,13 @@ class CodexUsageResolver:
       return None
 
     auto_compact_limit = self._backend_auto_compact_limit(backend_id)
-    context_limit = auto_compact_limit if auto_compact_limit else native_usage["context_limit"]
+    context_compact_at: int | None = auto_compact_limit
     model = native_usage.get("model") or ""
     total_token_usage = native_usage.get("total_token_usage")
     merged_usage: dict[str, Any] = {
         "context_tokens": native_usage["context_tokens"],
-        "context_limit": context_limit,
+        "context_full": native_usage["context_full"],
+        "context_compact_at": context_compact_at,
         "total_cost_usd": (
             calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
         "model": model,

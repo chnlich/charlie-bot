@@ -26,6 +26,7 @@ from src.agents.backends.claude_code import (
     CLAUDE_COMPACT_OUTPUT_RESERVE,
     headless_claude_declared_window,
 )
+from src.agents.backends.opencode import OPENCODE_COMPACT_OUTPUT_RESERVE
 from src.core import event_types as ET
 from src.core.codex_usage import CodexUsageResolver
 from src.core.config import CharlieBotConfig
@@ -138,17 +139,18 @@ def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
   """Derive (context_full, context_compact_at) from a snapshot ``limit`` dict.
 
   context_full is ``limit.input`` when present, else ``limit.context - limit.output``.
-  context_compact_at is ``limit.input - min(20000, limit.output)`` when ``input`` is
-  present; otherwise ``None`` (it would coincide with full, so the line carries no
-  information).
+  context_compact_at is ``limit.input - min(OPENCODE_COMPACT_OUTPUT_RESERVE, limit.output)``
+  when ``input`` is present; otherwise ``None`` (it would coincide with full, so the
+  line carries no information). A non-int ``output`` (e.g. a JSON ``null`` in the
+  catalog payload) degrades to ``(None, None)`` rather than raising ``TypeError``.
   """
   context_input = limit.get("input")
   context_output = limit.get("output", 0)
   context_context = limit.get("context")
-  if isinstance(context_input, int):
+  if isinstance(context_input, int) and isinstance(context_output, int):
     context_full = context_input
-    context_compact_at = context_input - min(CLAUDE_COMPACT_OUTPUT_RESERVE, context_output)
-  elif isinstance(context_context, int):
+    context_compact_at = context_input - min(OPENCODE_COMPACT_OUTPUT_RESERVE, context_output)
+  elif isinstance(context_context, int) and isinstance(context_output, int):
     context_full = context_context - context_output
     context_compact_at = None
   else:

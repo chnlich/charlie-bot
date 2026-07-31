@@ -512,6 +512,89 @@ async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path
 
 
 # ---------------------------------------------------------------------------
+# Acceptance test 10a: snapshot tier is decoupled from Claude Code's reserves
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier_follows_them(
+    tmp_path: Path, _clean_ceiling_env, monkeypatch) -> None:
+  # Move Claude Code's reserves to a value clearly different from their defaults
+  # (20000 / 13000); the snapshot tier must not move, the claude tier must.
+  monkeypatch.setattr("src.core.session_usage.CLAUDE_COMPACT_OUTPUT_RESERVE", 50_000)
+  monkeypatch.setattr("src.core.session_usage.CLAUDE_COMPACT_CONTEXT_RESERVE", 50_000)
+  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "600000")
+
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+
+  # Snapshot (opencode) tier — same limit as the existing 270000 / 250000 case.
+  snap_meta = SessionMetadata(id="session-decouple-snap", name="Snap Decouple", backend="opencode-glm52")
+  _write_session(session_mgr, snap_meta, [
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4",
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              {"context": 409_600, "input": 270_000, "output": 131_072})),
+  ])
+  snap_usage = await session_mgr.resolve_session_usage(snap_meta.id, snap_meta)
+
+  assert snap_usage is not None
+  # 270000 - min(20000, 131072) = 250000 — opencode's own reserve, unmoved by the
+  # Claude-constant monkeypatch above.
+  assert snap_usage["context_full"] == 270_000
+  assert snap_usage["context_compact_at"] == 250_000
+
+  # Claude tier — its point follows the monkeypatched Claude constants.
+  claude_meta = SessionMetadata(id="session-decouple-claude", name="Claude Decouple", backend="claude-opus-4.6")
+  _write_session(session_mgr, claude_meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 600_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=72_900),
+  ])
+  claude_usage = await session_mgr.resolve_session_usage(claude_meta.id, claude_meta)
+
+  assert claude_usage is not None
+  # context_full = min(600000 model window, 600000 declared) = 600000; with the real
+  # defaults (20000 / 13000) compact_at would be 567000, but the patched 50000 / 50000
+  # moves it to 500000 — the claude tier follows Claude Code's constants.
+  assert claude_usage["context_full"] == 600_000
+  assert claude_usage["context_compact_at"] == 500_000
+
+
+# ---------------------------------------------------------------------------
+# Acceptance test 10b: non-int output degrades instead of raising
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-snap-null-output", name="Snapshot Null Output", backend="opencode-glm52")
+  _write_session(session_mgr, meta, [
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4",
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              {"context": 409_600, "input": 270_000, "output": None})),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # A non-int output degrades both limit-derived context fields to None instead of
+  # raising TypeError from min(); the token sum is still resolved.
+  assert usage["context_full"] is None
+  assert usage["context_compact_at"] is None
+  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
+  assert usage["model"] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"
+
+
+# ---------------------------------------------------------------------------
 # Acceptance test 9: codex candidate directories + model_auto_compact_token_limit
 # ---------------------------------------------------------------------------
 

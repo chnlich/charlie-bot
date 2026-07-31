@@ -45,3 +45,17 @@ Whenever you need to present a file to the user (logs, traces, checkpoints, imag
 
    Trace indicators: filename matches `trace_rank*.json` / `*trace*.json`, lives under a `trace/` or `profile/` dir, or the user called it a "trace"/"profile"/"perf capture".
 5. **Never wrap a raw filesystem path in markdown `[](...)`** — CharlieBot UI renders raw local paths as dead links. Write the path as plain text `path:line`, or build a `/files/<abs-path-no-leading-slash>` URL. (This applies to raw paths, not to generated file-server URLs, which should be wrapped as `[descriptive text](url)` per rule #3.)
+
+## HTML Artifacts
+
+Generated HTML artifacts (reports, plans, dashboards) must satisfy:
+
+- Full document with doctype, html, body tags.
+- Self-contained: inline CSS/JS. External resources from `cdn.jsdelivr.net` or
+  `unpkg.com` only.
+- Sandboxing: chat embeds render via srcdoc + sandbox attribute (no access to parent
+  window, cookies, or storage). The plan panel viewer runs same-origin without sandbox
+  because its in-frame comment tray requires same-origin; plan artifact content is
+  trusted master-authored output.
+- Aim for well-organized, visually polished pages that present information more densely
+  than markdown allows. Multiple artifacts per response are supported.

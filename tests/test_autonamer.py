@@ -8,7 +8,7 @@ import pytest
 
 from src.core import autonamer
 from src.core.autonamer import (
-    _unfaithful_tokens, iter_light_backends, maybe_auto_name, maybe_auto_name_from_claude_ai_title)
+    iter_light_backends, maybe_auto_name, maybe_auto_name_from_claude_ai_title)
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
 
@@ -167,76 +167,43 @@ async def test_maybe_auto_name_rechecks_current_name_before_renaming() -> None:
 
 
 @pytest.mark.asyncio
-async def test_maybe_auto_name_retries_when_first_title_unfaithful_then_succeeds() -> None:
+async def test_maybe_auto_name_keeps_snake_case_identifier_verbatim() -> None:
   cfg = _cc_cfg()
-  session_meta = SessionMetadata(id="session-retry", name="Session 7", backend="light-cc")
+  session_meta = SessionMetadata(id="session-snake", name="Session 7", backend="light-cc")
   session_mgr = AsyncMock()
-  session_mgr.get_session.side_effect = [
-      SessionMetadata(id="session-retry", name="Session 7", group=None),
-      SessionMetadata(id="session-retry", name="7: Trellis Review", group=None),
-  ]
-  one_shot = AsyncMock(
-      side_effect=[
-          '{"name":"CTRELLIS.2 Review","group":"work"}',
-          '{"name":"Trellis Review","group":"work"}',
-      ])
+  session_mgr.get_session.return_value = SessionMetadata(id="session-snake", name="Session 7")
+  raw = '{"name":"CHARLIEBOT_HOME cleanup"}'
+  one_shot = AsyncMock(return_value=raw)
 
   with (
       patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(
-        cfg,
-        session_meta,
-        "Let's review the TRELLIS.2 branch changes.",
-        "Here is the review.",
-        session_mgr,
-        ["Work"],
-    )
+        cfg, session_meta, "Set CHARLIEBOT_HOME for the run.", "Done.", session_mgr, [])
 
-  session_mgr.rename_session.assert_awaited_once_with("session-retry", "7: Trellis Review")
-  session_mgr.set_group.assert_awaited_once_with("session-retry", "Work")
-  assert one_shot.await_count == 2
-  first_prompt, _ = one_shot.await_args_list[0].args
-  second_prompt, _ = one_shot.await_args_list[1].args
-  assert "names not present in the conversation" not in first_prompt
-  assert "names not present in the conversation: CTRELLIS.2" in second_prompt
+  expected_name = json.loads(raw)["name"]
+  session_mgr.rename_session.assert_awaited_once_with("session-snake", f"7: {expected_name}")
 
 
 @pytest.mark.asyncio
-async def test_maybe_auto_name_keeps_default_name_when_both_titles_unfaithful() -> None:
+async def test_maybe_auto_name_keeps_chinese_title_verbatim() -> None:
   cfg = _cc_cfg()
-  session_meta = SessionMetadata(id="session-fallback", name="Session 7", backend="light-cc")
+  session_meta = SessionMetadata(id="session-cjk", name="Session 8", backend="light-cc")
   session_mgr = AsyncMock()
-  one_shot = AsyncMock(
-      side_effect=[
-          '{"name":"CTRELLIS.2 Review","group":"work"}',
-          '{"name":"WRELLIS.3 Review","group":"work"}',
-      ])
+  session_mgr.get_session.return_value = SessionMetadata(id="session-cjk", name="Session 8")
+  raw = '{"name":"「TRELLIS.2」分支重构"}'
+  one_shot = AsyncMock(return_value=raw)
 
   with (
       patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
-      patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
+      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(
-        cfg,
-        session_meta,
-        "Let's review the TRELLIS.2 branch changes.",
-        "Here is the review.",
-        session_mgr,
-        ["Work"],
-    )
+        cfg, session_meta, "重构「TRELLIS.2」的分支。", "好的，开始重构。", session_mgr, [])
 
-  session_mgr.rename_session.assert_not_awaited()
-  session_mgr.set_group.assert_not_awaited()
-  mock_broadcast.assert_not_awaited()
-  mock_log.warning.assert_called_once_with(
-      "session_auto_name_unfaithful",
-      session_id="session-fallback",
-      rejected_title="7: WRELLIS.3 Review",
-      tokens=["WRELLIS.3"],
-  )
+  expected_name = json.loads(raw)["name"]
+  session_mgr.rename_session.assert_awaited_once_with("session-cjk", f"8: {expected_name}")
 
 
 @pytest.mark.asyncio
@@ -307,6 +274,70 @@ async def test_maybe_auto_name_keeps_default_name_when_all_first_responses_are_u
   mock_broadcast.assert_not_awaited()
   assert mock_log.warning.call_count == 2
   assert all(call.args[0] == "autonamer_failed" for call in mock_log.warning.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_maybe_auto_name_falls_back_to_next_backend_on_non_json_response() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first-backend", "second-backend"],
+  )
+  session_meta = SessionMetadata(id="session-fallback", name="Session 9", backend="first-backend")
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="session-fallback", name="Session 9")
+  first_one_shot = AsyncMock(return_value="Sure, here's a title: Refactoring the Loader")
+  second_raw = '{"name":"Loader Refactor"}'
+  second_one_shot = AsyncMock(return_value=second_raw)
+
+  with (
+      patch(
+          "src.core.autonamer.build_backend",
+          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+      ) as mock_build,
+      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+  ):
+    await maybe_auto_name(cfg, session_meta, "Refactor the loader", "Done.", session_mgr, [])
+
+  assert [call.args[0].id for call in mock_build.call_args_list] == ["first-backend", "second-backend"]
+  first_one_shot.assert_awaited_once()
+  second_one_shot.assert_awaited_once()
+  expected_name = json.loads(second_raw)["name"]
+  session_mgr.rename_session.assert_awaited_once_with("session-fallback", f"9: {expected_name}")
+
+
+@pytest.mark.asyncio
+async def test_maybe_auto_name_falls_back_to_next_backend_when_name_too_long() -> None:
+  cfg = CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first-backend", "second-backend"],
+  )
+  session_meta = SessionMetadata(id="session-long", name="Session 10", backend="first-backend")
+  session_mgr = AsyncMock()
+  session_mgr.get_session.return_value = SessionMetadata(id="session-long", name="Session 10")
+  first_one_shot = AsyncMock(return_value=json.dumps({"name": "x" * 61}))
+  second_raw = '{"name":"Short Title"}'
+  second_one_shot = AsyncMock(return_value=second_raw)
+
+  with (
+      patch(
+          "src.core.autonamer.build_backend",
+          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+      ) as mock_build,
+      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+  ):
+    await maybe_auto_name(cfg, session_meta, "Some ask", "Some answer.", session_mgr, [])
+
+  assert [call.args[0].id for call in mock_build.call_args_list] == ["first-backend", "second-backend"]
+  first_one_shot.assert_awaited_once()
+  second_one_shot.assert_awaited_once()
+  expected_name = json.loads(second_raw)["name"]
+  session_mgr.rename_session.assert_awaited_once_with("session-long", f"10: {expected_name}")
 
 
 # ---------------------------------------------------------------------------
@@ -557,40 +588,6 @@ async def test_claude_ai_title_does_not_overwrite_manual_session_name(
   session_mgr.rename_session.assert_not_awaited()
   session_mgr.set_group.assert_not_awaited()
   mock_broadcast.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# _unfaithful_tokens — pure fidelity checks
-# ---------------------------------------------------------------------------
-
-
-def test_unfaithful_tokens_faithful_title_passes() -> None:
-  source = "We worked on the TRELLIS.2 branch and the structure-pack-r2 spec."
-  assert _unfaithful_tokens("TRELLIS.2 structure-pack-r2 review", source) == []
-
-
-def test_unfaithful_tokens_rejects_invented_mixed_case_digit_token() -> None:
-  # "CTRELLIS.2" is not a substring of a source containing only "TRELLIS.2".
-  source = "We worked on the TRELLIS.2 branch."
-  assert _unfaithful_tokens("CTRELLIS.2 Perf", source) == ["CTRELLIS.2"]
-
-
-def test_unfaithful_tokens_strips_leading_trailing_punctuation_preserving_interior() -> None:
-  # "(TRELLIS.2)" strips to "TRELLIS.2" (interior dot kept) and matches the source.
-  source = "We worked on the TRELLIS.2 branch."
-  assert _unfaithful_tokens("(TRELLIS.2)", source) == []
-
-
-def test_unfaithful_tokens_single_capital_ordinary_word_not_checked() -> None:
-  # "Perf" has one capital and no digit; an ordinary word, never checked.
-  source = "We worked on the project."
-  assert _unfaithful_tokens("Perf Review", source) == []
-
-
-def test_unfaithful_tokens_digit_only_token_not_checked() -> None:
-  # The session-number prefix "7:" strips to digit-only "7"; never checked.
-  source = "We worked on the project review."
-  assert _unfaithful_tokens("7: Project Review", source) == []
 
 
 # ---------------------------------------------------------------------------

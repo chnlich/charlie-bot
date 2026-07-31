@@ -43,14 +43,7 @@ log = structlog.get_logger()
 # Does NOT match already-renamed titles like "7: My Topic".
 _DEFAULT_NAME_RE = re.compile(r"^(Session \d+|\d+: )$")
 _SESSION_NUMBER_RE = re.compile(r"^Session (\d+)$")
-_MARKDOWN_CHARS_RE = re.compile(r"[*`#_~\[\]]")
-_PREAMBLE_RE = re.compile(
-    r"^(here(?:'s| is|are)\s.*?[:]\s*|sure[,!.\s]+|title:\s*|okay[,.\s]+)",
-    re.IGNORECASE,
-)
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL)
-_MAX_TITLE_WORDS = 8
-_UNFAITHFUL_PUNCT = ".,:;!?()[]{}\"'"
 
 
 def _prefix_session_number_if_default(session_name: str, name: str) -> str:
@@ -102,14 +95,14 @@ def _strip_markdown_fences(text: str) -> str:
   return m.group(1).strip() if m else text
 
 
-def _parse_name_and_group(raw: str) -> tuple[str | None, str | None, bool]:
-  """Parse LLM response into (name, group, parsed_json)."""
+def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
+  """Parse LLM response into (name, group)."""
   stripped = _strip_markdown_fences(raw.strip())
   try:
     data = json.loads(stripped)
   except (json.JSONDecodeError, ValueError) as e:
     log.debug("autonamer_non_json_response", error=str(e))
-    return stripped, None, False
+    return None, None
 
   if isinstance(data, dict):
     name = data.get("name")
@@ -117,11 +110,10 @@ def _parse_name_and_group(raw: str) -> tuple[str | None, str | None, bool]:
     return (
         name.strip() if isinstance(name, str) and name.strip() else None,
         group.strip() if isinstance(group, str) and group.strip() else None,
-        True,
     )
 
   log.warning("autonamer_unexpected_json_type", response_type=type(data).__name__)
-  return None, None, True
+  return None, None
 
 
 def iter_light_backends(cfg: CharlieBotConfig) -> Iterator[BackendOption]:
@@ -142,45 +134,6 @@ def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
     if existing.lower() == lower:
       return existing
   return group
-
-
-def _sanitize_session_title(raw: str, session_name: str) -> str | None:
-  """Turn a raw LLM response into a sanitized session title, or None if it should be discarded.
-
-  Pure synchronous pipeline: parse JSON (with first-line fallback for plain-text replies),
-  strip quotes/markdown/preamble, gate on length and word count, then prefix with the
-  session number extracted from a default 'Session N' name.
-  """
-  parsed_name, _group, parsed_json = _parse_name_and_group(raw)
-
-  if parsed_name:
-    name = parsed_name
-  elif parsed_json:
-    return None
-  else:
-    name = ""
-    for line in raw.splitlines():
-      line = line.strip()
-      if line:
-        name = line
-        break
-    if not name:
-      return None
-
-  name = name.strip('"\'').strip()
-  name = _MARKDOWN_CHARS_RE.sub("", name)
-  name = name.strip()
-  name = _PREAMBLE_RE.sub("", name).strip()
-
-  if not name:
-    return None
-
-  if len(name) > 60 or len(name.split()) > _MAX_TITLE_WORDS:
-    return None
-
-  name = _prefix_session_number_if_default(session_name, name)
-
-  return name
 
 
 async def _apply_name_to_session(
@@ -229,30 +182,6 @@ async def _apply_name_to_session(
     log.info("session_auto_grouped", session_id=session_meta.id, group=group)
 
 
-def _unfaithful_tokens(title: str, source_text: str) -> list[str]:
-  """Return title tokens absent from source_text, per the naming-fidelity rule.
-
-  A token is checked only if it has a letter AND (a digit OR 2+ uppercase letters).
-  Leading/trailing punctuation is stripped; interior characters are preserved.
-  Digit-only tokens (e.g. a session-number prefix) and single-capital ordinary
-  words are never checked. A checked token is unfaithful when it is not a
-  case-insensitive substring of source_text.
-  """
-  lowered_source = source_text.lower()
-  unfaithful: list[str] = []
-  for token in title.split():
-    stripped = token.strip(_UNFAITHFUL_PUNCT)
-    if not stripped or not any(c.isalpha() for c in stripped):
-      continue
-    has_digit = any(c.isdigit() for c in stripped)
-    upper_count = sum(1 for c in stripped if c.isupper())
-    if not (has_digit or upper_count >= 2):
-      continue
-    if stripped.lower() not in lowered_source:
-      unfaithful.append(stripped)
-  return unfaithful
-
-
 async def maybe_auto_name(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -279,7 +208,6 @@ async def maybe_auto_name(
         user_message=user_slice,
         assistant_response=assistant_slice,
     )
-    source_text = "\n".join([user_slice, assistant_slice, *existing_groups])
 
     options = list(iter_light_backends(cfg))
     if not options:
@@ -302,44 +230,19 @@ async def maybe_auto_name(
         log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
         continue
 
-      name = _sanitize_session_title(raw, session_meta.name)
-      if name is None:
+      name, group = _parse_name_and_group(raw)
+      if not name or len(name) > 60:
         log.warning(
             "autonamer_failed",
             session_id=session_meta.id,
             error="empty or unparseable response",
         )
         continue
+      name = _prefix_session_number_if_default(session_meta.name, name)
       break
     else:
       return
 
-    tokens = _unfaithful_tokens(name, source_text)
-    if tokens:
-      correction = (
-          f"Your previous title used names not present in the conversation: {', '.join(tokens)}. "
-          "Use only names that appear verbatim in the conversation.")
-      raw = await _generate(f"{title_instruction}\n\n{prompt}\n\n{correction}")
-      name = _sanitize_session_title(raw, session_meta.name)
-      if name is None:
-        log.warning(
-            "session_auto_name_unfaithful",
-            session_id=session_meta.id,
-            rejected_title=None,
-            tokens=tokens,
-        )
-        return
-      tokens = _unfaithful_tokens(name, source_text)
-      if tokens:
-        log.warning(
-            "session_auto_name_unfaithful",
-            session_id=session_meta.id,
-            rejected_title=name,
-            tokens=tokens,
-        )
-        return
-
-    _, group, _ = _parse_name_and_group(raw)
     matched_group = _fuzzy_match_group(group, existing_groups) if group else None
     await _apply_name_to_session(session_mgr, session_meta, name=name, group=matched_group)
 

@@ -11,7 +11,7 @@ import structlog
 from croniter import croniter
 
 from src.core import event_types as ET
-from src.core.backup import BACKUP_DIR, apply_retention, create_backup
+from src.core.backup import apply_retention, create_backup
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks, load_config
 from src.core.backlog_loop import determine_action
 from src.core.models import SessionMetadata, SpawnRequest, TaskType, parse_utc_datetime
@@ -29,7 +29,7 @@ async def _backup_handler() -> str:
   """Built-in handler: create a backup and apply retention policy."""
   loop = asyncio.get_running_loop()
   archive = await loop.run_in_executor(None, create_backup)
-  await loop.run_in_executor(None, apply_retention, BACKUP_DIR)
+  await loop.run_in_executor(None, apply_retention)
   log.info('backup_handler_done', archive=str(archive))
   return str(archive)
 

@@ -37,7 +37,8 @@ def _request() -> Request:
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
-  monkeypatch.setattr(pages, "_PERFETTO_MERGE_CACHE_DIR", tmp_path / "cache")
+  cache_dir = tmp_path / "cache"
+  monkeypatch.setattr(pages, "_perfetto_merge_cache_dir", lambda: cache_dir)
   app = FastAPI()
   app.add_middleware(server._CharlieBotGZipMiddleware, minimum_size=1)
   app.include_router(pages.router)
@@ -121,7 +122,7 @@ def test_merge_cache_hits_invalidates_on_mtime_and_prunes(
     trace = tmp_path / f"rank{index}.json"
     _write_trace(trace, str(index))
     assert client.get("/perfetto/merged", params={"trace": str(trace)}).status_code == 200
-  assert len(list(pages._PERFETTO_MERGE_CACHE_DIR.glob("*.json.gz"))) <= 8
+  assert len(list(pages._perfetto_merge_cache_dir().glob("*.json.gz"))) <= 8
 
 
 @pytest.mark.asyncio

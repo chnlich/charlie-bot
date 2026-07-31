@@ -10,12 +10,16 @@ import structlog
 import yaml
 from pydantic import BaseModel
 
+from src.core.config import charliebot_home_dir
 from src.core.process import kill_process_group
 from src.core.timeouts import SLASH_COMMAND_DEFAULT_TIMEOUT
 
 log = structlog.get_logger()
 
-_SLASH_COMMANDS_FILE = Path.home() / '.charliebot' / 'slash_commands.yaml'
+
+def _slash_commands_file() -> Path:
+  """Path of this profile's slash command file. Resolved per call, never at import."""
+  return charliebot_home_dir() / 'slash_commands.yaml'
 
 
 class SlashCommandParam(BaseModel):
@@ -42,14 +46,15 @@ class SlashCommand(BaseModel):
 
 
 def load_slash_commands() -> list[SlashCommand]:
-  """Read ~/.charliebot/slash_commands.yaml fresh on every call. Returns empty list if missing."""
-  if not _SLASH_COMMANDS_FILE.exists():
+  """Read the profile's slash_commands.yaml fresh on every call. Returns empty list if missing."""
+  path = _slash_commands_file()
+  if not path.exists():
     return []
   try:
-    raw = _SLASH_COMMANDS_FILE.read_text(encoding='utf-8')
+    raw = path.read_text(encoding='utf-8')
     data = yaml.safe_load(raw) or {}
   except (OSError, yaml.YAMLError) as e:
-    log.warning('slash_commands_load_failed', path=str(_SLASH_COMMANDS_FILE), error=str(e))
+    log.warning('slash_commands_load_failed', path=str(path), error=str(e))
     return []
 
   commands_raw = data.get('commands') or {}

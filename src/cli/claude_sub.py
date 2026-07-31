@@ -30,6 +30,7 @@ from src.cli.claude_sub_bridge import (
     HookTurnState,
     PromptDelivery,
 )
+from src.core.config import charliebot_home_dir
 from src.core.process import kill_process_group
 
 _MIN_CLAUDE_VERSION = (2, 1, 210)
@@ -47,7 +48,6 @@ _TERMINATE_TIMEOUT_SECONDS = 5.0
 _IDLE_NOTIFICATION_THRESHOLD_MS = 1000
 _CAPABILITY_MARKERS = ("--plugin-dir", "--settings", "--session-id", "--resume")
 _VERSION_RE = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
-_SESSION_MARKER_DIR = Path.home() / ".charliebot" / "claude-sub-sessions"
 _SESSION_CONFIG_DIR_NAME = "configs"
 _HOOK_EVENTS = (
     "SessionStart",
@@ -274,8 +274,13 @@ async def _pane_info(session_id: str) -> PaneInfo:
   return PaneInfo(pid=pid, cwd=fields[1], command=fields[2], dead=fields[3] == "1")
 
 
+def _session_marker_dir() -> Path:
+  """This profile's claude-sub marker directory. Resolved per call, never at import."""
+  return charliebot_home_dir() / "claude-sub-sessions"
+
+
 def _marker_path(session_id: str) -> Path:
-  return _SESSION_MARKER_DIR / f"{session_id}.json"
+  return _session_marker_dir() / f"{session_id}.json"
 
 
 def _read_marker(session_id: str) -> SessionMarkerState | None:
@@ -320,7 +325,7 @@ def _claude_user_config_paths() -> tuple[Path, Path, Path, Path]:
 
 
 def _session_config_dir(session_id: str) -> Path:
-  return _SESSION_MARKER_DIR / _SESSION_CONFIG_DIR_NAME / session_id
+  return _session_marker_dir() / _SESSION_CONFIG_DIR_NAME / session_id
 
 
 def _write_json_atomically(path: Path, value: dict[str, Any]) -> None:

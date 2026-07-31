@@ -25,7 +25,7 @@ function loadArtifactsScript(opts) {
     escapeHtml,
     hljs: {highlight: (value) => ({value: escapeHtml(value)})},
     localStorage: {getItem: () => null, setItem: () => {}},
-    window: {addEventListener: () => {}, USER_HOME: '/home/user'},
+    window: {addEventListener: () => {}, SESSIONS_ROOT: '/home/user/.charliebot/sessions'},
     console,
     URL: globalThis.URL,
   };
@@ -44,9 +44,9 @@ function loadArtifactsScript(opts) {
   return context;
 }
 
-const USER_HOME = '/home/user';
+const SESSIONS_ROOT = '/home/user/.charliebot/sessions';
 const SESSION_ID = 'sess-42';
-const SESSION_DIR = USER_HOME + '/.charliebot/sessions/' + SESSION_ID;
+const SESSION_DIR = SESSIONS_ROOT + '/' + SESSION_ID;
 
 function makeVersion(v, file, verifyState) {
   return {
@@ -81,7 +81,7 @@ test('lookupRegisteredPlanVersion returns the plan+version when absPath matches 
   const plan = makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'My Plan', state: 'awaiting approval'});
   const snapshot = {plans: [plan]};
   const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, USER_HOME);
+  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
   assert.equal(result.planId, 1);
   assert.equal(result.v, 1);
   assert.equal(result.title, 'My Plan');
@@ -97,7 +97,7 @@ test('lookupRegisteredPlanVersion matches the latest of multiple versions by fil
   ], {state: 'in flight'});
   const snapshot = {plans: [plan]};
   const absPath = SESSION_DIR + '/artifacts/plan_02.html';
-  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, USER_HOME);
+  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
   assert.equal(result.planId, 2);
   assert.equal(result.v, 2);
   assert.equal(result.file, 'artifacts/plan_02.html');
@@ -108,23 +108,23 @@ test('lookupRegisteredPlanVersion returns null when the absPath is not in the re
   const plan = makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')]);
   const snapshot = {plans: [plan]};
   const unregistered = SESSION_DIR + '/artifacts/other_report.html';
-  assert.equal(ctx.lookupRegisteredPlanVersion(snapshot, unregistered, SESSION_ID, USER_HOME), null);
+  assert.equal(ctx.lookupRegisteredPlanVersion(snapshot, unregistered, SESSION_ID, SESSIONS_ROOT), null);
 });
 
 test('lookupRegisteredPlanVersion returns null for a link to another session dir (never in this registry)', () => {
   const ctx = loadArtifactsScript();
   const plan = makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')]);
   const snapshot = {plans: [plan]};
-  const otherSessionDir = USER_HOME + '/.charliebot/sessions/other-sess/artifacts/plan_01.html';
-  assert.equal(ctx.lookupRegisteredPlanVersion(snapshot, otherSessionDir, SESSION_ID, USER_HOME), null);
+  const otherSessionDir = SESSIONS_ROOT + '/other-sess/artifacts/plan_01.html';
+  assert.equal(ctx.lookupRegisteredPlanVersion(snapshot, otherSessionDir, SESSION_ID, SESSIONS_ROOT), null);
 });
 
 test('lookupRegisteredPlanVersion returns null for an empty or missing snapshot', () => {
   const ctx = loadArtifactsScript();
   const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  assert.equal(ctx.lookupRegisteredPlanVersion(null, absPath, SESSION_ID, USER_HOME), null);
-  assert.equal(ctx.lookupRegisteredPlanVersion({plans: []}, absPath, SESSION_ID, USER_HOME), null);
-  assert.equal(ctx.lookupRegisteredPlanVersion({}, absPath, SESSION_ID, USER_HOME), null);
+  assert.equal(ctx.lookupRegisteredPlanVersion(null, absPath, SESSION_ID, SESSIONS_ROOT), null);
+  assert.equal(ctx.lookupRegisteredPlanVersion({plans: []}, absPath, SESSION_ID, SESSIONS_ROOT), null);
+  assert.equal(ctx.lookupRegisteredPlanVersion({}, absPath, SESSION_ID, SESSIONS_ROOT), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -135,20 +135,20 @@ test('decidePlanCardRender returns compact when the absPath is a registered plan
   const ctx = loadArtifactsScript();
   const snapshot = {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]};
   const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  assert.equal(ctx.decidePlanCardRender(snapshot, absPath, SESSION_ID, USER_HOME), 'compact');
+  assert.equal(ctx.decidePlanCardRender(snapshot, absPath, SESSION_ID, SESSIONS_ROOT), 'compact');
 });
 
 test('decidePlanCardRender returns legacy when the absPath is not registered', () => {
   const ctx = loadArtifactsScript();
   const snapshot = {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]};
   const absPath = SESSION_DIR + '/artifacts/other.html';
-  assert.equal(ctx.decidePlanCardRender(snapshot, absPath, SESSION_ID, USER_HOME), 'legacy');
+  assert.equal(ctx.decidePlanCardRender(snapshot, absPath, SESSION_ID, SESSIONS_ROOT), 'legacy');
 });
 
 test('decidePlanCardRender returns legacy when there is no snapshot (planPanel unavailable)', () => {
   const ctx = loadArtifactsScript();
   const absPath = SESSION_DIR + '/artifacts/plan_01.html';
-  assert.equal(ctx.decidePlanCardRender(null, absPath, SESSION_ID, USER_HOME), 'legacy');
+  assert.equal(ctx.decidePlanCardRender(null, absPath, SESSION_ID, SESSIONS_ROOT), 'legacy');
 });
 
 // ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ test('lookupRegisteredPlanVersion returns the labeled state for an approved plan
   const plan = makePlan(1, [makeVersion(2, 'artifacts/plan_02.html')], {state: 'approved', takeoff: {v: 2, at: 'x'}});
   const snapshot = {plans: [plan]};
   const absPath = SESSION_DIR + '/artifacts/plan_02.html';
-  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, USER_HOME);
+  const result = ctx.lookupRegisteredPlanVersion(snapshot, absPath, SESSION_ID, SESSIONS_ROOT);
   assert.equal(result.state, 'approved \u00B7 v2');
 });
 

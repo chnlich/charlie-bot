@@ -6,12 +6,41 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 import structlog
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 log = structlog.get_logger()
 
 from src.core.models import BackendOption
 from src.core.yaml_utils import load_yaml
+
+CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
+
+
+def default_charliebot_home() -> Path:
+  """The state directory used when ``CHARLIEBOT_HOME`` is unset."""
+  return Path.home() / ".charliebot"
+
+
+def charliebot_home_dir() -> Path:
+  """Return the state directory this process belongs to (its profile).
+
+  ``CHARLIEBOT_HOME`` selects the profile: unset or empty gives the default
+  ``~/.charliebot``, so an untouched host behaves exactly as before. This is the
+  only place in the tree that reads the variable; every other path is derived
+  from :attr:`CharlieBotConfig.charliebot_home`.
+
+  A set value must be absolute or start with ``~``. A relative value would be
+  resolved against each process's own working directory, silently handing the
+  server, the CLI and every worker a different home, so it is rejected here
+  instead of surfacing later as a write into the wrong profile.
+  """
+  raw = os.environ.get(CHARLIEBOT_HOME_ENV, "").strip()
+  if not raw:
+    return default_charliebot_home()
+  if not (raw.startswith("~") or raw.startswith("/")):
+    raise ValueError(
+        f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
+  return Path(raw).expanduser().resolve()
 
 
 class ScheduledTaskResolutionError(Exception):
@@ -86,8 +115,8 @@ class CharlieBotConfig(BaseModel):
   # Server
   server_port: int = 18498
 
-  # Paths
-  charliebot_home: Path = Path.home() / ".charliebot"
+  # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
+  charliebot_home: Path = Field(default_factory=charliebot_home_dir)
 
   # Workspace directories to scan for git repos
   workspace_dirs: list[str] = ["~/workspace"]
@@ -245,14 +274,20 @@ _config_mtime: float = 0.0
 
 
 def load_config() -> CharlieBotConfig:
-  """Load config from ~/.charliebot/config.yaml."""
-  home = Path.home() / ".charliebot"
+  """Load config from this profile's ``config.yaml`` (see :func:`charliebot_home_dir`)."""
+  home = charliebot_home_dir()
   config_path = home / "config.yaml"
 
   yaml_data: dict = load_yaml(config_path, default={})
 
-  yaml_data.setdefault("charliebot_home", str(home))
-  return CharlieBotConfig(**yaml_data)
+  # The home directory is chosen by the environment, never by the file that lives
+  # inside it: honouring the key would leave the config loaded from one profile and
+  # the state written to another, and dropping it silently would hide the mistake.
+  if "charliebot_home" in yaml_data:
+    raise ValueError(
+        f"{config_path} sets 'charliebot_home'; that path is chosen by the "
+        f"{CHARLIEBOT_HOME_ENV} environment variable. Remove the key.")
+  return CharlieBotConfig(charliebot_home=home, **yaml_data)
 
 
 def get_config() -> CharlieBotConfig:
@@ -264,7 +299,7 @@ def get_config() -> CharlieBotConfig:
   holder pinned to a stale snapshot.
   """
   global _config, _config_mtime
-  config_path = Path.home() / ".charliebot" / "config.yaml"
+  config_path = charliebot_home_dir() / "config.yaml"
   try:
     mtime = config_path.stat().st_mtime
   except OSError:
@@ -397,7 +432,7 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
   retries each tick).
   """
   global _cron_tasks, _cron_mtime, _cron_prompt_mtimes
-  cron_path = Path.home() / ".charliebot" / "config.d" / "cron.yaml"
+  cron_path = charliebot_home_dir() / "config.d" / "cron.yaml"
   try:
     mtime = cron_path.stat().st_mtime
   except FileNotFoundError:

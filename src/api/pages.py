@@ -34,8 +34,12 @@ log = structlog.get_logger()
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _PT_TZ = ZoneInfo("America/Los_Angeles")
-_PERFETTO_MERGE_CACHE_DIR = Path.home() / ".charliebot" / "cache" / "perfetto_merge"
 _PERFETTO_MERGE_CACHE_LIMIT = 8
+
+
+def _perfetto_merge_cache_dir() -> Path:
+  """This profile's Perfetto merge cache. Resolved per call, never at import."""
+  return get_config().charliebot_home / "cache" / "perfetto_merge"
 
 
 def _get_git_version() -> str:
@@ -191,7 +195,7 @@ def _merge_cache_key(paths: list[Path], slim: bool) -> str:
 
 def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
   entries = sorted(
-      (path for path in _PERFETTO_MERGE_CACHE_DIR.glob("*.json.gz") if path != fresh_path),
+      (path for path in _perfetto_merge_cache_dir().glob("*.json.gz") if path != fresh_path),
       key=lambda path: path.stat().st_mtime_ns,
       reverse=True,
   )
@@ -200,12 +204,13 @@ def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
 
 
 def _cached_merge(paths: list[Path], slim: bool) -> Path:
-  _PERFETTO_MERGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-  cache_path = _PERFETTO_MERGE_CACHE_DIR / f"{_merge_cache_key(paths, slim)}.json.gz"
+  cache_dir = _perfetto_merge_cache_dir()
+  cache_dir.mkdir(parents=True, exist_ok=True)
+  cache_path = cache_dir / f"{_merge_cache_key(paths, slim)}.json.gz"
   if cache_path.is_file():
     return cache_path
 
-  descriptor, temp_name = tempfile.mkstemp(dir=_PERFETTO_MERGE_CACHE_DIR, suffix=".tmp")
+  descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
   os.close(descriptor)
   temp_path = Path(temp_name)
   try:
@@ -418,7 +423,7 @@ async def index(
           "load_errors": load_errors,
           "auth_enabled": bool(cfg.charliebot_access_key),
           "hostname": socket.gethostname(),
-          "user_home": str(pathlib.Path.home()),
+          "sessions_root": str(cfg.sessions_dir),
           "version": _RUNTIME_GIT_VERSION,
           "static_asset_version": _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-"),
       })

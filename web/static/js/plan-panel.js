@@ -118,64 +118,64 @@ const planPanel = (() => {
     return plan.state || '';
   }
 
-  function buildIframeUrl(file, sessionId, userHome) {
-    var home = userHome;
-    if (typeof window !== 'undefined' && window.USER_HOME && !home) {
-      home = window.USER_HOME;
+  function buildIframeUrl(file, sessionId, sessionsRoot) {
+    var root = sessionsRoot;
+    if (typeof window !== 'undefined' && window.SESSIONS_ROOT && !root) {
+      root = window.SESSIONS_ROOT;
     }
-    if (!home) {
-      throw new Error('USER_HOME not available for plan panel iframe URL');
+    if (!root) {
+      throw new Error('SESSIONS_ROOT not available for plan panel iframe URL');
     }
-    var absPath = home + '/.charliebot/sessions/' + sessionId + '/' + file;
+    var absPath = root + '/' + sessionId + '/' + file;
     return '/files' + absPath + '#cbsession=' + encodeURIComponent(sessionId) +
       '&' + PLAN_PANEL_MARKER + '=1';
   }
 
-  function buildIframeUrlFromVersion(plan, version, sessionId, userHome) {
+  function buildIframeUrlFromVersion(plan, version, sessionId, sessionsRoot) {
     if (!plan || !plan.versions) return null;
     var ver = null;
     for (var i = 0; i < plan.versions.length; i++) {
       if (plan.versions[i].v === version) { ver = plan.versions[i]; break; }
     }
     if (!ver) return null;
-    return buildIframeUrl(ver.file, sessionId, userHome);
+    return buildIframeUrl(ver.file, sessionId, sessionsRoot);
   }
 
   // Standalone URL for the "Open in tab" action: real /files URL with the
   // cbsession fragment but WITHOUT the cbpanel marker. The comment tray
   // activates via the top-level-page branch of artifact-comments.js (the
   // framed guard is skipped because the page is not in an iframe).
-  function buildStandaloneUrl(file, sessionId, userHome) {
-    var home = userHome;
-    if (typeof window !== 'undefined' && window.USER_HOME && !home) {
-      home = window.USER_HOME;
+  function buildStandaloneUrl(file, sessionId, sessionsRoot) {
+    var root = sessionsRoot;
+    if (typeof window !== 'undefined' && window.SESSIONS_ROOT && !root) {
+      root = window.SESSIONS_ROOT;
     }
-    if (!home) {
-      throw new Error('USER_HOME not available for plan standalone URL');
+    if (!root) {
+      throw new Error('SESSIONS_ROOT not available for plan standalone URL');
     }
-    var absPath = home + '/.charliebot/sessions/' + sessionId + '/' + file;
+    var absPath = root + '/' + sessionId + '/' + file;
     return '/files' + absPath + '#cbsession=' + encodeURIComponent(sessionId);
   }
 
-  function buildStandaloneUrlFromVersion(plan, version, sessionId, userHome) {
+  function buildStandaloneUrlFromVersion(plan, version, sessionId, sessionsRoot) {
     if (!plan || !plan.versions) return null;
     var ver = null;
     for (var i = 0; i < plan.versions.length; i++) {
       if (plan.versions[i].v === version) { ver = plan.versions[i]; break; }
     }
     if (!ver) return null;
-    return buildStandaloneUrl(ver.file, sessionId, userHome);
+    return buildStandaloneUrl(ver.file, sessionId, sessionsRoot);
   }
 
-  function _buildFilesFetchUrl(file, sessionId, userHome) {
-    var home = userHome;
-    if (typeof window !== 'undefined' && window.USER_HOME && !home) {
-      home = window.USER_HOME;
+  function _buildFilesFetchUrl(file, sessionId, sessionsRoot) {
+    var root = sessionsRoot;
+    if (typeof window !== 'undefined' && window.SESSIONS_ROOT && !root) {
+      root = window.SESSIONS_ROOT;
     }
-    if (!home) {
-      throw new Error('USER_HOME not available for plan panel files fetch');
+    if (!root) {
+      throw new Error('SESSIONS_ROOT not available for plan panel files fetch');
     }
-    var absPath = home + '/.charliebot/sessions/' + sessionId + '/' + file;
+    var absPath = root + '/' + sessionId + '/' + file;
     return '/files' + absPath;
   }
 

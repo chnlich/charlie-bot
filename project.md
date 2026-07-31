@@ -25,6 +25,12 @@
 ### 3.1 Home Directory (`~/.charliebot/` or `CHARLIEBOT_HOME`)
 All instance-specific data (configs, logs, sessions) is stored here.
 
+`CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
+or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
+profiles run side by side on one host, each with its own port in its own `config.yaml`. The
+variable is read in exactly one place, `charliebot_home_dir()` in `src/core/config.py`; every
+other path derives from `CharlieBotConfig.charliebot_home`.
+
 ```text
 ~/.charliebot/
 ├── config.yaml          # API keys, settings, and project_dirs list

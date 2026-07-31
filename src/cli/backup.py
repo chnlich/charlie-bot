@@ -10,12 +10,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.core.backup import BACKUP_DIR, apply_retention, create_backup, list_backups, restore_backup
+from src.core.backup import apply_retention, backup_dir, create_backup, list_backups, restore_backup
 
 
 def _cmd_create(args: argparse.Namespace) -> None:
   archive = create_backup()
-  apply_retention(BACKUP_DIR)
+  apply_retention()
   print(f'Created: {archive}')
 
 
@@ -36,7 +36,7 @@ def _cmd_list(args: argparse.Namespace) -> None:
 def _cmd_restore(args: argparse.Namespace) -> None:
   archive_path = Path(args.file)
   if not archive_path.is_absolute():
-    archive_path = BACKUP_DIR / archive_path
+    archive_path = backup_dir() / archive_path
   if not archive_path.exists():
     print(f'Error: {archive_path} not found.', file=sys.stderr)
     sys.exit(1)
@@ -53,7 +53,8 @@ def main() -> None:
   sub.add_parser('list', help='List available backups')
   restore_parser = sub.add_parser('restore', help='Restore from a backup file')
   restore_parser.add_argument('file', help='Backup filename or path')
-  restore_parser.add_argument('--target', help='Target directory (default: ~/.charliebot)')
+  restore_parser.add_argument(
+      '--target', help="Target directory (default: this profile's state directory)")
 
   args = parser.parse_args()
   {'create': _cmd_create, 'list': _cmd_list, 'restore': _cmd_restore}[args.command](args)

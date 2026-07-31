@@ -272,7 +272,7 @@ def test_cron_api_persists_and_clears_backend(
 ) -> None:
   cron_path = tmp_path / "cron.yaml"
   cron_path.parent.mkdir(parents=True, exist_ok=True)
-  monkeypatch.setattr(cron_api, "CRON_PATH", cron_path)
+  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
@@ -309,7 +309,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cron_path = tmp_path / "cron.yaml"
-  monkeypatch.setattr(cron_api, "CRON_PATH", cron_path)
+  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
@@ -344,7 +344,7 @@ def test_cron_api_rejects_invalid_backend_on_update(
       yaml.safe_dump({"scheduled_tasks": [initial_task]}),
       encoding="utf-8",
   )
-  monkeypatch.setattr(cron_api, "CRON_PATH", cron_path)
+  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
@@ -372,7 +372,7 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
       yaml.safe_dump({"scheduled_tasks": [initial_task]}),
       encoding="utf-8",
   )
-  monkeypatch.setattr(cron_api, "CRON_PATH", cron_path)
+  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(

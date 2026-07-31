@@ -185,10 +185,10 @@ function loadPlanPanelScript(opts = {}) {
   };
   const context = {
     SESSION_ID: opts.sessionId || 'test-session',
-    USER_HOME: opts.userHome || '/home/user',
+    SESSIONS_ROOT: opts.sessionsRoot || '/home/user/.charliebot/sessions',
     console: {error: noop, log: noop, warn: noop},
     document,
-    window: {USER_HOME: opts.userHome || '/home/user'},
+    window: {SESSIONS_ROOT: opts.sessionsRoot || '/home/user/.charliebot/sessions'},
     localStorage: {getItem: () => null, setItem: noop},
     fetch: opts.fetch || (async () => {
       throw new Error('fetch should not run during script load');
@@ -513,8 +513,8 @@ test('parseOpenForks returns empty for null or empty documents', () => {
 // ---------------------------------------------------------------------------
 
 test('buildIframeUrl builds a real /files URL with cbsession and cbpanel marker', () => {
-  const {planPanel} = loadPlanPanelScript({sessionId: 'sess-42', userHome: '/home/alice'});
-  const url = planPanel.buildIframeUrl('artifacts/plan_01.html', 'sess-42', '/home/alice');
+  const {planPanel} = loadPlanPanelScript({sessionId: 'sess-42', sessionsRoot: '/home/alice/.charliebot/sessions'});
+  const url = planPanel.buildIframeUrl('artifacts/plan_01.html', 'sess-42', '/home/alice/.charliebot/sessions');
   const expectedPath = '/files/home/alice/.charliebot/sessions/sess-42/artifacts/plan_01.html';
   assert.ok(url.startsWith(expectedPath), 'URL starts with the real /files path');
   assert.ok(url.indexOf('#cbsession=sess-42') !== -1, 'URL carries the cbsession fragment');
@@ -522,12 +522,12 @@ test('buildIframeUrl builds a real /files URL with cbsession and cbpanel marker'
 });
 
 test('buildIframeUrlFromVersion resolves the correct version file', () => {
-  const {planPanel} = loadPlanPanelScript({sessionId: 's1', userHome: '/home/u'});
+  const {planPanel} = loadPlanPanelScript({sessionId: 's1', sessionsRoot: '/home/u/.charliebot/sessions'});
   const plan = makePlan(1, [
     makeVersion(1, 'artifacts/plan_01.html'),
     makeVersion(2, 'artifacts/plan_02.html'),
   ]);
-  const url = planPanel.buildIframeUrlFromVersion(plan, 2, 's1', '/home/u');
+  const url = planPanel.buildIframeUrlFromVersion(plan, 2, 's1', '/home/u/.charliebot/sessions');
   assert.ok(url.indexOf('artifacts/plan_02.html') !== -1, 'URL points to v2 file');
   assert.ok(url.indexOf('&cbpanel=1') !== -1, 'URL carries the panel marker');
 });
@@ -535,8 +535,8 @@ test('buildIframeUrlFromVersion resolves the correct version file', () => {
 test('buildIframeUrlFromVersion returns null for unknown version', () => {
   const {planPanel} = loadPlanPanelScript();
   const plan = makePlan(1, [makeVersion(1)]);
-  assert.equal(planPanel.buildIframeUrlFromVersion(plan, 99, 's1', '/home/u'), null);
-  assert.equal(planPanel.buildIframeUrlFromVersion(null, 1, 's1', '/home/u'), null);
+  assert.equal(planPanel.buildIframeUrlFromVersion(plan, 99, 's1', '/home/u/.charliebot/sessions'), null);
+  assert.equal(planPanel.buildIframeUrlFromVersion(null, 1, 's1', '/home/u/.charliebot/sessions'), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -544,8 +544,8 @@ test('buildIframeUrlFromVersion returns null for unknown version', () => {
 // ---------------------------------------------------------------------------
 
 test('buildStandaloneUrl builds a real /files URL with cbsession and NO cbpanel marker', () => {
-  const {planPanel} = loadPlanPanelScript({sessionId: 'sess-42', userHome: '/home/alice'});
-  const url = planPanel.buildStandaloneUrl('artifacts/plan_01.html', 'sess-42', '/home/alice');
+  const {planPanel} = loadPlanPanelScript({sessionId: 'sess-42', sessionsRoot: '/home/alice/.charliebot/sessions'});
+  const url = planPanel.buildStandaloneUrl('artifacts/plan_01.html', 'sess-42', '/home/alice/.charliebot/sessions');
   const expectedPath = '/files/home/alice/.charliebot/sessions/sess-42/artifacts/plan_01.html';
   assert.ok(url.startsWith(expectedPath), 'URL starts with the real /files path');
   assert.ok(url.indexOf('#cbsession=sess-42') !== -1, 'URL carries the cbsession fragment');
@@ -553,12 +553,12 @@ test('buildStandaloneUrl builds a real /files URL with cbsession and NO cbpanel 
 });
 
 test('buildStandaloneUrlFromVersion resolves the version file without cbpanel', () => {
-  const {planPanel} = loadPlanPanelScript({sessionId: 's1', userHome: '/home/u'});
+  const {planPanel} = loadPlanPanelScript({sessionId: 's1', sessionsRoot: '/home/u/.charliebot/sessions'});
   const plan = makePlan(1, [
     makeVersion(1, 'artifacts/plan_01.html'),
     makeVersion(2, 'artifacts/plan_02.html'),
   ]);
-  const url = planPanel.buildStandaloneUrlFromVersion(plan, 2, 's1', '/home/u');
+  const url = planPanel.buildStandaloneUrlFromVersion(plan, 2, 's1', '/home/u/.charliebot/sessions');
   assert.ok(url.indexOf('artifacts/plan_02.html') !== -1, 'URL points to v2 file');
   assert.ok(url.indexOf('#cbsession=s1') !== -1, 'URL carries the cbsession fragment');
   assert.equal(url.indexOf('cbpanel'), -1, 'standalone URL must NOT carry the cbpanel marker');
@@ -567,8 +567,8 @@ test('buildStandaloneUrlFromVersion resolves the version file without cbpanel', 
 test('buildStandaloneUrlFromVersion returns null for unknown version', () => {
   const {planPanel} = loadPlanPanelScript();
   const plan = makePlan(1, [makeVersion(1)]);
-  assert.equal(planPanel.buildStandaloneUrlFromVersion(plan, 99, 's1', '/home/u'), null);
-  assert.equal(planPanel.buildStandaloneUrlFromVersion(null, 1, 's1', '/home/u'), null);
+  assert.equal(planPanel.buildStandaloneUrlFromVersion(plan, 99, 's1', '/home/u/.charliebot/sessions'), null);
+  assert.equal(planPanel.buildStandaloneUrlFromVersion(null, 1, 's1', '/home/u/.charliebot/sessions'), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -803,7 +803,7 @@ test('_renderActionBar chip text is the question without the fork number, trunca
       return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'plan_01.html')])]})};
     return {ok: true, text: async () => forkHtml};
   };
-  const {planPanel} = loadPlanPanelScript({document, fetch, sessionId: 's1', userHome: '/home/u'});
+  const {planPanel} = loadPlanPanelScript({document, fetch, sessionId: 's1', sessionsRoot: '/home/u/.charliebot/sessions'});
   await planPanel.refresh();
   assert.equal(bar._children.length, 1, 'one chip rendered for the one open fork');
   const chip = bar._children[0];

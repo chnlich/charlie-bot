@@ -1,4 +1,4 @@
-"""Core backup/restore logic for ~/.charliebot data."""
+"""Core backup/restore logic for a CharlieBot profile's state directory."""
 
 import sys
 import tarfile
@@ -8,10 +8,23 @@ from typing import Optional
 
 import structlog
 
+from src.core.config import charliebot_home_dir
+
 log = structlog.get_logger()
 
-CHARLIEBOT_DIR = Path.home() / '.charliebot'
-BACKUP_DIR = Path.home() / '.charliebot_backup'
+
+def charliebot_dir() -> Path:
+  """The state directory being backed up: this profile's home."""
+  return charliebot_home_dir()
+
+
+def backup_dir() -> Path:
+  """Where this profile's archives are written, a sibling of its home.
+
+  The default home yields ``~/.charliebot_backup``, unchanged from before.
+  """
+  home = charliebot_home_dir()
+  return home.with_name(home.name + '_backup')
 
 _TIMESTAMP_FMT = '%Y%m%d-%H%M%S'
 _BACKUP_PREFIX = 'charliebot-'
@@ -62,16 +75,17 @@ def _parse_backup_date(name: str) -> Optional[datetime]:
 
 
 def create_backup() -> Path:
-  """Create a compressed backup of CHARLIEBOT_DIR.
+  """Create a compressed backup of this profile's state directory.
 
   Excludes: .git, credentials, sessions/*/threads, *.pyc, __pycache__.
 
   Returns:
     Path to the created archive.
   """
-  BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+  target_dir = backup_dir()
+  target_dir.mkdir(parents=True, exist_ok=True)
   ts = datetime.now().strftime(_TIMESTAMP_FMT)
-  archive_path = BACKUP_DIR / f'{_BACKUP_PREFIX}{ts}{_BACKUP_SUFFIX}'
+  archive_path = target_dir / f'{_BACKUP_PREFIX}{ts}{_BACKUP_SUFFIX}'
 
   def _add_recursive(tar: tarfile.TarFile, path: Path, arcname: str) -> None:
     if _should_exclude(arcname):
@@ -92,7 +106,7 @@ def create_backup() -> Path:
 
   with tarfile.open(archive_path, 'w:gz') as tar:
     try:
-      children = sorted(CHARLIEBOT_DIR.iterdir())
+      children = sorted(charliebot_dir().iterdir())
     except Exception as e:
       log.warning('backup_root_iter_failed', error=str(e))
       children = []
@@ -104,18 +118,20 @@ def create_backup() -> Path:
   return archive_path
 
 
-def apply_retention(backup_dir: Path = BACKUP_DIR) -> None:
-  """Apply tiered retention policy to backups in backup_dir.
+def apply_retention(target_dir: Optional[Path] = None) -> None:
+  """Apply tiered retention policy to backups in target_dir (default: this profile's).
 
   - Keep all backups from the last 7 days.
   - Keep Sunday-only backups from 7-30 days ago.
   - Keep 1st-of-month backups from 30-90 days ago.
   - Delete everything older than 90 days.
   """
-  if not backup_dir.exists():
+  if target_dir is None:
+    target_dir = backup_dir()
+  if not target_dir.exists():
     return
   now = datetime.now()
-  for backup_file in backup_dir.glob(f'{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}'):
+  for backup_file in target_dir.glob(f'{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}'):
     backup_date = _parse_backup_date(backup_file.name)
     if backup_date is None:
       log.debug('backup_retention_skip_unparseable', name=backup_file.name)
@@ -142,10 +158,10 @@ def restore_backup(archive_path: Path, target: Path = None) -> None:
 
   Args:
     archive_path: Path to the .tar.gz backup file.
-    target: Destination directory. Defaults to CHARLIEBOT_DIR.
+    target: Destination directory. Defaults to this profile's state directory.
   """
   if target is None:
-    target = CHARLIEBOT_DIR
+    target = charliebot_dir()
   if target.exists():
     answer = input(f'Warning: {target} already exists. Overwrite? [y/N] ').strip().lower()
     if answer != 'y':
@@ -158,21 +174,21 @@ def restore_backup(archive_path: Path, target: Path = None) -> None:
   log.info('backup_restored', archive=str(archive_path), target=str(target))
 
 
-def list_backups(backup_dir: Path = None) -> list:
+def list_backups(scan_dir: Optional[Path] = None) -> list:
   """Return sorted list of backup files with size and date info.
 
   Args:
-    backup_dir: Directory to scan. Defaults to BACKUP_DIR.
+    scan_dir: Directory to scan. Defaults to this profile's backup directory.
 
   Returns:
     List of dicts with keys: path, name, size, date.
   """
-  if backup_dir is None:
-    backup_dir = BACKUP_DIR
-  if not backup_dir.exists():
+  if scan_dir is None:
+    scan_dir = backup_dir()
+  if not scan_dir.exists():
     return []
   results = []
-  for f in sorted(backup_dir.glob(f'{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}')):
+  for f in sorted(scan_dir.glob(f'{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}')):
     try:
       stat = f.stat()
       results.append({

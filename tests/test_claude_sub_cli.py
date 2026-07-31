@@ -423,7 +423,7 @@ def test_session_config_overlay_sets_idle_threshold_without_touching_sources(
       "_claude_user_config_paths",
       lambda: (source_global, source_settings, source_credentials, source_remote),
   )
-  monkeypatch.setattr(claude_sub, "_SESSION_MARKER_DIR", tmp_path / "markers")
+  monkeypatch.setattr(claude_sub, "_session_marker_dir", lambda: tmp_path / "markers")
 
   config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
@@ -461,7 +461,7 @@ def _install_config_paths(
       "_claude_user_config_paths",
       lambda: (source_global, source_settings, source_credentials, source_remote),
   )
-  monkeypatch.setattr(claude_sub, "_SESSION_MARKER_DIR", tmp_path / "markers")
+  monkeypatch.setattr(claude_sub, "_session_marker_dir", lambda: tmp_path / "markers")
   return source_global, source_settings, source_credentials, source_remote
 
 

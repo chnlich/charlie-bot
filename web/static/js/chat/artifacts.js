@@ -15,11 +15,11 @@ function basename(path) {
 
 function resolveArtifactAbsolutePath(filePath) {
   if (filePath.charAt(0) === '/') return filePath;
-  var home = (typeof window !== 'undefined' && window.USER_HOME) ? window.USER_HOME : '';
-  if (!home) {
-    throw new Error('window.USER_HOME not injected');
+  var root = (typeof window !== 'undefined' && window.SESSIONS_ROOT) ? window.SESSIONS_ROOT : '';
+  if (!root) {
+    throw new Error('window.SESSIONS_ROOT not injected');
   }
-  return home + '/.charliebot/sessions/' + SESSION_ID + '/' + filePath;
+  return root + '/' + SESSION_ID + '/' + filePath;
 }
 
 function escapeForSrcdoc(html) {
@@ -257,11 +257,11 @@ function insertHtmlArtifactCard(prose, card, ordinal) {
 // module (single source of truth, no client-side state derivation).
 // ---------------------------------------------------------------------------
 
-function buildSessionDir(sessionId, userHome) {
-  var home = userHome;
-  if (home == null && typeof window !== 'undefined' && window.USER_HOME) home = window.USER_HOME;
-  if (!home) return '';
-  return home + '/.charliebot/sessions/' + sessionId;
+function buildSessionDir(sessionId, sessionsRoot) {
+  var root = sessionsRoot;
+  if (root == null && typeof window !== 'undefined' && window.SESSIONS_ROOT) root = window.SESSIONS_ROOT;
+  if (!root) return '';
+  return root + '/' + sessionId;
 }
 
 function _planStateLabel(plan) {
@@ -274,9 +274,9 @@ function _planStateLabel(plan) {
   return plan ? plan.state : '';
 }
 
-function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, userHome) {
+function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) {
   var plans = (snapshot && snapshot.plans) || [];
-  var sessionDir = buildSessionDir(sessionId, userHome);
+  var sessionDir = buildSessionDir(sessionId, sessionsRoot);
   if (!sessionDir) return null;
   for (var i = 0; i < plans.length; i++) {
     var plan = plans[i];
@@ -293,8 +293,8 @@ function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, userHome) {
   return null;
 }
 
-function decidePlanCardRender(snapshot, absPath, sessionId, userHome) {
-  return lookupRegisteredPlanVersion(snapshot, absPath, sessionId, userHome) ? 'compact' : 'legacy';
+function decidePlanCardRender(snapshot, absPath, sessionId, sessionsRoot) {
+  return lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) ? 'compact' : 'legacy';
 }
 
 function lookupPlanVersionState(snapshot, planId, v) {
@@ -424,7 +424,7 @@ function renderArtifactLink(link, ordinal, prose) {
       return;
     }
     var snapshot = _planRegistrySnapshot();
-    var reg = snapshot ? lookupRegisteredPlanVersion(snapshot, link.absPath, SESSION_ID, window.USER_HOME) : null;
+    var reg = snapshot ? lookupRegisteredPlanVersion(snapshot, link.absPath, SESSION_ID, window.SESSIONS_ROOT) : null;
     if (reg) {
       renderPlanCompactCard(link, ordinal, currentProse, reg);
     } else {

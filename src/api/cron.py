@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.api.deps import get_session_manager
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_config, get_scheduled_tasks
+from src.core.config import (
+    CharlieBotConfig,
+    ScheduledTaskConfig,
+    charliebot_home_dir,
+    get_config,
+    get_scheduled_tasks,
+)
 from src.core.scheduler import effective_scheduled_task_backend
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
 from src.core.yaml_utils import load_yaml, save_yaml
@@ -17,15 +23,17 @@ from src.core.yaml_utils import load_yaml, save_yaml
 log = structlog.get_logger()
 router = APIRouter()
 
-CRON_PATH = Path.home() / '.charliebot' / 'config.d' / 'cron.yaml'
+def cron_path() -> Path:
+  """Path of this profile's cron config. Resolved per call, never at import."""
+  return charliebot_home_dir() / 'config.d' / 'cron.yaml'
 
 
 def _read_cron_yaml() -> dict:
-  return load_yaml(CRON_PATH, default={'scheduled_tasks': []})
+  return load_yaml(cron_path(), default={'scheduled_tasks': []})
 
 
 def _write_cron_yaml(data: dict):
-  save_yaml(CRON_PATH, data)
+  save_yaml(cron_path(), data)
 
 
 def _validate_backend_id(backend: Optional[str], cfg: CharlieBotConfig) -> None:

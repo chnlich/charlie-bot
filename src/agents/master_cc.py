@@ -340,7 +340,12 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
     extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
   resume_session = bool(resume_session_id)
-  if session_meta.cc_session_id and not resume_session:
+  # Capability check, independent of `resume_session`: for the Claude family the
+  # resume id travels via `extra_flags` (--resume), so `resume_session_id` (and
+  # thus `resume_session`) is always None/False there even while actively
+  # resuming. Reusing `resume_session` here would make this warning fire on
+  # every Claude-family round that has an anchor.
+  if session_meta.cc_session_id and option.type not in _RESUME_CAPABLE_BACKEND_TYPES:
     log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
   if item.extra_claude_flags:
     extra_flags.extend(item.extra_claude_flags)

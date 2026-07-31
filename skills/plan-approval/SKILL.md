@@ -1,8 +1,8 @@
 ---
 name: plan-approval
 description: Enforces explicit user approval at the CharlieBot master-to-user
-  boundary. Use only when the CharlieBot master is presenting a plan, receiving plan
-  feedback, or preparing to delegate implementation.
+  boundary. Use only when the CharlieBot master is producing an understanding page,
+  presenting a plan, receiving plan feedback, or preparing to delegate implementation.
 user-invocable: false
 ---
 
@@ -34,12 +34,35 @@ Details.** These are the exact terms a "take off" approves. The `BLOCK KIT` comm
 in `prompts/plan_template.html` is the canonical grammar for the plan surface; do
 not restate it here.
 
+## Understanding
+
+An understanding page precedes the plan when the master must first align the reading
+(the trigger and its exemptions live in the master prompt).
+
+- The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
+  `prompts/plan_template.html`. Five blocks: goal with the why one level up; the
+  deliverable through two or three concrete examples; acceptance criteria, each a trigger
+  condition plus an observable behavior (EARS phrasing, "WHEN <condition> THE SYSTEM
+  SHALL <behavior>", is an example shape, not a requirement); non-goals; numbered
+  divergences rendered as `div.fork` blocks.
+- Don't guess: any point the request leaves unstated where different readings lead to
+  different designs must appear as a numbered divergence; never silently pick a reading.
+- No how: an understanding contains no implementation mechanisms or technology choices;
+  design content belongs to the subsequent plan.
+- Not registered in the plan registry, no verify worker, and take off does not apply. The
+  user confirms by answering the numbered divergences in chat; unmentioned items take
+  their recommendation. Confirmation is ordinary feedback and introduces no new approval token.
+- The subsequent plan's section 1 references the confirmed understanding's file path.
+
 ## Plan
 
 - Research the codebase first; present the plan as a decision surface following the
   template block kit, with numbered Trade-offs for the choices the user must judge.
 - Render the artifact per the USAGE note atop the BLOCK KIT comment in `prompts/plan_template.html`.
 - Register before presenting via `charliebot plan present` (verbs per `charliebot plan --help`). The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth. Record the code baseline when the plan pins one.
+- An improve-loop takeoff plan follows this same contract; its approval object covers
+  repo, goal, iterations, work branch, and merge-back — loop parameters with reasonable
+  alternatives (iteration count, merge-back) make natural Trade-offs.
 - End with: "Say **take off** when ready to implement."
 
 ## Feedback
@@ -116,4 +139,4 @@ and `/api/internal/improve`:
 
 - At completion or at a blocking failure, account for every approval-object term:
   delivered or deviated. Each deviation is a retroactive Trade-off — approved term,
-  what landed, one-line reason — accepted by default or reverted on request.
+  what landed, one-line reason — accepted by default or reverted on request; the revert becomes a new delegation.

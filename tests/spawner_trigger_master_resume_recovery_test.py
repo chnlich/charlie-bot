@@ -52,10 +52,14 @@ class FakeSessionManager:
   async def update_thinking_state(self, session_id: str, *args: object, **kwargs: object) -> None:
     return None
 
-  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> None:
+  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> Optional[str]:
     if self._meta is not None:
       self._meta.cc_session_id = cc_session_id
     self.persisted_cc_session_ids.append(cc_session_id)
+    return cc_session_id
+
+  async def has_completed_round(self, session_id: str) -> bool:
+    return False
 
   async def mark_unread(self, session_id: str) -> None:
     return None
@@ -65,12 +69,19 @@ class FakeSessionManager:
         persist_and_broadcast=self.persist_and_broadcast,
         update_thinking_state=self.update_thinking_state,
         mark_unread=self.mark_unread,
+        persist_cc_session_id=self.persist_cc_session_id,
+        has_completed_round=self.has_completed_round,
     )
 
 
 @pytest.mark.asyncio
-async def test_stale_resume_id_retries_once_without_resume_and_persists_new_id(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Stale resume/session-not-found errors should retry once and recover."""
+async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Stale resume/session-not-found errors should retry once and recover.
+
+  Persistence of the new cc_session_id is the consumer's job (inside
+  run_message), not trigger_master's, so trigger_master must not touch the
+  anchor or call persist_cc_session_id.
+  """
   cfg = _build_cfg()
   session_id = "session-1"
   meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="stale-id", backend="codex")
@@ -99,9 +110,10 @@ async def test_stale_resume_id_retries_once_without_resume_and_persists_new_id(m
   assert call_backend_options[0] is call_backend_options[1]
   assert call_flags == [(True, True), (True, True)]
   assert session_mgr._meta is not None
-  assert session_mgr._meta.cc_session_id == "fresh-id"
-  assert session_mgr.persisted_cc_session_ids == ["fresh-id"]
-  assert any(saved.cc_session_id == "fresh-id" for saved in session_mgr.saved_metas)
+  # trigger_master no longer persists the anchor; the consumer owns it.
+  assert session_mgr._meta.cc_session_id == "stale-id"
+  assert session_mgr.persisted_cc_session_ids == []
+  assert session_mgr.saved_metas == []
   assert any(call.args[0] == "trigger_master_invalid_resume_detected" for call in mock_log.warning.call_args_list)
   assert any(call.args[0] == "trigger_master_retry_without_resume" for call in mock_log.info.call_args_list)
   assert any(call.args[0] == "trigger_master_resume_recovery_succeeded" for call in mock_log.info.call_args_list)
@@ -198,9 +210,10 @@ async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pyt
   assert [option.id for option in call_backend_options] == ["claude-opus-4.6"]
   assert [option.model for option in call_backend_options] == ["claude-opus-4-6"]
   assert call_summaries[0].startswith("[Auto-triggered scheduled task result for 'nightly']")
-  assert session_mgr.persisted_cc_session_ids == ["claude-master-id"]
+  # trigger_master no longer persists the anchor; the consumer owns it.
+  assert session_mgr.persisted_cc_session_ids == []
   assert session_mgr._meta is not None
-  assert session_mgr._meta.cc_session_id == "claude-master-id"
+  assert session_mgr._meta.cc_session_id is None
 
 
 def test_codex_no_rollout_found_resume_error_is_stale() -> None:

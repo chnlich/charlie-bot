@@ -178,7 +178,7 @@ async def run_and_finalize(
   if backend_option is None and backend_id.startswith("codex"):
     backend_option = next((o for o in cfg.backend_options if o.type == "codex"), None)
   try:
-    cc_session_id = await run_message(
+    await run_message(
         cfg,
         meta,
         content,
@@ -190,12 +190,8 @@ async def run_and_finalize(
         uploaded_files=uploaded_files,
         is_voice=is_voice,
     )
-    # Persist CC session ID if newly assigned.
-    # Re-read fresh metadata from disk to avoid overwriting has_unread
-    # (or other fields) that mark_unread() set during run_message().
-    if cc_session_id and cc_session_id != meta.cc_session_id:
-      await session_mgr.persist_cc_session_id(meta.id, cc_session_id)
-      meta.cc_session_id = cc_session_id
+    # cc_session_id persistence is owned by the consumer in run_message; nothing
+    # downstream here reads meta.cc_session_id (auto-naming uses name and id).
 
     # Auto-name session after first turn if still using default name
     if is_default_session_name(meta.name):

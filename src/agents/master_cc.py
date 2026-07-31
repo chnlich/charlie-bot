@@ -100,6 +100,9 @@ _active_procs: dict[str, AgentBackend] = {}
 
 _CLAUDE_RESUME_FLAG_BACKEND_TYPES = {"cc-claude", "cc-kimi", "cc-openai-compatible"}
 _NATIVE_RESUME_SESSION_BACKEND_TYPES = {"codex", "gemini", "opencode", "charlie-code"}
+# Every backend that can resume a prior session (via --resume or a native id).
+# The pre-flight anchor-missing alarm fires only for these.
+_RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESUME_SESSION_BACKEND_TYPES
 
 
 @dataclasses.dataclass
@@ -115,6 +118,9 @@ class _WorkItem:
   extra_claude_flags: Optional[list[str]]
   should_check_tex: bool
   future: asyncio.Future
+  # True only on the scheduled-session weekly-recycle path that deliberately
+  # clears the anchor; suppresses the resume-anchor-missing pre-flight alarm.
+  expect_fresh_session: bool = False
 
 
 def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
@@ -306,12 +312,26 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
     option = option.model_copy(update={"model": None})
 
   resume_id = _resolve_resume_id(option, session_meta)
-  if (session_meta.cc_session_id and resume_id is None and option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES):
-    await item.callbacks.persist_and_broadcast(
-        session_meta.id, {
-            "type": ET.RESUME_CONTEXT_DROPPED,
-            "config_dir": str(_claude_config_dir(option)),
-        })
+  # Pre-flight: a resume-capable backend about to run with no resolved resume
+  # id, when the session already has an anchor on disk or a completed round, is
+  # about to start a zero-context conversation. Fail loudly unless the caller
+  # declared a fresh start (the scheduled-session weekly-recycle path).
+  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id
+      and not item.expect_fresh_session):
+    anchor_on_disk = session_meta.cc_session_id
+    if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
+      reason = "transcript_missing" if anchor_on_disk else "anchor_missing"
+      log.error(
+          "master_cc_resume_anchor_missing",
+          session=session_meta.id,
+          backend=option.type,
+          reason=reason,
+      )
+      await item.callbacks.persist_and_broadcast(
+          session_meta.id, {
+              "type": ET.RESUME_CONTEXT_DROPPED,
+              "reason": reason,
+          })
   extra_flags, resume_session_id = _route_resume_session(option.type, resume_id)
   # Move per-machine sections (cwd, env info, memory paths, git status) out of the
   # system prompt into the first user message. Keeps the system prompt stable across
@@ -319,7 +339,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   # family supports this flag.
   if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
     extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
-  resume_session = bool(extra_flags or resume_session_id)
+  resume_session = bool(resume_session_id)
   if session_meta.cc_session_id and not resume_session:
     log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
   if item.extra_claude_flags:
@@ -435,6 +455,24 @@ async def _session_consumer(session_id: str) -> None:
         if cc_session_id:
           item.session_meta.cc_session_id = cc_session_id
           last_cc_session_id = cc_session_id
+          # The consumer is the single owner of persisting the resume anchor:
+          # every round, unconditionally, with no comparison against any
+          # in-memory value. The read-back verifies the write landed on disk.
+          read_back = await item.callbacks.persist_cc_session_id(session_id, cc_session_id)
+          if read_back != cc_session_id:
+            log.error(
+                "resume_anchor_persist_mismatch",
+                session=session_id,
+                written=cc_session_id,
+                read_back=read_back,
+            )
+            await item.callbacks.persist_and_broadcast(session_id, {
+                "type": ET.ERROR,
+                "source": "resume_anchor",
+                "message": (
+                    f"Resume anchor persist mismatch: wrote {cc_session_id!r}, "
+                    f"read back {read_back!r} from disk"),
+            })
 
         # Computed once, with no re-check: a queued item keeps this round's
         # busy interval alive, so the only question is whether one is queued.
@@ -508,6 +546,7 @@ async def run_message(
     display_content: Optional[str] = None,
     uploaded_files: Optional[list[dict]] = None,
     is_voice: bool = False,
+    expect_fresh_session: bool = False,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -516,12 +555,16 @@ async def run_message(
     session_meta: The session to run in.
     user_content: The user's message text.
     callbacks: Bundle of session hooks (persist_and_broadcast,
-      update_thinking_state, mark_unread).
+      update_thinking_state, mark_unread, persist_cc_session_id,
+      has_completed_round).
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
     display_content: User-visible content persisted to the chat log. Defaults
       to ``user_content`` when omitted.
     uploaded_files: Structured uploaded-file metadata persisted on the user event.
+    expect_fresh_session: True only on the scheduled-session weekly-recycle
+      path that deliberately clears the anchor; suppresses the
+      resume-anchor-missing pre-flight alarm.
 
   Returns:
     The CC session ID (for --resume on subsequent messages), or None.
@@ -574,6 +617,7 @@ async def run_message(
       extra_claude_flags=extra_claude_flags,
       should_check_tex=should_check_tex,
       future=future,
+      expect_fresh_session=expect_fresh_session,
   )
 
   # --- atomic enqueue block: no await, no statement that can raise ---

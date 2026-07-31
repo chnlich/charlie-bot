@@ -21,8 +21,15 @@ async def run_message_with_resume_recovery(
     session_meta: SessionMetadata,
     summary: str,
     session_mgr: SessionManager,
+    expect_fresh_session: bool = False,
 ) -> Optional[str]:
-  """Call run_message, retrying once with cc_session_id cleared on stale-resume errors."""
+  """Call run_message, retrying once with cc_session_id cleared on stale-resume errors.
+
+  ``expect_fresh_session`` is forwarded to the first ``run_message`` call only.
+  The stale-resume retry deliberately clears the anchor but must NOT forward the
+  flag: an anchor-missing alarm there is correct (the resume failed and context
+  is being dropped as recovery).
+  """
   backend_id = session_meta.backend
   backend_option = cfg.get_backend_option(backend_id)
   if backend_option is None and backend_id.startswith("codex"):
@@ -36,6 +43,7 @@ async def run_message_with_resume_recovery(
         skip_user_event=True,
         auto_trigger=True,
         backend_option=backend_option,
+        expect_fresh_session=expect_fresh_session,
     )
   except Exception as e:
     if not is_resume_not_found_error(e):
@@ -56,6 +64,8 @@ async def run_message_with_resume_recovery(
         session=session_meta.id,
         stale_cc_session_id=stale_cc_session_id,
     )
+    # expect_fresh_session intentionally not forwarded: an alarm on the retry
+    # path is correct (context is being dropped as stale-resume recovery).
     new_cc_session_id = await run_message(
         cfg,
         retry_session_meta,
@@ -87,6 +97,11 @@ async def trigger_master(
       log.error("trigger_master_session_not_found", session=session_id)
       return
 
+    # expect_fresh_session is True only on the weekly-recycle path that
+    # deliberately clears the anchor; it suppresses the resume-anchor-missing
+    # pre-flight alarm. The stale-resume retry clears the anchor too but must
+    # NOT set this flag (an alarm there is correct).
+    expect_fresh_session = False
     if (session_meta.scheduled_task and session_meta.cc_session_id and session_meta.cc_session_started_at):
       pt = ZoneInfo('America/Los_Angeles')
       now_pt = datetime.now(pt)
@@ -99,6 +114,9 @@ async def trigger_master(
         session_meta.cc_session_id = None
         session_meta.cc_session_started_at = None
         await session_mgr.save_metadata(session_meta)
+        # The weekly recycle deliberately clears the anchor; the next run is an
+        # intentional fresh start, so suppress the resume-anchor-missing alarm.
+        expect_fresh_session = True
         try:
           result = await session_mgr.recycle_scheduled_session(session_id, last_sat_1am_utc)
           log.info('scheduled_session_recycled', session=session_id, **result)
@@ -113,15 +131,9 @@ async def trigger_master(
           "Are there errors? Summarize the outcome.\n\n"
           f"{summary}")
 
-    new_cc_session_id = await run_message_with_resume_recovery(cfg, session_meta, master_summary, session_mgr)
-
-    if new_cc_session_id and new_cc_session_id != session_meta.cc_session_id:
-      await session_mgr.persist_cc_session_id(session_id, new_cc_session_id)
-      # persist_cc_session_id only saves cc_session_id; also persist cc_session_started_at.
-      fresh = await session_mgr.get_session(session_id)
-      if fresh:
-        fresh.cc_session_started_at = datetime.now(timezone.utc)
-        await session_mgr.save_metadata(fresh)
+    await run_message_with_resume_recovery(
+        cfg, session_meta, master_summary, session_mgr,
+        expect_fresh_session=expect_fresh_session)
   except Exception as e:
     log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
     try:

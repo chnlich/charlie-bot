@@ -33,6 +33,8 @@ def _make_callbacks() -> SessionCallbacks:
       persist_and_broadcast=AsyncMock(),
       update_thinking_state=AsyncMock(),
       mark_unread=AsyncMock(),
+      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
+      has_completed_round=AsyncMock(return_value=False),
   )
 
 
@@ -186,6 +188,8 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
       persist_and_broadcast=persist_hook,
       update_thinking_state=AsyncMock(),
       mark_unread=AsyncMock(),
+      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
+      has_completed_round=AsyncMock(return_value=False),
   )
 
   monkeypatch.setattr(master_cc, "_run_cc", fake_run_cc)
@@ -443,3 +447,131 @@ async def test_stamp_recovers_after_unrelated_save_resets_cached_object(
     assert got.thinking_since == started_at
   finally:
     thinking_state.clear_busy(session.id)
+
+
+# ---------------------------------------------------------------------------
+# Resume anchor single-owner persistence + pre-flight (regression tests)
+# ---------------------------------------------------------------------------
+
+
+class _NoopBackend:
+  """Minimal backend double: yields no events, exits cleanly."""
+
+  exit_code = 0
+  stderr_text = ""
+  terminated = False
+
+  async def terminate(self) -> None:
+    self.terminated = True
+
+  async def run(self, prompt: str, cwd: str, env: dict):
+    if False:
+      yield {}
+
+
+@pytest.mark.asyncio
+async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Anchor lands on disk: after one round through the consumer, a second,
+  cold-cache SessionManager reads the cc_session_id the backend returned.
+
+  This is the assertion both the 2026-03-30 and 2026-07-30 regressions were
+  missing — every prior test asserted only in-memory objects.
+  """
+  cfg = _make_consumer_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="anchor-on-disk"))
+  backend_returned_id = "cc-backend-session-42"
+
+  async def fake_run_cc(item: master_cc._WorkItem) -> tuple:
+    return (backend_returned_id, 0, None, {})
+
+  monkeypatch.setattr(master_cc, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+
+  _reset_master_state(session.id)
+  try:
+    result = await master_cc.run_message(
+        cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
+    assert result == backend_returned_id
+    consumer = master_cc._session_consumers.get(session.id)
+    if consumer and not consumer.done():
+      await asyncio.wait_for(consumer, timeout=5)
+  finally:
+    _reset_master_state(session.id)
+
+  # Cold-cache reader: a fresh SessionManager parses metadata.json from disk.
+  cold_reader = SessionManager(cfg)
+  cold_meta = await cold_reader.get_session(session.id)
+  assert cold_meta is not None
+  assert cold_meta.cc_session_id == backend_returned_id
+
+
+@pytest.mark.asyncio
+async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """Pre-flight: a resume-capable backend with an empty anchor but a completed
+  round emits resume_context_dropped with reason='anchor_missing'."""
+  cfg = _make_consumer_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="pre-flight"))
+  # Seed a completed round so has_completed_round returns True; anchor stays empty.
+  await session_mgr.save_chat_event(session.id, {"type": ET.MASTER_DONE, "exit_code": 0})
+  session_mgr._chat_events.clear_cache(session.id)
+
+  meta = await session_mgr.get_session(session.id)
+  assert meta is not None
+  assert meta.cc_session_id is None
+
+  monkeypatch.setattr("src.agents.backends.registry.build_backend",
+                      lambda *a, **k: _NoopBackend())
+  monkeypatch.setattr(master_cc, "_build_instructions_content",
+                      lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+
+  item = master_cc._WorkItem(
+      cfg=cfg,
+      session_meta=meta,
+      user_content="next round",
+      callbacks=session_mgr.callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=cfg.backend_options[0],
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
+  )
+  await master_cc._run_cc(item)
+
+  events = session_mgr.load_chat_events_sync(session.id)
+  dropped = [e for e in events if e.get("type") == ET.RESUME_CONTEXT_DROPPED]
+  assert len(dropped) == 1
+  assert dropped[0]["reason"] == "anchor_missing"
+
+
+@pytest.mark.asyncio
+async def test_persist_cc_session_id_same_id_does_not_advance_started_at(tmp_path: Path) -> None:
+  """started_at records the backend session start: writing the same id on two
+  consecutive rounds must not advance cc_session_started_at."""
+  cfg = _make_consumer_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="started-at-drift"))
+
+  read1 = await session_mgr.persist_cc_session_id(session.id, "same-id")
+  assert read1 == "same-id"
+  meta1 = await session_mgr.get_session(session.id)
+  assert meta1 is not None
+  assert meta1.cc_session_id == "same-id"
+  assert meta1.cc_session_started_at is not None
+  started_at_1 = meta1.cc_session_started_at
+
+  await asyncio.sleep(0.01)
+
+  read2 = await session_mgr.persist_cc_session_id(session.id, "same-id")
+  assert read2 == "same-id"
+  meta2 = await session_mgr.get_session(session.id)
+  assert meta2 is not None
+  assert meta2.cc_session_started_at == started_at_1, (
+      "writing the same id again must not advance cc_session_started_at")

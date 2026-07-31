@@ -2,12 +2,30 @@
 
 Usage is computed on demand from the full chat-event stream; no incremental cache
 is maintained. See the plan ``panel-usage-readout-fix`` for the tier contract.
+
+The usage dict carries four context fields plus cost and model:
+
+    {
+      "context_tokens":     int | None,   # used
+      "context_full":       int | None,   # bar's full scale
+      "context_compact_at": int | None,   # vertical line; None = draw no line
+      "total_cost_usd":     float | None,
+      "model":              str,
+    }
+
+``context_full`` is the longest context the prompt can reach on this backend;
+``context_compact_at`` is where that backend compacts (a vertical line on the
+bar). ``None`` for any context field means "unknown" — the bar is hidden.
 """
 
 import asyncio
 from typing import Callable
 
-from src.agents.backends.claude_code import headless_claude_context_ceiling
+from src.agents.backends.claude_code import (
+    CLAUDE_COMPACT_CONTEXT_RESERVE,
+    CLAUDE_COMPACT_OUTPUT_RESERVE,
+    headless_claude_declared_window,
+)
 from src.core import event_types as ET
 from src.core.codex_usage import CodexUsageResolver
 from src.core.config import CharlieBotConfig
@@ -61,10 +79,13 @@ def _resolve_claude_tier(events: list[dict]) -> dict | None:
   """Resolve usage from the last main-chain assistant event with positive prompt tokens.
 
   context_tokens / model come from that assistant event's ``message.usage`` /
-  ``message.model``. context_limit is ``min(contextWindow of modelUsage[model],
-  ceiling)`` where ``modelUsage`` is merged from result events; when the assistant
-  model is absent from ``modelUsage`` the ceiling alone is used. cost is summed over
-  result events. Returns ``None`` when no qualifying assistant event exists.
+  ``message.model``. context_full is ``min(contextWindow of modelUsage[model],
+  declared_window)``; when the assistant model is absent from ``modelUsage`` the
+  declared window alone is used. context_compact_at is
+  ``context_full - OUTPUT_RESERVE - CONTEXT_RESERVE``; it is ``None`` when the
+  declared window is degraded (a forwarded-but-unmodelled override is present).
+  cost is summed over result events. Returns ``None`` when no qualifying
+  assistant event exists.
   """
   chosen: dict | None = None
   for ev in events:
@@ -84,29 +105,103 @@ def _resolve_claude_tier(events: list[dict]) -> dict | None:
   usage = message.get("usage") or {}
   context_tokens = _prompt_token_sum(usage)
   model = message.get("model") or ""
-  ceiling = headless_claude_context_ceiling()
+  declared_window, compact_point = headless_claude_declared_window()
   windows = _model_context_windows_from_results(events)
   if model and model in windows:
-    context_limit = min(windows[model], ceiling)
+    context_full = min(windows[model], declared_window)
   else:
-    context_limit = ceiling
+    context_full = declared_window
+  if compact_point is None:
+    context_compact_at: int | None = None
+  else:
+    context_compact_at = context_full - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   return {
       "context_tokens": context_tokens,
-      "context_limit": context_limit,
+      "context_full": context_full,
+      "context_compact_at": context_compact_at,
+      "total_cost_usd": _cost_from_result_events(events),
+      "model": model,
+  }
+
+
+def _snapshot_tokens_sum(tokens: dict) -> int:
+  """Sum the five token fields of a context_snapshot ``tokens`` block."""
+  return (
+      tokens.get("input", 0)
+      + tokens.get("output", 0)
+      + tokens.get("reasoning", 0)
+      + tokens.get("cache_read", 0)
+      + tokens.get("cache_write", 0))
+
+
+def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
+  """Derive (context_full, context_compact_at) from a snapshot ``limit`` dict.
+
+  context_full is ``limit.input`` when present, else ``limit.context - limit.output``.
+  context_compact_at is ``limit.input - min(20000, limit.output)`` when ``input`` is
+  present; otherwise ``None`` (it would coincide with full, so the line carries no
+  information).
+  """
+  context_input = limit.get("input")
+  context_output = limit.get("output", 0)
+  context_context = limit.get("context")
+  if isinstance(context_input, int):
+    context_full = context_input
+    context_compact_at = context_input - min(CLAUDE_COMPACT_OUTPUT_RESERVE, context_output)
+  elif isinstance(context_context, int):
+    context_full = context_context - context_output
+    context_compact_at = None
+  else:
+    context_full = None
+    context_compact_at = None
+  return context_full, context_compact_at
+
+
+def _resolve_snapshot_tier(events: list[dict]) -> dict | None:
+  """Resolve usage from the newest result event carrying a ``context_snapshot``.
+
+  context_tokens is the sum of the snapshot's five ``tokens`` fields. context_full /
+  context_compact_at derive from the snapshot's ``limit`` (see
+  ``_snapshot_full_and_compact``); both are ``None`` when ``limit`` is ``None``.
+  cost is summed over result events. Returns ``None`` when no result event carries
+  a ``context_snapshot``.
+  """
+  snapshot: dict | None = None
+  for ev in events:
+    if ev.get("type") != ET.RESULT:
+      continue
+    candidate = ev.get("context_snapshot")
+    if isinstance(candidate, dict):
+      snapshot = candidate
+  if snapshot is None:
+    return None
+  tokens = snapshot.get("tokens") or {}
+  context_tokens = _snapshot_tokens_sum(tokens)
+  limit = snapshot.get("limit")
+  if isinstance(limit, dict):
+    context_full, context_compact_at = _snapshot_full_and_compact(limit)
+  else:
+    context_full, context_compact_at = None, None
+  model = snapshot.get("model") or ""
+  return {
+      "context_tokens": context_tokens,
+      "context_full": context_full,
+      "context_compact_at": context_compact_at,
       "total_cost_usd": _cost_from_result_events(events),
       "model": model,
   }
 
 
 def _resolve_no_source_tier(events: list[dict]) -> dict:
-  """Usage object when neither the claude nor codex tier applies.
+  """Usage object when no tier applies.
 
-  context_tokens / context_limit are ``None`` (rendered as ``unknown``); cost is
-  still summed over result events.
+  context_tokens / context_full / context_compact_at are ``None`` (rendered as
+  ``unknown``); cost is still summed over result events.
   """
   return {
       "context_tokens": None,
-      "context_limit": None,
+      "context_full": None,
+      "context_compact_at": None,
       "total_cost_usd": _cost_from_result_events(events),
       "model": "",
   }
@@ -137,7 +232,8 @@ class SessionUsageResolver:
 
     - claude: a main-chain ``assistant`` event with positive prompt tokens exists.
     - codex: the backend is codex and the native rollout resolves.
-    - no-source: neither — context fields are ``None``.
+    - snapshot: a result event carries a ``context_snapshot`` (opencode backend).
+    - no-source: none of the above — context fields are ``None``.
 
     Returns ``None`` only when the event list is empty.
     """
@@ -153,6 +249,10 @@ class SessionUsageResolver:
       if merged is not None:
         return merged
 
+    usage = _resolve_snapshot_tier(events)
+    if usage is not None:
+      return usage
+
     if not events:
       return None
     return _resolve_no_source_tier(events)
@@ -162,13 +262,16 @@ class SessionUsageResolver:
     """Pure projection over a pre-loaded event list (no caching).
 
     Provided for callers that already hold the full list. Resolves the claude
-    tier, then the no-source tier; the codex tier requires backend + rollout
-    state that this entry point does not have, so callers needing codex should
-    use ``resolve_session_usage`` instead.
+    tier, then the snapshot tier, then the no-source tier; the codex tier
+    requires backend + rollout state that this entry point does not have, so
+    callers needing codex should use ``resolve_session_usage`` instead.
     """
     if not events:
       return None
     usage = _resolve_claude_tier(events)
+    if usage is not None:
+      return usage
+    usage = _resolve_snapshot_tier(events)
     if usage is not None:
       return usage
     return _resolve_no_source_tier(events)

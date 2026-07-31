@@ -52,6 +52,8 @@ class OpenCodeBackend(AgentBackend):
     self._usage_cache_read = 0
     self._usage_cache_write = 0
     self._usage_cost = 0.0
+    self._model_limit: dict | None = None
+    self._last_step_tokens: dict | None = None
     self._failed = False
 
   def _prepare_cwd(self, cwd: str) -> None:
@@ -122,6 +124,7 @@ class OpenCodeBackend(AgentBackend):
 
       async with httpx.AsyncClient(base_url=self._server_url, timeout=30.0) as client:
         await self._check_health(client)
+        self._model_limit = await self._fetch_model_limit(client)
         self._session_id = self._resume_session_id or await self._create_session(client)
         yield {"session_id": self._session_id}
 
@@ -206,6 +209,8 @@ class OpenCodeBackend(AgentBackend):
     self._usage_cache_read = 0
     self._usage_cache_write = 0
     self._usage_cost = 0.0
+    self._model_limit = None
+    self._last_step_tokens = None
     self._failed = False
 
   def _log_paths(self) -> tuple[Path | None, Path | None]:
@@ -258,6 +263,69 @@ class OpenCodeBackend(AgentBackend):
   async def _check_health(self, client: httpx.AsyncClient) -> None:
     response = await client.get("/global/health")
     response.raise_for_status()
+
+  async def _fetch_model_limit(self, client: httpx.AsyncClient) -> dict | None:
+    """Fetch this run's model limit dict from ``/config/providers`` once per turn.
+
+    Splits ``self._model`` on the first ``/`` (same split ``_send_prompt`` does),
+    finds the provider's model entry, and returns its ``limit`` dict
+    (``{"context": int, "input": int | None, "output": int}``). Any failure —
+    request error, provider or model absent, malformed payload — is contained:
+    one ``log.warning`` is emitted and ``None`` is returned so the turn proceeds
+    normally (the usage resolver then reports ``unknown`` for this session).
+    """
+    if not self._model:
+      return None
+    provider_id, model_id = self._model.split("/", 1)
+    try:
+      response = await client.get("/config/providers")
+      response.raise_for_status()
+      providers = response.json()
+    except Exception as e:
+      log.warning(
+          "opencode_context_catalog_unavailable",
+          provider_id=provider_id, model_id=model_id, error=str(e))
+      return None
+    limit = self._extract_model_limit(providers, provider_id, model_id)
+    if limit is None:
+      log.warning(
+          "opencode_context_catalog_unavailable",
+          provider_id=provider_id, model_id=model_id)
+    return limit
+
+  @staticmethod
+  def _extract_model_limit(providers_payload: object, provider_id: str, model_id: str) -> dict | None:
+    """Find ``provider_id``/``model_id`` in a ``/config/providers`` payload.
+
+    opencode returns ``{"providers": [...]}`` where each provider's ``models`` is
+    a dict keyed by model id; a bare top-level list and list-shaped ``models`` are
+    also accepted for robustness. Returns the model's ``limit`` dict, or ``None``
+    when the provider or model is absent or the payload shape is not recognised.
+    """
+    if isinstance(providers_payload, dict):
+      providers = providers_payload.get("providers")
+    else:
+      providers = providers_payload
+    if not isinstance(providers, list):
+      return None
+    for provider in providers:
+      if not isinstance(provider, dict) or provider.get("id") != provider_id:
+        continue
+      models = provider.get("models")
+      if isinstance(models, dict):
+        model = models.get(model_id)
+        if isinstance(model, dict):
+          limit = model.get("limit")
+          return limit if isinstance(limit, dict) else None
+        return None
+      if isinstance(models, list):
+        for model in models:
+          if isinstance(model, dict) and model.get("id") == model_id:
+            limit = model.get("limit")
+            return limit if isinstance(limit, dict) else None
+        return None
+      return None
+    return None
 
   async def _create_session(self, client: httpx.AsyncClient) -> str:
     response = await client.post("/session", json={})
@@ -427,14 +495,32 @@ class OpenCodeBackend(AgentBackend):
     self._usage_cache_read += cache["read"]
     self._usage_cache_write += cache["write"]
     self._usage_cost += part["cost"]
+    # Remember the *last* step's tokens (raw, not the turn's sum) so the result
+    # event's context_snapshot reflects the live per-turn window. reasoning is
+    # otherwise discarded from the streamed events, so capture it here.
+    self._last_step_tokens = {
+        "input": tokens["input"],
+        "output": tokens["output"],
+        "reasoning": tokens.get("reasoning", 0),
+        "cache_read": cache["read"],
+        "cache_write": cache["write"],
+    }
 
   def _make_accumulated_result(self) -> dict:
+    snapshot: dict | None = None
+    if self._last_step_tokens is not None:
+      snapshot = {
+          "model": self._model or "",
+          "tokens": dict(self._last_step_tokens),
+          "limit": dict(self._model_limit) if self._model_limit is not None else None,
+      }
     return make_result_event(
         input_tokens=self._usage_input,
         output_tokens=self._usage_output,
         cache_read=self._usage_cache_read,
         cache_creation=self._usage_cache_write,
         cost=self._usage_cost,
+        context_snapshot=snapshot,
     )
 
   def _format_session_error(self, ev: dict) -> str:

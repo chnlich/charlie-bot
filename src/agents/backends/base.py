@@ -80,9 +80,17 @@ def make_result_event(
     cache_read: int = 0,
     cache_creation: int = 0,
     cost: float | None = 0,
+    context_snapshot: dict | None = None,
 ) -> dict:
-  """Build a CC-compatible result/usage event."""
-  return {
+  """Build a CC-compatible result/usage event.
+
+  ``context_snapshot`` is an optional opencode-only key carrying raw per-turn
+  tokens and the live model limit (see ``OpenCodeBackend``); when provided it is
+  added to the event so the usage resolver's snapshot tier can derive the bar's
+  full scale and compaction line. Other backends leave it ``None`` so their
+  result events keep their existing shape.
+  """
+  event = {
       "type": ET.RESULT,
       "result": "",
       "usage":
@@ -94,6 +102,9 @@ def make_result_event(
           },
       "total_cost_usd": cost,
   }
+  if context_snapshot is not None:
+    event["context_snapshot"] = context_snapshot
+  return event
 
 
 def make_tool_use_event(name: str, input_data: dict) -> dict:

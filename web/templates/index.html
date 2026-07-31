@@ -163,8 +163,9 @@
         <!-- Context usage indicator — starts hidden; the first /usage render fills it -->
         <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 hidden">
           <div class="flex items-center gap-1.5" title="Context window usage">
-            <div class="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+            <div class="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden relative">
               <div id="usage-bar" class="h-full rounded-full transition-all duration-300 bg-blue-500" style="width: 0%"></div>
+              <div id="usage-compact-line" class="absolute top-0 h-full w-0.5 bg-white hidden" style="left: 0%" title=""></div>
             </div>
             <span id="usage-text" class="text-xs text-slate-400 whitespace-nowrap"></span>
           </div>

@@ -72,20 +72,27 @@ def headless_claude_env() -> dict[str, str]:
   return env
 
 
-def headless_claude_context_ceiling() -> int:
-  """Return the Claude Code compaction point (the real context ceiling) in tokens.
+def headless_claude_declared_window() -> tuple[int, int | None]:
+  """Return ``(declared_window, compact_point | None)`` for a headless Claude Code run.
 
   Reads the same environment ``headless_claude_env()`` gives the CLI, so a host
   export of ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` overrides CharlieBot's default and
-  the ceiling follows it. Computed per call — never cached in a module constant —
-  because the host environment can change between calls.
+  the declared window follows it. Computed per call — never cached in a module
+  constant — because the host environment can change between calls.
 
-  Ceiling = declared window − OUTPUT_RESERVE − CONTEXT_RESERVE (with the 433000
-  default this is 400000). Degrades loudly, never silently: when the declared
-  window fails to parse as a positive int the default declared window is returned
-  as a fallback, and when an override variable CharlieBot forwards but does not
-  model is present the declared window is returned without subtraction. Each
-  degradation emits one ``log.warning`` naming the responsible variable.
+  ``declared_window`` is the auto-compact window the CLI advertises. ``compact_point``
+  is ``declared_window − OUTPUT_RESERVE − CONTEXT_RESERVE`` (with the 433000 default
+  this is 400000); the caller derives the real compaction point from the effective
+  ``context_full`` (``min(model contextWindow, declared_window)``) using the same
+  constants. Degrades loudly, never silently:
+
+  - unparseable / non-positive window: ``declared_window`` falls back to the 433000
+    default and ``compact_point`` is derived normally; one ``log.warning`` names the
+    responsible variable.
+  - a forwarded-but-unmodelled override (``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE``,
+    ``CLAUDE_CODE_MAX_CONTEXT_TOKENS``) is present: ``declared_window`` is the parsed
+    window and ``compact_point`` is ``None`` (the caller then reports no compaction
+    line); one ``log.warning`` names the responsible variable.
   """
   env = headless_claude_env()
   raw_window = env.get(
@@ -100,22 +107,22 @@ def headless_claude_context_ceiling() -> int:
       raise ValueError(f"non-positive window: {raw_window!r}")
   except (ValueError, TypeError):
     log.warning(
-        "claude_context_ceiling_unparseable_window",
+        "claude_declared_window_unparseable_window",
         variable="CLAUDE_CODE_AUTO_COMPACT_WINDOW",
         window=raw_window,
     )
-    return default_window
+    window = default_window
 
   for override_name in ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
     if override_name in env:
       log.warning(
-          "claude_context_ceiling_degraded",
+          "claude_declared_window_degraded",
           variable=override_name,
-          reason="forwarded but semantics not modelled; returning declared window without subtraction",
+          reason="forwarded but semantics not modelled; returning declared window without compaction point",
       )
-      return window
+      return window, None
 
-  return window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
+  return window, window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
 
 
 class ClaudeCodeBackend(AgentBackend):

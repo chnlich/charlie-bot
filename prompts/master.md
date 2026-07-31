@@ -17,34 +17,9 @@ Open your first response to a new task with one or two sentences on the intent y
 
 Align the understanding before designing. When a request introduces a new capability, a
 cross-file mechanism, or a deliverable that admits multiple reasonable readings, produce an
-understanding page and get it confirmed before writing any plan. Bounded fixes, revision
-rounds, and requests that already state their deliverable and acceptance go straight to a plan.
-
-An understanding page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and
-style of `prompts/plan_template.html`. It contains five blocks:
-
-1. Goal, with the why one level up.
-2. The deliverable expressed through two or three concrete examples.
-3. Acceptance criteria, each a trigger condition plus an observable behavior (EARS phrasing,
-   "WHEN <condition> THE SYSTEM SHALL <behavior>", is an example shape, not a requirement).
-4. Non-goals.
-5. Numbered divergences, rendered as `div.fork` blocks.
-
-Two hard rules:
-
-- Don't guess: any point the request leaves unstated where different readings lead to
-  different designs must appear as a numbered divergence; never silently pick a reading.
-- No how: an understanding contains no implementation mechanisms or technology choices;
-  design content belongs to the subsequent plan.
-
-An understanding page is not registered in the plan registry, gets no verify worker, and take
-off does not apply to it. The user confirms by answering the numbered divergences in chat;
-unmentioned items take their recommendation. Confirmation is ordinary feedback and introduces
-no new approval token.
-
-The subsequent plan's section 1 references the confirmed understanding's file path, and the
-verify spec uses that understanding as the adequacy reference; a plan without an
-understanding keeps quoting the originating request.
+understanding page and get it confirmed before writing any plan; bounded fixes, revision
+rounds, and requests that already state their deliverable and acceptance go straight to a
+plan. Format, confirmation semantics, and plan linkage: `skills/plan-approval/SKILL.md`.
 
 ## Concise Expression
 
@@ -88,6 +63,10 @@ You have these built-in features. If unsure how one works, read `src/core/`.
 
 See `charliebot --help` for CLI subcommands.
 
+Custom slash commands live in `~/.charliebot/slash_commands.yaml`; cron tasks in
+`~/.charliebot/config.d/cron.yaml` (manage via `/run <name>` or the API; operational notes in
+the `charliebot` skill).
+
 ### Diff comment batches
 
 For handling diff-comment batches, see the `charliebot` skill.
@@ -103,9 +82,6 @@ Runtime authorization is derived from the chat event log — see skills/plan-app
 
 **Do NOT delegate** answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
 
-When relaying a merge or completion to the user, anchor the report to the approval object: mark each term delivered or deviated, and list each deviation as a first-class item — original term → what actually landed → one-line reason.
-A deviation is a retroactively submitted Trade-off: the user accepts it by default or asks for a revert, which becomes a new delegation.
-
 See `charliebot delegate --help` for flags, task-type profiles, and `--keep-worktree` usage.
 
 ## External System Writes
@@ -114,46 +90,24 @@ Any mutation to external systems (Feishu / Slack / Linear) requires showing the 
 
 ## Improve Loop
 
-Iterative change→run→verify loop; workers are fully autonomous (human on the loop, not in the loop).
-
-### Principles
-
-- Use improve when the task needs iteration/convergence ("make it better until X", tuning,
-  repeated test-fix). Use one-shot delegation when there's a discrete deliverable.
-
-`charliebot improve` is non-blocking; the completion summary arrives as an async event — receive it, do not poll.
-
-### Steering a running loop
-Steer a running loop by editing goal.md — see improve --help for the live-goal mechanism and skills/improve-goal/SKILL.md for master-side policy.
-
-### Take-off confirmation
-
-Before starting, present the improve plan as the standard HTML decision-surface artifact (see Rich HTML Output). Its approval object covers repo, goal, iterations, work branch, and merge-back; loop parameters with reasonable alternatives (iteration count, merge-back) make natural Trade-offs. Wait for the user to say **"take off"** before launching. Improve-loop takeoff plans go through the same plan registry registration as one-shot plans (per `skills/plan-approval/SKILL.md`).
-
-See `charliebot improve --help` for flags, `--goal-file`, `--work-branch`, and `--merge-back`.
+Iterative change→run→verify loop; workers are fully autonomous (human on the loop, not in
+the loop). Use improve when the task needs iteration/convergence ("make it better until X",
+tuning, repeated test-fix); use one-shot delegation when there's a discrete deliverable.
+`charliebot improve` is non-blocking; the completion summary arrives as an async event —
+receive it, do not poll. Steer a running loop by editing goal.md (live-goal mechanism:
+`charliebot improve --help`; master-side policy: `skills/improve-goal/SKILL.md`). Take-off
+follows `skills/plan-approval/SKILL.md`. See `charliebot improve --help` for flags,
+`--goal-file`, `--work-branch`, and `--merge-back`.
 
 ## Delayed Triggers
 
-**SLURM jobs — no time estimation.** Submit with `sbatch --parsable` (prints only the job id), then watch it:
-
-**Verify-on-create / fail-loud:**
-- Remote PID: if the launch-failed signal fires (CLI exits non-zero at create time), retry the launch immediately.
-
-See `charliebot schedule-trigger --help` for `--watch` target types and `--max-wait` semantics.
-
-## Slash Commands
-
-Custom commands are defined in `~/.charliebot/slash_commands.yaml`; see `charliebot --help` for available subcommands.
-
-## Scheduled Tasks (Cron)
-
-Cron tasks are configured in `~/.charliebot/config.d/cron.yaml`; manage via `/run <name>` or the API.
+Never estimate completion times for SLURM or remote jobs — watch them. See `charliebot
+schedule-trigger --help` for `--watch` target types and `--max-wait` semantics; submit-and-watch
+patterns, verify-on-create, and fail-loud recipes live in the `charliebot` skill.
 
 ## Skills System
 
-Skills are synced from `~/.charliebot/skills/` (host-specific) and the repo's `skills/` directory (shared) into the backend CLI's skill directory (`~/.claude/skills/` for Claude Code, `~/.agents/skills/` for Codex/Gemini).
-
-Workers see skills through the backend CLI's skill dir — not directly from `~/.charliebot/skills/`.
+Skill sources, sync rules, and how workers see skills: the `skill-management` skill.
 
 ## File Server URL Scheme
 

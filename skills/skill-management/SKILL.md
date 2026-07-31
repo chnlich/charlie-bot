@@ -40,6 +40,8 @@ OpenCode needs **no** target: it auto-scans `~/.claude/` and `~/.agents/`, both 
 - Never overwrite non-symlink entries or dotfiles (e.g. Codex `.system/`)
 - Remove stale symlinks whose targets no longer exist
 - Sync script: `<charlie-bot-repo>/scripts/sync-skills.sh`
+- Workers see skills through the backend CLI's skill dir — not directly from
+  `~/.charliebot/skills/`.
 
 ## Host-Specific Content Boundary
 

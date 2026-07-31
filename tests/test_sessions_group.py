@@ -152,30 +152,24 @@ async def test_update_thinking_state_preserves_newer_group_from_disk(tmp_path: P
   concurrent_meta.group = "Research"
   await concurrent_mgr.save_metadata(concurrent_meta)
 
-  thinking_since = datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc)
   updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
-  await mgr.update_thinking_state(meta.id, thinking_since, updated_at)
+  await mgr.update_thinking_state(meta.id, updated_at=updated_at)
 
   updated = await verify_mgr.get_session(meta.id)
   assert updated is not None
   assert updated.group == "Research"
-  assert updated.thinking_since == thinking_since
   assert updated.updated_at == updated_at
 
 
 @pytest.mark.asyncio
-async def test_mark_unread_and_clear_thinking_since_do_not_clobber(tmp_path: Path) -> None:
-  """Regression: concurrent mark_unread vs clear_thinking_since must both persist.
+async def test_mark_unread_and_update_thinking_state_do_not_clobber(tmp_path: Path) -> None:
+  """Regression: concurrent mark_unread vs update_thinking_state must both persist.
 
   Without per-session RMW locking, these two coroutines interleave at their
   internal await points and the second save clobbers the first mutator's field.
   """
   mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(
-      name="Session 1",
-      thinking_since=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
-      has_unread=False,
-  )
+  meta = SessionMetadata(name="Session 1", has_unread=False)
   await mgr._save_metadata(meta)
 
   # Force interleaving by injecting a yield point inside _save_metadata. The
@@ -187,11 +181,12 @@ async def test_mark_unread_and_clear_thinking_since_do_not_clobber(tmp_path: Pat
     await asyncio.sleep(0)
     await real_save(m)
 
+  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
   with patch.object(mgr, "_save_metadata", side_effect=yielding_save):
     with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
       await asyncio.gather(
           mgr.mark_unread(meta.id),
-          mgr.clear_thinking_since(meta.id),
+          mgr.update_thinking_state(meta.id, updated_at=updated_at),
       )
 
   # Bypass the metadata cache to check what's actually on disk.
@@ -199,19 +194,4 @@ async def test_mark_unread_and_clear_thinking_since_do_not_clobber(tmp_path: Pat
   final = await mgr.get_session(meta.id)
   assert final is not None
   assert final.has_unread is True
-  assert final.thinking_since is None
-
-
-@pytest.mark.asyncio
-async def test_update_thinking_state_can_leave_existing_thinking_since_unchanged(tmp_path: Path) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(name="Session 1", thinking_since=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc))
-  await mgr._save_metadata(meta)
-
-  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
-  await mgr.update_thinking_state(meta.id, updated_at=updated_at)
-
-  updated = await mgr.get_session(meta.id)
-  assert updated is not None
-  assert updated.thinking_since == datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc)
-  assert updated.updated_at == updated_at
+  assert final.updated_at == updated_at

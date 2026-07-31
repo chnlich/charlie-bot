@@ -19,6 +19,7 @@ from src.core.models import BackendOption, CreateSessionRequest, SessionMetadata
 from src.core.models import ThreadMetadata
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
+from src.core.thinking_state import clear_busy, mark_busy
 from src.core.threads import ThreadManager
 
 
@@ -246,24 +247,31 @@ async def test_scheduler_skips_backend_rotation_while_old_session_is_running(
   )
   old_session.last_scheduled_run = (datetime.now(ZoneInfo("America/Los_Angeles")) - timedelta(hours=1)).isoformat()
   old_session.last_scheduled_cron = "* * * * *"
-  old_session.thinking_since = datetime.now(timezone.utc)
   await session_mgr.save_metadata(old_session)
-  task_cfg = ScheduledTaskConfig(
-      name="nightly",
-      cron="* * * * *",
-      prompt="nightly prompt",
-      backend="codex-o3",
-  )
-  execute_task = AsyncMock()
-  monkeypatch.setattr(scheduler, "_execute_task", execute_task)
+  # A busy session blocks backend rotation. Mark it busy in thinking_state and
+  # re-fetch so the stamped thinking_since flows through the session cache.
+  mark_busy(old_session.id)
+  try:
+    old_session_refetched = await session_mgr.get_session(old_session.id)
+    assert old_session_refetched is not None
+    task_cfg = ScheduledTaskConfig(
+        name="nightly",
+        cron="* * * * *",
+        prompt="nightly prompt",
+        backend="codex-o3",
+    )
+    execute_task = AsyncMock()
+    monkeypatch.setattr(scheduler, "_execute_task", execute_task)
 
-  await scheduler._maybe_run(task_cfg, session_mgr, {"nightly": [old_session]}, cfg)
+    await scheduler._maybe_run(task_cfg, session_mgr, {"nightly": [old_session_refetched]}, cfg)
 
-  execute_task.assert_not_awaited()
-  active_sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
-  assert len(active_sessions) == 1
-  assert active_sessions[0].id == old_session.id
-  assert active_sessions[0].backend == "claude-opus-4.6"
+    execute_task.assert_not_awaited()
+    active_sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
+    assert len(active_sessions) == 1
+    assert active_sessions[0].id == old_session.id
+    assert active_sessions[0].backend == "claude-opus-4.6"
+  finally:
+    clear_busy(old_session.id)
 
 
 def test_cron_api_persists_and_clears_backend(
@@ -379,12 +387,14 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
       backend="claude-opus-4.6",
   )
-  session.thinking_since = datetime.now(timezone.utc)
-  await session_mgr.save_metadata(session)
+  # A busy session blocks the backend switch with 409.
+  mark_busy(session.id)
+  try:
+    with _build_cron_client(cfg, session_mgr) as client:
+      response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
-  with _build_cron_client(cfg, session_mgr) as client:
-    response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
-
-  assert response.status_code == 409
-  assert "backend switch" in response.json()["detail"]
-  assert yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]["backend"] == "claude-opus-4.6"
+    assert response.status_code == 409
+    assert "backend switch" in response.json()["detail"]
+    assert yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]["backend"] == "claude-opus-4.6"
+  finally:
+    clear_busy(session.id)

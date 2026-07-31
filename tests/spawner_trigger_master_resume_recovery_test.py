@@ -52,9 +52,6 @@ class FakeSessionManager:
   async def update_thinking_state(self, session_id: str, *args: object, **kwargs: object) -> None:
     return None
 
-  async def clear_thinking_since(self, session_id: str, cc_session_id: Optional[str] = None) -> None:
-    return None
-
   async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> None:
     if self._meta is not None:
       self._meta.cc_session_id = cc_session_id
@@ -68,7 +65,6 @@ class FakeSessionManager:
         persist_and_broadcast=self.persist_and_broadcast,
         update_thinking_state=self.update_thinking_state,
         mark_unread=self.mark_unread,
-        clear_thinking_since=self.clear_thinking_since,
     )
 
 

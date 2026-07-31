@@ -1,14 +1,27 @@
-"""Tests for master_cc._session_consumer cc_session_id relay."""
+"""Tests for master_cc._session_consumer cc_session_id relay and thinking_state ownership."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from src.agents import master_cc
-from src.core.models import SessionCallbacks, SessionMetadata
+from src.api import sessions as sessions_api
+from src.api.deps import get_session_manager
+from src.core import event_types as ET
+from src.core import sessions as sessions_module
+from src.core import thinking_state
+from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption, CreateSessionRequest, SessionCallbacks, SessionMetadata
+from src.core.sessions import SessionManager
 
 
 def _make_meta(session_id: str) -> SessionMetadata:
@@ -20,7 +33,6 @@ def _make_callbacks() -> SessionCallbacks:
       persist_and_broadcast=AsyncMock(),
       update_thinking_state=AsyncMock(),
       mark_unread=AsyncMock(),
-      clear_thinking_since=AsyncMock(),
   )
 
 
@@ -85,3 +97,349 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
   assert meta_user_message.cc_session_id == "cc-id-from-bootstrap"
   assert item_bootstrap.future.done() and item_bootstrap.future.result() == "cc-id-from-bootstrap"
   assert item_user.future.done() and item_user.future.result() == "cc-id-from-bootstrap"
+
+
+# ---------------------------------------------------------------------------
+# thinking_state: single in-memory owner of busy intervals (T1-T5)
+# ---------------------------------------------------------------------------
+
+
+def _make_consumer_cfg(tmp_path: Path) -> CharlieBotConfig:
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      backend_options=[BackendOption(id="fake", label="Fake", type="codex")],
+  )
+
+
+def _reset_master_state(session_id: str) -> None:
+  master_cc._session_queues.pop(session_id, None)
+  master_cc._session_consumers.pop(session_id, None)
+  thinking_state.clear_busy(session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inject_at", ["run_cc", "master_done_persist", "worker_probe", "idle_broadcast"])
+async def test_busy_invariant_holds_under_adversarial_enqueue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    inject_at: str,
+) -> None:
+  """T1: an enqueue landing at any await in the consumer's tail keeps the invariant.
+
+  Parametrised over every await in the tail (the MASTER_DONE persist, the
+  worker probe, the idle broadcast) and over _run_cc itself. At each injection
+  point one extra work item is enqueued through the real run_message; every
+  entry into _run_cc must observe busy_since non-None, and after the consumer
+  ends busy_since must be None.
+  """
+  session_id = f"t1-{inject_at}"
+  cfg = _make_consumer_cfg(tmp_path)
+  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
+
+  entries: list[Optional[datetime]] = []
+  injected = False
+  injected_task: Optional[asyncio.Task] = None
+  real_persist = AsyncMock()
+
+  async def _inject_once() -> None:
+    nonlocal injected, injected_task
+    if injected:
+      return
+    injected = True
+    injected_task = asyncio.create_task(
+        master_cc.run_message(
+            cfg,
+            SessionMetadata(id=session_id, name="t"),
+            "extra",
+            callbacks,
+            skip_user_event=True,
+        ))
+
+  async def fake_run_cc(item: master_cc._WorkItem) -> tuple:
+    entries.append(thinking_state.busy_since(session_id))
+    if inject_at == "run_cc":
+      await _inject_once()
+      await asyncio.sleep(0)
+    return ("cc-1", 0, None, {})
+
+  async def persist_hook(sid: str, event: dict) -> None:
+    if inject_at == "master_done_persist" and event.get("type") == ET.MASTER_DONE:
+      await _inject_once()
+      await asyncio.sleep(0)
+    await real_persist(sid, event)
+
+  async def broadcast_hook(channel: str, event: dict) -> None:
+    if (inject_at == "idle_broadcast" and event.get("type") == ET.RUNNING_CHANGED and
+        event.get("thinking_since") is None):
+      await _inject_once()
+      await asyncio.sleep(0)
+
+  async def probe_hook(sid: str) -> bool:
+    if inject_at == "worker_probe":
+      await _inject_once()
+      await asyncio.sleep(0)
+    return False
+
+  workers_mock = MagicMock()
+  workers_mock._has_running_tasks = probe_hook
+  callbacks = SessionCallbacks(
+      persist_and_broadcast=persist_hook,
+      update_thinking_state=AsyncMock(),
+      mark_unread=AsyncMock(),
+  )
+
+  monkeypatch.setattr(master_cc, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", broadcast_hook)
+  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
+
+  _reset_master_state(session_id)
+  try:
+    task1 = asyncio.create_task(
+        master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, skip_user_event=True))
+    assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
+
+    # For injections fired during the consumer's teardown awaits, the work item
+    # only appears once that await runs — let the consumer reach it.
+    for _ in range(1000):
+      if injected_task is not None:
+        break
+      await asyncio.sleep(0)
+    assert injected_task is not None, f"injection did not fire at {inject_at}"
+    assert await asyncio.wait_for(injected_task, timeout=5) == "cc-1"
+
+    # Let the (possibly second) consumer task finish its teardown.
+    remaining = master_cc._session_consumers.get(session_id)
+    if remaining is not None:
+      await asyncio.wait_for(remaining, timeout=5)
+
+    assert len(entries) == 2
+    assert all(start is not None for start in entries), "every _run_cc entry must observe busy_since set"
+    assert thinking_state.busy_since(session_id) is None
+  finally:
+    _reset_master_state(session_id)
+
+
+def test_thinking_since_listed_as_transient() -> None:
+  """T2a: de-persistence is structural, not incidental file content."""
+  assert "thinking_since" in sessions_module._TRANSIENT_METADATA_FIELDS
+
+
+@pytest.mark.asyncio
+async def test_thinking_since_does_not_survive_save_reload_round_trip(tmp_path: Path) -> None:
+  """T2b: a save-then-reload round trip must not carry the derived field."""
+  cfg = _make_consumer_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="t2"))
+  thinking_state.mark_busy(session.id)
+  try:
+    stamped = await mgr.get_session(session.id)
+    assert stamped is not None
+    assert stamped.thinking_since is not None
+
+    # Saving the stamped object must not write the derived field.
+    await mgr.save_metadata(stamped)
+    on_disk = json.loads((cfg.sessions_dir / session.id / "metadata.json").read_text(encoding="utf-8"))
+    assert "thinking_since" not in on_disk
+
+    # Reloading with an empty busy map must not resurrect the earlier value.
+    thinking_state.clear_busy(session.id)
+    mgr._invalidate_cache(session.id)
+    reloaded = await mgr.get_session(session.id)
+    assert reloaded is not None
+    assert reloaded.thinking_since is None
+  finally:
+    thinking_state.clear_busy(session.id)
+
+
+@pytest.mark.asyncio
+async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """T3a: exception in _run_cc still converges — busy state clears at teardown."""
+  session_id = "t3-raise"
+  cfg = _make_consumer_cfg(tmp_path)
+  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
+
+  async def exploding_run_cc(item: master_cc._WorkItem) -> tuple:
+    raise RuntimeError("boom")
+
+  workers_mock = MagicMock()
+  workers_mock._has_running_tasks = AsyncMock(return_value=False)
+  callbacks = _make_callbacks()
+
+  monkeypatch.setattr(master_cc, "_run_cc", exploding_run_cc)
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
+
+  _reset_master_state(session_id)
+  try:
+    run_task = asyncio.create_task(
+        master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "hi", callbacks, skip_user_event=True))
+    with pytest.raises(RuntimeError, match="boom"):
+      await asyncio.wait_for(run_task, timeout=5)
+    consumer = master_cc._session_consumers.get(session_id)
+    if consumer is not None:
+      await asyncio.wait_for(consumer, timeout=5)
+    assert thinking_state.busy_since(session_id) is None
+  finally:
+    _reset_master_state(session_id)
+
+
+@pytest.mark.asyncio
+async def test_consumer_cancelled_before_first_item_finally_does_not_raise() -> None:
+  """T3b: a consumer that never got its first item must exit via the same finally.
+
+  The loop variable `item` is unbound here; the teardown must not raise
+  NameError trying to read cfg/auto_trigger off it.
+  """
+  session_id = "t3-cancel"
+  _reset_master_state(session_id)
+  master_cc._session_queues[session_id] = asyncio.Queue()
+  task = asyncio.create_task(master_cc._session_consumer(session_id))
+  master_cc._session_consumers[session_id] = task
+  try:
+    await asyncio.sleep(0)  # consumer is now suspended at queue.get()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    # A NameError raised in the finally would replace the cancellation with a
+    # regular exception; a clean cancellation means teardown skipped gracefully.
+    assert task.cancelled()
+  finally:
+    _reset_master_state(session_id)
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_thinking_since_matches_busy_map(tmp_path: Path) -> None:
+  """T4: push and pull agree — /api/sessions/status reports the busy map's value."""
+  cfg = _make_consumer_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="t4"))
+  started_at, _created = thinking_state.mark_busy(session.id)
+  try:
+    app = FastAPI()
+    app.include_router(sessions_api.router, prefix="/api/sessions")
+    app.dependency_overrides[get_session_manager] = lambda: session_mgr
+    with TestClient(app) as client:
+      response = client.get("/api/sessions/status")
+    assert response.status_code == 200
+    payload = response.json()[session.id]
+    current = thinking_state.busy_since(session.id)
+    assert current is not None
+    assert payload["thinking_since"] == current.isoformat()
+    assert payload["thinking_since"] == started_at.isoformat()
+  finally:
+    thinking_state.clear_busy(session.id)
+
+
+@pytest.mark.asyncio
+async def test_busy_session_value_returned_on_all_read_paths(tmp_path: Path) -> None:
+  """T5a: for a busy session, every read path returns the live busy value."""
+  cfg = _make_consumer_cfg(tmp_path)
+  author = SessionManager(cfg)
+  session = await author.create_session(CreateSessionRequest(name="t5-reads"))
+  started_at, _created = thinking_state.mark_busy(session.id)
+  try:
+    reader = SessionManager(cfg)  # cold metadata cache -> disk-parse path
+    disk_read = await reader.get_session(session.id)
+    assert disk_read is not None
+    assert disk_read.thinking_since == started_at
+    cache_read = await reader.get_session(session.id)
+    assert cache_read is not None
+    assert cache_read.thinking_since == started_at
+
+    listed = await reader.list_sessions()
+    assert [s.thinking_since for s in listed if s.id == session.id] == [started_at]
+    searched = await reader.search_sessions("t5-reads")
+    assert [s.thinking_since for s in searched if s.id == session.id] == [started_at]
+    active = reader.list_active_session_ids()
+    assert [s.thinking_since for s in active if s.id == session.id] == [started_at]
+  finally:
+    thinking_state.clear_busy(session.id)
+
+
+@pytest.mark.asyncio
+async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """T5b: every public method handing out a SessionMetadata applies the stamp,
+  including fresh-construction returns that bypass a read of a stored session."""
+  cfg = _make_consumer_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  sentinel = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+  monkeypatch.setattr("src.core.sessions.busy_since", lambda _sid: sentinel)
+  monkeypatch.setattr("src.core.sessions.streaming_manager.broadcast", AsyncMock())
+
+  created = await mgr.create_session(CreateSessionRequest(name="walk"))
+  assert created.thinking_since == sentinel
+
+  got = await mgr.get_session(created.id)
+  assert got is not None
+  assert got.thinking_since == sentinel
+
+  listed = await mgr.list_sessions()
+  assert [s.thinking_since for s in listed if s.id == created.id] == [sentinel]
+
+  found = await mgr.search_sessions("walk")
+  assert [s.thinking_since for s in found if s.id == created.id] == [sentinel]
+
+  # One chat event so fork/elone have history to reference.
+  events_path = mgr._chat_events_path(created.id)
+  events_path.parent.mkdir(parents=True, exist_ok=True)
+  events_path.write_text(json.dumps({"type": "user", "content": "hi"}) + "\n", encoding="utf-8")
+
+  renamed = await mgr.rename_session(created.id, "walk-2")
+  assert renamed is not None
+  assert renamed.thinking_since == sentinel
+
+  read_back = await mgr.mark_read(created.id)
+  assert read_back is not None
+  assert read_back.thinking_since == sentinel
+
+  starred = await mgr.star_session(created.id)
+  assert starred is not None
+  assert starred.thinking_since == sentinel
+  unstarred = await mgr.unstar_session(created.id)
+  assert unstarred is not None
+  assert unstarred.thinking_since == sentinel
+
+  grouped = await mgr.set_group(created.id, "g")
+  assert grouped is not None
+  assert grouped.thinking_since == sentinel
+
+  forked = await mgr.fork_session(created.id)
+  assert forked.thinking_since == sentinel
+
+  sched = await mgr.create_session(CreateSessionRequest(name="Scheduled: w", scheduled_task="w-task"))
+  assert sched.thinking_since == sentinel
+  via_sched = await mgr.ensure_scheduled_session_backend("w-task", "fake")
+  assert via_sched is not None
+  assert via_sched.thinking_since == sentinel
+
+  # elone archives the parent; run it after every other check on `created`.
+  eloned = await mgr.elone_session(created.id, event_index=0)
+  assert eloned.thinking_since == sentinel
+
+  active = mgr.list_active_session_ids()
+  assert all(m.thinking_since == sentinel for m in active)
+
+
+@pytest.mark.asyncio
+async def test_stamp_recovers_after_unrelated_save_resets_cached_object(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """T5c: an unrelated _save_metadata rebuilds the cached object from
+  transient-excluded JSON; a cache-hit read within the TTL must still return
+  the live busy value (no 30s bounded None window)."""
+  cfg = _make_consumer_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  monkeypatch.setattr("src.core.sessions.streaming_manager.broadcast", AsyncMock())
+  session = await mgr.create_session(CreateSessionRequest(name="t5-cache"))
+  started_at, _created = thinking_state.mark_busy(session.id)
+  try:
+    await mgr.mark_unread(session.id)  # unrelated save fires every master round
+    cached_meta, _cached_ts = mgr._metadata_cache[session.id]
+    assert cached_meta.thinking_since is None, "post-save cache rebuild must drop the derived field"
+
+    # Cache-hit read within the 30s TTL re-stamps on the way out.
+    got = await mgr.get_session(session.id)
+    assert got is not None
+    assert got.thinking_since == started_at
+  finally:
+    thinking_state.clear_busy(session.id)

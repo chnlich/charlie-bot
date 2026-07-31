@@ -28,6 +28,8 @@ _IGNORED_SSE_EVENT_TYPES = {
     "session.status",
     "session.updated",
 }
+# opencode's own compaction output-reserve default ($d = 20000 in the opencode binary, applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`).
+OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 
 
 class OpenCodeBackend(AgentBackend):

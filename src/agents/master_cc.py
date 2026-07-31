@@ -339,12 +339,13 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   # family supports this flag.
   if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
     extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
-  resume_session = bool(resume_session_id)
-  # Capability check, independent of `resume_session`: for the Claude family the
-  # resume id travels via `extra_flags` (--resume), so `resume_session_id` (and
-  # thus `resume_session`) is always None/False there even while actively
-  # resuming. Reusing `resume_session` here would make this warning fire on
-  # every Claude-family round that has an anchor.
+  resume_session = bool(resume_id)
+  # Gate on backend capability, not on a resume-id variable: a backend outside
+  # _RESUME_CAPABLE_BACKEND_TYPES cannot resume any prior session, so a session
+  # that carries an anchor (cc_session_id) is misconfigured regardless of
+  # whether this round resolved a reachable resume id. Keying off resume_id or
+  # resume_session_id would silence the warning whenever the id is absent (fresh
+  # start, unreachable transcript) and let the misconfiguration pass undetected.
   if session_meta.cc_session_id and option.type not in _RESUME_CAPABLE_BACKEND_TYPES:
     log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
   if item.extra_claude_flags:

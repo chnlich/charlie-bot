@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from structlog.testing import capture_logs
 
 from src.agents import master_cc
 from src.agents.backends import base as backend_base
@@ -152,3 +153,110 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
 
   backend_kwargs = captures["kwargs"]
   assert backend_kwargs["extra_flags"] == ["--exclude-dynamic-system-prompt-sections"]
+
+
+# ---------------------------------------------------------------------------
+# resume_session log field: derived from the resolved resume id, honest on both
+# the Claude family (--resume flag route) and native-resume backends.
+# ---------------------------------------------------------------------------
+
+
+def _starting_entry(logs: list[dict]) -> dict:
+  matches = [e for e in logs if e.get("event") == "master_cc_starting"]
+  assert len(matches) == 1, f"expected one master_cc_starting event, got {matches}"
+  return matches[0]
+
+
+def _make_transcript(config_dir: Path, cc_session_id: str) -> Path:
+  transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"
+  transcript.parent.mkdir(parents=True, exist_ok=True)
+  transcript.write_text("[]", encoding="utf-8")
+  return transcript
+
+
+async def _run_cc_starting_entry(
+    cfg: core_config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
+    backend_option: models.BackendOption,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict:
+  monkeypatch.setattr(
+      "src.agents.backends.registry.build_backend",
+      lambda option, cfg, **kw: _FakeBackend())
+  monkeypatch.setattr(
+      master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  item = master_cc._WorkItem(
+      cfg=cfg,
+      session_meta=session_meta,
+      user_content="hello",
+      callbacks=_make_callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=backend_option,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
+  )
+  with capture_logs() as logs:
+    await master_cc._run_cc(item)
+  return _starting_entry(logs)
+
+
+@pytest.mark.asyncio
+async def test_claude_family_with_reachable_anchor_logs_resume_session_true(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  config_dir = tmp_path / "claude-config"
+  _make_transcript(config_dir, "existing-session-id")
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          models.BackendOption(
+              id="cc", label="CC", type="cc-claude", model="claude-fable-5",
+              claude_config_dir=str(config_dir)),
+      ],
+  )
+  session_meta = models.SessionMetadata(
+      id="session-id", name="CC", backend="cc", cc_session_id="existing-session-id")
+
+  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backend_options[0], monkeypatch)
+
+  assert entry["resume_session"] is True
+
+
+@pytest.mark.asyncio
+async def test_claude_family_with_no_anchor_logs_resume_session_false(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
+      ],
+  )
+  session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
+
+  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backend_options[0], monkeypatch)
+
+  assert entry["resume_session"] is False
+
+
+@pytest.mark.asyncio
+async def test_native_resume_backend_with_reachable_anchor_logs_resume_session_true(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          models.BackendOption(id="oc", label="OpenCode", type="opencode", model="glm-5.2"),
+      ],
+  )
+  session_meta = models.SessionMetadata(
+      id="session-id", name="OpenCode", backend="oc", cc_session_id="existing-session-id")
+
+  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backend_options[0], monkeypatch)
+
+  assert entry["resume_session"] is True

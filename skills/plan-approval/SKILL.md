@@ -38,6 +38,8 @@ not restate it here.
 
 - Research the codebase first; present the plan as a decision surface following the
   template block kit, with numbered Trade-offs for the choices the user must judge.
+- Render the artifact per the USAGE note atop the BLOCK KIT comment in `prompts/plan_template.html`.
+- Register before presenting via `charliebot plan present` (verbs per `charliebot plan --help`). The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth. Record the code baseline when the plan pins one.
 - End with: "Say **take off** when ready to implement."
 
 ## Feedback
@@ -60,9 +62,11 @@ not restate it here.
 - Verify is a required independent step; its results live in the verify thread's own log, never in the
   plan registry. `approve` records a takeoff unconditionally; the runtime delegation gate reads the chat
   log, not the registry, so approve bookkeeping does not gate execution.
+- After the user says take off, record it via `charliebot plan approve`.
 
 ## Verify
 
+- Launch verify as a read-only repo-less delegation before presenting the plan.
 - Verify checks fidelity — claims against evidence — and adequacy: whether the design,
   assumed accurate and implemented, entails what section 1 claims. Quote the confirmed
   understanding's file path in the spec as the adequacy reference when one exists;

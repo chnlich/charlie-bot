@@ -38,6 +38,15 @@ a. **No theme coverage** — no existing entry's theme covers this candidate; ch
 b. **Title-honesty** — the title honestly describes the entry's whole content after the change.
    A title that over- or under-states the body is a reject reason.
 
+## The skills boundary
+
+The store holds decision knowledge — facts, rules, and conventions that change what the
+reader does next. Step-by-step operating procedures (command sequences, recipes, and their
+reference files) live in the owning skill, never the store: reject procedure-shaped
+candidates and name the owning skill in the report. Live state under active investigation
+stays with its owning system. One home per item: when a rule is admitted to the store, no
+skill keeps a duplicate of it.
+
 ## Labeling — the three axes plus title
 
 Every entry carries `scope`, `topic`, `audience`, and `title` in its front matter:

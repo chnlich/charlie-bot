@@ -70,10 +70,13 @@ def _context_compacted_msg(ev: dict) -> dict:
 
 
 def _resume_context_dropped_msg(ev: dict) -> dict:
-  config_dir = ev.get('config_dir')
-  msg = 'Context not resumed: this session\'s Claude conversation record is not in the account directory'
-  if config_dir:
-    msg += f' {config_dir}'
+  reason = ev.get('reason')
+  if reason == 'anchor_missing':
+    msg = 'Context not resumed: no previous session anchor was found'
+  elif reason == 'transcript_missing':
+    msg = 'Context not resumed: the previous session transcript is missing'
+  else:
+    msg = 'Context not resumed'
   return {'role': 'system', 'content': f'{msg} — started a new conversation'}
 
 

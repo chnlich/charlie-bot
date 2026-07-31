@@ -25,6 +25,8 @@ def _make_callbacks() -> models.SessionCallbacks:
       persist_and_broadcast=AsyncMock(),
       update_thinking_state=AsyncMock(),
       mark_unread=AsyncMock(),
+      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
+      has_completed_round=AsyncMock(return_value=False),
   )
 
 
@@ -251,7 +253,7 @@ async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
   dropped = [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED]
   assert len(dropped) == 1
-  assert dropped[0]["config_dir"] == str(target)
+  assert dropped[0]["reason"] == "transcript_missing"
 
 
 @pytest.mark.asyncio
@@ -279,9 +281,16 @@ async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, mo
   assert not [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED]
 
 
-def test_resume_context_dropped_renders_as_a_system_message() -> None:
+def test_resume_context_dropped_renders_backend_neutral_by_reason() -> None:
   from src.core.message_aggregator import _SIMPLE_HANDLERS
-  msg = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED]({"type": ET.RESUME_CONTEXT_DROPPED,
-                                                      "config_dir": "/home/u/.claude"})
-  assert msg["role"] == "system"
-  assert "/home/u/.claude" in msg["content"]
+  anchor = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED](
+      {"type": ET.RESUME_CONTEXT_DROPPED, "reason": "anchor_missing"})
+  assert anchor["role"] == "system"
+  assert "anchor" in anchor["content"].lower()
+  assert "claude" not in anchor["content"].lower()
+
+  transcript = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED](
+      {"type": ET.RESUME_CONTEXT_DROPPED, "reason": "transcript_missing"})
+  assert transcript["role"] == "system"
+  assert "transcript" in transcript["content"].lower()
+  assert "claude" not in transcript["content"].lower()

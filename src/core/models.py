@@ -430,6 +430,9 @@ class SessionCallbacks:
   persist_and_broadcast: Callable[[str, dict], Awaitable[None]]
   update_thinking_state: Callable[..., Awaitable[None]]
   mark_unread: Callable[[str], Awaitable[None]]
+  # Returns the cc_session_id read back from disk after persisting.
+  persist_cc_session_id: Callable[[str, str], Awaitable[Optional[str]]]
+  has_completed_round: Callable[[str], Awaitable[bool]]
 
 
 # ---------------------------------------------------------------------------

@@ -645,13 +645,37 @@ class SessionManager:
     """Public wrapper for _save_metadata."""
     await self._save_metadata(meta)
 
-  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> None:
-    """Persist a cc_session_id without clobbering unrelated metadata fields."""
+  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> Optional[str]:
+    """Persist a cc_session_id without clobbering unrelated metadata fields.
+
+    Re-reads fresh metadata from disk under the per-session lock, mutates only
+    ``cc_session_id`` (and ``cc_session_started_at`` when the on-disk id actually
+    changes), saves, then re-reads and returns the ``cc_session_id`` now on
+    disk. Never falls back to a whole-object save — that is the 2026-03-30
+    defect that clobbered ``has_unread``. ``update_thinking_state`` is the
+    reference pattern.
+    """
     async with self._lock_for(session_id):
+      self._invalidate_cache(session_id)
       fresh = await self.get_session(session_id)
-      if fresh:
+      if fresh is None:
+        return None
+      if fresh.cc_session_id != cc_session_id:
         fresh.cc_session_id = cc_session_id
-        await self._save_metadata(fresh)
+        fresh.cc_session_started_at = utc_now()
+      await self._save_metadata(fresh)
+      self._invalidate_cache(session_id)
+      read_back = await self.get_session(session_id)
+    return read_back.cc_session_id if read_back is not None else None
+
+  async def has_completed_round(self, session_id: str) -> bool:
+    """True when the live event stream contains a master_done event.
+
+    Reads through the existing ``load_chat_events_sync`` cache; adds no new
+    persistent state.
+    """
+    events = self.load_chat_events_sync(session_id)
+    return any(ev.get("type") == ET.MASTER_DONE for ev in events)
 
   async def update_thinking_state(
       self,
@@ -765,6 +789,8 @@ class SessionManager:
         persist_and_broadcast=self.persist_and_broadcast,
         update_thinking_state=self.update_thinking_state,
         mark_unread=self.mark_unread,
+        persist_cc_session_id=self.persist_cc_session_id,
+        has_completed_round=self.has_completed_round,
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

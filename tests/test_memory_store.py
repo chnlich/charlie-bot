@@ -7,15 +7,13 @@ the dual-read path.
 """
 
 import io
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from src.core import memory
-from src.core.memory import MemoryFormatError, assemble_master, assemble_worker, lint, load_store, parse_entry, \
-    record_usage, usage_stats
+from src.core.memory import MemoryFormatError, assemble_master, assemble_worker, lint, load_store, parse_entry
 
 _DEFAULT_TOPICS = [
     "profile resident",
@@ -34,20 +32,11 @@ def _write_topics(memory_dir: Path, lines: list[str] | None = None) -> None:
 
 
 def _entry_text(
-    topic: str,
-    slug: str,
-    *,
-    scope="user",
-    audience="master, worker",
-    title=None,
-    revises=None,
-    body=None) -> str:
+    topic: str, slug: str, *, scope="user", audience="master, worker", title=None, revises=None, body=None) -> str:
   """Format v2: title in frontmatter, comma-list audience, pure-markdown body."""
   if title is None:
     title = slug.replace("-", " ").title()
-  header = [
-      "---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"title: {title}"
-  ]
+  header = ["---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"title: {title}"]
   if revises is not None:
     header.append(f"revises: {revises}")
   header.append("---")
@@ -68,8 +57,7 @@ def _legacy_entry_text(
     body=None) -> str:
   """Format v1 (legacy): created/source header, three-value audience, ``# <title>`` body opener."""
   header = [
-      "---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"created: {created}",
-      f"source: {source}"
+      "---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"created: {created}", f"source: {source}"
   ]
   if revises is not None:
     header.append(f"revises: {revises}")
@@ -369,8 +357,7 @@ def test_lint_entries_flags_bad_audience_element(tmp_path: Path) -> None:
 def test_lint_staging_legacy_candidate_stays_clean(tmp_path: Path) -> None:
   """Existing staged candidates (created/source header, both, '# ' body) stay lint-clean."""
   _write_topics(tmp_path)
-  _write_staging(
-      tmp_path, "20260728T120000Z-abcd1234-pending", "profile", "pending", legacy=True, audience="both")
+  _write_staging(tmp_path, "20260728T120000Z-abcd1234-pending", "profile", "pending", legacy=True, audience="both")
   violations = lint(tmp_path)
   assert violations == [], f"expected clean, got: {violations}"
 
@@ -414,8 +401,7 @@ def test_lint_staging_missing_topic_flagged(tmp_path: Path) -> None:
 
 def test_assemble_master_resident_full_and_others_index(tmp_path: Path) -> None:
   _write_topics(tmp_path)
-  _write_entry(
-      tmp_path, "profile", "dark-mode", title="Dark Mode", body="User prefers dark UI.\n")
+  _write_entry(tmp_path, "profile", "dark-mode", title="Dark Mode", body="User prefers dark UI.\n")
   _write_entry(tmp_path, "charliebot", "cli-flags", title="CLI Flags", body="Details.\n")
   block = assemble_master(tmp_path)
   assert block is not None
@@ -493,18 +479,6 @@ def test_assemble_master_no_index_header_without_index_entries(tmp_path: Path) -
   block = assemble_master(tmp_path)
   assert block is not None
   assert memory.INDEX_HEADER not in block  # full-body only: no index, no header
-
-
-def test_assemble_master_records_usage_for_full_body_only(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "res", title="Res", body="r\n")
-  _write_entry(tmp_path, "charliebot", "ondemand", title="On")
-  assemble_master(tmp_path)
-  usage_path = tmp_path / "usage.jsonl"
-  assert usage_path.exists()
-  rec = json.loads(usage_path.read_text(encoding="utf-8").strip())
-  assert rec["caller"] == "master-spawn"
-  assert rec["entries"] == ["profile/res"]  # index-only entry not recorded
 
 
 def test_assemble_master_legacy_store_output_is_pre_change_plus_header(tmp_path: Path) -> None:
@@ -590,72 +564,6 @@ def test_assemble_worker_missing_dir_returns_none(tmp_path: Path) -> None:
   assert assemble_worker(tmp_path / "nope", "charliebot") is None
 
 
-def test_assemble_worker_records_usage(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "charliebot", "cli", audience="worker", title="CLI", body="c\n")
-  _write_entry(tmp_path, "profile", "pref", audience="worker", title="Pref", body="p\n")
-  assemble_worker(tmp_path, "charliebot")
-  rec = json.loads((tmp_path / "usage.jsonl").read_text(encoding="utf-8").strip())
-  assert rec["caller"] == "worker-spawn"
-  assert rec["entries"] == ["charliebot/cli"]  # only full-body injection
-
-
-# --- record_usage + usage_stats ----------------------------------------------
-
-
-def test_record_usage_appends_one_line(tmp_path: Path) -> None:
-  record_usage(tmp_path, "query", ["a/b", "c/d"])
-  record_usage(tmp_path, "query", ["a/b"])
-  lines = (tmp_path / "usage.jsonl").read_text(encoding="utf-8").strip().splitlines()
-  assert len(lines) == 2
-  rec = json.loads(lines[0])
-  assert set(rec.keys()) == {"ts", "caller", "entries"}
-  assert rec["entries"] == ["a/b", "c/d"]
-
-
-def test_record_usage_empty_ids_noop(tmp_path: Path) -> None:
-  record_usage(tmp_path, "query", [])
-  assert not (tmp_path / "usage.jsonl").exists()
-
-
-def test_record_usage_invalid_caller_raises(tmp_path: Path) -> None:
-  with pytest.raises(ValueError, match="invalid caller"):
-    record_usage(tmp_path, "bogus", ["a/b"])
-
-
-def test_usage_stats_hits_and_idle(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "a")
-  _write_entry(tmp_path, "profile", "b")
-  record_usage(tmp_path, "query", ["profile/a"])
-  stats = {s.entry_id: s for s in usage_stats(tmp_path, idle_days=60)}
-  assert stats["profile/a"].hits == 1
-  assert stats["profile/a"].last_seen is not None
-  assert stats["profile/a"].idle_days == 0
-  assert stats["profile/a"].over_threshold is False
-  assert stats["profile/b"].hits == 0
-  assert stats["profile/b"].last_seen is None
-  assert stats["profile/b"].idle_days is None
-  assert stats["profile/b"].over_threshold is True  # never seen = idle
-
-
-def test_usage_stats_corrupt_line_skipped(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "a")
-  usage_path = tmp_path / "usage.jsonl"
-  usage_path.write_text(
-      "not json at all\n" +
-      json.dumps({
-          "ts": "2026-07-28T00:00:00+00:00",
-          "caller": "query",
-          "entries": ["profile/a"]
-      }) + "\n",
-      encoding="utf-8")
-  stats = {s.entry_id: s for s in usage_stats(tmp_path)}
-  # Corrupt line skipped (no raise), valid line tallied.
-  assert stats["profile/a"].hits == 1
-
-
 # --- CLI add creates exactly one staging file, never touches entries/ -------
 
 
@@ -674,8 +582,7 @@ def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.Mo
   monkeypatch.setattr("sys.stdin", io.StringIO(body))
   import src.cli.memory as cli
   monkeypatch.setattr(
-      "sys.argv",
-      ["charliebot memory", "add", "--topic", "profile", "--scope", "user", "--audience", "master, worker"])
+      "sys.argv", ["charliebot memory", "add", "--topic", "profile", "--scope", "user", "--audience", "master, worker"])
   cli.main()
   staging = cfg.memory_dir / "staging"
   files = list(staging.glob("*.md"))
@@ -764,27 +671,22 @@ def test_cli_query_unknown_topic_exits_nonzero(tmp_path: Path, monkeypatch: pyte
   assert exc.value.code != 0
 
 
-def test_cli_query_full_records_usage_index_does_not(
+def test_cli_query_index_prints_lines_full_prints_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   cfg = _fake_cfg(tmp_path)
   _write_entry(cfg.memory_dir, "profile", "dark-mode", title="Dark Mode", body="body\n")
   monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
   import src.cli.memory as cli
-  # --index: prints index line, records nothing
+  # --index: prints index lines only
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--index"])
   cli.main()
   assert "profile/dark-mode · Dark Mode" in capsys.readouterr().out
-  assert not (cfg.memory_dir / "usage.jsonl").exists()
-  # full text: synthesizes the '# {title}' heading (v2 bodies carry none), records usage
+  # full text: synthesizes the '# {title}' heading (v2 bodies carry none)
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile"])
   cli.main()
   out = capsys.readouterr().out
   assert out.count("# Dark Mode") == 1
   assert "body" in out
-  lines = (cfg.memory_dir / "usage.jsonl").read_text(encoding="utf-8").strip().splitlines()
-  assert len(lines) == 1
-  assert json.loads(lines[0])["caller"] == "query"
-  assert json.loads(lines[0])["entries"] == ["profile/dark-mode"]
 
 
 def test_cli_query_full_no_duplicate_heading_for_legacy_body(
@@ -814,8 +716,7 @@ def test_cli_query_audience_filter_is_membership(
 
 
 def test_cli_lint_nonzero_on_violations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
-) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   cfg = _fake_cfg(tmp_path)
   _write_entry(cfg.memory_dir, "profile", "bad", revises="old")  # revises forbidden in entries
   monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)

@@ -106,7 +106,7 @@ DEFAULT_MEMORY_TOPICS = (
     "host resident\n"
     "charliebot\n")
 
-DEFAULT_MEMORY_GITIGNORE = "staging/\nusage.jsonl\n"
+DEFAULT_MEMORY_GITIGNORE = "staging/\n"
 
 DEFAULT_SLASH_COMMANDS = """\
 commands:

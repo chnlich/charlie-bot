@@ -1,11 +1,10 @@
-"""Labeled-entry memory store: parse, load, lint, assemble, and record usage.
+"""Labeled-entry memory store: parse, load, lint, and assemble.
 
 The store is a local git repo at ``cfg.memory_dir`` (``~/.charliebot/memory/``):
 
   entries/<topic>/<slug>.md   # canonical entries, one fact/rule set per file
   topics                      # controlled vocabulary, one topic per line
   staging/                    # candidate files (.gitignore'd)
-  usage.jsonl                 # query/injection hit log, O_APPEND (.gitignore'd)
 
 Entry grammar (format v2): line 1 is exactly ``---``; header lines each match
 ``^([a-z_]+): <value>$`` until the next line that is exactly ``---``; everything
@@ -23,10 +22,8 @@ All logic lives here; the CLI (``src/cli/memory.py``) is a thin wrapper, and the
 spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
 """
 
-import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -37,7 +34,6 @@ log = structlog.get_logger()
 _TOPICS_FILENAME = "topics"
 _ENTRIES_DIRNAME = "entries"
 _STAGING_DIRNAME = "staging"
-_USAGE_FILENAME = "usage.jsonl"
 
 # Header line: ``field: value`` where field is lower_snake. Value charset is
 # validated per field below (slug-charset for most, free text for ``title``).
@@ -58,11 +54,6 @@ _AUDIENCE_VALUE_RE = re.compile(r"^[A-Za-z0-9._-]+( *, *[A-Za-z0-9._-]+)*$")
 _KNOWN_FIELDS = frozenset({"scope", "topic", "audience", "title", "created", "source", "revises"})
 _SCOPES = frozenset({"user", "host"})
 _AUDIENCE_ELEMENTS = frozenset({"master", "worker"})
-
-CALLER_MASTER_SPAWN = "master-spawn"
-CALLER_WORKER_SPAWN = "worker-spawn"
-CALLER_QUERY = "query"
-_CALLERS = frozenset({CALLER_MASTER_SPAWN, CALLER_WORKER_SPAWN, CALLER_QUERY})
 
 # Header line prepended to the index lines by both spawn assemblers.
 INDEX_HEADER = "# Memory index — full text via `charliebot memory query --topic <topic>`"
@@ -106,15 +97,6 @@ class Store:
   memory_dir: Path
   topics: dict[str, Topic]
   entries: list[Entry]
-
-
-@dataclass
-class UsageStat:
-  entry_id: str
-  hits: int
-  last_seen: Optional[str]
-  idle_days: Optional[int]
-  over_threshold: bool
 
 
 def _parse_audience(raw: str) -> list[str]:
@@ -224,9 +206,7 @@ def _audience_violations(entry: Entry, v: Callable[[str], str]) -> list[str]:
   if entry.audience is None:
     return []
   return [
-      v(f"audience element {el!r} not in {{master, worker}}")
-      for el in entry.audience
-      if el not in _AUDIENCE_ELEMENTS
+      v(f"audience element {el!r} not in {{master, worker}}") for el in entry.audience if el not in _AUDIENCE_ELEMENTS
   ]
 
 
@@ -403,8 +383,7 @@ def assemble_master(memory_dir: Path) -> Optional[str]:
   Full bodies of entries in resident topics whose audience contains
   ``master``, then the INDEX_HEADER line and index lines
   (``<topic>/<slug> · <title>``) for all other master-audience entries, each
-  group stably sorted by ``(topic, slug)``. Records one usage line (caller
-  ``master-spawn``) for the full-body injections only.
+  group stably sorted by ``(topic, slug)``.
 
   Returns None when the memory dir is missing (logged) or when the store has
   no master-audience entries to inject. A malformed store propagates
@@ -428,10 +407,7 @@ def assemble_master(memory_dir: Path) -> Optional[str]:
     return None
   full_body_entries.sort(key=lambda e: (e.topic, e.slug))
   index_entries.sort(key=lambda e: (e.topic, e.slug))
-  block = _format_block(full_body_entries, index_entries)
-  if full_body_entries:
-    record_usage(memory_dir, CALLER_MASTER_SPAWN, [e.id for e in full_body_entries])
-  return block
+  return _format_block(full_body_entries, index_entries)
 
 
 def assemble_worker(memory_dir: Path, repo_basename: str) -> Optional[str]:
@@ -441,8 +417,7 @@ def assemble_worker(memory_dir: Path, repo_basename: str) -> Optional[str]:
   contains ``worker``, then the INDEX_HEADER line and index lines for all
   other worker-audience entries, then one usage line explaining
   ``charliebot memory query`` and ``charliebot memory add`` (workers may stage
-  candidates). Records one usage line (caller ``worker-spawn``) for the
-  full-body injections only.
+  candidates).
 
   Returns None when the memory dir is missing (logged). When the store exists
   the usage line is always present, so the result is non-None. A malformed
@@ -474,84 +449,4 @@ def assemble_worker(memory_dir: Path, repo_basename: str) -> Optional[str]:
   if index_entries:
     chunks.append(_index_lines(index_entries))
   chunks.append(usage_line)
-  if full_body_entries:
-    record_usage(memory_dir, CALLER_WORKER_SPAWN, [e.id for e in full_body_entries])
   return "\n\n".join(chunks)
-
-
-def record_usage(memory_dir: Path, caller: str, entry_ids: list[str]) -> None:
-  """Append one JSON line ``{ts, caller, entries}`` to usage.jsonl via O_APPEND.
-
-  ``caller`` must be one of ``master-spawn``, ``worker-spawn``, ``query``. A
-  single ``write`` call appends the whole line. No-op when *entry_ids* is
-  empty (nothing was injected). The caller is responsible for ensuring
-  *memory_dir* exists.
-  """
-  if caller not in _CALLERS:
-    raise ValueError(f"invalid caller {caller!r}; expected one of {sorted(_CALLERS)}")
-  if not entry_ids:
-    return
-  usage_path = memory_dir / _USAGE_FILENAME
-  line = json.dumps({
-      "ts": datetime.now(timezone.utc).isoformat(),
-      "caller": caller,
-      "entries": list(entry_ids),
-  })
-  with open(usage_path, "a", encoding="utf-8") as f:
-    f.write(line + "\n")
-
-
-def usage_stats(memory_dir: Path, idle_days: int = 60) -> list[UsageStat]:
-  """Per-entry usage stats: hits, last_seen, idle_days, over_threshold.
-
-  Reads usage.jsonl (skipping corrupt lines with a warning) and tallies per
-  entry id. An entry never seen has ``hits=0``, ``last_seen=None``,
-  ``idle_days=None``, ``over_threshold=True`` (maximally idle). Seen entries
-  compute ``idle_days`` from the most recent record; ``over_threshold`` is
-  True when ``idle_days >= idle_days``. Results are sorted by entry id.
-  """
-  store = load_store(memory_dir)
-  hits: dict[str, int] = {e.id: 0 for e in store.entries}
-  last_seen: dict[str, datetime] = {}
-  usage_path = memory_dir / _USAGE_FILENAME
-  if usage_path.is_file():
-    for raw in usage_path.read_text(encoding="utf-8").splitlines():
-      if not raw.strip():
-        continue
-      try:
-        rec = json.loads(raw)
-        ts = rec["ts"]
-        ids = rec["entries"]
-        if not isinstance(ts, str) or not isinstance(ids, list):
-          raise ValueError("bad record shape")
-        seen_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        if seen_dt.tzinfo is None:
-          seen_dt = seen_dt.replace(tzinfo=timezone.utc)
-        for eid in ids:
-          if not isinstance(eid, str):
-            raise ValueError("bad entry id")
-          if eid in hits:
-            hits[eid] += 1
-            prev = last_seen.get(eid)
-            if prev is None or seen_dt > prev:
-              last_seen[eid] = seen_dt
-      except (ValueError, KeyError, TypeError) as e:
-        log.warning("memory_usage_corrupt_line_skipped", line=raw, error=str(e))
-        continue
-  now = datetime.now(timezone.utc)
-  stats: list[UsageStat] = []
-  for e in store.entries:
-    ls = last_seen.get(e.id)
-    if ls is not None:
-      idle = (now - ls).days
-      stats.append(
-          UsageStat(
-              entry_id=e.id,
-              hits=hits.get(e.id, 0),
-              last_seen=ls.isoformat(),
-              idle_days=idle,
-              over_threshold=idle >= idle_days))
-    else:
-      stats.append(UsageStat(entry_id=e.id, hits=0, last_seen=None, idle_days=None, over_threshold=True))
-  stats.sort(key=lambda s: s.entry_id)
-  return stats

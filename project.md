@@ -31,8 +31,7 @@ All instance-specific data (configs, logs, sessions) is stored here.
 ├── memory/             # Labeled-entry memory store (local git repo)
 │   ├── entries/<topic>/<slug>.md   # canonical entries (one fact per file)
 │   ├── topics                       # controlled topic vocabulary
-│   ├── staging/                     # candidate entries (.gitignore'd)
-│   └── usage.jsonl                  # query/injection hit log (.gitignore'd)
+│   └── staging/                     # candidate entries (.gitignore'd)
 └── sessions/            # Session directories
     └── {session_uuid}/
         ├── metadata.json      # Session info (name, repo, branch)

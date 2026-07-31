@@ -1,4 +1,4 @@
-"""CLI: labeled-entry memory store (query / add / lint / usage).
+"""CLI: labeled-entry memory store (query / add / lint).
 
 Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
 (``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
@@ -6,7 +6,6 @@ Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
   charliebot memory query --topic <t> [--audience A] [--index] [--resident]
   charliebot memory add --topic <t> --scope <s> --audience <a[,a]> [--revises SLUG] [--file F | stdin]
   charliebot memory lint
-  charliebot memory usage [--idle-days N]
 """
 
 import argparse
@@ -22,8 +21,7 @@ _TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="Labeled-entry memory store: query, add candidates, lint, and usage stats")
+  parser = argparse.ArgumentParser(description="Labeled-entry memory store: query, add candidates, and lint")
   sub = parser.add_subparsers(dest="command", required=True)
 
   p_query = sub.add_parser("query", help="Print matched entries' full text (or index lines with --index)")
@@ -31,7 +29,7 @@ def main() -> None:
       "--topic", action="append", required=True, help="Topic to match (repeatable); must exist in the vocabulary")
   p_query.add_argument(
       "--audience", default=None, choices=["master", "worker"], help="Only entries whose audience contains this")
-  p_query.add_argument("--index", action="store_true", help="Print index lines only; no usage recorded")
+  p_query.add_argument("--index", action="store_true", help="Print index lines only")
   p_query.add_argument("--resident", action="store_true", help="Only entries in resident topics")
 
   p_add = sub.add_parser("add", help="Stage a candidate entry (never touches entries/)")
@@ -44,10 +42,6 @@ def main() -> None:
 
   sub.add_parser("lint", help="Validate the store; exit nonzero on violations")
 
-  p_usage = sub.add_parser("usage", help="Print per-entry usage stats")
-  p_usage.add_argument(
-      "--idle-days", type=int, default=60, dest="idle_days", help="Idle threshold in days (default 60)")
-
   args = parser.parse_args()
   if args.command == "query":
     _cmd_query(args)
@@ -55,8 +49,6 @@ def main() -> None:
     _cmd_add(args)
   elif args.command == "lint":
     _cmd_lint()
-  elif args.command == "usage":
-    _cmd_usage(args)
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
@@ -89,7 +81,6 @@ def _cmd_query(args: argparse.Namespace) -> None:
   # that v2 bodies no longer carry it; legacy bodies keep their own heading.
   for e in matched:
     print(memory.full_text(e))
-  memory.record_usage(memory_dir, memory.CALLER_QUERY, [e.id for e in matched])
 
 
 def _cmd_add(args: argparse.Namespace) -> None:
@@ -97,14 +88,15 @@ def _cmd_add(args: argparse.Namespace) -> None:
     print(f"error: --topic {args.topic!r} is not a valid topic name (lowercase, digits, hyphens)", file=sys.stderr)
     sys.exit(1)
   if args.audience.strip() == "both":
-    print("error: --audience 'both' was removed in entry format v2; use '--audience \"master, worker\"'",
-          file=sys.stderr)
+    print(
+        "error: --audience 'both' was removed in entry format v2; use '--audience \"master, worker\"'", file=sys.stderr)
     sys.exit(1)
   elements = [part.strip() for part in args.audience.split(",")]
   bad = [el for el in elements if el not in memory._AUDIENCE_ELEMENTS]
   if bad or not any(elements):
-    print(f"error: --audience {args.audience!r} must be a comma list with each element in {{master, worker}}",
-          file=sys.stderr)
+    print(
+        f"error: --audience {args.audience!r} must be a comma list with each element in {{master, worker}}",
+        file=sys.stderr)
     sys.exit(1)
   if args.revises is not None and not memory._SLUG_RE.match(args.revises):
     print(f"error: --revises {args.revises!r} does not match slug charset [A-Za-z0-9._-]", file=sys.stderr)
@@ -156,28 +148,6 @@ def _cmd_lint() -> None:
       print(v)
     sys.exit(1)
   print("clean")
-
-
-def _cmd_usage(args: argparse.Namespace) -> None:
-  cfg = get_config()
-  stats = memory.usage_stats(cfg.memory_dir, idle_days=args.idle_days)
-  rows = [["entry", "hits", "last_seen", "idle_days", "over_threshold"]]
-  for s in stats:
-    rows.append(
-        [
-            s.entry_id,
-            str(s.hits),
-            s.last_seen or "(never)",
-            "-" if s.idle_days is None else str(s.idle_days),
-            str(s.over_threshold),
-        ])
-  _print_table(rows)
-
-
-def _print_table(rows: list[list[str]]) -> None:
-  widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
-  for r in rows:
-    print("  ".join(c.ljust(widths[i]) for i, c in enumerate(r)))
 
 
 def _slugify(text: str) -> str:

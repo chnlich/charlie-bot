@@ -41,6 +41,9 @@ Task spec format (--task-spec-file):
   Things the worker must not change.
 
   Source Files entries: absolute paths or `- (none)`.
+  Task specs must not forbid test edits: updating affected tests is
+  part of the change — tests asserting removed behavior get updated
+  or deleted with it.
   Runtime authorization (takeoff gate) is derived from the chat
   event log; see skills/plan-approval/SKILL.md for the full contract.
 

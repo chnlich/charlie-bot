@@ -212,6 +212,8 @@ class SessionMetadata(BaseModel):
   next_trigger_at: Optional[datetime] = None
   has_pending_plan_approval: bool = False
   starred: bool = False
+  # Transient runtime fact derived from src.core.thinking_state at read time;
+  # never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
   thinking_since: Optional[UtcDatetime] = None
   created_at: UtcDatetime = Field(default_factory=utc_now)
   updated_at: UtcDatetime = Field(default_factory=utc_now)
@@ -428,7 +430,6 @@ class SessionCallbacks:
   persist_and_broadcast: Callable[[str, dict], Awaitable[None]]
   update_thinking_state: Callable[..., Awaitable[None]]
   mark_unread: Callable[[str], Awaitable[None]]
-  clear_thinking_since: Callable[..., Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------

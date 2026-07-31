@@ -250,7 +250,7 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
 
 
 async def run_crash_recovery(cfg, boot_time: datetime) -> int:
-  """Recover orphaned threads, quarantine stale worktrees, and clear stale thinking.
+  """Recover orphaned threads and quarantine stale worktrees.
 
   This is the deferrable part of startup: the server lifespan launches it as a
   background task so readiness is not delayed by the O(history) per-thread
@@ -265,7 +265,6 @@ async def run_crash_recovery(cfg, boot_time: datetime) -> int:
   """
   recovered, threads = await asyncio.to_thread(_recover_orphaned_threads, cfg, boot_time)
   await _quarantine_stale_failed_worktrees(cfg, threads)
-  await asyncio.to_thread(_clear_stale_thinking, cfg)
   return recovered
 
 
@@ -415,28 +414,3 @@ async def _quarantine_stale_failed_worktrees(cfg, threads: list[dict]) -> None:
     # synchronous os.walk does not block live request serving during recovery.
     total = await asyncio.to_thread(dir_size_bytes, trash_path)
     log.info("worktree_trash_size", path=str(trash_path), bytes=total, human=format_size(total))
-
-
-def _clear_stale_thinking(cfg) -> None:
-  """Set thinking_since=null on all session metadata files.
-
-  On server startup no master task is running, so any non-null thinking_since
-  is stale from a previous crash or unclean shutdown.
-  """
-  if not cfg.sessions_dir.exists():
-    return
-  cleared = 0
-  for session_dir in cfg.sessions_dir.iterdir():
-    meta_path = session_dir / "metadata.json"
-    meta = load_json_meta(meta_path, "session_meta_unreadable")
-    if meta is None:
-      continue
-    if meta.get("thinking_since") is None:
-      continue
-    meta["thinking_since"] = None
-    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    log.debug("cleared_stale_thinking_since", session=meta.get("id"))
-    cleared += 1
-
-  if cleared:
-    log.info("stale_thinking_since_cleared", count=cleared)

@@ -22,7 +22,6 @@ def _make_callbacks() -> models.SessionCallbacks:
       persist_and_broadcast=AsyncMock(),
       update_thinking_state=AsyncMock(),
       mark_unread=AsyncMock(),
-      clear_thinking_since=AsyncMock(),
   )
 
 

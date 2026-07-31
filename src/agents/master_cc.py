@@ -17,6 +17,7 @@ from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snap
 from src.core.memory import assemble_master
 from src.core.models import BackendOption, SessionCallbacks, SessionMetadata, backend_type_allows_missing_model
 from src.core.streaming import handle_compact_boundary, streaming_manager
+from src.core.thinking_state import busy_since, clear_busy, mark_busy
 
 log = structlog.get_logger()
 
@@ -412,9 +413,16 @@ async def _session_consumer(session_id: str) -> None:
   # Relay cc_session_id across items: queued _WorkItems may carry distinct
   # SessionMetadata instances (e.g. fork bootstrap vs. user message loaded later).
   last_cc_session_id: Optional[str] = None
+  # Teardown context for the idle RUNNING_CHANGED broadcast, captured per item
+  # so the finally never reads the loop variable — `item` is unbound when the
+  # consumer exits (e.g. via cancellation) before the first queue.get() returns.
+  teardown_cfg: Optional[CharlieBotConfig] = None
+  teardown_auto_trigger = False
   try:
     while True:
       item: _WorkItem = await queue.get()
+      teardown_cfg = item.cfg
+      teardown_auto_trigger = item.auto_trigger
       try:
         # Carry the previous run's cc_session_id onto a freshly-loaded meta
         # so --resume picks up the in-progress CC transcript.
@@ -428,60 +436,24 @@ async def _session_consumer(session_id: str) -> None:
           item.session_meta.cc_session_id = cc_session_id
           last_cc_session_id = cc_session_id
 
+        # Computed once, with no re-check: a queued item keeps this round's
+        # busy interval alive, so the only question is whether one is queued.
         still_thinking = not queue.empty()
 
-        # Broadcast MASTER_DONE
+        # Broadcast MASTER_DONE. thinking_seconds is the length of the
+        # continuous busy interval reported by thinking_state, attached only
+        # when this round leaves the queue empty.
         thinking_seconds = None
-        if not still_thinking and item.session_meta.thinking_since:
-          thinking_seconds = int((datetime.now(timezone.utc) - item.session_meta.thinking_since).total_seconds())
+        if not still_thinking:
+          busy_start = busy_since(session_id)
+          if busy_start is not None:
+            thinking_seconds = int((datetime.now(timezone.utc) - busy_start).total_seconds())
 
         done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking": still_thinking}
         if thinking_seconds is not None:
           done_event["thinking_seconds"] = thinking_seconds
         done_event.update({k: v for k, v in finish_extras.items()})
         await item.callbacks.persist_and_broadcast(session_id, done_event)
-
-        # Re-check the queue after the broadcast await: a new run_message may
-        # have enqueued a work item while we were yielding. That caller sees
-        # the consumer as "already running" and skips setting thinking_since,
-        # so clearing it here would persist a stale "not thinking" state while
-        # the next item is about to run.
-        if not still_thinking and not queue.empty():
-          still_thinking = True
-
-        if not still_thinking:
-          item.session_meta.thinking_since = None
-          await item.callbacks.clear_thinking_since(session_id, cc_session_id)
-
-          # The clear above contains async disk I/O, during which a new
-          # run_message may have enqueued an item (it skips setting
-          # thinking_since because the consumer task is still running).
-          # Restore thinking_since so the next iteration doesn't run with a
-          # stale None on disk.
-          if not queue.empty():
-            restored = datetime.now(timezone.utc)
-            item.session_meta.thinking_since = restored
-            await item.callbacks.update_thinking_state(session_id, restored, None)
-            await streaming_manager.broadcast(
-                "sidebar", {
-                    "type": ET.RUNNING_CHANGED,
-                    "session_id": session_id,
-                    "has_running_tasks": True,
-                    "thinking_since": restored.isoformat(),
-                    "auto_trigger": item.auto_trigger,
-                })
-          else:
-            # Check if workers are still running before declaring idle.
-            from src.core.sessions import SessionManager
-            workers_running = await SessionManager(item.cfg)._has_running_tasks(session_id)
-            await streaming_manager.broadcast(
-                "sidebar", {
-                    "type": ET.RUNNING_CHANGED,
-                    "session_id": session_id,
-                    "has_running_tasks": workers_running,
-                    "thinking_since": None,
-                    "auto_trigger": item.auto_trigger,
-                })
 
         # Resolve the caller's future
         if not item.future.done():
@@ -499,10 +471,29 @@ async def _session_consumer(session_id: str) -> None:
       if queue.empty():
         break
   finally:
+    # Await-free teardown: the loop's queue.empty() exit check, this
+    # deregistration, and the busy-state clear form one synchronous sequence —
+    # an enqueue cannot interleave inside it, so a new work item either extends
+    # the current consumer (loop sees a non-empty queue) or starts a fresh
+    # consumer that re-marks busy. No await is allowed in this sequence; that
+    # property is what makes the busy-state invariant hang-free.
     _session_consumers.pop(session_id, None)
     # Clean up the queue if empty to avoid memory leaks from abandoned sessions.
     if session_id in _session_queues and _session_queues[session_id].empty():
       _session_queues.pop(session_id, None)
+    clear_busy(session_id)
+    if teardown_cfg is not None:
+      # Check if workers are still running before declaring idle.
+      from src.core.sessions import SessionManager
+      workers_running = await SessionManager(teardown_cfg)._has_running_tasks(session_id)
+      await streaming_manager.broadcast(
+          "sidebar", {
+              "type": ET.RUNNING_CHANGED,
+              "session_id": session_id,
+              "has_running_tasks": workers_running,
+              "thinking_since": None,
+              "auto_trigger": teardown_auto_trigger,
+          })
 
 
 async def run_message(
@@ -525,7 +516,7 @@ async def run_message(
     session_meta: The session to run in.
     user_content: The user's message text.
     callbacks: Bundle of session hooks (persist_and_broadcast,
-      update_thinking_state, mark_unread, clear_thinking_since).
+      update_thinking_state, mark_unread).
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
     display_content: User-visible content persisted to the chat log. Defaults
@@ -552,7 +543,9 @@ async def run_message(
   if should_check_tex:
     await asyncio.to_thread(snapshot_tex)
 
-  # Persist the user message so it survives page refresh (WebSocket catch-up)
+  # Persist the user message so it survives page refresh (WebSocket catch-up).
+  # All awaits in run_message happen here, BEFORE the atomic enqueue block
+  # below — between mark_busy and put_nowait nothing may yield or raise.
   if not skip_user_event:
     user_event = {
         "type": ET.USER,
@@ -564,24 +557,6 @@ async def run_message(
       user_event["uploaded_files"] = uploaded_files
     await callbacks.persist_and_broadcast(session_meta.id, user_event)
     session_meta.updated_at = datetime.now(timezone.utc)
-
-  # If no consumer is running for this session, set thinking state now.
-  # If a consumer is already running, thinking is already active.
-  consumer_already_running = (session_meta.id in _session_consumers and not _session_consumers[session_meta.id].done())
-  if not consumer_already_running:
-    session_meta.thinking_since = datetime.now(timezone.utc)
-    await callbacks.update_thinking_state(session_meta.id, session_meta.thinking_since, session_meta.updated_at)
-    await streaming_manager.broadcast(
-        'sidebar', {
-            'type': ET.RUNNING_CHANGED,
-            'session_id': session_meta.id,
-            'has_running_tasks': True,
-            'thinking_since': session_meta.thinking_since.isoformat(),
-            'auto_trigger': auto_trigger,
-        })
-  else:
-    # Still save metadata even when consumer is already running
-    # (e.g. updated_at changed above).
     await callbacks.update_thinking_state(session_meta.id, updated_at=session_meta.updated_at)
 
   # Create a future for the caller to await.
@@ -601,17 +576,33 @@ async def run_message(
       future=future,
   )
 
-  # Enqueue the work item.
+  # --- atomic enqueue block: no await, no statement that can raise ---
+  # Busy state is marked before the item enters the queue, so a work item in
+  # the queue always implies busy_since is set; the consumer clears it only at
+  # teardown, in its own await-free sequence.
   if session_meta.id not in _session_queues:
     _session_queues[session_meta.id] = asyncio.Queue()
+  thinking_since, created = mark_busy(session_meta.id)
   _session_queues[session_meta.id].put_nowait(work_item)
-
   # Ensure a consumer task is running for this session.
   if session_meta.id not in _session_consumers or _session_consumers[session_meta.id].done():
     _session_consumers[session_meta.id] = asyncio.create_task(
         _session_consumer(session_meta.id),
         name=f"master-consumer-{session_meta.id[:8]}",
     )
+  # --- end atomic block ---
+
+  # Notify only when this call opened a new busy interval; the broadcast is a
+  # pure notification — correctness comes from readers deriving the state.
+  if created:
+    await streaming_manager.broadcast(
+        'sidebar', {
+            'type': ET.RUNNING_CHANGED,
+            'session_id': session_meta.id,
+            'has_running_tasks': True,
+            'thinking_since': thinking_since.isoformat(),
+            'auto_trigger': auto_trigger,
+        })
 
   # Await until this specific work item completes.
   return await future

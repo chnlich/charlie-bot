@@ -33,6 +33,7 @@ from src.core.ndjson import append_ndjson
 from src.core.scheduled_sessions import ScheduledSessionBusyError, ScheduledSessionStore
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import streaming_manager
+from src.core.thinking_state import busy_since
 
 # Raw event types whose render content is now produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
@@ -42,7 +43,6 @@ _RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USE
 log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 30.0  # seconds
-_UNSET = object()
 _PROJECTION_LRU_LIMIT = 8
 
 _TRANSIENT_METADATA_FIELDS = {
@@ -57,7 +57,22 @@ _TRANSIENT_METADATA_FIELDS = {
     "schedule_timezone",
     "schedule_project",
     "schedule_allow_failure",
+    "thinking_since",
 }
+
+
+def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
+  """Overwrite thinking_since with the live value before *meta* reaches a caller.
+
+  thinking_since is a derived runtime fact owned by
+  :mod:`src.core.thinking_state`; it is never persisted (see
+  ``_TRANSIENT_METADATA_FIELDS``). Every return path that hands a
+  SessionMetadata to a caller applies this stamp unconditionally — the field
+  stays declared on the model, so a stale value parsed from an old metadata.json
+  or restored into the cache by a post-save rebuild must not leak out.
+  """
+  meta.thinking_since = busy_since(meta.id)
+  return meta
 
 
 class SessionManager:
@@ -70,7 +85,7 @@ class SessionManager:
     self._metadata_cache: dict[str, tuple[SessionMetadata, float]] = {}
     # Per-session asyncio.Lock guarding metadata read-modify-write operations.
     # Prevents clobber races between concurrent mutators (e.g. mark_unread vs
-    # clear_thinking_since), which both load meta, mutate disjoint fields, and
+    # update_thinking_state), which both load meta, mutate disjoint fields, and
     # save back — without a lock the second save overwrites the first's change.
     self._metadata_locks: dict[str, asyncio.Lock] = {}
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
@@ -111,7 +126,7 @@ class SessionManager:
     await self._backend_create_hook(meta)
 
     log.info("session_created", session_id=meta.id, name=meta.name)
-    return meta
+    return _stamp_thinking_since(meta)
 
   async def ensure_scheduled_session_backend(
       self,
@@ -164,7 +179,7 @@ class SessionManager:
       if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
         if self._migrate_round_rating_keys(meta):
           await self._save_metadata(meta)
-        return meta.model_copy()
+        return _stamp_thinking_since(meta.model_copy())
       del self._metadata_cache[session_id]
     path = self._metadata_path(session_id)
     if not path.exists():
@@ -179,7 +194,7 @@ class SessionManager:
       await self._save_metadata(meta)
     else:
       self._metadata_cache[session_id] = (meta, time.monotonic())
-    return meta.model_copy()
+    return _stamp_thinking_since(meta.model_copy())
 
   async def list_sessions(
       self,
@@ -343,7 +358,7 @@ class SessionManager:
     await append_ndjson(events_path, clone_event)
     await self._save_metadata(meta)
     await self._copy_plans_to_child(parent_id, session_dir)
-    return meta
+    return _stamp_thinking_since(meta)
 
   async def _copy_plans_to_child(self, parent_id: str, child_session_dir: Path) -> None:
     """Copy parent plans.json and every referenced artifact file into the child.
@@ -641,10 +656,9 @@ class SessionManager:
   async def update_thinking_state(
       self,
       session_id: str,
-      thinking_since: Optional[datetime] | object = _UNSET,
-      updated_at: Optional[datetime] = None,
+      updated_at: datetime,
   ) -> None:
-    """Persist thinking_since and/or updated_at without clobbering unrelated fields.
+    """Persist updated_at without clobbering unrelated fields.
 
     Re-reads fresh metadata from disk before writing, so concurrent changes
     to fields like 'group' are preserved.
@@ -653,23 +667,7 @@ class SessionManager:
       self._invalidate_cache(session_id)
       fresh = await self.get_session(session_id)
       if fresh:
-        if thinking_since is not _UNSET:
-          fresh.thinking_since = thinking_since
-        if updated_at is not None:
-          fresh.updated_at = updated_at
-        await self._save_metadata(fresh)
-
-  async def clear_thinking_since(self, session_id: str, cc_session_id: Optional[str] = None) -> None:
-    """Clear thinking_since without clobbering unrelated metadata fields (e.g. has_unread).
-
-    If cc_session_id is provided, also persist it (avoids race with persist_cc_session_id).
-    """
-    async with self._lock_for(session_id):
-      fresh = await self.get_session(session_id)
-      if fresh:
-        fresh.thinking_since = None
-        if cc_session_id and fresh.cc_session_id != cc_session_id:
-          fresh.cc_session_id = cc_session_id
+        fresh.updated_at = updated_at
         await self._save_metadata(fresh)
 
   def list_active_session_ids(self) -> list[SessionMetadata]:
@@ -693,7 +691,7 @@ class SessionManager:
         meta = SessionMetadata.model_validate_json(raw)
         if meta.status == SessionStatus.ACTIVE:
           self._metadata_cache[d.name] = (meta, now)
-          results.append(meta.model_copy())
+          results.append(_stamp_thinking_since(meta.model_copy()))
       except (json.JSONDecodeError, OSError, ValueError) as e:
         log.debug("list_active_ids_skip", dir=d.name, error=str(e))
     return results
@@ -767,7 +765,6 @@ class SessionManager:
         persist_and_broadcast=self.persist_and_broadcast,
         update_thinking_state=self.update_thinking_state,
         mark_unread=self.mark_unread,
-        clear_thinking_since=self.clear_thinking_since,
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

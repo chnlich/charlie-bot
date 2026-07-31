@@ -9,7 +9,7 @@ from src.agents.backends.claude_code import (
     CLAUDE_COMPACT_CONTEXT_RESERVE,
     CLAUDE_COMPACT_OUTPUT_RESERVE,
     HEADLESS_CLAUDE_DEFAULT_ENV,
-    headless_claude_context_ceiling,
+    headless_claude_declared_window,
 )
 from src.core.config import CharlieBotConfig
 from src.core.codex_usage import _extract_codex_rollout_usage_event
@@ -70,7 +70,8 @@ def _assistant_event(model: str, input_tokens: int, cache_creation: int = 0, cac
 
 
 def _result_event(total_cost_usd, model_usage: dict | None = None, input_tokens: int = 0,
-                  cache_creation: int = 0, cache_read: int = 0) -> dict:
+                   cache_creation: int = 0, cache_read: int = 0,
+                   context_snapshot: dict | None = None) -> dict:
   return {
       "type": "result",
       "usage": {
@@ -80,7 +81,13 @@ def _result_event(total_cost_usd, model_usage: dict | None = None, input_tokens:
       },
       "modelUsage": model_usage or {},
       "total_cost_usd": total_cost_usd,
+      **({"context_snapshot": context_snapshot} if context_snapshot is not None else {}),
   }
+
+
+def _snapshot(model: str, tokens: dict, limit: dict | None) -> dict:
+  """Build a context_snapshot block for a result event."""
+  return {"model": model, "tokens": tokens, "limit": limit}
 
 
 # ---------------------------------------------------------------------------
@@ -106,18 +113,18 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
   assert usage is not None
   assert usage["context_tokens"] == 150_000  # assistant event sum, not 1.5M
-  assert usage["context_limit"] == 200_000
+  assert usage["context_full"] == 200_000
   assert usage["model"] == "claude-opus-4-6"
   assert usage["total_cost_usd"] == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------
-# Acceptance test 2: context_limit from assistant model, not dict order
+# Acceptance test 2: context_full from assistant model, not dict order
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_resolves_context_limit_from_assistant_model_not_dict_order(
+async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_order(
     tmp_path: Path,
 ) -> None:
   cfg = _build_cfg(tmp_path)
@@ -136,16 +143,18 @@ async def test_claude_tier_resolves_context_limit_from_assistant_model_not_dict_
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["context_limit"] == 200_000  # from the real model, not 50_000
+  assert usage["context_full"] == 200_000  # from the real model, not 50_000
 
 
 # ---------------------------------------------------------------------------
-# Acceptance test 3: modelUsage absent -> context_limit is the ceiling
+# Acceptance test 3: modelUsage absent -> context_full is the declared window
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_context_limit_is_ceiling_when_model_usage_absent(tmp_path: Path) -> None:
+async def test_claude_tier_context_full_is_declared_window_when_model_usage_absent(
+    tmp_path: Path,
+) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-nomodel", name="No Model Usage", backend="claude-opus-4.6")
@@ -157,7 +166,9 @@ async def test_claude_tier_context_limit_is_ceiling_when_model_usage_absent(tmp_
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["context_limit"] == headless_claude_context_ceiling()
+  declared_window, compact_point = headless_claude_declared_window()
+  assert usage["context_full"] == declared_window
+  assert usage["context_compact_at"] == compact_point
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +217,8 @@ async def test_no_source_tier_when_results_but_no_assistant_usage(tmp_path: Path
 
   assert usage is not None
   assert usage["context_tokens"] is None
-  assert usage["context_limit"] is None
+  assert usage["context_full"] is None
+  assert usage["context_compact_at"] is None
   assert usage["model"] == ""
   assert usage["total_cost_usd"] == pytest.approx(0.5)
 
@@ -277,55 +289,226 @@ async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Acceptance test 8: headless_claude_context_ceiling
+# Acceptance test 8: headless_claude_declared_window
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Remove env vars that would change the ceiling so each test starts clean."""
+  """Remove env vars that would change the declared window so each test starts clean."""
   for name in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
                "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
     monkeypatch.delenv(name, raising=False)
 
 
-def test_ceiling_subtracts_reserves_from_declared_window(_clean_ceiling_env, monkeypatch) -> None:
+def test_declared_window_subtracts_reserves_from_declared_window(_clean_ceiling_env, monkeypatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
-  expected = 500_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
-  assert headless_claude_context_ceiling() == expected
+  expected_point = 500_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
+  assert headless_claude_declared_window() == (500_000, expected_point)
 
 
-def test_ceiling_follows_host_export_of_different_window(_clean_ceiling_env, monkeypatch) -> None:
+def test_declared_window_follows_host_export_of_different_window(_clean_ceiling_env, monkeypatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1000000")
-  expected = 1_000_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
-  assert headless_claude_context_ceiling() == expected
-  assert headless_claude_context_ceiling() != 500_000 - 33_000
+  expected_point = 1_000_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
+  assert headless_claude_declared_window() == (1_000_000, expected_point)
+  assert headless_claude_declared_window() != (500_000, 500_000 - 33_000)
 
 
 @pytest.mark.parametrize("override_var", [
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
 ])
-def test_ceiling_returns_declared_window_when_override_present_and_warns(
+def test_declared_window_returns_none_compact_point_when_override_present_and_warns(
     _clean_ceiling_env, monkeypatch, capsys, override_var) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
   monkeypatch.setenv(override_var, "1")
-  result = headless_claude_context_ceiling()
-  assert result == 500_000  # declared window, no subtraction
+  result = headless_claude_declared_window()
+  assert result == (500_000, None)  # declared window, no compaction point
   out = capsys.readouterr().out
   assert override_var in out
-  assert "ceiling" in out.lower()
+  assert "declared_window" in out.lower()
 
 
-def test_ceiling_returns_default_when_window_unparseable_and_warns(
+def test_declared_window_returns_default_when_window_unparseable_and_warns(
     _clean_ceiling_env, monkeypatch, capsys) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
   default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
-  result = headless_claude_context_ceiling()
-  assert result == default_window
+  expected_point = default_window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
+  result = headless_claude_declared_window()
+  assert result == (default_window, expected_point)
   out = capsys.readouterr().out
   assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" in out
-  assert "ceiling" in out.lower()
+  assert "declared_window" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Acceptance test 8b: claude tier full / compact point per effective window
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path, _clean_ceiling_env) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-1m", name="1M Window", backend="claude-opus-4.6")
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 1_000_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=72_900),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # min(1M model window, 433000 declared) = 433000; point = 433000 - 20000 - 13000.
+  assert usage["context_full"] == 433_000
+  assert usage["context_compact_at"] == 400_000
+
+
+@pytest.mark.asyncio
+async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path, _clean_ceiling_env) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-200k", name="200k Window", backend="claude-opus-4.6")
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=72_900),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # min(200000 model window, 433000 declared) = 200000; point = 200000 - 20000 - 13000.
+  assert usage["context_full"] == 200_000
+  assert usage["context_compact_at"] == 167_000
+
+
+@pytest.mark.asyncio
+async def test_claude_tier_point_none_under_forwarded_unmodelled_override(
+    tmp_path: Path, _clean_ceiling_env, monkeypatch) -> None:
+  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "433000")
+  monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "1")
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-override", name="Override", backend="claude-opus-4.6")
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 1_000_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=72_900),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_full"] == 433_000
+  assert usage["context_compact_at"] is None  # degraded override -> no compaction line
+
+
+# ---------------------------------------------------------------------------
+# Acceptance test 10: snapshot tier (opencode context_snapshot)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_tier_full_and_point_for_limit_with_input(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-snap-input", name="Snapshot Input", backend="opencode-glm52")
+  _write_session(session_mgr, meta, [
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4",
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              {"context": 409_600, "input": 270_000, "output": 131_072})),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # full = limit.input = 270000; point = limit.input - min(20000, limit.output) = 270000 - 20000.
+  assert usage["context_full"] == 270_000
+  assert usage["context_compact_at"] == 250_000
+  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
+  assert usage["model"] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_tier_full_for_limit_without_input(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-snap-noinput", name="Snapshot No Input", backend="opencode-glm52")
+  _write_session(session_mgr, meta, [
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4",
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              {"context": 409_600, "input": None, "output": 131_072})),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # full = limit.context - limit.output = 409600 - 131072; point = None (no input).
+  assert usage["context_full"] == 409_600 - 131_072
+  assert usage["context_compact_at"] is None
+  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
+
+
+@pytest.mark.asyncio
+async def test_snapshot_tier_with_none_limit_yields_all_none_context(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-snap-nolimit", name="Snapshot No Limit", backend="opencode-glm52")
+  _write_session(session_mgr, meta, [
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4",
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              None)),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_full"] is None
+  assert usage["context_compact_at"] is None
+  # context_tokens still resolved from the snapshot's token sum.
+  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
+  assert usage["model"] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-snap-newest", name="Snapshot Newest", backend="opencode-glm52")
+  _write_session(session_mgr, meta, [
+      _result_event(
+          0.1,
+          context_snapshot=_snapshot(
+              "old/model",
+              {"input": 10_000, "output": 1_000, "reasoning": 0,
+               "cache_read": 0, "cache_write": 0},
+              {"context": 200_000, "input": 150_000, "output": 40_000})),
+      _result_event(
+          0.2,
+          context_snapshot=_snapshot(
+              "new/model",
+              {"input": 20_000, "output": 2_000, "reasoning": 3_000,
+               "cache_read": 4_000, "cache_write": 5_000},
+              {"context": 409_600, "input": 270_000, "output": 131_072})),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["model"] == "new/model"
+  assert usage["context_full"] == 270_000
+  assert usage["context_tokens"] == 20_000 + 2_000 + 3_000 + 4_000 + 5_000
 
 
 # ---------------------------------------------------------------------------
@@ -388,12 +571,73 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
 
   assert usage is not None
   assert usage["context_tokens"] == 179319
-  assert usage["context_limit"] == 258400  # model_context_window (no auto-compact configured)
+  assert usage["context_full"] == 258400  # model_context_window (no auto-compact configured)
+  assert usage["context_compact_at"] is None  # unconfigured — no compaction line
   assert usage["model"] == "gpt-5.5"
 
 
+# ---------------------------------------------------------------------------
+# Acceptance test 9b: codex unconfigured compaction logs no warning
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_codex_context_limit_uses_auto_compact_limit_when_configured(tmp_path: Path) -> None:
+async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, capsys) -> None:
+  cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
+  # _build_cfg creates the codex backend WITHOUT model_auto_compact_token_limit.
+  session_mgr = SessionManager(cfg)
+  native_thread_id = "019d45a2-836d-7552-a54f-3c6c5511e5ee"
+  meta = SessionMetadata(
+      id="session-codex-unconfigured",
+      name="Codex Unconfigured",
+      backend="codex-test",
+      cc_session_id=native_thread_id,
+  )
+  _write_session(session_mgr, meta, [
+      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
+  ])
+  _write_codex_rollout(tmp_path / "codex-tree", native_thread_id, [
+      _codex_turn_context("gpt-5.5"),
+      {
+          "timestamp": "2026-03-31T20:43:12.454Z",
+          "type": "event_msg",
+          "payload": {
+              "type": "token_count",
+              "info": {
+                  "total_token_usage": {
+                      "input_tokens": 1431555,
+                      "cached_input_tokens": 1126656,
+                      "output_tokens": 16521,
+                  },
+                  "last_token_usage": {
+                      "input_tokens": 179319,
+                      "cached_input_tokens": 176640,
+                      "output_tokens": 1732,
+                      "total_tokens": 181051,
+                  },
+                  "model_context_window": 258400,
+              },
+          },
+      },
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_full"] == 258400
+  assert usage["context_compact_at"] is None  # unconfigured — no compaction line
+  captured = capsys.readouterr().out
+  assert "auto_compact" not in captured
+  assert "degrad" not in captured.lower()
+
+
+# ---------------------------------------------------------------------------
+# Acceptance test 9c: codex full = model_context_window, point = configured limit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"),
                   model_auto_compact_token_limit=180_000)
   session_mgr = SessionManager(cfg)
@@ -435,7 +679,8 @@ async def test_codex_context_limit_uses_auto_compact_limit_when_configured(tmp_p
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["context_limit"] == 180_000  # auto-compact limit, not 258400
+  assert usage["context_full"] == 258400  # model_context_window
+  assert usage["context_compact_at"] == 180_000  # auto-compact limit
   assert usage["context_tokens"] == 176028
   assert usage["model"] == "gpt-5.5"
 
@@ -472,7 +717,7 @@ def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
 
   assert usage == {
       "context_tokens": 176028,
-      "context_limit": 258400,
+      "context_full": 258400,
       "total_token_usage": {
           "input_tokens": 1252236,
           "cached_input_tokens": 950016,

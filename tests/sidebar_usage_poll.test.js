@@ -180,7 +180,8 @@ function buildContext(overrides = {}) {
               session: {id: 'session-a', thinking_since: '2026-03-31T20:42:52Z'},
               usage: {
                 context_tokens: 49179,
-                context_limit: 258400,
+                context_full: 258400,
+                context_compact_at: 180000,
                 total_cost_usd: 1.25,
               },
               active_backend: context.ACTIVE_BACKEND_ID,
@@ -340,10 +341,96 @@ test('pollActiveSessionView refreshes usage from the lazy usage endpoint', async
   assert.deepEqual(fetchCalls, ['/api/sessions/session-a/usage']);
   assert.deepEqual(renderedUsage, {
     context_tokens: 49179,
-    context_limit: 258400,
+    context_full: 258400,
+    context_compact_at: 180000,
     total_cost_usd: 1.25,
   });
   assert.equal(context.THINKING_SINCE, '2026-03-31T20:42:52Z');
+});
+
+// ---------------------------------------------------------------------------
+// renderUsageFromData: compaction line + colour-relative-to-line
+// ---------------------------------------------------------------------------
+
+function buildUsageElements() {
+  return new Map([
+    ['usage-indicator', createElement({className: 'hidden'})],
+    ['usage-bar', createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}})],
+    ['usage-compact-line', createElement({className: 'absolute top-0 h-full w-0.5 bg-white hidden', style: {left: '0%'}})],
+    ['usage-text', createElement({textContent: ''})],
+    ['usage-cost', createElement({textContent: ''})],
+  ]);
+}
+
+test('renderUsageFromData draws the compact line at the right percentage', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: 100000,
+    context_full: 258400,
+    context_compact_at: 180000,
+    total_cost_usd: 1.25,
+    model: 'codex-test',
+  });
+
+  const line = elements.get('usage-compact-line');
+  assert.doesNotMatch(line.className, /hidden/);
+  assert.equal(line.style.left, ((180000 / 258400) * 100).toFixed(1) + '%');
+  assert.equal(line.title, '180000');
+});
+
+test('renderUsageFromData draws no compact line when context_compact_at is null', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: 100000,
+    context_full: 258400,
+    context_compact_at: null,
+    total_cost_usd: 1.25,
+    model: 'codex-test',
+  });
+
+  const line = elements.get('usage-compact-line');
+  assert.match(line.className, /hidden/);
+  assert.equal(line.style.left, '0%');
+  // The bar is still drawn (no line, but context_full present).
+  const bar = elements.get('usage-bar');
+  assert.doesNotMatch(bar.className, /hidden/);
+});
+
+test('renderUsageFromData bar turns red past the compaction line', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: 200000,  // past the line at 180000
+    context_full: 258400,
+    context_compact_at: 180000,
+    total_cost_usd: 1.25,
+    model: 'codex-test',
+  });
+
+  const bar = elements.get('usage-bar');
+  assert.match(bar.className, /bg-red-500/);
+  assert.doesNotMatch(bar.className, /bg-blue-500/);
+  assert.doesNotMatch(bar.className, /bg-yellow-500/);
+});
+
+test('renderUsageFromData bar is yellow at 50%-100% of the compaction line', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+
+  context.renderUsageFromData({
+    context_tokens: 100000,  // 100000 / 180000 ~ 55% of the line
+    context_full: 258400,
+    context_compact_at: 180000,
+    total_cost_usd: 1.25,
+    model: 'codex-test',
+  });
+
+  assert.match(elements.get('usage-bar').className, /bg-yellow-500/);
 });
 
 test('a result WebSocket event forces a poll without writing the header directly', async () => {

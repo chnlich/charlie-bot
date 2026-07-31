@@ -399,3 +399,259 @@ def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) ->
           "content": " to think"
       },
   ]
+
+
+# ---------------------------------------------------------------------------
+# context_snapshot: last step's tokens, reasoning, model limit, catalog failure
+# ---------------------------------------------------------------------------
+
+
+def _step_finish_part(input_t, output_t, reasoning_t, cache_read_t, cache_write_t, cost):
+  return {
+      "messageID": "m1",
+      "id": "p1",
+      "type": "step-finish",
+      "tokens": {
+          "input": input_t,
+          "output": output_t,
+          "reasoning": reasoning_t,
+          "cache": {"read": cache_read_t, "write": cache_write_t},
+      },
+      "cost": cost,
+  }
+
+
+def test_make_accumulated_result_snapshot_carries_last_step_tokens_not_sum(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
+  backend._accumulate_step_finish(
+      _step_finish_part(100, 10, 5, 20, 30, 0.1))
+  backend._accumulate_step_finish(
+      _step_finish_part(200, 20, 8, 40, 60, 0.2))
+
+  result = backend._make_accumulated_result()
+
+  assert result["type"] == ET.RESULT
+  snapshot = result["context_snapshot"]
+  # The snapshot carries the *last* step's tokens, not the turn's sum.
+  assert snapshot["tokens"] == {
+      "input": 200, "output": 20, "reasoning": 8, "cache_read": 40, "cache_write": 60}
+  # The usage block still carries the turn's accumulated sum.
+  assert result["usage"]["input_tokens"] == 300
+  assert result["usage"]["output_tokens"] == 30
+  assert result["usage"]["cache_read_input_tokens"] == 60
+  assert result["usage"]["cache_creation_input_tokens"] == 90
+  # reasoning is preserved in the snapshot.
+  assert snapshot["tokens"]["reasoning"] == 8
+  # cost still accumulates.
+  assert result["total_cost_usd"] == pytest.approx(0.3)
+  assert snapshot["model"] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"
+  assert snapshot["limit"] == {"context": 409600, "input": 270000, "output": 131072}
+
+
+def test_make_accumulated_result_omits_snapshot_when_no_step_finish(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
+
+  result = backend._make_accumulated_result()
+
+  assert "context_snapshot" not in result
+
+
+def test_make_accumulated_result_snapshot_limit_none_when_catalog_unavailable(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  backend._model_limit = None  # catalog unavailable -> limit stays None
+  backend._accumulate_step_finish(_step_finish_part(100, 10, 0, 0, 0, 0.1))
+
+  result = backend._make_accumulated_result()
+
+  snapshot = result["context_snapshot"]
+  assert snapshot["limit"] is None
+  assert snapshot["tokens"] == {
+      "input": 100, "output": 10, "reasoning": 0, "cache_read": 0, "cache_write": 0}
+
+
+def test_reset_run_state_clears_model_limit_and_last_step_tokens(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
+  backend._accumulate_step_finish(_step_finish_part(100, 10, 0, 0, 0, 0.1))
+  assert backend._last_step_tokens is not None
+
+  backend._reset_run_state()
+
+  assert backend._model_limit is None
+  assert backend._last_step_tokens is None
+
+
+class _FakeConfigResponse:
+
+  def __init__(self, payload=None, exc: Exception | None = None, status: int = 200) -> None:
+    self._payload = payload
+    self._exc = exc
+    self._status = status
+
+  def raise_for_status(self) -> None:
+    if self._status >= 400:
+      raise httpx.HTTPStatusError("bad status", request=None, response=self)
+
+  def json(self):
+    return self._payload
+
+
+class _FakeConfigClient:
+  """Minimal httpx-like client for ``_fetch_model_limit`` tests."""
+
+  def __init__(self, response: _FakeConfigResponse | None = None,
+               exc: Exception | None = None) -> None:
+    self._response = response
+    self._exc = exc
+
+  async def get(self, url: str) -> _FakeConfigResponse:
+    assert url == "/config/providers"
+    if self._exc is not None:
+      raise self._exc
+    return self._response
+
+
+@pytest.mark.asyncio
+async def test_fetch_model_limit_returns_limit_from_recorded_providers(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  # Recorded /config/providers payload: top-level {"providers": [...]}, each
+  # provider's models is a dict keyed by model id.
+  providers = {
+      "providers": [
+          {"id": "other-provider", "models": {"x": {"id": "x", "limit": {"context": 100}}}},
+          {
+              "id": "meshy-sglang-glm52",
+              "models": {
+                  "nvidia/GLM-5.2-NVFP4": {
+                      "id": "nvidia/GLM-5.2-NVFP4",
+                      "limit": {"context": 409600, "input": 270000, "output": 131072},
+                  },
+              },
+          },
+      ],
+      "default": "meshy-sglang-glm52",
+  }
+  client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
+
+  limit = await backend._fetch_model_limit(client)
+
+  assert limit == {"context": 409600, "input": 270000, "output": 131072}
+
+
+@pytest.mark.asyncio
+async def test_fetch_model_limit_accepts_bare_list_and_list_models(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="prov/model-id")
+  # Alternative shapes: bare top-level list and list-shaped models.
+  providers = [
+      {"id": "prov", "models": [{"id": "model-id", "limit": {"context": 8, "output": 4}}]},
+  ]
+  client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
+
+  limit = await backend._fetch_model_limit(client)
+
+  assert limit == {"context": 8, "output": 4}
+
+
+@pytest.mark.asyncio
+async def test_fetch_model_limit_returns_none_and_warns_on_request_error(monkeypatch, capsys) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  client = _FakeConfigClient(exc=httpx.ConnectError("connection refused"))
+
+  limit = await backend._fetch_model_limit(client)
+
+  assert limit is None
+  out = capsys.readouterr().out
+  assert "opencode_context_catalog_unavailable" in out
+  assert "meshy-sglang-glm52" in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_model_limit_returns_none_and_warns_when_provider_absent(monkeypatch, capsys) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  providers = {"providers": [{"id": "other-provider", "models": {}}]}
+  client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
+
+  limit = await backend._fetch_model_limit(client)
+
+  assert limit is None
+  out = capsys.readouterr().out
+  assert "opencode_context_catalog_unavailable" in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_model_limit_returns_none_and_warns_when_model_absent(monkeypatch, capsys) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  providers = {"providers": [{"id": "meshy-sglang-glm52", "models": {"other-model": {"id": "other-model"}}}]}
+  client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
+
+  limit = await backend._fetch_model_limit(client)
+
+  assert limit is None
+  out = capsys.readouterr().out
+  assert "opencode_context_catalog_unavailable" in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_model_limit_returns_none_and_warns_on_malformed_payload(monkeypatch, capsys) -> None:
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  # Not a recognised shape (no "providers" key, not a list).
+  client = _FakeConfigClient(response=_FakeConfigResponse(payload={"random": "shape"}))
+
+  limit = await backend._fetch_model_limit(client)
+
+  assert limit is None
+  out = capsys.readouterr().out
+  assert "opencode_context_catalog_unavailable" in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_model_limit_returns_none_when_model_unset(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model=None)
+  client = _FakeConfigClient(response=_FakeConfigResponse(payload=[]))
+
+  limit = await backend._fetch_model_limit(client)
+
+  assert limit is None
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypatch) -> None:
+  """A recorded SSE step-finish sequence yields a result event whose
+  context_snapshot carries the last step's tokens while the usage block carries
+  the turn's accumulated sum; the catalog failure (limit None) does not fail the
+  turn."""
+  backend = _build_backend(monkeypatch, model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+  backend._session_id = "parent-session"
+  backend._model_limit = None  # catalog unavailable
+
+  events = await _drain(
+      backend._consume_sse_events(
+          _FakeEventStream([
+              {"type": "message.updated",
+               "properties": {"sessionID": "parent-session", "info": {"id": "m1", "role": "assistant"}}},
+              {"type": "message.part.updated",
+               "properties": {"sessionID": "parent-session", "part": _step_finish_part(100, 10, 5, 20, 30, 0.1)}},
+              {"type": "message.part.updated",
+               "properties": {"sessionID": "parent-session", "part": _step_finish_part(200, 20, 8, 40, 60, 0.2)}},
+              {"type": "session.idle", "properties": {"sessionID": "parent-session"}},
+          ])))
+
+  assert backend._failed is False
+  result = events[-1]
+  assert result["type"] == ET.RESULT
+  snapshot = result["context_snapshot"]
+  # Last step's tokens, not the turn's sum.
+  assert snapshot["tokens"] == {
+      "input": 200, "output": 20, "reasoning": 8, "cache_read": 40, "cache_write": 60}
+  # The usage block carries the turn's accumulated sum.
+  assert result["usage"]["input_tokens"] == 300
+  assert result["usage"]["output_tokens"] == 30
+  assert result["usage"]["cache_read_input_tokens"] == 60
+  assert result["usage"]["cache_creation_input_tokens"] == 90
+  # reasoning preserved.
+  assert snapshot["tokens"]["reasoning"] == 8
+  # Catalog unavailable -> limit None, but the turn still completed.
+  assert snapshot["limit"] is None
+  assert snapshot["model"] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"

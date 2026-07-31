@@ -526,6 +526,7 @@ function buildUsageElements() {
   return new Map([
     ['usage-indicator', createElement({className: 'hidden'})],
     ['usage-bar', createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}})],
+    ['usage-compact-line', createElement({className: 'absolute top-0 h-full w-0.5 bg-white hidden', style: {left: '0%'}})],
     ['usage-text', createElement({textContent: ''})],
     ['usage-cost', createElement({textContent: ''})],
   ]);
@@ -537,7 +538,8 @@ test('renderUsageFromData shows unknown and hides the bar when context_tokens is
 
   context.renderUsageFromData({
     context_tokens: null,
-    context_limit: null,
+    context_full: null,
+    context_compact_at: null,
     total_cost_usd: 0.5,
     model: '',
   });
@@ -550,13 +552,14 @@ test('renderUsageFromData shows unknown and hides the bar when context_tokens is
   assert.equal(elements.get('usage-indicator').classList.contains('hidden'), false);
 });
 
-test('renderUsageFromData shows unknown when only context_limit is null', () => {
+test('renderUsageFromData shows unknown when only context_full is null', () => {
   const elements = buildUsageElements();
   const {context} = buildContext({elements});
 
   context.renderUsageFromData({
     context_tokens: 50000,
-    context_limit: null,
+    context_full: null,
+    context_compact_at: null,
     total_cost_usd: null,
     model: '',
   });
@@ -573,7 +576,8 @@ test('renderUsageFromData draws the bar when both context fields are present', (
 
   context.renderUsageFromData({
     context_tokens: 100000,
-    context_limit: 200000,
+    context_full: 200000,
+    context_compact_at: 167000,
     total_cost_usd: 1.25,
     model: 'claude-opus-4-6',
   });

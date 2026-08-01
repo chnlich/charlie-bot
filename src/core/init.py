@@ -488,6 +488,7 @@ async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
     except Exception:
       log.exception("master_replay_dispatch_failed", session=meta.id)
 
+
 async def _reconcile_one(
     cfg,
     session_mgr,

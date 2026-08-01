@@ -23,6 +23,7 @@ from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
     CreateSessionRequest,
+    MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
     SessionStatus,
@@ -677,6 +678,21 @@ class SessionManager:
     events = self.load_chat_events_sync(session_id)
     return any(ev.get("type") == ET.MASTER_DONE for ev in events)
 
+  async def persist_master_run(self, session_id: str, record: Optional[MasterRunRecord]) -> None:
+    """Set or clear the session's in-flight master-turn record.
+
+    Same read-modify-write-under-lock pattern as ``persist_cc_session_id``: a
+    whole-object save would clobber concurrent single-field writes.
+    """
+    async with self._lock_for(session_id):
+      self._invalidate_cache(session_id)
+      fresh = await self.get_session(session_id)
+      if fresh is None:
+        return
+      fresh.master_run = record
+      await self._save_metadata(fresh)
+      self._invalidate_cache(session_id)
+
   async def update_thinking_state(
       self,
       session_id: str,
@@ -791,6 +807,7 @@ class SessionManager:
         mark_unread=self.mark_unread,
         persist_cc_session_id=self.persist_cc_session_id,
         has_completed_round=self.has_completed_round,
+        persist_master_run=self.persist_master_run,
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

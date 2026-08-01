@@ -64,6 +64,10 @@ class FakeSessionManager:
   async def mark_unread(self, session_id: str) -> None:
     return None
 
+  async def persist_master_run(self, session_id: str, record) -> None:
+    if self._meta is not None:
+      self._meta.master_run = record
+
   def callbacks(self) -> SessionCallbacks:
     return SessionCallbacks(
         persist_and_broadcast=self.persist_and_broadcast,
@@ -71,6 +75,7 @@ class FakeSessionManager:
         mark_unread=self.mark_unread,
         persist_cc_session_id=self.persist_cc_session_id,
         has_completed_round=self.has_completed_round,
+        persist_master_run=self.persist_master_run,
     )
 
 

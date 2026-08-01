@@ -33,6 +33,13 @@ def _build_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestCli
   return TestClient(app)
 
 
+def _session_dir_names(cfg: CharlieBotConfig) -> set[str]:
+  """Snapshot the names of session directories on disk (existence, not content)."""
+  if not cfg.sessions_dir.exists():
+    return set()
+  return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
+
+
 async def _seed_parent(session_mgr: SessionManager, *, backend: str = "claude-opus-4.6") -> str:
   parent = await session_mgr.create_session(CreateSessionRequest(name="Parent"), backend=backend)
   events_path = session_mgr.get_chat_events_path(parent.id)
@@ -140,7 +147,7 @@ async def test_elone_route_accepts_valid_backend_override(tmp_path: Path, monkey
 
 
 @pytest.mark.asyncio
-async def test_elone_route_falls_back_to_parent_backend_for_invalid_override(
+async def test_elone_route_rejects_unresolvable_explicit_backend_and_persists_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -148,6 +155,7 @@ async def test_elone_route_falls_back_to_parent_backend_for_invalid_override(
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="codex-o3")
+  before = _session_dir_names(cfg)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(
@@ -158,8 +166,8 @@ async def test_elone_route_falls_back_to_parent_backend_for_invalid_override(
         },
     )
 
-  assert response.status_code == 200
-  assert response.json()["backend"] == "codex-o3"
+  assert response.status_code == 400
+  assert _session_dir_names(cfg) == before
 
 
 @pytest.mark.asyncio
@@ -204,3 +212,167 @@ async def test_elone_route_bootstrap_points_at_reference_file(tmp_path: Path, mo
   assert "Confirm with the user before acting." in prompt
   assert "reconstructed recent context" not in prompt
   assert "recap" not in prompt.lower()
+
+
+# ------------------------------------------------- validate-or-raise: explicit id
+
+
+@pytest.mark.asyncio
+async def test_create_route_rejects_unresolvable_backend_and_persists_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  _stub_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  before = _session_dir_names(cfg)
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post("/api/sessions/", json={"backend": "missing-backend"})
+
+  assert response.status_code == 400
+  assert _session_dir_names(cfg) == before
+
+
+@pytest.mark.asyncio
+async def test_fork_route_rejects_unresolvable_explicit_backend_and_persists_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  _stub_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  before = _session_dir_names(cfg)
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(
+        f"/api/sessions/{parent_id}/fork",
+        json={
+            "event_index": 1,
+            "backend": "missing-backend"
+        },
+    )
+
+  assert response.status_code == 400
+  assert _session_dir_names(cfg) == before
+
+
+# ---------------------------------------------- validate-or-raise: inherited id
+
+
+@pytest.mark.asyncio
+async def test_fork_route_rejects_unresolvable_inherited_backend_and_persists_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  _stub_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  parent_id = await _seed_parent(session_mgr, backend="missing-backend")
+  before = _session_dir_names(cfg)
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(f"/api/sessions/{parent_id}/fork", json={"event_index": 1})
+
+  assert response.status_code == 400
+  assert _session_dir_names(cfg) == before
+
+
+@pytest.mark.asyncio
+async def test_elone_route_rejects_unresolvable_inherited_backend_and_leaves_parent_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """Failure must precede the parent archive/thumbs-down side effect."""
+  _stub_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  parent_id = await _seed_parent(session_mgr, backend="missing-backend")
+  parent_before = await session_mgr.get_session(parent_id)
+  before = _session_dir_names(cfg)
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(f"/api/sessions/{parent_id}/elone", json={"event_index": 1})
+
+  assert response.status_code == 400
+  assert _session_dir_names(cfg) == before
+  parent_after = await session_mgr.get_session(parent_id)
+  assert parent_after.status == parent_before.status
+  assert parent_after.rating == parent_before.rating
+
+
+# --------------------------------------------------------- store-level property
+
+
+@pytest.mark.asyncio
+async def test_persisted_backend_stays_within_backend_options_across_mixed_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  _stub_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  valid_ids = {opt.id for opt in cfg.backend_options}
+  fork_parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  elone_ok_parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  elone_bad_parent_id = await _seed_parent(session_mgr, backend="missing-backend")
+  # The bad-parent seed intentionally simulates a pre-existing session pinned to a
+  # since-removed id (out of scope to migrate); exclude pre-existing dirs from the
+  # property check below and only look at sessions the routes under test produce.
+  before_dirs = _session_dir_names(cfg)
+
+  with _build_client(cfg, session_mgr) as client:
+    assert client.post("/api/sessions/", json={"name": "A"}).status_code == 200
+    assert client.post("/api/sessions/", json={"name": "B", "backend": "nope"}).status_code == 400
+    assert client.post(
+        f"/api/sessions/{fork_parent_id}/fork",
+        json={
+            "event_index": 1,
+            "backend": "codex-future"
+        },
+    ).status_code == 200
+    assert client.post(
+        f"/api/sessions/{fork_parent_id}/fork",
+        json={
+            "event_index": 1,
+            "backend": "still-nope"
+        },
+    ).status_code == 400
+    assert client.post(
+        f"/api/sessions/{elone_ok_parent_id}/elone",
+        json={
+            "event_index": 1,
+            "backend": "codex-o3"
+        },
+    ).status_code == 200
+    assert client.post(
+        f"/api/sessions/{elone_bad_parent_id}/elone",
+        json={"event_index": 1},
+    ).status_code == 400
+
+  new_session_ids = _session_dir_names(cfg) - before_dirs
+  assert new_session_ids  # sanity: the successful calls above did create sessions
+  for session_id in new_session_ids:
+    metadata_path = cfg.sessions_dir / session_id / "metadata.json"
+    backend = json.loads(metadata_path.read_text(encoding="utf-8"))["backend"]
+    assert backend in valid_ids
+
+
+# ---------------------------------------- regression: documented default carve-out
+
+
+@pytest.mark.asyncio
+async def test_create_route_defaults_to_first_backend_option_when_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  _stub_bootstrap(monkeypatch)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post("/api/sessions/", json={})
+
+  assert response.status_code == 200
+  assert response.json()["backend"] == cfg.backend_options[0].id

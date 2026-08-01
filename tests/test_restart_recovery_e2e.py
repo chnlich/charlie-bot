@@ -50,11 +50,18 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT
 exit 0
 """
 
-# A fake reviewer: no LLM, just a real `git push` of the worker's already-committed
-# change to the shared worktree's base branch, standing in for the reviewer prompt's
-# rebase+push instructions (build_review_prompt, src/core/review.py).
+# A fake reviewer: no LLM, just a real commit-of-its-own plus a `git push` of the
+# worker's already-committed change to the shared worktree's base branch, standing
+# in for the reviewer prompt's rebase+commit+push instructions (build_review_prompt,
+# src/core/review.py). The commit is keyed on the shim's own pid ($$) so that two
+# reviewer invocations *within the same test run* produce distinct commits — a
+# same-commit re-push is a git no-op ("Everything up-to-date") and would leave a
+# duplicated reviewer run undetectable from the origin repo's commit count alone.
 REVIEWER_SHIM = """#!/bin/sh
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"REVIEWER-ASSISTANT-MARKER"}]}}'
+echo "reviewer touch $$" > "reviewer_shim_$$.txt"
+git add "reviewer_shim_$$.txt"
+git commit -m "reviewer shim commit $$" 1>&2
 git push origin HEAD:main 1>&2
 echo '{"type":"result","subtype":"success","is_error":false,"result":"REVIEWER-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
@@ -407,10 +414,10 @@ async def _settle_finalize_window(home: Path, session_id: str, original_id: str)
 async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Contract line 38: drive the reconcile N (>=3) times over the same terminal,
   review-needing thread and assert the finalize effects — terminal worker_summary,
-  master wake, reviewer thread, and the merge commit reaching origin — each land
-  exactly once, not once per reconcile. The server tracks no merge state of its
-  own (src/core/review.py:401-403), so the merge count must come from the origin
-  repo itself, not a server-side proxy.
+  master wake, reviewer thread, and the reviewer's commits reaching origin — each
+  land exactly once (per ONE reviewer run), not once per reconcile. The server
+  tracks no merge state of its own (src/core/review.py:401-403), so the commit
+  count must come from the origin repo itself, not a server-side proxy.
   """
   home = tmp_path / "home"
 
@@ -467,6 +474,18 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
 
   monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
 
+  # --- keep the shared worktree alive across every reconcile round: the real
+  # finalize_review_chain removes it once a review lands, which would make rounds
+  # 2 and 3 exit at validate_review_prerequisites' worktree-exists check before ever
+  # reaching the reviewer_thread_exists judgment (src/core/review.py:405,
+  # src/core/init.py:755) — masking whether that judgment actually works. Neutering
+  # only the worktree-removal step (a test-side no-op) lets every round walk the
+  # judgment for real. ---
+  async def fake_finalize_review_chain(*args, **kwargs) -> None:
+    return None
+
+  monkeypatch.setattr("src.core.review.finalize_review_chain", fake_finalize_review_chain)
+
   # --- the original worker thread: already terminal (completed), needing review. ---
   cfg = _cfg(home)
   session_mgr = SessionManager(cfg)
@@ -503,11 +522,17 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   assert len(master_wakes) == 1
 
   # Effect 3: exactly one reviewer thread derived from the original, and it ran
-  # to completion.
+  # to completion. A broken reviewer_thread_exists judgment lets the reconcile
+  # loop derive a second (or third) reviewer on the later rounds — the worktree
+  # is kept alive above precisely so this is reachable.
   reviewer_threads = [m for m in _thread_metas(home, session_meta.id) if m.get("review_of") == original.id]
   assert len(reviewer_threads) == 1
   assert reviewer_threads[0]["status"] == "completed"
 
-  # Effect 4: exactly one merge commit reached the origin — counted from the
-  # origin repo itself, since the server keeps no merge state of its own.
-  assert _origin_commit_count(origin) == origin_commits_before + 1
+  # Effect 4: exactly the commits of ONE reviewer run reached the origin — the
+  # worker's own commit plus the reviewer shim's own pid-keyed commit — counted
+  # from the origin repo itself, since the server keeps no merge state of its
+  # own. A duplicated reviewer run pushes its own additional pid-keyed commit,
+  # which (unlike a same-commit re-push) is not a git no-op, so it strictly
+  # raises this count.
+  assert _origin_commit_count(origin) == origin_commits_before + 2

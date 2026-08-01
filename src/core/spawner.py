@@ -2,9 +2,11 @@
 
 import asyncio
 import shlex
+import signal
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -16,7 +18,7 @@ from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
-from src.core import review
+from src.core import finalize_effects, review, runs
 from src.core.models import (
     BackendOption,
     SessionMetadata,
@@ -27,6 +29,7 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.ndjson import parse_ndjson_file
+from src.core.process import kill_process_group
 from src.core.verify_trailer import (
     VERIFY_RESULT_TRAILER_EXPECTED as _VERIFY_RESULT_TRAILER_EXPECTED,
     read_verify_final_report as _read_verify_final_report,
@@ -767,8 +770,14 @@ async def _finalize_worker(
     error: str = "",
     skip_notify: bool = False,
     task_type: TaskType = TaskType.IMPLEMENT,
+    completed_at: Optional[datetime] = None,
 ) -> None:
-  """Update thread status and notify completion."""
+  """Update thread status and notify completion.
+
+  ``completed_at`` overrides the terminal-status timestamp when given — the
+  caller passes the raw log's final mtime so the recorded completion time is
+  the run's true end, not whenever finalization happened to run.
+  """
   # Re-read from disk: the cancel endpoint may have already set CANCELLED.
   current = await thread_mgr.get_thread(session_id, thread.id)
   cancelled = current and current.status == ThreadStatus.CANCELLED
@@ -783,14 +792,15 @@ async def _finalize_worker(
     # Cancel endpoint already set the status; don't overwrite.
     log.info("worker_already_cancelled", thread_id=thread.id)
   elif quota_exhausted:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED)
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, completed_at=completed_at)
   elif error:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1)
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1, completed_at=completed_at)
   elif exit_code == 0:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0)
+    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0, completed_at=completed_at)
     log.info("worker_completed", thread_id=thread.id)
   else:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code)
+    await thread_mgr.update_status(
+        session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code, completed_at=completed_at)
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
   skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
@@ -836,6 +846,7 @@ async def _finalize_worker_safely(
     error: str,
     skip_notify: bool,
     task_type: TaskType = TaskType.IMPLEMENT,
+    completed_at: Optional[datetime] = None,
 ) -> None:
   """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
   try:
@@ -850,7 +861,8 @@ async def _finalize_worker_safely(
         quota_exhausted=quota_exhausted,
         error=error,
         skip_notify=skip_notify,
-        task_type=task_type)
+        task_type=task_type,
+        completed_at=completed_at)
   except Exception as e:
     log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
     try:
@@ -861,6 +873,42 @@ async def _finalize_worker_safely(
           })
     except Exception:
       log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
+
+
+async def recomplete_finalize_effects(
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    exit_code: int,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    quota_exhausted: bool = False,
+    error: str = "",
+    task_type: TaskType = TaskType.IMPLEMENT,
+) -> None:
+  """Re-run ONLY the side effects of _finalize_worker — never the status write.
+
+  Startup-reconcile entry point for threads already marked terminal when a
+  crash interrupted their notify chain. Every effect behind this call is
+  judgment-idempotent (src/core/finalize_effects), so repetition converges to
+  a no-op; the status/completed_at fields are left exactly as recorded.
+  """
+  skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
+  cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
+  if cleanup_error:
+    await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
+  await _notify_completion(
+      session_id,
+      description,
+      thread,
+      exit_code,
+      thread_mgr,
+      session_mgr,
+      cfg,
+      quota_exhausted=quota_exhausted,
+      error=error,
+      task_type=task_type)
 
 
 class DelegationBlockedError(Exception):
@@ -1022,7 +1070,83 @@ async def spawn_worker(
           quota_exhausted,
           error_msg,
           req.skip_notify,
-          task_type=req.task_type)
+          task_type=req.task_type,
+          completed_at=_run_completion_time(cfg, session_id, thread.id))
+
+
+def _run_completion_time(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Optional[datetime]:
+  """The run's true completion time: its raw log's final mtime, when one exists.
+
+  Independent of backend, event content, and how long the server was down; the
+  finalize chain writes it into completed_at so downtime never shifts a run's
+  recorded end.
+  """
+  thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
+  return runs.raw_completion_time(runs.raw_log_path(thread_dir))
+
+
+async def resume_worker(
+    session_id: str,
+    description: str,
+    thread_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    *,
+    is_alive: Callable[[], bool],
+) -> None:
+  """Re-attach to an interrupted run's raw stream, then run the finalize chain.
+
+  Server-startup entry point: RUNNING/STALLED outcomes pass the recorded
+  (pid, pid_start) liveness judgment as ``is_alive``; COMPLETED/DIED drains
+  pass ``lambda: False``. Finalize is judgment-idempotent, so finishing here
+  and finishing without a restart take exactly the same path.
+  """
+  thread = None
+  worker = None
+  exit_code = -1
+  quota_exhausted = False
+  error_msg = ""
+  try:
+    thread = await thread_mgr.get_thread(session_id, thread_id)
+    if not thread:
+      log.error("resume_worker_thread_missing", session=session_id, thread_id=thread_id)
+      return
+    backend_option = None
+    if thread.backend:
+      try:
+        backend_option = resolve_backend_option(cfg, thread.backend, thread.model)
+      except ValueError as e:
+        # Translate-only fallback: a stale backend id degrades result
+        # detection to the raw claude shape, never crashes recovery.
+        log.warning("resume_backend_unresolved", thread_id=thread.id, error=str(e))
+    events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
+    working_dir = Path(thread.worktree_path) if thread.worktree_path else events_log.parent
+    worker = Worker(thread, working_dir, events_log, description, cfg, backend_option=backend_option)
+    exit_code = await worker.resume(is_alive=is_alive)
+  except QuotaExhaustedException:
+    log.warning("resume_worker_quota_exhausted", thread_id=thread_id)
+    if is_alive() and thread is not None and thread.pid is not None:
+      kill_process_group(thread.pid, signal.SIGTERM)
+    quota_exhausted = True
+  except Exception as e:
+    log.error("resume_worker_failed", thread_id=thread_id, error=str(e), traceback=traceback.format_exc())
+    error_msg = str(e)
+  finally:
+    if thread is not None:
+      await _finalize_worker_safely(
+          session_id,
+          description,
+          thread,
+          exit_code,
+          thread_mgr,
+          session_mgr,
+          cfg,
+          quota_exhausted,
+          error_msg,
+          False,
+          task_type=thread.task_type or TaskType.IMPLEMENT,
+          completed_at=_run_completion_time(cfg, session_id, thread.id))
 
 
 async def _broadcast_completion(
@@ -1084,9 +1208,14 @@ async def _broadcast_completion(
       backend=thread.backend,
       model=thread.model,
   )
-  await session_mgr.mark_unread(session_id)
-  await session_mgr.persist_and_broadcast(session_id, worker_event)
-  log.info("worker_summary_sent", session=session_id, thread=thread.id)
+  # Idempotency judgment: a rerun of the finalize chain (e.g. startup
+  # reconcile completing a crashed finalize) never duplicates the summary.
+  if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread.id):
+    log.info("worker_summary_skip_duplicate", session=session_id, thread=thread.id)
+  else:
+    await session_mgr.mark_unread(session_id)
+    await session_mgr.persist_and_broadcast(session_id, worker_event)
+    log.info("worker_summary_sent", session=session_id, thread=thread.id)
   return events_summary, full_summary
 
 
@@ -1141,8 +1270,11 @@ async def _notify_completion(
           backend=thread.backend,
           model=thread.model,
       )
-      await session_mgr.mark_unread(session_id)
-      await session_mgr.persist_and_broadcast(session_id, fallback_event)
+      if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread.id):
+        log.info("worker_summary_fallback_skip_duplicate", session=session_id, thread=thread.id)
+      else:
+        await session_mgr.mark_unread(session_id)
+        await session_mgr.persist_and_broadcast(session_id, fallback_event)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
 

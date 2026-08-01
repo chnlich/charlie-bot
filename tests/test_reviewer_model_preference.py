@@ -9,6 +9,8 @@ from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata
 from src.core import review, spawner
 
+from conftest import JudgmentShim
+
 BACKEND_OPTIONS = [
     BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
     BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
@@ -59,13 +61,13 @@ def _make_original_thread(
   )
 
 
-class FakeSessionManager:
+class FakeSessionManager(JudgmentShim):
 
   async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
     return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
 
 
-class FakeThreadManager:
+class FakeThreadManager(JudgmentShim):
 
   def __init__(self) -> None:
     self.saved: list[ThreadMetadata] = []
@@ -158,6 +160,57 @@ def test_resolve_preference_option_antigravity_missing_model() -> None:
 
 
 # --- review.spawn_review_worker preference tests ---
+
+
+@pytest.mark.asyncio
+async def test_spawn_review_worker_skips_when_reviewer_already_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Idempotency judgment: a second reviewer for the same original is never derived."""
+  cfg = _build_cfg()
+  original = _make_original_thread()
+  existing_reviewer = ThreadMetadata(
+      id="existing-review", session_id="session-id", description="Review", review_of=original.id)
+  captured: dict[str, Any] = {}
+
+  class ThreadMgrWithReviewer(FakeThreadManager):
+
+    async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
+      return [original, existing_reviewer]
+
+    async def create_thread(self, *args: Any, **kwargs: Any) -> ThreadMetadata:
+      raise AssertionError("a reviewer already exists — create_thread must not run")
+
+  monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
+
+  spawned = await review.spawn_review_worker("session-id", original, cfg, FakeSessionManager(), ThreadMgrWithReviewer())
+
+  assert spawned is True
+  assert captured == {}  # no spawn task was scheduled
+
+
+@pytest.mark.asyncio
+async def test_spawn_review_worker_replaces_failed_reviewer_via_exclusion(monkeypatch: pytest.MonkeyPatch) -> None:
+  """On the retry path the failed reviewer itself must not block its replacement."""
+  cfg = _build_cfg(model_preference=["kimi-k2.5"])
+  original = _make_original_thread()
+  failed_reviewer = ThreadMetadata(
+      id="failed-review", session_id="session-id", description="Review", review_of=original.id)
+  captured: dict[str, Any] = {}
+
+  class ThreadMgrWithFailedReviewer(FakeThreadManager):
+
+    async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
+      return [original, failed_reviewer]
+
+  monkeypatch.setattr(review, "git_current_branch", _fake_git_current_branch)
+  monkeypatch.setattr(spawner, "spawn_worker", _fake_spawn_worker)
+  monkeypatch.setattr(review, "create_logged_task", _capture_create_logged_task(captured))
+
+  spawned = await review.spawn_review_worker(
+      "session-id", original, cfg, FakeSessionManager(), ThreadMgrWithFailedReviewer(),
+      exclude_thread_id="failed-review")
+
+  assert spawned is True
+  assert captured["request"].resolved_backend == "kimi-k2.5"
 
 
 @pytest.mark.asyncio
@@ -435,7 +488,7 @@ def _make_review_thread(tried_backends: Optional[list[str]] = None,) -> ThreadMe
   )
 
 
-class NotifyFakeSessionManager:
+class NotifyFakeSessionManager(JudgmentShim):
 
   async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
     return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
@@ -453,7 +506,7 @@ class NotifyFakeSessionManager:
     pass
 
 
-class NotifyFakeThreadManager:
+class NotifyFakeThreadManager(JudgmentShim):
 
   def __init__(self, threads: dict[str, ThreadMetadata]) -> None:
     self._threads = threads
@@ -486,6 +539,7 @@ async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.Monkey
       sm: Any,
       tm: Any,
       tried_backends: Any = None,
+      exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True
@@ -528,6 +582,7 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
       sm: Any,
       tm: Any,
       tried_backends: Any = None,
+      exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True
@@ -569,6 +624,7 @@ async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.Monk
       sm: Any,
       tm: Any,
       tried_backends: Any = None,
+      exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return False
@@ -621,6 +677,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
       sm: Any,
       tm: Any,
       tried_backends: Any = None,
+      exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True
@@ -672,6 +729,7 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
       sm: Any,
       tm: Any,
       tried_backends: Any = None,
+      exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True

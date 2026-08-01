@@ -9,6 +9,8 @@ from src.core import spawner
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 
+from conftest import JudgmentShim
+
 BACKEND_OPTIONS = [
     BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
     BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
@@ -30,7 +32,7 @@ def _write_events(path: Path, events: list[dict[str, Any]]) -> None:
   path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
 
-class FakeThreadManager:
+class FakeThreadManager(JudgmentShim):
 
   def __init__(self, thread: ThreadMetadata, events_path: Path) -> None:
     self.thread = thread
@@ -58,6 +60,7 @@ class FakeThreadManager:
       status: ThreadStatus,
       pid: Optional[int] = None,
       exit_code: Optional[int] = None,
+      completed_at: Any = None,
   ) -> None:
     del pid
     assert session_id == self.thread.session_id
@@ -67,7 +70,7 @@ class FakeThreadManager:
     self.status_updates.append((status, exit_code))
 
 
-class FakeSessionManager:
+class FakeSessionManager(JudgmentShim):
 
   def __init__(self, session_id: str, backend: str = "claude-opus-4.6") -> None:
     self.session = SessionMetadata(id=session_id, name="Test", backend=backend)
@@ -284,6 +287,7 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
       error: str,
       skip_notify: bool,
       task_type: TaskType = TaskType.IMPLEMENT,
+      completed_at: Any = None,
   ) -> None:
     del session_id, description, manager, sessions, worker_cfg, skip_notify
     finalized.update(

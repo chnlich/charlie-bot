@@ -2,10 +2,12 @@
 
 import asyncio
 import fnmatch
+import gzip
 import hashlib
 import json
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -126,9 +128,7 @@ async def perfetto_viewer(
     raise HTTPException(status_code=400, detail="No trace files specified. Provide 'trace' or 'dir' query params.")
 
   warn = None
-  if len(inputs) == 1:
-    trace_url = inputs[0][0]
-  elif await asyncio.to_thread(_all_local_json_traces, inputs):
+  if await asyncio.to_thread(_all_local_json_traces, inputs):
     query: list[tuple[str, str]] = [("trace", str(path)) for _, path in inputs[:len(trace)]]
     if dir is not None:
       query.extend((("dir", dir), ("pattern", pattern)))
@@ -137,7 +137,8 @@ async def perfetto_viewer(
     trace_url = f"/perfetto/merged?{urlencode(query)}"
   else:
     trace_url = inputs[0][0]
-    warn = "⚠ Remote or non-JSON traces cannot be merged, showing first trace only"
+    if len(inputs) > 1:
+      warn = "⚠ Remote or non-JSON traces cannot be merged, showing first trace only"
 
   display_title = title or dir or inputs[0][0].rsplit("/", 1)[-1]
 
@@ -184,12 +185,12 @@ def _is_json_trace(path: Path) -> bool:
   return False
 
 
-def _merge_cache_key(paths: list[Path], slim: bool) -> str:
+def _merge_cache_key(paths: list[Path], slim: bool, mode: str) -> str:
   inputs = []
   for path in paths:
     stat = path.stat()
     inputs.append((str(path), stat.st_size, stat.st_mtime_ns))
-  payload = json.dumps({"paths": inputs, "slim": slim}, separators=(",", ":"))
+  payload = json.dumps({"paths": inputs, "slim": slim, "mode": mode}, separators=(",", ":"))
   return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -206,7 +207,7 @@ def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
 def _cached_merge(paths: list[Path], slim: bool) -> Path:
   cache_dir = _perfetto_merge_cache_dir()
   cache_dir.mkdir(parents=True, exist_ok=True)
-  cache_path = cache_dir / f"{_merge_cache_key(paths, slim)}.json.gz"
+  cache_path = cache_dir / f"{_merge_cache_key(paths, slim, 'merge')}.json.gz"
   if cache_path.is_file():
     return cache_path
 
@@ -215,6 +216,39 @@ def _cached_merge(paths: list[Path], slim: bool) -> Path:
   temp_path = Path(temp_name)
   try:
     merge_traces(paths, temp_path, slim)
+  except Exception:
+    temp_path.unlink()
+    raise
+  os.replace(temp_path, cache_path)
+  _prune_perfetto_merge_cache(cache_path)
+  return cache_path
+
+
+def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
+  """Validate the file is parseable JSON, then stream-compress the original bytes unchanged.
+
+  Peaks around 2.25 GB RSS for a 525.8 MB file (same order as the merge path's per-input
+  json.load) and reads the source file a second time, after validation, to compress it.
+  """
+  with path.open("rb") as validate_file:
+    json.load(validate_file)
+  with path.open("rb") as source_file, open(out_path, "wb") as raw_output:
+    with gzip.GzipFile(fileobj=raw_output, mode="wb", compresslevel=6) as gzip_output:
+      shutil.copyfileobj(source_file, gzip_output, length=65536)
+
+
+def _cached_direct_pass(path: Path) -> Path:
+  cache_dir = _perfetto_merge_cache_dir()
+  cache_dir.mkdir(parents=True, exist_ok=True)
+  cache_path = cache_dir / f"{_merge_cache_key([path], False, 'gzip')}.json.gz"
+  if cache_path.is_file():
+    return cache_path
+
+  descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+  os.close(descriptor)
+  temp_path = Path(temp_name)
+  try:
+    _build_direct_pass_gzip(path, temp_path)
   except Exception:
     temp_path.unlink()
     raise
@@ -253,7 +287,10 @@ async def perfetto_merged(
     resolved_paths.append(resolved_path)
 
   try:
-    cache_path = await asyncio.to_thread(_cached_merge, resolved_paths, bool(slim))
+    if len(resolved_paths) == 1 and not slim:
+      cache_path = await asyncio.to_thread(_cached_direct_pass, resolved_paths[0])
+    else:
+      cache_path = await asyncio.to_thread(_cached_merge, resolved_paths, bool(slim))
   except Exception as error:
     log.exception("perfetto_merge_failed", paths=[str(path) for path in resolved_paths], slim=slim)
     raise HTTPException(status_code=500, detail=str(error)) from error

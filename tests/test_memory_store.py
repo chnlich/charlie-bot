@@ -661,7 +661,8 @@ def test_cli_add_rejects_bad_title(tmp_path: Path, monkeypatch: pytest.MonkeyPat
   assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
 
 
-def test_cli_query_unknown_topic_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_query_unknown_topic_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
   import src.cli.memory as cli
@@ -669,6 +670,57 @@ def test_cli_query_unknown_topic_exits_nonzero(tmp_path: Path, monkeypatch: pyte
   with pytest.raises(SystemExit) as exc:
     cli.main()
   assert exc.value.code != 0
+  err = capsys.readouterr().err
+  assert err == "error: unknown topic: nope\n"
+
+
+def test_cli_query_unknown_topic_slash_value_known_pre_slash_hints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  """A ``topic/slug`` value whose pre-slash segment is a real topic gets a corrective hint."""
+  cfg = _fake_cfg(tmp_path)
+  monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
+  import src.cli.memory as cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "charliebot/some-slug"])
+  with pytest.raises(SystemExit) as exc:
+    cli.main()
+  assert exc.value.code == 1
+  out, err = capsys.readouterr()
+  assert out == ""
+  assert err == (
+      "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n")
+
+
+def test_cli_query_unknown_topic_slash_value_unknown_pre_slash_is_plain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  """A ``topic/slug`` value whose pre-slash segment is not a real topic gets no hint."""
+  cfg = _fake_cfg(tmp_path)
+  monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
+  import src.cli.memory as cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "nope/some-slug"])
+  with pytest.raises(SystemExit) as exc:
+    cli.main()
+  assert exc.value.code == 1
+  out, err = capsys.readouterr()
+  assert out == ""
+  assert err == "error: unknown topic: nope/some-slug\n"
+
+
+def test_cli_query_unknown_topic_mixed_invocation_hints_only_slash_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  """One plain typo plus one hint-eligible value: two lines, in argument order, only the latter hinted."""
+  cfg = _fake_cfg(tmp_path)
+  monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
+  import src.cli.memory as cli
+  monkeypatch.setattr(
+      "sys.argv", ["charliebot memory", "query", "--topic", "nope", "--topic", "charliebot/some-slug"])
+  with pytest.raises(SystemExit) as exc:
+    cli.main()
+  assert exc.value.code == 1
+  out, err = capsys.readouterr()
+  assert out == ""
+  assert err == (
+      "error: unknown topic: nope\n"
+      "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n")
 
 
 def test_cli_query_index_prints_lines_full_prints_body(

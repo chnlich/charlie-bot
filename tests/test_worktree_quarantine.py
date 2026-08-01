@@ -42,12 +42,16 @@ def _thread(
     age_days: float = 30.0,
     keep_worktree: bool = False,
     repo_path: str = "/tmp/repo",
+    session_id: str = "s1",
+    description: str = "test task",
     completed_at: Any = "__auto__",
 ) -> dict:
   if completed_at == "__auto__":
     completed_at = (utc_now() - timedelta(days=age_days)).isoformat()
   return {
       "id": thread_id,
+      "session_id": session_id,
+      "description": description,
       "status": status,
       "branch_name": branch_name,
       "repo_path": repo_path,
@@ -368,13 +372,15 @@ async def test_sweep_never_raises_when_helper_fails(tmp_path: Path, monkeypatch:
 
 
 # ---------------------------------------------------------------------------
-# _recover_orphaned_threads + run_crash_recovery (boot_time guard + sweep)
+# run_crash_recovery: interrupted-run reconcile (never kills) + sweep
 # ---------------------------------------------------------------------------
 
 
 def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Path:
   import json
 
+  meta.setdefault("session_id", session_id)
+  meta.setdefault("description", "test task")
   thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
   thread_dir.mkdir(parents=True, exist_ok=True)
   meta_path = thread_dir / "metadata.json"
@@ -382,8 +388,28 @@ def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pa
   return meta_path
 
 
+async def _await_recovery_tasks() -> None:
+  """Let the background reconcile drain/respawn/recomplete tasks run to completion.
+
+  Reconciliation dispatches its recovery actions as named asyncio tasks
+  (create_logged_task), so a full run_crash_recovery test must await them
+  before asserting on rewritten thread metadata.
+  """
+  import asyncio
+
+  current = asyncio.current_task()
+  pending = [
+      t for t in asyncio.all_tasks()
+      if t is not current and not t.done()
+      and t.get_name().startswith(("resume-", "respawn-", "recomplete-"))
+  ]
+  if pending:
+    await asyncio.gather(*pending)
+
+
 @pytest.mark.asyncio
 async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A never-started pre-boot thread drain-finalizes to failed; the aged failed worktree is swept."""
   import json
 
   cfg = _cfg(tmp_path)
@@ -407,27 +433,28 @@ async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatc
           thread_id="aged", status="failed", worktree_path=old_wt, branch_name="charliebot/task-aged", age_days=20.0))
 
   # boot_time in the future: the no-started_at running thread falls back to its
-  # (just-created) dir ctime, which predates boot_time, so it is recovered.
+  # (just-created) dir ctime, which predates boot_time, so it is reconciled.
+  # pid None + no raw log -> NEVER_STARTED; with no task_delegated invocation in
+  # the chat log it cannot respawn, so it drain-finalizes as failed.
   recovered = await init_module.run_crash_recovery(cfg, utc_now() + timedelta(hours=1))
+  await _await_recovery_tasks()
 
   assert recovered == 1
-  # Running thread recovered to failed; its just-stamped completed_at keeps it out of the sweep.
   meta = json.loads(running_meta.read_text(encoding="utf-8"))
   assert meta["status"] == "failed"
   assert meta["exit_code"] == -1
+  # A failed run keeps its worktree (debug state preserved).
   assert running_wt.exists()
   # The aged failed worktree was quarantined.
   assert quarantined == [str(old_wt)]
   assert not old_wt.exists()
 
 
-def test_recover_skips_post_boot_running_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A worker spawned during the recovery window (started_at > boot_time) is spared."""
+def test_scan_skips_post_boot_running_thread(tmp_path: Path) -> None:
+  """A worker spawned during the recovery window (started_at > boot_time) is not interrupted."""
   import json
 
   cfg = _cfg(tmp_path)
-  killed: list[int] = []
-  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
   boot_time = utc_now()
   meta_path = _write_thread_meta(
       cfg, "s1", {
@@ -437,15 +464,23 @@ def test_recover_skips_post_boot_running_thread(tmp_path: Path, monkeypatch: pyt
           "started_at": (boot_time + timedelta(seconds=30)).isoformat(),
       })
 
-  recovered, _ = init_module._recover_orphaned_threads(cfg, boot_time)
+  interrupted, threads = init_module._scan_interrupted_runs(cfg, boot_time)
 
-  assert recovered == 0
-  assert killed == []
+  assert interrupted == []
+  assert [m["id"] for m in threads] == ["post-boot"]
+  # The scan writes nothing: the thread stays running.
   assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "running"
 
 
-def test_recover_kills_pre_boot_running_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A thread started before boot is orphaned: its PID is killed and it is marked failed."""
+@pytest.mark.asyncio
+async def test_reconcile_pre_boot_run_without_raw_log_drains_failed_without_killing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A pre-boot run whose raw log is missing is DIED: drain-finalized failed, never killed.
+
+  Reconciliation resolves truth from disk and NEVER kills the recorded pid —
+  only leftover descendants holding the raw-log fd are killed, and a missing
+  raw log has none.
+  """
   import json
 
   cfg = _cfg(tmp_path)
@@ -460,28 +495,25 @@ def test_recover_kills_pre_boot_running_thread(tmp_path: Path, monkeypatch: pyte
           "started_at": (boot_time - timedelta(minutes=5)).isoformat(),
       })
 
-  recovered, _ = init_module._recover_orphaned_threads(cfg, boot_time)
+  recovered = await init_module.run_crash_recovery(cfg, boot_time)
+  await _await_recovery_tasks()
 
   assert recovered == 1
-  assert killed == [4242]
+  assert killed == []
   meta = json.loads(meta_path.read_text(encoding="utf-8"))
   assert meta["status"] == "failed"
   assert meta["exit_code"] == -1
 
 
-def test_recover_missing_started_at_falls_back_to_ctime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Without started_at, the thread dir ctime decides; an old dir (pre-boot) is recovered."""
-  import json
-
+def test_scan_missing_started_at_falls_back_to_ctime(tmp_path: Path) -> None:
+  """Without started_at, the thread dir ctime decides; an old dir (pre-boot) is interrupted."""
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: None)
-  # Thread dir created now; boot_time in the future => dir ctime < boot_time => recover.
-  meta_path = _write_thread_meta(cfg, "s1", {"id": "no-start", "status": "running", "pid": None})
+  # Thread dir created now; boot_time in the future => dir ctime < boot_time => interrupted.
+  _write_thread_meta(cfg, "s1", {"id": "no-start", "status": "running", "pid": None})
 
-  recovered, _ = init_module._recover_orphaned_threads(cfg, utc_now() + timedelta(hours=1))
+  interrupted, _ = init_module._scan_interrupted_runs(cfg, utc_now() + timedelta(hours=1))
 
-  assert recovered == 1
-  assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "failed"
+  assert [item.meta["id"] for item in interrupted] == ["no-start"]
 
 
 # ---------------------------------------------------------------------------
@@ -510,19 +542,15 @@ def _age_metadata_mtime(meta_path: Path, days: float) -> None:
   os.utime(meta_path, (ts, ts))
 
 
-def test_recover_skips_out_of_window_running_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A 'running' thread whose metadata mtime is outside the window is skipped unread.
+def test_scan_skips_out_of_window_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A thread whose metadata mtime is outside the window is skipped unread.
 
-  Recovery must read only recently-modified thread metadata. A thread that still
-  says 'running' but whose metadata.json has not been touched for longer than
-  RUNNING_SCAN_WINDOW is a crashed orphan whose dir was abandoned; it is neither
-  read nor recovered, while a recent pre-boot orphan beside it still is.
+  The reconcile scan must read only recently-modified thread metadata. A thread
+  that still says 'running' but whose metadata.json has not been touched for
+  longer than RUNNING_SCAN_WINDOW is neither read nor reconciled, while a
+  recent pre-boot thread beside it still is.
   """
-  import json
-
   cfg = _cfg(tmp_path)
-  killed: list[int] = []
-  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
   read_paths = _spy_on_load_json_meta(monkeypatch)
 
   boot_time = utc_now()
@@ -542,16 +570,13 @@ def test_recover_skips_out_of_window_running_thread(tmp_path: Path, monkeypatch:
       })
   _age_metadata_mtime(stale_path, init_module.RUNNING_SCAN_WINDOW.days + 5)
 
-  recovered, threads = init_module._recover_orphaned_threads(cfg, boot_time)
+  interrupted, threads = init_module._scan_interrupted_runs(cfg, boot_time)
 
-  # Only the recent orphan is read, signaled, recovered, and returned.
-  assert recovered == 1
-  assert killed == [4242]
+  # Only the recent thread is read and reconciled; the stale one is never touched.
   assert recent_path in read_paths
   assert stale_path not in read_paths
+  assert [item.meta["id"] for item in interrupted] == ["recent-running"]
   assert [m["id"] for m in threads] == ["recent-running"]
-  assert json.loads(recent_path.read_text(encoding="utf-8"))["status"] == "failed"
-  assert json.loads(stale_path.read_text(encoding="utf-8"))["status"] == "running"
 
 
 @pytest.mark.asyncio

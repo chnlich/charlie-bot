@@ -206,6 +206,21 @@ def backend_type_allows_missing_model(backend_type: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+class MasterRunRecord(BaseModel):
+  """Identity of one in-flight master turn, persisted for restart reconciliation.
+
+  Written when the turn's backend process spawns, cleared when the turn's
+  MASTER_DONE lands. A record still present at server start means the turn's
+  outcome is unresolved: re-attach when (pid, pid_start) is alive, otherwise
+  the turn's user message (user_event_id) stays eligible for replay.
+  """
+  pid: Optional[int] = None
+  pid_start: Optional[str] = None  # /proc/<pid>/stat field 22 at spawn time
+  started_at: UtcDatetime
+  raw_log: str  # absolute path to this turn's raw NDJSON transport file
+  user_event_id: Optional[str] = None  # chat event this turn answers
+
+
 class SessionMetadata(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   name: str
@@ -224,6 +239,8 @@ class SessionMetadata(BaseModel):
   updated_at: UtcDatetime = Field(default_factory=utc_now)
   cc_session_id: Optional[str] = None
   cc_session_started_at: Optional[UtcDatetime] = None
+  # In-flight master turn identity for restart reconcile; None when idle.
+  master_run: Optional[MasterRunRecord] = None
   backend: str = ""  # empty default; create_session always provides the real value
   scheduled_task: Optional[str] = None  # task name; None = regular session
   last_scheduled_run: Optional[str] = None  # ISO datetime of last scheduler execution
@@ -438,6 +455,8 @@ class SessionCallbacks:
   # Returns the cc_session_id read back from disk after persisting.
   persist_cc_session_id: Callable[[str, str], Awaitable[Optional[str]]]
   has_completed_round: Callable[[str], Awaitable[bool]]
+  # Sets (or clears, on None) the session's in-flight master-turn record.
+  persist_master_run: Callable[[str, Optional[MasterRunRecord]], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------

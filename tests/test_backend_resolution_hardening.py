@@ -27,6 +27,7 @@ def _make_callbacks() -> models.SessionCallbacks:
       mark_unread=AsyncMock(),
       persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
       has_completed_round=AsyncMock(return_value=False),
+      persist_master_run=AsyncMock(),
   )
 
 

@@ -554,9 +554,20 @@ async def _maybe_respawn(
     log.warning("respawn_invocation_missing", thread=thread_id, session=session_id)
     return False
 
+  request_task_type = TaskType(invocation.get("task_type") or meta.get("task_type") or TaskType.IMPLEMENT)
+  requested_backend = invocation.get("backend")
   try:
-    resolved_backend, resolved_model = await spawner.resolve_requested_subagent_backend_model(
-        session_id, cfg, session_mgr, requested_backend=invocation.get("backend"))
+    if request_task_type == TaskType.VERIFY and requested_backend is None:
+      # Mirrors _authorize_spawn_request's VERIFY branch (api/internal.py): verify
+      # checks the session's work, so its backend defaults cross-model via
+      # model_preference, exactly like the delegation reviewer.
+      from src.core.review import select_reviewer_backend
+      session_backend, session_model = await spawner.resolve_session_subagent_backend_model(
+          session_id, cfg, session_mgr)
+      resolved_backend, resolved_model, _ = select_reviewer_backend(cfg, session_backend, session_model, [])
+    else:
+      resolved_backend, resolved_model = await spawner.resolve_requested_subagent_backend_model(
+          session_id, cfg, session_mgr, requested_backend=requested_backend)
   except ValueError as e:
     log.error("respawn_backend_unresolved", thread=thread_id, error=str(e))
     return False
@@ -573,7 +584,7 @@ async def _maybe_respawn(
       branch_name_override=meta.get("branch_name"),
       worktree_path_override=worktree_path_override,
       keep_worktree=bool(invocation.get("keep_worktree", False)),
-      task_type=TaskType(invocation.get("task_type") or meta.get("task_type") or TaskType.IMPLEMENT),
+      task_type=request_task_type,
   )
   log.warning("respawning_never_started_worker", thread=thread_id, session=session_id)
   create_logged_task(

@@ -3,19 +3,29 @@
 import asyncio
 import dataclasses
 import os
+import signal
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import structlog
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends.base import AgentBackend, _read_stderr_tail, tail_follow_events
 from src.core import event_types as ET
+from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
 from src.core.memory import assemble_master
-from src.core.models import BackendOption, SessionCallbacks, SessionMetadata, backend_type_allows_missing_model
+from src.core.models import (
+    BackendOption,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
+    backend_type_allows_missing_model,
+)
+from src.core.process import kill_process_group
 from src.core.streaming import handle_compact_boundary, streaming_manager
 from src.core.thinking_state import busy_since, clear_busy, mark_busy
 
@@ -121,6 +131,20 @@ class _WorkItem:
   # True only on the scheduled-session weekly-recycle path that deliberately
   # clears the anchor; suppresses the resume-anchor-missing pre-flight alarm.
   expect_fresh_session: bool = False
+  # Chat event id of the user message this turn answers; persisted into
+  # master_run so restart reconcile can exclude exactly one event from replay.
+  user_event_id: Optional[str] = None
+  # Set for re-attach items enqueued by startup reconcile: follow a recorded
+  # live turn's raw log instead of spawning a new process.
+  resume_record: Optional[MasterRunRecord] = None
+  resume_is_alive: Optional[Callable[[], bool]] = None
+
+
+# Per-session currently-processing work item. Read by queued_user_event_ids so
+# startup replay can skip user messages this process already owns — the
+# restart-reconcile exclusion must be per-event, never per-session, or a
+# message queued behind a running one would be replayed.
+_current_items: dict[str, _WorkItem] = {}
 
 
 def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
@@ -372,15 +396,38 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
   backend: Optional[AgentBackend] = None
 
+  # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
+  # and read cursor here so a restarted server can re-attach to this exact
+  # turn from the persisted master_run record.
+  started_at = datetime.now(timezone.utc)
+  log_dir = cfg.sessions_dir / session_meta.id / "data" / "master_runs" / started_at.isoformat()
+  raw_log = str(log_dir / runs.RAW_LOG_NAME)
+
+  async def _on_spawn(pid: int) -> None:
+    await tracker.on_spawn(pid)
+    # pid_start was pinned to this exact process instance just before this
+    # callback fired — same contract as the worker path — so the pair cannot
+    # be faked by a later pid reuse.
+    assert backend is not None
+    record = MasterRunRecord(
+        pid=pid,
+        pid_start=backend.pid_start,
+        started_at=started_at,
+        raw_log=raw_log,
+        user_event_id=item.user_event_id,
+    )
+    await item.callbacks.persist_master_run(session_meta.id, record)
+
   try:
     backend = build_backend(
         option,
         cfg,
         extra_flags=extra_flags or None,
         buffer_limit=cfg.subprocess_buffer_limit,
-        on_spawn=tracker.on_spawn,
+        on_spawn=_on_spawn,
         instructions_content=instructions_content,
         resume_session_id=resume_session_id,
+        log_dir=log_dir,
     )
     _active_procs[session_meta.id] = backend
 
@@ -433,6 +480,156 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   return cc_session_id, exit_code, error_msg, finish_extras
 
 
+def _resolve_resume_option(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    backend_option: Optional[BackendOption],
+) -> Optional[BackendOption]:
+  """Pick the backend option a resume follows with (translate ownership only)."""
+  if backend_option is not None:
+    return backend_option
+  if session_meta.backend:
+    option = cfg.get_backend_option(session_meta.backend)
+    if option is not None:
+      return option
+    log.warning("master_cc_resume_backend_unresolved", session=session_meta.id, backend=session_meta.backend)
+  return cfg.backend_options[0] if cfg.backend_options else None
+
+
+def _build_fresh_translate(cfg: CharlieBotConfig, option: Optional[BackendOption]) -> Callable[[dict], list[dict]]:
+  """A fresh translate_event callable for one scan/stream.
+
+  Stateful translates (codex text buffering, gemini) require one instance per
+  stream. A missing/unbuildable option degrades to the identity translate (raw
+  claude shape) instead of failing the re-attach — same rule as the worker
+  side's reconcile translate.
+  """
+  if option is None:
+    return lambda event: [event]
+  try:
+    from src.agents.backends.registry import build_backend
+    return build_backend(option, cfg).translate_event
+  except Exception as e:
+    log.warning("master_cc_resume_translate_unresolved", backend=option.id, error=str(e))
+    return lambda event: [event]
+
+
+async def _resume_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], dict]:
+  """Re-attach to a recorded live master turn: follow its raw log to the end.
+
+  Consumer-side mirror of _run_cc with no spawn: the same per-event handling,
+  the same finish logging. Only the truth source differs — liveness comes from
+  the caller's (pid, pid_start) closure instead of an in-process handle, and
+  the exit code is derived from the raw log's trailing result event (a
+  detached process's real exit code is unreachable). Managed by the same
+  per-session consumer, so the re-attach drains before any queued turn spawns.
+  """
+  cfg = item.cfg
+  session_meta = item.session_meta
+  record = item.resume_record
+  assert record is not None and item.resume_is_alive is not None
+  is_alive = item.resume_is_alive
+
+  raw_path = Path(record.raw_log)
+  log_dir = raw_path.parent
+  cursor_path = log_dir / runs.CURSOR_NAME
+  stderr_path = log_dir / runs.STDERR_LOG_NAME
+
+  option = _resolve_resume_option(cfg, session_meta, item.backend_option)
+  log.info("master_cc_resuming", session=session_meta.id, pid=record.pid, raw_log=record.raw_log)
+
+  cc_session_id: Optional[str] = session_meta.cc_session_id
+  exit_code = -1
+  error_msg: Optional[str] = None
+  tracker = _RunTimingTracker(
+      session_meta.id, option.type if option else "unknown", option.model if option else None)
+
+  try:
+    stream_translate = _build_fresh_translate(cfg, option)
+    async for event in tail_follow_events(
+        raw_path,
+        translate=stream_translate,
+        is_alive=is_alive,
+        cursor=cursor_path,
+        start_offset=runs.read_raw_cursor(cursor_path),
+        post_result_timeout=AgentBackend._POST_RESULT_TIMEOUT,
+    ):
+      tracker.on_event(event)
+      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
+
+    # Whole-file result scan with a FRESH translate instance (stateful
+    # translates may not reuse the one that consumed the stream tail). -1
+    # matches the worker side's "no result event" code for died-mid-run.
+    if raw_path.is_file():
+      events = runs.project_raw_events(
+          runs.parse_raw_lines(raw_path.read_bytes()), _build_fresh_translate(cfg, option))
+    else:
+      events = []
+    result = runs.summarize_result(events)
+    exit_code = 0 if (result is not None and runs.result_success(result)) else -1
+
+    stderr_text = await asyncio.to_thread(_read_stderr_tail, stderr_path)
+    if stderr_text:
+      log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text)
+      if exit_code != 0:
+        error_msg = stderr_text[:500]
+
+    # The loop ended on the post-result timeout while the process is still
+    # alive: same contract as the live path's cleanup — SIGTERM the recorded
+    # process group, escalate to SIGKILL.
+    if is_alive() and record.pid is not None:
+      log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
+      kill_process_group(record.pid, signal.SIGTERM)
+      deadline = time.monotonic() + 5.0
+      while is_alive() and time.monotonic() < deadline:
+        await asyncio.sleep(0.2)
+      if is_alive():
+        kill_process_group(record.pid, signal.SIGKILL)
+
+  except asyncio.CancelledError:
+    log.warning("master_cc_resume_cancelled", session=session_meta.id)
+    raise
+  except Exception as e:
+    log.exception("master_cc_resume_crashed", session=session_meta.id)
+    cc_session_id = None
+    error_msg = str(e)
+
+  finally:
+    finish_extras = tracker.build_finish_extras()
+    if error_msg:
+      err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
+      await item.callbacks.persist_and_broadcast(session_meta.id, err_event)
+    await item.callbacks.mark_unread(session_meta.id)
+    log.info(
+        "master_cc_resume_finished",
+        session=session_meta.id,
+        exit_code=exit_code,
+        **(finish_extras or {}),
+    )
+
+  return cc_session_id, exit_code, error_msg, finish_extras
+
+
+def _enqueue_work_item(session_id: str, work_item: _WorkItem) -> tuple[datetime, bool]:
+  """Atomically mark busy, queue the item, and ensure a consumer exists.
+
+  No await and no statement that can raise: a work item in the queue always
+  implies busy_since is set; the consumer clears it only at teardown, in its
+  own await-free sequence. No other statement may interleave with this block —
+  correctness of the busy-state invariant depends on that.
+  """
+  if session_id not in _session_queues:
+    _session_queues[session_id] = asyncio.Queue()
+  thinking_since, created = mark_busy(session_id)
+  _session_queues[session_id].put_nowait(work_item)
+  if session_id not in _session_consumers or _session_consumers[session_id].done():
+    _session_consumers[session_id] = asyncio.create_task(
+        _session_consumer(session_id),
+        name=f"master-consumer-{session_id[:8]}",
+    )
+  return thinking_since, created
+
+
 async def _session_consumer(session_id: str) -> None:
   """Drain the per-session queue sequentially, one CC run at a time."""
   queue = _session_queues[session_id]
@@ -447,6 +644,7 @@ async def _session_consumer(session_id: str) -> None:
   try:
     while True:
       item: _WorkItem = await queue.get()
+      _current_items[session_id] = item
       teardown_cfg = item.cfg
       teardown_auto_trigger = item.auto_trigger
       try:
@@ -454,7 +652,7 @@ async def _session_consumer(session_id: str) -> None:
         # so --resume picks up the in-progress CC transcript.
         if last_cc_session_id and not item.session_meta.cc_session_id:
           item.session_meta.cc_session_id = last_cc_session_id
-        result = await _run_cc(item)
+        result = await (_resume_cc(item) if item.resume_record is not None else _run_cc(item))
         cc_session_id, exit_code, _error_msg, finish_extras = result
 
         # Update session_meta.cc_session_id for subsequent queued runs.
@@ -499,6 +697,12 @@ async def _session_consumer(session_id: str) -> None:
         done_event.update({k: v for k, v in finish_extras.items()})
         await item.callbacks.persist_and_broadcast(session_id, done_event)
 
+        # The turn is fully resolved — clear its restart-identity so the next
+        # startup reconcile neither re-attaches nor replays its user message.
+        # Written after MASTER_DONE: crash between the two replays the message
+        # with a marker (duplicate-tolerant) rather than silently dropping it.
+        await item.callbacks.persist_master_run(session_id, None)
+
         # Resolve the caller's future
         if not item.future.done():
           item.future.set_result(cc_session_id)
@@ -510,6 +714,7 @@ async def _session_consumer(session_id: str) -> None:
 
       finally:
         queue.task_done()
+        _current_items.pop(session_id, None)
 
       # If queue is empty, exit the consumer loop — it will be re-created lazily.
       if queue.empty():
@@ -553,6 +758,7 @@ async def run_message(
     uploaded_files: Optional[list[dict]] = None,
     is_voice: bool = False,
     expect_fresh_session: bool = False,
+    user_event_id: Optional[str] = None,
 ) -> Optional[str]:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
@@ -571,6 +777,10 @@ async def run_message(
     expect_fresh_session: True only on the scheduled-session weekly-recycle
       path that deliberately clears the anchor; suppresses the
       resume-anchor-missing pre-flight alarm.
+    user_event_id: Chat event id of the user message this turn answers;
+      recorded in master_run so restart reconcile excludes exactly it from
+      replay. Only pass explicitly on the replay path (skip_user_event=True);
+      otherwise captured from the freshly persisted user event.
 
   Returns:
     The CC session ID (for --resume on subsequent messages), or None.
@@ -605,6 +815,7 @@ async def run_message(
     if uploaded_files:
       user_event["uploaded_files"] = uploaded_files
     await callbacks.persist_and_broadcast(session_meta.id, user_event)
+    user_event_id = user_event.get("id")
     session_meta.updated_at = datetime.now(timezone.utc)
     await callbacks.update_thinking_state(session_meta.id, updated_at=session_meta.updated_at)
 
@@ -624,22 +835,14 @@ async def run_message(
       should_check_tex=should_check_tex,
       future=future,
       expect_fresh_session=expect_fresh_session,
+      user_event_id=user_event_id,
   )
 
   # --- atomic enqueue block: no await, no statement that can raise ---
   # Busy state is marked before the item enters the queue, so a work item in
   # the queue always implies busy_since is set; the consumer clears it only at
   # teardown, in its own await-free sequence.
-  if session_meta.id not in _session_queues:
-    _session_queues[session_meta.id] = asyncio.Queue()
-  thinking_since, created = mark_busy(session_meta.id)
-  _session_queues[session_meta.id].put_nowait(work_item)
-  # Ensure a consumer task is running for this session.
-  if session_meta.id not in _session_consumers or _session_consumers[session_meta.id].done():
-    _session_consumers[session_meta.id] = asyncio.create_task(
-        _session_consumer(session_meta.id),
-        name=f"master-consumer-{session_meta.id[:8]}",
-    )
+  thinking_since, created = _enqueue_work_item(session_meta.id, work_item)
   # --- end atomic block ---
 
   # Notify only when this call opened a new busy interval; the broadcast is a
@@ -671,3 +874,107 @@ async def cancel_master(session_id: str) -> bool:
   await backend.terminate()
   log.info("master_cancel_succeeded", session=session_id)
   return True
+
+
+async def enqueue_master_resume(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    record: MasterRunRecord,
+    callbacks: SessionCallbacks,
+    *,
+    is_alive: Callable[[], bool],
+) -> asyncio.Future:
+  """Re-attach a recorded live master turn by queueing a resume-follow item.
+
+  Goes through the normal per-session queue: the re-attached turn always
+  drains before any queued or replayed turn spawns a new CLI against the same
+  conversation. Returns the future the consumer resolves with the followed
+  turn's cc_session_id when its MASTER_DONE lands.
+  """
+  loop = asyncio.get_running_loop()
+  future: asyncio.Future = loop.create_future()
+  work_item = _WorkItem(
+      cfg=cfg,
+      session_meta=session_meta,
+      user_content="",
+      callbacks=callbacks,
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=None,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=future,
+      user_event_id=record.user_event_id,
+      resume_record=record,
+      resume_is_alive=is_alive,
+  )
+  # Atomic (see _enqueue_work_item); the broadcast below is a pure
+  # notification — correctness comes from readers deriving the state.
+  thinking_since, created = _enqueue_work_item(session_meta.id, work_item)
+  if created:
+    await streaming_manager.broadcast(
+        'sidebar', {
+            'type': ET.RUNNING_CHANGED,
+            'session_id': session_meta.id,
+            'has_running_tasks': True,
+            'thinking_since': thinking_since.isoformat(),
+            'auto_trigger': False,
+        })
+  return future
+
+
+def queued_user_event_ids(session_id: str) -> set[str]:
+  """Chat event ids of user messages this process already owns (running or queued).
+
+  Startup reconcile excludes exactly these (plus any recorded turn's id) from
+  replay: within one process the queue survives, so replaying a queued message
+  would answer it twice. The exclusion is per-event, never per-session — a
+  message queued BEHIND a crashed turn disappears with the killed process and
+  must be replayed.
+  """
+  ids: set[str] = set()
+  current = _current_items.get(session_id)
+  if current is not None and current.user_event_id:
+    ids.add(current.user_event_id)
+  queue = _session_queues.get(session_id)
+  if queue is not None:
+    for item in list(queue._queue):  # same-process snapshot; safe under the GIL
+      if item.user_event_id:
+        ids.add(item.user_event_id)
+  return ids
+
+
+_REPLAY_MARKER = (
+    "[System: the server restarted while answering this message, so it is "
+    "being redelivered. Your previous, interrupted attempt may already have "
+    "performed some actions — before repeating any side effect (files "
+    "written, messages sent, tasks delegated), read back that action's state "
+    "first and continue from there instead.]")
+
+
+async def replay_user_message(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    user_event: dict,
+    callbacks: SessionCallbacks,
+) -> None:
+  """Redeliver an unanswered user message after a restart, marked as a replay.
+
+  The original user event stays put in the chat log (skip_user_event); the
+  replayed prompt prefixes ``_REPLAY_MARKER`` so the master checks prior side
+  effects before redoing them. The record's user_event_id keeps pointing at
+  the ORIGINAL event, which is the one startup reconcile must exclude.
+  """
+  content = user_event.get("content")
+  if not isinstance(content, str) or not content:
+    log.error("master_replay_unusable_event", session=session_meta.id, event_id=user_event.get("id"))
+    return
+  await run_message(
+      cfg,
+      session_meta,
+      user_content=f"{_REPLAY_MARKER}\n\n{content}",
+      callbacks=callbacks,
+      skip_user_event=True,
+      is_voice=bool(user_event.get("is_voice")),
+      user_event_id=user_event.get("id"),
+  )

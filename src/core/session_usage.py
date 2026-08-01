@@ -76,20 +76,38 @@ def _model_context_windows_from_results(events: list[dict]) -> dict[str, int]:
   return windows
 
 
+def _post_compact_tokens_after(events: list[dict], chosen_idx: int) -> int | None:
+  """Latest ``compact_boundary`` event's int ``post_tokens`` strictly after ``chosen_idx``.
+
+  Returns ``None`` when no qualifying boundary exists after that index.
+  """
+  post_tokens: int | None = None
+  for ev in events[chosen_idx + 1:]:
+    if ev.get("type") != ET.SYSTEM or ev.get("subtype") != "compact_boundary":
+      continue
+    candidate = (ev.get("compact_metadata") or {}).get("post_tokens")
+    if isinstance(candidate, int):
+      post_tokens = candidate
+  return post_tokens
+
+
 def _resolve_claude_tier(events: list[dict]) -> dict | None:
   """Resolve usage from the last main-chain assistant event with positive prompt tokens.
 
-  context_tokens / model come from that assistant event's ``message.usage`` /
-  ``message.model``. context_full is ``min(contextWindow of modelUsage[model],
-  declared_window)``; when the assistant model is absent from ``modelUsage`` the
-  declared window alone is used. context_compact_at is
+  context_tokens is that assistant event's ``message.usage`` prompt-token sum, unless
+  a ``compact_boundary`` event with an int ``compact_metadata.post_tokens`` occurs
+  after it -- in which case the latest such ``post_tokens`` wins. ``model`` comes from
+  the assistant event's ``message.model``. context_full is ``min(contextWindow of
+  modelUsage[model], declared_window)``; when the assistant model is absent from
+  ``modelUsage`` the declared window alone is used. context_compact_at is
   ``context_full - OUTPUT_RESERVE - CONTEXT_RESERVE``; it is ``None`` when the
   declared window is degraded (a forwarded-but-unmodelled override is present).
   cost is summed over result events. Returns ``None`` when no qualifying
   assistant event exists.
   """
   chosen: dict | None = None
-  for ev in events:
+  chosen_idx = -1
+  for idx, ev in enumerate(events):
     if ev.get("type") != ET.ASSISTANT:
       continue
     if ev.get("parent_tool_use_id"):
@@ -98,13 +116,15 @@ def _resolve_claude_tier(events: list[dict]) -> dict | None:
     usage = message.get("usage") or {}
     if _prompt_token_sum(usage) > 0:
       chosen = ev
+      chosen_idx = idx
 
   if chosen is None:
     return None
 
   message = chosen.get("message") or {}
   usage = message.get("usage") or {}
-  context_tokens = _prompt_token_sum(usage)
+  post_tokens = _post_compact_tokens_after(events, chosen_idx)
+  context_tokens = post_tokens if post_tokens is not None else _prompt_token_sum(usage)
   model = message.get("model") or ""
   declared_window, compact_point = headless_claude_declared_window()
   windows = _model_context_windows_from_results(events)

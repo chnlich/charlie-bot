@@ -27,7 +27,7 @@ from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, ThreadMetadata
 from src.core.ndjson import append_ndjson
 from src.core.process import kill_process_group
-from src.core.streaming import handle_compact_boundary, streaming_manager
+from src.core.streaming import handle_compaction_events, streaming_manager
 
 log = structlog.get_logger()
 
@@ -310,7 +310,7 @@ class Worker:
       await log_file.flush()
       await streaming_manager.broadcast(self._thread.id, evt)
 
-    await handle_compact_boundary(
+    await handle_compaction_events(
         event_data,
         persist_and_broadcast=_persist_and_broadcast,
         log_context={"thread": self._thread.id},

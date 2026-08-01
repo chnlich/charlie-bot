@@ -31,6 +31,7 @@ SCHEDULED_TRIGGER = "scheduled_trigger"
 
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
+CONTEXT_COMPACT_FAILED = "context_compact_failed"
 RESUME_CONTEXT_DROPPED = "resume_context_dropped"
 
 # -- Clone / fork ------------------------------------------------------------

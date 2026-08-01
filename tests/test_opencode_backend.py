@@ -6,7 +6,7 @@ import pytest
 
 from src.agents.backends.opencode import OpenCodeBackend
 from src.core import event_types as ET
-from src.core.streaming import handle_compact_boundary
+from src.core.streaming import handle_compaction_events
 
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
@@ -825,8 +825,8 @@ def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_compaction_boundary_event_wires_into_handle_compact_boundary(monkeypatch) -> None:
-  """The synthesized compact_boundary event feeds handle_compact_boundary and yields
+async def test_compaction_boundary_event_wires_into_handle_compaction_events(monkeypatch) -> None:
+  """The synthesized compact_boundary event feeds handle_compaction_events and yields
   exactly one persisted ET.CONTEXT_COMPACTED event carrying the same trigger/pre_tokens."""
   backend = _build_backend(monkeypatch)
 
@@ -842,7 +842,7 @@ async def test_compaction_boundary_event_wires_into_handle_compact_boundary(monk
   async def _record(event: dict) -> None:
     persisted.append(event)
 
-  await handle_compact_boundary(boundary_event, _record, {"thread_id": "t1"})
+  await handle_compaction_events(boundary_event, _record, {"thread_id": "t1"})
 
   assert len(persisted) == 1
   assert persisted[0]["type"] == ET.CONTEXT_COMPACTED

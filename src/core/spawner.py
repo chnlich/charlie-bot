@@ -51,12 +51,26 @@ _PRE_TAKEOFF_PHRASE = "pre take off"
 _TAKEOFF_PHRASE = "take off"
 _PRE_TAKEOFF_WINDOW = timedelta(hours=12)
 
-_CODING_PRINCIPLES = (
-    "## Coding Principles\n"
-    "The codebase has a single user. Apply these principles:\n"
-    "- **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery.\n"
-    "- **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.\n"
-    "- **No defensive programming**: do not add guards for scenarios that cannot happen.\n")
+_WORKER_PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
+_WORKER_PROMPT_SECTION_MARKER_SUFFIX = " -->"
+
+_REQUIRED_WORKER_PROMPT_SECTIONS = (
+    "session_info",
+    "coding_principles",
+    "skills_discovery",
+    "role",
+    "intro_new",
+    "intro_continuation",
+    "worktree_workflow_header",
+    "workflow_implement",
+    "workflow_quick_edit",
+    "workflow_script_run",
+    "task_spec_source_files",
+    "task",
+    "iteration_reports",
+    "worktree_persistence",
+    "memory",
+)
 
 _VERIFY_PROMPT_PREAMBLE = (
     "You are a read-only plan verifier. Retrieve evidence through allowed local and network reads, and report "
@@ -84,6 +98,56 @@ _VERIFY_PROMPT_PREAMBLE = (
     "single-line form; fidelity findings keep it.")
 
 
+def _parse_worker_prompt_sections(text: str) -> dict[str, str]:
+  """Split prompts/worker.md's raw text on its `<!-- section: <id> -->` marker lines."""
+  sections: dict[str, str] = {}
+  current_id: Optional[str] = None
+  current_lines: list[str] = []
+  for line in text.split("\n"):
+    if line.startswith(_WORKER_PROMPT_SECTION_MARKER_PREFIX) and line.endswith(_WORKER_PROMPT_SECTION_MARKER_SUFFIX):
+      if current_id is not None:
+        sections[current_id] = "\n".join(current_lines)
+      current_id = line[len(_WORKER_PROMPT_SECTION_MARKER_PREFIX):-len(_WORKER_PROMPT_SECTION_MARKER_SUFFIX)]
+      current_lines = []
+      continue
+    if current_id is not None:
+      current_lines.append(line)
+  if current_id is not None:
+    sections[current_id] = "\n".join(current_lines)
+  return sections
+
+
+def load_worker_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
+  """Read prompts/worker.md fresh and split it into its required sections.
+
+  Stateless and uncached: every call re-reads the file so an edit takes effect on the
+  next spawn. Missing file or missing required section raises with the file's full
+  path and the most likely cause -- the repo checkout predates the worker-prompt
+  extraction commit. No embedded-text fallback.
+  """
+  path = cfg.charlie_bot_repo / "prompts" / "worker.md"
+  if not path.is_file():
+    raise FileNotFoundError(
+        f"worker prompt template not found at {path} — the repo checkout most likely "
+        "predates the worker-prompt extraction commit")
+  sections = _parse_worker_prompt_sections(path.read_text(encoding="utf-8"))
+  missing = [section_id for section_id in _REQUIRED_WORKER_PROMPT_SECTIONS if section_id not in sections]
+  if missing:
+    raise ValueError(
+        f"{path} is missing required section(s): {', '.join(missing)} — the repo checkout "
+        "most likely predates the worker-prompt extraction commit")
+  return sections
+
+
+def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
+  """Sequentially `str.replace` every `{{name}}` token (not `str.format` -- section text may
+  contain literal single braces)."""
+  result = template
+  for token, value in tokens.items():
+    result = result.replace(token, value)
+  return result
+
+
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
@@ -100,117 +164,66 @@ def _build_worker_prompt(
     start_point: Optional[str] = None,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
-  session_info = (f"## Session Info\n"
-                  f"- Session: {session_meta.name}\n")
+  sections = load_worker_prompt_sections(cfg)
 
-  if is_continuation:
-    intro_line = (
-        "You are continuing work in an existing worktree from a previous iteration. "
-        "Review previous iteration changes before starting.")
-  else:
-    intro_line = "A dedicated git worktree is already created for you."
+  session_info = sections["session_info"].replace("{{session_name}}", session_meta.name)
+
+  intro_line = sections["intro_continuation"] if is_continuation else sections["intro_new"]
 
   branch_origin = f"`{base_branch}`" + (f" @ `{start_point}`" if start_point else "")
-  branch_lines = (
-      f"- Branch: `{branch_name}` (from {branch_origin})\n"
-      f"- Worktree: `{wt_path}`\n"
-      f"- Repo: `{repo_path}`")
-
-  commit_steps = (
-      f"Follow these steps exactly:\n"
-      f"1. `cd {wt_path}` — do ALL your work inside this worktree.\n"
-      f"2. Commit your changes with descriptive messages.\n"
-      f"   Use structured commit messages: first line is a short summary, then a blank line, "
-      f"then a \"Why:\" line explaining the business reason for the change.\n")
+  branch_tokens = {
+      "{{branch_name}}": branch_name,
+      "{{base_branch_origin}}": branch_origin,
+      "{{wt_path}}": wt_path,
+      "{{repo_path}}": str(repo_path),
+  }
 
   if task_type == TaskType.IMPLEMENT:
-    workflow_body = (
-        f"{intro_line}\n"
-        f"{branch_lines}\n\n"
-        f"{commit_steps}\n"
-        f"STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.")
+    workflow_body = _substitute_tokens(sections["workflow_implement"], {"{{intro_line}}": intro_line, **branch_tokens})
   elif task_type == TaskType.QUICK_EDIT:
-    workflow_body = (
-        f"{intro_line}\n"
-        f"{branch_lines}\n\n"
-        f"{commit_steps}\n"
-        f"STOP here. Do NOT rebase, push, or remove the worktree. "
-        f"No reviewer will run; the orchestrator will handle merge/push.")
+    workflow_body = _substitute_tokens(sections["workflow_quick_edit"], {"{{intro_line}}": intro_line, **branch_tokens})
   elif task_type == TaskType.SCRIPT_RUN:
-    workflow_body = (
-        f"A dedicated git worktree is provided as your isolated sandbox.\n"
-        f"{branch_lines}\n\n"
-        f"This is a script-run task. The worktree exists only to give you an isolated environment "
-        f"to run commands, submit jobs, or inspect state.\n"
-        f"- Do NOT modify tracked files.\n"
-        f"- Do NOT commit.\n"
-        f"- Finish with `git status --short` showing a clean tree.\n"
-        f"- If you discover that a repo change is actually required to complete the task, "
-        f"STOP and report back instead of making the change.")
+    workflow_body = _substitute_tokens(sections["workflow_script_run"], branch_tokens)
   else:
     raise ValueError(f"unsupported task_type: {task_type!r}")
 
-  task_spec_section = (
-      "## Task Spec Source Files\n"
-      "- If the task text below is a structured task spec or contains a `## Source Files` section, "
-      "read every listed source file before editing.\n"
-      "- If the task spec and source files conflict, stop and report the conflict instead of inventing "
-      "a merged requirement.\n")
+  task_spec_section = sections["task_spec_source_files"]
+  task_section = sections["task"].replace("{{description}}", description)
 
   worktree_section = (
-      f"## Worktree Workflow\n"
-      f"{workflow_body}\n\n"
-      f"{task_spec_section}\n"
-      f"## Task\n{description}")
+      f"{sections['worktree_workflow_header']}\n{workflow_body}\n\n"
+      f"{task_spec_section}\n{task_section}")
 
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:
-    iteration_reports_section = (
-        f"\n\n## Iteration Reports\n"
-        f"Previous iteration reports are in: {loop_dir}/\n"
-        f"Review any existing iter_*.md files there before starting work. Treat them as advisory evidence and hints only.\n"
-        f"When you finish, write your report to: {loop_dir}/iter_{iteration_number:04d}.md\n"
-        f"Use this format:\n"
-        f"```\n"
-        f"## Iter {iteration_number} — {{completed|failed}}\n"
-        f"### What Changed\n"
-        f"- bullet points of what you changed\n"
-        f"### Evidence\n"
-        f"- test outcomes, measurements, concrete observations\n"
-        f"### Advisory Notes\n"
-        f"- optional hints, risks, or ideas future iterations may consider; advisory only, not a required plan\n"
-        f"```")
+    iteration_body = _substitute_tokens(
+        sections["iteration_reports"], {
+            "{{loop_dir}}": loop_dir,
+            "{{iteration_number_padded}}": f"{iteration_number:04d}",
+            "{{iteration_number}}": str(iteration_number),
+        })
+    iteration_reports_section = f"\n\n{iteration_body}"
 
-  skills_section = (
-      "## Skills Discovery\n"
-      "- **Before starting any task**, check for skills relevant to the target repo or task domain.\n"
-      "  - Look in **`~/.charliebot/skills/`** (canonical source — always available regardless of CLI backend).\n"
-      "  - Alternatively: `~/.claude/skills/` (Claude Code) or `~/.agents/skills/` (Codex/Gemini).\n"
-      "- **Read matching skills first** to avoid wasting time on environment setup, tooling issues, "
-      "or reinventing existing workflows.\n"
-      "- **Mandatory for tasks in any domain that has a matching skill**: you MUST read that skill BEFORE writing any code, running any command, or submitting any job. This includes profiling, metrics analysis, data processing — not just training. Starting work without reading the relevant skill is forbidden.\n"
-  )
-
-  role_section = (
-      "## Role\n"
-      "- You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.\n"
-      "- Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.\n")
+  skills_section = sections["skills_discovery"]
+  role_section = sections["role"]
 
   memory_section = ""
   memory_block = assemble_worker(cfg.memory_dir, repo_path.name)
   if memory_block:
-    memory_section = f"\n## Memory\n{memory_block}"
+    memory_section = "\n" + sections["memory"].replace("{{memory_block}}", memory_block)
 
   keep_worktree_section = ""
   if keep_worktree:
-    keep_worktree_section = (
-        "\n\n## Worktree Persistence\n"
-        "This worktree will persist after the reviewer merges. "
-        "You may safely use it as the WorkDir for external long-running processes (e.g. SLURM jobs).")
+    keep_worktree_section = f"\n\n{sections['worktree_persistence']}"
 
-  return (
-      f"{session_info}\n{_CODING_PRINCIPLES}\n{skills_section}\n{role_section}{memory_section}\n"
+  result = (
+      f"{session_info}\n{sections['coding_principles']}\n{skills_section}\n{role_section}{memory_section}\n"
       f"{worktree_section}{iteration_reports_section}{keep_worktree_section}")
+
+  if "{{" in result:
+    raise ValueError("worker prompt assembly left an unresolved {{token}} in the output")
+
+  return result
 
 
 def _short_desc(description: str, limit: int = 120) -> str:

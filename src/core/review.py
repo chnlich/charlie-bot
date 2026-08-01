@@ -70,6 +70,7 @@ def build_review_prompt(
     branch_name: str,
     wt_path: str,
     base_branch: str,
+    cfg: CharlieBotConfig,
     session_id: str,
     original_thread_id: str,
     sessions_dir: Path,
@@ -78,7 +79,9 @@ def build_review_prompt(
     worker_summary: Optional[str] = None,
 ) -> str:
   """Build the prompt for a review worker."""
-  from src.core.spawner import _CODING_PRINCIPLES
+  from src.core.spawner import load_worker_prompt_sections
+
+  coding_principles = load_worker_prompt_sections(cfg)["coding_principles"]
 
   context_hint = context or '(none provided)'
   context_lines: list[str] = []
@@ -100,7 +103,7 @@ def build_review_prompt(
       f"{context_section}\n\n"
       f"If the summary above is insufficient or you are unsure about intent, "
       f"read the full logs: Session: `{chat_log_path}`, Worker: `{worker_log_path}`\n\n"
-      f"{_CODING_PRINCIPLES}\n"
+      f"{coding_principles}\n"
       f"## Review Checklist\n"
       f"IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. "
       f"Only fix clear bugs, correctness issues, or scope violations. "
@@ -374,6 +377,7 @@ async def spawn_review_worker(
       ctx.branch_name,
       ctx.wt_path,
       ctx.base_branch,
+      cfg=cfg,
       session_id=session_id,
       original_thread_id=original_thread.id,
       sessions_dir=cfg.sessions_dir,

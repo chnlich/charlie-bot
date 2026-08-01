@@ -123,19 +123,27 @@ def _target_matches(stored: dict, requested: dict) -> bool:
 
 
 def _readback_trigger(session_id: str, message: str, watch_targets: list[dict] | None) -> dict | None:
-  """Sent-but-lost: a persisted trigger with the same message + watch targets.
+  """Sent-but-lost: a persisted, still-pending trigger with the same message +
+  watch targets.
 
   The server generates the trigger id, so it cannot be predicted — matching the
-  call's own fields is the readback judgment.
+  call's own fields is the readback judgment. Fired triggers are never deleted
+  (they stay on disk with status "fired"), and self-renewing watches reuse the
+  identical message on every renewal, so a fired trigger from a previous leg
+  can match; only "pending" proves the call landed. Among several pending
+  matches, the newest by ``created_at`` wins.
   """
   triggers_dir = get_config().sessions_dir / session_id / "triggers"
   if not triggers_dir.is_dir():
     return None
   requested = list(watch_targets or [])
+  candidates: list[dict] = []
   for trigger_file in triggers_dir.glob("*.json"):
     try:
       stored = json.loads(trigger_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+      continue
+    if stored.get("status") != "pending":
       continue
     if stored.get("message") != message:
       continue
@@ -144,9 +152,12 @@ def _readback_trigger(session_id: str, message: str, watch_targets: list[dict] |
       continue
     if not all(any(_target_matches(st, rq) for st in stored_targets) for rq in requested):
       continue
-    # Mirror the endpoint's response shape.
-    return {"trigger_id": stored["id"], "fire_at": stored["fire_at"]}
-  return None
+    candidates.append(stored)
+  if not candidates:
+    return None
+  newest = max(candidates, key=lambda t: t["created_at"])
+  # Mirror the endpoint's response shape.
+  return {"trigger_id": newest["id"], "fire_at": newest["fire_at"]}
 
 
 def main() -> None:

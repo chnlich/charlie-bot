@@ -119,6 +119,109 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
 
 # ---------------------------------------------------------------------------
+# Acceptance test 1b: context_tokens reads a post-boundary compact_boundary
+# ---------------------------------------------------------------------------
+
+
+def _compact_boundary_event(trigger: str = "manual", pre_tokens=None, post_tokens=None) -> dict:
+  meta: dict = {"trigger": trigger}
+  if pre_tokens is not None:
+    meta["pre_tokens"] = pre_tokens
+  if post_tokens is not None:
+    meta["post_tokens"] = post_tokens
+  return {"type": "system", "subtype": "compact_boundary", "compact_metadata": meta}
+
+
+@pytest.mark.asyncio
+async def test_claude_tier_context_tokens_reads_post_tokens_after_selected_assistant(
+    tmp_path: Path,
+) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-postboundary", name="Post Boundary", backend="claude-opus-4.6")
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=239_708),
+      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_tokens"] == 4_670
+  assert usage["context_full"] == 200_000
+  assert usage["model"] == "claude-opus-4-6"
+  assert usage["total_cost_usd"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_claude_tier_ignores_compact_boundary_before_selected_assistant(
+    tmp_path: Path,
+) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-preboundary", name="Pre Boundary", backend="claude-opus-4.6")
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # Boundary precedes the chosen assistant event -- reading stays the assistant sum.
+  assert usage["context_tokens"] == 100_000
+  assert usage["context_full"] == 200_000
+  assert usage["model"] == "claude-opus-4-6"
+  assert usage["total_cost_usd"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_claude_tier_boundary_without_post_tokens_leaves_reading_alone(
+    tmp_path: Path,
+) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-noboundarytokens", name="No Post Tokens", backend="claude-opus-4.6")
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000),
+      # opencode's synthesized shape: trigger + pre_tokens only, no post_tokens.
+      _compact_boundary_event(trigger="auto", pre_tokens=50_000),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_tokens"] == 100_000
+  assert usage["context_full"] == 200_000
+  assert usage["model"] == "claude-opus-4-6"
+  assert usage["total_cost_usd"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_claude_tier_admission_unaffected_by_boundary_only_events(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-boundaryonly", name="Boundary Only", backend="claude-opus-4.6")
+  _write_session(session_mgr, meta, [
+      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  # No qualifying assistant event exists, so the claude tier does not admit --
+  # falls through to the no-source tier (context fields None).
+  assert usage is not None
+  assert usage["context_tokens"] is None
+  assert usage["context_full"] is None
+  assert usage["context_compact_at"] is None
+  assert usage["model"] == ""
+
+
+# ---------------------------------------------------------------------------
 # Acceptance test 2: context_full from assistant model, not dict order
 # ---------------------------------------------------------------------------
 

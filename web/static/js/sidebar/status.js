@@ -42,9 +42,12 @@ function refreshTuiDots() {
   document.querySelectorAll('.tui-status-dot[data-session-id]').forEach(dot => {
     const id = dot.dataset.sessionId;
     const status = globalThis.TuiStatusMap[id] || {running: false, busy: false};
-    dot.classList.toggle('running', !!status.running);
-    dot.classList.toggle('busy', !!status.running && !!status.busy);
-    dot.title = !status.running ? 'Claude stopped' : (status.busy ? 'Claude busy' : 'Claude idle');
+    const running = !!status.running;
+    const busy = running && !!status.busy;
+    if (dot.classList.contains('running') !== running) dot.classList.toggle('running', running);
+    if (dot.classList.contains('busy') !== busy) dot.classList.toggle('busy', busy);
+    const title = !running ? 'Claude stopped' : (busy ? 'Claude busy' : 'Claude idle');
+    if (dot.title !== title) dot.title = title;
   });
   updateBackendHeaderControls(globalThis.ACTIVE_BACKEND_TYPE || '', SESSION_ID);
 }

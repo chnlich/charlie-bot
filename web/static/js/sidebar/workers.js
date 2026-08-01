@@ -328,7 +328,8 @@ function updateTriggerStatus(triggerId, status) {
 
   const iconColor = status === 'pending' ? 'text-amber-400'
     : status === 'fired' ? 'text-green-400' : 'text-slate-500';
-  icon.className = 'w-4 h-4 flex-shrink-0 ' + iconColor;
+  const iconClassName = 'w-4 h-4 flex-shrink-0 ' + iconColor;
+  if (icon.className !== iconClassName) icon.className = iconClassName;
 
   if (card) {
     card.className = 'bg-slate-800 rounded-xl border overflow-hidden '

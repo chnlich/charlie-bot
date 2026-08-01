@@ -27,6 +27,7 @@ from src.cli import common
 from src.cli import improve as improve_module
 from src.cli import plan as plan_module
 from src.cli import schedule_trigger as schedule_trigger_module
+from src.cli.plan import _PLAN_REMINDER
 from src.core.config import CharlieBotConfig
 
 
@@ -469,7 +470,7 @@ def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
     plan_module.main(["present", "--session", "sess-plan", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
 
     out = json.loads(capsys.readouterr().out)
-    assert out == {"plan": 7, "v": 1, "state": "open"}
+    assert out == {"plan": 7, "v": 1, "state": "open", "reminder": _PLAN_REMINDER}
   finally:
     stub.close()
 

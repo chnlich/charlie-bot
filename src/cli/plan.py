@@ -20,6 +20,11 @@ from typing import Sequence
 
 from src.cli.common import get_api, post_internal_api, resolve_session_id
 
+_PLAN_REMINDER = (
+    "A read-only verify delegation runs, and its adequacy findings are reported alongside "
+    "the plan, before the plan reaches the user. The full lifecycle contract is the "
+    "plan-approval skill.")
+
 
 def _same_file(a: str | None, b: str | None) -> bool:
   """Path-string comparison tolerant of normalization (./ prefixes, duplicate slashes)."""
@@ -158,6 +163,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         payload,
         readback=lambda: _readback_plan(session_id, args.verb, args),
     )
+    if args.verb in ("present", "amend"):
+      result.setdefault("reminder", _PLAN_REMINDER)
   print(json.dumps(result, indent=2))
 
 

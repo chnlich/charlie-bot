@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.cli.plan import main
+from src.cli.plan import _PLAN_REMINDER, main
 
 
 def _setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
@@ -70,7 +70,8 @@ def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
   assert payload["base_sha"] == "s"
 
 
-def test_plan_amend_posts_with_default_trigger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_amend_posts_with_default_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = _mock_response({"plan": 1, "v": 2, "state": "awaiting approval"})
   with patch("sys.argv", [
@@ -87,6 +88,9 @@ def test_plan_amend_posts_with_default_trigger(tmp_path: Path, monkeypatch: pyte
   assert "verify_thread" not in payload
   assert payload["plan_id"] is None
   assert payload["trigger"] == "feedback"
+
+  out = capsys.readouterr().out
+  assert json.loads(out)["reminder"] == _PLAN_REMINDER
 
 
 def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,7 +111,8 @@ def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.
   assert payload["trigger"] == "auto_amend"
 
 
-def test_plan_approve_posts_plan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_approve_posts_plan_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = _mock_response({"plan": 1, "v": 1, "state": "approved"})
   with patch("sys.argv", ["plan", "approve", "--plan", "1"]), \
@@ -117,6 +122,9 @@ def test_plan_approve_posts_plan_id(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload == {"session_id": "abc", "plan_id": 1}
+
+  out = capsys.readouterr().out
+  assert "reminder" not in json.loads(out)
 
 
 def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,7 +143,8 @@ def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
   assert payload == {"session_id": "abc", "plan_id": 1, "close_as": "superseded"}
 
 
-def test_plan_list_uses_get_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_list_uses_get_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = _mock_response({"plans": []})
   with patch("sys.argv", ["plan", "list"]), \
@@ -144,6 +153,9 @@ def test_plan_list_uses_get_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyP
     main()
 
   assert get_mock.call_args.args[0].endswith("/api/sessions/abc/plans")
+
+  out = capsys.readouterr().out
+  assert "reminder" not in json.loads(out)
 
 
 def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
@@ -188,7 +200,7 @@ def test_plan_present_stdout_json(
 
   out = capsys.readouterr().out
   parsed = json.loads(out)
-  assert parsed == {"plan": 1, "v": 1, "state": "awaiting approval"}
+  assert parsed == {"plan": 1, "v": 1, "state": "awaiting approval", "reminder": _PLAN_REMINDER}
 
 
 def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(

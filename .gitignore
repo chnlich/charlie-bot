@@ -13,6 +13,7 @@ env/
 .python-version
 
 # Frontend
+node_modules/
 web/node_modules/
 
 # Environment & secrets

@@ -12,6 +12,8 @@ import pytest
 
 from src.core import review, spawner
 from src.core.git import BaseResolution
+
+from conftest import JudgmentShim
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 
@@ -80,7 +82,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
 
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
       del session_id, thread_id
@@ -93,6 +95,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
         status: Any,
         pid: Optional[int] = None,
         exit_code: Optional[int] = None,
+        completed_at: Any = None,
     ) -> None:
       captures["status"] = status
       captures["exit_code"] = exit_code
@@ -228,7 +231,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
   )
   captures: dict[str, Any] = {}
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> SessionMetadata:
       return SessionMetadata(id=session_id, name="Bench Session")
@@ -236,7 +239,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures.setdefault("broadcasts", []).append(event)
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
@@ -254,6 +257,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
         status: Any,
         pid: Optional[int] = None,
         exit_code: Optional[int] = None,
+        completed_at: Any = None,
     ) -> None:
       captures["status"] = status
 

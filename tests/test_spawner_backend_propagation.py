@@ -8,6 +8,8 @@ from src.core.config import CharlieBotConfig
 from src.core.git import BaseResolution
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
 
+from conftest import JudgmentShim
+
 
 def _build_cfg() -> CharlieBotConfig:
   return CharlieBotConfig(
@@ -198,12 +200,12 @@ async def test_worker_start_summary_is_locator_without_task_description(monkeypa
     async def terminate(self) -> None:
       return None
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
       captured["saved_thread"] = meta
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captured["session_id"] = session_id
@@ -243,13 +245,13 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
   )
   captured: dict[str, Any] = {}
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
       del session_id, thread_id
       return thread
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> SessionMetadata:
       return SessionMetadata(id=session_id, name="Test")
@@ -294,7 +296,7 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
 async def test_resolve_requested_subagent_backend_model_uses_requested_backend() -> None:
   cfg = _build_cfg()
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> SessionMetadata:
       assert session_id == "session-id"
@@ -311,7 +313,7 @@ async def test_resolve_requested_subagent_backend_model_uses_requested_backend()
 async def test_resolve_requested_subagent_backend_model_defaults_to_session_backend() -> None:
   cfg = _build_cfg()
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> SessionMetadata:
       assert session_id == "session-id"
@@ -333,7 +335,7 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
       ],
   )
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> SessionMetadata:
       assert session_id == "session-id"
@@ -364,7 +366,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   )
   captures: dict[str, Any] = {}
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> Any:
       return SessionMetadata(id=session_id, name="Test Session")
@@ -375,7 +377,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures["broadcast_event"] = event
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
@@ -393,6 +395,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
         status: Any,
         pid: Optional[int] = None,
         exit_code: Optional[int] = None,
+        completed_at: Any = None,
     ) -> None:
       captures["status"] = status
       captures["exit_code"] = exit_code
@@ -494,7 +497,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
       del session_id, thread_id
@@ -507,6 +510,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
         status: Any,
         pid: Optional[int] = None,
         exit_code: Optional[int] = None,
+        completed_at: Any = None,
     ) -> None:
       captures["status"] = status
       captures["exit_code"] = exit_code
@@ -552,12 +556,12 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
   repo_path.mkdir()
   worktree_path.mkdir(parents=True)
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def create_thread(
         self,
@@ -642,12 +646,12 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
   repo_path.mkdir()
   worktree_path.mkdir(parents=True)
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def create_thread(
         self,
@@ -714,7 +718,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
       captures["saved_thread"] = meta
@@ -776,7 +780,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
       captures["saved_thread"] = meta
@@ -838,7 +842,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
       captures["saved_thread"] = meta
@@ -948,7 +952,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
   )
   captures: dict[str, Any] = {}
 
-  class FakeSessionManager:
+  class FakeSessionManager(JudgmentShim):
 
     async def get_session(self, session_id: str) -> Any:
       return SessionMetadata(id=session_id, name="Test Session")
@@ -959,7 +963,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures["broadcast_event"] = event
 
-  class FakeThreadManager:
+  class FakeThreadManager(JudgmentShim):
 
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread
@@ -977,6 +981,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
         status: Any,
         pid: Optional[int] = None,
         exit_code: Optional[int] = None,
+        completed_at: Any = None,
     ) -> None:
       captures["status"] = status
       captures["exit_code"] = exit_code

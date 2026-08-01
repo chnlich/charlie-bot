@@ -8,6 +8,7 @@ from typing import Optional
 import structlog
 
 from src.core import event_types as ET
+from src.core import finalize_effects
 from src.core.config import CharlieBotConfig
 from src.core.git import git_current_branch, git_worktree_dir_name, git_worktree_prune, git_worktree_remove
 from src.core.master_trigger import trigger_master
@@ -19,6 +20,29 @@ from src.core.threads import ThreadManager
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
+
+
+async def _trigger_master_judged(
+    session_id: str,
+    summary: str,
+    thread_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+) -> None:
+  """trigger_master behind the wake idempotency judgment.
+
+  A rerun of the finalize chain (startup reconcile completing a crashed
+  finalize) must not wake the master twice for the same worker summary. The
+  judgment is effect-keyed: any master output event AFTER this thread's last
+  terminal summary means "woke" — a hard kill between summary persist and the
+  trigger call therefore still wakes (summary alone is not the key), and a
+  rerun after a successful wake skips.
+  """
+  chat_events = session_mgr.load_chat_events_sync(session_id)
+  if finalize_effects.master_woke_after_summary(chat_events, thread_id):
+    log.info("master_wake_skip_already_woke", session=session_id, thread=thread_id)
+    return
+  await trigger_master(session_id, summary, cfg, session_mgr)
 
 
 async def finalize_review_chain(
@@ -361,12 +385,32 @@ async def spawn_review_worker(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     tried_backends: Optional[list[str]] = None,
+    exclude_thread_id: Optional[str] = None,
 ) -> bool:
   """Spawn a review worker for a completed worker's branch.
 
-  Returns True if a reviewer was spawned, False if all backends are exhausted.
+  Returns True if a reviewer now exists (spawned here or already present),
+  False if all backends are exhausted.
+
+  ``exclude_thread_id`` names the thread whose finalize is running: on the
+  failed-reviewer retry path the failed reviewer itself matches the
+  reviewer-exists judgment and must not block its own replacement.
   """
   from src.core.spawner import _short_desc, spawn_worker
+
+  # Idempotency judgment: never derive a second reviewer for the same original
+  # thread, so the merge happens exactly once (the reviewer pushes; the server
+  # only removes the worktree, so no merge-side dedupe key is needed).
+  session_threads = await thread_mgr.list_threads(session_id)
+  if finalize_effects.reviewer_thread_exists(
+      session_threads, original_thread.id, exclude_thread_id=exclude_thread_id):
+    log.info(
+        "reviewer_skip_already_exists",
+        session=session_id,
+        original_thread=original_thread.id,
+        exclude=exclude_thread_id,
+    )
+    return True
 
   ctx = await _resolve_review_spawn_context(original_thread, cfg, session_id, tried_backends)
   if ctx is None:
@@ -437,6 +481,7 @@ async def _retry_failed_reviewer(
       session_mgr,
       thread_mgr,
       tried_backends=list(thread_meta.tried_backends),
+      exclude_thread_id=thread_meta.id,
   )
   if retried:
     log.info(
@@ -477,10 +522,11 @@ async def maybe_spawn_reviewer(
   if exit_code == 0 and not thread_meta.review_of:
     if not thread_meta.require_review:
       # No review needed — trigger master directly
-      await trigger_master(session_id, full_summary, cfg, session_mgr)
+      await _trigger_master_judged(session_id, full_summary, thread_meta.id, cfg, session_mgr)
       return
     # Successful worker needing review -> spawn reviewer
-    await spawn_review_worker(session_id, thread_meta, cfg, session_mgr, thread_mgr)
+    await spawn_review_worker(
+        session_id, thread_meta, cfg, session_mgr, thread_mgr, exclude_thread_id=thread_meta.id)
     return
 
   if thread_meta.review_of:
@@ -494,7 +540,7 @@ async def maybe_spawn_reviewer(
     # Review done (success or retries exhausted) -> combine summaries, trigger master.
     original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
-    await trigger_master(session_id, combined, cfg, session_mgr)
+    await _trigger_master_judged(session_id, combined, thread_meta.id, cfg, session_mgr)
     if exit_code == 0 and original_thread:
       cleanup_error = await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
       if cleanup_error:
@@ -502,4 +548,4 @@ async def maybe_spawn_reviewer(
     return
 
   # Failed/cancelled worker -> trigger master immediately
-  await trigger_master(session_id, full_summary, cfg, session_mgr)
+  await _trigger_master_judged(session_id, full_summary, thread_meta.id, cfg, session_mgr)

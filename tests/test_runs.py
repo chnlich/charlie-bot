@@ -72,6 +72,30 @@ def test_is_run_alive_requires_full_identity() -> None:
     runs.is_run_alive(pid, pid_start, datetime(2026, 1, 1), HOST_BOOT)
 
 
+def test_is_run_alive_never_consults_the_raw_log_or_fds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Liveness is a pure (pid, pid_start, started_at, host_boot) judgment: it must not
+  regress into an fd/raw-log test. A deleted or replaced raw log must not change the
+  verdict, and scan_stdout_holders (fd scan) must never be called to reach it."""
+  pid = os.getpid()
+  pid_start, _ = runs.read_pid_stat(pid)  # type: ignore[misc]
+
+  def boom() -> None:
+    raise AssertionError("is_run_alive must not consult fd holders")
+
+  monkeypatch.setattr(runs, "scan_stdout_holders", boom)
+
+  raw = runs.raw_log_path(tmp_path)
+  raw.parent.mkdir(parents=True)
+  raw.write_text(ASSISTANT_LINE + "\n", encoding="utf-8")
+  assert runs.is_run_alive(pid, pid_start, NOW, HOST_BOOT) is True
+
+  raw.unlink()
+  assert runs.is_run_alive(pid, pid_start, NOW, HOST_BOOT) is True  # deleted raw log
+
+  raw.write_text(RESULT_SUCCESS_LINE + "\n", encoding="utf-8")
+  assert runs.is_run_alive(pid, pid_start, NOW, HOST_BOOT) is True  # replaced raw log
+
+
 # ---------------------------------------------------------------------------
 # Raw -> event projection (pure)
 # ---------------------------------------------------------------------------

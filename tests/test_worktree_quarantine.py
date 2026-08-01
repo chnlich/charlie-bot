@@ -560,6 +560,78 @@ async def test_reconcile_pre_boot_run_without_raw_log_drains_failed_without_kill
   assert meta["exit_code"] == -1
 
 
+@pytest.mark.asyncio
+async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """STALLED (outcome row 4) at the init layer: a run whose recorded pid is alive but
+  whose raw log has been silent beyond NO_OUTPUT_REPORT_THRESHOLD is re-attached, never
+  killed, and produces a suspected-hang report on the session chat stream.
+  """
+  import json
+  import os
+  import subprocess
+  import time
+
+  from src.core import runs
+
+  cfg = _cfg(tmp_path)
+  boot_time = utc_now() + timedelta(hours=1)  # forces the fresh thread to be treated pre-boot
+
+  monkeypatch.setattr(runs, "NO_OUTPUT_REPORT_THRESHOLD", 1)
+  monkeypatch.setattr(init_module, "NO_OUTPUT_REPORT_THRESHOLD", 1)
+
+  killed: list[int] = []
+  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+
+  resume_calls: list[bool] = []
+
+  async def fake_resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, *, is_alive):
+    resume_calls.append(is_alive())
+
+  monkeypatch.setattr("src.core.spawner.resume_worker", fake_resume_worker)
+
+  proc = subprocess.Popen(["sleep", "30"])
+  try:
+    pid_start, _ = runs.read_pid_stat(proc.pid)  # type: ignore[misc]
+    meta_path = _write_thread_meta(
+        cfg, "s1", {
+            "id": "stalled",
+            "status": "running",
+            "pid": proc.pid,
+            "pid_start": pid_start,
+            "started_at": utc_now().isoformat(),
+        })
+    raw = meta_path.parent / "data" / runs.RAW_LOG_NAME
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(
+        '{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}}\n',
+        encoding="utf-8")
+    old_ts = time.time() - 5
+    os.utime(raw, (old_ts, old_ts))
+
+    recovered = await init_module.run_crash_recovery(cfg, boot_time)
+    await _await_recovery_tasks()
+
+    assert recovered == 1
+    assert resume_calls == [True]  # re-attached, following a genuinely alive process
+    assert killed == []  # never signaled
+    assert proc.poll() is None  # still alive after the reconcile returns
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["status"] == "running"  # STALLED is reported, never forced terminal
+
+    chat_path = cfg.sessions_dir / "s1" / "data" / "chat_events.jsonl"
+    chat_events = [json.loads(line) for line in chat_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    hang_reports = [
+        e for e in chat_events
+        if e.get("source") == "crash_recovery" and "Suspected hung" in e.get("content", "")
+    ]
+    assert len(hang_reports) == 1
+  finally:
+    proc.kill()
+    proc.wait()
+
+
 def test_scan_missing_started_at_falls_back_to_ctime(tmp_path: Path) -> None:
   """Without started_at, the thread dir ctime decides; an old dir (pre-boot) is interrupted."""
   cfg = _cfg(tmp_path)

@@ -29,7 +29,7 @@ async def _consume(backend: AgentBackend, cwd: Path) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_normal_completion_writes_stdout_log_no_diagnostics(tmp_path: Path) -> None:
+async def test_normal_completion_writes_raw_log_no_diagnostics(tmp_path: Path) -> None:
   """Subprocess emits NDJSON including a result event then exits cleanly."""
   log_dir = tmp_path / "logs"
   payload_lines = [
@@ -42,11 +42,11 @@ async def test_normal_completion_writes_stdout_log_no_diagnostics(tmp_path: Path
   backend = _ScriptedBackend(script, log_dir=log_dir)
   events = await _consume(backend, tmp_path)
 
-  stdout_log = log_dir / "stdout.log"
-  stderr_log = log_dir / "stderr.log"
-  assert stdout_log.exists()
+  raw_log = log_dir / "agent.raw.ndjson"
+  stderr_log = log_dir / "agent.stderr.log"
+  assert raw_log.exists()
   assert stderr_log.exists()
-  assert stdout_log.read_bytes() == ("\n".join(payload_lines) + "\n").encode("utf-8")
+  assert raw_log.read_bytes() == ("\n".join(payload_lines) + "\n").encode("utf-8")
   assert backend.exit_code == 0
   assert backend.hang_diagnostics is None
   assert not (log_dir / "hang_diagnostics.json").exists()
@@ -76,14 +76,14 @@ async def test_subprocess_hang_after_result_captures_diagnostics(
   assert "status" in diag and diag["status"]
   assert "fds" in diag
   assert "children" in diag
-  assert (log_dir / "stdout.log").read_bytes() == (result_line + "\n").encode("utf-8")
+  assert (log_dir / "agent.raw.ndjson").read_bytes() == (result_line + "\n").encode("utf-8")
   assert backend.exit_code != 0
   assert any(e.get("type") == "result" for e in events)
 
 
 @pytest.mark.asyncio
 async def test_stderr_streams_live(tmp_path: Path) -> None:
-  """Subprocess writes to stderr periodically — stderr.log mtime advances during the run."""
+  """Subprocess writes to stderr periodically — agent.stderr.log mtime advances during the run."""
   log_dir = tmp_path / "logs"
   # Write 5 stderr lines spaced 0.1s apart, then exit. Total ~0.5s.
   script = (
@@ -95,7 +95,7 @@ async def test_stderr_streams_live(tmp_path: Path) -> None:
   )
 
   backend = _ScriptedBackend(script, log_dir=log_dir)
-  stderr_log = log_dir / "stderr.log"
+  stderr_log = log_dir / "agent.stderr.log"
   mtimes: list[float] = []
 
   async def _poll_mtime() -> None:

@@ -1,4 +1,12 @@
-"""Abstract base class for agent subprocess backends with template-method run()."""
+"""Abstract base class for agent subprocess backends with template-method run().
+
+Restart-safe transport: the subprocess writes stdout straight to
+``<log_dir>/agent.raw.ndjson`` and stderr to ``<log_dir>/agent.stderr.log`` via
+inherited file descriptors, so the writer never depends on the server process
+as a reader. The read side is a tail-follow offset loop
+(:func:`tail_follow_events`), which is what lets a restarted server re-attach
+at the recorded cursor without the agent noticing anything.
+"""
 
 import asyncio
 import contextlib
@@ -18,12 +26,17 @@ import aiofiles
 import structlog
 
 from src.core import event_types as ET
+from src.core import runs
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024
+
+# Poll cadence of the tail-follow read loop. Event volume is low (median
+# inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
+_TAIL_POLL_INTERVAL = 0.15
 
 
 async def _capture_proc_diagnostics(pid: int) -> dict:
@@ -117,6 +130,163 @@ def make_tool_result_event(tool_name: str, content: str) -> dict:
   return {"type": ET.TOOL_RESULT, "tool_name": tool_name, "content": content}
 
 
+def _clamp_event_timestamp(translated: dict, mtime: float) -> None:
+  """Inject an event-time into a translated event that lacks one.
+
+  Approximation is intentional (approved trade-off): the read moment, clamped
+  to the raw file's current mtime, so every injected timestamp precedes the
+  run's completion time (the raw file's FINAL mtime) no matter how long the
+  server was down in between.
+  """
+  if translated.get("timestamp"):
+    return
+  now = datetime.now(timezone.utc)
+  mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+  translated["timestamp"] = min(now, mtime_dt).isoformat()
+
+
+async def tail_follow_events(
+    raw_path: Path,
+    *,
+    translate: Callable[[dict], list[dict]],
+    is_alive: Callable[[], bool],
+    cursor: Optional[Path] = None,
+    start_offset: int = 0,
+    post_result_timeout: float,
+    poll_interval: float = _TAIL_POLL_INTERVAL,
+) -> AsyncIterator[dict]:
+  """Tail-follow a raw NDJSON log from *start_offset*, yielding translated events.
+
+  This is the single read loop for both the live path (spawned here) and the
+  re-attach path (a restarted server resuming from the persisted cursor).
+
+  Semantics:
+    - Reads at a byte offset with a poll cadence; a trailing partial line is
+      never processed — it is re-read once completed, or dropped when the
+      producer is gone (a torn final write replays as at most a duplicate).
+    - After each consumed line whose translated events were yielded (i.e. after
+      the caller processed them — a generator resumes post-consumption), the
+      *cursor* file advances, so a crash ordering never loses an event.
+    - A RESULT event does not end the loop; the producer may keep writing.
+      The loop ends when the producer is dead AND drained, or when the raw
+      file has not grown for *post_result_timeout* after the first RESULT
+      (pending tool calls suppress that clock exactly like the live loop did).
+    - ``is_alive()`` is the producer-liveness source: the asyncio process
+      handle on the live path, the (pid, pid_start) identity pair after
+      re-attach. A producer that closed stdout or had its raw file replaced
+      still counts as alive — liveness never reads the fd.
+  """
+  while not raw_path.exists():
+    # The raw file is created by the spawner before the subprocess starts, so
+    # a missing file here means "never spawned"; once the producer is gone
+    # there is nothing to follow.
+    if not is_alive():
+      return
+    await asyncio.sleep(poll_interval)
+
+  offset = start_offset
+  saw_result = False
+  last_growth = time.monotonic()
+  pending_tool_calls: set[str] = set()
+
+  with open(raw_path, "rb") as f:
+    f.seek(offset)
+    buf = b""
+    while True:
+      chunk = f.read(65536)
+      if chunk:
+        last_growth = time.monotonic()
+        buf += chunk
+        lines = buf.split(b"\n")
+        buf = lines.pop()  # trailing partial line; re-read once completed
+        for raw_line in lines:
+          offset += len(raw_line) + 1
+          line = raw_line.decode("utf-8", errors="replace").strip()
+          if not line:
+            continue
+          try:
+            event = json.loads(line)
+          except json.JSONDecodeError as e:
+            log.debug("backend_line_not_json", error=str(e))
+            continue
+          mtime = os.fstat(f.fileno()).st_mtime
+          for translated in translate(event):
+            evt_type = translated.get("type")
+
+            # Track pending tool calls — wrapped format (OpenCode/GLM-5):
+            # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
+            if evt_type == ET.ASSISTANT:
+              for item in translated.get("message", {}).get("content", []):
+                if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
+                  tool_id = item.get("id", "")
+                  if tool_id:
+                    pending_tool_calls.add(tool_id)
+
+            # Track pending tool calls — flat format (Codex/Gemini):
+            # {type: 'tool_use', id: '...', name: '...'}
+            if evt_type == ET.TOOL_USE:
+              tool_id = translated.get("id", "")
+              if tool_id:
+                pending_tool_calls.add(tool_id)
+
+            # Clear pending tool calls on tool_result events — flat format.
+            if evt_type == ET.TOOL_RESULT:
+              tool_use_id = translated.get("tool_use_id", "")
+              if tool_use_id:
+                pending_tool_calls.discard(tool_use_id)
+
+            # Clear pending tool calls — wrapped format (Claude Code):
+            # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
+            if evt_type == ET.USER:
+              for item in translated.get("message", {}).get("content", []):
+                if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
+                  tool_use_id = item.get("tool_use_id", "")
+                  if tool_use_id:
+                    pending_tool_calls.discard(tool_use_id)
+
+            _clamp_event_timestamp(translated, mtime)
+            yield translated
+
+            if not saw_result and evt_type == ET.RESULT:
+              if pending_tool_calls:
+                log.debug(
+                    "backend_result_suppressed_pending_tools",
+                    pending=len(pending_tool_calls),
+                    tool_ids=list(pending_tool_calls),
+                )
+              else:
+                saw_result = True
+                last_growth = time.monotonic()
+          if cursor is not None:
+            runs.write_raw_cursor(cursor, offset)
+        continue
+
+      if saw_result and time.monotonic() - last_growth > post_result_timeout:
+        log.warning("backend_post_result_timeout", timeout=post_result_timeout)
+        break
+      if not is_alive():
+        break  # producer gone and fully drained
+      await asyncio.sleep(poll_interval)
+
+    if buf.strip():
+      # Torn final write (producer killed mid-line). Dropping it makes a
+      # restart replay the run's tail as at most a duplicate — never a loss.
+      log.warning("raw_trailing_torn_line_dropped", bytes=len(buf))
+
+
+def _read_stderr_tail(stderr_path: Path) -> str:
+  """Last 64 KB of the stderr log, decoded; '' when the file is missing."""
+  try:
+    size = stderr_path.stat().st_size
+  except OSError:
+    return ""
+  with open(stderr_path, "rb") as f:
+    if size > _STDERR_TAIL_BYTES:
+      f.seek(-_STDERR_TAIL_BYTES, os.SEEK_END)
+    data = f.read()
+  return data.decode("utf-8", errors="replace").strip()
+
+
 class AgentBackend(ABC):
   """Abstract interface for running a Claude agent subprocess.
 
@@ -164,6 +334,9 @@ class AgentBackend(ABC):
     self._stderr_tail = bytearray()
     self.exit_code: int = -1
     self.stderr_text: str = ""
+    # /proc/<pid>/stat field 22 captured right after spawn; Worker persists it
+    # as ThreadMetadata.pid_start via the on_spawn callback.
+    self.pid_start: Optional[str] = None
     # Set when terminate() is called — deliberate user stop or shutdown.
     self.terminated: bool = False
     self.hang_diagnostics: Optional[dict] = None
@@ -218,7 +391,8 @@ class AgentBackend(ABC):
     """Spawn the agent subprocess and yield parsed NDJSON event dicts.
 
     Template method: calls _build_command() -> _prepare_env() -> subprocess
-    spawn -> NDJSON read loop -> translate_event() -> drain stderr.
+    spawn with stdout/stderr redirected to the raw log files -> tail-follow
+    read loop -> translate_event() -> wait for exit.
 
     After the generator is fully consumed, ``exit_code`` and ``stderr_text``
     are populated.
@@ -228,117 +402,67 @@ class AgentBackend(ABC):
     stdin_prompt = self._stdin_prompt(prompt)
     final_env = self._prepare_env(env)
 
-    self._proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=cwd,
-        stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=final_env,
-        limit=self._buffer_limit,
-        start_new_session=True,
-    )
+    # The raw log files are the run's transport. When the caller gave no log
+    # dir (one-shot use), use a throwaway dir so every covered backend shares
+    # exactly one transport.
+    temp_log_dir: Optional[Path] = None
+    if self._log_dir is not None:
+      log_dir = self._log_dir
+    else:
+      temp_log_dir = Path(tempfile.mkdtemp(prefix="charliebot-run-"))
+      log_dir = temp_log_dir
+    log_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = log_dir / runs.RAW_LOG_NAME
+    stderr_path = log_dir / runs.STDERR_LOG_NAME
+
+    # Open as real FDs and hand them to the child: after spawn the writer
+    # needs no reader, so the run survives this process dying.
+    raw_fd = os.open(raw_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+      stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    except Exception:
+      os.close(raw_fd)
+      raise
+    try:
+      self._proc = await asyncio.create_subprocess_exec(
+          *cmd,
+          cwd=cwd,
+          stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
+          stdout=raw_fd,
+          stderr=stderr_fd,
+          env=final_env,
+          start_new_session=True,
+      )
+    finally:
+      # The child holds its own copies of both fds.
+      os.close(raw_fd)
+      os.close(stderr_fd)
+
+    # Pin the process identity BEFORE on_spawn so the callback can persist
+    # (pid, pid_start) together; a proc that exited before we could read its
+    # stat simply yields None and can never be judged alive later.
+    stat_pair = runs.read_pid_stat(self._proc.pid)
+    self.pid_start = stat_pair[0] if stat_pair else None
+
     if stdin_prompt is not None:
       self._stdin_task = asyncio.create_task(self._write_stdin_prompt(stdin_prompt))
     if self._on_spawn is not None:
       await self._on_spawn(self._proc.pid)
 
-    assert self._proc.stdout is not None
-    _saw_result = False
-    _result_time: float = 0.0
-    _POST_RESULT_TIMEOUT = self._POST_RESULT_TIMEOUT
-    _CLEANUP_TIMEOUT = self._CLEANUP_TIMEOUT
-    _pending_tool_calls: set[str] = set()
-
-    if self._log_dir is not None:
-      self._log_dir.mkdir(parents=True, exist_ok=True)
-      stdout_log_cm = aiofiles.open(self._log_dir / "stdout.log", "wb")
-      stderr_log_path: Optional[Path] = self._log_dir / "stderr.log"
-    else:
-      stdout_log_cm = contextlib.nullcontext(None)
-      stderr_log_path = None
-
-    self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
-
-    async with stdout_log_cm as stdout_log:
-      while True:
-        if _saw_result:
-          remaining = _POST_RESULT_TIMEOUT - (time.monotonic() - _result_time)
-          if remaining <= 0:
-            log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
-            break
-          try:
-            raw_line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=remaining)
-          except asyncio.TimeoutError:
-            log.warning("backend_post_result_timeout", pid=self._proc.pid, timeout=_POST_RESULT_TIMEOUT)
-            break
-        else:
-          raw_line = await self._proc.stdout.readline()
-
-        if not raw_line:
-          break
-
-        if stdout_log is not None:
-          await stdout_log.write(raw_line)
-          await stdout_log.flush()
-
-        line = raw_line.decode("utf-8", errors="replace").strip()
-        if not line:
-          continue
-        try:
-          event = json.loads(line)
-        except json.JSONDecodeError as e:
-          log.debug("backend_line_not_json", error=str(e))
-          continue
-
-        for translated in self.translate_event(event):
-          evt_type = translated.get("type")
-
-          # Track pending tool calls — wrapped format (OpenCode/GLM-5):
-          # {type: 'assistant', message: {content: [{type: 'tool_use', id: '...'}]}}
-          if evt_type == ET.ASSISTANT:
-            for item in translated.get("message", {}).get("content", []):
-              if isinstance(item, dict) and item.get("type") == ET.TOOL_USE:
-                tool_id = item.get("id", "")
-                if tool_id:
-                  _pending_tool_calls.add(tool_id)
-
-          # Track pending tool calls — flat format (Codex/Gemini):
-          # {type: 'tool_use', id: '...', name: '...'}
-          if evt_type == ET.TOOL_USE:
-            tool_id = translated.get("id", "")
-            if tool_id:
-              _pending_tool_calls.add(tool_id)
-
-          # Clear pending tool calls on tool_result events — flat format.
-          if evt_type == ET.TOOL_RESULT:
-            tool_use_id = translated.get("tool_use_id", "")
-            if tool_use_id:
-              _pending_tool_calls.discard(tool_use_id)
-
-          # Clear pending tool calls — wrapped format (Claude Code):
-          # {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: '...'}]}}
-          if evt_type == ET.USER:
-            for item in translated.get("message", {}).get("content", []):
-              if isinstance(item, dict) and item.get("type") == ET.TOOL_RESULT:
-                tool_use_id = item.get("tool_use_id", "")
-                if tool_use_id:
-                  _pending_tool_calls.discard(tool_use_id)
-
-          yield translated
-
-          if not _saw_result and evt_type == ET.RESULT:
-            if _pending_tool_calls:
-              log.debug(
-                  "backend_result_suppressed_pending_tools",
-                  pending=len(_pending_tool_calls),
-                  tool_ids=list(_pending_tool_calls),
-              )
-            else:
-              _saw_result = True
-              _result_time = time.monotonic()
-
-    await self._drain_and_cleanup(_CLEANUP_TIMEOUT)
+    try:
+      async for event in tail_follow_events(
+          raw_path,
+          translate=self.translate_event,
+          is_alive=lambda: self._proc is not None and self._proc.returncode is None,
+          cursor=log_dir / runs.CURSOR_NAME,
+          start_offset=0,
+          post_result_timeout=self._POST_RESULT_TIMEOUT,
+      ):
+        yield event
+      await self._wait_for_exit_and_cleanup(self._CLEANUP_TIMEOUT, stderr_path)
+    finally:
+      if temp_log_dir is not None:
+        shutil.rmtree(temp_log_dir, ignore_errors=True)
 
   async def _write_stdin_prompt(self, prompt: str) -> None:
     """Write prompt to subprocess stdin while stdout is being drained."""
@@ -390,25 +514,57 @@ class AgentBackend(ABC):
         if len(self._stderr_tail) > _STDERR_TAIL_BYTES:
           del self._stderr_tail[:len(self._stderr_tail) - _STDERR_TAIL_BYTES]
 
+  async def _finish_stdin_task(self, timeout: float) -> Exception | None:
+    """Flush the stdin-prompt writer; return its error (if any) for the caller to raise."""
+    if self._stdin_task is None:
+      return None
+    assert self._proc is not None
+    stdin_error: Exception | None = None
+    try:
+      await asyncio.wait_for(asyncio.shield(self._stdin_task), timeout=timeout)
+    except asyncio.TimeoutError as e:
+      stdin_error = e
+      log.warning("backend_stdin_write_timeout", pid=self._proc.pid, timeout=timeout)
+      self._stdin_task.cancel()
+      try:
+        await self._stdin_task
+      except asyncio.CancelledError:
+        log.debug("backend_stdin_write_cancelled", pid=self._proc.pid)
+      except Exception as cancel_error:
+        stdin_error = cancel_error
+    except Exception as e:
+      stdin_error = e
+    return stdin_error
+
+  async def _wait_for_exit_and_cleanup(self, timeout: float, stderr_path: Path) -> None:
+    """Raw-transport cleanup: finish stdin, wait for process exit, escalate on hang.
+
+    Companion to the tail-follow read loop: stdout/stderr are file-descriptor
+    redirected, so there is no stream reader to drain — the process may simply
+    outlive us, hence the diagnostics + SIGKILL escalation on a hang, and
+    ``stderr_text`` comes back from the stderr log file's tail.
+    """
+    assert self._proc is not None
+    stdin_error = await self._finish_stdin_task(timeout)
+    try:
+      await asyncio.wait_for(self._proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+      log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
+      self.hang_diagnostics = await _capture_proc_diagnostics(self._proc.pid)
+      await self._graceful_shutdown(
+          timeout,
+          timeout_log_event="backend_sigkill_after_result",
+          wait_even_if_sigterm_not_sent=True,
+      )
+    self.exit_code = self._proc.returncode or 0
+    self.stderr_text = _read_stderr_tail(stderr_path)
+    if stdin_error is not None:
+      raise stdin_error
+
   async def _drain_and_cleanup(self, timeout: float) -> None:
     """Wait for stderr-streamer + process exit; capture diagnostics + escalate to kill on hang."""
     assert self._proc is not None
-    stdin_error: Exception | None = None
-    if self._stdin_task is not None:
-      try:
-        await asyncio.wait_for(asyncio.shield(self._stdin_task), timeout=timeout)
-      except asyncio.TimeoutError as e:
-        stdin_error = e
-        log.warning("backend_stdin_write_timeout", pid=self._proc.pid, timeout=timeout)
-        self._stdin_task.cancel()
-        try:
-          await self._stdin_task
-        except asyncio.CancelledError:
-          log.debug("backend_stdin_write_cancelled", pid=self._proc.pid)
-        except Exception as cancel_error:
-          stdin_error = cancel_error
-      except Exception as e:
-        stdin_error = e
+    stdin_error = await self._finish_stdin_task(timeout)
     if self._stderr_task is not None:
       try:
         await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=timeout)

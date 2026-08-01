@@ -310,6 +310,10 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 
   from src.agents.backends.registry import build_backend
   option = item.backend_option
+  # A caller that passed no option must not silently inherit backend_options[0]:
+  # the session's own pin is the explicit choice and takes precedence.
+  if option is None and session_meta.backend:
+    option = cfg.get_backend_option(session_meta.backend)
   if option is None:
     if session_meta.backend and cfg.get_backend_option(session_meta.backend) is None:
       # The session pins a backend id config.yaml no longer defines. Substituting a

@@ -175,8 +175,6 @@ async def run_and_finalize(
   log.info("run_and_finalize_start", session=meta.id, backend=meta.backend)
   backend_id = meta.backend
   backend_option = cfg.get_backend_option(backend_id)
-  if backend_option is None and backend_id.startswith("codex"):
-    backend_option = next((o for o in cfg.backend_options if o.type == "codex"), None)
   try:
     await run_message(
         cfg,

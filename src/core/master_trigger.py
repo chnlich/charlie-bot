@@ -32,8 +32,6 @@ async def run_message_with_resume_recovery(
   """
   backend_id = session_meta.backend
   backend_option = cfg.get_backend_option(backend_id)
-  if backend_option is None and backend_id.startswith("codex"):
-    backend_option = next((o for o in cfg.backend_options if o.type == "codex"), None)
   try:
     return await run_message(
         cfg,

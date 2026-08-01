@@ -89,7 +89,7 @@ async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
   """
   cfg = _build_cfg()
   session_id = "session-1"
-  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="stale-id", backend="codex")
+  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="stale-id", backend="codex-o3")
   session_mgr = FakeSessionManager(meta)
   call_resume_ids: list[Optional[str]] = []
   call_backend_options: list[BackendOption] = []
@@ -129,7 +129,7 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
   """Non-resume failures should not retry and should remain hard failures."""
   cfg = _build_cfg()
   session_id = "session-2"
-  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex")
+  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex-o3")
   session_mgr = FakeSessionManager(meta)
   call_count = 0
   call_backend_options: list[BackendOption] = []
@@ -159,7 +159,7 @@ async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -
   """Successful run with valid resume ID should stay single-attempt."""
   cfg = _build_cfg()
   session_id = "session-3"
-  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex")
+  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex-o3")
   session_mgr = FakeSessionManager(meta)
   call_resume_ids: list[Optional[str]] = []
   call_backend_options: list[BackendOption] = []

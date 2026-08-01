@@ -20,7 +20,13 @@ completes.
 import argparse
 import json
 
-from src.cli.common import find_local_thread, post_internal_api, read_required_text_file, resolve_session_id, validate_repo_path
+from src.cli.common import (
+    find_local_thread,
+    post_internal_api,
+    read_required_text_file,
+    resolve_session_id,
+    validate_repo_path,
+)
 from src.core.config import get_config
 
 

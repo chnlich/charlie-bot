@@ -408,6 +408,61 @@ async def _await_recovery_tasks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_maybe_respawn_verify_task_cross_models_backend_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A never-started VERIFY delegation with no explicit --backend must still resolve
+  cross-model via model_preference on respawn (mirrors _authorize_spawn_request's VERIFY
+  branch in api/internal.py) — not silently fall back to the session's own backend, which
+  would defeat verify's "checked by a different model" invariant.
+  """
+  from src.core import spawner as spawner_module
+  from src.core.models import BackendOption, SessionMetadata, TaskType
+
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          BackendOption(id="session-backend", label="S", type="cc-claude", model="s-model"),
+          BackendOption(id="other-backend", label="O", type="cc-claude", model="o-model"),
+      ],
+      model_preference=["other-backend"],
+  )
+
+  class FakeSessionManager:
+
+    async def get_session(self, session_id: str) -> SessionMetadata:
+      return SessionMetadata(id=session_id, name="s", backend="session-backend")
+
+  captured: dict[str, Any] = {}
+
+  async def fake_spawn_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, request=None):
+    captured["request"] = request
+
+  monkeypatch.setattr(spawner_module, "spawn_worker", fake_spawn_worker)
+
+  meta = {"id": "t1", "session_id": "s1", "description": "verify task", "status": "running", "pid": None}
+  item = init_module._InterruptedRun(session_id="s1", thread_dir=tmp_path / "thread", meta=meta)
+  chat_events = [
+      {
+          "type": "task_delegated",
+          "thread_id": "t1",
+          "delegate_invocation": {
+              "task_type": TaskType.VERIFY.value,
+              "backend": None,
+          },
+      },
+  ]
+
+  respawned = await init_module._maybe_respawn(
+      cfg, FakeSessionManager(), thread_mgr=None, spawner=spawner_module, item=item, chat_events=chat_events)
+  await _await_recovery_tasks()
+
+  assert respawned is True
+  assert captured["request"].resolved_backend == "other-backend"
+  assert captured["request"].resolved_model == "o-model"
+
+
+@pytest.mark.asyncio
 async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A never-started pre-boot thread drain-finalizes to failed; the aged failed worktree is swept."""
   import json

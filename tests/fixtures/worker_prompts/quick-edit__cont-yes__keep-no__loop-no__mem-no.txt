@@ -34,6 +34,7 @@ STOP here. Do NOT rebase, push, or remove the worktree. No reviewer will run; th
 ## Task Spec Source Files
 - If the task text below is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.
 - If the task spec and source files conflict, stop and report the conflict instead of inventing a merged requirement.
+- Source Files entries are read-only references into the base checkout. Make every edit inside your assigned worktree via repo-relative paths; writing to any path outside your worktree is forbidden.
 
 ## Task
 ## Goal

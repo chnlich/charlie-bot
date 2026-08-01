@@ -17,6 +17,7 @@ import json
 import sys
 
 from src.cli.common import (
+    find_local_thread,
     post_internal_api,
     read_required_text_file,
     resolve_session_id,
@@ -153,7 +154,15 @@ def main() -> None:
   if reviewer_context is not None:
     payload["context"] = reviewer_context
 
-  result = post_internal_api("/api/internal/delegate", payload)
+  def _readback() -> dict | None:
+    # Sent-but-lost: this delegation's own thread is the proof the effect
+    # landed. Matches the endpoint's response shape exactly.
+    thread = find_local_thread(session_id, description=task_spec, task_type=args.task_type)
+    if thread is None:
+      return None
+    return {"thread_id": thread["id"], "description": thread["description"]}
+
+  result = post_internal_api("/api/internal/delegate", payload, readback=_readback)
   print("Worker spawned in the background; the completion summary arrives as an async wake-up.", file=sys.stderr)
   print(json.dumps(result, indent=2))
 

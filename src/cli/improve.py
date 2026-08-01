@@ -20,7 +20,8 @@ completes.
 import argparse
 import json
 
-from src.cli.common import post_internal_api, read_required_text_file, resolve_session_id, validate_repo_path
+from src.cli.common import find_local_thread, post_internal_api, read_required_text_file, resolve_session_id, validate_repo_path
+from src.core.config import get_config
 
 
 def _read_goal_file(goal_file: str) -> str:
@@ -97,7 +98,46 @@ def main() -> None:
   if args.backend is not None:
     payload["backend"] = args.backend
 
-  result = post_internal_api("/api/internal/improve", payload)
+  def _readback() -> dict | None:
+    # Sent-but-lost: the loop's live goal file plus an iteration-1 thread that
+    # embeds this goal together prove the launch landed. Returns the endpoint's
+    # response shape so steering output stays identical.
+    cfg = get_config()
+    loops_dir = cfg.sessions_dir / session_id / "loops"
+    if not loops_dir.is_dir():
+      return None
+    candidates = []
+    for loop_dir in loops_dir.iterdir():
+      if not loop_dir.name.isdigit():
+        continue
+      try:
+        if (loop_dir / "goal.md").read_text(encoding="utf-8") == goal:
+          candidates.append(int(loop_dir.name))
+      except OSError:
+        continue
+    if not candidates:
+      return None
+    thread = find_local_thread(
+        session_id,
+        description=f"Goal: {goal}",
+        task_type="implement",
+        description_match="contains",
+    )
+    if thread is None:
+      return None
+    loop_id = max(candidates)
+    response = {
+        "status": "started",
+        "session_id": session_id,
+        "iterations": args.iterations,
+        "loop_id": loop_id,
+        "goal_path": str(loops_dir / str(loop_id) / "goal.md"),
+    }
+    if plan is not None:
+      response["plan_path"] = str(loops_dir / str(loop_id) / "plan.md")
+    return response
+
+  result = post_internal_api("/api/internal/improve", payload, readback=_readback)
   print(json.dumps(result, indent=2))
 
 

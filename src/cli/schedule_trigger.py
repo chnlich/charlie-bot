@@ -28,14 +28,10 @@ freely in one trigger.
 
 import argparse
 import json
-import sys
 
-import requests
-
-from src.cli.common import internal_api_auth_headers, resolve_session_id
+from src.cli.common import post_internal_api, resolve_session_id
 from src.core.config import get_config
 from src.core.models import WatchKind
-from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT
 
 # Exit code returned when remote-PID verify-on-create rejects the trigger.
 EXIT_VERIFY_REJECTED = 2
@@ -111,6 +107,48 @@ def _build_parser() -> argparse.ArgumentParser:
   return parser
 
 
+def _target_matches(stored: dict, requested: dict) -> bool:
+  """A stored watch target equals a requested one (server stores model defaults)."""
+  if stored.get("kind") != requested.get("kind"):
+    return False
+  for key in ("pid", "job_id"):
+    if requested.get(key) is not None and stored.get(key) != requested.get(key):
+      return False
+  requested_host = requested.get("host")
+  if requested_host is not None and stored.get("host") != requested_host:
+    return False
+  if requested_host is None and stored.get("host") is not None:
+    return False
+  return True
+
+
+def _readback_trigger(session_id: str, message: str, watch_targets: list[dict] | None) -> dict | None:
+  """Sent-but-lost: a persisted trigger with the same message + watch targets.
+
+  The server generates the trigger id, so it cannot be predicted — matching the
+  call's own fields is the readback judgment.
+  """
+  triggers_dir = get_config().sessions_dir / session_id / "triggers"
+  if not triggers_dir.is_dir():
+    return None
+  requested = list(watch_targets or [])
+  for trigger_file in triggers_dir.glob("*.json"):
+    try:
+      stored = json.loads(trigger_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+      continue
+    if stored.get("message") != message:
+      continue
+    stored_targets = stored.get("watch_targets") or []
+    if len(stored_targets) != len(requested):
+      continue
+    if not all(any(_target_matches(st, rq) for st in stored_targets) for rq in requested):
+      continue
+    # Mirror the endpoint's response shape.
+    return {"trigger_id": stored["id"], "fire_at": stored["fire_at"]}
+  return None
+
+
 def main() -> None:
   parser = _build_parser()
   args = parser.parse_args()
@@ -126,36 +164,13 @@ def main() -> None:
   if watch_targets is not None:
     payload["watch_targets"] = watch_targets
 
-  cfg = get_config()
-  try:
-    resp = requests.post(
-        f"{cfg.server_base_url}/api/internal/schedule-trigger",
-        json=payload,
-        headers=internal_api_auth_headers(cfg),
-        timeout=HTTP_INTERNAL_API_TIMEOUT,
-        verify=False,
-    )
-  except requests.RequestException as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
-    sys.exit(1)
-
-  if resp.status_code == 422:
-    detail = _extract_detail(resp)
-    print(json.dumps({"error": detail}), file=sys.stderr)
-    sys.exit(EXIT_VERIFY_REJECTED)
-  if not resp.ok:
-    detail = _extract_detail(resp)
-    print(json.dumps({"error": detail}), file=sys.stderr)
-    sys.exit(1)
-
-  print(json.dumps(resp.json(), indent=2))
-
-
-def _extract_detail(resp: requests.Response) -> str:
-  try:
-    return resp.json()["detail"]
-  except (ValueError, KeyError):
-    return resp.text or f"HTTP {resp.status_code}"
+  result = post_internal_api(
+      "/api/internal/schedule-trigger",
+      payload,
+      readback=lambda: _readback_trigger(session_id, args.message, watch_targets),
+      rejection_exit_codes={422: EXIT_VERIFY_REJECTED},
+  )
+  print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

@@ -14,10 +14,65 @@ written to stderr as a JSON error with a non-zero exit code.
 
 import argparse
 import json
+import os.path
 import sys
 from typing import Sequence
 
 from src.cli.common import get_api, post_internal_api, resolve_session_id
+
+
+def _same_file(a: str | None, b: str | None) -> bool:
+  """Path-string comparison tolerant of normalization (./ prefixes, duplicate slashes)."""
+  if a is None or b is None:
+    return False
+  return os.path.normpath(a) == os.path.normpath(b)
+
+
+def _latest_version(plan: dict) -> dict:
+  return max(plan["versions"], key=lambda v: v["v"])
+
+
+def _readback_plan(session_id: str, verb: str, args: argparse.Namespace) -> dict | None:
+  """Sent-but-lost: compare the session's plan registry against this verb's intent.
+
+  Returns the verb's response shape on a definite match, else None (the caller
+  then reports outcome_unknown).
+  """
+  listing = get_api(f"/api/sessions/{session_id}/plans")
+  plans = listing.get("plans", [])
+
+  if verb == "present":
+    for plan in plans:
+      if plan.get("title") == args.title and any(_same_file(v.get("file"), args.file) for v in plan["versions"]):
+        return {"plan": plan["id"], "v": _latest_version(plan)["v"], "state": plan["state"]}
+    return None
+
+  if verb == "amend":
+    for plan in plans:
+      if args.plan is not None and plan.get("id") != args.plan:
+        continue
+      if _same_file(_latest_version(plan).get("file"), args.file):
+        return {"plan": plan["id"], "v": _latest_version(plan)["v"], "state": plan["state"]}
+    return None
+
+  if verb == "approve":
+    candidates = [
+        p for p in plans
+        if p.get("takeoff") is not None and p.get("closed") is None
+        and (args.plan is None or p.get("id") == args.plan)
+    ]
+    if len(candidates) == 1:
+      plan = candidates[0]
+      return {"plan": plan["id"], "v": _latest_version(plan)["v"], "state": plan["state"]}
+    return None
+
+  if verb == "close":
+    for plan in plans:
+      if plan.get("id") == args.plan and (plan.get("closed") or {}).get("as") == args.close_as:
+        return {"plan": plan["id"], "state": plan["state"]}
+    return None
+
+  return None
 
 
 def _build_base_args(parser: argparse.ArgumentParser) -> None:
@@ -98,7 +153,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     result = get_api(f"/api/sessions/{session_id}/plans")
   else:
     payload = _build_payload(args.verb, session_id, args)
-    result = post_internal_api(f"/api/internal/plan/{args.verb}", payload)
+    result = post_internal_api(
+        f"/api/internal/plan/{args.verb}",
+        payload,
+        readback=lambda: _readback_plan(session_id, args.verb, args),
+    )
   print(json.dumps(result, indent=2))
 
 

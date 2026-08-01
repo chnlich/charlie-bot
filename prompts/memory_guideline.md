@@ -56,7 +56,8 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 - **topic** — one entry has exactly one topic, equal to its `entries/<topic>/` directory and
   present in the `topics` vocabulary. Cross-topic content belongs in a resident topic
   (`workflow`, `rulings`). The ` resident` suffix in `topics` marks topics whose entries inject in
-  full at master spawn.
+  full at master spawn. Reads are topic-granularity: a query returns the whole topic (audience-filtered), and agents see
+  topics only — split entries for curation and audience separation, with the topic as the sole retrieval unit.
 - **audience** — comma list, each element in `master` | `worker`, at least one — who receives the
   entry's full body at spawn: master spawn gets master-audience entries in resident topics as
   full text, others as index lines; worker spawn gets worker-audience entries matching the repo

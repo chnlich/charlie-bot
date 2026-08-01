@@ -6,6 +6,13 @@ The store is a local git repo at ``cfg.memory_dir`` (``~/.charliebot/memory/``):
   topics                      # controlled vocabulary, one topic per line
   staging/                    # candidate files (.gitignore'd)
 
+Agent-facing read contract: the topic is the sole read unit. ``memory query
+--topic <topic>`` returns every entry of that topic admitted for the caller's
+audience, as one whole. The entry layer belongs to the store's internals: it
+separates request kinds — audience (master vs worker), scope, revision
+tracking — while agents see topics only. Whole-topic reads keep that
+separation sound, so every read surface keeps the topic as its unit.
+
 Entry grammar (format v2): line 1 is exactly ``---``; header lines each match
 ``^([a-z_]+): <value>$`` until the next line that is exactly ``---``; everything
 after is an opaque pure-markdown body with no first-line requirement. The v2
@@ -56,7 +63,9 @@ _SCOPES = frozenset({"user", "host"})
 _AUDIENCE_ELEMENTS = frozenset({"master", "worker"})
 
 # Header line prepended to the index lines by both spawn assemblers.
-INDEX_HEADER = "# Memory index — full text via `charliebot memory query --topic <topic>`"
+INDEX_HEADER = (
+    "# Memory index — full text via `charliebot memory query --topic <topic>` (topic = segment before \"/\", e.g. "
+    "`--topic integrations`)")
 
 
 class MemoryFormatError(Exception):

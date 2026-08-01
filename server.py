@@ -109,7 +109,7 @@ async def _run_crash_recovery(cfg, boot_time) -> None:
   """
   started = utc_now()
   try:
-    recovered = await run_crash_recovery(cfg, boot_time)
+    recovered = await run_crash_recovery(cfg, boot_time, get_session_manager(), get_thread_manager())
     elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
     log.info("crash_recovery_done", count=recovered, elapsed_ms=elapsed_ms)
   except Exception:

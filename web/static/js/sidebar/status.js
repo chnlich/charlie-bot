@@ -46,7 +46,7 @@ function refreshTuiDots() {
     dot.classList.toggle('busy', !!status.running && !!status.busy);
     dot.title = !status.running ? 'Claude stopped' : (status.busy ? 'Claude busy' : 'Claude idle');
   });
-  updateTuiHeaderControls(globalThis.ACTIVE_BACKEND_TYPE || '', SESSION_ID);
+  updateBackendHeaderControls(globalThis.ACTIVE_BACKEND_TYPE || '', SESSION_ID);
 }
 
 function startTuiStatusPolling() {
@@ -55,13 +55,26 @@ function startTuiStatusPolling() {
   tuiStatusPollInterval = setInterval(fetchTuiStatus, 3000);
 }
 
-function updateTuiHeaderControls(backendType, sessionId) {
+function compactButtonTitle(backendType) {
+  if (backendType === 'cc-claude') return '';
+  if (backendType === 'codex') return 'codex only compacts automatically — tune model_auto_compact_token_limit';
+  return 'Manual compaction is not supported on this backend';
+}
+
+function updateBackendHeaderControls(backendType, sessionId) {
   const stopBtn = document.getElementById('stop-tui-btn');
-  if (!stopBtn) return;
-  const isTui = backendType === 'tui-cli';
-  const stopped = isTui && globalThis.TuiStatusMap[sessionId]?.running === false;
-  stopBtn.classList.toggle('hidden', !isTui || stopped);
-  stopBtn.dataset.sessionId = isTui ? sessionId : '';
+  if (stopBtn) {
+    const isTui = backendType === 'tui-cli';
+    const stopped = isTui && globalThis.TuiStatusMap[sessionId]?.running === false;
+    stopBtn.classList.toggle('hidden', !isTui || stopped);
+    stopBtn.dataset.sessionId = isTui ? sessionId : '';
+  }
+
+  const compactBtn = document.getElementById('compact-btn');
+  if (compactBtn) {
+    compactBtn.disabled = backendType !== 'cc-claude';
+    compactBtn.title = compactButtonTitle(backendType);
+  }
 }
 
 function updateSidebarSessionName(sessionId, name) {
@@ -316,7 +329,7 @@ Object.assign(Sidebar, {
   fetchTuiStatus,
   refreshTuiDots,
   startTuiStatusPolling,
-  updateTuiHeaderControls,
+  updateBackendHeaderControls,
   updateSidebarSessionName,
   getSessionIndicatorState,
   pendingTriggerTitle,
@@ -346,7 +359,7 @@ Sidebar.expose([
   'fetchTuiStatus',
   'refreshTuiDots',
   'startTuiStatusPolling',
-  'updateTuiHeaderControls',
+  'updateBackendHeaderControls',
   'updateSidebarSessionName',
   'getSessionIndicatorState',
   'pendingTriggerTitle',

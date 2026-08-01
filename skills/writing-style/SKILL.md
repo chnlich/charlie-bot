@@ -19,6 +19,7 @@ Applies to all writing.
 - Prefer the full form over contractions.
 - Open with the purpose together with the problem it solves (these are one
   idea), then how it works, then where to find it and how to invoke it.
+- State rules at the category level: an instance list narrows the rule to its examples.
 
 ## Code
 

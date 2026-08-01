@@ -67,9 +67,6 @@ function buildContext(sessionId) {
     clearTimeout: () => {},
     hideStreaming: () => {},
     showStreaming: () => {},
-    renderedMessages: [],
-    compactOutcome: () => 'none',
-    appendCompactFailedNoticeIfMissing: () => {},
     appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
       messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles: uploadedFiles || []});
     },

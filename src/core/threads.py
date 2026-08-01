@@ -1,6 +1,7 @@
 """Thread management for CharlieBot Worker tasks."""
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -74,6 +75,7 @@ class ThreadManager:
       status: ThreadStatus,
       pid: Optional[int] = None,
       exit_code: Optional[int] = None,
+      completed_at: Optional[datetime] = None,
   ) -> None:
     meta = await self.get_thread(session_id, thread_id)
     if not meta:
@@ -86,7 +88,9 @@ class ThreadManager:
     if status == ThreadStatus.RUNNING and not meta.started_at:
       meta.started_at = utc_now()
     if status in (ThreadStatus.COMPLETED, ThreadStatus.FAILED, ThreadStatus.CANCELLED):
-      meta.completed_at = utc_now()
+      # An explicit completion time (e.g. the raw log's final mtime, which is
+      # independent of when finalization happens to run) wins over "now".
+      meta.completed_at = completed_at or utc_now()
     await self._save_metadata(meta)
 
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:

@@ -52,7 +52,12 @@ def _resolve_requested_backend(
     *,
     fallback_backend: str | None = None,
 ) -> str:
-  """Resolve an optional backend override with codex-family alias support."""
+  """Resolve a backend override with codex-family alias support.
+
+  Raises HTTPException(400) for any non-None backend id -- whether it arrives
+  explicitly via ``requested_backend`` or is inherited via ``fallback_backend``
+  -- that isn't a member of ``cfg.backend_options``.
+  """
   valid_backend_ids = {opt.id for opt in cfg.backend_options}
   resolved_fallback = fallback_backend or _default_backend_id(cfg)
 
@@ -65,28 +70,31 @@ def _resolve_requested_backend(
     if codex_option:
       log.info("using_requested_backend_family_match", requested=requested_backend, backend=codex_option.id)
       return codex_option.id
-    log.info(
-        "using_fallback_backend",
-        reason="codex_family_requested_but_no_codex_backend",
-        requested=requested_backend,
-        fallback=resolved_fallback,
-    )
-    return resolved_fallback
 
-  reason = "backend_is_none" if requested_backend is None else "backend_not_in_valid_ids"
-  log.info(
-      "using_fallback_backend",
-      reason=reason,
-      requested=requested_backend,
-      fallback=resolved_fallback,
-  )
-  if requested_backend is not None and requested_backend not in valid_backend_ids:
+  if requested_backend is not None:
     log.warning(
         "invalid_backend_requested",
         requested=requested_backend,
         valid=list(valid_backend_ids),
         fallback=resolved_fallback,
     )
+    raise HTTPException(
+        status_code=400,
+        detail=f"backend '{requested_backend}' is not a recognized backend id; valid ids: {sorted(valid_backend_ids)}",
+    )
+
+  if resolved_fallback not in valid_backend_ids:
+    log.warning(
+        "invalid_fallback_backend",
+        fallback=resolved_fallback,
+        valid=list(valid_backend_ids),
+    )
+    raise HTTPException(
+        status_code=400,
+        detail=f"backend '{resolved_fallback}' is not a recognized backend id; valid ids: {sorted(valid_backend_ids)}",
+    )
+
+  log.info("using_fallback_backend", reason="backend_is_none", requested=None, fallback=resolved_fallback)
   return resolved_fallback
 
 

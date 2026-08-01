@@ -8,6 +8,48 @@
 
 let compactMode = 'compact';
 
+// Mirrors the messages currently rendered for the active session. Reset
+// wholesale on every full render, appended to for each live message delta.
+// It is not independent state -- compactOutcome() is recomputed from it on
+// every append rather than tracked via a separate flag. Exposed as shared
+// global state (rather than a plain `let`) since it must be read/written
+// from websocket.js and chat/input.js, which each run in their own IIFE.
+Chat.exposeState('renderedMessages', []);
+
+const COMPACT_FAILED_NOTICE_ID = 'compact-failed-notice';
+const COMPACT_FAILED_NOTICE_TEXT = 'Compaction did not happen — nothing was compacted';
+
+function compactOutcome(messages) {
+  const list = messages || [];
+  let compactIdx = -1;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i];
+    if (m && m.role === 'user' && m.content === '/compact') {
+      compactIdx = i;
+      break;
+    }
+  }
+  if (compactIdx === -1) return 'none';
+  for (let i = compactIdx + 1; i < list.length; i++) {
+    const m = list[i];
+    if (!m) continue;
+    if (m.kind === 'context_compacted') return 'ok';
+    if (m.role === 'separator') return 'failed';
+  }
+  return 'pending';
+}
+
+function compactFailedNoticeHtml() {
+  return '<div class="flex justify-center" id="' + COMPACT_FAILED_NOTICE_ID + '">'
+    + '<div class="bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate">'
+    + escapeHtml(COMPACT_FAILED_NOTICE_TEXT) + '</div></div>';
+}
+
+function appendCompactFailedNoticeIfMissing() {
+  if (document.getElementById(COMPACT_FAILED_NOTICE_ID)) return;
+  _appendRenderedMessage(compactFailedNoticeHtml());
+}
+
 function toolInputSummary(tool) {
   var input = tool.input || {};
   if (tool.name === 'Bash') return {text: input.command || '', limit: 80};
@@ -240,7 +282,10 @@ function toggleCompactMode() {
 function renderMessagesIntoContainer(container, messages, sessionId) {
   const streamEl = document.getElementById('streaming-msg');
   const streamHtml = streamEl ? streamEl.outerHTML : '';
-  const parts = (messages || []).map(msg => globalThis.renderMessage(msg, sessionId));
+  const list = messages || [];
+  renderedMessages = list.slice();
+  const parts = list.map(msg => globalThis.renderMessage(msg, sessionId));
+  if (compactOutcome(renderedMessages) === 'failed') parts.push(compactFailedNoticeHtml());
   container.innerHTML = parts.join('') + streamHtml;
   globalThis.postProcessRenderedMessages(container);
   globalThis.applyCompactMode(container);
@@ -441,6 +486,7 @@ function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
     uploaded_files: uploadedFiles || null,
   };
   _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID), role === "user");
+  return msg;
 }
 
 function appendSeparator(seconds, eventIndex) {
@@ -472,6 +518,8 @@ Chat.appendCloneBanner = appendCloneBanner;
 Chat.applyCompactMode = applyCompactMode;
 Chat.toggleCompactMode = toggleCompactMode;
 Chat.toggleTurnFold = toggleTurnFold;
+Chat.compactOutcome = compactOutcome;
+Chat.appendCompactFailedNoticeIfMissing = appendCompactFailedNoticeIfMissing;
 Chat.expose([
   'renderMessage',
   'renderMessagesIntoContainer',
@@ -484,6 +532,8 @@ Chat.expose([
   'applyCompactMode',
   'toggleCompactMode',
   'toggleTurnFold',
+  'compactOutcome',
+  'appendCompactFailedNoticeIfMissing',
 ]);
 
 })();

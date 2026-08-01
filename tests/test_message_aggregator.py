@@ -387,6 +387,32 @@ def test_tui_menu_dismissed_system_event_emits_system_message() -> None:
   ]
 
 
+def test_context_compacted_projection_carries_kind() -> None:
+  agg = MessageAggregator()
+  deltas = list(
+      agg.feed({
+          "type": "context_compacted",
+          "trigger": "manual",
+          "pre_tokens": 21988,
+          "timestamp": "t",
+      }))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "system",
+                  "content": "Context compacted (manual) — was 22k tokens",
+                  "kind": "context_compacted",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t",
+              },
+      }
+  ]
+
+
 def test_init_system_event_is_ignored() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}, "timestamp": "t1"}))

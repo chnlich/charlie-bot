@@ -171,6 +171,10 @@
           </div>
           <span id="usage-cost" class="text-xs text-slate-500 whitespace-nowrap" title="API list-price equivalent for this session's own turns; excludes delegated workers"></span>
         </div>
+        <button id="compact-btn"
+                onclick="compactContext()"
+                class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+                {% if active_backend_type != 'cc-claude' %}disabled{% endif %}>Compact</button>
         <a href="/sessions/{{ active_session.id }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

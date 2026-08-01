@@ -37,6 +37,14 @@ function bumpCurrentSessionToTop() {
   }
 }
 
+function postChatMessage(content, extra) {
+  return fetch(`/api/chat/${SESSION_ID}/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ content }, extra || {})),
+  });
+}
+
 async function sendMessage() {
   if (uploadsInFlight > 0) {
     showToast('Please wait for uploads to finish', true);
@@ -76,11 +84,7 @@ async function sendMessage() {
   startThinking();
 
   try {
-    const res = await fetch(`/api/chat/${SESSION_ID}/message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: contentWithCtx, uploaded_files: payloadFiles, is_voice: isVoice }),
-    });
+    const res = await postChatMessage(contentWithCtx, { uploaded_files: payloadFiles, is_voice: isVoice });
     if (!res.ok) throw new Error(String(res.status));
   } catch (err) {
     console.error('Send failed:', err);
@@ -90,13 +94,44 @@ async function sendMessage() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Manual compaction (cc-claude only; gated by #compact-btn's disabled attribute)
+// ---------------------------------------------------------------------------
+async function compactContext() {
+  const usageTextEl = document.getElementById('usage-text');
+  const contextReading = usageTextEl ? usageTextEl.textContent : 'unknown';
+  const confirmed = confirm(
+    'Current context: ' + contextReading + '. Compacting costs one model call, priced by the ' +
+    'size of the current context. The reading above only updates on the next turn, and can even ' +
+    'grow if the transcript is not the bulk of the context. Compact now?'
+  );
+  if (!confirmed) return;
+
+  pendingUserMsg = true;
+  const msg = appendMessage('user', '/compact', false, new Date().toISOString(), null);
+  renderedMessages.push(msg);
+
+  try {
+    const res = await postChatMessage('/compact');
+    if (!res.ok) throw new Error(String(res.status));
+  } catch (err) {
+    console.error('Compact failed:', err);
+    pendingUserMsg = false;
+    appendMessage('system', 'Failed to send message');
+  }
+}
+
 Chat.setVoiceContributed = setVoiceContributed;
 Chat.bumpCurrentSessionToTop = bumpCurrentSessionToTop;
+Chat.postChatMessage = postChatMessage;
 Chat.sendMessage = sendMessage;
+Chat.compactContext = compactContext;
 Chat.expose([
   'setVoiceContributed',
   'bumpCurrentSessionToTop',
+  'postChatMessage',
   'sendMessage',
+  'compactContext',
 ]);
 
 })();

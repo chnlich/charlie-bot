@@ -66,7 +66,7 @@ def _context_compacted_msg(ev: dict) -> dict:
     msg += f' ({trigger})'
   if pre_tokens:
     msg += f' — was {round(pre_tokens / 1000)}k tokens'
-  return {'role': 'system', 'content': msg}
+  return {'role': 'system', 'content': msg, 'kind': 'context_compacted'}
 
 
 def _resume_context_dropped_msg(ev: dict) -> dict:

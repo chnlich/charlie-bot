@@ -198,7 +198,7 @@ function renderSessionView(data) {
   } else {
     globalThis.ACTIVE_BACKEND_TYPE = backendType;
   }
-  updateTuiHeaderControls(backendType, session.id);
+  updateBackendHeaderControls(backendType, session.id);
 
   // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;

@@ -102,14 +102,12 @@ async function compactContext() {
   const contextReading = usageTextEl ? usageTextEl.textContent : 'unknown';
   const confirmed = confirm(
     'Current context: ' + contextReading + '. Compacting costs one model call, priced by the ' +
-    'size of the current context. The reading above only updates on the next turn, and can even ' +
-    'grow if the transcript is not the bulk of the context. Compact now?'
+    'size of the current context. Compact now?'
   );
   if (!confirmed) return;
 
   pendingUserMsg = true;
-  const msg = appendMessage('user', '/compact', false, new Date().toISOString(), null);
-  renderedMessages.push(msg);
+  appendMessage('user', '/compact', false, new Date().toISOString(), null);
 
   try {
     const res = await postChatMessage('/compact');

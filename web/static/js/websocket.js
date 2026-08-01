@@ -107,10 +107,6 @@ function _commitMessage(msg) {
   // the same text the preview holds.
   hideStreaming();
   appendMessageObject(msg);
-  renderedMessages.push(msg);
-  if (compactOutcome(renderedMessages) === 'failed') {
-    appendCompactFailedNoticeIfMissing();
-  }
 }
 
 function handleWSEvent(ev, socketSessionId, socketGeneration) {

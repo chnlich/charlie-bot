@@ -261,28 +261,35 @@ test('compactContext posts the exact same request shape as the shared message-se
 });
 
 // ---------------------------------------------------------------------------
-// 4. A fake success is never reported as success, and a mid-round reload
-//    changes nothing.
+// 4. The compaction verdict comes from the backend event, not client inference.
 // ---------------------------------------------------------------------------
-test('a model merely claiming success without a context_compacted message is judged failed, and the notice renders exactly once', () => {
+test('a context_compact_failed system message renders as an ordinary chat bubble through the normal render path', () => {
   const elements = new Map([['messages', new FakeElement('DIV')]]);
   const context = loadChatContext(elements);
   const container = elements.get('messages');
 
   const messages = [
     { role: 'user', content: '/compact', id: 'u1' },
-    { role: 'assistant', content: 'Context compacted successfully!', id: 'a1' },
+    { role: 'system', content: 'Compaction failed — context too large', kind: 'context_compact_failed', id: 'c1' },
     { role: 'separator', id: 's1' },
   ];
 
-  assert.equal(context.compactOutcome(messages), 'failed');
-
   context.renderMessagesIntoContainer(container, messages, 'session-a');
-  const noticeCount = (container.innerHTML.match(/compact-failed-notice/g) || []).length;
-  assert.equal(noticeCount, 1);
+
+  assert.match(container.innerHTML, /Compaction failed.*context too large/);
 });
 
-test('a real context_compacted message is judged ok and produces no notice', () => {
+test('a context_compact_failed message delivered live renders through the same bubble path as any other message', () => {
+  const elements = new Map([['messages', new FakeElement('DIV')]]);
+  const context = loadChatContext(elements);
+  const container = elements.get('messages');
+
+  context._commitMessage({ role: 'system', content: 'Compaction failed', kind: 'context_compact_failed', id: 'c1' });
+
+  assert.match(container.innerHTML, /Compaction failed/);
+});
+
+test('no failure notice element is ever synthesized by the client, for success, failure, or silence', () => {
   const elements = new Map([['messages', new FakeElement('DIV')]]);
   const context = loadChatContext(elements);
   const container = elements.get('messages');
@@ -291,47 +298,15 @@ test('a real context_compacted message is judged ok and produces no notice', () 
     { role: 'user', content: '/compact', id: 'u1' },
     { role: 'system', content: 'Context compacted (manual)', kind: 'context_compacted', id: 'c1' },
     { role: 'separator', id: 's1' },
+    { role: 'user', content: '/compact', id: 'u2' },
+    { role: 'system', content: 'Compaction failed', kind: 'context_compact_failed', id: 'c2' },
+    { role: 'separator', id: 's2' },
+    { role: 'user', content: '/compact', id: 'u3' },
+    { role: 'separator', id: 's3' },
   ];
-
-  assert.equal(context.compactOutcome(messages), 'ok');
 
   context.renderMessagesIntoContainer(container, messages, 'session-a');
-  assert.doesNotMatch(container.innerHTML, /compact-failed-notice/);
-});
+  context._commitMessage({ role: 'separator', id: 's4' });
 
-test('a mid-round reload reaches the same failed verdict through the live-append path, with no page variable involved', () => {
-  const elements = new Map([['messages', new FakeElement('DIV')]]);
-  const context = loadChatContext(elements);
-  const container = elements.get('messages');
-
-  // First paint: only the click made it into the snapshot before the reload.
-  const upToCompact = [
-    { role: 'assistant', content: 'Sure, compacting now.', id: 'a0' },
-    { role: 'user', content: '/compact', id: 'u1' },
-  ];
-  context.renderMessagesIntoContainer(container, upToCompact, 'session-a');
-  assert.doesNotMatch(container.innerHTML, /compact-failed-notice/);
-
-  // The round then ends without ever having produced a context_compacted
-  // message -- delivered live, exactly as the WebSocket would deliver it.
-  context._commitMessage({ role: 'separator', id: 's1' });
-
-  assert.match(container.innerHTML, /compact-failed-notice/);
-});
-
-test('an auto-compact context_compacted message with no preceding /compact click produces no notice', () => {
-  const elements = new Map([['messages', new FakeElement('DIV')]]);
-  const context = loadChatContext(elements);
-  const container = elements.get('messages');
-
-  const messages = [
-    { role: 'assistant', content: 'Some work happened.', id: 'a1' },
-    { role: 'system', content: 'Context compacted (auto)', kind: 'context_compacted', id: 'c1' },
-    { role: 'separator', id: 's1' },
-  ];
-
-  assert.equal(context.compactOutcome(messages), 'none');
-
-  context.renderMessagesIntoContainer(container, messages, 'session-a');
   assert.doesNotMatch(container.innerHTML, /compact-failed-notice/);
 });

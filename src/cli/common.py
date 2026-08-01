@@ -1,7 +1,15 @@
 """Shared helpers for CharlieBot CLI scripts.
 
 Provides a single place for the POST-to-internal-API pattern used by every CLI
-entry point, including consistent error-detail extraction on 4xx/5xx responses.
+entry point, including consistent error-detail extraction on 4xx/5xx responses
+and the restart-crossing call contract: a call whose connection never got
+established is retried with bounded exponential backoff (the effect provably
+did not happen, so re-sending is safe); a call sent with a lost response is
+never retried — instead the CLI reads back that call's own on-disk artifact.
+
+Every failure output stays a JSON object on stderr with exit code 1, now with
+``code`` (server_unavailable / outcome_unknown / server_error) and ``effect``
+(none / unknown) fields so the caller can tell "retry safely" from "verify".
 """
 
 import argparse
@@ -9,13 +17,19 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, NoReturn, Optional
 
 import requests
 
 from src.core.config import CharlieBotConfig, get_config
-from src.core.timeouts import HTTP_INTERNAL_API_TIMEOUT, HTTP_VERSION_SKEW_TIMEOUT, SUBPROCESS_VERSION_SKEW_TIMEOUT
+from src.core.timeouts import (
+    CLI_CONNECT_TOTAL_TIMEOUT,
+    HTTP_INTERNAL_API_TIMEOUT,
+    HTTP_VERSION_SKEW_TIMEOUT,
+    SUBPROCESS_VERSION_SKEW_TIMEOUT,
+)
 
 TASK_SPEC_REQUIRED_HEADINGS = (
     "Goal",
@@ -177,67 +191,174 @@ def _maybe_version_skew_hint(cfg: CharlieBotConfig) -> str | None:
   return compose_version_skew_hint(server_sha, started_at, local_sha)
 
 
-def post_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+_CONNECT_RETRY_BASE_DELAY = 0.25  # seconds; doubles per attempt
+_CONNECT_RETRY_MAX_DELAY = 5.0  # seconds
+
+
+def _is_connect_failure(exc: requests.RequestException) -> bool:
+  """True only when the request provably never reached the server.
+
+  TCP connect refused/timed out means zero bytes were sent, so the requested
+  effect did not happen and a retry is safe. Connection resets are excluded:
+  a reset may arrive after the server accepted (and possibly processed) the
+  request — that is the outcome_unknown class instead.
+  """
+  if isinstance(exc, requests.exceptions.ConnectTimeout):
+    return True
+  if isinstance(exc, requests.exceptions.ConnectionError):
+    msg = str(exc)
+    return (
+        "Failed to establish a new connection" in msg
+        or "Connection refused" in msg
+        or "NameResolutionError" in msg  # DNS never resolved — nothing was sent
+    )
+  return False
+
+
+def _exit_with_error(error_obj: dict[str, Any], exit_code: int = 1) -> NoReturn:
+  print(json.dumps(error_obj), file=sys.stderr)
+  sys.exit(exit_code)
+
+
+def _exit_server_rejection(
+    cfg: CharlieBotConfig,
+    exc: requests.RequestException,
+    rejection_exit_codes: Optional[dict[int, int]],
+) -> NoReturn:
+  """Handle a server that explicitly answered with an error status."""
+  msg = str(exc)
+  try:
+    msg = exc.response.json()["detail"]  # type: ignore[union-attr]
+  except (ValueError, KeyError):
+    pass
+  error_obj: dict[str, Any] = {"error": msg, "code": "server_error", "effect": "none"}
+  hint = _maybe_version_skew_hint(cfg)
+  if hint is not None:
+    error_obj["hint"] = hint
+  exit_code = 1
+  if rejection_exit_codes is not None and exc.response is not None:
+    exit_code = rejection_exit_codes.get(exc.response.status_code, 1)
+  _exit_with_error(error_obj, exit_code)
+
+
+def _request_with_contract(
+    method: str,
+    endpoint: str,
+    *,
+    payload: Optional[dict[str, Any]] = None,
+    params: Optional[dict[str, Any]] = None,
+    readback: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
+    rejection_exit_codes: Optional[dict[int, int]] = None,
+    unknown_effect: str,
+) -> dict[str, Any]:
+  """Issue one internal-API call under the restart-crossing contract."""
+  cfg = get_config()
+  url = f"{cfg.server_base_url}{endpoint}"
+  request_fn = requests.post if method == "POST" else requests.get
+  deadline = time.monotonic() + CLI_CONNECT_TOTAL_TIMEOUT
+  attempt = 0
+  while True:
+    try:
+      resp = request_fn(
+          url,
+          json=payload,
+          params=params,
+          headers=internal_api_auth_headers(cfg),
+          timeout=HTTP_INTERNAL_API_TIMEOUT,
+          verify=False)
+      resp.raise_for_status()
+      return resp.json()
+    except requests.RequestException as e:
+      if e.response is not None:
+        _exit_server_rejection(cfg, e, rejection_exit_codes)
+      if _is_connect_failure(e):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+          _exit_with_error({"error": str(e), "code": "server_unavailable", "effect": "none"})
+        delay = min(_CONNECT_RETRY_BASE_DELAY * (2**attempt), _CONNECT_RETRY_MAX_DELAY, remaining)
+        attempt += 1
+        time.sleep(delay)
+        continue
+      # Sent but the response was lost — never re-issue the call (its effect
+      # may have landed). Read back this call's own on-disk artifact instead.
+      if readback is not None:
+        artifact = readback()
+        if artifact is not None:
+          return artifact
+      _exit_with_error({"error": str(e), "code": "outcome_unknown", "effect": unknown_effect})
+
+
+def post_internal_api(
+    endpoint: str,
+    payload: dict[str, Any],
+    *,
+    readback: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
+    rejection_exit_codes: Optional[dict[int, int]] = None,
+) -> dict[str, Any]:
   """POST to an internal CharlieBot API endpoint and return the parsed JSON response.
 
-  On requests.RequestException, extracts the server's ``detail`` field when
-  available, writes a JSON error to stderr (with an optional version-skew ``hint``
-  when the server and repo SHAs differ), and calls ``sys.exit(1)``.
+  On failure, writes a JSON error (with ``code``/``effect`` fields, plus the
+  version-skew ``hint`` for explicit server rejections) to stderr and exits.
+  ``readback`` is invoked exactly once, for the sent-but-lost class: returning
+  a non-None artifact makes the call a success, None reports
+  ``outcome_unknown``. ``rejection_exit_codes`` maps specific rejection status
+  codes to alternate exit codes (schedule-trigger's 422 -> 2 contract).
   """
-  cfg = get_config()
-  try:
-    resp = requests.post(
-        f"{cfg.server_base_url}{endpoint}",
-        json=payload,
-        headers=internal_api_auth_headers(cfg),
-        timeout=HTTP_INTERNAL_API_TIMEOUT,
-        verify=False)
-    resp.raise_for_status()
-    return resp.json()
-  except requests.RequestException as e:
-    msg = str(e)
-    if e.response is not None:
-      try:
-        msg = e.response.json()["detail"]
-      except (ValueError, KeyError):
-        pass
-    error_obj: dict[str, Any] = {"error": msg}
-    hint = _maybe_version_skew_hint(cfg)
-    if hint is not None:
-      error_obj["hint"] = hint
-    print(json.dumps(error_obj), file=sys.stderr)
-    sys.exit(1)
+  return _request_with_contract(
+      "POST",
+      endpoint,
+      payload=payload,
+      readback=readback,
+      rejection_exit_codes=rejection_exit_codes,
+      unknown_effect="unknown",
+  )
 
 
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
   """GET a CharlieBot API endpoint and return the parsed JSON response.
 
-  Mirrors ``post_internal_api`` error handling (including the version-skew hint).
-  Used by read-only CLI verbs (e.g. ``plan list``) that hit the public sessions router.
+  Mirrors ``post_internal_api`` error handling (including the bounded connect
+  retry and version-skew hint). A read-only call mutates nothing, so the
+  sent-but-lost class reports effect ``none`` and needs no readback.
   """
-  cfg = get_config()
-  try:
-    resp = requests.get(
-        f"{cfg.server_base_url}{endpoint}",
-        params=params,
-        headers=internal_api_auth_headers(cfg),
-        timeout=HTTP_INTERNAL_API_TIMEOUT,
-        verify=False)
-    resp.raise_for_status()
-    return resp.json()
-  except requests.RequestException as e:
-    msg = str(e)
-    if e.response is not None:
-      try:
-        msg = e.response.json()["detail"]
-      except (ValueError, KeyError):
-        pass
-    error_obj: dict[str, Any] = {"error": msg}
-    hint = _maybe_version_skew_hint(cfg)
-    if hint is not None:
-      error_obj["hint"] = hint
-    print(json.dumps(error_obj), file=sys.stderr)
-    sys.exit(1)
+  return _request_with_contract("GET", endpoint, params=params, unknown_effect="none")
+
+
+def find_local_thread(
+    session_id: str,
+    *,
+    description: str,
+    task_type: Optional[str],
+    description_match: str = "exact",
+) -> Optional[dict[str, Any]]:
+  """Readback scan: the newest thread metadata matching description + task_type.
+
+  Pure local-disk judgment used when an internal-API POST's response was lost:
+  matching this call's own product proves the effect landed, so the call can
+  report success without re-sending. Threads in any status count.
+  ``description_match`` is ``exact`` or ``contains``.
+  """
+  threads_dir = get_config().sessions_dir / session_id / "threads"
+  if not threads_dir.is_dir():
+    return None
+  best: Optional[dict[str, Any]] = None
+  for thread_dir in threads_dir.iterdir():
+    meta_path = thread_dir / "metadata.json"
+    try:
+      meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+      continue
+    stored_description = meta.get("description", "")
+    if description_match == "exact":
+      if stored_description != description:
+        continue
+    elif description not in stored_description:
+      continue
+    if (meta.get("task_type") or "implement") != (task_type or "implement"):
+      continue
+    if best is None or str(meta.get("created_at", "")) > str(best.get("created_at", "")):
+      best = meta
+  return best
 
 
 def resolve_session_id(arg_session: str | None) -> str:

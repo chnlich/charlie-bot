@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import requests
 from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
@@ -423,6 +424,36 @@ def test_cli_parse_rejects_bad_pid() -> None:
       cli_module._parse_watch_target(bad)
 
 
+def _fake_cli_cfg(monkeypatch) -> None:
+  """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
+
+  class _Cfg:
+    server_base_url = "https://server"
+    charliebot_access_key = ""
+    sessions_dir = Path("/nonexistent-sessions")
+
+  monkeypatch.setattr("src.cli.common.get_config", lambda: _Cfg())
+
+
+def _fake_200_post(captured: dict):
+
+  class _FakeResp:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+      return None
+
+    def json(self) -> dict:
+      return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
+
+  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):  # noqa: A002, ARG001
+    captured["url"] = url
+    captured["payload"] = json
+    return _FakeResp()
+
+  return _fake_post
+
+
 def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
   argv = [
       "schedule_trigger",
@@ -432,19 +463,9 @@ def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
       "--watch", "1234", "neptune:5678", "slurm:99",
   ]
   captured: dict = {}
+  _fake_cli_cfg(monkeypatch)
 
-  class _FakeResp:
-    status_code = 200
-    ok = True
-
-    def json(self) -> dict:
-      return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
-
-  def _fake_post(url, json, headers, timeout, verify):  # noqa: A002, ARG001
-    captured["payload"] = json
-    return _FakeResp()
-
-  monkeypatch.setattr(cli_module.requests, "post", _fake_post)
+  monkeypatch.setattr("src.cli.common.requests.post", _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
     cli_module.main()
 
@@ -488,20 +509,9 @@ def test_cli_max_wait_accepted(monkeypatch) -> None:
       "--message", "hello",
   ]
   captured: dict = {}
+  _fake_cli_cfg(monkeypatch)
 
-  class _FakeResp:
-    status_code = 200
-    ok = True
-
-    def json(self) -> dict:
-      return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
-
-  def _fake_post(url, json, headers, timeout, verify):  # noqa: A002, ARG001
-    captured["url"] = url
-    captured["payload"] = json
-    return _FakeResp()
-
-  monkeypatch.setattr(cli_module.requests, "post", _fake_post)
+  monkeypatch.setattr("src.cli.common.requests.post", _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
     cli_module.main()
 
@@ -520,19 +530,26 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
       "--message", "hello",
       "--watch", "neptune:5678",
   ]
+  _fake_cli_cfg(monkeypatch)
 
   class _FakeResp:
     status_code = 422
-    ok = False
     text = ""
+
+    def raise_for_status(self) -> None:
+      raise requests.exceptions.HTTPError(response=self)
 
     def json(self) -> dict:
       return {"detail": "verify-on-create failed for remote watch target(s): neptune:5678 -> DEAD ('DEAD\\n')"}
 
-  def _fake_post(url, json, headers, timeout, verify):  # noqa: A002, ARG001
+  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):  # noqa: A002, ARG001
     return _FakeResp()
 
-  monkeypatch.setattr(cli_module.requests, "post", _fake_post)
+  def _offline_get(url, **kwargs):  # best-effort version hint must not reach a real server
+    raise requests.ConnectionError("offline")
+
+  monkeypatch.setattr("src.cli.common.requests.post", _fake_post)
+  monkeypatch.setattr("src.cli.common.requests.get", _offline_get)
   with patch.object(sys, "argv", argv):
     with pytest.raises(SystemExit) as excinfo:
       cli_module.main()

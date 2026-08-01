@@ -172,7 +172,7 @@ app = FastAPI(
   lifespan=lifespan,
 )
 
-app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000)
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=6)
 app.add_middleware(AuthMiddleware)
 
 # Page router (GET / — Jinja2 rendered)

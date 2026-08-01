@@ -61,21 +61,34 @@ class StreamingManager:
 streaming_manager = StreamingManager()
 
 
-async def handle_compact_boundary(
+async def handle_compaction_events(
     event: dict[str, Any],
     persist_and_broadcast: Callable[[dict[str, Any]], Awaitable[None]],
     log_context: dict[str, Any],
 ) -> None:
-  """Detect compact_boundary system events, log, persist, and broadcast a context_compacted event."""
-  if event.get("type") != "system" or event.get("subtype") != "compact_boundary":
+  """Detect compact_boundary and compact-failure system events, log, persist, and
+  broadcast a synthesized event. At most one synthesized event is emitted per
+  input event."""
+  if event.get("type") != "system":
     return
-  meta = event.get("compact_metadata", {})
-  trigger = meta.get("trigger", "unknown")
-  pre_tokens = meta.get("pre_tokens")
-  log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)
-  compact_event: dict[str, Any] = {
-      "type": ET.CONTEXT_COMPACTED,
-      "trigger": trigger,
-      "pre_tokens": pre_tokens,
-  }
-  await persist_and_broadcast(compact_event)
+  subtype = event.get("subtype")
+  if subtype == "compact_boundary":
+    meta = event.get("compact_metadata", {})
+    trigger = meta.get("trigger", "unknown")
+    pre_tokens = meta.get("pre_tokens")
+    log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)
+    compact_event: dict[str, Any] = {
+        "type": ET.CONTEXT_COMPACTED,
+        "trigger": trigger,
+        "pre_tokens": pre_tokens,
+    }
+    await persist_and_broadcast(compact_event)
+    return
+  if subtype == "status" and event.get("compact_result") == "failed":
+    error = event.get("compact_error")
+    log.info("cc_context_compact_failed", error=error, **log_context)
+    compact_failed_event: dict[str, Any] = {
+        "type": ET.CONTEXT_COMPACT_FAILED,
+        "error": error,
+    }
+    await persist_and_broadcast(compact_failed_event)

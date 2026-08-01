@@ -26,7 +26,7 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.process import kill_process_group
-from src.core.streaming import handle_compact_boundary, streaming_manager
+from src.core.streaming import handle_compaction_events, streaming_manager
 from src.core.thinking_state import busy_since, clear_busy, mark_busy
 
 log = structlog.get_logger()
@@ -271,7 +271,7 @@ async def _handle_event(
     cc_session_id: Optional[str],
     persist_and_broadcast,
 ) -> Optional[str]:
-  """Process a single backend event: persist, broadcast, and handle compact_boundary.
+  """Process a single backend event: persist, broadcast, and handle compaction events.
 
   Returns the cc_session_id (possibly updated from the event).
   """
@@ -283,7 +283,7 @@ async def _handle_event(
   # Persist first (injects timestamp), then broadcast with timestamp included
   await persist_and_broadcast(session_id, event)
 
-  await handle_compact_boundary(
+  await handle_compaction_events(
       event,
       persist_and_broadcast=lambda evt: persist_and_broadcast(session_id, evt),
       log_context={"session": session_id},

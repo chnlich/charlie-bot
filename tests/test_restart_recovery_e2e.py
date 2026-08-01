@@ -20,20 +20,26 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from src.core import event_types as ET
 from src.core import init as init_module
 from src.core import runs
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption
+from src.core.git import git_create_worktree, git_worktree_dir_name
+from src.core.models import BackendOption, CreateSessionRequest, ThreadStatus, utc_now
+from src.core.process import kill_process_group
+from src.core.sessions import SessionManager
 from src.core.spawner import resume_worker as _real_resume_worker
+from src.core.threads import ThreadManager
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,6 +47,16 @@ FAKE_SHIM = """#!/bin/sh
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"E2E-ASSISTANT-MARKER"}]}}'
 sleep "$FAKE_RESULT_DELAY"
 echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
+exit 0
+"""
+
+# A fake reviewer: no LLM, just a real `git push` of the worker's already-committed
+# change to the shared worktree's base branch, standing in for the reviewer prompt's
+# rebase+push instructions (build_review_prompt, src/core/review.py).
+REVIEWER_SHIM = """#!/bin/sh
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"REVIEWER-ASSISTANT-MARKER"}]}}'
+git push origin HEAD:main 1>&2
+echo '{"type":"result","subtype":"success","is_error":false,"result":"REVIEWER-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 """
 
@@ -159,7 +175,12 @@ def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
   def run_started() -> bool:
     if not raw.exists() or "E2E-ASSISTANT-MARKER" not in raw.read_text(encoding="utf-8", errors="replace"):
       return False
-    meta = _read_meta(home, ids["session"], ids["thread"])
+    try:
+      meta = _read_meta(home, ids["session"], ids["thread"])
+    except json.JSONDecodeError:
+      # metadata.json is a plain (non-atomic) "w"-mode write; the driver may be
+      # mid-write when this polls, which is exactly "not ready yet".
+      return False
     return meta.get("pid") is not None and meta.get("pid_start") is not None and meta.get("status") == "running"
 
   _wait_for(run_started, timeout=20.0, what="worker run did not start/persist identity")
@@ -202,17 +223,19 @@ def _assert_run_converged(home: Path, ids: dict) -> dict:
   recorded = datetime.fromisoformat(meta["completed_at"])
   assert abs((recorded - completion).total_seconds()) < 0.005
 
-  # Projection equality (timestamps stripped), with duplicate-over-loss
-  # tolerance: every raw-derived event persisted, none lost, none beyond a
-  # single replay-at-crash-boundary duplicate.
+  # Projection equality (timestamps stripped): nothing is ever lost, and the
+  # whole STREAM carries at most one duplicated event in total (the one
+  # straddling the persisted cursor when the kill landed between the raw
+  # write and the cursor advance) — a budget for the stream, not per event.
   persisted = [{k: v for k, v in e.items() if k != "timestamp"} for e in _read_events(home, ids["session"], ids["thread"])]
   projected = runs.project_raw_events(runs.parse_raw_lines(raw.read_bytes()), lambda e: [e])
-  counted = Counter(json.dumps(e, sort_keys=True) for e in persisted)
-  for event in projected:
-    key = json.dumps(event, sort_keys=True)
-    assert counted[key] >= 1, f"lost event: {event}"
-    assert counted[key] <= 2, f"duplicated beyond crash-boundary tolerance: {event}"
-  assert counted.keys() == {json.dumps(e, sort_keys=True) for e in projected}
+  persisted_counts = Counter(json.dumps(e, sort_keys=True) for e in persisted)
+  projected_counts = Counter(json.dumps(e, sort_keys=True) for e in projected)
+  for key, count in projected_counts.items():
+    assert persisted_counts[key] >= count, f"lost event: {key}"
+  assert set(persisted_counts) <= set(projected_counts), "persisted an event the raw projection never produced"
+  duplicate_total = sum(persisted_counts.values()) - sum(projected_counts.values())
+  assert duplicate_total in (0, 1), f"stream-wide duplicate budget exceeded: {duplicate_total} extra event(s)"
 
   # Every persisted event timestamp is clamped to the raw log's completion time.
   for event in _read_events(home, ids["session"], ids["thread"]):
@@ -279,3 +302,212 @@ async def test_restart_reattaches_running_run(tmp_path: Path, monkeypatch: pytes
   assert alive_at_reattach == [True]
   _assert_run_converged(home, ids)
   _assert_finalize_effects_once(home, ids, master_wakes)
+
+
+@pytest.mark.asyncio
+async def test_projection_exact_equality_at_deterministic_line_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Kill lands exactly when the persisted cursor has caught up to the raw log's
+  current end (a completed-line boundary). Unlike the timing-dependent scenarios
+  above, this is constructed so the crash-boundary duplicate tolerance can never
+  apply — projection equality must come out EXACT, not just within budget.
+  """
+  home = tmp_path / "home"
+  # A long delay keeps the result line far away, so the deterministic snapshot
+  # below can never race a second raw-log write landing before the kill.
+  proc, ids = _launch_driver(tmp_path, home, result_delay=20.0)
+  thread_dir = home / "sessions" / ids["session"] / "threads" / ids["thread"]
+  raw = thread_dir / "data" / runs.RAW_LOG_NAME
+  cursor = thread_dir / "data" / runs.CURSOR_NAME
+
+  def cursor_caught_up_at_boundary() -> bool:
+    if not raw.exists() or not cursor.exists():
+      return False
+    if "E2E-ASSISTANT-MARKER" not in raw.read_text(encoding="utf-8", errors="replace"):
+      return False
+    return runs.read_raw_cursor(cursor) == raw.stat().st_size
+
+  _wait_for(cursor_caught_up_at_boundary, timeout=20.0, what="cursor never caught up to a line boundary")
+  boundary_offset = raw.stat().st_size
+
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  shim_pid = meta["pid"]
+  assert shim_pid is not None
+  proc.kill()
+  proc.wait(timeout=10)
+  # The shim (still sleeping toward the far-off result) outlives A independently
+  # (its own process group) — kill it too so recovery observes a DEAD run.
+  kill_process_group(shim_pid, signal.SIGKILL)
+
+  # Confirm nothing raced in after the snapshot: no growth past the boundary.
+  assert raw.stat().st_size == boundary_offset
+
+  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home)
+
+  assert recovered == 1
+  assert alive_at_reattach == [False]
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"  # DIED without a result event; no growth to drain
+
+  persisted = [{k: v for k, v in e.items() if k != "timestamp"} for e in _read_events(home, ids["session"], ids["thread"])]
+  projected = runs.project_raw_events(runs.parse_raw_lines(raw.read_bytes()), lambda e: [e])
+  assert persisted == projected
+
+
+# ---------------------------------------------------------------------------
+# Finalize idempotency across repeated restarts (contract line 38)
+# ---------------------------------------------------------------------------
+
+
+def _run_git(cwd: Path, *args: str) -> None:
+  subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
+
+
+def _origin_commit_count(origin: Path, branch: str = "main") -> int:
+  result = subprocess.run(
+      ["git", "log", "--oneline", branch], cwd=str(origin), check=True, capture_output=True, text=True)
+  return len(result.stdout.splitlines())
+
+
+def _thread_metas(home: Path, session_id: str) -> list[dict]:
+  threads_dir = home / "sessions" / session_id / "threads"
+  if not threads_dir.is_dir():
+    return []
+  return [
+      json.loads((p / "metadata.json").read_text(encoding="utf-8"))
+      for p in threads_dir.iterdir()
+      if (p / "metadata.json").exists()
+  ]
+
+
+def _session_chat_events(home: Path, session_id: str) -> list[dict]:
+  path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
+  if not path.exists():
+    return []
+  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+async def _settle_finalize_window(home: Path, session_id: str, original_id: str) -> None:
+  """Drain the named recovery tasks, then wait for the (idempotently, at most
+  once) spawned reviewer thread's own completion. The reviewer's own spawn_worker
+  task is unnamed (dispatched from spawn_review_worker), so _await_recovery_tasks()
+  alone cannot see it — only the disk state can.
+  """
+  await _await_recovery_tasks()
+  deadline = time.monotonic() + 20.0
+  while time.monotonic() < deadline:
+    reviewers = [m for m in _thread_metas(home, session_id) if m.get("review_of") == original_id]
+    if reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers):
+      return
+    await asyncio.sleep(0.05)
+  raise TimeoutError("reviewer thread never settled")
+
+
+@pytest.mark.asyncio
+async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Contract line 38: drive the reconcile N (>=3) times over the same terminal,
+  review-needing thread and assert the finalize effects — terminal worker_summary,
+  master wake, reviewer thread, and the merge commit reaching origin — each land
+  exactly once, not once per reconcile. The server tracks no merge state of its
+  own (src/core/review.py:401-403), so the merge count must come from the origin
+  repo itself, not a server-side proxy.
+  """
+  home = tmp_path / "home"
+
+  # --- a real bare origin + a worktree already carrying the worker's own
+  # (unpushed) commit, exactly as a completed-but-not-yet-reviewed worker would
+  # leave it. ---
+  origin = tmp_path / "origin.git"
+  _run_git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+  seed = tmp_path / "seed"
+  _run_git(tmp_path, "clone", str(origin), str(seed))
+  _run_git(seed, "config", "user.email", "t@example.com")
+  _run_git(seed, "config", "user.name", "T")
+  (seed / "README.md").write_text("seed\n", encoding="utf-8")
+  _run_git(seed, "add", "README.md")
+  _run_git(seed, "commit", "-m", "seed")
+  _run_git(seed, "push", "origin", "main")
+
+  main_checkout = tmp_path / "main_checkout"
+  _run_git(tmp_path, "clone", str(origin), str(main_checkout))
+  _run_git(main_checkout, "config", "user.email", "t@example.com")
+  _run_git(main_checkout, "config", "user.name", "T")
+
+  branch_name = "charliebot/task-finalize-idem"
+  worktree_dir = home / "worktrees"
+  worktree_dir.mkdir(parents=True)
+  wt_path = worktree_dir / git_worktree_dir_name(branch_name)
+  await git_create_worktree(main_checkout, "main", branch_name, wt_path)
+  (wt_path / "change.txt").write_text("worker change\n", encoding="utf-8")
+  _run_git(wt_path, "add", "change.txt")
+  _run_git(wt_path, "commit", "-m", "worker change")
+
+  origin_commits_before = _origin_commit_count(origin)
+  assert origin_commits_before == 1  # only the seed commit; the worker's commit is still local-only
+
+  # --- the fake reviewer, on PATH: a real subprocess doing a real `git push`. ---
+  shim_dir = tmp_path / "reviewer_shim"
+  shim_dir.mkdir()
+  shim = shim_dir / "claude"
+  shim.write_text(REVIEWER_SHIM, encoding="utf-8")
+  shim.chmod(0o755)
+  monkeypatch.setenv("PATH", f"{shim_dir}:{os.environ['PATH']}")
+
+  # --- fake trigger_master: records wakes AND persists a plausible master-output
+  # event, so the idempotency judgment (master_woke_after_summary) sees "woke"
+  # exactly as a real master turn would — otherwise every reconcile would judge
+  # the wake still missing and re-fire it. ---
+  master_wakes: list[str] = []
+
+  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
+    master_wakes.append(summary)
+    await session_mgr.persist_and_broadcast(
+        session_id,
+        {"type": ET.ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": "ack"}]}})
+
+  monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
+
+  # --- the original worker thread: already terminal (completed), needing review. ---
+  cfg = _cfg(home)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session_meta = await session_mgr.create_session(CreateSessionRequest(name="finalize-idempotency"))
+
+  original = await thread_mgr.create_thread(session_meta, "Implement the finalize idempotency fixture.")
+  original.status = ThreadStatus.COMPLETED
+  original.exit_code = 0
+  original.repo_path = str(main_checkout)
+  original.branch_name = branch_name
+  original.worktree_path = str(wt_path)
+  original.base_branch = "main"
+  original.backend = "fake"
+  original.model = "fake-model"
+  original.completed_at = utc_now()
+  await thread_mgr.save_metadata(original)
+
+  boot_time = utc_now() + timedelta(hours=1)  # treats every thread here as pre-boot on every pass
+
+  for _ in range(3):
+    await init_module.run_crash_recovery(cfg, boot_time)
+    await _settle_finalize_window(home, session_meta.id, original.id)
+
+  # Effect 1: terminal worker_summary for the original thread, exactly once.
+  chat_events = _session_chat_events(home, session_meta.id)
+  terminal_summaries = [
+      e for e in chat_events
+      if e.get("type") == "worker_summary" and e.get("thread_id") == original.id and e.get("status") != "running"
+  ]
+  assert len(terminal_summaries) == 1
+
+  # Effect 2: master woke exactly once.
+  assert len(master_wakes) == 1
+
+  # Effect 3: exactly one reviewer thread derived from the original, and it ran
+  # to completion.
+  reviewer_threads = [m for m in _thread_metas(home, session_meta.id) if m.get("review_of") == original.id]
+  assert len(reviewer_threads) == 1
+  assert reviewer_threads[0]["status"] == "completed"
+
+  # Effect 4: exactly one merge commit reached the origin — counted from the
+  # origin repo itself, since the server keeps no merge state of its own.
+  assert _origin_commit_count(origin) == origin_commits_before + 1

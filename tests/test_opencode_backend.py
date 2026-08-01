@@ -6,6 +6,7 @@ import pytest
 
 from src.agents.backends.opencode import OpenCodeBackend
 from src.core import event_types as ET
+from src.core.streaming import handle_compact_boundary
 
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
@@ -655,3 +656,195 @@ async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypat
   # Catalog unavailable -> limit None, but the turn still completed.
   assert snapshot["limit"] is None
   assert snapshot["model"] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"
+
+
+# ---------------------------------------------------------------------------
+# Compaction summary suppression: opencode auto-compaction publishes an
+# assistant message (summary=true, agent="compaction") whose text/reasoning
+# must never reach the chat stream; instead exactly one compact_boundary
+# event is synthesized, and the message's own step-finish usage is kept.
+# ---------------------------------------------------------------------------
+
+_COMPACTION_TOKENS = {
+    "total": 142466,
+    "input": 140853,
+    "output": 1613,
+    "reasoning": 0,
+    "cache": {"write": 0, "read": 0},
+}
+_COMPACTION_COST = 0.42
+
+
+def _compaction_message_info(message_id: str, *, completed: bool) -> dict:
+  """Recorded compaction message shape: first delivery is all-zero tokens with no
+  time.completed; the later delivery carries the real tokens once the step finishes."""
+  tokens = _COMPACTION_TOKENS if completed else {
+      "total": 0, "input": 0, "output": 0, "reasoning": 0, "cache": {"write": 0, "read": 0}}
+  time = {"created": 1, "completed": 2} if completed else {"created": 1}
+  return {
+      "id": message_id,
+      "role": "assistant",
+      "mode": "compaction",
+      "agent": "compaction",
+      "summary": True,
+      "tokens": tokens,
+      "time": time,
+  }
+
+
+def _compaction_parts(message_id: str) -> list[dict]:
+  """Recorded part sequence for a compaction message: step-start, reasoning, text,
+  step-finish (step-finish carries the compaction call's own tokens/cost)."""
+  return [
+      {"messageID": message_id, "id": f"{message_id}-step-start", "type": "step-start"},
+      {"messageID": message_id, "id": f"{message_id}-reasoning", "type": "reasoning",
+       "text": "[placeholder compaction reasoning]"},
+      {"messageID": message_id, "id": f"{message_id}-text", "type": "text",
+       "text": "[placeholder compaction summary]"},
+      {
+          "messageID": message_id,
+          "id": f"{message_id}-step-finish",
+          "type": "step-finish",
+          "tokens": _COMPACTION_TOKENS,
+          "cost": _COMPACTION_COST,
+      },
+  ]
+
+
+def test_compaction_message_full_sequence_emits_no_chat_content(monkeypatch) -> None:
+  """message.updated (created) -> parts -> message.updated (completed): zero text/thinking."""
+  backend = _build_backend(monkeypatch)
+  message_id = "msg_compaction_full"
+
+  translated: list[dict] = []
+  translated += backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info(message_id, completed=False)},
+  })
+  for part in _compaction_parts(message_id):
+    translated += backend._translate_sse_event({
+        "type": "message.part.updated",
+        "properties": {"part": part},
+    })
+  translated += backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info(message_id, completed=True)},
+  })
+
+  assert not any(event["type"] == ET.ASSISTANT for event in translated)
+  assert not any(event["type"] == ET.THINKING for event in translated)
+
+
+def test_compaction_message_adversarial_buffered_order_emits_no_chat_content(monkeypatch) -> None:
+  """Adversarial order (parts buffered before message.updated arrives): still zero leak."""
+  backend = _build_backend(monkeypatch)
+  message_id = "msg_compaction_adversarial"
+
+  translated: list[dict] = []
+  for part in _compaction_parts(message_id):
+    translated += backend._translate_sse_event({
+        "type": "message.part.updated",
+        "properties": {"part": part},
+    })
+  translated += backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info(message_id, completed=True)},
+  })
+
+  assert not any(event["type"] == ET.ASSISTANT for event in translated)
+  assert not any(event["type"] == ET.THINKING for event in translated)
+  assert backend._pending_parts == {}
+
+
+def test_compaction_step_finish_usage_is_conserved(monkeypatch) -> None:
+  """Accumulated usage after one normal message and one compaction message, each with a
+  step-finish part, equals the sum over every step-finish part fed."""
+  backend = _build_backend(monkeypatch)
+  normal_step_finish = _step_finish_part(500, 50, 10, 5, 7, 0.03)
+  message_id = "msg_compaction_usage"
+
+  backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": {"id": normal_step_finish["messageID"], "role": "assistant"}},
+  })
+  backend._translate_sse_event({
+      "type": "message.part.updated",
+      "properties": {"part": normal_step_finish},
+  })
+  backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info(message_id, completed=False)},
+  })
+  for part in _compaction_parts(message_id):
+    backend._translate_sse_event({
+        "type": "message.part.updated",
+        "properties": {"part": part},
+    })
+
+  assert backend._usage_input == normal_step_finish["tokens"]["input"] + _COMPACTION_TOKENS["input"]
+  assert backend._usage_output == normal_step_finish["tokens"]["output"] + _COMPACTION_TOKENS["output"]
+  assert backend._usage_cache_read == (
+      normal_step_finish["tokens"]["cache"]["read"] + _COMPACTION_TOKENS["cache"]["read"])
+  assert backend._usage_cache_write == (
+      normal_step_finish["tokens"]["cache"]["write"] + _COMPACTION_TOKENS["cache"]["write"])
+  assert backend._usage_cost == pytest.approx(normal_step_finish["cost"] + _COMPACTION_COST)
+
+
+def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch) -> None:
+  """Two summary messages, each message.updated delivered twice, yield exactly two
+  compact_boundary events; pre_tokens reflects the _last_step_tokens snapshot in effect
+  at registration (None before any step has completed)."""
+  backend = _build_backend(monkeypatch)
+
+  events: list[dict] = []
+  events += backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info("msg_c1", completed=False)},
+  })
+  events += backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info("msg_c1", completed=True)},
+  })
+
+  backend._accumulate_step_finish(_step_finish_part(999, 88, 7, 3, 4, 0.02))
+
+  events += backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info("msg_c2", completed=False)},
+  })
+  events += backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info("msg_c2", completed=True)},
+  })
+
+  boundary_events = [e for e in events if e.get("type") == "system" and e.get("subtype") == "compact_boundary"]
+  assert len(boundary_events) == 2
+  assert boundary_events[0]["compact_metadata"] == {"trigger": "auto", "pre_tokens": None}
+  assert boundary_events[1]["compact_metadata"] == {
+      "trigger": "auto", "pre_tokens": backend._last_step_tokens["input"]}
+
+
+@pytest.mark.asyncio
+async def test_compaction_boundary_event_wires_into_handle_compact_boundary(monkeypatch) -> None:
+  """The synthesized compact_boundary event feeds handle_compact_boundary and yields
+  exactly one persisted ET.CONTEXT_COMPACTED event carrying the same trigger/pre_tokens."""
+  backend = _build_backend(monkeypatch)
+
+  events = backend._translate_sse_event({
+      "type": "message.updated",
+      "properties": {"info": _compaction_message_info("msg_wire", completed=False)},
+  })
+  assert len(events) == 1
+  boundary_event = events[0]
+
+  persisted: list[dict] = []
+
+  async def _record(event: dict) -> None:
+    persisted.append(event)
+
+  await handle_compact_boundary(boundary_event, _record, {"thread_id": "t1"})
+
+  assert len(persisted) == 1
+  assert persisted[0]["type"] == ET.CONTEXT_COMPACTED
+  assert persisted[0]["trigger"] == boundary_event["compact_metadata"]["trigger"]
+  assert persisted[0]["pre_tokens"] == boundary_event["compact_metadata"]["pre_tokens"]

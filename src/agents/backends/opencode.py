@@ -51,6 +51,7 @@ class OpenCodeBackend(AgentBackend):
     self._last_part_text: dict[str, str] = {}
     self._tool_use_emitted: set[str] = set()
     self._tool_result_emitted: set[str] = set()
+    self._compaction_message_ids: set[str] = set()
     self._usage_input = 0
     self._usage_output = 0
     self._usage_cache_read = 0
@@ -208,6 +209,7 @@ class OpenCodeBackend(AgentBackend):
     self._last_part_text.clear()
     self._tool_use_emitted.clear()
     self._tool_result_emitted.clear()
+    self._compaction_message_ids.clear()
     self._usage_input = 0
     self._usage_output = 0
     self._usage_cache_read = 0
@@ -392,6 +394,17 @@ class OpenCodeBackend(AgentBackend):
       info = properties["info"]
       self._message_roles[info["id"]] = info["role"]
       pending_parts = self._pending_parts.pop(info["id"], [])
+      if info["role"] == "assistant" and bool(info.get("summary")):
+        already_registered = info["id"] in self._compaction_message_ids
+        self._compaction_message_ids.add(info["id"])
+        if already_registered:
+          return []
+        pre_tokens = self._last_step_tokens["input"] if self._last_step_tokens is not None else None
+        return [{
+            "type": "system",
+            "subtype": "compact_boundary",
+            "compact_metadata": {"trigger": "auto", "pre_tokens": pre_tokens},
+        }]
       if info["role"] != "assistant":
         return []
       translated: list[dict] = []
@@ -401,6 +414,10 @@ class OpenCodeBackend(AgentBackend):
 
     if ev_type == "message.part.updated":
       part = properties["part"]
+      if part["messageID"] in self._compaction_message_ids:
+        if part.get("type") == "step-finish":
+          self._accumulate_step_finish(part)
+        return []
       role = self._message_roles.get(part["messageID"])
       if role is None:
         self._pending_parts.setdefault(part["messageID"], []).append(part)

@@ -274,6 +274,30 @@ async def tail_follow_events(
       log.warning("raw_trailing_torn_line_dropped", bytes=len(buf))
 
 
+def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cursor_path: Path) -> None:
+  """Move a previous attempt's transport files aside before a fresh spawn.
+
+  The raw log is opened O_APPEND and a fresh tail-follow always starts at
+  offset 0, so a fresh spawn into a log dir that already holds a previous
+  attempt's raw bytes (e.g. the VERIFY quota-retry fallback, which respawns
+  into the same thread data dir) would replay that entire prior stream —
+  including whatever terminal error ended it. Rotated files are kept under a
+  numbered suffix distinct from RAW_LOG_NAME/STDERR_LOG_NAME (so resolve_run
+  and raw_completion_time keep seeing only the current attempt) for
+  debugging, and the stale cursor is removed so it can never point past the
+  new file's EOF.
+  """
+  if not raw_path.exists() or raw_path.stat().st_size == 0:
+    return
+  suffix = 1
+  while (log_dir / f"{raw_path.name}.{suffix}").exists():
+    suffix += 1
+  raw_path.rename(log_dir / f"{raw_path.name}.{suffix}")
+  if stderr_path.exists():
+    stderr_path.rename(log_dir / f"{stderr_path.name}.{suffix}")
+  cursor_path.unlink(missing_ok=True)
+
+
 def _read_stderr_tail(stderr_path: Path) -> str:
   """Last 64 KB of the stderr log, decoded; '' when the file is missing."""
   try:
@@ -414,6 +438,10 @@ class AgentBackend(ABC):
     log_dir.mkdir(parents=True, exist_ok=True)
     raw_path = log_dir / runs.RAW_LOG_NAME
     stderr_path = log_dir / runs.STDERR_LOG_NAME
+    cursor_path = log_dir / runs.CURSOR_NAME
+
+    # Fresh-spawn invariant: never read or append to a previous attempt's bytes.
+    _rotate_stale_transport(log_dir, raw_path, stderr_path, cursor_path)
 
     # Open as real FDs and hand them to the child: after spawn the writer
     # needs no reader, so the run survives this process dying.
@@ -454,7 +482,7 @@ class AgentBackend(ABC):
           raw_path,
           translate=self.translate_event,
           is_alive=lambda: self._proc is not None and self._proc.returncode is None,
-          cursor=log_dir / runs.CURSOR_NAME,
+          cursor=cursor_path,
           start_offset=0,
           post_result_timeout=self._POST_RESULT_TIMEOUT,
       ):

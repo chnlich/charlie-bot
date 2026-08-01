@@ -30,12 +30,13 @@ from pathlib import Path
 
 import pytest
 
+from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
 from src.core import init as init_module
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
-from src.core.models import BackendOption, CreateSessionRequest, ThreadStatus, utc_now
+from src.core.models import BackendOption, CreateSessionRequest, ThreadMetadata, ThreadStatus, utc_now
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.spawner import resume_worker as _real_resume_worker
@@ -64,6 +65,24 @@ git add "reviewer_shim_$$.txt"
 git commit -m "reviewer shim commit $$" 1>&2
 git push origin HEAD:main 1>&2
 echo '{"type":"result","subtype":"success","is_error":false,"result":"REVIEWER-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
+exit 0
+"""
+
+# Attempt 1 of a VERIFY quota-retry pair: emits a rate_limit_event the way Claude
+# Code does on a rejected quota check, then dies -- the exact shape Worker._process_event
+# (src/agents/worker.py:286-294) turns into QuotaExhaustedException.
+QUOTA_SHIM = """#!/bin/sh
+cat >/dev/null
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ATTEMPT-1-MARKER"}]}}'
+echo '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"tokens","resetsAt":"later"}}'
+exit 1
+"""
+
+# Attempt 2: a clean retry with no quota event, completing normally.
+CLEAN_RETRY_SHIM = """#!/bin/sh
+cat >/dev/null
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ATTEMPT-2-MARKER"}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"ATTEMPT-2-RESULT","usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 """
 
@@ -536,3 +555,83 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   # which (unlike a same-commit re-push) is not a git no-op, so it strictly
   # raises this count.
   assert _origin_commit_count(origin) == origin_commits_before + 2
+
+
+# ---------------------------------------------------------------------------
+# Fresh-spawn transport rotation (VERIFY quota-retry fallback, bug 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_replayed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The VERIFY quota-retry fallback (src/core/spawner.py:1031-1048) respawns a
+  fresh Worker into the SAME thread data dir. Without rotation, the fresh
+  spawn's tail-follow (always start_offset=0) would replay attempt 1's entire
+  raw stream first -- ending in the very quota event that killed attempt 1 --
+  falsely concluding the retry backend exhausted too. A real subprocess (a
+  `claude` shim on PATH), same two-attempt shape as the DRIVER/FAKE_SHIM e2e
+  tests above.
+  """
+  shim_dir = tmp_path / "shim"
+  shim_dir.mkdir()
+  shim = shim_dir / "claude"
+  shim.write_text(QUOTA_SHIM, encoding="utf-8")
+  shim.chmod(0o755)
+  monkeypatch.setenv("PATH", f"{shim_dir}:{os.environ['PATH']}")
+
+  work_dir = tmp_path / "work"
+  work_dir.mkdir()
+  data_dir = tmp_path / "data"
+  events_log = data_dir / "events.jsonl"
+  cfg = _cfg(tmp_path / "home")
+  thread = ThreadMetadata(session_id="sess-1", description="test")
+
+  worker1 = Worker(
+      thread_metadata=thread,
+      working_dir=work_dir,
+      events_log_path=events_log,
+      task_description="do the thing",
+      cfg=cfg,
+  )
+  with pytest.raises(QuotaExhaustedException):
+    await worker1.run()
+
+  raw_path = data_dir / runs.RAW_LOG_NAME
+  assert raw_path.exists()
+  assert "ATTEMPT-1-MARKER" in raw_path.read_text(encoding="utf-8")
+  attempt1_line_count = len([l for l in events_log.read_text(encoding="utf-8").splitlines() if l.strip()])
+  assert attempt1_line_count > 0
+
+  # Attempt 2: same thread data dir (the retry fallback's own respawn shape),
+  # a clean shim this time.
+  shim.write_text(CLEAN_RETRY_SHIM, encoding="utf-8")
+  shim.chmod(0o755)
+
+  worker2 = Worker(
+      thread_metadata=thread,
+      working_dir=work_dir,
+      events_log_path=events_log,
+      task_description="do the thing",
+      cfg=cfg,
+  )
+  exit_code = await worker2.run()
+  assert exit_code == 0
+
+  # The first attempt's bytes are preserved, just moved aside under a name
+  # distinct from RAW_LOG_NAME.
+  rotated = list(data_dir.glob(f"{runs.RAW_LOG_NAME}.*"))
+  assert len(rotated) == 1
+  assert "ATTEMPT-1-MARKER" in rotated[0].read_text(encoding="utf-8")
+
+  # The current raw log holds only attempt 2's bytes.
+  assert "ATTEMPT-1-MARKER" not in raw_path.read_text(encoding="utf-8")
+
+  # events.jsonl accumulates across both attempts (same thread, same file) --
+  # exactly like a real retry. What must NOT happen is attempt 2's own
+  # contribution replaying attempt 1's assistant marker or its quota event.
+  all_lines = [l for l in events_log.read_text(encoding="utf-8").splitlines() if l.strip()]
+  attempt2_events = [json.loads(l) for l in all_lines[attempt1_line_count:]]
+  assert attempt2_events
+  assert not any("ATTEMPT-1-MARKER" in json.dumps(e) for e in attempt2_events)
+  assert not any(e.get("type") == "rate_limit_event" for e in attempt2_events)

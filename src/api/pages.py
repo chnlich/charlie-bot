@@ -67,6 +67,11 @@ def _get_git_version() -> str:
 
 _RUNTIME_GIT_VERSION = _get_git_version()
 
+
+def _static_asset_version() -> str:
+  """Cache-bust token for static assets, derived from the pinned runtime git version."""
+  return _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-")
+
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
 
@@ -103,6 +108,7 @@ async def events_viewer(
           "session_id": session_id,
           "events_url": f"/api/sessions/{session_id}/events.jsonl",
           "hostname": socket.gethostname(),
+          "static_asset_version": _static_asset_version(),
       })
 
 
@@ -368,6 +374,7 @@ async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_conf
       context={
           "hostname": socket.gethostname(),
           "code_server_enabled": is_code_server_available(cfg),
+          "static_asset_version": _static_asset_version(),
       })
 
 
@@ -462,5 +469,5 @@ async def index(
           "hostname": socket.gethostname(),
           "sessions_root": str(cfg.sessions_dir),
           "version": _RUNTIME_GIT_VERSION,
-          "static_asset_version": _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-"),
+          "static_asset_version": _static_asset_version(),
       })

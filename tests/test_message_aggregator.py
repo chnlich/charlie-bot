@@ -413,6 +413,56 @@ def test_context_compacted_projection_carries_kind() -> None:
   ]
 
 
+def test_context_compact_failed_projection_with_error() -> None:
+  agg = MessageAggregator()
+  deltas = list(
+      agg.feed({
+          "type": "context_compact_failed",
+          "error": "context too large",
+          "timestamp": "t",
+      }))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "system",
+                  "content": "Compaction failed — context too large",
+                  "kind": "context_compact_failed",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t",
+              },
+      }
+  ]
+
+
+def test_context_compact_failed_projection_without_error() -> None:
+  agg = MessageAggregator()
+  deltas = list(
+      agg.feed({
+          "type": "context_compact_failed",
+          "error": None,
+          "timestamp": "t",
+      }))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "system",
+                  "content": "Compaction failed",
+                  "kind": "context_compact_failed",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t",
+              },
+      }
+  ]
+
+
 def test_init_system_event_is_ignored() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}, "timestamp": "t1"}))

@@ -69,6 +69,12 @@ def _context_compacted_msg(ev: dict) -> dict:
   return {'role': 'system', 'content': msg, 'kind': 'context_compacted'}
 
 
+def _context_compact_failed_msg(ev: dict) -> dict:
+  error = ev.get('error')
+  content = 'Compaction failed' if not error else f'Compaction failed — {error}'
+  return {'role': 'system', 'kind': 'context_compact_failed', 'content': content}
+
+
 def _resume_context_dropped_msg(ev: dict) -> dict:
   reason = ev.get('reason')
   if reason == 'anchor_missing':
@@ -135,6 +141,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _handler_result_msg,
     ET.CONTEXT_COMPACTED:
         _context_compacted_msg,
+    ET.CONTEXT_COMPACT_FAILED:
+        _context_compact_failed_msg,
     ET.RESUME_CONTEXT_DROPPED:
         _resume_context_dropped_msg,
     ET.SYSTEM:

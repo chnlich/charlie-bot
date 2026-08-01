@@ -16,6 +16,7 @@ from pathlib import Path
 import structlog
 
 from src.core import finalize_effects, runs
+from src.core import event_types as ET
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -277,6 +278,12 @@ async def run_crash_recovery(cfg, boot_time: datetime, session_mgr=None, thread_
   *session_mgr*/*thread_mgr* are injectable so the server passes its live
   instances; standalone callers (tests) get auto-constructed ones.
 
+  Master-side reconciliation (:func:`_reconcile_master_runs`) runs after the
+  worker-side pass: per session, a recorded live master turn is re-attached,
+  a dead one clears its record, and every real user message after the last
+  MASTER_DONE (minus the recorded turn's per-event exclusion) is replayed
+  with a replay marker through the normal per-session queue.
+
   Returns the number of interrupted runs dispatched for recovery.
   """
   if session_mgr is None:
@@ -287,6 +294,7 @@ async def run_crash_recovery(cfg, boot_time: datetime, session_mgr=None, thread_
     thread_mgr = ThreadManager(cfg)
   interrupted, threads = await asyncio.to_thread(_scan_interrupted_runs, cfg, boot_time)
   recovered = await _reconcile_interrupted_runs(cfg, session_mgr, thread_mgr, interrupted)
+  await _reconcile_master_runs(cfg, session_mgr, boot_time)
   await _quarantine_stale_failed_worktrees(cfg, threads)
   return recovered
 
@@ -386,6 +394,99 @@ async def _reconcile_interrupted_runs(cfg, session_mgr, thread_mgr, interrupted:
     log.info("interrupted_run_reconcile_done", count=recovered)
   return recovered
 
+
+def unanswered_user_events(chat_events: list[dict], exclude_ids: set[str]) -> list[dict]:
+  """Real user events after the last MASTER_DONE, minus exclusions, in log order.
+
+  Restart-replay contract: every real user event with no MASTER_DONE after it
+  is unanswered and must be redelivered. Exclusions are per-event (never
+  per-session): a recorded live turn excludes exactly its own user_event_id,
+  and a live process excludes the events already sitting in its in-memory
+  queue — everything else disappears with a killed process and is replayed.
+  """
+  last_done = -1
+  for idx, ev in enumerate(chat_events):
+    if ev.get("type") == ET.MASTER_DONE:
+      last_done = idx
+  return [
+      ev for ev in chat_events[last_done + 1:]
+      if ev.get("type") == ET.USER and isinstance(ev.get("content"), str)
+      and ev.get("id") not in exclude_ids
+  ]
+
+
+async def _await_reattach(future: asyncio.Future) -> None:
+  """Await a re-attached master turn so its recovery task stays alive to the end."""
+  await future
+
+
+async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
+  """Resolve each session's recorded master turn, then replay unanswered user messages.
+
+  Two ordered passes over active sessions:
+
+  1. master_run records: a still-alive covered run is re-attached through the
+     per-session queue (its user_event_id joins the replay exclusion set); a
+     dead run — or one on an uncovered backend transport — clears its record
+     so replay handles its message. Records spawned by this same process
+     during the recovery window (started_at >= boot_time) are spared.
+  2. replay: every real user event after the last MASTER_DONE, minus the
+     per-event exclusions and this process's queued items, is redelivered
+     with the replay marker. Pass 2 runs strictly after pass 1 enqueued the
+     resume items, so a re-attached turn always drains before a replay spawns
+     a new CLI against the same conversation.
+  """
+  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
+
+  try:
+    sessions = session_mgr.list_active_session_ids()
+  except Exception:
+    log.exception("master_reconcile_scan_failed")
+    return
+  host_boot = await asyncio.to_thread(runs.read_host_boot_time)
+  excluded: dict[str, set[str]] = {}
+
+  for meta in sessions:
+    record = meta.master_run
+    if record is None:
+      continue
+    if record.started_at >= boot_time:
+      # This process spawned the turn during the recovery window — live and
+      # self-owned: spare it, and keep its message out of the replay set.
+      if record.user_event_id:
+        excluded.setdefault(meta.id, set()).add(record.user_event_id)
+      continue
+    alive = runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
+    option = cfg.get_backend_option(meta.backend)
+    covered = option is not None and option.type not in runs.UNCOVERED_BACKEND_TYPES
+    if alive and covered:
+      future = await master_cc.enqueue_master_resume(
+          cfg,
+          meta,
+          record,
+          session_mgr.callbacks(),
+          is_alive=lambda r=record: runs.is_run_alive(r.pid, r.pid_start, r.started_at, host_boot),
+      )
+      create_logged_task(_await_reattach(future), name=f"master-resume-{meta.id[:8]}")
+      if record.user_event_id:
+        excluded.setdefault(meta.id, set()).add(record.user_event_id)
+      log.info("master_run_reattached", session=meta.id, pid=record.pid, raw_log=record.raw_log)
+    else:
+      reason = runs.TRANSPORT_NOT_COVERED_REASON if alive else "recorded master process is dead"
+      log.warning("master_run_cleared", session=meta.id, pid=record.pid, reason=reason)
+      await session_mgr.persist_master_run(meta.id, None)
+
+  for meta in sessions:
+    try:
+      events = session_mgr.load_chat_events_sync(meta.id)
+      skip = excluded.get(meta.id, set()) | master_cc.queued_user_event_ids(meta.id)
+      for ev in unanswered_user_events(events, skip):
+        log.warning("master_replaying_user_message", session=meta.id, event_id=ev.get("id"))
+        create_logged_task(
+            master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()),
+            name=f"master-replay-{meta.id[:8]}")
+    except Exception:
+      log.exception("master_replay_dispatch_failed", session=meta.id)
 
 async def _reconcile_one(
     cfg,

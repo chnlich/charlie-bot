@@ -57,7 +57,13 @@ def _cmd_query(args: argparse.Namespace) -> None:
   store = memory.load_store(memory_dir)
   unknown = [t for t in args.topic if t not in store.topics]
   if unknown:
-    print(f"error: unknown topic: {', '.join(unknown)}", file=sys.stderr)
+    for value in unknown:
+      pre_slash = value.split("/", 1)[0] if "/" in value else None
+      if pre_slash is not None and pre_slash in store.topics:
+        print(
+            f"error: unknown topic: {value} (index lines are topic/slug; try --topic {pre_slash})", file=sys.stderr)
+      else:
+        print(f"error: unknown topic: {value}", file=sys.stderr)
     sys.exit(1)
   wanted_topics = set(args.topic)
   resident_names = {t.name for t in store.topics.values() if t.resident}

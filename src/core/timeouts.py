@@ -78,3 +78,17 @@ SLASH_COMMAND_DEFAULT_TIMEOUT = 10  # seconds — overridable per-command in YAM
 # quotas). The poller fetches one derived account per gap, so each account
 # refreshes every N x 60 s where N is the derived account count.
 EXT_USAGE_ROUND_GAP_SECONDS = 60  # seconds between consecutive single-account fetches
+
+# ---------------------------------------------------------------------------
+# Restart-safe agent runtime
+# ---------------------------------------------------------------------------
+
+# A live run whose raw log has not grown for longer than this is reported as
+# suspected-hung at server startup (report only — never auto-killed). Empirically
+# 6x the p99 inter-event gap (1200 s), ~0.2% false positives on long silent runs.
+NO_OUTPUT_REPORT_THRESHOLD = 2 * 3600  # seconds
+
+# Total budget for a CLI to retry a POST whose connection never got established
+# (server down/restarting); exponential backoff inside. Measured server cold
+# start is <0.5 s, so 60 s is two orders of magnitude of headroom.
+CLI_CONNECT_TOTAL_TIMEOUT = 60  # seconds

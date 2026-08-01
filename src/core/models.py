@@ -88,6 +88,11 @@ class ThreadMetadata(BaseModel):
   started_at: Optional[UtcDatetime] = None
   completed_at: Optional[UtcDatetime] = None
   pid: Optional[int] = None
+  # Field 22 of /proc/<pid>/stat (process start time in clock ticks since host
+  # boot). Together with pid it pins a run to one process instance, so pid
+  # reuse after a crash never fakes liveness. None for threads recorded by
+  # older builds — such threads can never be judged alive.
+  pid_start: Optional[str] = None
   exit_code: Optional[int] = None
   cli_command: Optional[str] = None
   claude_session_id: Optional[str] = None

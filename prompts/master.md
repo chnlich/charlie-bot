@@ -120,4 +120,4 @@ artifact — it defines the HTML requirements and the page quality bar; write
 `artifacts/<name>.html` and share it via the file-server link. Use markdown only when
 the user opts out or the response is a brief acknowledgment.
 
-Reload the plan-approval skill in full before presenting any plan, and follow it.
+Reload the plan-approval skill in full before drafting any plan, and follow it.

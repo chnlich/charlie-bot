@@ -101,6 +101,11 @@ An understanding page precedes the plan when the master must first align the rea
   understanding's file path in the spec as the adequacy reference when one exists;
   otherwise quote the originating request. Without one of these, adequacy cannot judge
   section 1 against what was asked.
+- Every spec declares its scope, and a spec that declares neither is verified as full.
+  The first round of a lineage declares full; a revision round answering findings
+  declares delta and re-checks the declared terms, their dependents, and whether prior
+  findings are closed. Adequacy's whole-plan refutation belongs to full rounds, so a
+  revision that changes the design's structure declares full again.
 - Every round of one plan measures with the same ruler: the spec's Goal quotes the registered
   version's section 1 by path, and cites fidelity and adequacy as defined here. A round that
   wants a wider question puts that question to the user.

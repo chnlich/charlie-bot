@@ -910,16 +910,17 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   assert "`RESULT: clean`, `RESULT: 2 mismatches (1 approval)`, and `RESULT: 1 mismatch (0 approval)`" in prompt
   assert "This report format is fixed by the harness and overrides any output format the task spec requests; a task spec may add checks or scope, never change the report format." in prompt
   assert str(canonical_template_path) in prompt
-  assert "Check exactly the scope the task spec declares; do not add checks beyond it." in prompt
+  assert "Check exactly the scope the task spec declares. A spec that declares neither scope is verified as full." in prompt
   assert "Full verification (the spec declares full)" in prompt
   artifact_only_index = prompt.index("artifact-only standalone-comprehension pass")
   anchors_index = prompt.index("then read the canonical plan template")
   assert artifact_only_index < anchors_index
   assert "check the plan against every canonical rule in the template's BLOCK KIT" in prompt
   assert "Delta verification (the spec declares delta)" in prompt
-  assert "check only the declared terms, their dependent claims, prior mismatches, and document structure" in prompt
-  assert "do not reopen unchanged content" in prompt
-  assert "- Adequacy (both plan scopes, delta included)" in prompt
+  assert "check exactly the declared terms, their dependent claims, prior mismatches (including whether previously reported findings are closed), and document structure" in prompt
+  assert "- Adequacy (full scope only)" in prompt
+  assert "unchanged content keeps its verdict" in prompt
+  assert "is verified as full" in prompt
   assert "`scenario:` — the counterexample you built" in prompt
   assert "Adequacy findings use the labelled block form defined in the plan scope block" in prompt
   assert "missing or unreadable plan artifact or canonical template" in prompt

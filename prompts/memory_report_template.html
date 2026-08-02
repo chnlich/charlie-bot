@@ -1,0 +1,74 @@
+<!--
+USAGE: The daily memory curator renders its Step 2 report from this skeleton. Copy the file,
+replace every {{...}} placeholder, and delete the BLOCK comments. One <section> per admit or
+revise: the Action and Home proof lines sit directly above that entry's diff. A canon deletion
+or a vocabulary (`topics`) change reuses the same section shape with a one-line justification
+in place of the proof lines. Rejected candidates form one table, each row naming its failed
+proof line. Chinese prose; code, paths, and commands stay English. Diff rendering: one <span>
+per line inside <pre class="diff">, class add | del | hunk | meta | ctx by the line's first
+character.
+-->
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记忆库待批提案 · {{YYYY-MM-DD}}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; max-width: 62rem;
+         margin: 2rem auto; padding: 0 1.25rem; line-height: 1.6;
+         background: light-dark(#ffffff, #14161a); color: light-dark(#1f2328, #d5dae0); }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: .98rem; font-family: ui-monospace, monospace; margin: 1.7rem 0 .3rem;
+       color: light-dark(#0550ae, #79b8ff); }
+  .chip { display: inline-block; font-size: .72rem; font-family: inherit; border-radius: 999px;
+          padding: .05rem .55rem; margin-right: .35rem; vertical-align: 1px; }
+  .chip.admit  { background: light-dark(#dafbe1, #12331c); color: light-dark(#116329, #7ee2a8); }
+  .chip.revise { background: light-dark(#ddf4ff, #0c2d48); color: light-dark(#0550ae, #79b8ff); }
+  .chip.remove { background: light-dark(#ffebe9, #3b1a1d); color: light-dark(#82071e, #ffa8a8); }
+  ul.proof { margin: .2rem 0 .5rem; padding-left: 1.2rem; font-size: .92rem; }
+  table { border-collapse: collapse; width: 100%; margin: .6rem 0; font-size: .9rem; }
+  th, td { border: 1px solid light-dark(#d0d7de, #30363d); padding: .4rem .6rem; vertical-align: top; text-align: left; }
+  th { background: light-dark(#f6f8fa, #1d2127); }
+  pre.diff { background: light-dark(#f6f8fa, #1d2127); border: 1px solid light-dark(#d0d7de, #30363d);
+             border-radius: 8px; padding: .7rem .9rem; overflow-x: auto; font-size: .8rem; line-height: 1.5; }
+  pre.diff span { display: block; white-space: pre; }
+  .add  { background: light-dark(#dafbe1, #12331c); color: light-dark(#116329, #7ee2a8); }
+  .del  { background: light-dark(#ffebe9, #3b1a1d); color: light-dark(#82071e, #ffa8a8); }
+  .hunk { color: light-dark(#6639ba, #b392f0); }
+  .meta { color: light-dark(#57606a, #8b949e); }
+  .ctx  { color: light-dark(#1f2328, #d5dae0); }
+  footer { margin: 1.6rem 0; font-size: .9rem; color: light-dark(#57606a, #8b949e); }
+</style>
+</head>
+<body>
+<h1>记忆库待批提案 · {{YYYY-MM-DD}}</h1>
+<p>{{处置计数，如：admit 3、revise 2、reject 9}}（<code>charliebot memory lint</code>：{{clean}}，未提交）。</p>
+
+<!-- BLOCK: one section per admit / revise -->
+<section>
+<h2><span class="chip {{admit|revise}}">{{admit|revise}}</span> {{entries/<topic>/<slug>.md}}</h2>
+<ul class="proof">
+<li><b>Action</b>：{{这条改变未来哪个具体动作}}</li>
+<li><b>Home</b>：{{为什么 repo 文档、master prompt、skill、config、源码、LESSONS、run 目录都不是它的家}}</li>
+</ul>
+<pre class="diff">{{该文件的 git diff}}</pre>
+</section>
+
+<!-- BLOCK: canon deletion or topics change, when present -->
+<section>
+<h2><span class="chip remove">删除</span> {{entries/<topic>/<slug>.md}}</h2>
+<ul class="proof"><li>{{一句话依据，如：执行用户裁定}}</li></ul>
+<pre class="diff">{{该文件的 git diff}}</pre>
+</section>
+
+<h2>被拒候选（{{N}}），各标失败的举证行</h2>
+<table>
+<tr><th style="width:22rem">候选</th><th>失败行</th><th>理由</th></tr>
+<tr><td>{{staging 文件名主体}}</td><td>{{Action|Home}}</td><td>{{一句话}}</td></tr>
+</table>
+
+<footer>批准后动作：按 admit / revise 前缀提交，删除全部已处理 staging 文件（含被拒）。</footer>
+</body>
+</html>

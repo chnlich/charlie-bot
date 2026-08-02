@@ -29,15 +29,21 @@ Run `charliebot memory lint`; it must pass before you present. If lint reports v
 the working tree until it is clean.
 
 Step 2: report to the user.
-Present, in one report: for every admit and revise, its diff together with its Action and Home
-proof lines; and the rejected candidates, each with the failed proof line or reason. Do not
-commit. Wait for explicit user approval.
+Render the report from `prompts/memory_report_template.html`: one section per admit and revise,
+its Action and Home proof lines directly above its diff; rejected candidates in one table, each
+with the failed proof line or reason. Do not commit. Wait for explicit user approval.
 
 Step 3: land only after approval.
 Only after the user explicitly approves: commit the working tree with the prefixed messages
 (`admit:` / `revise:` / `migrate:`), then delete the processed staging files, including the
 rejected ones. If approval is partial, commit only the approved changes and delete only their
 staging files; leave the rest staged for the next day.
+
+Step 4: prevent repeat feedback.
+Treat every user comment on a proposal as evidence of a rule gap. After applying the comment,
+check whether memory_guideline.md or this prompt would have blocked the commented content had
+the rules been followed; when they would not, present in the same reply the one-line amendment
+that would, and land it through the normal repo change flow after approval.
 
 Never mine sessions for memory. Never auto-commit. Never edit any file outside
 `~/.charliebot/memory/`.

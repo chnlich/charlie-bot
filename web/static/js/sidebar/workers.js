@@ -115,8 +115,7 @@ function renderWorkersListItems(items, sessionId) {
 }
 
 function restartWorkersPolling() {
-  if (workersPollInterval) clearInterval(workersPollInterval);
-  workersPollInterval = setInterval(pollWorkers, 3000);
+  startPageTimer('workers-list', pollWorkers, 3000);
 }
 
 async function ensureWorkersLoadedForActiveSession(opts) {

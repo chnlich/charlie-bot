@@ -49,10 +49,7 @@ function resetLazySessionData() {
     else clearTimeout(lazySessionDataTimer);
     lazySessionDataTimer = null;
   }
-  if (workersPollInterval) {
-    clearInterval(workersPollInterval);
-    workersPollInterval = null;
-  }
+  stopPageTimer('workers-list');
   workersLoadedForSession = null;
   workersLoadInflightForSession = null;
   if (typeof stopAllThreadPolls === 'function') stopAllThreadPolls();

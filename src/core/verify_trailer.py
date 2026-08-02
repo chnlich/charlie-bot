@@ -45,12 +45,27 @@ async def read_verify_final_report(session_id: str, thread_id: str, thread_mgr: 
   return ""
 
 
+def _normalize_line(line: str) -> str:
+  """Strip whitespace and repeated markdown wrappers (backticks, asterisks) to a fixed point."""
+  normalized = line.strip()
+  while True:
+    stripped = normalized.strip("`*").strip()
+    if stripped == normalized:
+      return normalized
+    normalized = stripped
+
+
 def verify_result_trailer_error(report: str) -> str:
-  """Return an explicit verifier completion error, or an empty string for a valid trailer."""
+  """Return an explicit verifier completion error, or an empty string for a valid trailer.
+
+  A report is valid when any line, scanning from the end toward the start, normalizes to a
+  RESULT trailer line matching the regex. The last such line is taken as the final verdict,
+  so a valid trailer remains accepted even when it is markdown-wrapped or followed by prose.
+  """
   expected = VERIFY_RESULT_TRAILER_EXPECTED
   if not report.strip():
     return f"Verifier final report is empty; expected a final {expected} line."
-  final_line = report.splitlines()[-1]
-  if VERIFY_RESULT_TRAILER_RE.fullmatch(final_line):
-    return ""
+  for raw_line in reversed(report.splitlines()):
+    if VERIFY_RESULT_TRAILER_RE.fullmatch(_normalize_line(raw_line)):
+      return ""
   return f"Verifier final report has a missing or malformed `RESULT:` trailer; expected a final {expected} line."

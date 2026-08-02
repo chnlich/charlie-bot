@@ -80,6 +80,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   border-radius: 0.5rem 0.5rem 0 0;
   max-width: 100%;
 }
+/* A compact card is toolbar-only until it is expanded — close its bottom edge. */
+.html-artifact:not([data-artifact-expanded="1"]) > .html-artifact-toolbar {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.5rem;
+}
 .html-artifact-toolbar .filename { font-weight: 500; color: #cbd5e1; }
 .html-artifact-toolbar a,
 .html-artifact-toolbar button {

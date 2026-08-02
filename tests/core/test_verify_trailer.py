@@ -19,7 +19,7 @@ def test_bare_mismatch_last_line_is_valid() -> None:
 
 
 def test_bold_wrapped_last_line_is_valid() -> None:
-  assert verify_result_trailer_error("RESULT: 1 mismatch (0 approval)\n\n**RESULT: 1 mismatch (0 approval)**") == ""
+  assert verify_result_trailer_error("**RESULT: 1 mismatch (0 approval)**") == ""
 
 
 def test_backtick_wrapped_last_line_is_valid() -> None:

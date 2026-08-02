@@ -3,10 +3,16 @@
   const Chat = globalThis.Chat;
 
 // ---------------------------------------------------------------------------
-// HTML artifact rendering — inline sandboxed iframes for linked artifacts/*.html.
+// HTML artifact rendering — linked artifacts/*.html render as compact cards.
+// The sandboxed iframe (a whole live document with its own scripts) exists only
+// while the user has the card expanded, and both the fetch cache and the number
+// of simultaneously expanded frames are bounded.
 // ---------------------------------------------------------------------------
 var HTML_ARTIFACT_LINK_RE = /(^|\/)artifacts\/[^/]+\.html$/;
+var HTML_ARTIFACT_CACHE_MAX = 8;
+var MAX_EXPANDED_ARTIFACTS = 3;
 var htmlArtifactFetchCache = new Map();
+var expandedArtifactCards = [];
 
 function basename(path) {
   var parts = String(path || '').split('/');
@@ -120,7 +126,9 @@ function saveHtmlArtifactSavedSize(filePath, size) {
   } catch (e) {}
 }
 
-function buildHtmlArtifactCard(opts) {
+// Inner markup of an expanded card: the live iframe plus its toolbar, resize
+// handles and source view. Built on expand only, discarded on collapse.
+function buildHtmlArtifactFrameHtml(opts) {
   var filePath = opts.filePath || opts.absPath || '';
   var absPath = opts.absPath || resolveArtifactAbsolutePath(filePath);
   var rawHtml = opts.html || '';
@@ -141,10 +149,10 @@ function buildHtmlArtifactCard(opts) {
     + 'background:white;display:block;';
   var manualHeightAttr = (savedSize && savedSize.height) ? ' data-manual-height="1"' : '';
   var filePathAttr = ' data-file-path="' + escapeHtml(filePath) + '"';
-  return '<div class="html-artifact" data-artifact-path="' + escapeHtml(absPath) + '">'
-    + '<div class="html-artifact-toolbar" style="' + widthStyle + '">'
+  return '<div class="html-artifact-toolbar" style="' + widthStyle + '">'
     + '<span class="filename">' + escapeHtml(basename(filePath)) + '</span>'
-    + '<button type="button" onclick="expandHtmlArtifact(this)">Expand</button>'
+    + '<button type="button" onclick="toggleHtmlArtifactEmbed(this)">Collapse</button>'
+    + '<button type="button" onclick="expandHtmlArtifact(this)">Full screen</button>'
     + '<a href="' + escapeHtml(openUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
     + '<button type="button" onclick="toggleHtmlArtifactSource(this)">View source</button>'
     + '</div>'
@@ -161,8 +169,7 @@ function buildHtmlArtifactCard(opts) {
     + ' onpointerdown="startHtmlArtifactResize(event, this, \'xy\')"></div>'
     + '</div>'
     + '<div class="html-artifact-source"><pre><code class="hljs language-html">'
-    + sourceHighlighted + '</code></pre></div>'
-    + '</div>';
+    + sourceHighlighted + '</code></pre></div>';
 }
 
 function resolveHtmlArtifactLink(source) {
@@ -210,20 +217,33 @@ function findArtifactLinkInCode(code) {
   return null;
 }
 
-function fetchHtmlArtifact(absPath, fetchUrl) {
-  if (!htmlArtifactFetchCache.has(absPath)) {
-    var promise = fetch(fetchUrl).then(function(resp) {
-      if (!resp.ok) {
-        throw new Error('HTTP ' + resp.status + ' fetching ' + fetchUrl);
-      }
-      return resp.text();
-    }).catch(function(e) {
-      htmlArtifactFetchCache.delete(absPath);
-      throw e;
-    });
-    htmlArtifactFetchCache.set(absPath, promise);
+// Map iteration order is insertion order, so re-inserting on read makes the
+// first key the least recently used one.
+function touchHtmlArtifactCache(absPath, promise) {
+  htmlArtifactFetchCache.delete(absPath);
+  htmlArtifactFetchCache.set(absPath, promise);
+  while (htmlArtifactFetchCache.size > HTML_ARTIFACT_CACHE_MAX) {
+    htmlArtifactFetchCache.delete(htmlArtifactFetchCache.keys().next().value);
   }
-  return htmlArtifactFetchCache.get(absPath);
+}
+
+function fetchHtmlArtifact(absPath, fetchUrl) {
+  var cached = htmlArtifactFetchCache.get(absPath);
+  if (cached) {
+    touchHtmlArtifactCache(absPath, cached);
+    return cached;
+  }
+  var promise = fetch(fetchUrl).then(function(resp) {
+    if (!resp.ok) {
+      throw new Error('HTTP ' + resp.status + ' fetching ' + fetchUrl);
+    }
+    return resp.text();
+  }).catch(function(e) {
+    htmlArtifactFetchCache.delete(absPath);
+    throw e;
+  });
+  touchHtmlArtifactCache(absPath, promise);
+  return promise;
 }
 
 function findEmbeddedHtmlArtifactCard(prose, absPath) {
@@ -313,20 +333,72 @@ function lookupPlanVersionState(snapshot, planId, v) {
   return null;
 }
 
-function buildPlanCompactCardHtml(planId, v, title, state, absPath) {
+var ARTIFACT_EXPAND_CONTROL = '<button type="button" onclick="toggleHtmlArtifactEmbed(this)">Expand</button>';
+
+function buildCompactToolbarHtml(title, absPath, controls) {
   var openInTabUrl = stampViewingSessionFragment('/files' + absPath);
+  return '<div class="html-artifact-toolbar">'
+    + '<span class="filename">' + escapeHtml(title || '(untitled)') + '</span>'
+    + controls
+    + '<a href="' + escapeHtml(openInTabUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
+    + '</div>';
+}
+
+// One compact card shape for both registered plan versions (which open in the
+// plan panel) and any other HTML artifact (which expands into an iframe here).
+// `opts.fetchUrl` is required for the non-plan variant.
+function buildPlanCompactCardHtml(planId, v, title, state, absPath, opts) {
+  if (planId == null) {
+    return '<div class="artifact-compact-card html-artifact" data-artifact-path="' + escapeHtml(absPath) + '"'
+      + ' data-artifact-fetch-url="' + escapeHtml((opts && opts.fetchUrl) || '') + '">'
+      + buildCompactToolbarHtml(title, absPath, ARTIFACT_EXPAND_CONTROL)
+      + '</div>';
+  }
+  var planControls = '<span class="plan-compact-version">v' + escapeHtml(v) + '</span>'
+    + '<span class="plan-compact-state">' + escapeHtml(state || '') + '</span>'
+    + '<button type="button" onclick="openPlanFromCard(this)">Open panel</button>';
   return '<div class="plan-compact-card html-artifact" data-artifact-path="' + escapeHtml(absPath) + '"'
     + ' data-plan-card-plan="' + escapeHtml(planId) + '"'
     + ' data-plan-card-version="' + escapeHtml(v) + '"'
     + ' data-plan-card-abs-path="' + escapeHtml(absPath) + '">'
-    + '<div class="html-artifact-toolbar">'
-    + '<span class="filename">' + escapeHtml(title || '(untitled)') + '</span>'
-    + '<span class="plan-compact-version">v' + escapeHtml(v) + '</span>'
-    + '<span class="plan-compact-state">' + escapeHtml(state || '') + '</span>'
-    + '<button type="button" onclick="openPlanFromCard(this)">Open panel</button>'
-    + '<a href="' + escapeHtml(openInTabUrl) + '" target="_blank" rel="noopener noreferrer">Open in tab</a>'
-    + '</div>'
+    + buildCompactToolbarHtml(title, absPath, planControls)
     + '</div>';
+}
+
+function collapseArtifactCard(card) {
+  var index = expandedArtifactCards.indexOf(card);
+  if (index !== -1) expandedArtifactCards.splice(index, 1);
+  var absPath = card.dataset.artifactPath;
+  card.innerHTML = buildCompactToolbarHtml(basename(absPath), absPath, ARTIFACT_EXPAND_CONTROL);
+  delete card.dataset.artifactExpanded;
+}
+
+function expandArtifactCard(card) {
+  var absPath = card.dataset.artifactPath;
+  var fetchUrl = card.dataset.artifactFetchUrl;
+  return fetchHtmlArtifact(absPath, fetchUrl).then(function(html) {
+    // The chat can be rebuilt (SPA session switch) while the fetch is in
+    // flight; never revive a detached card into the expanded set.
+    if (!card.isConnected) return;
+    if (card.dataset.artifactExpanded === '1') return;
+    card.innerHTML = buildHtmlArtifactFrameHtml({absPath: absPath, filePath: absPath, html: html});
+    card.dataset.artifactExpanded = '1';
+    expandedArtifactCards.push(card);
+    // Oldest expansion wins the eviction: at most MAX_EXPANDED_ARTIFACTS live
+    // documents exist in the chat at any time.
+    while (expandedArtifactCards.length > MAX_EXPANDED_ARTIFACTS) {
+      collapseArtifactCard(expandedArtifactCards[0]);
+    }
+  }).catch(function(e) {
+    console.warn('Failed to expand linked HTML artifact', fetchUrl, e);
+  });
+}
+
+function toggleHtmlArtifactEmbed(btn) {
+  var card = btn.closest('.html-artifact');
+  if (!card) return;
+  if (card.dataset.artifactExpanded === '1') collapseArtifactCard(card);
+  else expandArtifactCard(card);
 }
 
 function openPlanFromCard(btn) {
@@ -364,12 +436,16 @@ function _planRegistrySnapshot() {
   return planPanel.getRegistrySnapshot();
 }
 
+// `reg` is the registered plan version for this path, or null for any other
+// HTML artifact — both render through the same compact card.
 function renderPlanCompactCard(link, ordinal, prose, reg) {
   var template = document.createElement('template');
-  template.innerHTML = buildPlanCompactCardHtml(reg.planId, reg.v, reg.title, reg.state, link.absPath);
+  template.innerHTML = reg
+    ? buildPlanCompactCardHtml(reg.planId, reg.v, reg.title, reg.state, link.absPath)
+    : buildPlanCompactCardHtml(null, null, basename(link.absPath), null, link.absPath, {fetchUrl: link.fetchUrl});
   var card = template.content.firstElementChild;
   if (!card) {
-    throw new Error('plan compact card render produced no element');
+    throw new Error('artifact compact card render produced no element');
   }
   var mc = document.getElementById('messages');
   var atBottom = mc ? shouldAutoScroll(mc) : false;
@@ -378,40 +454,10 @@ function renderPlanCompactCard(link, ordinal, prose, reg) {
   if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
 }
 
-function renderLegacyArtifactEmbed(link, ordinal) {
-  fetchHtmlArtifact(link.absPath, link.fetchUrl).then(function(html) {
-    if (!link.el.isConnected) return;
-    if (link.el.dataset.embedded === '1') return;
-    var currentProse = link.el.closest('.prose-msg');
-    if (!currentProse || currentProse.closest('#streaming-msg')) return;
-    if (findEmbeddedHtmlArtifactCard(currentProse, link.absPath)) {
-      link.el.dataset.embedded = '1';
-      return;
-    }
-    var template = document.createElement('template');
-    template.innerHTML = buildHtmlArtifactCard({
-      absPath: link.absPath,
-      filePath: link.absPath,
-      html: html,
-    });
-    var card = template.content.firstElementChild;
-    if (!card) {
-      throw new Error('HTML artifact card render produced no element');
-    }
-    var mc = document.getElementById('messages');
-    var atBottom = mc ? shouldAutoScroll(mc) : false;
-    insertHtmlArtifactCard(currentProse, card, ordinal);
-    link.el.dataset.embedded = '1';
-    if (atBottom && mc) mc.scrollTop = mc.scrollHeight;
-  }).catch(function(e) {
-    console.warn('Failed to render linked HTML artifact', link.fetchUrl, e);
-  });
-}
-
 function renderArtifactLink(link, ordinal, prose) {
   var ready = _planRegistryReady();
   if (!ready) {
-    renderLegacyArtifactEmbed(link, ordinal);
+    renderPlanCompactCard(link, ordinal, prose, null);
     return;
   }
   ready.then(function() {
@@ -425,14 +471,10 @@ function renderArtifactLink(link, ordinal, prose) {
     }
     var snapshot = _planRegistrySnapshot();
     var reg = snapshot ? lookupRegisteredPlanVersion(snapshot, link.absPath, SESSION_ID, window.SESSIONS_ROOT) : null;
-    if (reg) {
-      renderPlanCompactCard(link, ordinal, currentProse, reg);
-    } else {
-      renderLegacyArtifactEmbed(link, ordinal);
-    }
+    renderPlanCompactCard(link, ordinal, currentProse, reg);
   }).catch(function(e) {
-    console.warn('plan registry readiness failed; using legacy embed', e);
-    renderLegacyArtifactEmbed(link, ordinal);
+    console.warn('plan registry readiness failed; rendering the artifact card', e);
+    renderPlanCompactCard(link, ordinal, prose, null);
   });
 }
 
@@ -663,6 +705,12 @@ Chat.findArtifactLinkInCode = findArtifactLinkInCode;
 Chat.toggleHtmlArtifactSource = toggleHtmlArtifactSource;
 Chat.startHtmlArtifactResize = startHtmlArtifactResize;
 Chat.expandHtmlArtifact = expandHtmlArtifact;
+Chat.toggleHtmlArtifactEmbed = toggleHtmlArtifactEmbed;
+Chat.expandArtifactCard = expandArtifactCard;
+Chat.collapseArtifactCard = collapseArtifactCard;
+Chat.fetchHtmlArtifact = fetchHtmlArtifact;
+Chat.htmlArtifactFetchCache = htmlArtifactFetchCache;
+Chat.expandedArtifactCards = expandedArtifactCards;
 Chat.injectLinkBehavior = injectLinkBehavior;
 Chat.lookupRegisteredPlanVersion = lookupRegisteredPlanVersion;
 Chat.decidePlanCardRender = decidePlanCardRender;
@@ -678,6 +726,7 @@ Chat.expose([
   'toggleHtmlArtifactSource',
   'startHtmlArtifactResize',
   'expandHtmlArtifact',
+  'toggleHtmlArtifactEmbed',
   'injectLinkBehavior',
   'lookupRegisteredPlanVersion',
   'decidePlanCardRender',

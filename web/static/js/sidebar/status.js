@@ -7,7 +7,55 @@
 // Tracks server-reported unread state per session so we can restore the
 // unread dot after the spinner hides.
 globalThis.TuiStatusMap = globalThis.TuiStatusMap || {};
-let tuiStatusPollInterval = null;
+
+// Status polls are scoped to the sessions the sidebar is actually rendering.
+// The URL stays well under the 8 KB request-line budget at the ~23 sessions the
+// sidebar shows, but a longer list is split so no single request can overflow.
+const STATUS_QUERY_MAX_BYTES = 8192;
+
+function sidebarSessionIds() {
+  const ids = [];
+  const seen = new Set();
+  if (typeof SESSION_ID !== 'undefined' && SESSION_ID) {
+    seen.add(SESSION_ID);
+    ids.push(SESSION_ID);
+  }
+  document.querySelectorAll('a[id^="session-"]').forEach(el => {
+    const sid = el.id.slice('session-'.length);
+    if (!sid || seen.has(sid)) return;
+    seen.add(sid);
+    ids.push(sid);
+  });
+  return ids;
+}
+
+function statusRequestUrls(path, ids) {
+  const urlFor = (batch) => path + '?ids=' + batch.map(encodeURIComponent).join(',');
+  const urls = [];
+  let batch = [];
+  const flush = () => {
+    if (batch.length) urls.push(urlFor(batch));
+    batch = [];
+  };
+  ids.forEach(sid => {
+    if (batch.length && urlFor(batch.concat([sid])).length > STATUS_QUERY_MAX_BYTES) flush();
+    batch.push(sid);
+  });
+  flush();
+  return urls;
+}
+
+async function fetchScopedStatus(path) {
+  const ids = sidebarSessionIds();
+  if (!ids.length) return {};
+  const responses = await Promise.all(statusRequestUrls(path, ids).map(url => fetch(url)));
+  const merged = {};
+  for (const r of responses) {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    Object.assign(merged, await r.json());
+  }
+  return merged;
+}
 
 function sessionBackendType(session) {
   return session && session.backend && typeof BACKEND_TYPES !== 'undefined' ? (BACKEND_TYPES[session.backend] || '') : '';
@@ -29,9 +77,7 @@ function renderTuiStatusDot(session) {
 
 async function fetchTuiStatus() {
   try {
-    const r = await fetch('/api/sessions/tui/status');
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    globalThis.TuiStatusMap = await r.json();
+    globalThis.TuiStatusMap = await fetchScopedStatus('/api/sessions/tui/status');
     refreshTuiDots();
   } catch (err) {
     console.error('fetchTuiStatus failed:', err);
@@ -53,9 +99,9 @@ function refreshTuiDots() {
 }
 
 function startTuiStatusPolling() {
-  if (tuiStatusPollInterval) return;
+  if (pageTimerRegistered('tui-status')) return;
   fetchTuiStatus();
-  tuiStatusPollInterval = setInterval(fetchTuiStatus, 3000);
+  startPageTimer('tui-status', fetchTuiStatus, 3000);
 }
 
 function compactButtonTitle(backendType) {
@@ -167,15 +213,11 @@ function updateSpinner() {
   return refreshSessionStatusNow();
 }
 
-let activeSessionViewPollInterval = null;
 let activeSessionViewPollInflight = false;
 const ACTIVE_SESSION_VIEW_POLL_MS = 3000;
 
 function stopActiveSessionViewPolling() {
-  if (activeSessionViewPollInterval) {
-    clearInterval(activeSessionViewPollInterval);
-    activeSessionViewPollInterval = null;
-  }
+  stopPageTimer('active-session-view');
 }
 
 function ensureActiveSessionViewPolling() {
@@ -183,8 +225,8 @@ function ensureActiveSessionViewPolling() {
     stopActiveSessionViewPolling();
     return;
   }
-  if (activeSessionViewPollInterval) return;
-  activeSessionViewPollInterval = setInterval(pollActiveSessionView, ACTIVE_SESSION_VIEW_POLL_MS);
+  if (pageTimerRegistered('active-session-view')) return;
+  startPageTimer('active-session-view', pollActiveSessionView, ACTIVE_SESSION_VIEW_POLL_MS);
 }
 
 async function pollActiveSessionView(opts) {
@@ -242,8 +284,7 @@ function refreshSessionStatusNow(opts) {
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
-  statusPollPromise = fetch('/api/sessions/status')
-    .then(r => r.ok ? r.json() : null)
+  statusPollPromise = fetchScopedStatus('/api/sessions/status')
     .then(data => {
       if (!data) return false;
       let anyRunning = false;
@@ -265,14 +306,12 @@ function pollSessionStatus() {
 // ---------------------------------------------------------------------------
 // Thinking indicator
 // ---------------------------------------------------------------------------
-let thinkingInterval = null;
-
 function startThinking(opts) {
   masterThinking = true;
   thinkingStart = thinkingStart || Date.now();
   document.getElementById('thinking').classList.remove('hidden');
   updateThinkingTime();
-  thinkingInterval = setInterval(updateThinkingTime, 1000);
+  startPageTimer('thinking-tick', updateThinkingTime, 1000);
   if (!(opts && opts.keepSendEnabled)) {
     document.getElementById('send-btn').disabled = true;
     document.getElementById('send-btn').classList.add('opacity-50');
@@ -283,7 +322,7 @@ function startThinking(opts) {
 function stopThinking(opts) {
   masterThinking = false;
   document.getElementById('thinking').classList.add('hidden');
-  if (thinkingInterval) { clearInterval(thinkingInterval); thinkingInterval = null; }
+  stopPageTimer('thinking-tick');
   thinkingStart = null;
   document.getElementById('send-btn').disabled = false;
   document.getElementById('send-btn').classList.remove('opacity-50');
@@ -326,6 +365,9 @@ async function cancelMaster() {
 
 
 Object.assign(Sidebar, {
+  sidebarSessionIds,
+  statusRequestUrls,
+  fetchScopedStatus,
   sessionBackendType,
   isTuiSession,
   renderTuiStatusDot,
@@ -356,6 +398,9 @@ Object.assign(Sidebar, {
   cancelMaster,
 });
 Sidebar.expose([
+  'sidebarSessionIds',
+  'statusRequestUrls',
+  'fetchScopedStatus',
   'sessionBackendType',
   'isTuiSession',
   'renderTuiStatusDot',

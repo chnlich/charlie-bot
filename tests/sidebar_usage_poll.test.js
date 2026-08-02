@@ -12,6 +12,10 @@ const SIDEBAR_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'sidebar.js'),
   'utf8'
 );
+const PAGE_TIMERS_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'page-timers.js'),
+  'utf8'
+);
 const WEBSOCKET_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'websocket.js'),
   'utf8'
@@ -288,6 +292,7 @@ function buildContext(overrides = {}) {
   };
 
   vm.createContext(context);
+  vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
   return {context, fetchCalls, fetchRequests, intervals, timeouts, clears, alerts, elements, localStorageData};
@@ -512,13 +517,79 @@ test('renderMessage passes uploaded_files through for user attachment bubbles', 
   assert.match(html, /report\.pdf/);
 });
 
+// ---------------------------------------------------------------------------
+// Status polls are scoped to the sessions the sidebar has in the DOM
+// ---------------------------------------------------------------------------
+
+function sessionAnchors(ids) {
+  return ids.map((id) => ({id: 'session-' + id, tagName: 'A'}));
+}
+
+test('sidebarSessionIds sends the rendered session anchors plus the active session, deduplicated', () => {
+  const {context} = buildContext({
+    querySelectorAll: (selector) =>
+      selector === 'a[id^="session-"]' ? sessionAnchors(['session-b', 'session-a', 'session-c']) : [],
+  });
+
+  assert.deepEqual(Array.from(context.sidebarSessionIds()), ['session-a', 'session-b', 'session-c']);
+});
+
+test('sidebarSessionIds includes the active session even when the sidebar has not rendered it', () => {
+  const {context} = buildContext();
+
+  assert.deepEqual(Array.from(context.sidebarSessionIds()), ['session-a']);
+});
+
+test('pollSessionStatus asks only for the sessions the sidebar renders', async () => {
+  const requested = [];
+  const {context} = buildContext({
+    querySelectorAll: (selector) =>
+      selector === 'a[id^="session-"]' ? sessionAnchors(['session-a', 'session-b']) : [],
+  });
+  context.fetch = async (url) => {
+    requested.push(url);
+    return {ok: true, json: async () => ({})};
+  };
+
+  await context.pollSessionStatus();
+
+  assert.deepEqual(requested, ['/api/sessions/status?ids=session-a,session-b']);
+});
+
+test('a session id list too long for one request is split and the results are merged', async () => {
+  const ids = [];
+  for (let i = 0; i < 400; i++) ids.push('session-' + String(i).padStart(4, '0') + '-'.repeat(20));
+  const requested = [];
+  const {context} = buildContext({
+    querySelectorAll: (selector) => (selector === 'a[id^="session-"]' ? sessionAnchors(ids) : []),
+  });
+  const seen = [];
+  context.fetch = async (url) => {
+    requested.push(url);
+    const batch = url.slice(url.indexOf('?ids=') + 5).split(',').map(decodeURIComponent);
+    return {
+      ok: true,
+      json: async () => Object.fromEntries(batch.map((sid) => [sid, {has_unread: false, has_running_tasks: false}])),
+    };
+  };
+  context.setSessionIndicator = (sid) => { seen.push(sid); };
+
+  await context.pollSessionStatus();
+
+  assert.ok(requested.length > 1, 'the id list was split across requests');
+  requested.forEach((url) => assert.ok(url.length <= 8192, 'no request URL exceeds the 8 KB budget'));
+  // session-a is the active session and is always included on top of the rendered ids.
+  assert.equal(seen.length, ids.length + 1);
+  assert.equal(new Set(seen).size, seen.length, 'no id is requested twice');
+});
+
 test('pollSessionStatus updates pending trigger indicators from the status endpoint', async () => {
   const {context} = buildContext();
   const indicatorUpdates = [];
   const pendingUpdates = [];
 
   context.fetch = async (url) => {
-    assert.equal(url, '/api/sessions/status');
+    assert.equal(url, '/api/sessions/status?ids=session-a');
     return {
       ok: true,
       async json() {

@@ -23,9 +23,7 @@
   exposeState('sessionUnread', {});
   exposeState('switching', false);
   exposeState('currentFilter', 'all');
-  exposeState('statusPollInterval', null);
   exposeState('statusPollMs', 3000);
-  exposeState('workersPollInterval', null);
   exposeState('workersLoadedForSession', null);
   exposeState('workersLoadInflightForSession', null);
   exposeState('thinkingStart', null);

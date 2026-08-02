@@ -70,12 +70,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Poll sidebar status to correct WS drift (adaptive: 3s when tasks running, 10s idle)
   function scheduleStatusPoll() {
-    statusPollInterval = setInterval(() => {
+    startPageTimer('sidebar-status', () => {
       pollSessionStatus().then(anyRunning => {
         const desired = anyRunning ? 3000 : 10000;
         if (desired !== statusPollMs) {
           statusPollMs = desired;
-          clearInterval(statusPollInterval);
           scheduleStatusPoll();
         }
       });
@@ -83,6 +82,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   scheduleStatusPoll();
   scheduleLazySessionDataLoad();
+
+  // Coming back from a hidden tab: one immediate snapshot of everything the
+  // paused timers would have refreshed, before their cadences restart.
+  onPageResume(() => {
+    refreshSessionStatusNow({refreshWorkers: true});
+    fetchTuiStatus();
+    pollActiveSessionView();
+    updateThinkingTime();
+  });
 
   // Reconnect immediately on tab becoming visible (mobile Chrome background kills WS)
   document.addEventListener('visibilitychange', () => {

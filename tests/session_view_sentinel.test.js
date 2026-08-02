@@ -12,6 +12,10 @@ const SIDEBAR_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'sidebar.js'),
   'utf8'
 );
+const PAGE_TIMERS_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'page-timers.js'),
+  'utf8'
+);
 
 function createClassList(initial = '') {
   const names = new Set(String(initial).split(/\s+/).filter(Boolean));
@@ -229,6 +233,7 @@ function buildContext(overrides = {}) {
   context.CSS = {escape: (value) => String(value)};
 
   vm.createContext(context);
+  vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
   return {context, fetchCalls, elements};

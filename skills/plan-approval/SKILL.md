@@ -70,6 +70,9 @@ An understanding page precedes the plan when the master must first align the rea
 - Replies that touch the plan are feedback, not approval: Trade-off resolutions by
   number, added constraints, questions, changed terms. Fold each into the plan and
   re-present what changed, then wait.
+- Only the user changes the goal. Versions answer feedback within the standing goal; a changed
+  goal is a new plan — `charliebot plan present` opens the new lineage and the old one closes
+  as superseded.
 - When the user asks to control an Other Details entry, promote it; it joins the
   approval object. Unmentioned Trade-offs take their recommendation at approval.
 
@@ -89,15 +92,24 @@ An understanding page precedes the plan when the master must first align the rea
 
 ## Verify
 
-- Launch verify as a read-only repo-less delegation before presenting the plan.
+- Fixed order: draft → register with `charliebot plan present` → verify → revise → hand the
+  plan to the user with its findings. Verify is a read-only repo-less delegation and runs on
+  a registered plan, so the goal it measures against has one home and the plan is listed
+  while the rounds run.
 - Verify checks fidelity — claims against evidence — and adequacy: whether the design,
   assumed accurate and implemented, entails what section 1 claims. Quote the confirmed
   understanding's file path in the spec as the adequacy reference when one exists;
   otherwise quote the originating request. Without one of these, adequacy cannot judge
   section 1 against what was asked.
+- Every round of one plan measures with the same ruler: the spec's Goal quotes the registered
+  version's section 1 by path, and cites fidelity and adequacy as defined here. A round that
+  wants a wider question puts that question to the user.
 - Adequacy findings are advisory. `gap-design:` says the mechanism looks short of the
   goal — weigh it and revise the design if it holds. `gap-goal:` says the goal itself may
   be misread — put that question to the user.
+- A revision answers findings by correcting the plan against the goal it was registered with;
+  section 1 keeps saying what the first version said. When a finding argues the goal itself
+  is the problem, that is a `gap-goal:` question for the user.
 - Report the adequacy findings when presenting the plan, so the user can weigh them too.
 
 ## Runtime delegation authorization

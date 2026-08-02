@@ -86,8 +86,10 @@
 
       BLOCK KIT — canonical plan grammar and the only definition of its section semantics. A plan is a decision
       surface, not a step list. It exposes the generalized contract and the choices the user must judge;
-      implementation steps belong in the worker task spec. Keep content in semantic blocks so inline comments
-      can anchor to useful units.
+      implementation steps belong in the worker task spec. Facts the plan establishes — the contract it
+      proposes, the measurements it took — belong in the plan. Facts that already live in the repository
+      belong to the source: cite them by path, so the plan stays right when the code moves. Keep content
+      in semantic blocks so inline comments can anchor to useful units.
 
       Treat the plan artifact as the reader's only session context. A technically capable reader with
       repository access but no prior conversation, older plan, run nickname, comment thread, or verifier

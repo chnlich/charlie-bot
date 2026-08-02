@@ -324,7 +324,7 @@ async def test_status_endpoint_thinking_since_matches_busy_map(tmp_path: Path) -
     app.include_router(sessions_api.router, prefix="/api/sessions")
     app.dependency_overrides[get_session_manager] = lambda: session_mgr
     with TestClient(app) as client:
-      response = client.get("/api/sessions/status")
+      response = client.get(f"/api/sessions/status?ids={session.id}")
     assert response.status_code == 200
     payload = response.json()[session.id]
     current = thinking_state.busy_since(session.id)

@@ -103,7 +103,7 @@ async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Pat
   )
   _write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-status.json", trigger)
 
-  status = await sessions_api.all_sessions_status(session_mgr=session_mgr)
+  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=session_mgr)
   assert status[session.id]["has_unread"] is True
   assert status[session.id]["has_running_tasks"] is False
   assert status[session.id]["has_pending_trigger"] is True
@@ -130,7 +130,7 @@ async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) ->
   )
   _write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-archived.json", trigger)
 
-  status = await sessions_api.all_sessions_status(session_mgr=session_mgr)
+  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=session_mgr)
   # Archived sessions remain in the status response but skip per-session
   # filesystem work, so pending-trigger fields are always empty regardless of
   # any trigger files still on disk.

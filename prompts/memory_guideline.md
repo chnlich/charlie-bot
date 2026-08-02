@@ -11,23 +11,28 @@ and labeling rules apply in both flows.
 
 ## Admission test
 
-Admission is judged at curation time, with evidence, never mid-session. Every candidate is gated
-by all four tests:
+Admission is judged at curation time, with evidence, never mid-session. The store admits three
+kinds of entry, and only these:
 
-1. **Future behavior**: it changes what the user or an agent does next, across tasks, runs, and
-   sessions. A fact that never steers a decision does not belong in the store.
-2. **Only home**: the store is the only home for it. Live state that has an authoritative home
-   elsewhere is rejected: in-flight plans, loops, and jobs live in their owning systems; run
-   results and receipts live in the run dir, owning session, or a results doc.
-3. **Stable**: a month from now it reads unchanged and is still wanted.
-4. **Cost of loss**: losing it costs real work: a correction the user already made gets repeated,
-   or discovery gets redone.
+1. A ruling or preference the user stated.
+2. A mechanism or fact whose rediscovery would cost a real investigation and that still reads
+   true a month from now.
+3. A host, cluster, or account level pointer that cannot be guessed and has no owning document.
 
-An incident (a rendering bug, tool failure, environment glitch) is not evidence of a preference;
-its home is `LESSONS.md` or the owning system, not the store. A fact enters when both hold: later
-work will rely on it, and re-obtaining it at that point would cost a real investigation. Data
-cheap to re-obtain on demand lives in session reports and run dirs; the store keeps the
-mechanism-level takeaway that tells the reader where to look.
+Everything else stays out by default; when in doubt, reject and name the candidate in the
+report.
+
+Every admit and every revise carries two proof lines in the report, and a candidate whose
+Action or Home line cannot be written is rejected:
+
+- **Action**: the concrete future action this entry changes.
+- **Home**: why the store is the only home, checked against the others: repo-scoped knowledge
+  lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives in the master prompt,
+  a skill, config, or the source; incidents and event history live in `LESSONS.md`; run
+  results, live state, and receipts live in the run dir or owning session.
+
+Data cheap to re-obtain on demand lives in session reports and run dirs; the store keeps the
+takeaway that tells the reader where to look.
 
 ## Admission is merge-first and strict
 

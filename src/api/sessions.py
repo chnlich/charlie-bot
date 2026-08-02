@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from croniter import croniter
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.responses import Response
 
@@ -196,10 +196,34 @@ async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_sess
   return sessions
 
 
+def _parse_session_ids(ids: str) -> list[str]:
+  """Split the `ids` query parameter into a deduplicated, order-preserving id list."""
+  parsed: list[str] = []
+  seen: set[str] = set()
+  for part in ids.split(','):
+    sid = part.strip()
+    if not sid or sid in seen:
+      continue
+    seen.add(sid)
+    parsed.append(sid)
+  if not parsed:
+    raise HTTPException(status_code=422, detail="ids must name at least one session")
+  return parsed
+
+
+async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> list[SessionMetadata]:
+  """Resolve the requested ids to metadata, dropping ids that no longer exist."""
+  loaded = await asyncio.gather(*(session_mgr.get_session(sid) for sid in _parse_session_ids(ids)))
+  return [meta for meta in loaded if meta is not None]
+
+
 @router.get('/status')
-async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_manager)):
-  """Return derived sidebar state for every session shown in the sidebar."""
-  sessions = await session_mgr.list_sessions()
+async def all_sessions_status(
+    ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """Return derived sidebar state for the requested sessions."""
+  sessions = await _load_requested_sessions(session_mgr, ids)
   if not sessions:
     return {}
   await session_mgr.populate_sidebar_state(
@@ -224,11 +248,12 @@ async def all_sessions_status(session_mgr: SessionManager = Depends(get_session_
 
 @router.get('/tui/status')
 async def tui_status_all(
+    ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Return tmux liveness and recent Claude jsonl activity for every tui-cli session."""
-  sessions = await session_mgr.list_sessions()
+  """Return tmux liveness and recent Claude jsonl activity for the requested tui-cli sessions."""
+  sessions = await _load_requested_sessions(session_mgr, ids)
   tui_sessions = []
   for meta in sessions:
     option = cfg.get_backend_option(meta.backend)

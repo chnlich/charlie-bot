@@ -25,7 +25,8 @@ report.
 Every admit and every revise carries two proof lines in the report, and a candidate whose
 Action or Home line cannot be written is rejected:
 
-- **Action**: the concrete future action this entry changes.
+- **Action**: the concrete future action this entry changes, named as work that recurs or is
+  already planned; a constructed possibility fails the line.
 - **Home**: why the store is the only home, checked against the others: repo-scoped knowledge
   lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives in the master prompt,
   a skill, config, or the source; incidents and event history live in `LESSONS.md`; run

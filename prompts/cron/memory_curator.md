@@ -22,7 +22,7 @@ is rejected. For each passing candidate, the default action is a merge, not a ne
   title honestly describes the whole content. Create `entries/<topic>/<slug>.md` with a
   complete header (scope, topic, audience, title) and the candidate body. Add the topic to
   the `topics` vocabulary if it is not already there.
-- **reject**: do not admit; list the candidate in the report with the failed proof lines or a
+- **reject**: do not admit; list the candidate in the report with the failed proof line or a
   one-line reason (wrong home, theme already covered, dishonest title, and so on).
 
 Run `charliebot memory lint`; it must pass before you present. If lint reports violations, fix
@@ -30,7 +30,7 @@ the working tree until it is clean.
 
 Step 2: report to the user.
 Present, in one report: for every admit and revise, its diff together with its Action and Home
-proof lines; and the rejected candidates, each with the failed proof lines or reason. Do not
+proof lines; and the rejected candidates, each with the failed proof line or reason. Do not
 commit. Wait for explicit user approval.
 
 Step 3: land only after approval.

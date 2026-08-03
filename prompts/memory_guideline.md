@@ -79,8 +79,10 @@ One coherent fact or rule set per entry. The title lives in frontmatter; the bod
 content with no first-line requirement. Timeless phrasing: state the standing reality, not the
 moment it was learned. Dates, session ids, commit hashes, quoted rulings, event history, and
 case enumerations belong in `LESSONS.md`, not the store. Positively phrased, said once, in one
-language, lines 120 columns or fewer. Entry prose follows the writing-style skill. When context
-changes, revise the entry in place (a `revises` candidate stages the proposed new text).
+language, lines 120 columns or fewer. Entry prose follows the writing-style skill.
+Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
+moves. When context changes, revise the entry in place (a `revises` candidate stages the proposed
+new text).
 
 ## Commit message prefixes
 

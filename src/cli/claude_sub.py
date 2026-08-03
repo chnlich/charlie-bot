@@ -12,8 +12,8 @@ import asyncio
 import json
 import os
 import re
-import signal
 import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -24,11 +24,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.agents.backends.claude_code import headless_claude_env
-from src.agents.backends.pty_common import _TMUX_SOCKET, _tmux_binary, _tmux_client_env, tmux_session_name
+from src.agents.backends.pty_common import (
+  _TMUX_SOCKET,
+  _tmux_binary,
+  _tmux_client_env,
+  tmux_session_name,
+)
 from src.cli.claude_sub_bridge import (
-    HookBridge,
-    HookTurnState,
-    PromptDelivery,
+  HookBridge,
+  HookTurnState,
+  PromptDelivery,
 )
 from src.core.config import charliebot_home_dir
 from src.core.process import kill_process_group

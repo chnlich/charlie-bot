@@ -13,19 +13,23 @@ import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.agents.backends.pty_common import (
-    PTY_EXIT,
-    PTY_INPUT,
-    PTY_RESIZE,
-    PtyAttachment,
-    _HISTORY_LIMIT,
-    _INITIAL_COLS,
-    _INITIAL_ROWS,
-    _WS_RECV_TIMEOUT,
-    _pump_pty_to_ws,
-    _run_tmux,
-    tmux_session_name,
+  _HISTORY_LIMIT,
+  _INITIAL_COLS,
+  _INITIAL_ROWS,
+  _WS_RECV_TIMEOUT,
+  PTY_EXIT,
+  PTY_INPUT,
+  PTY_RESIZE,
+  PtyAttachment,
+  _pump_pty_to_ws,
+  _run_tmux,
+  tmux_session_name,
 )
-from src.core.config import CHARLIEBOT_HOME_ENV, charliebot_home_dir, default_charliebot_home
+from src.core.config import (
+  CHARLIEBOT_HOME_ENV,
+  charliebot_home_dir,
+  default_charliebot_home,
+)
 
 log = structlog.get_logger()
 

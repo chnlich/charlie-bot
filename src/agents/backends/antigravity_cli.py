@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Optional
 
 import aiofiles
-from src.agents.backends.base import AgentBackend
-from src.agents.backends.base import make_error_event
-from src.agents.backends.base import make_result_event
-from src.agents.backends.base import make_text_event
-from src.agents.backends.base import resolve_binary
+
+from src.agents.backends.base import (
+  AgentBackend,
+  make_error_event,
+  make_result_event,
+  make_text_event,
+  resolve_binary,
+)
 
 _PRINT_TIMEOUT = "24h"
 

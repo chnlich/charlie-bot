@@ -10,21 +10,31 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.responses import Response
 
-from src.api.deps import get_plan_manager, get_session_manager, get_thread_manager, get_trigger_manager, require_session
-from src.api.message_utils import build_session_bootstrap_data, build_session_view_data, events_to_messages
+from src.api.deps import (
+  get_plan_manager,
+  get_session_manager,
+  get_thread_manager,
+  get_trigger_manager,
+  require_session,
+)
+from src.api.message_utils import (
+  build_session_bootstrap_data,
+  build_session_view_data,
+  events_to_messages,
+)
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import (
-    CreateSessionRequest,
-    DeleteGroupRequest,
-    EloneSessionRequest,
-    ForkSessionRequest,
-    RateRoundRequest,
-    RenameGroupRequest,
-    RenameSessionRequest,
-    SessionMetadata,
-    SessionStatus,
-    SetGroupRequest,
-    ThreadMetadata,
+  CreateSessionRequest,
+  DeleteGroupRequest,
+  EloneSessionRequest,
+  ForkSessionRequest,
+  RateRoundRequest,
+  RenameGroupRequest,
+  RenameSessionRequest,
+  SessionMetadata,
+  SessionStatus,
+  SetGroupRequest,
+  ThreadMetadata,
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager

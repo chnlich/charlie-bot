@@ -7,38 +7,43 @@ from typing import Union
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.deps import get_plan_manager, get_session_manager, get_thread_manager, get_trigger_manager
+from src.api.deps import (
+  get_plan_manager,
+  get_session_manager,
+  get_thread_manager,
+  get_trigger_manager,
+)
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
-    ImproveLoopAlreadyRunningError,
-    loop_goal_path,
-    loop_plan_path,
-    reserve_loop_state,
-    run_improve_loop,
+  ImproveLoopAlreadyRunningError,
+  loop_goal_path,
+  loop_plan_path,
+  reserve_loop_state,
+  run_improve_loop,
 )
 from src.core.models import (
-    DelegateInvocationMetadata,
-    DelegateRequest,
-    ImproveRequest,
-    PlanAmendRequest,
-    PlanApproveRequest,
-    PlanCloseRequest,
-    PlanPresentRequest,
-    ScheduleTriggerRequest,
-    SessionMetadata,
-    SpawnRequest,
-    TaskType,
-    WatchKind,
+  DelegateInvocationMetadata,
+  DelegateRequest,
+  ImproveRequest,
+  PlanAmendRequest,
+  PlanApproveRequest,
+  PlanCloseRequest,
+  PlanPresentRequest,
+  ScheduleTriggerRequest,
+  SessionMetadata,
+  SpawnRequest,
+  TaskType,
+  WatchKind,
 )
 from src.core.review import select_reviewer_backend
 from src.core.sessions import SessionManager
 from src.core.spawner import (
-    DelegationBlockedError,
-    check_takeoff_gate,
-    resolve_requested_subagent_backend_model,
-    resolve_session_subagent_backend_model,
-    spawn_worker,
+  DelegationBlockedError,
+  check_takeoff_gate,
+  resolve_requested_subagent_backend_model,
+  resolve_session_subagent_backend_model,
+  spawn_worker,
 )
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager

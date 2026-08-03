@@ -4,7 +4,12 @@ from typing import Any, Optional
 
 import structlog
 
-from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus, utc_now
+from src.core.models import (
+  CreateSessionRequest,
+  SessionMetadata,
+  SessionStatus,
+  utc_now,
+)
 
 log = structlog.get_logger()
 

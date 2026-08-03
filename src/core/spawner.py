@@ -8,45 +8,49 @@ import traceback
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import structlog
 
-from src.api.message_utils import extract_text_from_message
 from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 from src.agents.worker import QuotaExhaustedException, Worker
+from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core import finalize_effects, review, runs
+from src.core.config import CharlieBotConfig, get_scheduled_tasks
+from src.core.git import (
+  git_create_worktree,
+  git_current_branch,
+  git_worktree_dir_name,
+  git_worktree_prune,
+  git_worktree_remove,
+)
+from src.core.memory import assemble_worker
 from src.core.models import (
-    BackendOption,
-    SessionMetadata,
-    SpawnRequest,
-    TaskType,
-    ThreadMetadata,
-    ThreadStatus,
-    backend_type_allows_missing_model,
+  BackendOption,
+  SessionMetadata,
+  SpawnRequest,
+  TaskType,
+  ThreadMetadata,
+  ThreadStatus,
+  backend_type_allows_missing_model,
 )
 from src.core.ndjson import parse_ndjson_file
+from src.core.notifications import send_telegram
 from src.core.process import kill_process_group
-from src.core.verify_trailer import (
-    VERIFY_RESULT_TRAILER_EXPECTED as _VERIFY_RESULT_TRAILER_EXPECTED,
-    read_verify_final_report as _read_verify_final_report,
-    verify_result_trailer_error as _verify_result_trailer_error,
-)
-from src.core.git import (
-    git_current_branch,
-    git_create_worktree,
-    git_worktree_dir_name,
-    git_worktree_prune,
-    git_worktree_remove,
-)
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-from src.core.config import CharlieBotConfig, get_scheduled_tasks
-from src.core.memory import assemble_worker
-from src.core.notifications import send_telegram
+from src.core.verify_trailer import (
+  VERIFY_RESULT_TRAILER_EXPECTED as _VERIFY_RESULT_TRAILER_EXPECTED,
+)
+from src.core.verify_trailer import (
+  read_verify_final_report as _read_verify_final_report,
+)
+from src.core.verify_trailer import (
+  verify_result_trailer_error as _verify_result_trailer_error,
+)
 
 log = structlog.get_logger()
 

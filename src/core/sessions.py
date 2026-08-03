@@ -22,16 +22,19 @@ from src.core.json_utils import load_json_meta
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
-    CreateSessionRequest,
-    MasterRunRecord,
-    SessionCallbacks,
-    SessionMetadata,
-    SessionStatus,
-    parse_utc_datetime,
-    utc_now,
+  CreateSessionRequest,
+  MasterRunRecord,
+  SessionCallbacks,
+  SessionMetadata,
+  SessionStatus,
+  parse_utc_datetime,
+  utc_now,
 )
 from src.core.ndjson import append_ndjson
-from src.core.scheduled_sessions import ScheduledSessionBusyError, ScheduledSessionStore
+from src.core.scheduled_sessions import (  # noqa: F401  # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
+  ScheduledSessionBusyError,
+  ScheduledSessionStore,
+)
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import streaming_manager
 from src.core.thinking_state import busy_since
@@ -156,7 +159,7 @@ class SessionManager:
     from src.agents.backends.tui import ensure_tmux_session
     try:
       await ensure_tmux_session(meta.id, self._session_dir(meta.id))
-    except Exception as e:
+    except Exception:
       log.exception("backend_create_hook_failed", session_id=meta.id, backend=meta.backend)
       raise
 
@@ -576,7 +579,7 @@ class SessionManager:
           continue
         shutil.rmtree(thread_dir)
         deleted += 1
-      except Exception as e:
+      except Exception:
         log.exception("thread_gc_failed", thread=str(thread_dir))
     return deleted
 

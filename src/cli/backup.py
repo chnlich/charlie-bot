@@ -10,7 +10,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.core.backup import apply_retention, backup_dir, create_backup, list_backups, restore_backup
+from src.core.backup import (
+  apply_retention,
+  backup_dir,
+  create_backup,
+  list_backups,
+  restore_backup,
+)
 
 
 def _cmd_create(args: argparse.Namespace) -> None:

@@ -21,19 +21,19 @@ import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.agents.backends.pty_common import (
-    PTY_EXIT,
-    PTY_INPUT,
-    PTY_RESIZE,
-    PtyAttachment,
-    _HISTORY_LIMIT,
-    _INITIAL_COLS,
-    _INITIAL_ROWS,
-    _WS_RECV_TIMEOUT,
-    _pump_pty_to_ws,
-    _run_tmux,
-    _tmux_binary,
-    kill_tmux_session,
-    tmux_session_name,
+  _HISTORY_LIMIT,
+  _INITIAL_COLS,
+  _INITIAL_ROWS,
+  _WS_RECV_TIMEOUT,
+  PTY_EXIT,
+  PTY_INPUT,
+  PTY_RESIZE,
+  PtyAttachment,
+  _pump_pty_to_ws,
+  _run_tmux,
+  _tmux_binary,
+  kill_tmux_session,  # noqa: F401  # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py and monkeypatched here by tests
+  tmux_session_name,
 )
 
 log = structlog.get_logger()

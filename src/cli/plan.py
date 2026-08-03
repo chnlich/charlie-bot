@@ -15,7 +15,6 @@ written to stderr as a JSON error with a non-zero exit code.
 import argparse
 import json
 import os.path
-import sys
 from typing import Sequence
 
 from src.cli.common import get_api, post_internal_api, resolve_session_id

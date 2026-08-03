@@ -9,7 +9,11 @@ from pydantic import BaseModel, Field
 
 from src.api.chat import run_and_finalize
 from src.api.deps import get_session_manager, require_session
-from src.api.message_utils import build_agent_input_content, build_user_event, serialize_uploaded_files
+from src.api.message_utils import (
+  build_agent_input_content,
+  build_user_event,
+  serialize_uploaded_files,
+)
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata, UploadedFileRef

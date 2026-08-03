@@ -13,7 +13,13 @@ import aiofiles
 import httpx
 import structlog
 
-from src.agents.backends.base import AgentBackend, make_error_event, make_result_event, make_text_event, resolve_binary
+from src.agents.backends.base import (
+  AgentBackend,
+  make_error_event,
+  make_result_event,
+  make_text_event,
+  resolve_binary,
+)
 from src.core import event_types as ET
 from src.core.process import kill_process_group
 

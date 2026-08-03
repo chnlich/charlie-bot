@@ -761,7 +761,7 @@ def _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) -> boo
   if exit_code != 0:
     return True
   can_spawn_reviewer = all([thread.repo_path, thread.branch_name, thread.worktree_path])
-  return exit_code == 0 and thread.require_review and not thread.review_of and can_spawn_reviewer
+  return thread.require_review and can_spawn_reviewer
 
 
 async def _finalize_worker(
@@ -815,29 +815,17 @@ async def _finalize_worker(
     await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
 
   if not skip_notify:
-    if task_type == TaskType.VERIFY:
-      await _notify_completion(
-          session_id,
-          description,
-          thread,
-          exit_code,
-          thread_mgr,
-          session_mgr,
-          cfg,
-          quota_exhausted=quota_exhausted,
-          error=error,
-          task_type=task_type)
-    else:
-      await _notify_completion(
-          session_id,
-          description,
-          thread,
-          exit_code,
-          thread_mgr,
-          session_mgr,
-          cfg,
-          quota_exhausted=quota_exhausted,
-          error=error)
+    await _notify_completion(
+        session_id,
+        description,
+        thread,
+        exit_code,
+        thread_mgr,
+        session_mgr,
+        cfg,
+        quota_exhausted=quota_exhausted,
+        error=error,
+        task_type=task_type)
 
 
 async def _finalize_worker_safely(
@@ -1158,7 +1146,7 @@ async def resume_worker(
 async def _broadcast_completion(
     session_id: str,
     description: str,
-    thread,
+    thread: ThreadMetadata,
     exit_code: int,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
@@ -1228,7 +1216,7 @@ async def _broadcast_completion(
 async def _notify_completion(
     session_id: str,
     description: str,
-    thread,
+    thread: ThreadMetadata,
     exit_code: int,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,

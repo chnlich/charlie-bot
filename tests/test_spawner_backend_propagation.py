@@ -446,6 +446,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
       notify_cfg: CharlieBotConfig,
       quota_exhausted: bool = False,
       error: str = "",
+      task_type: TaskType = TaskType.IMPLEMENT,
   ) -> None:
     captures["notify_exit_code"] = exit_code
 
@@ -525,6 +526,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       notify_cfg: CharlieBotConfig,
       quota_exhausted: bool = False,
       error: str = "",
+      task_type: TaskType = TaskType.IMPLEMENT,
   ) -> None:
     captures["notified"] = True
 
@@ -1020,6 +1022,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       notify_cfg: CharlieBotConfig,
       quota_exhausted: bool = False,
       error: str = "",
+      task_type: TaskType = TaskType.IMPLEMENT,
   ) -> None:
     captures["notify_exit_code"] = exit_code
     captures["notify_require_review"] = thread_meta.require_review

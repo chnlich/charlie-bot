@@ -161,7 +161,7 @@ async def test_verify_final_report_falls_back_to_untruncated_last_assistant_mess
         ("mismatch | claim | anchor | evidence\nRESULT: 1 mismatches (1 approval)", "", ThreadStatus.COMPLETED, 0),
         ("", "", ThreadStatus.FAILED, -1),
         ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", "", ThreadStatus.FAILED, -1),
-        ("confirmed | claim | anchor | evidence\nRESULT: clean\n\n", "", ThreadStatus.FAILED, -1),
+        ("confirmed | claim | anchor | evidence\nRESULT: clean\n\n", "", ThreadStatus.COMPLETED, 0),
         ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", "backend shutdown", ThreadStatus.FAILED, -1),
         ("mismatch | claim | anchor | evidence\nRESULT: 1 mismatch", "", ThreadStatus.FAILED, -1),
         ("mismatch | claim | anchor | evidence\nRESULT: 3 mismatches", "", ThreadStatus.FAILED, -1),

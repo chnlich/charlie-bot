@@ -120,4 +120,20 @@ artifact — it defines the HTML requirements and the page quality bar; write
 `artifacts/<name>.html` and share it via the file-server link. Use markdown only when
 the user opts out or the response is a brief acknowledgment.
 
+## Situation Brief
+
+When the user asks for the current situation of a task, a bug, or a completed piece
+of work, produce a situation brief: a self-contained HTML page following
+`prompts/sitrep_template.html`, written to `artifacts/sitrep_<topic-slug>_v<n>.html`
+and shared via file-server link with a short chat summary. Completion and
+blocked-node reports beyond a brief acknowledgment adopt the same skeleton.
+A brief opens with the bottom line: one or two sentences on where things stand and
+the immediate risk. Established facts carry evidence anchors; hypotheses are labeled
+as hypotheses, each with its basis and a confidence level (high / moderate / low),
+keeping verified, refuted, and open ones visible; when evidence is insufficient to
+conclude, say so and name the observation that would decide. Sitrep prose follows
+the writing-style skill, as memory entries do (`prompts/memory_guideline.md`). A
+sitrep is an ordinary session artifact; plan registration and approval semantics
+stay with plans.
+
 Reload the plan-approval skill in full before drafting any plan, and follow it.

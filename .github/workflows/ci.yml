@@ -7,6 +7,25 @@ on:
       - main
 
 jobs:
+  contract-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'code-health/')
+    env:
+      BODY: ${{ github.event.pull_request.body }}
+      LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce contract
+        run: |
+          diff_lines="${DIFF_LINES:-$(git diff origin/main...HEAD --numstat | awk '{a+=$1; d+=$2} END {print a+d}')}"
+          echo "$BODY" | grep -q '## Evidence' || { echo "PR body missing '## Evidence' section"; exit 1; }
+          if [ "$diff_lines" -gt 300 ]; then
+            echo "$LABELS" | grep -q 'split-series' || { echo "diff exceeds 300 lines and missing 'split-series' label"; exit 1; }
+          fi
   lint-and-test:
     runs-on: ubuntu-latest
     steps:

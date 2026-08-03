@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharlieBot Sitrep Template</title>
+<style>
+  :root{
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --acc:#1163c0; --grn:#187f37;
+    --amb:#9a6700; --red:#cf222e; --vio:#6a3fc0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#ffffff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#ffffff;font-size:12px;font-weight:700;align-items:center;justify-content:center}
+  h2 .nb{background:var(--vio)}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#ffffff;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  h3 .sn.read{background:var(--grn)}
+  h3 .layer{font-size:11px;font-weight:600;color:var(--mut);margin-left:7px}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#24292f;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#7a4b00}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #b6d3f2;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#1c3f66}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#e6d09b;border-left-color:var(--amb);color:#6b4e00}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.n{border-color:var(--grn);color:#187f37}
+  .flow .ar{color:var(--mut)}
+  .fork{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--amb);border-radius:8px;padding:12px 15px;margin:12px 0}
+  .fork .q{display:flex;align-items:baseline;gap:9px;font-weight:600;margin:0 0 4px}
+  .fork .fn{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--amb);color:#ffffff;font-size:11.5px;font-weight:700;align-items:center;justify-content:center;flex:0 0 auto}
+  .fork .rec{margin:4px 0 0;font-size:12.5px}
+  .fork .rec b{color:var(--grn)}
+  .fork .trade{margin:3px 0 0;font-size:12.5px;color:var(--mut)}
+  .fork .resolved{margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px;font-weight:600;color:#187f37}
+  details.details-layer{background:var(--panel);border:1px solid var(--bd);border-radius:9px;margin:6px 0 0}
+  details.details-layer summary{cursor:pointer;padding:11px 15px;font-size:13px;font-weight:600;color:var(--mut)}
+  details.details-layer summary:hover{color:var(--tx)}
+  details.details-layer[open] summary{color:var(--tx);border-bottom:1px solid var(--bd)}
+  details.details-layer ul{margin:0;padding:10px 16px 13px 34px}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  .foot p{margin:0}
+  .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#7a5a00;border:1px solid #e0c97f;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#7a5a00}
+  @media(max-width:760px){body{padding:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Optimize a data-loading hot path</h1>
+    <p class="sub">Example sitrep body; replace this header and the sections below with the topic's own content.</p>
+    <div class="meta">
+      <span class="mtag">repo · charlie-bot</span>
+      <span class="mtag">scope · data loading</span>
+      <span class="mtag">status · completed</span>
+    </div>
+  </header>
+
+  <main>
+    <!--
+      USAGE — build each brief as artifacts/sitrep_<topic-slug>_v<n>.html in the session dir.
+      Reuse this file's <head> and <style> verbatim; replace the <main> content following the
+      grammar below. Each generated page is self-contained: a technically capable reader with no
+      prior conversation understands it on its own. The generated page's language follows the
+      user's artifact-language preference; this template stays English.
+
+      GRAMMAR — canonical sitrep page grammar and the only definition of its section semantics.
+      A brief opens with the bottom line (BLUF) and then walks the fixed section order below.
+
+      Section order is fixed; each section appears in this order when present:
+      0. Bottom Line — one or two sentences on where things stand and the immediate risk.
+         Say the bottom line up front so the reader can stop reading at will.
+      1. Background & Problem — from scratch: what is being done and why, so a reader arriving
+         cold understands the situation.
+      2. Established Facts — statements that are established. An evidence anchor (span.src with
+         numbers, log paths, or commands) admits a claim into this section; unanchored claims at
+         this level read as hypotheses instead.
+      3. Comparison — baseline versus current, naming what the work measures. Present when the
+         topic is a completed piece of work; omitted otherwise.
+      4. Hypotheses — each stated in hypothesis voice (provisional, not settled) with its basis
+         and a confidence level (high / moderate / low), confidence stated separately from the
+         likelihood wording. Verified, refuted, and open hypotheses all stay visible; refuted ones
+         are labeled refuted.
+      5. Unknowns & Gaps — what the evidence cannot yet decide, naming the observation or data
+         that would decide it. When evidence is insufficient to conclude, the needed observation
+         stands in place of a conclusion.
+      6. Now Running — optional small section for in-flight delegations, improve-loop iterations,
+         and waiting triggers. Omitted when nothing is running.
+
+      Optional sections by topic: a brief timeline section covers bug or incident topics; a brief
+      recommended-next-step closes an open-loop report. A brief on a cross-session topic labels
+      that its evidence chain lives outside the current session.
+
+      Prose rules by reference: sitrep prose follows the writing-style skill in the
+      explaining-to-the-user genre, exactly as memory entries do (prompts/memory_guideline.md).
+      Framing stays positive throughout; the rule bodies live in that skill and stay out of this
+      comment. The page is an ordinary session artifact; plan registration and approval semantics
+      stay with plans.
+
+      Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
+      blockquote, pre, table, td, div.callout, div.flow, and div.meta > span.mtag chips.
+    -->
+
+    <section class="plan-section">
+      <h2><span class="n">0</span> Bottom Line</h2>
+      <p>The data-loading path on hostA now builds a full day's batch in 14s, down from 61s on the previous approach, with no accuracy change.</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">1</span> Background &amp; Problem</h2>
+      <p>The training job needs a full day of input records available before each step. The original loader pulled every record over the network one row at a time, which made each step wait for the slowest row.</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">2</span> Established Facts</h2>
+      <p>The new loader batches rows and reads them sequentially on disk. <span class="src">Sources: run 12345 stdout, artifacts/run_12345.log; command sbatch run.sbatch --loader=batched</span></p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">3</span> Comparison</h2>
+      <p>Baseline: 61s per day at 4 MB/s; current: 2s per day at 130 MB/s. The thing measured is wall time for one fully loaded day.</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">4</span> Hypotheses</h2>
+      <p>Hypothesis (high confidence): the batched read is faster because it issues one contiguous disk read per day instead of 40k single-row reads. The hypothesis is open; a run that reverts to per-row reads has not been measured yet, so it stays unverified.</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">5</span> Unknowns &amp; Gaps</h2>
+      <p>The evidence cannot yet decide whether the same speedup holds on the slower disk on hostB. A run on hostB with the batched loader would settle it; until then that case is not concluded.</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">6</span> Now Running</h2>
+      <p>An improve-loop pass is steering the loader's chunk size; nothing else is awaiting a result.</p>
+    </section>
+  </main>
+</div>
+</body>
+</html>

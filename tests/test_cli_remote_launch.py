@@ -78,6 +78,7 @@ def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
 
 
 @pytest.mark.skipif(not _has_ssh_localhost(), reason="ssh localhost not available without password")
+@pytest.mark.local_only
 def test_end_to_end_localhost(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   meta, home, session = _run_e2e(tmp_path, capsys, host="localhost")
 

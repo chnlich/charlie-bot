@@ -53,6 +53,7 @@ def test_ncu_junk_file_returns_clean_4xx(client: TestClient, tmp_path: Path) -> 
 
 
 @_requires_sample
+@pytest.mark.local_only
 def test_ncu_renders_sample_report(client: TestClient) -> None:
   resp = client.get("/ncu", params={"file": str(_SAMPLE_REPORT)})
   assert resp.status_code == 200
@@ -68,6 +69,7 @@ def test_ncu_renders_sample_report(client: TestClient) -> None:
 
 
 @_requires_sample
+@pytest.mark.local_only
 def test_ncu_renders_all_tabs_and_provenance(client: TestClient) -> None:
   body = client.get("/ncu", params={"file": str(_SAMPLE_REPORT)}).text
   for tab in ("summary", "details", "roofline", "source", "session", "raw"):
@@ -80,6 +82,7 @@ def test_ncu_renders_all_tabs_and_provenance(client: TestClient) -> None:
 
 
 @_requires_sample
+@pytest.mark.local_only
 def test_parser_surfaces_new_content_types() -> None:
   report = parse_ncu_report(str(_SAMPLE_REPORT))
   assert report["parser"] == "ncu_report"
@@ -108,6 +111,7 @@ def test_parser_surfaces_new_content_types() -> None:
 
 
 @_requires_full_report
+@pytest.mark.local_only
 def test_parser_surfaces_roofline_for_full_report() -> None:
   report = parse_ncu_report(str(_FULL_REPORT))
   assert report["parser"] == "ncu_report"
@@ -130,6 +134,7 @@ def test_parser_surfaces_roofline_for_full_report() -> None:
 
 
 @_requires_full_report
+@pytest.mark.local_only
 def test_ncu_renders_full_report_roofline_tab(client: TestClient) -> None:
   resp = client.get("/ncu", params={"file": str(_FULL_REPORT)})
   assert resp.status_code == 200

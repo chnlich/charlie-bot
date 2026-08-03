@@ -23,6 +23,10 @@ GROUNDTRUTH_TXT = Path(
 AUDIO_DURATION_SECONDS = 48.06
 CHUNK_SAMPLES = 2048
 
+# Both tests stream the host's acceptance voice sample through locally cached
+# sherpa-onnx speech models; nothing they need exists on a CI runner.
+pytestmark = pytest.mark.local_only
+
 
 def _require_voice_assets(cfg: CharlieBotConfig) -> None:
   if not SAMPLE_WAV.is_file() or not GROUNDTRUTH_TXT.is_file():

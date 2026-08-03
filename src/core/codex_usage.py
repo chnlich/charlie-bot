@@ -6,8 +6,8 @@ from typing import Any, Callable
 
 import structlog
 
-from src.core.config import CharlieBotConfig
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
+from src.core.config import CharlieBotConfig
 
 log = structlog.get_logger()
 

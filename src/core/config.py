@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, Field, model_validator
 
-log = structlog.get_logger()
-
 from src.core.models import BackendOption
 from src.core.yaml_utils import load_yaml
+
+log = structlog.get_logger()
 
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 

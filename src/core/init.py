@@ -8,21 +8,20 @@ import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
-import yaml
-from pathlib import Path
-
 import structlog
+import yaml
 
-from src.core import finalize_effects, runs
 from src.core import event_types as ET
+from src.core import finalize_effects, runs
 from src.core.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    _resolve_local_timezone,
-    _resolve_prompt_file,
-    get_config,
+  CharlieBotConfig,
+  ScheduledTaskConfig,
+  _resolve_local_timezone,
+  _resolve_prompt_file,
+  get_config,
 )
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
@@ -350,8 +349,8 @@ def _translate_for_thread(cfg, meta: dict):
   backend_id = meta.get("backend")
   if backend_id:
     try:
-      from src.core.spawner import resolve_backend_option
       from src.agents.backends.registry import build_backend
+      from src.core.spawner import resolve_backend_option
       option = resolve_backend_option(cfg, backend_id, meta.get("model"))
       return build_backend(option, cfg).translate_event
     except Exception as e:
@@ -363,7 +362,9 @@ async def _reconcile_interrupted_runs(cfg, session_mgr, thread_mgr, interrupted:
   """Resolve each pre-boot thread's run truth and dispatch its recovery action."""
   if not interrupted:
     return 0
-  from src.core import spawner  # lazy: spawner imports sessions, sessions imports this module
+  from src.core import (
+    spawner,  # lazy: spawner imports sessions, sessions imports this module
+  )
 
   host_boot = await asyncio.to_thread(runs.read_host_boot_time)
   holders_scan = await asyncio.to_thread(runs.scan_stdout_holders)

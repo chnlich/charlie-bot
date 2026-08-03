@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from src.agents.backends.base import AgentBackend
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
+from src.agents.backends.base import AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.codex import CodexBackend

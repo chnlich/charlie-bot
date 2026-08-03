@@ -10,14 +10,24 @@ import structlog
 from src.core import event_types as ET
 from src.core import finalize_effects
 from src.core.config import CharlieBotConfig
-from src.core.git import git_current_branch, git_worktree_dir_name, git_worktree_prune, git_worktree_remove
+from src.core.git import (
+  git_current_branch,
+  git_worktree_dir_name,
+  git_worktree_prune,
+  git_worktree_remove,
+)
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
-from src.core.models import BackendOption, SpawnRequest, ThreadMetadata, backend_type_allows_missing_model
+from src.core.models import (
+  BackendOption,
+  SpawnRequest,
+  ThreadMetadata,
+  backend_type_allows_missing_model,
+)
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
 from src.core.tasks import create_logged_task
+from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 

@@ -6,21 +6,24 @@ import shlex
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from src.core.process import kill_process_group
-
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.agents.backends.pty_common import _TMUX_SOCKET, tmux_session_exists, tmux_session_name
+from src.agents.backends.pty_common import (
+  _TMUX_SOCKET,
+  tmux_session_exists,
+  tmux_session_name,
+)
 from src.api.deps import get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import (
-    ThreadMetadata,
-    ThreadStatus,
-    WorkerEvent,
+  ThreadMetadata,
+  ThreadStatus,
+  WorkerEvent,
 )
 from src.core.ndjson import parse_ndjson_file
+from src.core.process import kill_process_group
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 

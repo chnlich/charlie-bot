@@ -6,7 +6,6 @@ import gzip
 import hashlib
 import json
 import os
-import pathlib
 import shutil
 import socket
 import subprocess

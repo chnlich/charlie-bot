@@ -14,7 +14,15 @@ import structlog
 from src.api.message_utils import build_scheduled_trigger_event
 from src.core.config import CharlieBotConfig, get_config
 from src.core.master_trigger import trigger_master
-from src.core.models import LocalPid, PendingTrigger, RemotePid, SlurmJob, TriggerStatus, WatchKind, WatchTarget
+from src.core.models import (
+  LocalPid,
+  PendingTrigger,
+  RemotePid,
+  SlurmJob,
+  TriggerStatus,
+  WatchKind,
+  WatchTarget,
+)
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 
@@ -84,9 +92,9 @@ def _detect_pidfd():
 
     return _stdlib_pidfd_open, _stdlib_waitid_pidfd
 
-  import platform
   import ctypes
   import ctypes.util
+  import platform
 
   if platform.system() != "Linux":
     return None, None

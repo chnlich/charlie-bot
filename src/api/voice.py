@@ -12,7 +12,11 @@ from uuid import uuid4
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
-from src.agents.transcriber import SAMPLE_RATE, SpeechModelsNotReady, create_transcription_session
+from src.agents.transcriber import (
+  SAMPLE_RATE,
+  SpeechModelsNotReady,
+  create_transcription_session,
+)
 from src.core.config import CharlieBotConfig, get_config
 
 log = structlog.get_logger()

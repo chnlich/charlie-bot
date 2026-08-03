@@ -8,11 +8,14 @@ from typing import TYPE_CHECKING
 import structlog
 
 from src.core import event_types as ET
-from src.core.message_aggregator import MessageAggregator, extract_text_from_message, extract_tool_result_text
+from src.core.message_aggregator import (
+  MessageAggregator,
+  extract_text_from_message,
+  extract_tool_result_text,
+)
 
 if TYPE_CHECKING:
-  from src.core.models import SessionMetadata
-  from src.core.models import ThreadMetadata
+  from src.core.models import SessionMetadata, ThreadMetadata
   from src.core.sessions import SessionManager
   from src.core.threads import ThreadManager
 

@@ -9,7 +9,13 @@ import aiofiles
 import structlog
 
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata, TaskType, ThreadMetadata, ThreadStatus, utc_now
+from src.core.models import (
+  SessionMetadata,
+  TaskType,
+  ThreadMetadata,
+  ThreadStatus,
+  utc_now,
+)
 
 log = structlog.get_logger()
 

@@ -633,7 +633,11 @@ async def test_claude_one_shot_text_raises_on_nonzero_exit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_one_shot_text_accumulates_agent_message() -> None:
+async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> None:
+  monkeypatch.setattr(
+      "src.agents.backends.codex.resolve_binary",
+      lambda name, fallback: "/usr/bin/codex",
+  )
   from src.agents.backends.codex import CodexBackend
 
   lines = [
@@ -665,7 +669,11 @@ async def test_codex_one_shot_text_accumulates_agent_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_one_shot_text_returns_empty_when_no_agent_message() -> None:
+async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypatch) -> None:
+  monkeypatch.setattr(
+      "src.agents.backends.codex.resolve_binary",
+      lambda name, fallback: "/usr/bin/codex",
+  )
   from src.agents.backends.codex import CodexBackend
 
   lines = [

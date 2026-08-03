@@ -40,8 +40,8 @@ Some symbols look dead to static tools but are reached by string reference or ke
 The seed entry, uncovered while standing up the CI gate, is the two documented `# noqa`
 re-exports: `kill_tmux_session` and `ScheduledSessionBusyError`. Any symbol reached from
 `prompts/ skills/ configs/ web/` by string belongs here rather than in a deletion. Keep this list
-in this file as `## known-alive` below; edit it whenever you confirm a symbol is reached by
-string. Do not delete a symbol on this list.
+in this file, in the "Known-alive symbols" list below; edit it whenever you confirm a symbol is
+reached by string. Do not delete a symbol on this list.
 
 Known-alive symbols:
 - `kill_tmux_session` — documented `# noqa` re-export, reached by string reference.

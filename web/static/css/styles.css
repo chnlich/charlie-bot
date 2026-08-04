@@ -164,6 +164,21 @@ body.resizing { cursor: col-resize; user-select: none; }
   border-right-color: rgba(148, 163, 184, 0.9);
   border-bottom-color: rgba(148, 163, 184, 0.9);
 }
+/* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
+   warning without hiding the link, which stays clickable. */
+.file-link-missing {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #f87171;
+  background: rgba(127, 29, 29, 0.25);
+  white-space: nowrap;
+  vertical-align: baseline;
+}
 .html-artifact-source {
   display: none;
   max-height: 80vh;

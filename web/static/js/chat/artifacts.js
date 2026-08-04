@@ -14,6 +14,52 @@ var MAX_EXPANDED_ARTIFACTS = 3;
 var htmlArtifactFetchCache = new Map();
 var expandedArtifactCards = [];
 
+// The two prefixes the file server answers on (server.py mounts one router under both):
+// "/absolute_filepath/" is the form written into chat text, "/files/" is what this UI builds
+// and what older messages carry. Every link below is normalized to the absolute path it names
+// before anything else looks at it, so cards, dedupe keys, cache keys and the plan version
+// badge see one path per file whichever prefix it arrived under.
+var FILE_SERVER_PREFIXES = ['/files', '/absolute_filepath'];
+var FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';
+
+function absolutePathFromServedPathname(pathname) {
+  for (var i = 0; i < FILE_SERVER_PREFIXES.length; i++) {
+    var prefix = FILE_SERVER_PREFIXES[i] + '/';
+    if (pathname.indexOf(prefix) !== 0) continue;
+    try {
+      return '/' + decodeURIComponent(pathname.slice(prefix.length));
+    } catch (e) {
+      console.warn('Invalid file-server path', pathname, e);
+      return null;
+    }
+  }
+  return null;
+}
+
+function parseLinkUrl(href) {
+  try {
+    return new URL(href, window.location.href);
+  } catch (e) {
+    console.warn('Invalid link', href, e);
+    return null;
+  }
+}
+
+// A link naming this page's hostname with a different scheme or port names this same server:
+// the base URL is written from memory, and a wrong scheme or port there is still unambiguous,
+// so the link is pulled back to the page origin. Another hostname is another server, and is
+// returned as written.
+function normalizedToPageOrigin(url) {
+  var page = new URL(window.location.href);
+  if (url.hostname !== page.hostname || url.origin === page.origin) return url;
+  return new URL(url.pathname + url.search + url.hash, page.origin);
+}
+
+function resolveFileServerUrl(href) {
+  var url = parseLinkUrl(href);
+  return url ? normalizedToPageOrigin(url) : null;
+}
+
 function basename(path) {
   var parts = String(path || '').split('/');
   return parts[parts.length - 1];
@@ -180,28 +226,17 @@ function resolveHtmlArtifactLink(source) {
     href = source.getAttribute('href') || '';
   }
   if (!href) return null;
-  var url;
-  try {
-    url = new URL(href, window.location.href);
-  } catch (e) {
-    console.warn('Invalid HTML artifact link', href, e);
-    return null;
-  }
+  var url = resolveFileServerUrl(href);
+  if (!url) return null;
   var pathname = url.pathname || '';
   if (!HTML_ARTIFACT_LINK_RE.test(pathname)) return null;
-  if (pathname.indexOf('/files/') !== 0) return null;
-  var encodedAbsPath = pathname.slice('/files/'.length);
-  var absPath;
-  try {
-    absPath = '/' + decodeURIComponent(encodedAbsPath);
-  } catch (e) {
-    console.warn('Invalid HTML artifact file path', pathname, e);
-    return null;
-  }
+  var absPath = absolutePathFromServedPathname(pathname);
+  if (absPath === null) return null;
   return {fetchUrl: pathname, absPath: absPath};
 }
 
-var HTML_ARTIFACT_CODE_RE = /(?:https?:\/\/[^\s]+?)?\/files\/[^\s]*\/artifacts\/[^/\s]+\.html/g;
+var HTML_ARTIFACT_CODE_RE = new RegExp(
+  '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/[^\\s]*\\/artifacts\\/[^/\\s]+\\.html', 'g');
 
 function findArtifactLinkInCode(code) {
   var text = code.textContent || '';
@@ -235,7 +270,11 @@ function fetchHtmlArtifact(absPath, fetchUrl) {
   }
   var promise = fetch(fetchUrl).then(function(resp) {
     if (!resp.ok) {
-      throw new Error('HTTP ' + resp.status + ' fetching ' + fetchUrl);
+      // The status rides along on the error: it is what tells an expand that the artifact is
+      // gone rather than that the fetch went wrong some other way.
+      var failure = new Error('HTTP ' + resp.status + ' fetching ' + fetchUrl);
+      failure.status = resp.status;
+      throw failure;
     }
     return resp.text();
   }).catch(function(e) {
@@ -268,6 +307,141 @@ function insertHtmlArtifactCard(prose, card, ordinal) {
     before = before.nextSibling;
   }
   parent.insertBefore(card, before);
+}
+
+// ---------------------------------------------------------------------------
+// Missing file links — a file link whose target the server has nothing at is
+// marked where it appears, so a wrong path shows up on the render rather than
+// on the click that fails. Only a 404 marks: any other status, and any network
+// error, leaves the link alone, so the marker keeps meaning "the server looked
+// and the file is not there". HTML artifact links are decided by the fetch that
+// builds their card, so they cost no request of their own here.
+// ---------------------------------------------------------------------------
+var MISSING_FILE_MARKER_TEXT = '\u26A0 missing';
+var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
+// A run of text naming a path under either prefix, with or without a scheme and host in front.
+// The class ends the run at whitespace and at the closers markdown and prose put after a URL.
+var FILE_SERVER_LINK_SOURCE =
+  '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/[^\\s\\)\\]"\'`<>]+';
+var LINK_TRAILING_PUNCTUATION_RE = /[.,;:!?*]+$/;
+
+function buildMissingMarker() {
+  var marker = document.createElement('span');
+  marker.className = 'file-link-missing';
+  marker.title = MISSING_FILE_MARKER_TITLE;
+  marker.textContent = MISSING_FILE_MARKER_TEXT;
+  return marker;
+}
+
+function missingMarkerHtml() {
+  return '<span class="file-link-missing" title="' + escapeHtml(MISSING_FILE_MARKER_TITLE) + '">'
+    + escapeHtml(MISSING_FILE_MARKER_TEXT) + '</span>';
+}
+
+// One occurrence of a file link: the absolute path it names, the URL a probe would ask for,
+// and where the marker goes. `end` is the offset just past the link inside a text node, which
+// is where that node has to be split; element carriers take the marker as a sibling instead.
+function fileServerOccurrence(href, node, kind, end) {
+  var url = resolveFileServerUrl(href);
+  if (!url) return null;
+  var pathname = url.pathname || '';
+  var absPath = absolutePathFromServedPathname(pathname);
+  if (absPath === null) return null;
+  // An HTML artifact link already has an answer coming from the fetch that builds its card;
+  // probing it here would be a second request for the same thing.
+  if (HTML_ARTIFACT_LINK_RE.test(pathname)) return null;
+  return {absPath: absPath, probeUrl: url.href, node: node, kind: kind, end: end};
+}
+
+function collectFileServerOccurrences(out, text, node, kind) {
+  if (!text) return;
+  var pattern = new RegExp(FILE_SERVER_LINK_SOURCE, 'g');
+  var match;
+  while ((match = pattern.exec(text)) !== null) {
+    var href = match[0].replace(LINK_TRAILING_PUNCTUATION_RE, '');
+    var occurrence = fileServerOccurrence(href, node, kind, match.index + href.length);
+    if (occurrence) out.push(occurrence);
+  }
+}
+
+function probeFileMissing(probeUrl) {
+  return fetch(probeUrl, {method: 'HEAD'}).then(function(resp) {
+    return resp.status === 404;
+  }).catch(function(e) {
+    console.warn('file link probe failed', probeUrl, e);
+    return false;
+  });
+}
+
+function markMissingFileLinks(occurrences) {
+  if (!occurrences.length) return Promise.resolve();
+  var byPath = new Map();
+  occurrences.forEach(function(occurrence) {
+    var group = byPath.get(occurrence.absPath);
+    if (!group) {
+      group = [];
+      byPath.set(occurrence.absPath, group);
+    }
+    group.push(occurrence);
+  });
+  var groups = Array.from(byPath.values());
+  // One HEAD per unique path, and marking waits for all of them: a text node is split once
+  // with every missing occurrence in it at hand, since splitting it moves the later offsets.
+  return Promise.all(groups.map(function(group) {
+    return probeFileMissing(group[0].probeUrl);
+  })).then(function(missing) {
+    var marked = [];
+    groups.forEach(function(group, index) {
+      if (missing[index]) marked = marked.concat(group);
+    });
+    markOccurrencesMissing(marked);
+  });
+}
+
+function markOccurrencesMissing(occurrences) {
+  var textNodes = new Map();
+  occurrences.forEach(function(occurrence) {
+    if (occurrence.kind === 'text') {
+      var group = textNodes.get(occurrence.node);
+      if (!group) {
+        group = [];
+        textNodes.set(occurrence.node, group);
+      }
+      group.push(occurrence);
+      return;
+    }
+    insertMissingMarkerAfter(occurrence.node);
+  });
+  textNodes.forEach(splitTextNodeAroundMarkers);
+}
+
+// The chat can be rebuilt (SPA session switch) while a probe is in flight, which leaves the
+// carrier detached; a marker on a detached node would never be seen, so there is nothing to do.
+function insertMissingMarkerAfter(node) {
+  var parent = node.parentNode;
+  if (!parent) return;
+  parent.insertBefore(buildMissingMarker(), node.nextSibling);
+}
+
+// A text node carries no attribute to hang a marker off, so it is split just past each missing
+// link and the marker goes between the halves. Offsets ascend, so one pass rebuilds the node.
+function splitTextNodeAroundMarkers(occurrences, node) {
+  var parent = node.parentNode;
+  if (!parent) return;
+  var text = node.nodeValue || '';
+  var pieces = document.createDocumentFragment();
+  var cursor = 0;
+  occurrences.forEach(function(occurrence) {
+    pieces.appendChild(document.createTextNode(text.slice(cursor, occurrence.end)));
+    pieces.appendChild(buildMissingMarker());
+    cursor = occurrence.end;
+  });
+  pieces.appendChild(document.createTextNode(text.slice(cursor)));
+  parent.replaceChild(pieces, node);
+}
+
+function markArtifactCardMissing(card) {
+  card.querySelector('.html-artifact-toolbar').insertAdjacentHTML('beforeend', missingMarkerHtml());
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +565,9 @@ function expandArtifactCard(card) {
     }
   }).catch(function(e) {
     console.warn('Failed to expand linked HTML artifact', fetchUrl, e);
+    // This fetch is the probe for an HTML artifact link: a 404 here is the answer a HEAD would
+    // have brought back, so the card carries the marker and no extra request is made.
+    if (e.status === 404) markArtifactCardMissing(card);
   });
 }
 
@@ -490,8 +667,21 @@ function embedLinkedHtmlArtifacts(root) {
   root.querySelectorAll('.prose-msg').forEach(function(prose) {
     if (prose.id === 'streaming-msg' || prose.closest('#streaming-msg')) return;
     var links = [];
+    var occurrences = [];
     var seen = new Set();
     Array.from(prose.querySelectorAll('a[href]')).forEach(function(anchor) {
+      var href = anchor.getAttribute('href') || '';
+      var url = parseLinkUrl(href);
+      var normalized = url ? normalizedToPageOrigin(url) : null;
+      // Writing the normalized href back is what makes the click land: a wrong scheme or port
+      // on this host would otherwise be carried into the navigation exactly as written.
+      // normalizedToPageOrigin hands back the same object when the link needs no rewrite.
+      if (normalized && normalized !== url) {
+        anchor.setAttribute('href', normalized.href);
+        href = normalized.href;
+      }
+      var occurrence = fileServerOccurrence(href, anchor, 'element', null);
+      if (occurrence) occurrences.push(occurrence);
       if (anchor.dataset.embedded === '1') return;
       var resolved = resolveHtmlArtifactLink(anchor);
       if (!resolved) return;
@@ -505,6 +695,7 @@ function embedLinkedHtmlArtifacts(root) {
       });
     });
     Array.from(prose.querySelectorAll('code')).forEach(function(code) {
+      collectFileServerOccurrences(occurrences, code.textContent || '', code, 'element');
       if (code.dataset.embedded === '1') return;
       var resolved = findArtifactLinkInCode(code);
       if (!resolved) return;
@@ -522,6 +713,7 @@ function embedLinkedHtmlArtifacts(root) {
       if (type === Node.TEXT_NODE) {
         var text = node.nodeValue || '';
         if (text) {
+          collectFileServerOccurrences(occurrences, text, node, 'text');
           var matches = text.match(HTML_ARTIFACT_CODE_RE);
           if (matches) {
             for (var i = 0; i < matches.length; i++) {
@@ -555,6 +747,7 @@ function embedLinkedHtmlArtifacts(root) {
       }
       renderArtifactLink(link, ordinal, prose);
     });
+    markMissingFileLinks(occurrences);
   });
 }
 

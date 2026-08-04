@@ -132,11 +132,10 @@ A situation brief is a self-contained HTML page following `prompts/sitrep_templa
 written to `artifacts/sitrep_<topic-slug>_v<n>.html` and shared via file-server link with a
 short chat summary. Completion and
 blocked-node reports beyond a brief acknowledgment adopt the same skeleton.
-A brief opens with the bottom line: one or two sentences on where things stand and
-the immediate risk. Established facts carry evidence anchors; hypotheses are labeled
-as hypotheses, each with its basis and a confidence level (high / moderate / low),
-keeping verified, refuted, and open ones visible; when evidence is insufficient to
-conclude, say so and name the observation that would decide. Sitrep prose follows
+The brief opens with the bottom line and then follows the page grammar: the
+reader-question sections, the inline epistemic labels, the readability rules, and
+the pre-share self-checks. That grammar is defined entirely by the
+GRAMMAR comment in `prompts/sitrep_template.html`. Sitrep prose follows
 the writing-style skill, as memory entries do (`prompts/memory_guideline.md`). A
 sitrep is an ordinary session artifact; plan registration and approval semantics
 stay with plans.

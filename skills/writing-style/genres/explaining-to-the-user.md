@@ -19,6 +19,14 @@ it does.
 - Restructure when the keystone turns up late, so it lands where it is first
   needed.
 - Let each step name what it takes from the step before.
+- Open every section and block with its conclusion, so a pass over first sentences
+  alone retells the whole.
+
+## Vocabulary
+
+- Prefer the reader's established term over a coined description.
+- Gloss a coined term at first occurrence, and re-hint its meaning when it recurs
+  far from its gloss.
 
 ## Evidence
 

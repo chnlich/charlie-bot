@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
-import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -149,11 +148,13 @@ async def update_cron_task(
     _validate_backend_id(req.backend, cfg)
   # A syntax-error or otherwise unparseable file must surface as a 409 with the
   # loader's error text, never a 500. Validate via the loader on the real file
-  # so the error matches what the list route reports for the job.
+  # so the error matches what the list route reports for the job. Mirrors the
+  # loader's own catch-all: any failure in _load_cron_file becomes this job's
+  # error, never an unhandled exception.
   try:
     await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
     task = await asyncio.to_thread(_read_cron_yaml, name)
-  except (yaml.YAMLError, ValueError, TypeError) as e:
+  except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
   await _ensure_backend_update_session(name, task, req, cfg, session_mgr)
   updated_task = _apply_task_update(task, req)

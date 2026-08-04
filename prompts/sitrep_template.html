@@ -63,6 +63,10 @@
   .foot p{margin:0}
   .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#7a5a00;border:1px solid #e0c97f;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
   .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#7a5a00}
+  .req{display:inline-block;background:rgba(17,99,192,.08);border:1px solid #b6d3f2;border-radius:5px;padding:1px 7px;font-weight:600;font-size:12px;color:var(--acc);white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px;margin-right:6px;vertical-align:baseline}
+  .tag.fact{background:rgba(24,127,55,.10);color:var(--grn);border:1px solid #b7dcc2}
+  .tag.hyp{background:rgba(154,103,0,.10);color:var(--amb);border:1px solid #e6d09b}
   @media(max-width:760px){body{padding:18px}}
 </style>
 </head>
@@ -70,7 +74,7 @@
 <div class="wrap">
   <header>
     <h1>Optimize a data-loading hot path</h1>
-    <p class="sub">Example sitrep body; replace this header and the sections below with the topic's own content.</p>
+    <p class="sub">The batched loader is merged and complete: a full day now builds in 2 seconds instead of 61, with no accuracy change. The only exposure is whether the speedup holds on the slower second host. Example sitrep body; replace this header and the sections below with the topic's own content.</p>
     <div class="meta">
       <span class="mtag">repo · charlie-bot</span>
       <span class="mtag">scope · data loading</span>
@@ -79,83 +83,97 @@
   </header>
 
   <main>
-    <!--
+<!--
       USAGE — build each brief as artifacts/sitrep_<topic-slug>_v<n>.html in the session dir.
       Reuse this file's <head> and <style> verbatim; replace the <main> content following the
       grammar below. Each generated page is self-contained: a technically capable reader with no
       prior conversation understands it on its own. The generated page's language follows the
       user's artifact-language preference; this template stays English.
 
-      GRAMMAR — canonical sitrep page grammar and the only definition of its section semantics.
-      A brief opens with the bottom line (BLUF) and then walks the fixed section order below.
-
-      Section order is fixed; each section appears in this order when present:
-      0. Bottom Line — one or two sentences on where things stand and the immediate risk.
-         Say the bottom line up front so the reader can stop reading at will.
-      1. Background & Problem — from scratch: what is being done and why, so a reader arriving
-         cold understands the situation.
-      2. Established Facts — statements that are established. An evidence anchor (span.src with
-         numbers, log paths, or commands) admits a claim into this section; unanchored claims at
-         this level read as hypotheses instead.
-      3. Comparison — baseline versus current, naming what the work measures. Present when the
-         topic is a completed piece of work; omitted otherwise.
-      4. Hypotheses — each stated in hypothesis voice (provisional, not settled) with its basis
-         and a confidence level (high / moderate / low), confidence stated separately from the
-         likelihood wording. Verified, refuted, and open hypotheses all stay visible; refuted ones
-         are labeled refuted.
-      5. Unknowns & Gaps — what the evidence cannot yet decide, naming the observation or data
-         that would decide it. When evidence is insufficient to conclude, the needed observation
-         stands in place of a conclusion.
-      6. Now Running — optional small section for in-flight delegations, improve-loop iterations,
-         and waiting triggers. Omitted when nothing is running.
-
-      Optional sections by topic: a brief timeline section covers bug or incident topics; a brief
-      recommended-next-step closes an open-loop report. A brief on a cross-session topic labels
-      that its evidence chain lives outside the current session.
-
-      Prose rules by reference: sitrep prose follows the writing-style skill in the
-      explaining-to-the-user genre, exactly as memory entries do (prompts/memory_guideline.md).
-      Framing stays positive throughout; the rule bodies live in that skill and stay out of this
-      comment. The page is an ordinary session artifact; plan registration and approval semantics
-      stay with plans.
+      Pre-share self-checks, applied to the finished page:
+      1. Reading only the first sentences of every section and block retells the whole story.
+      2. No coined term or count is left undefined at its first occurrence.
+      3. Every fact label carries a source anchor.
 
       Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
       blockquote, pre, table, td, div.callout, div.flow, and div.meta > span.mtag chips.
+
+      GRAMMAR — canonical sitrep page grammar and the only definition of its section semantics.
+      The header's p.sub carries the bottom line: where things stand plus the immediate risk, in
+      one or two sentences, so the reader can stop after the header. Then come five sections in a
+      fixed order and numbering; any section may shrink to one sentence.
+
+      1. "What waits on you?" — the decisions or actions pending on the reader, each with the
+         material needed to judge it. "Nothing waits on you." is a valid one-line body.
+      2. "What is this and why?" — the problem from scratch for a cold reader, ending with a short
+         list of named requirements: self-describing slugs the rest of the page references,
+         rendered as span.req chips.
+      3. "What was verified?" — deliverables and acceptance evidence; every claim carries a
+         span.src anchor.
+      4. "Risks & open questions" — one h3 per topic, the whole story of a topic told in one
+         place. Epistemic status is an inline label, not a section: a fact label (span.tag.fact)
+         requires a source anchor; an open-hypothesis label (span.tag.hyp) carries a confidence
+         level (high / moderate / low) and the observation that would decide it; a verified
+         hypothesis is restated as a fact with one clause noting it was confirmed; a refuted one
+         gets one sentence. An incident topic may add a brief timeline inside its own block.
+      5. "What happens next?" — the schedule, in-flight work, and the recommended order.
+
+      Six readability rules, one line each:
+      - facts-answer-requirements: every fact block opens by naming which requirement from
+        section 2 it discharges.
+      - skim-layer: the first sentence of every section and every h3 block is its conclusion;
+        material deeper than a conclusion plus a one-line evidence anchor moves into a details
+        block.
+      - one-topic-one-place: each topic is told fully in one place; anywhere else, at most one
+        referencing sentence.
+      - walked-causality: a causal claim walks every step of its chain, or carries a worked
+        example small enough to check by hand.
+      - reader-vocabulary: prefer the reader's established terms over coined descriptions; gloss
+        every coined slug and every count at first occurrence; re-hint a term's meaning when it
+        recurs in a distant section.
+      - density: one fact per sentence; table cells hold short enumerable facts, with explanation
+        in the surrounding prose.
+
+      Sitrep prose follows the writing style skill in the explaining-to-the-user genre, exactly
+      as memory entries do (prompts/memory_guideline.md). The page is an ordinary session
+      artifact; plan semantics stay with plans.
     -->
 
     <section class="plan-section">
-      <h2><span class="n">0</span> Bottom Line</h2>
-      <p>The data-loading path on hostA now builds a full day's batch in 2s, down from 61s on the previous approach, with no accuracy change.</p>
+      <h2><span class="n">1</span> What waits on you?</h2>
+      <p>Nothing waits on you; the loader change is merged and complete. One decision is open when you want to widen scope to the slower second host.</p>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">1</span> Background &amp; Problem</h2>
-      <p>The training job needs a full day of input records available before each step. The original loader pulled every record over the network one row at a time, which made each step wait for the slowest row.</p>
+      <h2><span class="n">2</span> What is this and why?</h2>
+      <p>The training job must have a full day of input records available before each step. The original loader pulled each record from network storage one row at a time, so every step waited on its slowest row. The work replaced that path with a batched loader that reads a full day as one contiguous disk read.
+      Requirements this page references: <span class="req">batched-load</span> load a full day as one read; <span class="req">disk-locality</span> keep reads on local disk; <span class="req">no-accuracy-change</span> keep the held-out accuracy metric level.</p>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">2</span> Established Facts</h2>
-      <p>The new loader batches rows and reads them sequentially on disk. <span class="src">Sources: run 12345 stdout, artifacts/run_12345.log; command sbatch run.sbatch --loader=batched</span></p>
+      <h2><span class="n">3</span> What was verified?</h2>
+      <p><span class="req">batched-load</span> is met: a full day now builds in 2 seconds, down from 61 seconds. <span class="req">disk-locality</span> holds: reads stay on the local disk. <span class="req">no-accuracy-change</span> holds: the held-out accuracy metric is 0.5 before and after the switch. All three readings come from the run below. <span class="src">Sources: run 12345 stdout, artifacts/run_12345.log.</span></p>
+      <details class="details-layer">
+        <summary>Verification depth</summary>
+        <ul>
+          <li>Baseline, one record at a time: 61 seconds per fully loaded day.</li>
+          <li>Batched: 2 seconds per fully loaded day.</li>
+          <li>Accuracy metric: stable within a tenth of a percent.</li>
+        </ul>
+      </details>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">3</span> Comparison</h2>
-      <p>Baseline: 61s per day at 4 MB/s; current: 2s per day at 130 MB/s. The thing measured is wall time for one fully loaded day.</p>
+      <h2><span class="n">4</span> Risks &amp; open questions</h2>
+      <h3>Why the batched read is fast</h3>
+      <p><span class="tag hyp">Hypothesis</span> The batched read is faster because it issues one contiguous disk read per day instead of 40,000 single-row reads. Confidence: high. The run that would decide it reads the same day one row at a time and should return near the old 61 seconds.</p>
+      <h3>Slower disk on the second host</h3>
+      <p>Whether the loader is equally fast on the second host's slower disk stays open. <span class="tag fact">Fact</span> On the local disk it builds a day in 2 seconds. <span class="src">run 12345 stdout.</span> A run on the second host with the batched loader settles it.</p>
     </section>
 
     <section class="plan-section">
-      <h2><span class="n">4</span> Hypotheses</h2>
-      <p>Hypothesis (high confidence): the batched read is faster because it issues one contiguous disk read per day instead of 40k single-row reads. The hypothesis is open; a run that reverts to per-row reads has not been measured yet, so it stays unverified.</p>
-    </section>
-
-    <section class="plan-section">
-      <h2><span class="n">5</span> Unknowns &amp; Gaps</h2>
-      <p>The evidence cannot yet decide whether the same speedup holds on the slower disk on hostB. A run on hostB with the batched loader would settle it; until then that case is not concluded.</p>
-    </section>
-
-    <section class="plan-section">
-      <h2><span class="n">6</span> Now Running</h2>
-      <p>An improve-loop pass is steering the loader's chunk size; nothing else is awaiting a result.</p>
+      <h2><span class="n">5</span> What happens next?</h2>
+      <p>An improve-loop pass is steering the loader's chunk size. Recommended order: land the chunk-size result, then, only if you want cross-host scope, run the batched loader on the second host.</p>
     </section>
   </main>
 </div>

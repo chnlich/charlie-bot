@@ -256,8 +256,8 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 ## Cron Task Behavior
 
 - A newly added cron task first fires on its next occurrence after one full tick: the scheduler looks back a single tick from load, so a new daily expression starts the following day.
-- Changed cron syntax takes effect through the change-then-restart order (`server.py` runs with `reload=False`): until the restart the server keeps the last successfully parsed task list and logs `cron_config_reload_failed` each tick, self-healing on restart. Tell the user about the order up front.
-- The cron timezone is fixed in the config model, API, and UI: pin `America/Los_Angeles` explicitly for local tasks. Reread `config.d/cron.yaml` at implementation time — concurrent sessions may mutate it.
+- Cron config lives one job per file under `~/.charliebot/config.d/cron.d/<name>.yaml`, and the loader hot-reloads on a file or `prompt_file` mtime change — no restart is needed. A broken file yields an error entry for that job alone (logged as `cron_task_load_failed`) while every other job keeps loading, scheduling, and rendering through `GET /api/cron/tasks`.
+- The cron timezone is fixed in the config model, API, and UI: pin `America/Los_Angeles` explicitly for local tasks. Reread `config.d/cron.d/` at implementation time — concurrent sessions may mutate it.
 
 ---
 

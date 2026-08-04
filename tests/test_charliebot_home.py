@@ -25,9 +25,7 @@ def _reset_config_caches():
   def _clear():
     core_config._config = None
     core_config._config_mtime = 0.0
-    core_config._cron_tasks = []
-    core_config._cron_mtime = 0.0
-    core_config._cron_prompt_mtimes = {}
+    core_config._cron_snapshot = core_config._CronSnapshot()
 
   _clear()
   yield
@@ -109,17 +107,18 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch, tmp_path):
 
   from src.api import cron as api_cron
   from src.api import pages as api_pages
+  from src.cli import claude_sub
   from src.core import backup as core_backup
   from src.core import init as core_init
   from src.core import slash_commands
-  from src.cli import claude_sub
 
   asyncio.run(core_init.init_charliebot_home())
 
   cfg = core_config.get_config()
   core_config.get_scheduled_tasks()
-  api_cron._write_cron_yaml({"scheduled_tasks": []})
-  assert api_cron._read_cron_yaml() == {"scheduled_tasks": []}
+  api_cron.cron_dir().mkdir(parents=True, exist_ok=True)
+  api_cron._write_cron_yaml("probe", {"cron": "* * * * *", "prompt": "p"})
+  assert api_cron._read_cron_yaml("probe") == {"cron": "* * * * *", "prompt": "p"}
   slash_commands.load_slash_commands()
 
   owned = [
@@ -129,7 +128,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch, tmp_path):
       cfg.config_d_dir,
       cfg.memory_dir,
       cfg.claude_md_file,
-      api_cron.cron_path(),
+      api_cron.cron_dir(),
       slash_commands._slash_commands_file(),
       api_pages._perfetto_merge_cache_dir(),
       core_backup.charliebot_dir(),

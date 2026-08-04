@@ -15,8 +15,14 @@ from fastapi.testclient import TestClient
 from src.api import cron as cron_api
 from src.api.deps import get_session_manager
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_config
-from src.core.models import BackendOption, CreateSessionRequest, SessionMetadata, SessionStatus, SpawnRequest
-from src.core.models import ThreadMetadata
+from src.core.models import (
+  BackendOption,
+  CreateSessionRequest,
+  SessionMetadata,
+  SessionStatus,
+  SpawnRequest,
+  ThreadMetadata,
+)
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.thinking_state import clear_busy, mark_busy
@@ -278,11 +284,15 @@ def test_cron_api_persists_and_clears_backend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_path = tmp_path / "cron.yaml"
-  cron_path.parent.mkdir(parents=True, exist_ok=True)
-  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
+  nightly_path = cron_dir / "nightly.yaml"
+
+  def _read_backend() -> str:
+    return yaml.safe_load(nightly_path.read_text(encoding="utf-8")).get("backend")
 
   with _build_cron_client(cfg, session_mgr) as client:
     create_response = client.post(
@@ -296,12 +306,12 @@ def test_cron_api_persists_and_clears_backend(
     )
     assert create_response.status_code == 200
     assert create_response.json()["backend"] == "codex-o3"
-    assert yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]["backend"] == "codex-o3"
+    assert _read_backend() == "codex-o3"
 
     clear_response = client.put("/api/cron/tasks/nightly", json={"backend": None})
     assert clear_response.status_code == 200
     assert "backend" not in clear_response.json()
-    assert "backend" not in yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]
+    assert "backend" not in yaml.safe_load(nightly_path.read_text(encoding="utf-8"))
 
     update_response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
     assert update_response.status_code == 200
@@ -309,15 +319,16 @@ def test_cron_api_persists_and_clears_backend(
 
     empty_clear_response = client.put("/api/cron/tasks/nightly", json={"backend": ""})
     assert empty_clear_response.status_code == 200
-    assert "backend" not in yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]
+    assert "backend" not in yaml.safe_load(nightly_path.read_text(encoding="utf-8"))
 
 
 def test_cron_api_rejects_invalid_backend_on_create(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_path = tmp_path / "cron.yaml"
-  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
@@ -334,25 +345,19 @@ def test_cron_api_rejects_invalid_backend_on_create(
 
   assert response.status_code == 400
   assert response.json()["detail"] == "backend 'missing-backend' is not in backend_options"
-  assert not cron_path.exists()
+  assert not (cron_dir / "nightly.yaml").exists()
 
 
 def test_cron_api_rejects_invalid_backend_on_update(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_path = tmp_path / "cron.yaml"
-  initial_task = {
-      "name": "nightly",
-      "cron": "0 2 * * *",
-      "prompt": "run nightly",
-      "backend": "codex-o3",
-  }
-  cron_path.write_text(
-      yaml.safe_dump({"scheduled_tasks": [initial_task]}),
-      encoding="utf-8",
-  )
-  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  (cron_dir / "nightly.yaml").write_text(
+      yaml.safe_dump({"cron": "0 2 * * *", "prompt": "run nightly", "backend": "codex-o3"}),
+      encoding="utf-8")
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
@@ -361,7 +366,9 @@ def test_cron_api_rejects_invalid_backend_on_update(
 
   assert response.status_code == 400
   assert response.json()["detail"] == "backend 'missing-backend' is not in backend_options"
-  assert yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]["backend"] == "codex-o3"
+  assert (
+      yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend")
+      == "codex-o3")
 
 
 @pytest.mark.asyncio
@@ -369,18 +376,12 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_path = tmp_path / "cron.yaml"
-  initial_task = {
-      "name": "nightly",
-      "cron": "0 2 * * *",
-      "prompt": "run nightly",
-      "backend": "claude-opus-4.6",
-  }
-  cron_path.write_text(
-      yaml.safe_dump({"scheduled_tasks": [initial_task]}),
-      encoding="utf-8",
-  )
-  monkeypatch.setattr(cron_api, "cron_path", lambda: cron_path)
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  (cron_dir / "nightly.yaml").write_text(
+      yaml.safe_dump({"cron": "0 2 * * *", "prompt": "run nightly", "backend": "claude-opus-4.6"}),
+      encoding="utf-8")
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(
@@ -395,6 +396,8 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
 
     assert response.status_code == 409
     assert "backend switch" in response.json()["detail"]
-    assert yaml.safe_load(cron_path.read_text(encoding="utf-8"))["scheduled_tasks"][0]["backend"] == "claude-opus-4.6"
+    assert (
+        yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend")
+        == "claude-opus-4.6")
   finally:
     clear_busy(session.id)

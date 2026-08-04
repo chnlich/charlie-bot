@@ -72,7 +72,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ./scripts/start-server.sh
 ```
 
-`setup.sh` provisions `~/.charliebot/` (home layout, memory store scaffold, `config.yaml` from `configs/config.example.yaml`) and seeds repo-default cron tasks into `~/.charliebot/config.d/cron.yaml`. Server startup never writes `cron.yaml` — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up new repo-default cron tasks and skills.
+`setup.sh` provisions `~/.charliebot/` (home layout, memory store scaffold, `config.yaml` from `configs/config.example.yaml`) and seeds repo-default cron tasks into `~/.charliebot/config.d/cron.d/<name>.yaml` (one file per job). Server startup never writes cron config — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up new repo-default cron tasks and skills.
 
 ## CLI at a glance
 

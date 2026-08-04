@@ -42,8 +42,8 @@ fi
 # Provision ~/.charliebot/ and seed repo-default cron tasks. init_charliebot_home
 # provisions the home layout (dirs, memory store scaffold, config.yaml) and is the same
 # path the server runs at startup; seed_default_cron_tasks is the ONLY writer of
-# cron.yaml and is never called from the server startup path — so running setup
-# is the only way repo-default cron skeletons reach the host.
+# per-job cron config and is never called from the server startup path — so running
+# setup is the only way repo-default cron skeletons reach the host.
 echo "==> Provisioning ~/.charliebot and seeding default cron tasks"
 DRY_RUN_VAL=$DRY_RUN uv run python - <<'PY'
 import asyncio
@@ -83,19 +83,17 @@ for label, path in [(lbl, p) for _, lbl, p in home_items]:
         status = "exists" if existed_before[str(path)] else "created"
     print(f"  home {label}: {status}")
 
-# Per-task created/exists for repo-default cron entries. In dry-run, compute
-# what would be seeded from the repo defaults vs the host file without writing.
+# Per-task created/exists for repo-default cron entries, keyed on whether the
+# per-job host file config.d/cron.d/<name>.yaml exists. In dry-run, compute what
+# would be seeded from the repo defaults without writing.
 repo_root = cfg.charlie_bot_repo
 defaults = (load_yaml(repo_root / "configs" / "cron.default.yaml", default={})
             .get("scheduled_tasks", []) or [])
-cron_path = cfg.config_d_dir / "cron.yaml"
-host_data = load_yaml(cron_path, default={"scheduled_tasks": []}) or {}
-host_names = {t.get("name") for t in (host_data.get("scheduled_tasks", []) or [])
-              if isinstance(t, dict)}
+cron_dir = cfg.config_d_dir / "cron.d"
 if dry:
     for entry in defaults:
         name = entry.get("name")
-        status = "exists" if name in host_names else "would-create"
+        status = "exists" if (cron_dir / f"{name}.yaml").exists() else "would-create"
         print(f"  cron {name}: {status}")
 else:
     for item in seed_default_cron_tasks(cfg):

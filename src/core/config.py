@@ -1,12 +1,13 @@
 """Configuration loading for CharlieBot."""
 
 import os
+import re
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 import structlog
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.core.models import BackendOption
 from src.core.yaml_utils import load_yaml
@@ -43,17 +44,6 @@ def charliebot_home_dir() -> Path:
   return Path(raw).expanduser().resolve()
 
 
-class ScheduledTaskResolutionError(Exception):
-  """Raised when a cron entry cannot be resolved into a ``ScheduledTaskConfig``.
-
-  Covers loader-level resolution failures that must escape the generic reload
-  fallback in :func:`get_scheduled_tasks` so the failure is loud and self-healing
-  (the scheduler logs and retries each tick) rather than silently serving a
-  stale task list: a ``prompt_file`` that is missing/unreadable, or an entry
-  carrying both ``prompt`` and ``prompt_file``.
-  """
-
-
 class ImprovementLoopConfig(BaseModel):
   """Declarative config for an improvement-loop cron task."""
 
@@ -72,7 +62,15 @@ class ImprovementLoopConfig(BaseModel):
 
 
 class ScheduledTaskConfig(BaseModel):
-  """Configuration for a single scheduled (cron-like) task."""
+  """Configuration for a single scheduled (cron-like) task.
+
+  ``name`` is supplied by the loader (from the host file stem) and is required,
+  but the persisted per-job file body never carries ``name``. ``extra='forbid'``
+  turns an unknown key (a typo such as ``promt_file:``) into that file's error
+  instead of silently dropping it.
+  """
+
+  model_config = ConfigDict(extra='forbid')
 
   name: str
   cron: str
@@ -95,6 +93,26 @@ class ScheduledTaskConfig(BaseModel):
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
     return self
+
+
+class ScheduledTaskError(BaseModel):
+  """A per-file cron load failure surfaced through the API without raising."""
+
+  name: str
+  path: str
+  error: str
+
+
+class _CronSnapshot:
+  """Module-level cache of the last cron.d load, invalidated by any fingerprint change."""
+
+  __slots__ = ('tasks', 'errors', 'prompt_mtimes', 'fingerprint')
+
+  def __init__(self) -> None:
+    self.tasks: list[ScheduledTaskConfig] = []
+    self.errors: list[ScheduledTaskError] = []
+    self.prompt_mtimes: dict[Path, float] = {}
+    self.fingerprint: object = None
 
 
 class BacklogRepoConfig(BaseModel):
@@ -323,9 +341,7 @@ def get_config() -> CharlieBotConfig:
   return _config
 
 
-_cron_tasks: list[ScheduledTaskConfig] = []
-_cron_mtime: float = 0.0
-_cron_prompt_mtimes: dict[Path, float] = {}
+_cron_snapshot = _CronSnapshot()
 
 
 def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
@@ -340,15 +356,15 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
   resolved against *repo_root* (``cfg.charlie_bot_repo``); a ``~``-prefixed or
   absolute path is taken literally via :func:`os.path.expanduser`.
 
-  Raises :class:`ScheduledTaskResolutionError` if the entry carries both a
-  non-empty ``prompt`` and a ``prompt_file`` (two prompt sources is a
-  configuration error), or if the file is missing or unreadable.
+  Raises :class:`ValueError` if the entry carries both a non-empty ``prompt``
+  and a ``prompt_file`` (two prompt sources is a configuration error), or if the
+  file is missing or unreadable.
   """
   pf = entry.get("prompt_file")
   if not pf:
     return None
   if entry.get("prompt"):
-    raise ScheduledTaskResolutionError(
+    raise ValueError(
         f"cron entry {entry.get('name')!r} has both 'prompt' and 'prompt_file'; "
         "exactly one prompt source is allowed")
   if pf.startswith("~") or Path(pf).is_absolute():
@@ -358,7 +374,7 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
   try:
     body = path.read_text(encoding="utf-8")
   except OSError as e:
-    raise ScheduledTaskResolutionError(f"cron entry {entry.get('name')!r} prompt_file unreadable: {path} ({e})") from e
+    raise ValueError(f"cron entry {entry.get('name')!r} prompt_file unreadable: {path} ({e})") from e
   entry["prompt"] = body
   del entry["prompt_file"]
   return path
@@ -404,8 +420,8 @@ def _stat_prompt_files(paths: dict[Path, float]) -> Optional[dict[Path, float]]:
   """Return current mtimes for *paths*, or ``None`` if any is missing.
 
   Returning ``None`` forces a reload so a missing ``prompt_file`` surfaces as a
-  :class:`ScheduledTaskResolutionError` instead of silently serving a cached
-  body from a file that no longer exists.
+  per-file load error instead of silently serving a cached body from a file that
+  no longer exists.
   """
   current: dict[Path, float] = {}
   for p in paths:
@@ -416,63 +432,164 @@ def _stat_prompt_files(paths: dict[Path, float]) -> Optional[dict[Path, float]]:
   return current
 
 
-def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
-  """Load scheduled tasks from config.d/cron.yaml, with an mtime cache.
+def _cron_d_dir() -> Path:
+  """Path of this profile's per-job cron directory. Resolved per call."""
+  return charliebot_home_dir() / "config.d" / "cron.d"
 
-  The cache invalidates on the cron file's mtime **and** on the mtime of every
-  ``prompt_file`` referenced by the last successful load, so editing a prompt
-  ``.md`` (or a ``git pull`` that changes it) takes effect without touching
-  ``cron.yaml`` and without a server restart.
 
-  Each entry is resolved before model construction: ``prompt_file`` is read
-  into ``prompt`` (and the key removed) and a literal ``timezone: local`` is
-  rewritten to the host's IANA zone. Resolution failures raise
-  :class:`ScheduledTaskResolutionError`, which escapes the generic reload
-  fallback so the failure is loud and self-healing (the scheduler logs and
-  retries each tick).
+def _legacy_cron_file() -> Path:
+  """Path of the legacy single-file cron config (a tripwire, never a fallback)."""
+  return charliebot_home_dir() / "config.d" / "cron.yaml"
+
+
+def _valid_cron_name(name: str) -> bool:
+  """Return whether *name* is a safe cron job name for a single host file.
+
+  Only names matching ``^[A-Za-z0-9][A-Za-z0-9._-]*$`` are safe: anything else
+  (``..``, an embedded ``/``, a leading ``.``, an absolute-looking name) could
+  escape the ``cron.d`` directory, so it is rejected with a 400 before any
+  filesystem access. The host also uses this guard when enumerating files.
   """
-  global _cron_tasks, _cron_mtime, _cron_prompt_mtimes
-  cron_path = charliebot_home_dir() / "config.d" / "cron.yaml"
-  try:
-    mtime = cron_path.stat().st_mtime
-  except FileNotFoundError:
-    return _cron_tasks
-  except OSError as e:
-    log.warning("cron_config_stat_failed", error=str(e))
-    return _cron_tasks
+  return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name))
 
-  # Invalidate when the cron file or any referenced prompt file changed. A
-  # previously-referenced prompt file that is now missing (stat fails) forces a
-  # reload so the missing-file error surfaces instead of serving a stale body.
-  prompt_mtimes = _stat_prompt_files(_cron_prompt_mtimes)
-  if (mtime == _cron_mtime and prompt_mtimes is not None and prompt_mtimes == _cron_prompt_mtimes):
-    return _cron_tasks
 
-  try:
-    data = load_yaml(cron_path, default={})
-    raw_tasks = data.get("scheduled_tasks", [])
-    repo_root = get_config().charlie_bot_repo
-    resolved_prompt_mtimes: dict[Path, float] = {}
-    for t in raw_tasks:
-      if isinstance(t, dict):
-        resolved = _resolve_prompt_file(t, repo_root)
-        if resolved is not None:
-          try:
-            resolved_prompt_mtimes[resolved] = resolved.stat().st_mtime
-          except OSError:
-            # The file existed moments ago (we just read it); a transient race
-            # falls back to a sentinel so the next tick re-reads.
-            resolved_prompt_mtimes[resolved] = 0.0
-        _resolve_local_timezone(t)
-        if t.get("repo"):
-          t["repo"] = os.path.expanduser(t["repo"])
-    _cron_tasks = [ScheduledTaskConfig(**t) for t in raw_tasks]
-    _cron_mtime = mtime
-    _cron_prompt_mtimes = resolved_prompt_mtimes
-  except ScheduledTaskResolutionError:
-    # Configuration error in a prompt_file: fail loud, escape the generic
-    # fallback. Scheduler._loop logs and retries each tick, so this self-heals.
-    raise
-  except Exception as e:
-    log.warning("cron_config_reload_failed", error=str(e))
-  return _cron_tasks
+def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskConfig, dict[Path, float]]:
+  """Load, resolve, and validate one ``cron.d`` file into a ``ScheduledTaskConfig``.
+
+  The file body is a top-level mapping of :class:`ScheduledTaskConfig` fields
+  *without* ``name``; the job name is *stem* (the file stem) and is injected
+  here. A body that carries a ``name`` key is an error (the file name is the
+  single source of the name). Resolution follows the existing order:
+  ``prompt_file`` against *repo* (``~``-prefixed or absolute taken literally),
+  ``timezone: local`` to the host IANA zone, and ``repo`` to ``expanduser``.
+
+  Returns the model plus the mtime map for any ``prompt_file`` it read (for the
+  hot-reload fingerprint). Raises :class:`ValueError` on any failure; the caller
+  records it as a per-file error rather than propagating it.
+  """
+  body = load_yaml(path)
+  if not isinstance(body, dict):
+    raise ValueError("cron config must be a mapping")
+  if "name" in body:
+    raise ValueError("the body must not carry a 'name' key; the file name is the job name")
+  prompt_mtimes: dict[Path, float] = {}
+  prompt_file = body.get("prompt_file")
+  if prompt_file:
+    resolved = _resolve_prompt_file(body, repo)
+    try:
+      prompt_mtimes[resolved] = resolved.stat().st_mtime
+    except OSError:
+      # The file existed moments ago (we just read it); a transient race falls
+      # back to a sentinel so the next tick re-reads.
+      prompt_mtimes[resolved] = 0.0
+  _resolve_local_timezone(body)
+  if body.get("repo"):
+    body["repo"] = os.path.expanduser(body["repo"])
+  return ScheduledTaskConfig(name=stem, **body), prompt_mtimes
+
+
+def _reload_cron_snapshot() -> _CronSnapshot:
+  """Recompute the snapshot by loading every ``cron.d`` file independently."""
+  global _cron_snapshot
+  repo = get_config().charlie_bot_repo
+  cron_d = _cron_d_dir()
+  legacy_file = _legacy_cron_file()
+
+  tasks: list[ScheduledTaskConfig] = []
+  errors: list[ScheduledTaskError] = []
+  prompt_mtimes: dict[Path, float] = {}
+
+  # A missing cron.d/ directory is an empty set, not an error.
+  if cron_d.is_dir():
+    for path in sorted(cron_d.iterdir()):
+      if not (path.is_file() and path.name.endswith(".yaml") and not path.name.startswith(".")):
+        continue
+      stem = path.stem
+      if not _valid_cron_name(stem):
+        errors.append(ScheduledTaskError(
+            name=stem,
+            path=str(path),
+            error="file name is not a valid cron task name"))
+        continue
+      try:
+        task, file_prompt_mtimes = _load_cron_file(path, repo, stem)
+      except Exception as e:
+        errors.append(ScheduledTaskError(name=stem, path=str(path), error=str(e)))
+        log.error("cron_task_load_failed", name=stem, path=str(path), error=str(e))
+        continue
+      tasks.append(task)
+      prompt_mtimes.update(file_prompt_mtimes)
+
+  # Legacy tripwire: a leftover config.d/cron.yaml is a loud error, never a
+  # silent fallback. None of its entries are loaded.
+  if legacy_file.exists():
+    errors.append(ScheduledTaskError(
+        name="cron.yaml (legacy)",
+        path=str(legacy_file),
+        error="legacy config.d/cron.yaml present; entries not loaded — "
+              "split into config.d/cron.d/<name>.yaml"))
+    log.error("cron_legacy_file_present", path=str(legacy_file))
+
+  tasks.sort(key=lambda t: t.name)
+  errors.sort(key=lambda e: e.name)
+  snapshot = _CronSnapshot()
+  snapshot.tasks = tasks
+  snapshot.errors = errors
+  snapshot.prompt_mtimes = prompt_mtimes
+  snapshot.fingerprint = _cron_fingerprint(prompt_mtimes)
+  _cron_snapshot = snapshot
+  return snapshot
+
+
+def _cron_fingerprint(prompt_mtimes: dict[Path, float]):
+  """Compute the hot-reload fingerprint over all four re-read inputs.
+
+  The set of ``cron.d/*.yaml`` paths with each file's mtime, the mtime of every
+  referenced ``prompt_file`` (a referenced file that has gone missing makes the
+  stat fail, returning ``None`` and forcing a full re-read so the failure
+  surfaces instead of a stale cached body), and whether the legacy
+  ``config.d/cron.yaml`` exists.
+  """
+  cron_d = _cron_d_dir()
+  legacy_file = _legacy_cron_file()
+  files: list[tuple[str, float]] = []
+  if cron_d.is_dir():
+    for p in sorted(cron_d.iterdir()):
+      if p.is_file() and p.name.endswith(".yaml") and not p.name.startswith("."):
+        try:
+          files.append((p.name, p.stat().st_mtime))
+        except OSError:
+          files.append((p.name, 0.0))
+  current_prompt_mtimes = _stat_prompt_files(prompt_mtimes)
+  return (tuple(files), current_prompt_mtimes, legacy_file.exists())
+
+
+def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
+  """Load the valid scheduled tasks from ``config.d/cron.d/<name>.yaml``.
+
+  Total and never raises: any file that fails to parse or validate becomes a
+  single entry in :func:`get_scheduled_task_errors` and is skipped, every other
+  file still loads and is schedulable. The result is sorted by name.
+
+  The snapshot refreshes whenever the fingerprint changes (cron.d file set and
+  mtimes, referenced prompt_file mtimes, and legacy-presence), so a change takes
+  effect on the next call with no restart.
+  """
+  return _refresh_cron_snapshot().tasks
+
+
+def get_scheduled_task_errors() -> list[ScheduledTaskError]:
+  """Return one record per failing cron job file, sorted by name.
+
+  Total and never raises, mirroring :func:`get_scheduled_tasks`. Includes the
+  legacy-tripwire record when ``config.d/cron.yaml`` exists.
+  """
+  return _refresh_cron_snapshot().errors
+
+
+def _refresh_cron_snapshot() -> _CronSnapshot:
+  """Return the cached snapshot, reloading when the fingerprint changed."""
+  snapshot = _cron_snapshot
+  if snapshot.fingerprint == _cron_fingerprint(snapshot.prompt_mtimes):
+    return snapshot
+  return _reload_cron_snapshot()

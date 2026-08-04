@@ -69,9 +69,9 @@ You have these built-in features. If unsure how one works, read `src/core/`.
 
 See `charliebot --help` for CLI subcommands.
 
-Custom slash commands live in `~/.charliebot/slash_commands.yaml`; cron tasks in
-`~/.charliebot/config.d/cron.yaml` (manage via `/run <name>` or the API; operational notes in
-the `charliebot` skill).
+Custom slash commands live in `~/.charliebot/slash_commands.yaml`; cron tasks live in
+`~/.charliebot/config.d/cron.d/` (one file per job; manage via `/run <name>` or the API;
+operational notes in the `charliebot` skill).
 
 ### Diff comment batches
 

@@ -1,20 +1,24 @@
-"""CRUD API for scheduled cron task configs (~/.charliebot/config.d/cron.yaml)."""
+"""CRUD API for scheduled cron task configs (config.d/cron.d/<name>.yaml)."""
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Optional
 
 import structlog
+import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.api.deps import get_session_manager
 from src.core.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    charliebot_home_dir,
-    get_config,
-    get_scheduled_tasks,
+  CharlieBotConfig,
+  ScheduledTaskConfig,
+  _load_cron_file,
+  charliebot_home_dir,
+  get_config,
+  get_scheduled_task_errors,
+  get_scheduled_tasks,
 )
 from src.core.scheduler import effective_scheduled_task_backend
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
@@ -23,17 +27,25 @@ from src.core.yaml_utils import load_yaml, save_yaml
 log = structlog.get_logger()
 router = APIRouter()
 
-def cron_path() -> Path:
-  """Path of this profile's cron config. Resolved per call, never at import."""
-  return charliebot_home_dir() / 'config.d' / 'cron.yaml'
+_CRON_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def _read_cron_yaml() -> dict:
-  return load_yaml(cron_path(), default={'scheduled_tasks': []})
+def cron_dir() -> Path:
+  """Path of this profile's per-job cron config directory. Resolved per call."""
+  return charliebot_home_dir() / 'config.d' / 'cron.d'
 
 
-def _write_cron_yaml(data: dict):
-  save_yaml(cron_path(), data)
+def cron_path(name: str) -> Path:
+  """Path of one job's cron config file. Resolved per call, never at import."""
+  return cron_dir() / f'{name}.yaml'
+
+
+def _read_cron_yaml(name: str) -> dict:
+  return load_yaml(cron_path(name), default={})
+
+
+def _write_cron_yaml(name: str, data: dict):
+  save_yaml(cron_path(name), data)
 
 
 def _validate_backend_id(backend: Optional[str], cfg: CharlieBotConfig) -> None:
@@ -75,7 +87,7 @@ async def _ensure_backend_update_session(
   if 'backend' not in req.model_fields_set:
     return
   updated_task = _apply_task_update(task, req)
-  task_cfg = ScheduledTaskConfig.model_validate(updated_task)
+  task_cfg = ScheduledTaskConfig.model_validate({**updated_task, 'name': name})
   backend = effective_scheduled_task_backend(task_cfg, cfg)
   try:
     await session_mgr.ensure_scheduled_session_backend(name, backend)
@@ -108,8 +120,17 @@ class TaskCreate(BaseModel):
 
 @router.get('/tasks')
 async def list_cron_tasks():
-  """Return all scheduled tasks as JSON."""
-  return [t.model_dump() for t in get_scheduled_tasks()]
+  """Return all scheduled tasks plus one error entry per broken file, never 500.
+
+  Valid jobs are sorted by name, followed by one entry per error record shaped
+  ``{"name", "error", "broken": True}``. A broken or legacy file must never cause
+  this route to fail.
+  """
+  valid = [t.model_dump() for t in get_scheduled_tasks()]
+  broken = [
+      {'name': e.name, 'error': e.error, 'broken': True}
+      for e in get_scheduled_task_errors()]
+  return valid + broken
 
 
 @router.put('/tasks/{name}')
@@ -119,52 +140,56 @@ async def update_cron_task(
     cfg: CharlieBotConfig = Depends(get_config),
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
-  """Update an existing task by name (name is immutable)."""
+  if not _CRON_NAME_RE.fullmatch(name):
+    raise HTTPException(status_code=400, detail=f'invalid cron task name: {name!r}')
+  path = cron_path(name)
+  if not path.exists():
+    raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
   if 'backend' in req.model_fields_set:
     _validate_backend_id(req.backend, cfg)
-  data = await asyncio.to_thread(_read_cron_yaml)
-  tasks = data.get('scheduled_tasks', [])
-  for task in tasks:
-    if task.get('name') == name:
-      await _ensure_backend_update_session(name, task, req, cfg, session_mgr)
-      updated_task = _apply_task_update(task, req)
-      task.clear()
-      task.update(updated_task)
-      data['scheduled_tasks'] = tasks
-      await asyncio.to_thread(_write_cron_yaml, data)
-      log.debug('cron_task_updated', name=name)
-      return task
-  raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
+  # A syntax-error or otherwise unparseable file must surface as a 409 with the
+  # loader's error text, never a 500. Validate via the loader on the real file
+  # so the error matches what the list route reports for the job.
+  try:
+    await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
+    task = await asyncio.to_thread(_read_cron_yaml, name)
+  except (yaml.YAMLError, ValueError, TypeError) as e:
+    raise HTTPException(status_code=409, detail=str(e)) from e
+  await _ensure_backend_update_session(name, task, req, cfg, session_mgr)
+  updated_task = _apply_task_update(task, req)
+  await asyncio.to_thread(_write_cron_yaml, name, updated_task)
+  log.debug('cron_task_updated', name=name)
+  return updated_task
 
 
 @router.post('/tasks')
 async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_config)):
-  """Add a new scheduled task."""
+  """Add a new scheduled job as its own config.d/cron.d/<name>.yaml file."""
+  if not _CRON_NAME_RE.fullmatch(req.name):
+    raise HTTPException(status_code=400, detail=f'invalid cron name: {req.name!r}')
   _validate_backend_id(req.backend, cfg)
-  data = await asyncio.to_thread(_read_cron_yaml)
-  tasks = data.get('scheduled_tasks', [])
-  if any(t.get('name') == req.name for t in tasks):
+  path = cron_path(req.name)
+  if path.exists():
     raise HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')
   payload = req.model_dump()
   if not payload.get('backend'):
     payload.pop('backend', None)
-  new_task = {k: v for k, v in payload.items() if v is not None or k in ('name', 'cron', 'prompt', 'enabled')}
-  tasks.append(new_task)
-  data['scheduled_tasks'] = tasks
-  await asyncio.to_thread(_write_cron_yaml, data)
+  body = {k: v for k, v in payload.items()
+          if k != 'name' and (v is not None or k in ('cron', 'prompt', 'enabled'))}
+  cron_dir().mkdir(parents=True, exist_ok=True)
+  await asyncio.to_thread(_write_cron_yaml, req.name, body)
   log.debug('cron_task_created', name=req.name)
-  return new_task
+  return {**{'name': req.name}, **body}
 
 
 @router.delete('/tasks/{name}')
 async def delete_cron_task(name: str):
-  """Remove a task by name."""
-  data = await asyncio.to_thread(_read_cron_yaml)
-  tasks = data.get('scheduled_tasks', [])
-  filtered = [t for t in tasks if t.get('name') != name]
-  if len(filtered) == len(tasks):
+  """Remove a job by unlinking its config.d/cron.d/<name>.yaml file."""
+  if not _CRON_NAME_RE.fullmatch(name):
+    raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
+  path = cron_path(name)
+  if not path.exists():
     raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
-  data['scheduled_tasks'] = filtered
-  await asyncio.to_thread(_write_cron_yaml, data)
+  path.unlink()
   log.debug('cron_task_deleted', name=name)
   return {'ok': True}

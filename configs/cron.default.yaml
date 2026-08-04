@@ -1,7 +1,8 @@
-# Repo-owned default scheduled tasks. ./scripts/setup.sh seeds any entry whose
-# `name` is absent from ~/.charliebot/config.d/cron.yaml, and never touches an
-# entry that is already there. Host-specific fields (backend, schedule) belong
-# in the host file, not here.
+# Repo-owned default scheduled tasks. ./scripts/setup.sh seeds each entry into
+# its own host file ~/.charliebot/config.d/cron.d/<name>.yaml (the job `name`
+# becomes the file name, and the host file body carries no `name` key), and
+# never touches a file that is already there. Host-specific fields (backend,
+# schedule) belong in the host files, not here.
 scheduled_tasks:
   - name: memory-curator
     cron: "27 6 * * *"

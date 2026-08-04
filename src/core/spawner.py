@@ -473,6 +473,8 @@ async def _create_worktree_and_process(
     thread.context = req.context
 
     session_meta = await session_mgr.get_session(session_id)
+    if session_meta is None:
+      raise ValueError(f"session '{session_id}' not found")
     worker_prompt = _build_worker_prompt(
         description,
         resolved_repo,
@@ -510,6 +512,8 @@ async def _create_worktree_and_process(
 
     # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
+    if session_meta is None:
+      raise ValueError(f"session '{session_id}' not found")
     worker_prompt = _build_worker_prompt(
         description,
         resolved_repo,

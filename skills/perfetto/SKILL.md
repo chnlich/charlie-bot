@@ -6,11 +6,13 @@ version: 1.0.0
 
 # Perfetto Trace Viewer
 
-Generate links to the CharlieBot built-in Perfetto trace viewer, which can merge **cross-rank** traces of the same time window into a single view.
+Generate links to the CharlieBot built-in Perfetto trace viewer, which can merge **cross-rank**
+traces of the same time window into a single view.
 
 ## Endpoints
 
-All URLs use `<base_url>` where `<base_url>` is the CharlieBot URL resolved from HOST MEMORY (look for the **CharlieBot URL** entry).
+All URLs use `<base_url>` where `<base_url>` is the CharlieBot URL resolved from HOST MEMORY (look
+for the **CharlieBot URL** entry).
 
 ### Merge cross-rank traces from a directory
 
@@ -18,28 +20,37 @@ All URLs use `<base_url>` where `<base_url>` is the CharlieBot URL resolved from
 <base_url>/perfetto?dir=<absolute-path>
 ```
 
-Auto-discovers all `*.json` trace files in the directory, merges them client-side (labeling by rank), and loads into an embedded Perfetto UI.
+Auto-discovers all `*.json` trace files in the directory, merges them client-side (labeling by
+rank), and loads into an embedded Perfetto UI.
 
-**Use `?dir=` only for cross-rank merging** — i.e. when every file in the directory is a different rank's trace of the **same** time window/step. The merger labels tracks by rank and assumes one trace per rank; mixing multiple time windows of the same rank into one `?dir=` link will produce a confusing/overlapping view.
+**Use `?dir=` only for cross-rank merging**, that is, when every file in the directory is a
+different rank's trace of the **same** time window/step. The merger labels tracks by rank and
+assumes one trace per rank; mixing multiple time windows of the same rank into one `?dir=` link will
+produce a confusing/overlapping view.
 
-If a directory contains multiple time windows (or multiple steps) for the same rank(s), generate **separate** links — one per time window — each pointing at just that window's files. Use `?pattern=` to scope a `?dir=` link to a single window, or list the per-rank files explicitly with repeated `?trace=` params.
+If a directory contains multiple time windows (or multiple steps) for the same rank(s), generate
+**separate** links, one per time window, each pointing at just that window's files. Use `?pattern=`
+to scope a `?dir=` link to a single window, or list the per-rank files explicitly with repeated
+`?trace=` params.
 
 Optional params:
-- `&pattern=<glob>` -- file pattern to match (default: `*.json`); use this to isolate one time window in a mixed directory
-- `&title=<text>` -- custom page title
+- `&pattern=<glob>`: file pattern to match (default: `*.json`); use this to isolate one time window
+  in a mixed directory
+- `&title=<text>`: custom page title
 
 ### View specific trace files
 
 ```
-<base_url>/perfetto?trace=/files/<path1>&trace=/files/<path2>
+<base_url>/perfetto?trace=/absolute_filepath/<path1>&trace=/absolute_filepath/<path2>
 ```
 
-Pass one or more `trace=` params with `/files/`-prefixed absolute paths.
+Pass one or more `trace=` params, each naming a trace file the way the `file-server` skill writes a
+file link.
 
 ### Single trace
 
 ```
-<base_url>/perfetto?trace=/files/<absolute-path>
+<base_url>/perfetto?trace=/absolute_filepath/<absolute-path>
 ```
 
 ## Examples
@@ -48,14 +59,13 @@ Pass one or more `trace=` params with `/files/`-prefixed absolute paths.
 |---|---|
 | Cross-rank merge for one step | `<base_url>/perfetto?dir=/path/to/traces/step100` |
 | Scope `?dir=` to one time window | `<base_url>/perfetto?dir=/path/to/traces&pattern=trace_rank*_step100.json` |
-| Only rank 0 | `<base_url>/perfetto?trace=/files/path/to/traces/trace_rank000_step100.json` |
-| Two time windows of rank 0 | generate **two separate links**, one per window — do not combine in a single `?dir=` |
+| Only rank 0 | `<base_url>/perfetto?trace=/absolute_filepath/path/to/traces/trace_rank000_step100.json` |
+| Two time windows of rank 0 | generate **two separate links**, one per window, rather than one combined `?dir=` |
 
 ## Rules
 
-1. Always verify the trace directory/files exist before sharing the link (use `ls` or `Glob`)
-2. Resolve base URL from HOST MEMORY — never hardcode hostnames or ports
-3. `?dir=` is for **cross-rank merging only**. Multiple time-window traces of the same rank must be linked separately (one URL per window), not bundled in one `?dir=`
-4. Before using `?dir=`, confirm the directory holds at most one trace per rank for a single time window; otherwise narrow it with `&pattern=` or switch to explicit `?trace=` params
-5. Present the link in markdown format: `[descriptive text](url)`
-6. Note: only JSON traces can be merged; protobuf traces will show only the first file
+1. `?dir=` is for **cross-rank merging only**. Multiple time-window traces of the same rank belong in
+   separate links, one URL per window, rather than bundled in one `?dir=`
+2. Before using `?dir=`, confirm the directory holds at most one trace per rank for a single time
+   window; otherwise narrow it with `&pattern=` or switch to explicit `?trace=` params
+3. Only JSON traces can be merged; a protobuf trace shows only the first file

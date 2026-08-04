@@ -450,3 +450,113 @@ test('renderExtUsage renders a not-yet-read account as loading, never as no-cap'
   assert.ok(pill, 'pending row carries a provider pill');
   assert.equal(pill.textContent, 'Codex');
 });
+
+// ---------------------------------------------------------------------------
+// Scoped (per-model) weekly windows: one more 7d bar per row, labelled by the
+// model. The scope_label rides in the window so both weekly bars coexist, and
+// the group div holding the scoped bar is matched by the narrow-screen rule
+// `div:has(> [data-field^="7d-"])`.
+// ---------------------------------------------------------------------------
+
+test('renderExtUsage binds each scoped reading to its own label and percent', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  // Distinct percents per window, and a model name (Nimbus) absent from the
+  // source, so a swapped or hardcoded implementation cannot fake this output.
+  context.renderExtUsage({
+    providers: {
+      'claude:main': {
+        provider: 'claude',
+        account: 'main',
+        windows: [
+          { window_minutes: 10080, utilization: 22.0, resets_at: _iso(3 * DAY) },
+          { window_minutes: 10080, utilization: 33.0, resets_at: _iso(3 * DAY), scope_label: 'Nimbus' },
+        ],
+        fetched_at: _iso(-1 * MINUTE),
+      },
+    },
+  });
+
+  const row = _rowByKey(strip, 'claude:main');
+  assert.equal(_field(row, '7d-pct').textContent, '22%');
+  assert.equal(_field(row, '7d-nimbus-pct').textContent, '33%');
+});
+
+test('every data-field within a scoped row is unique', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': scopedClaudeFixture(),
+    },
+  });
+
+  const row = _rowByKey(strip, 'claude:main');
+  const fields = [];
+  const collect = (node) => {
+    const field = node.getAttribute('data-field');
+    if (field) fields.push(field);
+    for (const child of node.children) collect(child);
+  };
+  collect(row);
+  assert.equal(new Set(fields).size, fields.length,
+      'data-fields must be unique within a row: ' + fields.join(', '));
+});
+
+function scopedClaudeFixture() {
+  return {
+    provider: 'claude',
+    account: 'main',
+    windows: [
+      { window_minutes: 300, utilization: 42.0, resets_at: _iso(2 * HOUR) },
+      { window_minutes: 10080, utilization: 10.0, resets_at: _iso(3 * DAY) },
+      { window_minutes: 10080, utilization: 51.0, resets_at: _iso(3 * DAY), scope_label: 'Fable' },
+    ],
+    fetched_at: _iso(-1 * MINUTE),
+  };
+}
+
+test('renderExtUsage scoped bucket carries no reset element', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': _claudePayload({
+        windows: [
+          { window_minutes: 10080, utilization: 10.0, resets_at: _iso(3 * DAY) },
+          { window_minutes: 10080, utilization: 51.0, resets_at: _iso(3 * DAY), scope_label: 'Fable' },
+        ],
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'claude:main');
+  assert.equal(_field(row, '7d-fable-reset'), null, 'scoped bucket renders no -reset element');
+  assert.ok(_field(row, '7d-reset'), 'unscoped bucket keeps its reset element');
+  assert.ok(_field(row, '7d-fable-bar'), 'scoped bucket renders its bar');
+});
+
+test('scoped and plan-wide weekly bars share the threshold colour function', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': _claudePayload({
+        windows: [
+          { window_minutes: 10080, utilization: 85.0, resets_at: _iso(3 * DAY) },
+          { window_minutes: 10080, utilization: 85.0, resets_at: _iso(3 * DAY), scope_label: 'Fable' },
+        ],
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'claude:main');
+  const plan = _field(row, '7d-bar');
+  const scoped = _field(row, '7d-fable-bar');
+  assert.ok(plan && scoped, 'both weekly bars rendered');
+  // Both carry the same colour, an existing threshold class, not a made-up one.
+  assert.ok(plan.classList.contains('bg-red-500'),
+    'a >80% plan-wide bar is red via the shared threshold function');
+  assert.equal(scoped.classList.contains('bg-red-500'), plan.classList.contains('bg-red-500'),
+    'scoped bar coloured by the same threshold function as the plan-wide bar');
+});

@@ -844,6 +844,114 @@ def test_transform_response_marks_missing_claude_percentage_unknown() -> None:
   assert [w["utilization"] for w in usage["windows"]] == [None, 10.0]
 
 
+def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
+  """Every reading renders as its own window, keyed by its own limit.
+
+  Each window's percent is distinct so a swap between two bars becomes
+  observable, and the scoped model name appears nowhere in the source so a
+  hardcoded label fails.
+  """
+  raw = {
+    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
+    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+    "limits": [
+      {"kind": "weekly_scoped", "group": "weekly", "percent": 33.0,
+       "resets_at": "2026-08-04T19:00:00+00:00",
+       "scope": {"model": {"id": None, "display_name": "Nimbus"}, "surface": None}},
+    ],
+  }
+
+  windows = _transform_response(raw, account="main")["windows"]
+
+  by_label = {}
+  for window in windows:
+    label = window.get("scope_label", "")
+    by_label.setdefault(label, []).append(window["utilization"])
+  assert by_label == {
+      "": [11.0, 22.0],
+      "Nimbus": [33.0],
+  }
+
+
+def test_transform_scoped_windows_leaves_unscoped_untouched_when_limits_removed() -> None:
+  """Removing ``limits`` must not change the plan-wide windows at all."""
+  raw = {
+    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
+    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+    "limits": [
+      {"kind": "weekly_scoped", "group": "weekly", "percent": 33.0,
+       "resets_at": "2026-08-04T19:00:00+00:00",
+       "scope": {"model": {"id": None, "display_name": "Nimbus"}, "surface": None}},
+    ],
+  }
+
+  with_limits = _transform_response(raw, account="main")["windows"]
+  without = dict(raw)
+  without.pop("limits")
+  no_limits = _transform_response(without, account="main")["windows"]
+
+  scoped = [w for w in with_limits if "scope_label" in w]
+  unscoped_with = [w for w in with_limits if "scope_label" not in w]
+  assert len(scoped) == 1
+  assert unscoped_with == no_limits
+
+
+def test_transform_response_scopes_are_sorted_before_planwide() -> None:
+  raw = {
+    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
+    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+    "limits": [
+      {"group": "weekly", "percent": 33.0, "resets_at": "",
+       "scope": {"model": {"display_name": "Nimbus"}}},
+      {"group": "weekly", "percent": 44.0, "resets_at": "",
+       "scope": {"model": {"display_name": "Fable"}}},
+    ],
+  }
+
+  windows = _transform_response(raw, account="main")["windows"]
+
+  assert [(w["window_minutes"], w.get("scope_label", "")) for w in windows] == [
+      (300, ""),
+      (10080, ""),
+      (10080, "Fable"),
+      (10080, "Nimbus"),
+  ]
+
+
+def test_transform_response_scoped_skip_and_warn_paths(monkeypatch) -> None:
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+
+  raw = {
+    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
+    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+    "limits": [
+      {"kind": "weekly_scoped", "group": "bogus", "percent": 33.0, "resets_at": "",
+       "scope": {"model": {"display_name": "Nimbus"}}},
+      {"kind": "weekly_scoped", "group": "weekly", "percent": 44.0, "resets_at": "",
+       "scope": {"model": {}}},
+    ],
+  }
+
+  windows = _transform_response(raw, account="main")["windows"]
+
+  assert all("scope_label" not in w for w in windows)
+  events = [w["event"] for w in warns if w["event"] == "ext_usage_unknown_limit_shape"]
+  assert events == ["ext_usage_unknown_limit_shape", "ext_usage_unknown_limit_shape"]
+
+
+def test_transform_response_absent_limits_produces_exactly_today_windows() -> None:
+  raw = {
+    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
+    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+  }
+
+  assert _transform_response(raw, account="main")["windows"] == [
+    {"window_minutes": 300, "utilization": 11.0, "resets_at": "2026-08-04T12:00:00+00:00"},
+    {"window_minutes": 10080, "utilization": 22.0, "resets_at": "2026-08-04T19:00:00+00:00"},
+  ]
+
+
 @pytest.mark.asyncio
 async def test_codex_provider_fetch_reads_newest_rollout_beyond_three_days(tmp_path) -> None:
   """No date cliff: the last known reading stays visible however old it is.

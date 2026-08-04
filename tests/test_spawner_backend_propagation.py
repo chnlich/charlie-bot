@@ -480,6 +480,82 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_create_worktree_and_process_raises_when_session_missing_on_worktree_override(tmp_path: Path) -> None:
+  cfg = _build_cfg()
+  repo_path = (tmp_path / "repo").resolve()
+  repo_path.mkdir(parents=True, exist_ok=True)
+  thread = ThreadMetadata(
+      id="thread-1",
+      session_id="session-id",
+      description="Do work",
+  )
+
+  class FakeSessionManager(JudgmentShim):
+
+    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+      return None
+
+  with pytest.raises(ValueError, match="session 'session-id' not found"):
+    await spawner._create_worktree_and_process(
+        "session-id",
+        thread,
+        "Do work",
+        cfg,
+        FakeSessionManager(),
+        JudgmentShim(),
+        repo_path,
+        SpawnRequest(
+            repo_path=str(repo_path),
+            base_branch="main",
+            worktree_path_override=str(tmp_path / "worktrees" / "reused"),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_worktree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+      ],
+  )
+  repo_path = (tmp_path / "repo").resolve()
+  repo_path.mkdir(parents=True, exist_ok=True)
+  thread = ThreadMetadata(
+      id="thread-1",
+      session_id="session-id",
+      description="Do work",
+  )
+
+  class FakeSessionManager(JudgmentShim):
+
+    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+      return None
+
+  async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
+    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
+
+  monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
+
+  with pytest.raises(ValueError, match="session 'session-id' not found"):
+    await spawner._create_worktree_and_process(
+        "session-id",
+        thread,
+        "Do work",
+        cfg,
+        FakeSessionManager(),
+        JudgmentShim(),
+        repo_path,
+        SpawnRequest(repo_path=str(repo_path), base_branch="main"),
+    )
+
+
+@pytest.mark.asyncio
 async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

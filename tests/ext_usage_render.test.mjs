@@ -538,13 +538,16 @@ test('renderExtUsage scoped bucket carries no reset element', () => {
 
 test('scoped and plan-wide weekly bars share the threshold colour function', () => {
   const { context, strip } = loadExtUsageScript();
+  // Which colour 85% maps to is _barColor's business, not this test's; only that
+  // both bars land on the same one, given equal percents, matters here.
+  const pct = 85.0;
 
   context.renderExtUsage({
     providers: {
       'claude:main': _claudePayload({
         windows: [
-          { window_minutes: 10080, utilization: 85.0, resets_at: _iso(3 * DAY) },
-          { window_minutes: 10080, utilization: 85.0, resets_at: _iso(3 * DAY), scope_label: 'Fable' },
+          { window_minutes: 10080, utilization: pct, resets_at: _iso(3 * DAY) },
+          { window_minutes: 10080, utilization: pct, resets_at: _iso(3 * DAY), scope_label: 'Fable' },
         ],
       }),
     },
@@ -554,9 +557,44 @@ test('scoped and plan-wide weekly bars share the threshold colour function', () 
   const plan = _field(row, '7d-bar');
   const scoped = _field(row, '7d-fable-bar');
   assert.ok(plan && scoped, 'both weekly bars rendered');
-  // Both carry the same colour, an existing threshold class, not a made-up one.
-  assert.ok(plan.classList.contains('bg-red-500'),
-    'a >80% plan-wide bar is red via the shared threshold function');
-  assert.equal(scoped.classList.contains('bg-red-500'), plan.classList.contains('bg-red-500'),
-    'scoped bar coloured by the same threshold function as the plan-wide bar');
+
+  const THRESHOLD_CLASSES = ['bg-red-500', 'bg-yellow-500', 'bg-emerald-500'];
+  const planColor = THRESHOLD_CLASSES.find((c) => plan.classList.contains(c));
+  const scopedColor = THRESHOLD_CLASSES.find((c) => scoped.classList.contains(c));
+  assert.ok(planColor, 'plan-wide bar carries one of the known threshold colours');
+  assert.equal(scopedColor, planColor,
+    'scoped bar shares the same threshold colour as the plan-wide bar for an equal percent');
+});
+
+// The existing selector-coverage test above only proves *some* emitted field
+// matches the 7d- rule; it does not use a scoped fixture, so it cannot tell
+// whether the scoped bucket's own field is one of the fields that rule sweeps
+// up. Assert that directly, so the narrow-screen coupling covers the scoped
+// bar too, not just the plan-wide one it happens to share a row with.
+test('the 7d- narrow-screen rule also sweeps up the scoped weekly bucket', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': scopedClaudeFixture(),
+    },
+  });
+
+  const emitted = new Set();
+  const collect = (node) => {
+    const field = node.getAttribute('data-field');
+    if (field) emitted.add(field);
+    for (const child of node.children) collect(child);
+  };
+  collect(strip);
+
+  const cssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/css/styles.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+  assert.ok(css.includes('[data-field^="7d-"]'),
+      'styles.css:395 must still key the narrow-screen 7d group off the data-field prefix');
+
+  const scopedFields = [...emitted].filter((f) => f.startsWith('7d-') && f !== '7d-bar' && f !== '7d-pct' && f !== '7d-reset');
+  assert.ok(scopedFields.length > 0,
+      'scoped weekly bucket must emit a field the ^="7d-" rule also matches: ' + [...emitted].join(', '));
+  assert.ok(!emitted.has('spend-7d'), 'the 7d- rule must not sweep up the codex spend column');
 });

@@ -110,6 +110,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
       notify_cfg: CharlieBotConfig,
       quota_exhausted: bool = False,
       error: str = "",
+      task_type: TaskType = TaskType.IMPLEMENT,
   ) -> None:
     captures["notified"] = True
 
@@ -300,6 +301,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
       notify_cfg: CharlieBotConfig,
       quota_exhausted: bool = False,
       error: str = "",
+      task_type: TaskType = TaskType.IMPLEMENT,
   ) -> None:
     captures["notify_thread_keep_worktree"] = thread_meta.keep_worktree
     captures["notify_thread_worktree_path"] = thread_meta.worktree_path

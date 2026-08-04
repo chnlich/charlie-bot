@@ -6,22 +6,29 @@ version: 1.0.0
 
 # File Server
 
-Share files and directories with the user by generating links to the CharlieBot file server. The server serves any file on the host filesystem via the `/files/` endpoint.
+Share files and directories with the user by generating links to the CharlieBot file server. The
+server serves any file on the host filesystem.
 
 ## URL Format
 
 ```
-<base_url>/files/<absolute-path>
+<base_url>/absolute_filepath/<absolute-path>
 ```
 
-Where `<base_url>` is the CharlieBot URL resolved from HOST MEMORY (look for the **CharlieBot URL** entry).
+Where `<base_url>` is the CharlieBot URL resolved from HOST MEMORY (look for the **CharlieBot URL**
+entry).
 
-The path after `/files/` is the absolute filesystem path (without leading `/`). Examples:
+The path after `/absolute_filepath/` is the absolute filesystem path with its leading `/` removed.
+The prefix names what has to follow it, so a path that dropped its leading segments reads as wrong
+where it is written. Examples:
 
 | Filesystem path | URL |
 |---|---|
-| `/path/to/trace.json` | `<base_url>/files/path/to/trace.json` |
-| `/path/to/results/` | `<base_url>/files/path/to/results/` |
+| `/path/to/trace.json` | `<base_url>/absolute_filepath/path/to/trace.json` |
+| `/path/to/results/` | `<base_url>/absolute_filepath/path/to/results/` |
+
+The server answers on the alias `/files/` as well, which is the prefix links already sent carry and
+the prefix the web UI builds its own URLs with.
 
 ## Behavior
 
@@ -30,7 +37,8 @@ The path after `/files/` is the absolute filesystem path (without leading `/`). 
 
 ## When to Use
 
-Whenever you need to present a file to the user (logs, traces, checkpoints, images, configs, etc.), generate the URL instead of dumping file contents into chat. This is especially useful for:
+Whenever you need to present a file to the user (logs, traces, checkpoints, images, configs, and so
+on), generate the URL instead of dumping file contents into chat. This is especially useful for:
 
 - Large files (traces, logs, pickles)
 - Binary files (images, model checkpoints)
@@ -38,13 +46,18 @@ Whenever you need to present a file to the user (logs, traces, checkpoints, imag
 
 ## Rules
 
-1. Always verify the file/directory exists before sharing the link (use `ls` or `Glob`)
-2. Resolve base URL from HOST MEMORY — never hardcode hostnames or ports
-3. Present the link in markdown format: `[descriptive text](url)`
-4. **If the file is a Perfetto/Chrome trace** (`.json` trace from training/profiling, or a directory of rank traces), ALWAYS also include a Perfetto viewer link alongside the file link. Read the `perfetto` skill for how to construct the viewer URL.
+1. Take the path in a link from the current turn's command output: run `ls` on the exact full path
+   about to be pasted, rather than reconstructing it from memory.
+2. Present the link in markdown format: `[descriptive text](url)`
+3. **If the file is a Perfetto/Chrome trace** (`.json` trace from training/profiling, or a directory
+   of rank traces), ALWAYS also include a Perfetto viewer link alongside the file link. Read the
+   `perfetto` skill for how to construct the viewer URL.
 
-   Trace indicators: filename matches `trace_rank*.json` / `*trace*.json`, lives under a `trace/` or `profile/` dir, or the user called it a "trace"/"profile"/"perf capture".
-5. **Never wrap a raw filesystem path in markdown `[](...)`** — CharlieBot UI renders raw local paths as dead links. Write the path as plain text `path:line`, or build a `/files/<abs-path-no-leading-slash>` URL. (This applies to raw paths, not to generated file-server URLs, which should be wrapped as `[descriptive text](url)` per rule #3.)
+   Trace indicators: filename matches `trace_rank*.json` / `*trace*.json`, lives under a `trace/` or
+   `profile/` dir, or the user called it a "trace"/"profile"/"perf capture".
+4. Write a raw filesystem path as plain text, `path:line`, since the CharlieBot UI renders a markdown
+   link around a raw local path as a dead link. The form to wrap in `[descriptive text](url)` is a
+   file-server URL.
 
 ## HTML Artifacts
 

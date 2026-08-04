@@ -38,6 +38,15 @@ implementing; master includes them as constraints in task specs.
   Reserve `0 = UNKNOWN` and start real values at `1`.
 - Store computed or derivable values on demand.
 
+## Comments
+
+- Give the reason the code takes this form: the constraint that rules
+  out the simpler alternative, the cost that dictates the shape, the
+  invariant a reader cannot see. The code already states what it does.
+- Name the outside fact the reason rests on, concretely enough for a
+  reader to re-check whether it still holds: the library behavior, the
+  version boundary, the measured cost.
+
 ## Error Handling
 
 - Surface failures explicitly; catch and report, skip and discard.

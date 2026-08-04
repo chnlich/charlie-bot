@@ -147,39 +147,50 @@ function _paintBucket(refs, win, providerData) {
   if (_isExpiredReading(providerData, win)) {
     _blankBar(refs.bar);
     refs.pctEl.textContent = '—';
-    refs.resetEl.textContent = 'window reset — reading expired';
+    if (refs.resetEl) refs.resetEl.textContent = 'window reset — reading expired';
     return;
   }
   if (typeof win.utilization !== 'number' || !Number.isFinite(win.utilization)) {
     _blankBar(refs.bar);
     refs.pctEl.textContent = '?';
-    refs.resetEl.textContent = _formatWindowReset(providerData, win);
+    if (refs.resetEl) refs.resetEl.textContent = _formatWindowReset(providerData, win);
     return;
   }
   const pct = win.utilization;
   refs.bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
   refs.bar.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
   refs.pctEl.textContent = Math.round(pct) + '%';
-  refs.resetEl.textContent = _formatWindowReset(providerData, win);
+  if (refs.resetEl) refs.resetEl.textContent = _formatWindowReset(providerData, win);
+}
+
+function _bucketFieldPrefix(displayLabel) {
+  return displayLabel.slice(0, -1).toLowerCase().replace(/[^a-z0-9]+/g, '-');
 }
 
 function _buildBucket(row, win, providerData) {
   const label = _windowLabel(win.window_minutes);
+  const scopeLabel = win.scope_label;
+  const scoped = typeof scopeLabel === 'string' && scopeLabel !== '';
+  const displayLabel = label + (scoped ? ' ' + scopeLabel : '') + ':';
+  const fieldPrefix = _bucketFieldPrefix(displayLabel);
   const group = _el('div', 'flex items-center gap-1.5');
   const lbl = _el('span', '');
-  lbl.textContent = label + ':';
+  lbl.textContent = displayLabel;
   group.appendChild(lbl);
   const barWrap = _el('div', 'w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden');
   const bar = _el('div', 'h-full rounded-full transition-all duration-300');
-  bar.setAttribute('data-field', label + '-bar');
+  bar.setAttribute('data-field', fieldPrefix + '-bar');
   barWrap.appendChild(bar);
   group.appendChild(barWrap);
   const pctEl = _el('span', '');
-  pctEl.setAttribute('data-field', label + '-pct');
+  pctEl.setAttribute('data-field', fieldPrefix + '-pct');
   group.appendChild(pctEl);
-  const resetEl = _el('span', 'text-slate-500');
-  resetEl.setAttribute('data-field', label + '-reset');
-  group.appendChild(resetEl);
+  let resetEl = null;
+  if (!scoped) {
+    resetEl = _el('span', 'text-slate-500');
+    resetEl.setAttribute('data-field', fieldPrefix + '-reset');
+    group.appendChild(resetEl);
+  }
   row.appendChild(group);
 
   const refs = {bar: bar, pctEl: pctEl, resetEl: resetEl};

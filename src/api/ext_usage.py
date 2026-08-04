@@ -485,6 +485,11 @@ CLAUDE_WINDOW_FIELDS = (
     ("sevenDay", "seven_day", 10080),
 )
 
+# limits[].group -> window length in minutes. Both values the endpoint reports
+# today, kept as a table rather than an if/else so an unknown group is skipped
+# with a warning instead of guessed at from array position.
+LIMIT_GROUP_WINDOW_MINUTES = {"session": 300, "weekly": 10080}
+
 
 def _as_utilization(value: Any) -> float | None:
   """Percentage used, or None when upstream did not report one.
@@ -635,6 +640,57 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
   return new_access
 
 
+def _scoped_windows(raw: dict[str, Any], *, account: str) -> list[dict[str, Any]]:
+  """Turn every usable per-model ``limits`` entry into a window.
+
+  Entries carry ``scope``; a null/absent scope is the plan-wide limit already
+  covered by the top-level fields, so it is skipped silently. A scoped entry
+  names one model via ``scope.model.display_name`` and is emitted with a
+  ``scope_label`` so it can sit beside the plan-wide window of the same
+  length. Entries that cannot be identified are skipped with a warning rather
+  than guessed at.
+  """
+  windows: list[dict[str, Any]] = []
+  limits = raw.get("limits")
+  if not isinstance(limits, list):
+    if limits is not None:
+      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
+                  slot="limits", reason="limits is not a list")
+    return windows
+  for index, entry in enumerate(limits):
+    slot = entry.get("kind") if isinstance(entry, dict) and isinstance(entry.get("kind"), str) else index
+    if not isinstance(entry, dict):
+      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
+                  slot=slot, reason="entry is not an object")
+      continue
+    scope = entry.get("scope")
+    if scope is None:
+      continue
+    group = entry.get("group")
+    window_minutes = LIMIT_GROUP_WINDOW_MINUTES.get(group)
+    if window_minutes is None:
+      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
+                  slot=slot, reason="unknown limit group")
+      continue
+    model = scope.get("model") if isinstance(scope, dict) else None
+    display_name = model.get("display_name") if isinstance(model, dict) else None
+    if not isinstance(display_name, str) or not display_name:
+      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
+                  slot=slot, reason="missing model display_name")
+      continue
+    utilization = _as_utilization(entry.get("percent"))
+    if utilization is None:
+      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
+                  slot=slot, reason="missing percent")
+    windows.append({
+        "window_minutes": window_minutes,
+        "scope_label": display_name,
+        "utilization": utilization,
+        "resets_at": entry.get("resets_at") or "",
+    })
+  return windows
+
+
 def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, Any]:
   """Transform the raw Anthropic usage API response into our cached format.
 
@@ -651,6 +707,8 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
         "utilization": _as_utilization(bucket.get("utilization")),
         "resets_at": bucket.get("resetsAt", bucket.get("resets_at", "")),
     })
+  windows.extend(_scoped_windows(raw, account=account))
+  windows.sort(key=lambda w: (w["window_minutes"], w.get("scope_label", "")))
 
   known = {name for camel, snake, _ in CLAUDE_WINDOW_FIELDS for name in (camel, snake)}
   for key, value in raw.items():

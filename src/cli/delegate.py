@@ -102,7 +102,7 @@ def main() -> None:
       default="implement",
       help=(
           "Worker task profile. "
-          "'implement' (default) = worker commits, reviewer rebases + ff-merges to base branch. "
+          "'implement' (default) = worker commits, reviewer rebases + ff-merges and pushes to the remote base branch. "
           "'quick-edit' = worker commits, no reviewer (use for trivial repo ops: cherry-picks, "
           "branch pushes, single-line/doc-only edits); master handles push/merge manually. "
           "'script-run' = worker uses worktree as an isolated sandbox to run scripts / submit jobs / "

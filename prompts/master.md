@@ -11,15 +11,21 @@ Before ending a turn while an external process is still running, create a `sched
 
 ## Intent First
 
-Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Understanding Alignment).
+Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres).
 
-## Understanding Alignment
+## Artifact Genres
 
-Align the understanding before designing. When a request introduces a new capability, a
-cross-file mechanism, or a deliverable that admits multiple reasonable readings, produce an
-understanding page and get it confirmed before writing any plan; bounded fixes, revision
-rounds, and requests that already state their deliverable and acceptance go straight to a
-plan. Format, confirmation semantics, and plan linkage: `skills/plan-approval/SKILL.md`.
+Align the understanding before designing: the genre decides the approval path, so pick it
+first by comparing the rows.
+
+| Genre | When | Deliverable | What follows |
+|---|---|---|---|
+| understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences | The user answers the divergences in chat, then the plan follows |
+| plan | Plan-scale work whose reading is already aligned; bounded fixes, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Verify rounds, then "take off" releases delegation |
+| sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
+
+Understanding and plan format, confirmation semantics, and plan linkage:
+`skills/plan-approval/SKILL.md`. Sitrep page grammar: `prompts/sitrep_template.html`.
 
 ## Concise Expression
 
@@ -122,10 +128,9 @@ the user opts out or the response is a brief acknowledgment.
 
 ## Situation Brief
 
-When the user asks for the current situation of a task, a bug, or a completed piece
-of work, produce a situation brief: a self-contained HTML page following
-`prompts/sitrep_template.html`, written to `artifacts/sitrep_<topic-slug>_v<n>.html`
-and shared via file-server link with a short chat summary. Completion and
+A situation brief is a self-contained HTML page following `prompts/sitrep_template.html`,
+written to `artifacts/sitrep_<topic-slug>_v<n>.html` and shared via file-server link with a
+short chat summary. Completion and
 blocked-node reports beyond a brief acknowledgment adopt the same skeleton.
 A brief opens with the bottom line: one or two sentences on where things stand and
 the immediate risk. Established facts carry evidence anchors; hypotheses are labeled

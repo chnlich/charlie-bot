@@ -193,63 +193,65 @@ def _seed_memory_scaffold(cfg: CharlieBotConfig) -> None:
 
 
 def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
-  """Seed repo-owned default cron tasks into the host cron.yaml by name.
+  """Seed repo-owned default cron tasks into per-job host files by name.
 
   Reads ``configs/cron.default.yaml`` from the repo and the host
-  ``~/.charliebot/config.d/cron.yaml``. For each default entry: if no host entry
-  shares its ``name``, append it verbatim; if one exists, change nothing about
-  it. Never reorders, rewrites, or drops host-only entries.
+  ``~/.charliebot/config.d/cron.d/`` directory. For each default entry: if no
+  host file ``cron.d/<name>.yaml`` exists, create it with the entry body minus
+  ``name``; if one exists, change nothing about it. Never rewrites or drops
+  host-only files.
 
-  Creates ``config.d/`` and the cron file when absent. Writes through
+  Creates ``config.d/cron.d/`` when absent. Writes through
   :func:`src.core.yaml_utils.save_yaml` (the same writer ``src/api/cron.py``
   uses). Validates every default entry before writing: each must construct a
   :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution and
   every ``prompt_file`` must resolve to an existing file. Fails loudly without
-  writing if validation fails.
+  writing if validation fails, and fails loudly (writing nothing) when a legacy
+  ``config.d/cron.yaml`` exists — migration to the per-job layout is a human
+  action, never automatic.
 
   Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}, ...]``.
 
   This is a library function invoked only by ``./scripts/setup.sh``. It is NOT
   called by :func:`init_charliebot_home`, so the server startup path never
-  writes ``cron.yaml`` — that is an invariant the tests assert directly.
+  writes cron config — that is an invariant the tests assert directly.
   """
   repo_root = cfg.charlie_bot_repo
   defaults_data = load_yaml(repo_root / "configs" / "cron.default.yaml", default={})
   default_entries = list(defaults_data.get("scheduled_tasks", []))
 
   # Validate every default entry on a resolved copy before touching the host
-  # file, so a bad repo default fails loudly without any partial write.
+  # directory, so a bad repo default fails loudly without any partial write.
   for entry in default_entries:
     if not isinstance(entry, dict):
       raise ValueError(f"invalid default cron entry (not a mapping): {entry!r}")
     resolved = copy.deepcopy(entry)
-    _resolve_prompt_file(resolved, repo_root)  # raises ScheduledTaskResolutionError
+    resolved.pop("name", None)
+    _resolve_prompt_file(resolved, repo_root)  # raises ValueError
     _resolve_local_timezone(resolved)
-    ScheduledTaskConfig(**resolved)  # raises on validation error
+    ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
 
-  cfg.config_d_dir.mkdir(parents=True, exist_ok=True)
-  cron_path = cfg.config_d_dir / "cron.yaml"
-  data = load_yaml(cron_path, default={"scheduled_tasks": []})
-  if not isinstance(data, dict):
-    raise ValueError(f"cron config must be a mapping: {cron_path}")
-  host_tasks = list(data.get("scheduled_tasks", []) or [])
-  host_names = {t.get("name") for t in host_tasks if isinstance(t, dict)}
+  # A leftover legacy cron.yaml is a loud tripwire, never a silent fallback:
+  # refuse to seed (and write nothing) until a human migrates and removes it.
+  legacy_path = cfg.config_d_dir / "cron.yaml"
+  if legacy_path.exists():
+    raise ValueError(
+        f"legacy {legacy_path} present; not seeding. Split its entries into "
+        f"config.d/cron.d/<name>.yaml and remove cron.yaml (migration is manual)")
+
+  cron_d_dir = cfg.config_d_dir / "cron.d"
+  cron_d_dir.mkdir(parents=True, exist_ok=True)
 
   report: list[dict] = []
-  changed = False
   for entry in default_entries:
     name = entry.get("name")
-    if name in host_names:
+    path = cron_d_dir / f"{name}.yaml"
+    if path.exists():
       report.append({"name": name, "status": "exists"})
       continue
-    host_tasks.append(copy.deepcopy(entry))
-    host_names.add(name)
+    body = {k: v for k, v in copy.deepcopy(entry).items() if k != "name"}
+    save_yaml(path, body)
     report.append({"name": name, "status": "created"})
-    changed = True
-
-  if changed:
-    data["scheduled_tasks"] = host_tasks
-    save_yaml(cron_path, data)
   return report
 
 

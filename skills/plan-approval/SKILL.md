@@ -142,9 +142,9 @@ and `/api/internal/improve`:
 
 ## Execution
 
-- Default to acting. If you can undo an operation alone at similar cost and its
-  effect stays within what you own — reaching neither other people nor systems
-  they rely on — do it without asking.
+- Default to acting. This is the reversibility test: if you can undo an operation
+  alone at similar cost and its effect stays within what you own (reaching neither
+  other people nor systems they rely on), do it without asking.
 - When reality forces a change that leaves the approval object intact, make it,
   log it as a deviation, and keep going.
 - Between "take off" and the report there is nothing to ask: return to the user

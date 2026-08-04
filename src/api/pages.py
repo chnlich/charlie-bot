@@ -36,6 +36,9 @@ log = structlog.get_logger()
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _PT_TZ = ZoneInfo("America/Los_Angeles")
 _PERFETTO_MERGE_CACHE_LIMIT = 8
+# Prefixes the file server answers on (server.py mounts one router under both). A trace= input
+# names an absolute path under either of them.
+_FILE_SERVER_PREFIXES = ("/files", "/absolute_filepath")
 
 
 def _perfetto_merge_cache_dir() -> Path:
@@ -169,8 +172,9 @@ def _discover_trace_paths(directory: str, pattern: str) -> list[Path]:
 
 
 def _trace_input(value: str) -> tuple[str, Path | None]:
-  if value.startswith("/files/"):
-    return value, Path(value.removeprefix("/files"))
+  for prefix in _FILE_SERVER_PREFIXES:
+    if value.startswith(f"{prefix}/"):
+      return value, Path(value.removeprefix(prefix))
   if value.startswith("/"):
     return f"/files{value}", Path(value)
   return value, None

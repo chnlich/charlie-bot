@@ -13,7 +13,7 @@ from src.core.config import get_config
 # or re-serve data already public via "/files/", so exposing them leaks nothing
 # new and makes trace/report links shareable.
 _PUBLIC_PATHS = frozenset({"/", "/perfetto", "/perfetto/merged", "/ncu", "/api/auth/status"})
-_PUBLIC_PREFIXES = ("/static/", "/files/")
+_PUBLIC_PREFIXES = ("/static/", "/files/", "/absolute_filepath/")
 
 # Self-contained HTML login page served to unauthenticated browser navigations.
 # On submit it stores the key in localStorage (the source of truth for the SPA

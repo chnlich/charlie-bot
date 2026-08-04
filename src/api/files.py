@@ -100,9 +100,13 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
   return page
 
 
-@router.get("/{path:path}")
+@router.api_route("/{path:path}", methods=["GET", "HEAD"])
 async def serve_file(path: str):
-  """Serve a file or directory listing from the filesystem."""
+  """Serve a file or directory listing from the filesystem.
+
+  HEAD answers the same status as GET, which is how the chat asks whether a linked path is
+  still there without pulling the file down.
+  """
   fs_path = await asyncio.to_thread(lambda: (Path("/") / path).resolve())
 
   if not await asyncio.to_thread(fs_path.exists):

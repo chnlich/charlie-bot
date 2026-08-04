@@ -192,8 +192,12 @@ app.include_router(code_server.router, prefix="/api/code-server", tags=["code-se
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
 app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
 
-# File server (filesystem browser)
+# File server (filesystem browser). The same router is mounted under two prefixes, so both
+# reach one handler and one path resolution. "/absolute_filepath" is the prefix written into
+# chat text: it names what has to follow it, so a link missing its absolute prefix reads as
+# wrong where it is written. "/files" stays as the form the UI builds and older links carry.
 app.include_router(files.router, prefix="/files", tags=["files"])
+app.include_router(files.router, prefix="/absolute_filepath", tags=["files"])
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Master-side end-to-end restart recovery: re-attach, replay, queue drain, read-back.
+"""Master-side end-to-end restart recovery: re-attach, drain, replay, queue drain, read-back.
 
 Two-process A/B protocol (mirrors test_restart_recovery_e2e.py):
   A is a short-lived driver subprocess that runs a real master turn through
@@ -10,8 +10,20 @@ Two-process A/B protocol (mirrors test_restart_recovery_e2e.py):
 Scenarios:
   - re-attach: the server dies, the agent keeps running. Recovery follows the
     recorded turn's raw log to its end; no second spawn, no replay.
+  - completed: the agent FINISHED while the server was dead. Recovery drains
+    the bytes after the cursor through the follower and closes the round
+    exactly once — no spawn, no replay, cursor at file size.
+  - delegate wake variants: a turn with no user event (user_event_id=None).
+    A completed one drains like any other; one killed mid-run drains as a
+    failure (no user message exists that pass 2 could replay).
+  - stalled: alive but silent beyond the report threshold. Recovery
+    re-attaches exactly like the RUNNING row, without the worker side's
+    chat report.
   - dead turn: server and agent die together. Recovery replays the user
     message with the replay marker.
+  - undrainable rows: raw log missing (legacy transport), never started, and
+    uncovered transports clear the record; a turn with a user message is then
+    answered by the replay pass, never by a drain.
   - queued: A running + B queued when the server dies. Recovery re-attaches A
     (excluded from replay) and replays B AFTER A drains.
   - idempotency: a replayed delegate call re-crossing the restart hits the
@@ -40,8 +52,11 @@ from src.agents import master_cc
 from src.core import init as init_module
 from src.core import runs
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption
+from src.core.message_aggregator import MessageAggregator
+from src.core.models import BackendOption, CreateSessionRequest, MasterRunRecord
 from src.core.process import kill_process_group
+from src.core.sessions import SessionManager
+from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -120,9 +135,15 @@ async def main() -> None:
          "message": {"role": "assistant", "content": [{"type": "text", "text": "prior master output"}]}})
 
   callbacks = session_mgr.callbacks()
-  task_a = asyncio.create_task(master_cc.run_message(cfg, meta, "message A", callbacks))
-  while not any(e.get("content") == "message A" for e in session_mgr.load_chat_events_sync(meta.id)):
-    await asyncio.sleep(0.01)
+  # kind == "wake": a turn with no user event in the chat log (delegate /
+  # cron / improve wake): the record's user_event_id stays None, so the
+  # replay pass has nothing to redeliver for it.
+  skip_user_event = kind == "wake"
+  task_a = asyncio.create_task(
+      master_cc.run_message(cfg, meta, "message A", callbacks, skip_user_event=skip_user_event))
+  if not skip_user_event:
+    while not any(e.get("content") == "message A" for e in session_mgr.load_chat_events_sync(meta.id)):
+      await asyncio.sleep(0.01)
   extra_tasks = []
   if kind == "queued":
     # Strict A-before-B enqueue ordering: A's user event is already on disk.
@@ -258,6 +279,57 @@ def _kill_agent_only(home: Path, session_id: str) -> None:
   """SIGKILL the recorded master agent's process group (it runs its own session)."""
   pid = _master_pid(home, session_id)
   kill_process_group(pid, signal.SIGKILL)
+
+
+def _turn_finished_on_disk(home: Path, session_id: str, marker: str) -> bool:
+  """Producer exited with its trailing bytes durable and the record still set.
+
+  The recovery-relevant state for a COMPLETED row: the raw log carries
+  ``marker``, and the recorded (pid, pid_start, started_at) identity is dead.
+  """
+  raws = _raw_logs(home, session_id)
+  if not raws or marker not in raws[0].read_text(encoding="utf-8", errors="replace"):
+    return False
+  record = _session_meta(home, session_id)["master_run"]
+  if record is None:
+    return False
+  started_at = datetime.fromisoformat(record["started_at"].replace("Z", "+00:00"))
+  return not runs.is_run_alive(record["pid"], record["pid_start"], started_at, runs.read_host_boot_time())
+
+
+def _round_transported_events(events: list[dict], *, skip_user_event: bool) -> list[dict]:
+  """The round's raw-log-transported events, stripped of server-injected keys.
+
+  The boundaries of "the round" are its user event (when one exists) and its
+  MASTER_DONE — the transported events are everything the agent's raw stream
+  contributed between them.
+  """
+  done_idx = next(i for i, e in enumerate(events) if e.get("type") == "master_done")
+  start = 0
+  if skip_user_event:
+    start = next(i for i, e in enumerate(events) if e.get("type") == "user") + 1
+  return [
+      {k: v for k, v in e.items() if k not in ("id", "timestamp", "event_index")}
+      for e in events[start:done_idx]
+  ]
+
+
+def _full_projection(home: Path, session_id: str, cfg: CharlieBotConfig) -> list[dict]:
+  """Project the recorded turn's whole raw log from offset 0, fresh translate."""
+  raw = _raw_logs(home, session_id)[0]
+  option = cfg.get_backend_option(_session_meta(home, session_id)["backend"])
+  return runs.project_raw_events(
+      runs.parse_raw_lines(raw.read_bytes()),
+      master_cc._build_fresh_translate(cfg, option))
+
+
+def _assert_round_operable(events: list[dict]) -> None:
+  """The round closes with a separator whose event_index is present — the
+  render condition for Clone to here / Elon-e / Recap."""
+  messages = [d["message"] for d in MessageAggregator().feed_all(events) if d.get("type") == "message"]
+  separators = [m for m in messages if m.get("role") == "separator"]
+  assert separators, "no separator row projected for the recovered round"
+  assert all(m.get("event_index") is not None for m in separators)
 
 
 class _BlackHoleServer:
@@ -496,3 +568,300 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Pat
   assert len(matching) == 1, "the replayed delegate spawned a duplicate worker thread"
   assert delegate_out["thread_id"] == matching[0]["id"]
   assert _session_meta(home, session_id)["master_run"] is None
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The turn's final result landed on disk inside the server-down window:
+  recovery resolves the COMPLETED row, drains the bytes after the cursor
+  through the follower, and closes the round exactly once."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "sleep_first")
+  _wait_for(
+      lambda: _session_meta(home, session_id)["master_run"] is not None
+      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      timeout=20.0,
+      what="turn A did not start/persist identity and first output")
+  # Kill the server; the producer then finishes while nobody is consuming.
+  proc.kill()
+  proc.wait(timeout=10)
+  _wait_for(
+      lambda: _turn_finished_on_disk(home, session_id, "RESULT-INV-1"),
+      timeout=20.0,
+      what="agent did not finish during the server-down window")
+
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  cfg = _cfg(home, shim)
+  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+
+  # Exactly one answer: MASTER_DONE landed once, and the user message was NOT
+  # replayed (a replay would have spawned a second agent). Both would mean
+  # the COMPLETED row was drained AND replayed; neither would mean it was
+  # cleared unanswered — the regression this row prevents.
+  assert not (state / "inv-2.argv").exists(), "recovering a completed turn must start no agent process"
+  events = _chat_events(home, session_id)
+  assert len([e for e in events if e.get("type") == "user"]) == 1
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  assert master_done[0].get("exit_code") == 0
+  assert _session_meta(home, session_id)["master_run"] is None
+
+  # Lossless, duplicate-free: the round's transported events equal a full
+  # projection of the raw log from offset 0 under a fresh translate, and the
+  # cursor ends exactly at the file size.
+  assert _round_transported_events(events, skip_user_event=True) == _full_projection(home, session_id, cfg)
+  raw = _raw_logs(home, session_id)[0]
+  assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
+
+  # The recovered round is operable (separator with event_index).
+  _assert_round_operable(events)
+
+  # Idempotent: re-running recovery over the same on-disk state is a no-op.
+  chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
+  before = chat_path.read_bytes()
+  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+  assert chat_path.read_bytes() == before
+  assert _session_meta(home, session_id)["master_run"] is None
+
+
+@pytest.mark.asyncio
+async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+  """A delegate/cron wake has no user event to replay: a result that landed
+  during downtime is still drained and closed — never left silent."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  proc, session_id = _launch_driver(tmp_path, home, shim, "wake", "sleep_first")
+  _wait_for(
+      lambda: _session_meta(home, session_id)["master_run"] is not None
+      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      timeout=20.0,
+      what="wake turn did not start/persist identity and first output")
+  proc.kill()
+  proc.wait(timeout=10)
+  _wait_for(
+      lambda: _turn_finished_on_disk(home, session_id, "RESULT-INV-1"),
+      timeout=20.0,
+      what="agent did not finish during the server-down window")
+
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setenv("SHIM_MODE", "immediate")
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  cfg = _cfg(home, shim)
+  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+
+  # Exactly one answer, delivered by the drain; the replay pass had nothing
+  # to redeliver (the chat log holds no user event for this turn).
+  assert not (state / "inv-2.argv").exists(), "recovering a completed turn must start no agent process"
+  events = _chat_events(home, session_id)
+  assert not [e for e in events if e.get("type") == "user"]
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  assert master_done[0].get("exit_code") == 0
+  assert _session_meta(home, session_id)["master_run"] is None
+
+  # Lossless, duplicate-free drain, cursor at file size, round operable, idempotent.
+  assert _round_transported_events(events, skip_user_event=False) == _full_projection(home, session_id, cfg)
+  raw = _raw_logs(home, session_id)[0]
+  assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
+  _assert_round_operable(events)
+
+  chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
+  before = chat_path.read_bytes()
+  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+  assert chat_path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Alive but silent beyond the report threshold: re-attached exactly like the
+  RUNNING row. Unlike the worker side, the master side posts no stall report."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "hang")
+  _wait_for(
+      lambda: _session_meta(home, session_id)["master_run"] is not None
+      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      timeout=20.0,
+      what="turn A did not start/persist identity and first output")
+  # Only the server dies; the agent hangs on, silent.
+  proc.kill()
+  proc.wait(timeout=10)
+  raw = _raw_logs(home, session_id)[0]
+  silent_since = time.time() - (NO_OUTPUT_REPORT_THRESHOLD + 60)
+  os.utime(raw, (silent_since, silent_since))
+
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setenv("SHIM_MODE", "immediate")
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+
+  # Re-attached, not cleared: the record is still filed (a clear happens
+  # synchronously inside recovery), and no replay was dispatched.
+  assert _session_meta(home, session_id)["master_run"] is not None
+  assert not (state / "inv-2.argv").exists()
+
+  # The producer dies; the re-attached follower then closes the round.
+  _kill_agent_only(home, session_id)
+  await _await_recovery_tasks()
+
+  events = _chat_events(home, session_id)
+  assert len([e for e in events if e.get("type") == "user"]) == 1
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  # Drained without a trailing result: same failure code as the worker side's
+  # died-mid-run (-1), never a spawned turn's 0.
+  assert master_done[0].get("exit_code") == -1
+  assert _session_meta(home, session_id)["master_run"] is None
+  # No worker-side STALLED chat report on the master path.
+  assert not any(e.get("source") == "crash_recovery" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+  """A delegate/cron wake killed mid-run (no result): no user message exists
+  that pass 2 could replay, so the leftover bytes are drained and the round
+  closes as a failure — exactly one answer, no spawn, no replay."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  proc, session_id = _launch_driver(tmp_path, home, shim, "wake", "hang")
+  _wait_for(
+      lambda: _session_meta(home, session_id)["master_run"] is not None
+      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      timeout=20.0,
+      what="wake turn did not start/persist identity and first output")
+  proc.kill()
+  proc.wait(timeout=10)
+  _kill_agent_only(home, session_id)
+
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setenv("SHIM_MODE", "immediate")
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+
+  assert not (state / "inv-2.argv").exists(), "a mid-run-dead wake must not spawn a new agent"
+  events = _chat_events(home, session_id)
+  assert not [e for e in events if e.get("type") == "user"]
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  assert master_done[0].get("exit_code") == -1
+  assert _session_meta(home, session_id)["master_run"] is None
+  raw = _raw_logs(home, session_id)[0]
+  assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
+  _assert_round_operable(events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_user_message", [True, False], ids=["user-wake", "delegate-wake"])
+async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                            with_user_message: bool) -> None:
+  """An interrupted turn on an uncovered backend transport (opencode /
+  antigravity / tui-cli) is drained NEVER: the record clears and the user
+  message — when one exists — is answered by the replay pass. No user
+  message, nothing to answer: the round simply closes."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
+          BackendOption(id="oc", label="OC", type="opencode", model="oc-model"),
+      ],
+  )
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
+  user_event_id = None
+  if with_user_message:
+    user_event = {"type": "user", "content": "message A"}
+    await session_mgr.save_chat_event(meta.id, user_event)
+    user_event_id = user_event["id"]
+  record = MasterRunRecord(
+      pid=999999,
+      pid_start="1",
+      started_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+      raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "gone" / runs.RAW_LOG_NAME),
+      user_event_id=user_event_id,
+  )
+  await session_mgr.persist_master_run(meta.id, record)
+
+  # Capture the replay instead of spawning the uncovered backend: the marker
+  # application lives in replay_user_message, which stays real.
+  replays: list[dict] = []
+
+  async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
+    replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
+
+  monkeypatch.setattr(master_cc, "run_message", _capture_run_message)
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+
+  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+
+  assert _session_meta(home, meta.id)["master_run"] is None
+  events = _chat_events(home, meta.id)
+  # The drain invariant: no drain ran, so this turn never produced a MASTER_DONE.
+  assert not any(e.get("type") == "master_done" for e in events)
+  if with_user_message:
+    assert len(replays) == 1
+    assert replays[0]["content"].startswith(master_cc._REPLAY_MARKER)
+    assert "message A" in replays[0]["content"]
+    assert replays[0]["user_event_id"] == user_event_id
+  else:
+    assert replays == []
+  assert not (state / "inv-1.argv").exists(), "recovery must not spawn any agent for this row"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pid,pid_start",
+    [(999999, "1"), (None, None)],
+    ids=["legacy-raw-missing", "never-started"],
+)
+async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                          pid, pid_start) -> None:
+  """Raw log missing (pre-transport record) or turn never spawned: nothing is
+  drainable, the record clears, and the user message is replayed with the
+  marker — exactly one answer, by replay and only by replay."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  cfg = _cfg(home, shim)
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
+  user_event = {"type": "user", "content": "message A"}
+  await session_mgr.save_chat_event(meta.id, user_event)
+  record = MasterRunRecord(
+      pid=pid,
+      pid_start=pid_start,
+      started_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+      raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "gone" / runs.RAW_LOG_NAME),
+      user_event_id=user_event["id"],
+  )
+  await session_mgr.persist_master_run(meta.id, record)
+
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setenv("SHIM_MODE", "immediate")
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+
+  # Exactly one answer: one new agent, carrying the marker + the original
+  # content; the original user event was not rewritten nor duplicated.
+  assert (state / "inv-1.argv").exists(), "replayed turn never spawned"
+  assert not (state / "inv-2.argv").exists()
+  replayed_prompt = _shim_prompt(state, 1)
+  assert replayed_prompt.startswith(master_cc._REPLAY_MARKER)
+  assert "message A" in replayed_prompt
+  events = _chat_events(home, meta.id)
+  assert len([e for e in events if e.get("type") == "user"]) == 1
+  assert sum(1 for e in events if e.get("type") == "master_done") == 1
+  assert _session_meta(home, meta.id)["master_run"] is None

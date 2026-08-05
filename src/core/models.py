@@ -211,8 +211,10 @@ class MasterRunRecord(BaseModel):
 
   Written when the turn's backend process spawns, cleared when the turn's
   MASTER_DONE lands. A record still present at server start means the turn's
-  outcome is unresolved: re-attach when (pid, pid_start) is alive, otherwise
-  the turn's user message (user_event_id) stays eligible for replay.
+  outcome is unresolved: startup reconcile resolves it through
+  ``runs.resolve_run``'s outcome table (re-attach, drain, or clear); only a
+  cleared record keeps the turn's user message (user_event_id) eligible for
+  replay.
   """
   pid: Optional[int] = None
   pid_start: Optional[str] = None  # /proc/<pid>/stat field 22 at spawn time

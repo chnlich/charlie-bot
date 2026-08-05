@@ -158,7 +158,7 @@ def test_raw_cursor_roundtrip_and_fallbacks(tmp_path: Path) -> None:
 
 def _resolve(thread_dir: Path, **overrides) -> runs.RunResolution:
   kwargs = {
-      "thread_dir": thread_dir,
+      "raw_path": runs.raw_log_path(thread_dir),
       "pid": None,
       "pid_start": None,
       "started_at": NOW,

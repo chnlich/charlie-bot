@@ -456,6 +456,30 @@ class SessionManager:
     log.info("session_renamed", session_id=session_id, new_name=new_name)
     return meta
 
+  async def switch_backend(self, session_id: str, backend: str) -> Optional[SessionMetadata]:
+    """Set the session's backend and return the updated metadata.
+
+    Performs only the metadata write — the caller (API layer) is responsible
+    for resume-domain validation and for persisting the audit event. Returns
+    ``None`` when the session is missing. Broadcasts a sidebar update so other
+    open tabs refresh their header.
+    """
+    async with self._lock_for(session_id):
+      meta = await self.get_session(session_id)
+      if not meta:
+        return None
+      meta.backend = backend
+      meta.updated_at = utc_now()
+      await self._save_metadata(meta)
+    await streaming_manager.broadcast(
+        "sidebar", {
+            "type": ET.BACKEND_SWITCHED,
+            "session_id": session_id,
+            "backend": backend,
+        })
+    log.info("session_backend_switched", session_id=session_id, backend=backend)
+    return meta
+
   async def mark_read(self, session_id: str) -> Optional[SessionMetadata]:
     """Clear the unread flag for a session."""
     async with self._lock_for(session_id):

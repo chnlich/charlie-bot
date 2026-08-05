@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from src.api.code_server import is_code_server_available
 from src.api.deps import get_session_manager, get_thread_manager
 from src.api.message_utils import build_session_bootstrap_data
+from src.api.sessions import _active_backend_payload
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -433,10 +434,9 @@ async def index(
             "pending_draft": bootstrap.pending_draft,
             "event_count": bootstrap.total_event_count,
             "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
-            "active_backend": active_backend,
-            "active_backend_type": active_backend_opt.type if active_backend_opt else "",
             "has_more": bootstrap.has_more,
         }
+        session_bootstrap.update(_active_backend_payload(active_session, cfg))
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")

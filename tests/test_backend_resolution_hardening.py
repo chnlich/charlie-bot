@@ -205,14 +205,14 @@ def test_spawner_defaults_when_session_pins_no_backend() -> None:
 def test_claude_config_dir_prefers_option_then_env_then_home(monkeypatch) -> None:
   opt = models.BackendOption(id="a", label="A", type="cc-claude", model="m",
                              claude_config_dir="~/.claude-ext-1")
-  assert master_cc._claude_config_dir(opt) == Path.home() / ".claude-ext-1"
+  assert core_config.claude_config_dir(opt) == Path.home() / ".claude-ext-1"
 
   bare = models.BackendOption(id="b", label="B", type="cc-claude", model="m")
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/env-claude")
-  assert master_cc._claude_config_dir(bare) == Path("/tmp/env-claude")
+  assert core_config.claude_config_dir(bare) == Path("/tmp/env-claude")
 
   monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-  assert master_cc._claude_config_dir(bare) == Path.home() / ".claude"
+  assert core_config.claude_config_dir(bare) == Path.home() / ".claude"
 
 
 def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: Path) -> None:

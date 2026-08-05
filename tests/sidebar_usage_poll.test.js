@@ -1240,6 +1240,7 @@ test('createSession switches open chat through SPA state without full reload', a
     oldest_message_ordinal: 0,
     active_backend: 'codex-o3',
     active_backend_type: 'codex',
+    switchable_backends: [],
     has_more: false,
   });
 });

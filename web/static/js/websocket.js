@@ -174,6 +174,19 @@ function handleWSEvent(ev, socketSessionId, socketGeneration) {
     return;
   }
 
+  // A backend switch on the active session: the header badge/dropdown must
+  // reflect the new value immediately (the initiating tab already did this via
+  // its own fetch; other tabs reach this through the shared session/sidebar
+  // channels). `to` is the audit shape; `backend` the sidebar broadcast shape.
+  if (t === 'backend_switched') {
+    const newBackend = ev.to || ev.backend;
+    if (newBackend) {
+      setActiveBackendId(newBackend);
+      updateActiveBackendBadges();
+    }
+    return;
+  }
+
   _bumpEventCursor(ev);
 
   if (t === 'message') {

@@ -95,6 +95,13 @@ def _system_msg(ev: dict) -> dict | None:
   }
 
 
+def _backend_switched_msg(ev: dict) -> dict:
+  return {
+      "role": "system",
+      "content": f"Backend switched: {ev.get('from', '')} → {ev.get('to', '')}",
+  }
+
+
 def _task_delegated_msg(ev: dict) -> dict:
   backend = ev.get("backend") or ev.get("resolved_backend") or ""
   model = ev.get("model") or ev.get("resolved_model") or ""
@@ -158,6 +165,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "role": "scheduled_trigger",
             "content": ev.get("content", ""),
         },
+    ET.BACKEND_SWITCHED:
+        _backend_switched_msg,
 }
 
 

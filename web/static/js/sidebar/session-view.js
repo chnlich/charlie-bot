@@ -69,9 +69,9 @@ async function switchBackend(backendId) {
 
 function rollbackBackendSelect(badge) {
   // Restore the dropdown to the currently-active backend without firing change.
-  if (badge && badge.tagName === 'SELECT'.toLowerCase()) {
-    badge.value = getActiveBackendId();
-  }
+  // `badge` is the '#backend-badge' container; the live <select> is nested inside it.
+  const select = badge && badge.querySelector && badge.querySelector('select[data-backend-switch]');
+  if (select) select.value = getActiveBackendId();
 }
 
 function updateActiveBackendBadges() {

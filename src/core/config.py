@@ -380,6 +380,22 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
   return path
 
 
+def claude_config_dir(option: BackendOption) -> Path:
+  """Resolve the CLAUDE_CONFIG_DIR a cc-claude process will use.
+
+  Single source of truth for the resume-domain resolution order: the option's
+  ``claude_config_dir`` override, then ``$CLAUDE_CONFIG_DIR``, then
+  ``~/.claude``. Both the API backend-switch guard and the runtime resume
+  resolver call this — do not restate the order anywhere else.
+  """
+  if option.claude_config_dir:
+    return Path(option.claude_config_dir).expanduser()
+  env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+  if env_dir:
+    return Path(env_dir).expanduser()
+  return Path.home() / ".claude"
+
+
 def _detect_local_timezone() -> str:
   """Return the host's IANA timezone, derived from ``/etc/localtime``.
 

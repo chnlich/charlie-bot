@@ -15,7 +15,7 @@ import structlog
 from src.agents.backends.base import AgentBackend, _read_stderr_tail, tail_follow_events
 from src.core import event_types as ET
 from src.core import runs
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
 from src.core.memory import assemble_master
 from src.core.models import (
@@ -194,16 +194,6 @@ def _build_prompt(user_content: str, is_voice: bool) -> str:
   return user_content
 
 
-def _claude_config_dir(option: BackendOption) -> Path:
-  """Resolve the CLAUDE_CONFIG_DIR the spawned cc-claude process will use."""
-  if option.claude_config_dir:
-    return Path(option.claude_config_dir).expanduser()
-  env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-  if env_dir:
-    return Path(env_dir).expanduser()
-  return Path.home() / ".claude"
-
-
 def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
   """True when *config_dir* holds a resumable transcript for *cc_session_id*.
 
@@ -226,7 +216,7 @@ def _resolve_resume_id(option: BackendOption, session_meta: SessionMetadata) -> 
     return None
   if option.type not in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
     return cc_session_id
-  config_dir = _claude_config_dir(option)
+  config_dir = claude_config_dir(option)
   if _cc_transcript_exists(config_dir, cc_session_id):
     return cc_session_id
   log.warning(

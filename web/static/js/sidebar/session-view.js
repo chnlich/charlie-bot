@@ -25,15 +25,86 @@ function setActiveBackendId(backendId) {
   globalThis.ACTIVE_BACKEND_ID = backendId || getDefaultBackendId();
 }
 
+let switchableBackends = [];
+
+function setSwitchableBackends(backendIds) {
+  switchableBackends = Array.isArray(backendIds) ? backendIds : [];
+}
+
+function getSwitchableBackends() {
+  return switchableBackends;
+}
+
+// POST to switch this session's backend, then sync the header. On failure the
+// server's `detail` is surfaced and the control reverts to the active value.
+async function switchBackend(backendId) {
+  if (!SESSION_ID || !backendId) return;
+  const previousBadge = document.getElementById('backend-badge');
+  try {
+    const res = await fetch('/api/sessions/' + SESSION_ID + '/backend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: backendId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setActiveBackendId(data.backend);
+      updateActiveBackendBadges();
+    } else {
+      let detail = '';
+      try {
+        const body = await res.json();
+        detail = body.detail || '';
+      } catch (_err) { detail = ''; }
+      rollbackBackendSelect(previousBadge);
+      if (detail) showToast(detail, true);
+      console.error('switchBackend failed:', res.status, detail || res.statusText);
+    }
+  } catch (err) {
+    rollbackBackendSelect(previousBadge);
+    showToast('Backend switch failed: network error. Please try again.', true);
+    console.error('switchBackend failed:', err);
+  }
+}
+
+function rollbackBackendSelect(badge) {
+  // Restore the dropdown to the currently-active backend without firing change.
+  if (badge && badge.tagName === 'SELECT'.toLowerCase()) {
+    badge.value = getActiveBackendId();
+  }
+}
+
 function updateActiveBackendBadges() {
   const activeBackendId = getActiveBackendId();
   const activeBackendLabel = BACKEND_OPTIONS[activeBackendId] || activeBackendId;
 
   const backendBadge = document.getElementById('backend-badge');
-  if (backendBadge) backendBadge.textContent = activeBackendLabel;
+  if (backendBadge) {
+    if (switchableBackends.length > 1 && SESSION_ID) {
+      renderSwitchableBackendBadge(backendBadge, switchableBackends, activeBackendId);
+    } else {
+      backendBadge.textContent = activeBackendLabel;
+    }
+  }
 
   const inputModelBadge = document.getElementById('input-model-badge');
   if (inputModelBadge) inputModelBadge.textContent = activeBackendLabel;
+}
+
+function renderSwitchableBackendBadge(badge, backendIds, activeId) {
+  const options = backendIds.map((id) => {
+    const label = BACKEND_OPTIONS[id] || id;
+    return '<option value="' + id + '"' + (id === activeId ? ' selected' : '') + '>' + label + '</option>';
+  }).join('');
+  badge.innerHTML = '<select data-backend-switch class="bg-slate-800 border border-slate-600 rounded text-slate-200 text-xs px-1.5 py-0.5">' + options + '</select>';
+  const select = badge.querySelector('select[data-backend-switch]');
+  if (select) {
+    select.value = activeId;
+    select.addEventListener('change', () => {
+      if (select.value !== activeId) switchBackend(select.value);
+    });
+    select.addEventListener('click', (e) => e.stopPropagation());
+  }
 }
 
 function scheduleIdleTask(fn) {
@@ -75,6 +146,7 @@ function buildEmptySessionBootstrap(session) {
     oldest_message_ordinal: 0,
     active_backend: backend,
     active_backend_type: BACKEND_TYPES ? (BACKEND_TYPES[backend] || '') : '',
+    switchable_backends: [],
     has_more: false,
   };
 }
@@ -188,6 +260,7 @@ function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
   setActiveBackendId(data.active_backend);
+  setSwitchableBackends(data.switchable_backends);
   setActiveRoundRatings(session.round_ratings || {});
   const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';
   if (globalThis.TuiSession) {
@@ -569,7 +642,10 @@ Object.assign(Sidebar, {
   getDefaultBackendId,
   getActiveBackendId,
   setActiveBackendId,
+  setSwitchableBackends,
+  getSwitchableBackends,
   updateActiveBackendBadges,
+  switchBackend,
   scheduleIdleTask,
   resetLazySessionData,
   scheduleLazySessionDataLoad,
@@ -587,7 +663,10 @@ Sidebar.expose([
   'getDefaultBackendId',
   'getActiveBackendId',
   'setActiveBackendId',
+  'setSwitchableBackends',
+  'getSwitchableBackends',
   'updateActiveBackendBadges',
+  'switchBackend',
   'scheduleIdleTask',
   'resetLazySessionData',
   'scheduleLazySessionDataLoad',

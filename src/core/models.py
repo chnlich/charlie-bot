@@ -326,6 +326,10 @@ class RenameSessionRequest(BaseModel):
   name: str
 
 
+class SwitchBackendRequest(BaseModel):
+  backend: str
+
+
 class RateRoundRequest(BaseModel):
   rating: Optional[Literal['thumbs_up', 'thumbs_down']]
 

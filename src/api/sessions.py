@@ -22,8 +22,15 @@ from src.api.message_utils import (
   build_session_view_data,
   events_to_messages,
 )
-from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
+from src.core.config import (
+  CharlieBotConfig,
+  claude_config_dir,
+  get_config,
+  get_scheduled_tasks,
+)
+from src.core.event_types import BACKEND_SWITCHED
 from src.core.models import (
+  BackendOption,
   CreateSessionRequest,
   DeleteGroupRequest,
   EloneSessionRequest,
@@ -34,6 +41,7 @@ from src.core.models import (
   SessionMetadata,
   SessionStatus,
   SetGroupRequest,
+  SwitchBackendRequest,
   ThreadMetadata,
 )
 from src.core.sessions import SessionManager
@@ -53,7 +61,58 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   return {
       "active_backend": active_backend,
       "active_backend_type": active_backend_opt.type if active_backend_opt else "",
+      "switchable_backends": _switchable_backend_ids(active_backend, cfg),
   }
+
+
+def _backend_domain(option: BackendOption) -> str | None:
+  """The resume domain an option belongs to, or None for non-cc-claude backends.
+
+  cc-claude options share a resume domain exactly when they resolve to the same
+  ``claude_config_dir`` (each account has its own transcript store). Every other
+  backend family is its own, non-switchable domain.
+  """
+  if option.type != "cc-claude":
+    return None
+  return str(claude_config_dir(option))
+
+
+def _same_backend_domain(cur_id: str, tgt_id: str, cfg: CharlieBotConfig) -> bool:
+  """True when cur and tgt are cc-claude options in the same resume domain.
+
+  ``cur`` must already be the effective current backend (the API layer resolves
+  the default). Any non-cc-claude effective option has no switchable domain.
+  """
+  cur = cfg.get_backend_option(cur_id)
+  tgt = cfg.get_backend_option(tgt_id)
+  if cur is None or tgt is None:
+    return False
+  cur_domain = _backend_domain(cur)
+  tgt_domain = _backend_domain(tgt)
+  return cur_domain is not None and cur_domain == tgt_domain
+
+
+def _switchable_backend_ids(active_backend: str, cfg: CharlieBotConfig) -> list[str]:
+  """Backend option ids in the effective backend's resume domain, current first.
+
+  Empty when the effective backend is missing from config or lies outside the
+  cc-claude domain (nothing is switchable from it in place). The current id is
+  always included; ids keep config order.
+  """
+  active_domain = _backend_domain_for(active_backend, cfg)
+  if active_domain is None:
+    return []
+  ids = [opt.id for opt in cfg.backend_options if opt.type == "cc-claude"
+         and str(claude_config_dir(opt)) == active_domain]
+  return ids
+
+
+def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
+  """The cc-claude resume domain for a backend id, or None if not switchable."""
+  opt = cfg.get_backend_option(backend_id)
+  if opt is None:
+    return None
+  return _backend_domain(opt)
 
 
 def _resolve_requested_backend(
@@ -541,6 +600,57 @@ async def elone_session(
   from src.core.tasks import create_logged_task
   create_logged_task(run_and_finalize(cfg, meta, bootstrap_prompt, session_mgr, skip_user_event=False))
 
+  return meta
+
+
+@router.post("/{session_id}/backend", response_model=SessionMetadata)
+async def switch_session_backend(
+    session_id: str,
+    body: SwitchBackendRequest,
+    parent: SessionMetadata = Depends(require_session),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Switch a session's backend in place, refused across resume domains.
+
+  ``meta.backend`` is an effective current backend: the raw field when set,
+  else ``backend_options[0]``. Only cc-claude options sharing the same
+  ``claude_config_dir`` are switchable for free; anything else must fork/clone.
+  """
+  valid_ids = {opt.id for opt in cfg.backend_options}
+  if body.backend not in valid_ids:
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"backend '{body.backend}' is not a recognized backend id. To switch to a "
+            "backend outside the session's domain, clone/fork the session with the "
+            "target backend instead."),
+    )
+
+  effective_current = parent.backend or _default_backend_id(cfg)
+  if body.backend == effective_current:
+    return parent
+
+  if not _same_backend_domain(effective_current, body.backend, cfg):
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"backend '{body.backend}' cannot be switched to in place: it does not "
+            "share this session's resume domain (backend types differ or config dirs "
+            "differ). Clone/fork the session with the target backend instead."),
+    )
+
+  previous = effective_current
+  meta = await session_mgr.switch_backend(session_id, body.backend)
+  if meta is None:
+    raise HTTPException(status_code=404, detail="Session not found")
+
+  audit_event = {
+      "type": BACKEND_SWITCHED,
+      "from": previous,
+      "to": body.backend,
+  }
+  await session_mgr.persist_and_broadcast(session_id, audit_event)
   return meta
 
 

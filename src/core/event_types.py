@@ -63,3 +63,6 @@ PROMPT_DISPATCHED = "prompt_dispatched"
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"
 FILE_WRITE = "file_write"
+
+# -- Session backend switching ----------------------------------------------
+BACKEND_SWITCHED = "backend_switched"

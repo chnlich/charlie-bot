@@ -463,6 +463,31 @@ def test_context_compact_failed_projection_without_error() -> None:
   ]
 
 
+def test_backend_switched_event_emits_system_message() -> None:
+  agg = MessageAggregator()
+  deltas = list(
+      agg.feed({
+          "type": ET.BACKEND_SWITCHED,
+          "from": "claude-opus-5",
+          "to": "claude-fable-5",
+          "timestamp": "t",
+      }))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "system",
+                  "content": "Backend switched: claude-opus-5 → claude-fable-5",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t",
+              },
+      }
+  ]
+
+
 def test_init_system_event_is_ignored() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}, "timestamp": "t1"}))

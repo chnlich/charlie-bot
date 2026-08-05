@@ -313,7 +313,7 @@ def write_raw_cursor(cursor: Path, offset: int) -> None:
 
 def resolve_run(
     *,
-    thread_dir: Path,
+    raw_path: Path,
     pid: Optional[int],
     pid_start: Optional[str],
     started_at: Optional[datetime],
@@ -335,7 +335,6 @@ def resolve_run(
   from the other rows).
   """
   now = now or datetime.now(timezone.utc)
-  raw_path = raw_log_path(thread_dir)
   raw_exists = raw_path.is_file()
 
   if not raw_exists and pid is None:

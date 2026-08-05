@@ -517,7 +517,7 @@ async def _reconcile_one(
     return False
 
   resolution = runs.resolve_run(
-      thread_dir=item.thread_dir,
+      raw_path=runs.raw_log_path(item.thread_dir),
       pid=meta.get("pid"),
       pid_start=meta.get("pid_start"),
       started_at=_parse_started_at(meta),

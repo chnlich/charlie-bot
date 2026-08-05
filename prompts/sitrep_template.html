@@ -96,15 +96,18 @@
       3. Every fact label carries a source anchor.
 
       Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
-      blockquote, pre, table, td, div.callout, div.flow, and div.meta > span.mtag chips.
+      blockquote, pre, table, td, div.callout, div.flow, div.fork with its folded explainer, and
+      div.meta > span.mtag chips.
 
       GRAMMAR — canonical sitrep page grammar and the only definition of its section semantics.
       The header's p.sub carries the bottom line: where things stand plus the immediate risk, in
       one or two sentences, so the reader can stop after the header. Then come five sections in a
       fixed order and numbering; any section may shrink to one sentence.
 
-      1. "What waits on you?" — the decisions or actions pending on the reader, each with the
-         material needed to judge it. "Nothing waits on you." is a valid one-line body.
+      1. "What waits on you?" — the decisions or actions pending on the reader, each rendered
+         as a div.fork block whose folded explainer carries the material needed to judge it
+         (fork grammar: plan_template.html's block kit, section 5). "Nothing waits on you."
+         is a valid one-line body.
       2. "What is this and why?" — the problem from scratch for a cold reader, ending with a short
          list of named requirements: self-describing slugs the rest of the page references,
          rendered as span.req chips.

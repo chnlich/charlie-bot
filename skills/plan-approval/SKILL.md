@@ -44,7 +44,8 @@ An understanding page precedes the plan when the master must first align the rea
   deliverable through two or three concrete examples; acceptance criteria, each a trigger
   condition plus an observable behavior (EARS phrasing, "WHEN <condition> THE SYSTEM
   SHALL <behavior>", is an example shape, not a requirement); non-goals; numbered
-  divergences rendered as `div.fork` blocks.
+  divergences rendered as `div.fork` blocks, each carrying the fork grammar's
+  folded explainer (block kit section 5, `prompts/plan_template.html`).
 - Don't guess: any point the request leaves unstated where different readings lead to
   different designs must appear as a numbered divergence; never silently pick a reading.
 - No how: an understanding contains no implementation mechanisms or technology choices;

@@ -463,7 +463,7 @@ async def _run_single_iteration(
   meta = await session_mgr.get_session(session_id)
   if not meta:
     log.error("improve_loop_session_missing", session=session_id)
-    return None
+    raise ValueError(f"session '{session_id}' not found")
 
   # Create thread and spawn worker
   thread = await thread_mgr.create_thread(meta, description, require_review=False)
@@ -680,9 +680,11 @@ async def run_improve_loop(
     return
 
   blocked_error: Optional[_ImproveLoopBlockedError] = None
+  failure_iteration = 0
 
   try:
     for i in range(1, iterations + 1):
+      failure_iteration = i
       try:
         summary = await _run_single_iteration(
             i,
@@ -705,7 +707,7 @@ async def run_improve_loop(
         blocked_error = exc
         break
       if summary is None:
-        break  # Stopped by user or session missing
+        break  # Stopped by user
       state = await require_loop_state(session_id, loop_id, cfg)
       state.iterations_completed += 1
       await save_loop_state(session_id, state, cfg)
@@ -775,12 +777,31 @@ async def run_improve_loop(
     log.warning("improve_loop_cancelled", session=session_id)
     await session_mgr.persist_and_broadcast(session_id, {"type": ET.IMPROVE_CANCELLED, "goal": goal})
     raise
-  except Exception:
+  except Exception as exc:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
     state = await load_loop_state(session_id, loop_id, cfg)
     if state:
       state.status = 'failed'
       await save_loop_state(session_id, state, cfg)
+      failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
+      failure_payload['failed_iteration'] = failure_iteration
+      failure_payload['error'] = f"Improve loop failed: {exc}"
+      failure_payload['work_branch'] = work_branch
+      failure_payload['base_branch'] = base_branch
+      instructions = (
+          "Report the improve loop failure to the user. Do not spawn another "
+          "iteration worker or relaunch the loop automatically; ask the user to decide next steps.")
+      try:
+        await session_mgr.persist_and_broadcast(session_id, failure_payload)
+        final_payload = {**failure_payload, 'instructions': instructions}
+        await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr)
+      except Exception as notify_error:
+        log.error(
+            "improve_loop_failure_notify_failed",
+            session=session_id,
+            error=str(notify_error),
+            exc_info=True,
+        )
   finally:
     await clear_active_loop_lock(session_id, cfg)
     # Keep the shared worktree when the loop failed so its in-progress state survives for

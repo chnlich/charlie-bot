@@ -494,6 +494,68 @@ async def test_run_improve_loop_stops_on_quota_blocker_without_incrementing_iter
 
 
 @pytest.mark.asyncio
+async def test_run_improve_loop_fails_when_session_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A missing session on iteration k ends the loop as a failure, not a completion.
+
+  ``_run_single_iteration`` raises when ``get_session`` returns None, so the loop
+  exits with ``status == 'failed'``, ``iterations_completed == k-1``, broadcasts
+  an ``IMPROVE_FAILED`` payload with ``failed_iteration == k``, and runs no
+  merge-back landing/push on that path.
+  """
+  cfg = _make_cfg(tmp_path)
+  session_id = "missing-session"
+  session_mgr = _FakeImproveSessionManager()
+  get_session_count = {"n": 0}
+
+  class MissingOnSecondIteration(_FakeImproveSessionManager):
+
+    async def get_session(self, session: str):
+      get_session_count["n"] += 1
+      if get_session_count["n"] >= 2:
+        return None
+      return MagicMock(id=session, name="Improve", backend="codex-o3")
+
+  session_mgr = MissingOnSecondIteration()
+  thread_mgr = _FakeImproveThreadManager(
+      tmp_path,
+      {
+          "thread-1": [{"type": "result", "result": "first iteration completed"}],
+      },
+      {"thread-1": ThreadStatus.COMPLETED},
+  )
+  spawn_requests, triggered_payloads = _patch_improve_loop_io(monkeypatch)
+
+  await improve_command.run_improve_loop(
+      session_id=session_id,
+      repo_path="/tmp/repo",
+      iterations=3,
+      goal="optimize",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+  assert len(spawn_requests) == 1  # only iteration 1 was spawned before the miss
+  state = await load_loop_state(session_id, 1, cfg)
+  assert state is not None
+  assert state.status == "failed"
+  assert state.iterations_completed == 1  # k-1 == 1
+
+  failed_payloads = [event for event in session_mgr.persisted_events if event.get("type") == "improve_failed"]
+  assert len(failed_payloads) == 1
+  assert failed_payloads[0]["failed_iteration"] == 2
+  assert failed_payloads[0]["iterations_completed"] == 1
+  assert failed_payloads[0].get("merge_result") is None  # no landing ran
+  assert triggered_payloads[-1]["type"] == "improve_failed"
+  assert triggered_payloads[-1]["failed_iteration"] == 2
+  assert "Do not spawn another" in triggered_payloads[-1]["instructions"]
+
+
+@pytest.mark.asyncio
 async def test_run_improve_loop_keeps_non_quota_worker_failures_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _make_cfg(tmp_path)

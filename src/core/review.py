@@ -440,6 +440,9 @@ async def spawn_review_worker(
       worker_summary=worker_summary)
 
   session_meta = await session_mgr.get_session(session_id)
+  if session_meta is None:
+    log.warning("review_session_missing", session=session_id)
+    return False
   review_thread = await thread_mgr.create_thread(
       session_meta,
       f"Review: {original_thread.context or _short_desc(original_thread.description)}",

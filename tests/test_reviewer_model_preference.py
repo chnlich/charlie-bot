@@ -362,6 +362,32 @@ async def test_preference_skips_invalid_then_selects_valid(monkeypatch: pytest.M
   assert captured["request"].resolved_model == "kimi-k2.5"
 
 
+@pytest.mark.asyncio
+async def test_spawn_review_worker_returns_false_when_session_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A missing session must not dereference a None session_meta.
+
+  ``spawn_review_worker`` returns False and creates no review thread when
+  ``get_session`` returns None, mirroring the ``ctx is None`` exit.
+  """
+  cfg = _build_cfg()
+  original = _make_original_thread()
+
+  class MissingSessionManager(FakeSessionManager):
+
+    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+      return None
+
+  class ThreadMgrNoCreate(FakeThreadManager):
+
+    async def create_thread(self, *args: Any, **kwargs: Any) -> ThreadMetadata:
+      raise AssertionError("create_thread must not run when the session is missing")
+
+  spawned = await review.spawn_review_worker(
+      "session-id", original, cfg, MissingSessionManager(), ThreadMgrNoCreate())
+
+  assert spawned is False
+
+
 # --- Retry flow tests for review.spawn_review_worker with tried_backends ---
 
 

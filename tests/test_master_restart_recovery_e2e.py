@@ -31,7 +31,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -315,6 +315,25 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   proc.kill()
   proc.wait(timeout=10)
 
+  # Backdate the persisted turn's recorded start 600s, so a correct re-attach
+  # reports a thinking interval beginning before the restart's recovery window.
+  # The mechanism under test—taking the interval start from the record—must
+  # surface that 600s on the MASTER_DONE thinking_seconds; a restart-fresh
+  # interval would report ~0s.
+  meta_path = home / "sessions" / session_id / "metadata.json"
+  meta = json.loads(meta_path.read_text(encoding="utf-8"))
+  rec = meta["master_run"]
+  assert rec is not None
+  rec_started = datetime.fromisoformat(rec["started_at"].replace("Z", "+00:00"))
+  backdated = rec_started - timedelta(seconds=600)
+  rec["started_at"] = backdated.isoformat()
+  meta_path.write_text(json.dumps(meta), encoding="utf-8")
+  # Keep the run "live": is_run_alive requires started_at to postdate the most
+  # recent host boot (nothing survives a reboot), and _reconcile_master_runs
+  # funnels this same value into the liveness closure it hands the re-attach.
+  monkeypatch.setattr(init_module.runs, "read_host_boot_time",
+                      lambda: backdated - timedelta(hours=1))
+
   monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
@@ -334,6 +353,14 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   raw = _raw_logs(home, session_id)[0]
   cursor = raw.parent / runs.CURSOR_NAME
   assert runs.read_raw_cursor(cursor) == raw.stat().st_size
+
+  # The re-attached turn's MASTER_DONE counts the whole interval — including
+  # the backdated 600s before the restart — because the interval start came
+  # from the persisted record, not from the restart's enqueue.
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  assert master_done[0].get("thinking_seconds", 0) >= 600, (
+      f"interval must count the backdated start; got {master_done[0].get('thinking_seconds')}s")
 
 
 @pytest.mark.asyncio

@@ -624,7 +624,10 @@ def _enqueue_work_item(session_id: str, work_item: _WorkItem) -> tuple[datetime,
   """
   if session_id not in _session_queues:
     _session_queues[session_id] = asyncio.Queue()
-  thinking_since, created = mark_busy(session_id)
+  # A resume item is re-attaching a turn that already started, so its busy
+  # interval begins at the recorded start rather than at this enqueue.
+  resumed = work_item.resume_record
+  thinking_since, created = mark_busy(session_id, since=resumed.started_at if resumed else None)
   _session_queues[session_id].put_nowait(work_item)
   if session_id not in _session_consumers or _session_consumers[session_id].done():
     _session_consumers[session_id] = asyncio.create_task(

@@ -20,6 +20,8 @@ Applies to all writing.
 - Open with the purpose together with the problem it solves (these are one
   idea), then how it works, then where to find it and how to invoke it.
 - State rules at the category level: an instance list narrows the rule to its examples.
+- Positive framing: state the working action or standing reality; a sentence
+  built around what fails leads with the alternative that works.
 
 ## Code
 

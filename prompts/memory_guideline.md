@@ -2,9 +2,9 @@
 
 The memory store (`~/.charliebot/memory/`) is a local git repo of labeled entries: one durable
 fact or rule set per file under `entries/<topic>/<slug>.md`, with front matter restricted to
-`scope`, `topic`, `audience`, `title` (plus `revises` in staging only) and a pure-markdown body
-with no first-line requirement. Sessions only stage candidates (`charliebot memory add` writes
-to `staging/`); the canon changes only through user-approved diffs.
+`scope`, `topic`, `audience`, `title` (plus `revises` in staging only) and a pure-markdown body.
+Sessions only stage candidates (`charliebot memory add` writes to `staging/`); the canon
+changes only through user-approved diffs.
 
 This file governs the daily curator AND ad-hoc user-directed promotions: the same admission test
 and labeling rules apply in both flows.
@@ -26,11 +26,17 @@ Every admit and every revise carries two proof lines in the report, and a candid
 Action or Home line cannot be written is rejected:
 
 - **Action**: the concrete future action this entry changes, named as work that recurs or is
-  already planned; a constructed possibility fails the line.
+  already planned in a named project or stack; a constructed possibility fails the line, and a
+  version- or build-specific fact is scoped to the stack that pins it.
 - **Home**: why the store is the only home, checked against the others: repo-scoped knowledge
   lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives in the master prompt,
   a skill, config, or the source; incidents and event history live in `LESSONS.md`; run
-  results, live state, and receipts live in the run dir or owning session.
+  results, live state, and receipts live in the run dir or owning session. A project-scoped
+  finding lives under that project's topic or its repo docs; a cluster or host entry holds
+  only what binds every project there.
+
+A candidate's text is a claim: verify version, build, and account figures against the live
+system before presenting them.
 
 Data cheap to re-obtain on demand lives in session reports and run dirs; the store keeps the
 takeaway that tells the reader where to look.
@@ -62,7 +68,8 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 - **scope** in `user` | `host`: `user` follows the human across machines; `host` is tied to this
   machine (hostnames, local paths, hardware, internal endpoints).
 - **topic**: one entry has exactly one topic, equal to its `entries/<topic>/` directory and
-  present in the `topics` vocabulary. Cross-topic content belongs in a resident topic
+  present in the `topics` vocabulary. The `topics` vocabulary grows only by user ruling.
+  Cross-topic content belongs in a resident topic
   (`workflow`, `rulings`). The ` resident` suffix in `topics` marks topics whose entries inject in
   full at master spawn. Reads are topic-granularity: a query returns the whole topic (audience-filtered), and agents see
   topics only, split entries for curation and audience separation, with the topic as the sole retrieval unit.
@@ -76,10 +83,11 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 ## Entry form
 
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
-content with no first-line requirement. Timeless phrasing: state the standing reality, not the
-moment it was learned. Dates, session ids, commit hashes, quoted rulings, event history, and
-case enumerations belong in `LESSONS.md`, not the store. Positively phrased, said once, in one
-language, lines 120 columns or fewer. Entry prose follows the writing-style skill.
+content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
+quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Said once, in one
+language, lines 120 columns or fewer. Entry prose follows the writing-style skill. Apply the
+admission test line by line as well as entry by entry: a line that changes no future action
+leaves.
 Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
 moves. When context changes, revise the entry in place (a `revises` candidate stages the proposed
 new text).

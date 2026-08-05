@@ -49,6 +49,9 @@ An understanding page precedes the plan when the master must first align the rea
   different designs must appear as a numbered divergence; never silently pick a reading.
 - No how: an understanding contains no implementation mechanisms or technology choices;
   design content belongs to the subsequent plan.
+- Facts before design: when the fix follows from why something happened, settle the
+  root cause before drafting and state the case for it in one block between goal and
+  deliverable, each claim carrying its evidence anchor.
 - Not registered in the plan registry, no verify worker, and take off does not apply. The
   user confirms by answering the numbered divergences in chat; unmentioned items take
   their recommendation. Confirmation is ordinary feedback and introduces no new approval token.

@@ -280,8 +280,9 @@ async def run_crash_recovery(cfg, boot_time: datetime, session_mgr=None, thread_
   instances; standalone callers (tests) get auto-constructed ones.
 
   Master-side reconciliation (:func:`_reconcile_master_runs`) runs after the
-  worker-side pass: per session, a recorded live master turn is re-attached,
-  a dead one clears its record, and every real user message after the last
+  worker-side pass: per session, a recorded master turn is resolved through
+  ``runs.resolve_run``'s outcome table — re-attached or drained through the
+  follower, or cleared — and every real user message after the last
   MASTER_DONE (minus the recorded turn's per-event exclusion) is replayed
   with a replay marker through the normal per-session queue.
 
@@ -428,11 +429,18 @@ async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
 
   Two ordered passes over active sessions:
 
-  1. master_run records: a still-alive covered run is re-attached through the
-     per-session queue (its user_event_id joins the replay exclusion set); a
-     dead run — or one on an uncovered backend transport — clears its record
-     so replay handles its message. Records spawned by this same process
-     during the recovery window (started_at >= boot_time) are spared.
+  1. master_run records: each pre-boot record is resolved through
+     ``runs.resolve_run``'s outcome table on disk facts, not a local
+     alive/covered guess. COMPLETED goes through the follower to drain the
+     bytes the dead producer left after the cursor and close the round;
+     RUNNING/STALLED re-attach through the same follower; DIED without a
+     final result is drained too when the turn has no user message to replay,
+     or cleared when it has one (pass 2 answers it); DIED on an uncovered
+     backend transport or with a missing raw log, and NEVER_STARTED, clear
+     the record. Every follower-bound row adds its user_event_id to the
+     replay exclusion set, so a turn is answered by the drain OR by replay,
+     never both. Records spawned by this same process during the recovery
+     window (started_at >= boot_time) are spared.
   2. replay: every real user event after the last MASTER_DONE, minus the
      per-event exclusions and this process's queued items, is redelivered
      with the replay marker. Pass 2 runs strictly after pass 1 enqueued the
@@ -459,10 +467,48 @@ async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
       if record.user_event_id:
         excluded.setdefault(meta.id, set()).add(record.user_event_id)
       continue
-    alive = runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
     option = cfg.get_backend_option(meta.backend)
-    covered = option is not None and option.type not in runs.UNCOVERED_BACKEND_TYPES
-    if alive and covered:
+    if option is None:
+      # The translate and the transport judgment both need the session's
+      # backend option; without it the turn can only be cleared, leaving its
+      # user message (if any) to the replay pass.
+      log.warning(
+          "master_run_resolved",
+          session=meta.id,
+          pid=record.pid,
+          outcome=None,
+          reason=f"backend option {meta.backend!r} unresolved",
+      )
+      await session_mgr.persist_master_run(meta.id, None)
+      continue
+    resolution = runs.resolve_run(
+        raw_path=Path(record.raw_log),
+        pid=record.pid,
+        pid_start=record.pid_start,
+        started_at=record.started_at,
+        backend_type=option.type,
+        translate=master_cc._build_fresh_translate(cfg, option),
+        host_boot_time=host_boot,
+    )
+    log.info(
+        "master_run_resolved",
+        session=meta.id,
+        pid=record.pid,
+        outcome=resolution.outcome.value,
+        reason=resolution.reason,
+    )
+
+    follow = (
+        resolution.outcome in (
+            runs.RunOutcome.COMPLETED,
+            runs.RunOutcome.RUNNING,
+            runs.RunOutcome.STALLED,
+        )
+        or (
+            resolution.outcome is runs.RunOutcome.DIED
+            and resolution.reason == runs.DIED_WITHOUT_RESULT_REASON
+            and not record.user_event_id))
+    if follow:
       future = await master_cc.enqueue_master_resume(
           cfg,
           meta,
@@ -471,12 +517,14 @@ async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
           is_alive=lambda r=record: runs.is_run_alive(r.pid, r.pid_start, r.started_at, host_boot),
       )
       create_logged_task(_await_reattach(future), name=f"master-resume-{meta.id[:8]}")
+      # The follower answers this round; keep its user message (if any) out
+      # of the replay set so the round is answered exactly once.
       if record.user_event_id:
         excluded.setdefault(meta.id, set()).add(record.user_event_id)
-      log.info("master_run_reattached", session=meta.id, pid=record.pid, raw_log=record.raw_log)
     else:
-      reason = runs.TRANSPORT_NOT_COVERED_REASON if alive else "recorded master process is dead"
-      log.warning("master_run_cleared", session=meta.id, pid=record.pid, reason=reason)
+      # DIED without a result but with a user message (pass 2 replays it),
+      # DIED on an uncovered transport or with a missing raw log, or
+      # NEVER_STARTED: nothing drainable remains — clear the record.
       await session_mgr.persist_master_run(meta.id, None)
 
   for meta in sessions:

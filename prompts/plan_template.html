@@ -130,9 +130,14 @@
                     approval padding 4.1, are both violations.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
-                    (p.trade). A resolved item keeps only the question and resolution (p.resolved); never record
-                    rejected alternatives. When nothing needs judging, keep one line stating there are no open
-                    trade-offs.
+                    (p.trade). An open item whose whole story runs deeper than its question, recommendation, and
+                    tradeoff lines also carries a folded explainer, a details.details-layer block collapsed by
+                    default, so the reader can verify the recommendation from the block alone while the decision
+                    surface stays short: it retells the decision from scratch, glosses each term at first use,
+                    walks the causal chain through one worked example small enough to check by hand, and anchors
+                    each fact to its source. A resolved item keeps only the question and resolution
+                    (p.resolved); never record rejected alternatives. When nothing needs judging, keep one line
+                    stating there are no open trade-offs.
       6. Other Details — a collapsed details.details-layer. Use one li per autonomous implementation decision,
                     with a one-line rationale in span.m.
 
@@ -210,6 +215,20 @@
         <p class="q"><span class="fn">1</span> Scope: list triggers for the current session only, or across all sessions?</p>
         <p class="rec"><b>Recommendation:</b> current session only, keeping the command's scope explicit.</p>
         <p class="trade">Tradeoff: consistent with the rest of the CLI, but triggers created from other sessions stay invisible.</p>
+        <details class="details-layer">
+          <summary>Full story, no prior knowledge required — expand to check the recommendation by hand</summary>
+          <ul>
+            <li><b>Session</b> here names the working directory's persisted trigger collection: every
+              <code>charliebot schedule-trigger</code> run on that directory writes its record there, and
+              <code>triggers list</code> would read only that collection.</li>
+            <li>Cross-session visibility inherits whatever the CLI's other read commands do, so changing
+              scope to "all sessions" reaches triggers the current directory did not write.</li>
+            <li>Worked example: a directory holds two published triggers; a third session elsewhere holds one.
+              Current-session scope shows those two only, cross-session shows all three.</li>
+            <li>Each row's existence is anchored to its JSON file, so the rendered list is checkable against
+              what was persisted <span class="src">Sources: src/core/triggers.py:322-337, 677-687</span>.</li>
+          </ul>
+        </details>
       </div>
       <div class="fork">
         <p class="q"><span class="fn">2</span> Which trigger states should the command display?</p>

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import time
+import uuid
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -726,7 +727,7 @@ class SessionManager:
     for d in self._cfg.sessions_dir.iterdir():
       if not d.is_dir():
         continue
-      meta_path = d / "metadata.json"
+      meta_path = self._metadata_path(d.name)
       if not meta_path.exists():
         continue
       try:
@@ -1191,8 +1192,21 @@ class SessionManager:
     path = self._metadata_path(meta.id)
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
-    async with aiofiles.open(path, "w") as f:
-      await f.write(serialized)
+
+    def _atomic_write() -> None:
+      tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+      try:
+        with open(tmp, "w", encoding="utf-8") as f:
+          f.write(serialized)
+        os.replace(tmp, path)
+      except BaseException:
+        try:
+          tmp.unlink()
+        except OSError:
+          pass
+        raise
+
+    await asyncio.to_thread(_atomic_write)
     self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic())
 
   def _session_dir(self, session_id: str) -> Path:

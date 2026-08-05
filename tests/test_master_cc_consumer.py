@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,7 +20,13 @@ from src.core import event_types as ET
 from src.core import sessions as sessions_module
 from src.core import thinking_state
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, SessionCallbacks, SessionMetadata
+from src.core.models import (
+    BackendOption,
+    CreateSessionRequest,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
+)
 from src.core.sessions import SessionManager
 
 
@@ -577,3 +583,65 @@ async def test_persist_cc_session_id_same_id_does_not_advance_started_at(tmp_pat
   assert meta2 is not None
   assert meta2.cc_session_started_at == started_at_1, (
       "writing the same id again must not advance cc_session_started_at")
+
+
+@pytest.mark.asyncio
+async def test_resume_reattach_uses_persisted_interval_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A re-attached turn keeps its persisted interval start on the live surface.
+
+  enqueue_master_resume queues an item carrying resume_record; both the busy
+  map and the RUNNING_CHANGED payload must stamp the interval start from that
+  record's started_at (600s in the past here), not from now(). Deterministic:
+  _resume_cc is parked on an asyncio.Event so nothing races the asserts.
+  """
+  started_at = datetime.now(timezone.utc) - timedelta(seconds=600)
+  record = MasterRunRecord(
+      pid=1234,
+      pid_start="100",
+      started_at=started_at,
+      raw_log="<fake>",
+  )
+  session_id = "test-resume-since"
+  release = asyncio.Event()
+
+  async def fake_resume_cc(item: master_cc._WorkItem) -> tuple:
+    await release.wait()
+    return "cc-id", 0, None, {}
+
+  broadcast = AsyncMock()
+  workers_mock = MagicMock()
+  workers_mock._has_running_tasks = AsyncMock(return_value=False)
+
+  monkeypatch.setattr(master_cc, "_resume_cc", fake_resume_cc)
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", broadcast)
+  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
+
+  cfg = _make_consumer_cfg(tmp_path)
+  meta = _make_meta(session_id)
+  callbacks = _make_callbacks()
+
+  _reset_master_state(session_id)
+  try:
+    future = await master_cc.enqueue_master_resume(
+        cfg, meta, record, callbacks, is_alive=lambda: True)
+
+    assert thinking_state.busy_since(session_id) == started_at, (
+        "the live busy map must use the persisted interval start")
+
+    payloads = [
+        c.args[1] for c in broadcast.call_args_list
+        if c.args[1].get("type") == ET.RUNNING_CHANGED
+    ]
+    assert payloads, "expected a RUNNING_CHANGED payload on re-attach"
+    assert payloads[0]["thinking_since"] == record.started_at.isoformat(), (
+        "the sidebar-indicator start must equal the persisted record start")
+
+    release.set()
+    consumer = master_cc._session_consumers.get(session_id)
+    if consumer is not None:
+      await asyncio.wait_for(consumer, timeout=5)
+    await asyncio.wait_for(future, timeout=5)
+  finally:
+    _reset_master_state(session_id)

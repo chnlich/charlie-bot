@@ -20,18 +20,23 @@ log = structlog.get_logger()
 _busy_since: dict[str, datetime] = {}
 
 
-def mark_busy(session_id: str) -> tuple[datetime, bool]:
+def mark_busy(session_id: str, since: Optional[datetime] = None) -> tuple[datetime, bool]:
   """Record the busy interval start for *session_id*.
 
   setdefault semantics: an already-busy session keeps its existing interval
   start. Returns (interval_start, created) — *created* is True only when this
   call opened a new interval, which is what callers use to decide whether a
   busy notification is needed.
+
+  *since*, when an aware datetime, becomes the interval start instead of
+  ``datetime.now(timezone.utc)``. Its only supplier is a re-attached turn's
+  persisted ``master_run.started_at`` (startup reconcile); ``None`` keeps the
+  default now() start for every freshly-queued turn.
   """
   existing = _busy_since.get(session_id)
   if existing is not None:
     return existing, False
-  started_at = datetime.now(timezone.utc)
+  started_at = since if since is not None else datetime.now(timezone.utc)
   _busy_since[session_id] = started_at
   log.debug("thinking_state_busy", session=session_id, busy_since=started_at.isoformat())
   return started_at, True

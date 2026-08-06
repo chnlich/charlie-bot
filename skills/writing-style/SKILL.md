@@ -27,6 +27,10 @@ Applies to all writing.
 
 See [genres/code.md](genres/code.md).
 
+## READMEs
+
+See [genres/readme.md](genres/readme.md).
+
 ## Commits and PRs
 
 See [genres/commits-and-prs.md](genres/commits-and-prs.md).

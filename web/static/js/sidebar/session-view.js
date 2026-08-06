@@ -432,7 +432,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       container.prepend(tempDiv.lastChild);
     }
 
-    applyCompactMode(container);
+    applyTurnOutline(container);
 
     // Recreate sentinel if more pages remain
     if (sessionHasMore) {

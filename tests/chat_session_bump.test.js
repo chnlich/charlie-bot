@@ -9,6 +9,9 @@ const CHAT_JS = fs.readFileSync(
   'utf8'
 );
 
+const ELEMENT_NODE = 1;
+const TEXT_NODE = 3;
+
 class FakeClassList {
   constructor(initial = '') {
     this._classes = new Set(String(initial).split(/\s+/).filter(Boolean));
@@ -45,19 +48,38 @@ class FakeClassList {
   }
 }
 
+function escapeForFakeDom(str) {
+  return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
+class FakeText {
+  constructor(text) {
+    this.nodeType = TEXT_NODE;
+    this.textContent = String(text);
+    this.parentElement = null;
+    this.parentNode = null;
+  }
+}
+
+// Child bookkeeping runs over `_nodes`, which holds elements and text nodes
+// alike: the fold row reads a bubble's text back off the rendered nodes, and
+// that read only means anything if element boundaries are real here too.
 class FakeElement {
   constructor(tagName = 'DIV', {id = '', className = ''} = {}) {
+    this.nodeType = ELEMENT_NODE;
     this.tagName = String(tagName).toUpperCase();
     this.id = id;
     this.dataset = {};
     this.attributes = new Map();
-    this.textContent = '';
     this.parentElement = null;
     this.parentNode = null;
-    this.children = [];
+    this._nodes = [];
     this.classList = new FakeClassList(className);
     this._className = className;
     this.innerHTML = '';
+    this.scrollTop = 0;
+    this.scrollHeight = 0;
+    this.clientHeight = 0;
   }
 
   get className() {
@@ -69,55 +91,83 @@ class FakeElement {
     this.classList = new FakeClassList(this._className);
   }
 
-  appendChild(child) {
-    if (child.parentElement) {
-      child.parentElement.removeChild(child);
+  get childNodes() {
+    return this._nodes;
+  }
+
+  get children() {
+    return this._nodes.filter((node) => node.nodeType === ELEMENT_NODE);
+  }
+
+  get textContent() {
+    return this._nodes.map((node) => node.textContent).join('');
+  }
+
+  set textContent(value) {
+    for (const node of this._nodes) {
+      node.parentElement = null;
+      node.parentNode = null;
     }
+    this._nodes = [];
+    this.appendChild(new FakeText(value));
+    // escapeHtml() round-trips text through textContent -> innerHTML.
+    this.innerHTML = escapeForFakeDom(value);
+  }
+
+  appendChild(child) {
+    if (child.parentNode) child.parentNode.removeChild(child);
     child.parentElement = this;
     child.parentNode = this;
-    this.children.push(child);
+    this._nodes.push(child);
     return child;
   }
 
   removeChild(child) {
-    const index = this.children.indexOf(child);
+    const index = this._nodes.indexOf(child);
     if (index === -1) {
       throw new Error('child not found');
     }
-    this.children.splice(index, 1);
+    this._nodes.splice(index, 1);
     child.parentElement = null;
     child.parentNode = null;
     return child;
   }
 
   insertBefore(child, referenceChild) {
-    if (child.parentElement) {
-      child.parentElement.removeChild(child);
-    }
+    if (child.parentNode) child.parentNode.removeChild(child);
     child.parentElement = this;
     child.parentNode = this;
     if (!referenceChild) {
-      this.children.push(child);
+      this._nodes.push(child);
       return child;
     }
-    const index = this.children.indexOf(referenceChild);
+    const index = this._nodes.indexOf(referenceChild);
     if (index === -1) {
       throw new Error('reference child not found');
     }
-    this.children.splice(index, 0, child);
+    this._nodes.splice(index, 0, child);
     return child;
   }
 
+  prepend(child) {
+    return this.insertBefore(child, this._nodes[0] || null);
+  }
+
   remove() {
-    if (this.parentElement) this.parentElement.removeChild(this);
+    if (this.parentNode) this.parentNode.removeChild(this);
   }
 
   get firstElementChild() {
     return this.children[0] || null;
   }
 
+  get lastElementChild() {
+    const elements = this.children;
+    return elements[elements.length - 1] || null;
+  }
+
   get firstChild() {
-    return this.children[0] || null;
+    return this._nodes[0] || null;
   }
 
   get nextElementSibling() {
@@ -201,15 +251,17 @@ function loadChatContext(document) {
     SESSION_ID: 'session-a',
     document: {
       addEventListener() {},
-      createElement() {
-        return new FakeElement();
+      createElement(tag) {
+        return new FakeElement(tag);
       },
       ...document,
     },
     console: {error: () => {}},
     relativeTime: (iso) => `relative:${iso}`,
     window: {addEventListener() {}},
-    Date: class FakeDate {
+    // Real parsing (the fold row formats a message timestamp), fixed "now"
+    // (the sidebar bump stamps the current time).
+    Date: class FakeDate extends Date {
       toISOString() {
         return nowIso;
       }
@@ -219,17 +271,6 @@ function loadChatContext(document) {
   vm.createContext(context);
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   return {context, nowIso};
-}
-
-function messageElement(role, id) {
-  const el = new FakeElement('DIV');
-  el.dataset.messageRole = role;
-  el.dataset.messageId = id;
-  return el;
-}
-
-function childRoles(root) {
-  return root.children.map((child) => child.dataset.messageRole || child.className);
 }
 
 test('bumpCurrentSessionToTop keeps grouped sessions inside their current group', () => {
@@ -299,84 +340,737 @@ test('bumpCurrentSessionToTop moves flat sidebar sessions to the top-level front
   assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
 });
 
-test('applyCompactMode folds all completed turns and leaves live turn expanded', () => {
-  const root = new FakeElement('DIV');
+// ---------------------------------------------------------------------------
+// Turn outline fold — invariants I0-I6.
+//
+// Every expected value below is computed from the test's own input spec, never
+// from the implementation: `expectedTurns()` re-derives the turn boundaries
+// from the item list, and the row fields come from the item that the generator
+// placed at the head / conclusion. The only thing read out of the DOM is what
+// the derive produced.
+// ---------------------------------------------------------------------------
+const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'worker_summary'];
+const PROSE_ROLES = ['assistant', 'worker_summary', 'plan'];
+const TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', worker_summary: 'Worker'};
+const DEPTHS = ['outline', 'compact', 'expanded'];
+const BUBBLE_TIME_TEXT = 'Apr 2, 2026, 3:04:05 AM PDT';
+
+// --- input spec -> DOM -----------------------------------------------------
+function msg(role, id, extra = {}) {
+  return Object.assign({kind: 'msg', role, id, text: `${role} ${id}`, ts: null}, extra);
+}
+
+function separator(id, extra = {}) {
+  return Object.assign({kind: 'msg', role: 'separator', id, secs: 42}, extra);
+}
+
+function plain(id) {
+  return {kind: 'plain', id};
+}
+
+// #streaming-msg / #load-more-sentinel: container fixtures inside no span.
+function fixture(id) {
+  return {kind: 'fixture', id};
+}
+
+function appendTimeDiv(el, ts) {
+  if (!ts) return;
+  const time = new FakeElement('DIV', {className: 'text-[10px] mt-1'});
+  time.textContent = BUBBLE_TIME_TEXT;
+  el.appendChild(time);
+}
+
+// Mirrors where each renderMessage() branch puts its text: prose bubbles keep
+// the unrendered markdown on `.prose-msg[data-raw]`, plain bubbles hold it as
+// text next to their time div.
+function buildElement(item) {
+  const el = new FakeElement('DIV');
+  el.dataset.nodeId = item.id;
+  if (item.kind !== 'msg') {
+    el.id = item.kind === 'fixture' ? item.id : '';
+    el.textContent = `node ${item.id}`;
+    return el;
+  }
+  el.dataset.messageId = item.id;
+  el.dataset.messageRole = item.role;
+  if (item.ts) el.dataset.messageTs = item.ts;
+
+  if (item.role === 'separator') {
+    el.className = 'separator-line group/sep';
+    if (item.secs != null) el.dataset.thinkingSeconds = String(item.secs);
+    const line = new FakeElement('DIV', {className: 'flex-1 border-t'});
+    el.appendChild(line);
+    return el;
+  }
+
+  // The trigger bubble is the one that holds its text and its time div under
+  // the same `.whitespace-pre-wrap` node, as renderMessage() writes it.
+  const bubbleClass = {
+    user: 'max-w-[75%]',
+    scheduled_trigger: 'w-full whitespace-pre-wrap break-words',
+  }[item.role] || 'max-w-[90%]';
+  const bubble = new FakeElement('DIV', {className: bubbleClass});
+  if (PROSE_ROLES.includes(item.role)) {
+    const prose = new FakeElement('DIV', {className: 'prose-msg'});
+    prose.dataset.raw = item.text;
+    bubble.appendChild(prose);
+  } else if (item.role === 'user') {
+    if (item.voice) {
+      const badge = new FakeElement('SPAN', {className: 'text-xs text-blue-200 block mb-1'});
+      badge.textContent = '\u{1F3A4} Voice';
+      bubble.appendChild(badge);
+    }
+    const text = new FakeElement('DIV', {className: 'whitespace-pre-wrap'});
+    text.textContent = item.text;
+    bubble.appendChild(text);
+  } else {
+    bubble.appendChild(new FakeText(item.text));
+  }
+  appendTimeDiv(bubble, item.ts);
+  el.appendChild(bubble);
+  return el;
+}
+
+function mountCase(items) {
+  const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
+  const control = new FakeElement('DIV', {id: 'page-depth-control'});
+  for (const depth of DEPTHS) {
+    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
+    btn.dataset.pageDepth = depth;
+    control.appendChild(btn);
+  }
+  const nodes = new Map();
+  for (const item of items) {
+    const el = buildElement(item);
+    nodes.set(item, el);
+    root.appendChild(el);
+  }
   const {context} = loadChatContext({
-    getElementById() {
+    getElementById(id) {
+      if (id === 'messages') return root;
+      if (id === 'page-depth-control') return control;
       return null;
     },
   });
+  return {context, root, control, nodes};
+}
 
-  [
-    messageElement('user', 'u1'),
-    messageElement('assistant', 'a1'),
-    messageElement('system', 's1'),
-    messageElement('assistant', 'a2'),
-    messageElement('worker_summary', 'w1'),
-    messageElement('plan', 'p1'),
-    messageElement('separator', 'sep1'),
-    messageElement('user', 'u2'),
-    messageElement('assistant', 'a3'),
-    messageElement('system', 's2'),
-    messageElement('assistant', 'a4'),
-    messageElement('separator', 'sep2'),
-    messageElement('user', 'u3'),
-    messageElement('assistant', 'a5'),
-    messageElement('system', 's3'),
-    messageElement('assistant', 'a6'),
-  ].forEach((el) => root.appendChild(el));
+// --- independent expectations ----------------------------------------------
+function expectedFirstLine(text) {
+  for (const rawLine of String(text).split('\n')) {
+    let line = rawLine.trim();
+    line = line.replace(/^#{1,6}\s+/, '');
+    line = line.replace(/^[-*+>]\s+/, '');
+    line = line.replace(/^\d+[.)]\s+/, '');
+    line = line.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+    line = line.split('`').join('').trim();
+    if (line) return line;
+  }
+  return '';
+}
 
-  context.applyCompactMode(root);
+function expectedSteps(count) {
+  if (!count) return '';
+  return `${count} step${count === 1 ? '' : 's'}`;
+}
 
-  assert.deepEqual(childRoles(root), [
-    'user',
-    'turn-fold-bar',
-    'turn-fold-content space-y-3 hidden',
-    'assistant',
-    'worker_summary',
-    'plan',
-    'separator',
-    'user',
-    'turn-fold-bar',
-    'turn-fold-content space-y-3 hidden',
-    'assistant',
-    'separator',
-    'user',
-    'assistant',
-    'system',
-    'assistant',
-  ]);
-  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 2);
-  assert.deepEqual(root.children[2].children.map((child) => child.dataset.messageId), ['a1', 's1']);
-  assert.equal(root.children[2].classList.contains('hidden'), true);
-  assert.deepEqual(root.children[9].children.map((child) => child.dataset.messageId), ['a3', 's2']);
-  assert.equal(root.children[9].classList.contains('hidden'), true);
-  assert.deepEqual(root.children.slice(12).map((child) => child.dataset.messageId), ['u3', 'a5', 's3', 'a6']);
+function expectedDuration(secs) {
+  if (secs == null) return '';
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m${String(secs % 60).padStart(2, '0')}s`;
+}
 
-  context.applyCompactMode(root);
+function expectedTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
-  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 2);
-  assert.deepEqual(root.children[2].children.map((child) => child.dataset.messageId), ['a1', 's1']);
-  assert.deepEqual(root.children[9].children.map((child) => child.dataset.messageId), ['a3', 's2']);
-  assert.deepEqual(root.children.slice(12).map((child) => child.dataset.messageId), ['u3', 'a5', 's3', 'a6']);
+function lastMatch(items, predicate) {
+  let found = null;
+  for (const item of items) if (predicate(item)) found = item;
+  return found;
+}
+
+// The span cut and the head/conclusion/fold-range picks, recomputed from the
+// item list alone.
+function expectedTurns(items) {
+  const spans = [];
+  let span = [];
+  let leading = true;
+  for (const item of items) {
+    if (item.kind === 'fixture') continue;
+    span.push(item);
+    if (item.kind === 'msg' && item.role === 'separator') {
+      spans.push({items: span, leading});
+      span = [];
+      leading = false;
+    }
+  }
+  return spans.map(describeExpectedSpan).filter(Boolean);
+}
+
+function describeExpectedSpan(span) {
+  const messages = span.items.filter((item) => item.kind === 'msg');
+  const tail = messages[messages.length - 1];
+  const body = messages.slice(0, -1);
+  const conclusion = lastMatch(body, (item) => item.role === 'assistant');
+  const beforeConclusion = conclusion ? body.slice(0, body.indexOf(conclusion)) : body;
+  const stimulus = lastMatch(beforeConclusion, (item) => STIMULUS_ROLES.includes(item.role));
+  if (!stimulus && span.leading) return null;
+  const head = stimulus || body[0];
+  if (!head) return null;
+  const steps = conclusion
+    ? body.slice(body.indexOf(head) + 1, body.indexOf(conclusion))
+    : [];
+  return {items: span.items, head, conclusion, tail, steps};
+}
+
+function expectedRow(turn) {
+  const head = turn.head;
+  const title = head.role === 'worker_summary' && head.workerId
+    ? head.workerId
+    : expectedFirstLine(head.text);
+  return {
+    tag: TYPE_LABELS[head.role] || 'Turn',
+    title,
+    conclusion: turn.conclusion ? expectedFirstLine(turn.conclusion.text) : '',
+    steps: expectedSteps(turn.steps.length),
+    duration: expectedDuration(turn.tail.secs),
+    time: expectedTime(head.ts),
+  };
+}
+
+// --- DOM readers ------------------------------------------------------------
+function wrappers(root) {
+  return root.children.filter((el) => el.classList.contains('turn-wrap'));
+}
+
+function nodeLabel(node) {
+  return node.dataset.nodeId || node.className || node.tagName;
+}
+
+function descendantNodes(node, allowed) {
+  const found = [];
+  for (const child of node.children) {
+    if (allowed.has(child)) found.push(child);
+    found.push(...descendantNodes(child, allowed));
+  }
+  return found;
+}
+
+function stableMessageIds(root) {
+  const ids = [];
+  const walk = (node) => {
+    for (const child of node.children) {
+      if (child.dataset.messageId && child.dataset.messageRole) ids.push(child.dataset.messageId);
+      walk(child);
+    }
+  };
+  walk(root);
+  return ids.sort();
+}
+
+function snapshot(node) {
+  if (node.nodeType === TEXT_NODE) return {text: node.textContent};
+  return {
+    tag: node.tagName,
+    className: node.className,
+    dataset: Object.assign({}, node.dataset),
+    attributes: Object.fromEntries(node.attributes),
+    children: node.childNodes.map(snapshot),
+  };
+}
+
+function rowField(row, className) {
+  const field = row.querySelector(`.${className}`);
+  assert.ok(field, `row is missing .${className}`);
+  return field.textContent;
+}
+
+// --- invariants -------------------------------------------------------------
+// I0 — wrapper completeness. `nodes` maps every input item to the element the
+// test created for it, so filtering a wrapper's descendants by that set drops
+// everything the derive added (row, fold bar, fold content) and leaves exactly
+// the span the wrapper claims to hold.
+function assertWrapperCompleteness(root, turns, nodes, label) {
+  const found = wrappers(root);
+  assert.equal(found.length, turns.length, `${label}: wrapper count`);
+  found.forEach((wrap, i) => {
+    const held = descendantNodes(wrap, new Set(nodes.values()));
+    const wanted = turns[i].items.map((item) => nodes.get(item));
+    assert.deepEqual(held.map(nodeLabel), wanted.map(nodeLabel), `${label}: wrapper ${i} span`);
+    held.forEach((node, j) => {
+      assert.ok(node === wanted[j], `${label}: wrapper ${i} node ${j} is not the input node`);
+    });
+    assert.equal(wrap.querySelectorAll('.turn-row').length, 1, `${label}: wrapper ${i} rows`);
+  });
+}
+
+// I2 — open/folded state equals open(turn), and the row's six fields equal the
+// independently computed values. Row values do not depend on the state, so
+// they are checked on every wrapper, not only the folded ones.
+function assertStateAndRows(root, turns, depth, label) {
+  const found = wrappers(root);
+  found.forEach((wrap, i) => {
+    const override = wrap.dataset.turnOverride;
+    const open = override
+      ? override === 'open'
+      : (depth === 'outline' ? i === found.length - 1 : true);
+    assert.equal(wrap.dataset.turnOpen, String(open), `${label}: wrapper ${i} open state`);
+
+    const row = wrap.querySelector('.turn-row');
+    const want = expectedRow(turns[i]);
+    assert.equal(rowField(row, 'turn-row-tag'), want.tag, `${label}: wrapper ${i} tag`);
+    assert.equal(rowField(row, 'turn-row-title'), want.title, `${label}: wrapper ${i} title`);
+    assert.equal(rowField(row, 'turn-row-conclusion'), want.conclusion,
+        `${label}: wrapper ${i} conclusion line`);
+    assert.equal(rowField(row, 'turn-row-steps'), want.steps, `${label}: wrapper ${i} steps`);
+    assert.equal(rowField(row, 'turn-row-duration'), want.duration, `${label}: wrapper ${i} duration`);
+    assert.equal(rowField(row, 'turn-row-time'), want.time, `${label}: wrapper ${i} time`);
+  });
+}
+
+// I4 — the stimulus stays out of the `N steps` band, so opening a turn always
+// shows what triggered it.
+function assertStimulusVisible(root, turns, nodes, label) {
+  wrappers(root).forEach((wrap, i) => {
+    const head = nodes.get(turns[i].head);
+    assert.equal(head.closest('.turn-fold-content'), null,
+        `${label}: wrapper ${i} head is inside the fold band`);
+    assert.equal(head.parentElement, wrap, `${label}: wrapper ${i} head is not a direct child`);
+  });
+}
+
+// I6 — everything outside a finished turn stays flat at container level.
+function assertFlatBoundaries(root, turns, nodes, label) {
+  const wrapped = new Set(turns.flatMap((turn) => turn.items).map((item) => nodes.get(item)));
+  for (const node of nodes.values()) {
+    if (wrapped.has(node)) continue;
+    assert.equal(node.closest('.turn-wrap'), null, `${label}: ${nodeLabel(node)} was wrapped`);
+    assert.equal(node.parentElement, root, `${label}: ${nodeLabel(node)} left container level`);
+  }
+}
+
+// --- generator --------------------------------------------------------------
+const HEAD_ROLES = [
+  'user',
+  'scheduled_trigger',
+  'worker_summary',
+  'assistant',
+  'system',
+  'task_delegated',
+  'clone_start',
+];
+
+const HEAD_TEXTS = [
+  'fold the messages page',
+  '## cuda_muon status\n\nthe run finished',
+  '\n\n- check the `separator` markup\nsecond line',
+  'read [the plan](/artifacts/plan_02.html) first',
+];
+
+const CONCLUSION_TEXTS = [
+  'both pushes landed, the PR is refreshed',
+  '### Verdict\nall three criteria pass',
+  '\n1. rebased onto `main`\n2. merged',
+];
+
+function headItem(role, id, index) {
+  if (role === 'worker_summary') {
+    const workerId = `a1b2c3d${index % 10}`;
+    return msg(role, id, {
+      text: `Worker \`${workerId}\` | thread \`${workerId}-4f21-9c3e\` | status: completed`,
+      workerId,
+      ts: '2026-04-02T10:07:00.000Z',
+    });
+  }
+  return msg(role, id, {text: HEAD_TEXTS[index % HEAD_TEXTS.length], ts: '2026-04-02T10:07:00.000Z'});
+}
+
+// A finished turn: head, `steps` intermediate messages, a conclusion and a
+// separator. `stepRoles` lets a non-message node or an extra card sit in the
+// span without becoming part of the fold band.
+function finishedTurn(prefix, {headRole = 'user', steps = 1, index = 0, secs = 42, ts, pre = []} = {}) {
+  const head = headItem(headRole, `${prefix}-head`, index);
+  if (ts !== undefined) head.ts = ts;
+  const items = pre.map((role, i) => msg(role, `${prefix}-pre${i}`));
+  items.push(head);
+  for (let i = 0; i < steps; i++) {
+    items.push(msg(i % 2 === 0 ? 'assistant' : 'system', `${prefix}-step${i}`));
+  }
+  items.push(msg('assistant', `${prefix}-concl`, {
+    text: CONCLUSION_TEXTS[index % CONCLUSION_TEXTS.length],
+  }));
+  items.push(separator(`${prefix}-sep`, {secs}));
+  return items;
+}
+
+function liveTail(prefix) {
+  return [msg('user', `${prefix}-live-head`), msg('assistant', `${prefix}-live-body`)];
+}
+
+function generateCases() {
+  const cases = [];
+  let index = 0;
+  for (const headRole of HEAD_ROLES) {
+    for (const steps of [0, 1, 3]) {
+      for (const terminated of [true, false]) {
+        index++;
+        const items = [
+          ...finishedTurn('t1', {index}),
+          ...finishedTurn('t2', {headRole, steps, index}),
+          ...(terminated ? finishedTurn('t3', {index: index + 1, steps: 2}) : liveTail('t3')),
+        ];
+        cases.push({name: `${headRole}/${steps} steps/${terminated ? 'terminated' : 'live'}`, items});
+      }
+    }
+  }
+
+  cases.push({
+    // The 0.65% shape: a Delegated card lands in the head position and the real
+    // stimulus arrives after it.
+    name: 'delegated card occupies the head position',
+    items: [
+      ...finishedTurn('a', {}),
+      ...finishedTurn('b', {pre: ['task_delegated'], steps: 2}),
+      ...liveTail('c'),
+    ],
+  });
+  cases.push({
+    // Two stimuli in one span (a second ask lands while the master is running):
+    // the head is the last one before the conclusion.
+    name: 'two stimuli in one span',
+    items: [
+      ...finishedTurn('h1', {}),
+      msg('user', 'h2-first', {text: 'first ask', ts: '2026-04-02T13:00:00.000Z'}),
+      msg('worker_summary', 'h2-second', {
+        text: 'Worker `beef1234` | thread `beef1234-11aa` | status: completed',
+        workerId: 'beef1234',
+        ts: '2026-04-02T13:04:00.000Z',
+      }),
+      msg('system', 'h2-step'),
+      msg('assistant', 'h2-concl', {text: 'answered both'}),
+      separator('h2-sep', {secs: 91}),
+    ],
+  });
+  cases.push({
+    // A stimulus that arrives after the conclusion belongs to the next round,
+    // so it must not become this turn's head.
+    name: 'stimulus after the conclusion',
+    items: [
+      ...finishedTurn('i1', {}),
+      msg('user', 'i2-head', {text: 'the ask being answered', ts: '2026-04-02T14:00:00.000Z'}),
+      msg('assistant', 'i2-step'),
+      msg('assistant', 'i2-concl', {text: 'here is the answer'}),
+      msg('user', 'i2-late', {text: 'one more thing', ts: '2026-04-02T14:09:00.000Z'}),
+      separator('i2-sep', {secs: 33}),
+    ],
+  });
+  cases.push({
+    name: 'paginated leading span has no stimulus',
+    items: [
+      msg('assistant', 'p-a1'),
+      msg('system', 'p-s1'),
+      msg('assistant', 'p-a2'),
+      separator('p-sep'),
+      ...finishedTurn('q', {}),
+    ],
+  });
+  cases.push({
+    name: 'load-more sentinel above the first span',
+    items: [fixture('load-more-sentinel'), ...finishedTurn('s', {}), ...finishedTurn('s2', {steps: 2})],
+  });
+  cases.push({
+    name: 'streaming node below the last span',
+    items: [...finishedTurn('m', {}), ...finishedTurn('m2', {}), fixture('streaming-msg')],
+  });
+  cases.push({
+    name: 'non-message nodes inside the span',
+    items: [
+      ...finishedTurn('n', {}),
+      plain('n2-card'),
+      msg('user', 'n2-head', {text: 'a question', ts: '2026-04-02T11:30:00.000Z'}),
+      plain('n2-note'),
+      msg('assistant', 'n2-step'),
+      msg('assistant', 'n2-concl', {text: 'the answer'}),
+      separator('n2-sep', {secs: 605}),
+    ],
+  });
+  cases.push({
+    name: 'turn without a conclusion',
+    items: [
+      ...finishedTurn('c1', {}),
+      msg('user', 'c2-head', {text: 'anything?', ts: '2026-04-02T12:00:00.000Z'}),
+      msg('system', 'c2-error', {text: 'Error: backend refused'}),
+      separator('c2-sep', {secs: 7}),
+    ],
+  });
+  cases.push({
+    name: 'bare separator span',
+    items: [...finishedTurn('d1', {}), separator('d-bare'), ...finishedTurn('d2', {})],
+  });
+  cases.push({
+    name: 'head without a timestamp and separator without a duration',
+    items: [
+      ...finishedTurn('e1', {}),
+      ...finishedTurn('e2', {ts: null, secs: null}),
+    ],
+  });
+  cases.push({
+    name: 'worker summary without a worker id',
+    items: [
+      ...finishedTurn('w1', {}),
+      msg('worker_summary', 'w2-head', {text: 'worker finished, no locator', ts: '2026-04-02T09:00:00.000Z'}),
+      msg('assistant', 'w2-step'),
+      msg('assistant', 'w2-concl', {text: 'merged back'}),
+      separator('w2-sep', {secs: 3600}),
+    ],
+  });
+  cases.push({
+    // The voice badge and the bubble's time div both sit next to the text and
+    // must not become the title.
+    name: 'voice user head',
+    items: [
+      ...finishedTurn('v1', {}),
+      msg('user', 'v2-head', {text: 'read the fold plan', voice: true, ts: '2026-04-02T15:20:00.000Z'}),
+      msg('assistant', 'v2-step'),
+      msg('assistant', 'v2-concl', {text: 'read it, here is the summary'}),
+      separator('v2-sep', {secs: 54}),
+    ],
+  });
+  cases.push({
+    name: 'single finished turn',
+    items: finishedTurn('only', {steps: 2}),
+  });
+  return cases;
+}
+
+// --- I0/I2/I4/I6 over every generated case, at every depth ------------------
+for (const depth of DEPTHS) {
+  test(`turn outline: wrapper completeness, state, row values and flat boundaries at depth ${depth}`, () => {
+    for (const testCase of generateCases()) {
+      const label = `${testCase.name} @ ${depth}`;
+      const {context, root, nodes} = mountCase(testCase.items);
+      const turns = expectedTurns(testCase.items);
+
+      context.setPageDepth(depth);
+
+      assertWrapperCompleteness(root, turns, nodes, label);
+      assertStateAndRows(root, turns, depth, label);
+      assertStimulusVisible(root, turns, nodes, label);
+      assertFlatBoundaries(root, turns, nodes, label);
+    }
+  });
+}
+
+// --- I1 + I3 ---------------------------------------------------------------
+test('turn outline: message conservation and idempotence across repeated derives at every depth', () => {
+  for (const testCase of generateCases()) {
+    const {context, root} = mountCase(testCase.items);
+    const flatIds = stableMessageIds(root);
+    assert.ok(flatIds.length > 0, `${testCase.name}: fixture has no stable messages`);
+
+    for (const depth of DEPTHS) {
+      context.setPageDepth(depth);
+      assert.deepEqual(stableMessageIds(root), flatIds, `${testCase.name} @ ${depth}: conservation`);
+
+      const before = snapshot(root);
+      context.applyTurnOutline(root);
+      assert.deepEqual(snapshot(root), before, `${testCase.name} @ ${depth}: idempotence`);
+      context.applyTurnOutline(root);
+      assert.deepEqual(snapshot(root), before, `${testCase.name} @ ${depth}: idempotence (third derive)`);
+      assert.deepEqual(stableMessageIds(root), flatIds,
+          `${testCase.name} @ ${depth}: conservation after repeats`);
+    }
+  }
 });
 
-test('turn fold bar toggles its single intermediate span', () => {
-  const root = new FakeElement('DIV');
+// --- I0 is not vacuous ------------------------------------------------------
+test('I0 fails for a no-op derive and for a derive that only wraps the N steps band', () => {
+  const items = [...finishedTurn('x1', {steps: 2}), ...finishedTurn('x2', {steps: 2})];
+  const turns = expectedTurns(items);
+
+  const noop = mountCase(items);
+  assert.throws(
+      () => assertWrapperCompleteness(noop.root, turns, noop.nodes, 'no-op'),
+      /wrapper count/);
+
+  // Today's shape: the intermediate messages get folded into a band, but no
+  // turn is wrapped.
+  const banded = mountCase(items);
+  for (const turn of turns) {
+    const band = new FakeElement('DIV', {className: 'turn-fold-content'});
+    const first = banded.nodes.get(turn.steps[0]);
+    banded.root.insertBefore(band, first);
+    for (const step of turn.steps) band.appendChild(banded.nodes.get(step));
+  }
+  assert.throws(
+      () => assertWrapperCompleteness(banded.root, turns, banded.nodes, 'band only'),
+      /wrapper count/);
+});
+
+// --- I2: fold on completion -------------------------------------------------
+test('I2: a landing separator wraps the finished turn and folds the one before it', () => {
+  const items = [...finishedTurn('k1', {}), ...finishedTurn('k2', {steps: 2}), ...liveTail('k3')];
+  const {context, root, nodes} = mountCase(items);
+  context.setPageDepth('outline');
+
+  let turns = expectedTurns(items);
+  assert.equal(wrappers(root).length, 2);
+  assertStateAndRows(root, turns, 'outline', 'before landing');
+  assert.equal(wrappers(root)[0].dataset.turnOpen, 'false');
+  assert.equal(wrappers(root)[1].dataset.turnOpen, 'true');
+
+  // The live turn finishes: its separator lands at the end of the container.
+  const landed = separator('k3-sep', {secs: 68});
+  items.push(landed);
+  const landedEl = buildElement(landed);
+  nodes.set(landed, landedEl);
+  root.appendChild(landedEl);
+  context.applyTurnOutline(root);
+
+  turns = expectedTurns(items);
+  assert.equal(wrappers(root).length, 3);
+  assertWrapperCompleteness(root, turns, nodes, 'after landing');
+  assertStateAndRows(root, turns, 'outline', 'after landing');
+  assert.deepEqual(wrappers(root).map((wrap) => wrap.dataset.turnOpen), ['false', 'false', 'true']);
+});
+
+// --- I5 ---------------------------------------------------------------------
+test('I5: manual open/fold, an expanded N steps bar and an open recap panel survive later derives', () => {
+  const items = [
+    ...finishedTurn('r1', {steps: 2}),
+    ...finishedTurn('r2', {steps: 3}),
+    ...finishedTurn('r3', {steps: 2}),
+  ];
+  const {context, root, nodes} = mountCase(items);
+  context.setPageDepth('outline');
+
+  const [first, second, third] = wrappers(root);
+
+  // Manual state: open the first turn from its row, fold the last one from the
+  // collapse control on its separator line.
+  const firstRow = first.querySelector('.turn-row');
+  firstRow.onclick.call(firstRow);
+  const collapse = third.querySelector('.turn-collapse');
+  collapse.onclick.call(collapse);
+  assert.equal(first.dataset.turnOpen, 'true');
+  assert.equal(third.dataset.turnOpen, 'false');
+
+  // Reader-expanded `N steps` bar in the second turn.
+  const bar = second.querySelector('.turn-fold-bar');
+  const band = second.querySelector('.turn-fold-content');
+  context.toggleTurnFold(bar);
+  assert.equal(band.classList.contains('hidden'), false);
+  assert.equal(bar.getAttribute('aria-expanded'), 'true');
+
+  // Recap panel pulled open next to the second turn's separator, exactly where
+  // toggleRecapPanel() puts it.
+  const panel = new FakeElement('DIV', {className: 'recap-panel'});
+  panel.textContent = 'What was discussed';
+  const sep = nodes.get(items.find((item) => item.id === 'r2-sep'));
+  sep.parentNode.insertBefore(panel, sep.nextElementSibling);
+  const panelIndex = second.childNodes.indexOf(panel);
+
+  const bandContents = band.children.slice();
+  context.applyTurnOutline(root);
+  context.applyTurnOutline(root);
+
+  assert.equal(first.dataset.turnOpen, 'true', 'manual open survives');
+  assert.equal(third.dataset.turnOpen, 'false', 'manual fold survives');
+  assert.equal(band.classList.contains('hidden'), false, 'expanded bar survives');
+  assert.equal(bar.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(band.children, bandContents, 'band contents unmoved');
+  assert.equal(panel.parentElement, second, 'recap panel stays in its wrapper');
+  assert.equal(second.childNodes.indexOf(panel), panelIndex, 'recap panel stays in place');
+  assert.equal(panel.textContent, 'What was discussed', 'recap panel content untouched');
+
+  // A newly finished turn arriving later must not disturb any of it.
+  const landing = finishedTurn('r4', {steps: 1});
+  for (const item of landing) {
+    const el = buildElement(item);
+    nodes.set(item, el);
+    root.appendChild(el);
+    items.push(item);
+  }
+  context.applyTurnOutline(root);
+
+  assert.equal(first.dataset.turnOpen, 'true');
+  assert.equal(third.dataset.turnOpen, 'false');
+  assert.equal(band.classList.contains('hidden'), false);
+  assert.equal(panel.parentElement, second);
+  assert.equal(second.childNodes.indexOf(panel), panelIndex);
+  assert.equal(wrappers(root).length, 4);
+  assert.equal(wrappers(root)[3].dataset.turnOpen, 'true');
+});
+
+// --- I6: pagination --------------------------------------------------------
+test('I6: a leading partial turn stays flat until pagination prepends its head', () => {
+  const items = [
+    msg('assistant', 'a1'),
+    msg('system', 's1'),
+    msg('assistant', 'a2'),
+    separator('sep1', {secs: 12}),
+  ];
+  const {context, root, nodes} = mountCase(items);
+  context.setPageDepth('outline');
+
+  assert.equal(wrappers(root).length, 0);
+  assertFlatBoundaries(root, expectedTurns(items), nodes, 'before the head arrives');
+
+  const head = msg('user', 'u1', {text: 'the original ask', ts: '2026-04-02T08:15:00.000Z'});
+  const headEl = buildElement(head);
+  nodes.set(head, headEl);
+  root.insertBefore(headEl, nodes.get(items[0]));
+  items.unshift(head);
+  context.applyTurnOutline(root);
+
+  const turns = expectedTurns(items);
+  assert.equal(turns.length, 1);
+  assertWrapperCompleteness(root, turns, nodes, 'after the head arrives');
+  assertStateAndRows(root, turns, 'outline', 'after the head arrives');
+  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 1);
+  assert.deepEqual(
+      root.querySelector('.turn-fold-content').children.map((child) => child.dataset.messageId),
+      ['a1', 's1']);
+});
+
+// --- the row's two value sources -------------------------------------------
+test('renderMessage emits data-message-ts and data-thinking-seconds, and omits both when absent', () => {
   const {context} = loadChatContext({
     getElementById() {
       return null;
     },
   });
+  const ts = '2026-04-02T10:07:00.000Z';
 
-  [
-    messageElement('user', 'u1'),
-    messageElement('assistant', 'a1'),
-    messageElement('assistant', 'a2'),
-    messageElement('separator', 'sep1'),
-  ].forEach((el) => root.appendChild(el));
+  const separatorHtml = context.renderMessage(
+      {role: 'separator', id: 'sep1', thinking_seconds: 68, event_index: 3, timestamp: ts}, 'sess-1');
+  assert.ok(separatorHtml.includes('data-thinking-seconds="68"'), separatorHtml);
+  assert.ok(separatorHtml.includes(`data-message-ts="${ts}"`), separatorHtml);
 
-  context.applyCompactMode(root);
+  const userHtml = context.renderMessage({role: 'user', id: 'u1', content: 'hi', timestamp: ts}, 'sess-1');
+  assert.ok(userHtml.includes(`data-message-ts="${ts}"`), userHtml);
+
+  // No timestamp and no thinking time: no attribute at all, so the row's own
+  // fields stay empty rather than showing a placeholder.
+  const bare = context.renderMessage({role: 'separator', id: 'sep2', event_index: 4}, 'sess-1');
+  assert.ok(!bare.includes('data-message-ts='), bare);
+  assert.ok(!bare.includes('data-thinking-seconds='), bare);
+});
+
+// --- retained `N steps` bar behaviour --------------------------------------
+test('turn fold bar toggles its single intermediate span', () => {
+  const items = [
+    msg('user', 'u1'),
+    msg('assistant', 'a1'),
+    msg('assistant', 'a2'),
+    separator('sep1'),
+  ];
+  const {context, root} = mountCase(items);
+  context.applyTurnOutline(root);
+
   const bar = root.querySelector('.turn-fold-bar');
   const content = root.querySelector('.turn-fold-content');
 
@@ -389,71 +1083,34 @@ test('turn fold bar toggles its single intermediate span', () => {
   assert.equal(bar.getAttribute('aria-expanded'), 'true');
 });
 
-test('top-bar compact action expands and collapses all completed turns', () => {
-  const root = new FakeElement('DIV');
-  const compactButton = new FakeElement('BUTTON');
-  const {context} = loadChatContext({
-    getElementById(id) {
-      if (id === 'messages') return root;
-      if (id === 'compact-mode-toggle') return compactButton;
-      return null;
-    },
-  });
+test('the page depth control drives wrapper state, the N steps bars and its own pressed state', () => {
+  const items = [...finishedTurn('g1', {steps: 2}), ...finishedTurn('g2', {steps: 2})];
+  const {context, root, control} = mountCase(items);
 
-  [
-    messageElement('user', 'u1'),
-    messageElement('assistant', 'a1'),
-    messageElement('assistant', 'a2'),
-    messageElement('separator', 'sep1'),
-    messageElement('user', 'u2'),
-    messageElement('assistant', 'a3'),
-    messageElement('assistant', 'a4'),
-    messageElement('separator', 'sep2'),
-  ].forEach((el) => root.appendChild(el));
+  const pressed = () => control.children
+      .filter((btn) => btn.getAttribute('aria-pressed') === 'true')
+      .map((btn) => btn.dataset.pageDepth);
+  const bands = () => root.querySelectorAll('.turn-fold-content');
+  const openStates = () => wrappers(root).map((wrap) => wrap.dataset.turnOpen);
 
-  context.applyCompactMode(root);
-  assert.equal(root.querySelectorAll('.turn-fold-content').length, 2);
-  assert.equal(root.querySelectorAll('.turn-fold-content').every((content) => content.classList.contains('hidden')), true);
-  assert.equal(compactButton.textContent, 'Expand all');
-  assert.equal(compactButton.getAttribute('title'), 'Expand collapsed turns');
+  context.setPageDepth('outline');
+  assert.deepEqual(pressed(), ['outline']);
+  assert.deepEqual(openStates(), ['false', 'true']);
+  assert.equal(bands().length, 2);
+  assert.equal(bands().every((band) => band.classList.contains('hidden')), true);
 
-  context.toggleCompactMode();
-  assert.equal(root.querySelectorAll('.turn-fold-content').length, 2);
-  assert.equal(root.querySelectorAll('.turn-fold-content').every((content) => !content.classList.contains('hidden')), true);
-  assert.equal(compactButton.textContent, 'Compact');
-  assert.equal(compactButton.getAttribute('title'), 'Collapse completed turns');
+  context.setPageDepth('compact');
+  assert.deepEqual(pressed(), ['compact']);
+  assert.deepEqual(openStates(), ['true', 'true']);
+  assert.equal(bands().every((band) => band.classList.contains('hidden')), true);
 
-  context.toggleCompactMode();
-  assert.equal(root.querySelectorAll('.turn-fold-content').length, 2);
-  assert.equal(root.querySelectorAll('.turn-fold-content').every((content) => content.classList.contains('hidden')), true);
-  assert.equal(compactButton.textContent, 'Expand all');
-  assert.equal(compactButton.getAttribute('title'), 'Expand collapsed turns');
-});
+  context.setPageDepth('expanded');
+  assert.deepEqual(pressed(), ['expanded']);
+  assert.deepEqual(openStates(), ['true', 'true']);
+  assert.equal(bands().every((band) => !band.classList.contains('hidden')), true);
 
-test('applyCompactMode waits for a paginated turn head before folding a leading partial turn', () => {
-  const root = new FakeElement('DIV');
-  const {context} = loadChatContext({
-    getElementById() {
-      return null;
-    },
-  });
-
-  const firstAssistant = messageElement('assistant', 'a1');
-  [
-    firstAssistant,
-    messageElement('system', 's1'),
-    messageElement('assistant', 'a2'),
-    messageElement('separator', 'sep1'),
-  ].forEach((el) => root.appendChild(el));
-
-  context.applyCompactMode(root);
-
-  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 0);
-
-  root.insertBefore(messageElement('user', 'u1'), firstAssistant);
-  context.applyCompactMode(root);
-
-  assert.equal(root.querySelectorAll('.turn-fold-bar').length, 1);
-  assert.deepEqual(root.querySelector('.turn-fold-content').children.map((child) => child.dataset.messageId), ['a1', 's1']);
-  assert.equal(root.querySelector('.turn-fold-content').classList.contains('hidden'), true);
+  context.setPageDepth('outline');
+  assert.deepEqual(pressed(), ['outline']);
+  assert.deepEqual(openStates(), ['false', 'true']);
+  assert.equal(bands().every((band) => band.classList.contains('hidden')), true);
 });

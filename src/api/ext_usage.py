@@ -625,11 +625,12 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
         timeout=HTTP_OAUTH_TIMEOUT,
     )
   except Exception:
-    log.exception("ext_usage_token_refresh_failed")
+    log.exception("ext_usage_token_refresh_failed", path=str(credentials_path))
     return None
   if resp.status_code >= 400:
     log.warning(
         "ext_usage_token_refresh_failed",
+        path=str(credentials_path),
         status_code=resp.status_code,
         body=resp.text[:200],
     )

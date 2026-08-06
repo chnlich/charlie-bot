@@ -2,6 +2,7 @@
 (function() {
   const Chat = globalThis.Chat;
   const formatBubbleTime = Chat.formatBubbleTime;
+  const escapeChatAttr = Chat.escapeChatAttr;
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
   const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
@@ -384,6 +385,8 @@ function renderMessage(msg, sessionId) {
   }
   if (msg.role === "separator") {
     var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
+    var secondsAttr = msg.thinking_seconds != null
+      ? " data-thinking-seconds=\"" + escapeChatAttr(msg.thinking_seconds) + "\"" : "";
     var buttons = "";
     if (sessionId) {
       if (msg.event_index != null) {
@@ -404,7 +407,8 @@ function renderMessage(msg, sessionId) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);
       }
     }
-    return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\"" + messageIdentityAttrs(msg) + ">"
+    return "<div class=\"flex items-center gap-3 py-2 px-4 separator-line group/sep\""
+      + messageIdentityAttrs(msg) + secondsAttr + ">"
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div>"
       + "<span class=\"text-xs text-slate-500 whitespace-nowrap\">response complete" + timeStr + "</span>"
       + buttons

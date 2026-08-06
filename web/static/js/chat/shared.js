@@ -45,6 +45,9 @@ function messageIdentityAttrs(msg) {
   const id = messageRenderId(msg);
   let attrs = id ? ' data-message-id="' + escapeChatAttr(id) + '"' : '';
   if (msg && msg.role) attrs += ' data-message-role="' + escapeChatAttr(msg.role) + '"';
+  // The turn fold row reads its time field from here — a message without a
+  // timestamp emits no attribute and the row's time field stays empty.
+  if (msg && msg.timestamp) attrs += ' data-message-ts="' + escapeChatAttr(msg.timestamp) + '"';
   return attrs;
 }
 

@@ -7,7 +7,9 @@
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
   const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
 
-let compactMode = 'compact';
+// Page depth: 'outline' (one row per finished turn, last turn open),
+// 'compact' (every turn open, `N steps` bars closed), 'expanded' (all open).
+let pageDepth = 'outline';
 
 function toolInputSummary(tool) {
   var input = tool.input || {};
@@ -97,60 +99,93 @@ function isStableRenderedMessage(el) {
   return Boolean(renderedMessageId(el) && renderedMessageRole(el));
 }
 
-function resetTurnFolds(root) {
-  Array.from(root.querySelectorAll('.turn-fold-content')).forEach(content => {
-    const parent = content.parentNode;
-    while (content.firstElementChild) {
-      parent.insertBefore(content.firstElementChild, content);
-    }
-    content.remove();
-  });
-  Array.from(root.querySelectorAll('.turn-fold-bar')).forEach(bar => bar.remove());
+// ---------------------------------------------------------------------------
+// Turn outline fold
+//
+// Every finished turn (one stimulus-to-answer round, ending in a separator)
+// lives in one `.turn-wrap`: that span's own nodes in their original order,
+// plus one `.turn-row`. Folded shows the row and hides the span; open does the
+// reverse. Nothing is ever unwrapped and no message is ever moved again, so a
+// reader-expanded `N steps` bar, an open recap panel and embedded artifact
+// iframes all survive every later derive.
+// ---------------------------------------------------------------------------
+const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'worker_summary'];
+const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', worker_summary: 'Worker'};
+const TEXT_NODE = 3;
+
+function isStimulusMessage(el) {
+  return STIMULUS_ROLES.includes(renderedMessageRole(el));
 }
 
-function collectCompletedTurns(root) {
+// #streaming-msg and #load-more-sentinel are container fixtures owned by no
+// turn — the sentinel sits at the top of a paginated page, exactly where a
+// span would otherwise start.
+function isTurnSpanNode(el) {
+  return el.id !== 'streaming-msg' && el.id !== 'load-more-sentinel';
+}
+
+// One pass over the container's flat runs. An existing wrapper is a settled
+// turn: its span can no longer change, so it only ends the run before it.
+function collectTurns(root) {
   const turns = [];
-  let turnStart = null;
+  let nodes = [];
+  let leading = true;
 
   Array.from(root.children).forEach(el => {
-    if (!isStableRenderedMessage(el)) return;
-    const role = renderedMessageRole(el);
-    if (role === 'user') {
-      turnStart = el;
+    if (el.classList.contains('turn-wrap')) {
+      nodes = [];
+      leading = false;
       return;
     }
-    if (role === 'separator') {
-      if (turnStart) turns.push({start: turnStart, separator: el});
-      turnStart = null;
+    if (!isTurnSpanNode(el)) return;
+    nodes.push(el);
+    if (isStableRenderedMessage(el) && renderedMessageRole(el) === 'separator') {
+      const turn = describeTurn(nodes, leading);
+      if (turn) turns.push(turn);
+      nodes = [];
+      leading = false;
     }
   });
 
   return turns;
 }
 
-function findTurnConclusion(turn) {
-  let el = turn.separator.previousElementSibling;
-  while (el && el !== turn.start) {
-    if (isStableRenderedMessage(el) && renderedMessageRole(el) === 'assistant') return el;
-    el = el.previousElementSibling;
+// The parts of one finished turn. Null for a span that stays flat: a leading
+// span whose stimulus was left on an earlier page, or a bare separator.
+function describeTurn(nodes, leading) {
+  const messages = nodes.filter(isStableRenderedMessage);
+  const separator = messages[messages.length - 1];
+  const body = messages.slice(0, -1);
+  const conclusion = lastMessageWithRole(body, 'assistant');
+  const stimulus = lastStimulusBefore(body, conclusion);
+  if (!stimulus && leading) return null;
+  const head = stimulus || body[0];
+  if (!head) return null;
+  const foldRange = conclusion
+    ? body.slice(body.indexOf(head) + 1, body.indexOf(conclusion))
+    : [];
+  return {nodes, head, conclusion, separator, foldRange};
+}
+
+function lastMessageWithRole(messages, role) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (renderedMessageRole(messages[i]) === role) return messages[i];
   }
   return null;
 }
 
-function collectIntermediateTurnMessages(turn, conclusion) {
-  const messages = [];
-  let el = turn.start.nextElementSibling;
-  while (el && el !== conclusion) {
-    if (isStableRenderedMessage(el)) messages.push(el);
-    el = el.nextElementSibling;
+function lastStimulusBefore(messages, conclusion) {
+  const limit = conclusion ? messages.indexOf(conclusion) : messages.length;
+  for (let i = limit - 1; i >= 0; i--) {
+    if (isStimulusMessage(messages[i])) return messages[i];
   }
-  return messages;
+  return null;
 }
 
-function turnFoldKey(turn, conclusion) {
+function turnFoldKey(turn) {
   return [
-    renderedMessageId(turn.start),
-    renderedMessageId(conclusion),
+    renderedMessageId(turn.head),
+    turn.conclusion ? renderedMessageId(turn.conclusion) : '',
     renderedMessageId(turn.separator),
   ].join('|');
 }
@@ -164,7 +199,7 @@ function setTurnFoldBarExpanded(btn, expanded) {
   btn.setAttribute('title', expanded ? 'Collapse steps' : 'Expand steps');
 }
 
-function buildTurnFoldBar(turnKey, count, expanded) {
+function buildTurnFoldBar(turnKey, count) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'turn-fold-bar';
@@ -174,68 +209,229 @@ function buildTurnFoldBar(turnKey, count, expanded) {
   btn.innerHTML = '<span class="turn-fold-label">' + turnFoldLabel(count) + '</span>'
     + '<svg class="turn-fold-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
     + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
-  setTurnFoldBarExpanded(btn, expanded);
+  setTurnFoldBarExpanded(btn, false);
   return btn;
 }
 
-function installTurnFold(root, turn, collapsed) {
-  const conclusion = findTurnConclusion(turn);
-  if (!conclusion) return;
-
-  const messages = collectIntermediateTurnMessages(turn, conclusion);
-  if (!messages.length) return;
+// The `N steps` band: the stable messages between head and conclusion. New
+// bands start collapsed; Expand all opens them from the derive.
+function installTurnFold(wrap, turn) {
+  if (!turn.foldRange.length) return;
 
   const content = document.createElement('div');
-  content.className = 'turn-fold-content space-y-3';
-  content.dataset.turnFoldKey = turnFoldKey(turn, conclusion);
-  content.classList.toggle('hidden', collapsed);
+  content.className = 'turn-fold-content space-y-3 hidden';
+  content.dataset.turnFoldKey = turnFoldKey(turn);
 
-  const bar = buildTurnFoldBar(content.dataset.turnFoldKey, messages.length, !collapsed);
-  const ref = messages[0];
-  root.insertBefore(bar, ref);
-  root.insertBefore(content, ref);
-  messages.forEach(el => content.appendChild(el));
+  const bar = buildTurnFoldBar(content.dataset.turnFoldKey, turn.foldRange.length);
+  const ref = turn.foldRange[0];
+  wrap.insertBefore(bar, ref);
+  wrap.insertBefore(content, ref);
+  turn.foldRange.forEach(el => content.appendChild(el));
 }
 
-function applyCompactMode(root) {
-  if (!root) {
-    updateCompactModeButton();
-    return;
-  }
-
-  resetTurnFolds(root);
-  const turns = collectCompletedTurns(root);
-  turns.forEach(turn => {
-    installTurnFold(root, turn, shouldCollapseTurn());
-  });
-  updateCompactModeButton();
-}
-
-function shouldCollapseTurn() {
-  return compactMode !== 'expanded';
-}
-
-function toggleTurnFold(btn) {
+function turnFoldContent(btn) {
   const content = btn.nextElementSibling;
   if (!content || !content.classList.contains('turn-fold-content')) {
     throw new Error('Turn fold content missing');
   }
-  const collapsed = content.classList.toggle('hidden');
-  setTurnFoldBarExpanded(btn, !collapsed);
+  return content;
 }
 
-function updateCompactModeButton() {
-  const btn = document.getElementById('compact-mode-toggle');
-  if (!btn) return;
-  const expanded = compactMode === 'expanded';
-  btn.textContent = expanded ? 'Compact' : 'Expand all';
-  btn.setAttribute('title', expanded ? 'Collapse completed turns' : 'Expand collapsed turns');
-  btn.setAttribute('aria-pressed', String(!expanded));
+function setTurnFoldExpanded(btn, expanded) {
+  turnFoldContent(btn).classList.toggle('hidden', !expanded);
+  setTurnFoldBarExpanded(btn, expanded);
 }
 
-function toggleCompactMode() {
-  compactMode = compactMode === 'expanded' ? 'compact' : 'expanded';
-  applyCompactMode(document.getElementById('messages'));
+function setAllTurnFolds(root, expanded) {
+  Array.from(root.querySelectorAll('.turn-fold-bar')).forEach(bar => {
+    setTurnFoldExpanded(bar, expanded);
+  });
+}
+
+function toggleTurnFold(btn) {
+  setTurnFoldExpanded(btn, turnFoldContent(btn).classList.contains('hidden'));
+}
+
+// ---------------------------------------------------------------------------
+// Fold row: six derived fields, all read off the turn's own messages
+// ---------------------------------------------------------------------------
+function turnTypeLabel(head) {
+  return TURN_TYPE_LABELS[renderedMessageRole(head)] || 'Turn';
+}
+
+// Rendered nodes read back with element boundaries as line breaks, so a
+// trailing time div can never merge into the first line.
+function renderedNodeText(node) {
+  if (node.nodeType === TEXT_NODE) return node.textContent;
+  return Array.from(node.childNodes).map(renderedNodeText).join('\n');
+}
+
+// `.prose-msg[data-raw]` carries the message's own unrendered markdown; a plain
+// bubble keeps its text in `.whitespace-pre-wrap`, which is also what leaves the
+// voice badge and the time div out of the first line.
+function messageSourceText(el) {
+  const prose = el.querySelector('.prose-msg');
+  if (prose) return prose.dataset.raw != null ? prose.dataset.raw : renderedNodeText(prose);
+  const plain = el.querySelector('.whitespace-pre-wrap');
+  if (plain) return renderedNodeText(plain);
+  return renderedNodeText(el);
+}
+
+function turnFirstLine(text) {
+  const lines = String(text).split('\n');
+  for (const raw of lines) {
+    const line = raw.replace(/^\s*(?:#{1,6}|[-*+>]|\d+[.)])\s+/, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/`/g, '')
+      .trim();
+    if (line) return line;
+  }
+  return '';
+}
+
+// A worker summary titles itself by the worker it reports on; every other head
+// titles itself by its first line.
+function turnRowTitle(head) {
+  const text = messageSourceText(head);
+  if (renderedMessageRole(head) === 'worker_summary') {
+    const workerId = /`([0-9a-f]{6,})`/.exec(text);
+    if (workerId) return workerId[1];
+  }
+  return turnFirstLine(text);
+}
+
+function formatTurnDuration(seconds) {
+  if (!seconds) return '';
+  const total = Number(seconds);
+  if (total < 60) return total + 's';
+  return Math.floor(total / 60) + 'm' + String(total % 60).padStart(2, '0') + 's';
+}
+
+function formatTurnTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+function turnRowField(className, text) {
+  const span = document.createElement('span');
+  span.className = className;
+  span.textContent = text;
+  return span;
+}
+
+function buildTurnRow(turn) {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'turn-row';
+  row.setAttribute('title', 'Open this turn');
+  row.onclick = function() { setTurnOverride(this.parentNode, true); };
+
+  const label = turnTypeLabel(turn.head);
+  row.appendChild(turnRowField('turn-row-tag turn-row-tag-' + label.toLowerCase(), label));
+  row.appendChild(turnRowField('turn-row-title', turnRowTitle(turn.head)));
+  row.appendChild(turnRowField('turn-row-conclusion',
+      turn.conclusion ? turnFirstLine(messageSourceText(turn.conclusion)) : ''));
+
+  const meta = document.createElement('span');
+  meta.className = 'turn-row-meta';
+  meta.appendChild(turnRowField('turn-row-steps',
+      turn.foldRange.length ? turnFoldLabel(turn.foldRange.length) : ''));
+  meta.appendChild(turnRowField('turn-row-duration',
+      formatTurnDuration(turn.separator.dataset.thinkingSeconds)));
+  const ts = turn.head.dataset.messageTs;
+  const time = turnRowField('turn-row-time', formatTurnTime(ts));
+  if (ts) time.setAttribute('title', formatBubbleTime(ts));
+  meta.appendChild(time);
+  row.appendChild(meta);
+
+  return row;
+}
+
+// The fold-back control shares the separator line with clone-to-here, Elon-e,
+// Recap and the round rating.
+function installTurnCollapseControl(separator) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'turn-collapse';
+  btn.setAttribute('title', 'Collapse this turn into one row');
+  btn.textContent = 'Collapse';
+  btn.onclick = function() { setTurnOverride(this.closest('.turn-wrap'), false); };
+  separator.insertBefore(btn, separator.lastElementChild);
+}
+
+// ---------------------------------------------------------------------------
+// Wrapping, open/folded state, derive
+// ---------------------------------------------------------------------------
+function wrapTurn(root, turn) {
+  const wrap = document.createElement('div');
+  wrap.className = 'turn-wrap';
+  root.insertBefore(wrap, turn.nodes[0]);
+  wrap.appendChild(buildTurnRow(turn));
+  turn.nodes.forEach(node => wrap.appendChild(node));
+  installTurnFold(wrap, turn);
+  installTurnCollapseControl(turn.separator);
+  return wrap;
+}
+
+function turnWrappers(root) {
+  return Array.from(root.children).filter(el => el.classList.contains('turn-wrap'));
+}
+
+function setTurnOpen(wrap, open) {
+  wrap.dataset.turnOpen = String(open);
+}
+
+// open(turn) = override ?? (pageDepth === 'outline' ? isLastWrapper : true)
+function turnIsOpen(wrap, isLast) {
+  const override = wrap.dataset.turnOverride;
+  if (override) return override === 'open';
+  return pageDepth === 'outline' ? isLast : true;
+}
+
+function setTurnOverride(wrap, open) {
+  wrap.dataset.turnOverride = open ? 'open' : 'folded';
+  setTurnOpen(wrap, open);
+}
+
+// The derive: wrap every newly finished turn, then set every wrapper's state to
+// open(turn). Runs at session load, at pagination, and when a separator lands.
+function applyTurnOutline(root) {
+  if (!root) {
+    updatePageDepthControl();
+    return;
+  }
+
+  // Hold the reader's place: folding a turn above the viewport changes the
+  // height above it, so keep the distance to the bottom (or stay pinned).
+  const wasAtBottom = shouldAutoScroll(root);
+  const bottomOffset = root.scrollHeight - root.scrollTop;
+
+  collectTurns(root).forEach(turn => wrapTurn(root, turn));
+
+  const wrappers = turnWrappers(root);
+  wrappers.forEach((wrap, i) => setTurnOpen(wrap, turnIsOpen(wrap, i === wrappers.length - 1)));
+  if (pageDepth === 'expanded') setAllTurnFolds(root, true);
+
+  root.scrollTop = wasAtBottom ? root.scrollHeight : root.scrollHeight - bottomOffset;
+  updatePageDepthControl();
+}
+
+function updatePageDepthControl() {
+  const control = document.getElementById('page-depth-control');
+  if (!control) return;
+  Array.from(control.children).forEach(btn => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.pageDepth === pageDepth));
+  });
+}
+
+function setPageDepth(depth) {
+  pageDepth = depth;
+  const root = document.getElementById('messages');
+  // A depth click is the one place that closes a reader-expanded `N steps`
+  // bar; Expand all reopens every bar from the derive.
+  if (root && depth !== 'expanded') setAllTurnFolds(root, false);
+  applyTurnOutline(root);
 }
 
 function renderMessagesIntoContainer(container, messages, sessionId) {
@@ -245,7 +441,7 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
   const parts = list.map(msg => globalThis.renderMessage(msg, sessionId));
   container.innerHTML = parts.join('') + streamHtml;
   globalThis.postProcessRenderedMessages(container);
-  globalThis.applyCompactMode(container);
+  globalThis.applyTurnOutline(container);
 }
 
 function postProcessRenderedMessages(root) {
@@ -426,6 +622,9 @@ function _appendRenderedMessage(html, forceScroll) {
   var el = wrapper.firstElementChild || wrapper;
   var streamEl = document.getElementById("streaming-msg");
   container.insertBefore(el, streamEl);
+  // A landed separator finishes a turn: derive so it becomes a wrapper and the
+  // turn before it folds.
+  if (renderedMessageRole(el) === 'separator') globalThis.applyTurnOutline(container);
   if (forceScroll || wasAtBottom) {
     container.scrollTop = container.scrollHeight;
   } else {
@@ -475,8 +674,8 @@ Chat.appendMessageObject = appendMessageObject;
 Chat.appendMessage = appendMessage;
 Chat.appendSeparator = appendSeparator;
 Chat.appendCloneBanner = appendCloneBanner;
-Chat.applyCompactMode = applyCompactMode;
-Chat.toggleCompactMode = toggleCompactMode;
+Chat.applyTurnOutline = applyTurnOutline;
+Chat.setPageDepth = setPageDepth;
 Chat.toggleTurnFold = toggleTurnFold;
 Chat.expose([
   'renderMessage',
@@ -487,8 +686,8 @@ Chat.expose([
   'appendMessage',
   'appendSeparator',
   'appendCloneBanner',
-  'applyCompactMode',
-  'toggleCompactMode',
+  'applyTurnOutline',
+  'setPageDepth',
   'toggleTurnFold',
 ]);
 

@@ -149,11 +149,17 @@
         </div>
         <!-- Backend badge -->
         <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend">{{ active_backend_label or active_backend }}</span>
-        <button id="compact-mode-toggle"
-                onclick="toggleCompactMode()"
-                class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap"
-                title="Expand collapsed turns"
-                aria-pressed="true">Expand all</button>
+        <div id="page-depth-control" class="turn-depth-control" role="group" aria-label="Turn depth">
+          <button type="button" class="turn-depth-btn" data-page-depth="outline"
+                  onclick="setPageDepth('outline')" aria-pressed="true"
+                  title="One row per finished turn, last turn open">Outline</button>
+          <button type="button" class="turn-depth-btn" data-page-depth="compact"
+                  onclick="setPageDepth('compact')" aria-pressed="false"
+                  title="Open every turn, keep the step folds closed">Compact</button>
+          <button type="button" class="turn-depth-btn" data-page-depth="expanded"
+                  onclick="setPageDepth('expanded')" aria-pressed="false"
+                  title="Open every turn and every step fold">Expand all</button>
+        </div>
         <button id="stop-tui-btn"
                 onclick="stopActiveTui()"
                 class="ml-2 text-xs px-2 py-1 rounded bg-red-900/40 text-red-200 border border-red-700/50 hover:bg-red-800/60 transition-colors whitespace-nowrap {% if active_backend_type != 'tui-cli' %}hidden{% endif %}"

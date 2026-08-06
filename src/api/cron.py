@@ -1,6 +1,7 @@
 """CRUD API for scheduled cron task configs (config.d/cron.d/<name>.yaml)."""
 
 import asyncio
+import copy
 import re
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,7 @@ from src.core.config import (
   CharlieBotConfig,
   ScheduledTaskConfig,
   _load_cron_file,
+  _validate_cron_body,
   charliebot_home_dir,
   get_config,
   get_scheduled_task_errors,
@@ -78,16 +80,14 @@ def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:
 
 async def _ensure_backend_update_session(
     name: str,
-    task: dict,
+    cand_model: ScheduledTaskConfig,
     req: "TaskUpdate",
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
 ) -> None:
   if 'backend' not in req.model_fields_set:
     return
-  updated_task = _apply_task_update(task, req)
-  task_cfg = ScheduledTaskConfig.model_validate({**updated_task, 'name': name})
-  backend = effective_scheduled_task_backend(task_cfg, cfg)
+  backend = effective_scheduled_task_backend(cand_model, cfg)
   try:
     await session_mgr.ensure_scheduled_session_backend(name, backend)
   except ScheduledSessionBusyError as e:
@@ -152,15 +152,39 @@ async def update_cron_task(
   # loader's own catch-all: any failure in _load_cron_file becomes this job's
   # error, never an unhandled exception.
   try:
-    await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
-    task = await asyncio.to_thread(_read_cron_yaml, name)
+    current, _ = await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
+    raw = await asyncio.to_thread(_read_cron_yaml, name)
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
-  await _ensure_backend_update_session(name, task, req, cfg, session_mgr)
-  updated_task = _apply_task_update(task, req)
-  await asyncio.to_thread(_write_cron_yaml, name, updated_task)
+
+  # prompt_file jobs manage `prompt` from the referenced file; the UI modal
+  # always echoes the resolved text back on save, so an unchanged echo must
+  # not be persisted (that would leave the file with two prompt sources — see
+  # _resolve_prompt_file), while a genuinely changed value must be rejected
+  # before any write happens.
+  if raw.get('prompt_file') and 'prompt' in req.model_fields_set:
+    if req.prompt != current.prompt:
+      raise HTTPException(
+          status_code=400,
+          detail=f"prompt is managed by prompt_file '{raw['prompt_file']}'; edit that file instead")
+    req = req.model_copy(update={'prompt': None})
+
+  candidate = _apply_task_update(raw, req)
+  # Validate the candidate through the exact same body-processing code the
+  # production loader uses, on a deep copy (that code mutates the body in
+  # place — see _validate_cron_body) so the persisted file is always
+  # reloadable and file-format-only keys like `prompt_file` can never surface
+  # as an unhandled ValidationError.
+  try:
+    cand_model, _ = await asyncio.to_thread(
+        _validate_cron_body, copy.deepcopy(candidate), cfg.charlie_bot_repo, name)
+  except Exception as e:
+    raise HTTPException(status_code=409, detail=str(e)) from e
+
+  await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
+  await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
-  return updated_task
+  return candidate
 
 
 @router.post('/tasks')

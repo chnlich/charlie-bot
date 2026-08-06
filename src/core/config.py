@@ -469,25 +469,21 @@ def _valid_cron_name(name: str) -> bool:
   return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name))
 
 
-def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskConfig, dict[Path, float]]:
-  """Load, resolve, and validate one ``cron.d`` file into a ``ScheduledTaskConfig``.
+def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTaskConfig, dict[Path, float]]:
+  """Resolve and validate one cron job body into a ``ScheduledTaskConfig``.
 
-  The file body is a top-level mapping of :class:`ScheduledTaskConfig` fields
-  *without* ``name``; the job name is *stem* (the file stem) and is injected
-  here. A body that carries a ``name`` key is an error (the file name is the
-  single source of the name). Resolution follows the existing order:
-  ``prompt_file`` against *repo* (``~``-prefixed or absolute taken literally),
-  ``timezone: local`` to the host IANA zone, and ``repo`` to ``expanduser``.
+  Mutates *body* in place — resolves ``prompt_file`` (removing the key and
+  setting ``prompt``), rewrites a literal ``timezone: local`` to the host IANA
+  zone, and expands ``~`` in ``repo`` — matching the :func:`_resolve_prompt_file`
+  mutate-in-place convention. This is the exact body-processing step
+  :func:`_load_cron_file` uses for the production loader; any other caller
+  (e.g. the cron API's update path) that validates a candidate through this
+  function is guaranteed a result the loader can reload unchanged.
 
   Returns the model plus the mtime map for any ``prompt_file`` it read (for the
-  hot-reload fingerprint). Raises :class:`ValueError` on any failure; the caller
-  records it as a per-file error rather than propagating it.
+  hot-reload fingerprint). Raises :class:`ValueError` (or a pydantic validation
+  error) on any failure.
   """
-  body = load_yaml(path)
-  if not isinstance(body, dict):
-    raise ValueError("cron config must be a mapping")
-  if "name" in body:
-    raise ValueError("the body must not carry a 'name' key; the file name is the job name")
   prompt_mtimes: dict[Path, float] = {}
   prompt_file = body.get("prompt_file")
   if prompt_file:
@@ -502,6 +498,29 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
   if body.get("repo"):
     body["repo"] = os.path.expanduser(body["repo"])
   return ScheduledTaskConfig(name=stem, **body), prompt_mtimes
+
+
+def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskConfig, dict[Path, float]]:
+  """Load, resolve, and validate one ``cron.d`` file into a ``ScheduledTaskConfig``.
+
+  The file body is a top-level mapping of :class:`ScheduledTaskConfig` fields
+  *without* ``name``; the job name is *stem* (the file stem) and is injected
+  here. A body that carries a ``name`` key is an error (the file name is the
+  single source of the name). Resolution follows the existing order:
+  ``prompt_file`` against *repo* (``~``-prefixed or absolute taken literally),
+  ``timezone: local`` to the host IANA zone, and ``repo`` to ``expanduser`` —
+  see :func:`_validate_cron_body`.
+
+  Returns the model plus the mtime map for any ``prompt_file`` it read (for the
+  hot-reload fingerprint). Raises :class:`ValueError` on any failure; the caller
+  records it as a per-file error rather than propagating it.
+  """
+  body = load_yaml(path)
+  if not isinstance(body, dict):
+    raise ValueError("cron config must be a mapping")
+  if "name" in body:
+    raise ValueError("the body must not carry a 'name' key; the file name is the job name")
+  return _validate_cron_body(body, repo, stem)
 
 
 def _reload_cron_snapshot() -> _CronSnapshot:

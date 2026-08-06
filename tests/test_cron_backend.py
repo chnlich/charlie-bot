@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from src.api import cron as cron_api
 from src.api.deps import get_session_manager
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_config
+from src.core.config import CharlieBotConfig, ScheduledTaskConfig, _load_cron_file, get_config
 from src.core.models import (
   BackendOption,
   CreateSessionRequest,
@@ -401,3 +401,110 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
         == "claude-opus-4.6")
   finally:
     clear_busy(session.id)
+
+
+def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path) -> tuple[Path, Path, str]:
+  """Write a prompt_file-backed 'nightly' job; returns (yaml_path, md_path, md_content)."""
+  md_path = tmp_path / "prompts" / "nightly.md"
+  md_path.parent.mkdir(parents=True, exist_ok=True)
+  md_content = "Rebase omni main and report status.\n"
+  md_path.write_text(md_content, encoding="utf-8")
+  yaml_path = cron_dir / "nightly.yaml"
+  yaml_path.write_text(
+      yaml.safe_dump(
+          {
+              "cron": "0 3 * * *",
+              "prompt_file": str(md_path),  # absolute path, as production files use
+              "timezone": "America/Los_Angeles",
+              "enabled": True,
+          },
+          sort_keys=False),
+      encoding="utf-8")
+  return yaml_path, md_path, md_content
+
+
+def test_cron_api_updates_backend_on_prompt_file_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  yaml_path, _md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)
+  original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+
+  with _build_cron_client(cfg, session_mgr) as client:
+    response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
+
+  assert response.status_code == 200
+  persisted = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+  # The PUT must add exactly one key/value pair and touch nothing else, in
+  # either direction.
+  assert set(persisted.items()) - set(original.items()) == {("backend", "codex-o3")}
+  assert set(original.items()) - set(persisted.items()) == set()
+
+  # The persisted file must be loadable by the exact same code the production
+  # loader uses — not just "parseable by this route".
+  loaded, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
+  assert loaded.backend == "codex-o3"
+
+
+def test_cron_api_rejects_prompt_edit_on_prompt_file_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  yaml_path, md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)
+  before = yaml_path.read_bytes()
+
+  with _build_cron_client(cfg, session_mgr) as client:
+    response = client.put(
+        "/api/cron/tasks/nightly",
+        json={"prompt": "a completely different prompt", "backend": "codex-o3"},
+    )
+
+  assert response.status_code == 400
+  assert str(md_path) in response.json()["detail"]
+  # The guard must fire before any write — the file on disk is untouched.
+  assert yaml_path.read_bytes() == before
+
+
+def test_cron_api_prompt_echo_is_not_persisted_on_prompt_file_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  yaml_path, _md_path, md_content = _seed_prompt_file_task(cron_dir, tmp_path)
+  original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+
+  with _build_cron_client(cfg, session_mgr) as client:
+    # The modal always round-trips the resolved prompt text verbatim; since it
+    # matches the prompt_file content this is a no-op echo, not an edit.
+    response = client.put(
+        "/api/cron/tasks/nightly",
+        json={
+            "cron": "0 3 * * *",
+            "prompt": md_content,
+            "repo": None,
+            "project": None,
+            "timezone": "America/Los_Angeles",
+            "enabled": True,
+        },
+    )
+
+  assert response.status_code == 200
+  persisted = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+  assert persisted == original
+
+  loaded, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
+  assert loaded.prompt == md_content

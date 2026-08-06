@@ -309,11 +309,6 @@ class _InterruptedRun:
   meta: dict
 
 
-# Improve-loop iteration threads are identified by their description prefix;
-# the loop task itself does not survive a restart (loop continuation is an
-# explicit non-goal), so these threads are finalized, never respawned.
-_IMPROVE_ITERATION_PREFIX = "Iterative improvement — iteration"
-
 
 def _scan_interrupted_runs(cfg, boot_time: datetime) -> tuple[list[_InterruptedRun], list[dict]]:
   """Collect pre-boot threads (any status) plus the full in-window metadata list.
@@ -569,7 +564,7 @@ async def _reconcile_one(
       pid=meta.get("pid"),
       pid_start=meta.get("pid_start"),
       started_at=_parse_started_at(meta),
-      backend_type=_backend_type(cfg, meta.get("backend")),
+      backend_type=runs.backend_type(cfg, meta.get("backend")),
       translate=_translate_for_thread(cfg, meta),
       host_boot_time=host_boot,
       holders_scan=holders_scan,
@@ -623,9 +618,12 @@ async def _reconcile_one(
     return True
 
   # COMPLETED / DIED: drain whatever events were not consumed, then finalize.
+  # DIED carries resolve_run's reason (transport not covered, no result event,
+  # …) into the finalize error, so the master's summary states why the run
+  # failed instead of a bare exit -1; COMPLETED has no reason and is unaffected.
   create_logged_task(
       spawner.resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr,
-                            is_alive=lambda: False),
+                            is_alive=lambda: False, interrupt_reason=resolution.reason),
       name=f"resume-drain-{thread_id[:8]}")
 
   # Row 5: descendants that outlived the run while holding its raw-log fd are
@@ -651,13 +649,6 @@ def _parse_started_at(meta: dict) -> Optional[datetime]:
     return parse_utc_datetime(started_at)
   except (ValueError, TypeError):
     return None
-
-
-def _backend_type(cfg, backend_id: Optional[str]) -> Optional[str]:
-  if not backend_id:
-    return None
-  option = cfg.get_backend_option(backend_id)
-  return option.type if option else None
 
 
 async def _report_recovery_event(session_mgr, session_id: str, content: str) -> None:
@@ -695,7 +686,7 @@ async def _maybe_respawn(
   thread_id = meta.get("id")
   session_id = item.session_id
   description = meta.get("description", "")
-  if meta.get("review_of") or description.startswith(_IMPROVE_ITERATION_PREFIX):
+  if meta.get("review_of") or description.startswith(runs.IMPROVE_ITERATION_PREFIX):
     return False
 
   invocation = None
@@ -768,7 +759,7 @@ async def _complete_finalize_effects(
   thread_id = meta.get("id")
   session_id = item.session_id
   description = meta.get("description", "")
-  if description.startswith(_IMPROVE_ITERATION_PREFIX):
+  if description.startswith(runs.IMPROVE_ITERATION_PREFIX):
     return
   if not _effects_maybe_missing(meta, chat_events, session_threads):
     return

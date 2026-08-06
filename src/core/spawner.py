@@ -1009,6 +1009,7 @@ async def spawn_worker(
   exit_code = -1
   quota_exhausted = False
   error_msg = ""
+  cancelled = False
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
     if not thread:
@@ -1048,15 +1049,37 @@ async def spawn_worker(
       exit_code = await _maybe_override_exit_code_from_result(exit_code, session_id, thread, thread_mgr)
 
   except asyncio.CancelledError:
-    log.warning("spawn_worker_cancelled", session=session_id, thread_id=thread_id)
+    # Only live trigger: event-loop shutdown (graceful restart). Never write a
+    # terminal state here — the thread stays as-is on disk and the next boot's
+    # reconcile judges the truth via resolve_run: covered transports are
+    # re-attached for their real result, everything else is finalized with an
+    # explicit reason. Covered workers keep running on their own raw-log fds
+    # (detach stops the closing loop's transports from killing them);
+    # uncovered transports and improve iterations (whose loop dies with this
+    # process) cannot outlive the server usefully, so their processes are
+    # still terminated (ff82c34's orphan prevention).
+    cancelled = True
+    transport = runs.backend_type(cfg, thread.backend if thread else None)
+    let_go = (worker is not None and transport not in runs.UNCOVERED_BACKEND_TYPES
+              and not description.startswith(runs.IMPROVE_ITERATION_PREFIX))
+    log.warning(
+        "spawn_worker_cancelled",
+        session=session_id,
+        thread_id=thread_id,
+        transport=transport,
+        action="let_go" if let_go else ("terminate" if worker else "none"),
+    )
     if worker:
-      await worker.terminate()
+      if let_go:
+        worker.detach()
+      else:
+        await worker.terminate()
     raise
   except Exception as e:
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
     error_msg = str(e)
   finally:
-    if thread is not None:
+    if thread is not None and not cancelled:
       await _finalize_worker_safely(
           session_id,
           description,
@@ -1092,6 +1115,7 @@ async def resume_worker(
     thread_mgr: ThreadManager,
     *,
     is_alive: Callable[[], bool],
+    interrupt_reason: str = "",
 ) -> None:
   """Re-attach to an interrupted run's raw stream, then run the finalize chain.
 
@@ -1099,6 +1123,11 @@ async def resume_worker(
   (pid, pid_start) liveness judgment as ``is_alive``; COMPLETED/DIED drains
   pass ``lambda: False``. Finalize is judgment-idempotent, so finishing here
   and finishing without a restart take exactly the same path.
+
+  ``interrupt_reason`` is the reconcile's resolve_run reason: when the drain
+  ends without a successful result and no harder error occurred, it becomes
+  the finalize error, so the master's summary states why the run failed
+  instead of a bare exit -1.
   """
   thread = None
   worker = None
@@ -1131,6 +1160,8 @@ async def resume_worker(
     log.error("resume_worker_failed", thread_id=thread_id, error=str(e), traceback=traceback.format_exc())
     error_msg = str(e)
   finally:
+    if exit_code != 0 and not quota_exhausted and not error_msg and interrupt_reason:
+      error_msg = interrupt_reason
     if thread is not None:
       await _finalize_worker_safely(
           session_id,

@@ -50,8 +50,22 @@ TRANSPORT_NOT_COVERED_REASON = "backend transport not covered by restart-safe ru
 LEGACY_RAW_MISSING_REASON = "raw log missing (run predates restart-safe transport)"
 DIED_WITHOUT_RESULT_REASON = "process exited without a final result event"
 
+# Improve-loop iteration threads are identified by their description prefix;
+# the loop task itself does not survive a restart (loop continuation is an
+# explicit non-goal), so these threads are finalized, never respawned, and
+# the shutdown path terminates their processes along with the loop.
+IMPROVE_ITERATION_PREFIX = "Iterative improvement — iteration"
+
 # Pids that must never appear in a kill list derived from the fd scan.
 _NEVER_KILL_PIDS = frozenset({0, 1})
+
+
+def backend_type(cfg, backend_id: Optional[str]) -> Optional[str]:
+  """The configured transport type of ``backend_id``; None when unset or unknown."""
+  if not backend_id:
+    return None
+  option = cfg.get_backend_option(backend_id)
+  return option.type if option else None
 
 
 class RunOutcome(str, Enum):

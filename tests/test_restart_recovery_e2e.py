@@ -13,11 +13,18 @@ while the agent still runs: the reconcile re-attaches to the live run and
 follows it to completion. Both end in the same terminal state, proving the
 transport (raw log + cursor + pid/pid_start) makes the server process
 dispensable.
+
+A second driver protocol simulates a GRACEFUL shutdown: the driver cancels
+the spawn task (exactly what the closing event loop does) and exits cleanly.
+The shutdown must write no terminal state — covered runs survive and
+re-attach on the next boot; everything else is finalized there with
+resolve_run's explicit reason.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import signal
@@ -34,9 +41,18 @@ from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
 from src.core import init as init_module
 from src.core import runs
+from src.core import spawner as spawner_module
 from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
-from src.core.models import BackendOption, CreateSessionRequest, ThreadMetadata, ThreadStatus, utc_now
+from src.core.models import (
+    BackendOption,
+    CreateSessionRequest,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
+    utc_now,
+)
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.spawner import resume_worker as _real_resume_worker
@@ -214,7 +230,9 @@ def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
   proc.wait(timeout=10)
 
 
-async def _recover(monkeypatch: pytest.MonkeyPatch, home: Path) -> tuple[int, list[bool], list[str]]:
+async def _recover(
+    monkeypatch: pytest.MonkeyPatch, home: Path, cfg: CharlieBotConfig | None = None
+) -> tuple[int, list[bool], list[str]]:
   """Run startup crash recovery as process B; record reattach mode + master wakes."""
   alive_at_reattach: list[bool] = []
   master_wakes: list[str] = []
@@ -229,7 +247,7 @@ async def _recover(monkeypatch: pytest.MonkeyPatch, home: Path) -> tuple[int, li
   monkeypatch.setattr("src.core.spawner.resume_worker", spy_resume)
   monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
 
-  cfg = _cfg(home)
+  cfg = cfg or _cfg(home)
   recovered = await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
   await _await_recovery_tasks()
   return recovered, alive_at_reattach, master_wakes
@@ -635,3 +653,310 @@ async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_repla
   assert attempt2_events
   assert not any("ATTEMPT-1-MARKER" in json.dumps(e) for e in attempt2_events)
   assert not any(e.get("type") == "rate_limit_event" for e in attempt2_events)
+
+
+# ---------------------------------------------------------------------------
+# Graceful shutdown: cancellation writes no terminal state (plan "关机不再抢先下结论")
+# ---------------------------------------------------------------------------
+
+GRACEFUL_DRIVER = """import asyncio
+import contextlib
+import json
+import sys
+from pathlib import Path
+
+from src.core import runs, spawner
+from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption, CreateSessionRequest, SpawnRequest
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+
+
+async def main() -> None:
+  home = Path(sys.argv[1])
+  description = sys.argv[2]
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
+  )
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
+  thread = await thread_mgr.create_thread(meta, description)
+  (home / "driver_ids.json").write_text(json.dumps({"session": meta.id, "thread": thread.id}))
+  task = asyncio.create_task(
+      spawner.spawn_worker(
+          meta.id,
+          description,
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="do the thing")))
+
+  thread_dir = home / "sessions" / meta.id / "threads" / thread.id
+  raw = thread_dir / "data" / runs.RAW_LOG_NAME
+
+  def run_started() -> bool:
+    if not raw.exists() or "E2E-ASSISTANT-MARKER" not in raw.read_text(encoding="utf-8", errors="replace"):
+      return False
+    try:
+      m = json.loads((thread_dir / "metadata.json").read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+      return False
+    return m.get("pid") is not None and m.get("pid_start") is not None and m.get("status") == "running"
+
+  while not run_started():
+    await asyncio.sleep(0.05)
+
+  # Graceful shutdown: exactly what the closing event loop does to the task.
+  task.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await task
+  (home / "driver_done.json").write_text("{}")
+
+
+asyncio.run(main())
+"""
+
+
+def _launch_graceful_driver(
+    tmp_path: Path, home: Path, result_delay: float, description: str = "e2e task"
+) -> tuple[subprocess.Popen, dict]:
+  """Run the graceful driver to completion: spawn, wait for the run, cancel, exit."""
+  shim_dir = _install_shim(tmp_path)
+  driver = tmp_path / "graceful_driver.py"
+  driver.write_text(GRACEFUL_DRIVER, encoding="utf-8")
+  env = dict(os.environ)
+  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PATH"] = f"{shim_dir}:{env['PATH']}"
+  env["FAKE_RESULT_DELAY"] = str(result_delay)
+  proc = subprocess.Popen(
+      [sys.executable, str(driver), str(home), description],
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+      env=env,
+  )
+  done = home / "driver_done.json"
+  _wait_for(done.exists, timeout=30.0, what="graceful driver never finished cancelling")
+  proc.wait(timeout=10)
+  ids = json.loads((home / "driver_ids.json").read_text(encoding="utf-8"))
+  return proc, ids
+
+
+def _terminal_summaries(home: Path, ids: dict) -> list[dict]:
+  return [
+      e for e in _session_chat_events(home, ids["session"])
+      if e.get("type") == "worker_summary" and e.get("thread_id") == ids["thread"] and e.get("status") != "running"
+  ]
+
+
+def _pid_alive(pid: int) -> bool:
+  try:
+    os.kill(pid, 0)
+    return True
+  except OSError:
+    return False
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_lets_covered_run_survive_and_reattach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Event-loop shutdown mid-run: a covered worker is neither signalled nor
+  finalized; the next boot re-attaches and finishes with the real result."""
+  home = tmp_path / "home"
+  proc, ids = _launch_graceful_driver(tmp_path, home, result_delay=3.0)
+  assert proc.returncode == 0
+
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "running"  # shutdown wrote no terminal state
+  assert meta.get("exit_code") is None
+  assert _pid_alive(meta["pid"])  # the agent process outlived the server
+  assert not _terminal_summaries(home, ids)  # finalize was skipped entirely
+
+  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home)
+
+  assert recovered == 1
+  assert alive_at_reattach == [True]
+  _assert_run_converged(home, ids)
+  _assert_finalize_effects_once(home, ids, master_wakes)
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Cancellation before the agent process exists writes no terminal state; the
+  next boot judges NEVER_STARTED and walks the existing respawn machinery
+  (which, without a persisted delegation invocation, drain-finalizes)."""
+  home = tmp_path / "home"
+  cfg = _cfg(home)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session_meta = await session_mgr.create_session(CreateSessionRequest(name="graceful-setup"))
+  thread = await thread_mgr.create_thread(session_meta, "e2e setup-phase task")
+  ids = {"session": session_meta.id, "thread": thread.id}
+
+  setup_entered = asyncio.Event()
+
+  async def hang_in_setup(*args, **kwargs):
+    setup_entered.set()
+    await asyncio.Event().wait()
+
+  monkeypatch.setattr("src.core.spawner._create_repoless_process", hang_in_setup)
+  task = asyncio.create_task(
+      spawner_module.spawn_worker(
+          session_meta.id, "e2e setup-phase task", thread.id, cfg, session_mgr, thread_mgr,
+          request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="x")))
+  await asyncio.wait_for(setup_entered.wait(), timeout=10.0)
+  task.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await task
+
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "idle"  # untouched: no failed/-1 fabricated at shutdown
+  assert meta.get("exit_code") is None
+  assert not _terminal_summaries(home, ids)
+
+  outcomes: list[runs.RunOutcome] = []
+  real_resolve = runs.resolve_run
+
+  def spy_resolve(**kwargs):
+    resolution = real_resolve(**kwargs)
+    outcomes.append(resolution.outcome)
+    return resolution
+
+  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
+  recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home)
+
+  assert recovered == 1
+  assert outcomes == [runs.RunOutcome.NEVER_STARTED]
+  assert alive_at_reattach == [False]
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"  # existing fall-back: no invocation to respawn from
+
+
+@pytest.mark.asyncio
+async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The incident shape: an opencode-backed verify thread left running by a
+  graceful shutdown. The next boot cannot re-attach (transport not covered),
+  so the thread fails with resolve_run's reason — the module constant, not a
+  retyped literal — in the worker_summary the master reads."""
+  home = tmp_path / "home"
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+      ],
+  )
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered"))
+  thread = await thread_mgr.create_thread(session_meta, "Verify plan fixture", task_type=TaskType.VERIFY)
+  thread.status = ThreadStatus.RUNNING
+  thread.backend = "fake-oc"
+  thread.model = "fake-model"
+  thread.pid = 4194304  # dead: beyond this host's live pids, /proc entry absent
+  thread.pid_start = "1"
+  thread.started_at = utc_now()
+  thread.require_review = False
+  await thread_mgr.save_metadata(thread)
+  ids = {"session": session_meta.id, "thread": thread.id}
+
+  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home, cfg=cfg)
+
+  assert recovered == 1
+  assert alive_at_reattach == [False]
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
+  assert len(master_wakes) == 1
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_winds_down_improve_iteration_with_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An improve iteration dies with its loop at shutdown (terminated, not let
+  go), but its terminal state still comes from the next boot's judgment chain:
+  DIED with an explicit reason, no re-attach, no respawn."""
+  home = tmp_path / "home"
+  proc, ids = _launch_graceful_driver(
+      tmp_path, home, result_delay=20.0, description=f"{runs.IMPROVE_ITERATION_PREFIX} 1/2")
+  assert proc.returncode == 0
+
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "running"  # no terminal state written at shutdown
+  # ...but the iteration's process was terminated along with its loop.
+  _wait_for(lambda: not _pid_alive(meta["pid"]), timeout=10.0, what="improve iteration outlived shutdown")
+
+  recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home)
+
+  assert recovered == 1
+  assert alive_at_reattach == [False]  # judged dead: drained, never re-attached
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert runs.DIED_WITHOUT_RESULT_REASON in summaries[0]["full_content"]
+  # Improve iterations are never respawned: the session still has exactly one thread.
+  assert len(_thread_metas(home, ids["session"])) == 1
+
+
+@pytest.mark.asyncio
+async def test_ui_cancel_endpoint_still_finalizes_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Regression: the cancel endpoint (SIGTERM + CANCELLED status, no task
+  cancellation) is untouched by the shutdown change — the spawn task finishes
+  normally and finalize keeps the cancelled status."""
+  from src.api.threads import cancel_thread
+
+  home = tmp_path / "home"
+  shim_dir = _install_shim(tmp_path)
+  monkeypatch.setenv("PATH", f"{shim_dir}:{os.environ['PATH']}")
+  monkeypatch.setenv("FAKE_RESULT_DELAY", "20")
+
+  master_wakes: list[str] = []
+
+  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
+    master_wakes.append(summary)
+
+  monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
+
+  cfg = _cfg(home)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session_meta = await session_mgr.create_session(CreateSessionRequest(name="ui-cancel"))
+  thread = await thread_mgr.create_thread(session_meta, "e2e cancel task")
+  ids = {"session": session_meta.id, "thread": thread.id}
+  task = asyncio.create_task(
+      spawner_module.spawn_worker(
+          session_meta.id, "e2e cancel task", thread.id, cfg, session_mgr, thread_mgr,
+          request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="do the thing")))
+
+  def started() -> bool:
+    try:
+      m = _read_meta(home, ids["session"], ids["thread"])
+    except (FileNotFoundError, json.JSONDecodeError):
+      return False
+    return m.get("pid") is not None and m.get("status") == "running"
+
+  deadline = time.monotonic() + 20.0
+  while not started():
+    assert time.monotonic() < deadline, "worker never started"
+    await asyncio.sleep(0.05)
+
+  await cancel_thread(ids["session"], ids["thread"], thread_mgr)
+  await task  # completes normally: this path never cancels the spawn task
+
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "cancelled"
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert summaries[0]["status"] == "cancelled"

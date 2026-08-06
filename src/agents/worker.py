@@ -271,6 +271,11 @@ class Worker:
     if self._backend is not None:
       await self._backend.terminate()
 
+  def detach(self) -> None:
+    """Forget the running subprocess without signalling it (shutdown let-go)."""
+    if self._backend is not None:
+      self._backend.detach()
+
   async def _process_event(self, event_data: dict, log_file) -> None:
     """Write event to disk log and broadcast to WebSocket subscribers."""
     # Detect quota exhaustion errors

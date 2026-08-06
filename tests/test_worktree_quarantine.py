@@ -585,7 +585,8 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
 
   resume_calls: list[bool] = []
 
-  async def fake_resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, *, is_alive):
+  async def fake_resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, *, is_alive,
+                               interrupt_reason=""):
     resume_calls.append(is_alive())
 
   monkeypatch.setattr("src.core.spawner.resume_worker", fake_resume_worker)

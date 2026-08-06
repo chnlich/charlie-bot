@@ -662,3 +662,20 @@ class AgentBackend(ABC):
     if self._proc is None or self._proc.returncode is not None:
       return
     await self._graceful_shutdown(5.0, timeout_log_event="backend_terminate_timeout")
+
+  def detach(self) -> None:
+    """Forget the running child without signalling it (graceful-shutdown let-go).
+
+    The asyncio subprocess transport kills a still-running child when closed
+    (BaseSubprocessTransport.close), and every transport is closed at
+    event-loop teardown — so "no signal at shutdown" only holds if the
+    transport's process handle is dropped first. The run's ground truth stays
+    on disk (raw log + cursor + pid/pid_start); the next boot re-attaches.
+    """
+    proc = self._proc
+    if proc is None:
+      return
+    transport = getattr(proc, "_transport", None)
+    if transport is not None and getattr(transport, "_proc", None) is not None:
+      transport._proc = None
+    self._proc = None

@@ -88,6 +88,10 @@ quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Sai
 language, lines 120 columns or fewer. Entry prose follows the writing-style skill. Apply the
 admission test line by line as well as entry by entry: a line that changes no future action
 leaves.
+Brevity is part of the admission bar: lead with the action and keep only the mechanism the action
+is unintelligible without; receipts, verification notes, and secondary effects leave. Hold a
+bullet to about three lines and an entry body to about a dozen; a merge that would grow past that
+re-trims the whole entry by the same test.
 Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
 moves. When context changes, revise the entry in place (a `revises` candidate stages the proposed
 new text).

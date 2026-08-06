@@ -10,9 +10,11 @@ consume the tolerant read in ``read_plans_tolerant`` — the single authority fo
 """
 
 import asyncio
+import html
 import json
 import os
 import posixpath
+import re
 from enum import IntEnum
 from pathlib import Path
 from typing import Optional
@@ -25,6 +27,40 @@ from src.core.models import utc_now
 from src.core.sessions import SessionManager
 
 log = structlog.get_logger()
+
+# ---------------------------------------------------------------------------
+# Goal budget — registration-time gate on the artifact's Problem / Goal section
+# ---------------------------------------------------------------------------
+
+GOAL_WEIGHTED_BUDGET = 240
+
+_GOAL_SECTION_RE = re.compile(r"Problem / Goal</h2>(.*?)</section>", re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+# CJK ideographs, CJK punctuation, and fullwidth forms count double, so the same
+# information density spends the same budget in Chinese and English.
+_CJK_RANGES = ((0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))
+
+
+def _weighted_goal_length(text: str) -> int:
+  return len(text) + sum(1 for c in text if any(lo <= ord(c) <= hi for lo, hi in _CJK_RANGES))
+
+
+def _check_goal_budget(artifact: Path) -> None:
+  """Reject registration when the Problem / Goal section exceeds the weighted budget.
+
+  Fail-loud like the other verb validations; a missing section is a defect, not a pass.
+  Runs only at present/amend — registered plans are never re-checked.
+  """
+  section = _GOAL_SECTION_RE.search(artifact.read_text(encoding="utf-8"))
+  if section is None:
+    raise ValueError(f"artifact {artifact.name!r} has no 'Problem / Goal' section")
+  text = html.unescape(_TAG_RE.sub("", section.group(1)))
+  weighted = _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
+  if weighted > GOAL_WEIGHTED_BUDGET:
+    raise ValueError(
+        f"plan goal is {weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET}): keep the goal "
+        "and non-goals; demote diagnosis, thresholds, paths, and justifications to Context or 4.1")
+
 
 # ---------------------------------------------------------------------------
 # DerivedState — internal enum (0 = UNKNOWN reserved); API use strings
@@ -276,6 +312,7 @@ class PlanRegistryManager:
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       file_relative = self._validate_file_in_session_dir(session_id, file)
+      _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
       existing_file = self._find_binding_by_file(session_id, data, file_relative)
       if existing_file is not None:
         raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
@@ -313,6 +350,7 @@ class PlanRegistryManager:
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       file_relative = self._validate_file_in_session_dir(session_id, file)
+      _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
       existing_file = self._find_binding_by_file(session_id, data, file_relative)
       if existing_file is not None:
         raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")

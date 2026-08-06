@@ -56,7 +56,8 @@ An understanding page precedes the plan when the master must first align the rea
 - Not registered in the plan registry, no verify worker, and take off does not apply. The
   user confirms by answering the numbered divergences in chat; unmentioned items take
   their recommendation. Confirmation is ordinary feedback and introduces no new approval token.
-- The subsequent plan's section 1 references the confirmed understanding's file path.
+- The subsequent plan carries the confirmed understanding's file path as a header
+  meta chip; section 1 states the goal in its own words.
 
 ## Plan
 
@@ -101,10 +102,12 @@ An understanding page precedes the plan when the master must first align the rea
   a registered plan, so the goal it measures against has one home and the plan is listed
   while the rounds run.
 - Verify checks fidelity — claims against evidence — and adequacy: whether the design,
-  assumed accurate and implemented, entails what section 1 claims. Quote the confirmed
-  understanding's file path in the spec as the adequacy reference when one exists;
-  otherwise quote the originating request. Without one of these, adequacy cannot judge
-  section 1 against what was asked.
+  assumed accurate and implemented, entails what section 1 claims. Adequacy reads
+  section 1 as the goal statement only; scope boundaries, thresholds, and exemptions
+  stated in Context, 4.1, or Trade-offs bind adequacy equally, so section 1 never
+  restates them. Quote the confirmed understanding's file path in the spec as the
+  adequacy reference when one exists; otherwise quote the originating request. Without
+  one of these, adequacy cannot judge section 1 against what was asked.
 - Every spec declares its scope, and a spec that declares neither is verified as full.
   The first round of a lineage declares full; a revision round answering findings
   declares delta and re-checks the declared terms, their dependents, and whether prior

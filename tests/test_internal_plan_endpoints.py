@@ -50,7 +50,8 @@ def _build_app(
 def _write_artifact(cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html") -> str:
   artifacts_dir = cfg.sessions_dir / session_id / "artifacts"
   artifacts_dir.mkdir(parents=True, exist_ok=True)
-  (artifacts_dir / name).write_text("<html>plan</html>", encoding="utf-8")
+  (artifacts_dir / name).write_text(
+      "<html><section><h2>1 Problem / Goal</h2><p>Ship the fix.</p></section></html>", encoding="utf-8")
   return f"artifacts/{name}"
 
 

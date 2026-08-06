@@ -33,10 +33,14 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def _write_artifact(cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html") -> str:
+_GOAL_OK_HTML = "<html><section><h2>1 Problem / Goal</h2><p>Ship the fix.</p></section></html>"
+
+
+def _write_artifact(
+    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str = _GOAL_OK_HTML) -> str:
   artifacts_dir = cfg.sessions_dir / session_id / "artifacts"
   artifacts_dir.mkdir(parents=True, exist_ok=True)
-  (artifacts_dir / name).write_text("<html>plan</html>", encoding="utf-8")
+  (artifacts_dir / name).write_text(content, encoding="utf-8")
   return f"artifacts/{name}"
 
 
@@ -749,3 +753,46 @@ async def test_present_stores_initial_trigger(tmp_path: Path) -> None:
   await plan_mgr.present(meta.id, file=f1, title="P1")
   data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
   assert data["plans"][0]["versions"][0]["trigger"] == "initial"
+
+
+# ---------------------------------------------------------------------------
+# Goal budget gate: present/amend reject an over-budget Problem / Goal section
+# ---------------------------------------------------------------------------
+
+
+def _goal_doc(goal_text: str) -> str:
+  return f"<html><section><h2>1 Problem / Goal</h2><p>{goal_text}</p></section></html>"
+
+
+@pytest.mark.asyncio
+async def test_present_rejects_goal_over_budget_with_measured_value(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_goal_doc("x" * 241))
+  with pytest.raises(ValueError, match=r"241 weighted chars \(budget 240\)"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+
+@pytest.mark.asyncio
+async def test_present_accepts_goal_at_budget(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_goal_doc("x" * 240))
+  result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  assert result["state"] == "awaiting approval"
+
+
+@pytest.mark.asyncio
+async def test_goal_budget_counts_cjk_double_and_gates_amend(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  at_budget = _write_artifact(cfg, meta.id, "plan_01.html", content=_goal_doc("\u4e00" * 120))
+  await plan_mgr.present(meta.id, file=at_budget, title="P1")
+  over = _write_artifact(cfg, meta.id, "plan_02.html", content=_goal_doc("\u4e00" * 121))
+  with pytest.raises(ValueError, match=r"242 weighted chars"):
+    await plan_mgr.amend(meta.id, file=over)
+
+
+@pytest.mark.asyncio
+async def test_present_rejects_artifact_without_goal_section(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content="<html>plan</html>")
+  with pytest.raises(ValueError, match="no 'Problem / Goal' section"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")

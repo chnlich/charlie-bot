@@ -34,7 +34,7 @@ _instances: dict[tuple[str, str], "_UsageInstance"] = {}
 
 ROUND_GAP_SECONDS = EXT_USAGE_ROUND_GAP_SECONDS
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-TOKEN_REFRESH_URL = "https://console.anthropic.com/v1/oauth/token"
+TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_BETA = "oauth-2025-04-20"
 # The usage endpoint rate-limits per access token, and reportedly far more
@@ -136,7 +136,8 @@ class ClaudeUsageProvider:
 
   async def fetch(self) -> dict[str, Any] | None:
     if time.time() < self._backoff_until:
-      self.last_error = "rate limited"
+      # Last_error keeps whatever armed the backoff; a backed-off account is
+      # silent and reports the cause, not that it was skipped this round.
       return None
 
     creds = await asyncio.to_thread(_read_credentials, self.credentials_path)
@@ -157,6 +158,7 @@ class ClaudeUsageProvider:
         return None
       resp = await self._get_usage(access_token)
       if resp.status_code == 401:
+        self.last_error = "auth rejected"
         self._arm_backoff()
         log.warning("ext_usage_auth_rejected_after_renewal", account=self.label, backoff_seconds=self._backoff_seconds)
         return None
@@ -193,12 +195,11 @@ class ClaudeUsageProvider:
       log.warning("ext_usage_no_refresh_token", account=self.label)
       self.last_error = "token refresh failed"
       return None
-    try:
-      return await _refresh_access_token(self.credentials_path, creds["refresh_token"])
-    except Exception as e:
-      log.warning("ext_usage_token_refresh_failed", account=self.label, error=str(e))
+    access_token = await _refresh_access_token(self.credentials_path, creds["refresh_token"])
+    if access_token is None:
       self.last_error = "token refresh failed"
       return None
+    return access_token
 
   def _arm_backoff(self) -> None:
     """Advance the shared backoff ladder: 60s first, doubling, capped at 30 minutes."""
@@ -605,19 +606,34 @@ def _write_credentials_atomically(path: Path, value: dict[str, Any]) -> None:
 
 
 async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> str | None:
-  """Renew the OAuth access token and save new credentials to the account's file."""
+  """Renew the OAuth access token and save new credentials to the account's file.
+
+  A failure returns None after logging the token endpoint's status and a
+  truncated response-body prefix. Only the error response body is logged —
+  never a request body, an access token, or a refresh token.
+  """
   client = get_http_client()
-  resp = await client.post(
-      TOKEN_REFRESH_URL,
-      json={
-          "grant_type": "refresh_token",
-          "refresh_token": refresh_token,
-          "client_id": CLIENT_ID,
-      },
-      headers={"User-Agent": USER_AGENT},
-      timeout=HTTP_OAUTH_TIMEOUT,
-  )
-  resp.raise_for_status()
+  try:
+    resp = await client.post(
+        TOKEN_REFRESH_URL,
+        json={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": CLIENT_ID,
+        },
+        headers={"User-Agent": USER_AGENT},
+        timeout=HTTP_OAUTH_TIMEOUT,
+    )
+  except Exception:
+    log.exception("ext_usage_token_refresh_failed")
+    return None
+  if resp.status_code >= 400:
+    log.warning(
+        "ext_usage_token_refresh_failed",
+        status_code=resp.status_code,
+        body=resp.text[:200],
+    )
+    return None
   token_data = resp.json()
 
   new_access = token_data["access_token"]

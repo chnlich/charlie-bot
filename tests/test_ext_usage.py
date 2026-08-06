@@ -1092,9 +1092,10 @@ _STALE_EXPIRES_AT_MS = 1_700_000_000_000
 
 class _FakeResponse:
 
-  def __init__(self, status_code: int, payload: dict) -> None:
+  def __init__(self, status_code: int, payload: dict, text: str = "") -> None:
     self.status_code = status_code
     self._payload = payload
+    self.text = text
 
   def json(self) -> dict:
     return self._payload
@@ -1108,12 +1109,15 @@ class _FakeUsageHTTP:
   """Scripted stand-in for the shared client that records every outbound call."""
 
   def __init__(self, get_statuses: list[int], *, renewal: dict | None = None,
-               on_get: Callable[[int], None] | None = None) -> None:
+               on_get: Callable[[int], None] | None = None,
+               renewal_status: int = 200, renewal_body: str = "") -> None:
     self._get_statuses = list(get_statuses)
     self._renewal = renewal if renewal is not None else {"access_token": "tok-new",
                                                          "refresh_token": "ref-new",
                                                          "expires_in": 28800}
     self._on_get = on_get
+    self._renewal_status = renewal_status
+    self._renewal_body = renewal_body
     self.gets: list[dict] = []
     self.posts: list[dict] = []
 
@@ -1126,7 +1130,7 @@ class _FakeUsageHTTP:
 
   async def post(self, url, json=None, headers=None, timeout=None):
     self.posts.append({"url": url, "json": dict(json or {}), "headers": dict(headers or {})})
-    return _FakeResponse(200, self._renewal)
+    return _FakeResponse(self._renewal_status, self._renewal, text=self._renewal_body)
 
 
 def _write_credentials(path, *, access="tok-stored", refresh="ref-stored",
@@ -1241,3 +1245,57 @@ async def test_claude_requests_identify_as_claude_code(monkeypatch, tmp_path) ->
 
   assert all(call["headers"]["User-Agent"].startswith("claude-code/") for call in fake.gets)
   assert all(call["headers"]["User-Agent"].startswith("claude-code/") for call in fake.posts)
+
+
+@pytest.mark.asyncio
+async def test_claude_renewal_posts_to_the_platform_token_endpoint(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401, 200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  await provider.fetch()
+
+  # The recorded request, not the module constant: proving the constant is
+  # itself proves nothing.
+  assert fake.posts[0]["url"] == "https://platform.claude.com/v1/oauth/token"
+
+
+@pytest.mark.asyncio
+async def test_claude_renewal_failure_arms_backoff_and_reports_token_refresh_failed(
+    monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401], renewal_body="boom", renewal_status=400)
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  assert await provider.fetch() is None
+  assert provider.last_error == "token refresh failed"
+  assert provider._backoff_until > time.time()
+  calls_after_first_fetch = (len(fake.gets), len(fake.posts))
+
+  assert await provider.fetch() is None
+  # A backed-off account is silent and reports what armed the backoff.
+  assert provider.last_error == "token refresh failed"
+  assert (len(fake.gets), len(fake.posts)) == calls_after_first_fetch
+
+
+@pytest.mark.asyncio
+async def test_claude_rate_limited_arms_backoff_and_reports_rate_limited(
+    monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([429])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  assert await provider.fetch() is None
+  assert provider.last_error == "rate limited"
+  assert provider._backoff_until > time.time()
+
+  assert await provider.fetch() is None
+  assert provider.last_error == "rate limited"
+
+
+@pytest.mark.asyncio
+async def test_claude_renewal_succeeds_but_retried_get_401_reports_auth_rejected(
+    monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([401, 401])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+
+  assert await provider.fetch() is None
+  assert provider.last_error == "auth rejected"
+  assert provider._backoff_until > time.time()

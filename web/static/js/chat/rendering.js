@@ -129,36 +129,32 @@ function isTurnSpanNode(el) {
 function collectTurns(root) {
   const turns = [];
   let nodes = [];
-  let leading = true;
 
   Array.from(root.children).forEach(el => {
     if (el.classList.contains('turn-wrap')) {
       nodes = [];
-      leading = false;
       return;
     }
     if (!isTurnSpanNode(el)) return;
     nodes.push(el);
     if (isStableRenderedMessage(el) && renderedMessageRole(el) === 'separator') {
-      const turn = describeTurn(nodes, leading);
+      const turn = describeTurn(nodes);
       if (turn) turns.push(turn);
       nodes = [];
-      leading = false;
     }
   });
 
   return turns;
 }
 
-// The parts of one finished turn. Null for a span that stays flat: a leading
-// span whose stimulus was left on an earlier page, or a bare separator.
-function describeTurn(nodes, leading) {
+// The parts of one finished turn. Null for a span that stays flat: a bare
+// separator with an empty body.
+function describeTurn(nodes) {
   const messages = nodes.filter(isStableRenderedMessage);
   const separator = messages[messages.length - 1];
   const body = messages.slice(0, -1);
   const conclusion = lastMessageWithRole(body, 'assistant');
   const stimulus = lastStimulusBefore(body, conclusion);
-  if (!stimulus && leading) return null;
   const head = stimulus || body[0];
   if (!head) return null;
   const foldRange = conclusion

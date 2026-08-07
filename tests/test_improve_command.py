@@ -1,5 +1,6 @@
 """Tests for the iterative improve loop orchestrator."""
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -440,6 +441,33 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
   return spawn_requests, triggered_payloads
 
 
+def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str = "0", tip: str = "a" * 40) -> list[tuple]:
+  """Monkeypatch the shared-worktree git helpers used for the commit delta.
+
+  ``rev-parse HEAD`` returns ``tip`` on every call, ``rev-list --count`` returns
+  ``count``, and ``diff --shortstat`` returns a fixed line. Returns the recorded
+  args so tests can assert the git commands that actually ran.
+  """
+  calls: list[tuple] = []
+
+  async def fake_rev_parse(repo_path: Path, ref: str) -> str:
+    del repo_path, ref
+    return tip
+
+  async def fake_stdout(repo_path: Path, *args: str, **_kwargs: object) -> tuple[bool, str, str]:
+    del repo_path, _kwargs
+    calls.append(args)
+    if args[:2] == ("rev-list", "--count"):
+      return True, count, ""
+    if args[:2] == ("diff", "--shortstat"):
+      return True, "1 file changed, 1 insertion(+)", ""
+    return True, "", ""
+
+  monkeypatch.setattr(improve_command, "_git_rev_parse", fake_rev_parse)
+  monkeypatch.setattr(improve_command, "_git_stdout", fake_stdout)
+  return calls
+
+
 @pytest.mark.asyncio
 async def test_run_improve_loop_stops_on_quota_blocker_without_incrementing_iteration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -839,7 +867,7 @@ async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeyp
 @pytest.mark.asyncio
 async def test_run_improve_loop_injects_previous_summaries_in_next_description(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Iteration N>1 sees summaries collected from earlier iterations."""
+  """Iteration N>1 sees summaries sourced from earlier iteration report files."""
   cfg = _make_cfg(tmp_path)
   session_mgr = _FakeImproveSessionManager()
   thread_mgr = _FakeImproveThreadManager(
@@ -847,7 +875,7 @@ async def test_run_improve_loop_injects_previous_summaries_in_next_description(
       {
           "thread-1": [{
               "type": "result",
-              "result": "iter1 measured auth bottleneck"
+              "result": "iter1 event text that must NOT be the summary"
           }],
           "thread-2": [{
               "type": "result",
@@ -860,12 +888,19 @@ async def test_run_improve_loop_injects_previous_summaries_in_next_description(
       },
   )
   _patch_improve_loop_io(monkeypatch)
+  _patch_git(monkeypatch, count="1")
 
+  iter1_report = (
+      "## Iter 1 — completed\n"
+      "### What Changed\n- did the work\n"
+      "### Commits\n- 1111111 did the work\n")
   descriptions: list[str] = []
 
   async def capturing_spawn_worker(*args, **kwargs) -> None:
-    del kwargs
+    request = kwargs["request"]
     descriptions.append(args[1])
+    if request.iteration_number == 1:
+      (Path(request.loop_dir) / f'iter_{request.iteration_number:04d}.md').write_text(iter1_report)
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
 
@@ -885,7 +920,8 @@ async def test_run_improve_loop_injects_previous_summaries_in_next_description(
 
   assert len(descriptions) == 2
   assert "Previous iteration summaries:" not in descriptions[0]
-  assert "Previous iteration summaries:\niter1 measured auth bottleneck" in descriptions[1]
+  assert "iter1 event text that must NOT be the summary" not in descriptions[1]
+  assert "Previous iteration summaries:\n## Iter 1 — completed" in descriptions[1]
 
 
 @pytest.mark.asyncio
@@ -1072,3 +1108,240 @@ async def test_run_improve_loop_fails_when_goal_file_missing_mid_loop(
   assert state.status == "failed"
   assert state.iterations_completed == 1
   assert not (cfg.sessions_dir / "missing-goal-session" / "loops" / "active.lock").exists()
+
+
+# ---------------------------------------------------------------------------
+# Invalid-iteration gate: validity, quarantine, and wake-payload fidelity
+# ---------------------------------------------------------------------------
+
+
+def _valid_report(iteration: int, *, em_dash: bool = True) -> str:
+  dash = "\u2014" if em_dash else "-"
+  return f"## Iter {iteration} {dash} completed\n### What Changed\n- did the work\n### Commits\n- 1111111 did the work\n"
+
+
+def _nothing_done_report(iteration: int) -> str:
+  return (
+      f"## Iter {iteration} \u2014 completed\n"
+      "### What Changed\n- investigated, nothing changed\n"
+      "### Commits\n- none \u2014 zero progress, no regression introduced\n")
+
+
+async def _pump_event_loop() -> None:
+  for _ in range(20):
+    await asyncio.sleep(0)
+
+
+async def _gate_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    iterations: int,
+    reports: dict[int, str | None],
+    count: str = "1",
+) -> tuple[Any, _FakeImproveSessionManager, list[dict], list[str]]:
+  """Run a loop writing the given per-iteration reports.
+
+  Returns (cfg, session_mgr, triggered_payloads, descriptions). ``reports`` maps an
+  iteration number to its report text (None = worker wrote no report that iteration);
+  ``descriptions`` holds each spawned worker's full description in iteration order.
+  """
+  cfg = _make_cfg(tmp_path)
+  session_mgr = _FakeImproveSessionManager()
+  events = {f"thread-{k}": [{"type": "result", "result": f"event text iter{k}"}] for k in range(1, iterations + 1)}
+  statuses = {f"thread-{k}": ThreadStatus.COMPLETED for k in range(1, iterations + 1)}
+  thread_mgr = _FakeImproveThreadManager(tmp_path, events, statuses)
+  _spawns, triggered_payloads = _patch_improve_loop_io(monkeypatch)
+  _patch_git(monkeypatch, count=count)
+
+  descriptions: list[str] = []
+
+  async def writing_spawn_worker(*args: Any, **kwargs: Any) -> None:
+    description = args[1]
+    request = kwargs["request"]
+    assert isinstance(request, SpawnRequest)
+    descriptions.append(description)
+    report = reports.get(request.iteration_number)
+    if report is not None:
+      (Path(request.loop_dir) / f'iter_{request.iteration_number:04d}.md').write_text(report)
+
+  monkeypatch.setattr("src.core.spawner.spawn_worker", writing_spawn_worker)
+
+  await improve_command.run_improve_loop(
+      session_id="gate-session",
+      repo_path="/tmp/repo",
+      iterations=iterations,
+      goal="original goal",
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+  await _pump_event_loop()
+  return cfg, session_mgr, triggered_payloads, descriptions
+
+
+def _iter_broadcast(session_mgr: _FakeImproveSessionManager, iteration: int) -> dict:
+  return next(
+      p for p in session_mgr.persisted_events
+      if p.get("type") == "improve_iteration_completed" and p.get("iteration") == iteration)
+
+
+def _iter_trigger(payloads: list[dict], iteration: int) -> dict:
+  return next(
+      p for p in payloads
+      if p.get("type") == "improve_iteration_completed" and p.get("iteration") == iteration)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "report,count,expected_valid,expected_reason",
+    [
+        (None, "1", False, "missing_report"),
+        ("no heading here at all\n", "1", False, "malformed_report"),
+        ("## Iter 1 \u2014 completed\n### What Changed\n- x\n", "0", False,
+         "no_commit_no_verdict"),
+        (_valid_report(1), "1", True, None),
+        (_nothing_done_report(1), "0", True, None),
+        (_valid_report(1, em_dash=False), "1", True, None),
+    ],
+)
+async def test_iteration_validity_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    report: str | None,
+    count: str,
+    expected_valid: bool,
+    expected_reason: str | None,
+) -> None:
+  """Each validity path yields the expected verdict on broadcast and trigger payloads."""
+  _cfg, session_mgr, triggered_payloads, _descs = await _gate_loop(
+      tmp_path, monkeypatch, iterations=1, reports={1: report}, count=count)
+
+  broadcast = _iter_broadcast(session_mgr, 1)
+  trigger = _iter_trigger(triggered_payloads, 1)
+  assert broadcast["report_valid"] is expected_valid
+  assert broadcast["invalid_reason"] == expected_reason
+  assert trigger["report_valid"] is expected_valid
+  assert trigger["invalid_reason"] == expected_reason
+  assert set(broadcast.keys()) >= {
+      "report_path", "report_valid", "invalid_reason", "tip", "commits_added", "diffstat"}
+  assert set(trigger.keys()) >= {
+      "report_path", "report_valid", "invalid_reason", "tip", "commits_added", "diffstat"}
+
+
+@pytest.mark.asyncio
+async def test_invalid_iteration_is_quarantined_across_all_channels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An invalid iteration's event summary leaks nowhere; the placeholder is used everywhere."""
+  _cfg, session_mgr, triggered_payloads, _descriptions = await _gate_loop(
+      tmp_path,
+      monkeypatch,
+      iterations=2,
+      # Iter 1: heading present, zero commits, no `### Commits` — no_commit_no_verdict.
+      reports={1: "## Iter 1 \u2014 completed\n### What Changed\n- x\n"},
+      count="0",
+  )
+
+  # The event-extracted text must not leak into the broadcast event.
+  assert all("event text iter1" not in str(p) for p in session_mgr.persisted_events)
+  iter_trigger = _iter_trigger(triggered_payloads, 1)
+  assert "event text iter1" not in iter_trigger["summary"]
+
+  broadcast = _iter_broadcast(session_mgr, 1)
+  assert broadcast["report_valid"] is False
+  assert broadcast["invalid_reason"] == "no_commit_no_verdict"
+  placeholder_snip = "INVALID (no_commit_no_verdict)"
+  assert placeholder_snip in broadcast["summary"]
+  assert placeholder_snip in iter_trigger["summary"]
+
+  # The invalid iteration still consumes a slot and still wakes the master.
+  assert iter_trigger["iteration"] == 1
+  state = await load_loop_state("gate-session", 1, _cfg)
+  assert state is not None
+
+
+@pytest.mark.asyncio
+async def test_invalid_placeholder_feeds_next_worker_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The placeholder (not event text) reaches the next worker's description."""
+  _cfg, session_mgr, _triggered_payloads, descriptions = await _gate_loop(
+      tmp_path,
+      monkeypatch,
+      iterations=2,
+      reports={1: "## Iter 1 \u2014 completed\n### What Changed\n- x\n"},  # no_commit_no_verdict
+      count="0",
+  )
+
+  assert len(descriptions) == 2
+  # Iteration 2's worker sees only the placeholder, never the event text.
+  assert "Iteration 1 INVALID (no_commit_no_verdict)" in descriptions[1]
+  assert "event text iter1" not in descriptions[1]
+
+  # The placeholder also replaces the event text in both the broadcast and trigger.
+  broadcast = _iter_broadcast(session_mgr, 1)
+  assert "INVALID (no_commit_no_verdict)" in broadcast["summary"]
+  assert "event text iter1" not in broadcast["summary"]
+
+
+@pytest.mark.asyncio
+async def test_wake_payload_fidelity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The per-iteration payload carries report-path/fidelity fields and a report-head summary."""
+  cfg = _make_cfg(tmp_path)
+  loop_dir = cfg.sessions_dir / "gate-session" / "loops" / "1"
+  report_text = "## Iter 1 \u2014 completed\n### What Changed\n- work\n### Commits\n- 1111111 work\n"
+  _cfg, session_mgr, triggered_payloads, _descriptions = await _gate_loop(
+      tmp_path, monkeypatch, iterations=1, reports={1: report_text}, count="1")
+
+  trigger = _iter_trigger(triggered_payloads, 1)
+  expected_report_path = str(loop_dir / "iter_0001.md")
+  assert trigger["report_path"] == expected_report_path
+  assert Path(trigger["report_path"]).is_absolute()
+  assert trigger["report_valid"] is True
+  assert trigger["invalid_reason"] is None
+  assert trigger["tip"] == "a" * 40
+  assert trigger["commits_added"] == 1
+  assert trigger["diffstat"]
+  # Summary is sourced from the report file head, not the event stream.
+  assert trigger["summary"].startswith("## Iter 1")
+  assert "event text iter1" not in trigger["summary"]
+
+  broadcast = _iter_broadcast(session_mgr, 1)
+  assert broadcast["report_path"] == expected_report_path
+  assert broadcast["diffstat"]
+
+
+@pytest.mark.asyncio
+async def test_diffstat_empty_when_zero_commits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """diffstat is '' and commits_added is 0 when no commits were added this iteration."""
+  _cfg, _session_mgr, triggered_payloads, _descriptions = await _gate_loop(
+      tmp_path, monkeypatch, iterations=1, reports={1: _nothing_done_report(1)}, count="0")
+
+  trigger = _iter_trigger(triggered_payloads, 1)
+  assert trigger["commits_added"] == 0
+  assert trigger["diffstat"] == ""
+  assert trigger["report_valid"] is True
+
+
+@pytest.mark.asyncio
+async def test_fallback_report_write_carries_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A missing worker report gets a fallback write prefixed by the marker and a missing verdict."""
+  cfg = _make_cfg(tmp_path)
+  _cfg, session_mgr, triggered_payloads, _descriptions = await _gate_loop(
+      tmp_path, monkeypatch, iterations=1, reports={1: None}, count="1")
+
+  marker = "<!-- runner fallback: worker wrote no report -->"
+  report_path = cfg.sessions_dir / "gate-session" / "loops" / "1" / "iter_0001.md"
+  assert report_path.exists()
+  text = report_path.read_text()
+  assert text.startswith(marker)
+
+  # Validity was decided as missing_report BEFORE the fallback write.
+  trigger = _iter_trigger(triggered_payloads, 1)
+  assert trigger["report_valid"] is False
+  assert trigger["invalid_reason"] == "missing_report"
+  assert marker not in trigger["summary"]
+  assert marker in text

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -19,17 +20,20 @@ from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import (
-    git_create_worktree,
-    git_current_branch,
-    git_push_branch,
-    git_push_refspec,
-    git_worktree_dir_name,
-    git_worktree_prune,
-    git_worktree_remove,
+  _git_rev_parse,
+  _git_stdout,
+  git_create_worktree,
+  git_current_branch,
+  git_push_branch,
+  git_push_refspec,
+  git_worktree_dir_name,
+  git_worktree_prune,
+  git_worktree_remove,
 )
 from src.core.master_trigger import trigger_master
 from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
 from src.core.tasks import create_logged_task
+from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
 log = structlog.get_logger()
 
@@ -274,6 +278,89 @@ async def stop_improve_loop(session_id: str, cfg: CharlieBotConfig) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _commits_section_first_none(text: str) -> bool:
+  """Return True when the report's `### Commits` section lists `none` first."""
+  lines = text.splitlines()
+  for idx, line in enumerate(lines):
+    if line.strip().startswith("### Commits"):
+      for entry in lines[idx + 1:]:
+        stripped = entry.strip()
+        if not stripped:
+          continue
+        if stripped.startswith("- "):
+          return stripped[2:].strip().startswith("none")
+        break
+      break
+  return False
+
+
+async def _iter_report_validity(
+    report_path: Path,
+    iteration: int,
+    commits_added: int,
+) -> tuple[bool, Optional[str]]:
+  """Mechanically judge an iteration's report validity.
+
+  Valid ⇔ the report exists, contains a `## Iter <n>` heading (em dash or
+  hyphen tolerated), and either commits were added or the report carries an
+  explicit zero-progress verdict (`### Commits` with `- none — <verdict>`).
+  Returns (valid, invalid_reason), invalid_reason in
+  {missing_report, malformed_report, no_commit_no_verdict} or None when valid.
+  """
+  if not await asyncio.to_thread(report_path.exists):
+    return False, "missing_report"
+  text = await asyncio.to_thread(report_path.read_text)
+  if not re.search(rf"^## Iter {iteration}\b", text, flags=re.MULTILINE):
+    return False, "malformed_report"
+  if commits_added > 0 or _commits_section_first_none(text):
+    return True, None
+  return False, "no_commit_no_verdict"
+
+
+def _invalid_iteration_summary(
+    iteration: int,
+    reason: str,
+    commits_added: int,
+    tip_before: str,
+    tip_after: str,
+    report_path: Path,
+) -> str:
+  """Build the fixed single-line placeholder for an invalid iteration."""
+  return (
+      f"Iteration {iteration} INVALID ({reason}); commits_added={commits_added}; "
+      f"tip {tip_before}..{tip_after}; report: {report_path}")
+
+
+async def _worktree_commit_delta(wt_path: Path, tip_before: str) -> tuple[str, int, str]:
+  """Compute (tip_after, commits_added, diffstat) for the iteration's commits."""
+  tip_after = await _git_rev_parse(wt_path, "HEAD") or ""
+  commits_added = 0
+  diffstat = ""
+  if tip_before and tip_after:
+    ok, out, _ = await _git_stdout(
+        wt_path,
+        "rev-list",
+        "--count",
+        f"{tip_before}..{tip_after}",
+        timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+        timeout_label="git rev-list --count",
+    )
+    if ok and out.isdigit():
+      commits_added = int(out)
+    if commits_added > 0:
+      ok, ds, _ = await _git_stdout(
+          wt_path,
+          "diff",
+          "--shortstat",
+          f"{tip_before}..{tip_after}",
+          timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+          timeout_label="git diff --shortstat",
+      )
+      if ok:
+        diffstat = ds
+  return tip_after, commits_added, diffstat
+
+
 def _extract_iteration_summary(events: list[dict], iteration: int, status: str) -> str:
   """Extract a summary from worker events, preferring the result event."""
   for event in reversed(events):
@@ -466,6 +553,7 @@ async def _run_single_iteration(
     raise ValueError(f"session '{session_id}' not found")
 
   # Create thread and spawn worker
+  tip_before = await _git_rev_parse(wt_path, "HEAD") or ""
   thread = await thread_mgr.create_thread(meta, description, require_review=False)
   await spawn_worker(
       session_id,
@@ -490,7 +578,8 @@ async def _run_single_iteration(
       ),
   )
 
-  # Successful (or non-quota failure) — extract summary and proceed
+  # Successful (or non-quota failure) — mechanically judge validity from the
+  # report file and git state, then source the summary from the report head.
   thread_meta = await thread_mgr.get_thread(session_id, thread.id)
   status = thread_meta.status.value if thread_meta else "unknown"
   events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
@@ -501,17 +590,37 @@ async def _run_single_iteration(
       summary = _extract_iteration_summary(events, i, status)
       log.warning("improve_iteration_blocked", session=session_id, iteration=i, reason=blocker_reason)
       raise _ImproveLoopBlockedError(i, blocker_reason, summary)
-  summary = _extract_iteration_summary(events, i, status)
+
+  report_path = loop_dir / f'iter_{i:04d}.md'
+  tip_after, commits_added, diffstat = await _worktree_commit_delta(wt_path, tip_before)
+  report_valid, invalid_reason = await _iter_report_validity(report_path, i, commits_added)
+
+  if report_valid:
+    summary = (await asyncio.to_thread(report_path.read_text))[:500]
+  else:
+    summary = _invalid_iteration_summary(i, invalid_reason, commits_added, tip_before, tip_after, report_path)
   previous_summaries.append(summary)
 
-  # Write fallback report if the worker didn't write one
-  report_path = loop_dir / f'iter_{i:04d}.md'
+  # Write a fallback report if the worker wrote none. Validity was already
+  # decided as missing_report before this write, so the fallback never flips the
+  # verdict. The event-extracted summary is used only here, never as loop context.
   if not await asyncio.to_thread(report_path.exists):
-    await asyncio.to_thread(report_path.write_text, summary)
+    fallback_body = _extract_iteration_summary(events, i, status)
+    await asyncio.to_thread(
+        report_path.write_text, "<!-- runner fallback: worker wrote no report -->\n" + fallback_body)
 
-  log.info("improve_iteration_completed", session=session_id, iteration=i, status=status)
+  log.info(
+      "improve_iteration_completed",
+      session=session_id,
+      iteration=i,
+      status=status,
+      report_valid=report_valid,
+      invalid_reason=invalid_reason,
+      commits_added=commits_added,
+  )
 
-  # Broadcast progress event
+  # Broadcast progress event, sourced from the report head/placeholder like the
+  # master wake payload.
   await session_mgr.persist_and_broadcast(
       session_id, {
           "type": ET.IMPROVE_ITERATION_COMPLETED,
@@ -519,6 +628,12 @@ async def _run_single_iteration(
           "total_iterations": iterations,
           "status": status,
           "summary": summary[:200],
+          "report_path": str(report_path),
+          "report_valid": report_valid,
+          "invalid_reason": invalid_reason,
+          "tip": tip_after,
+          "commits_added": commits_added,
+          "diffstat": diffstat,
       })
 
   # Trigger master after each iteration so it sees progress
@@ -530,7 +645,18 @@ async def _run_single_iteration(
       'status': status,
       'summary': summary[:200],
       'work_branch': work_branch,
-      'instructions': "Report iteration progress with commit identifier and link. Briefly assess and recommend.",
+      'report_path': str(report_path),
+      'report_valid': report_valid,
+      'invalid_reason': invalid_reason,
+      'tip': tip_after,
+      'commits_added': commits_added,
+      'diffstat': diffstat,
+      'instructions': (
+          "Audit this iteration before reporting: read the report file at report_path and check its "
+          "verdict and KPI readings against the live goal. Report iteration progress with commit "
+          "identifier and link. If drift signals are present (report_valid is false, or the report "
+          "omits a goal-declared KPI or verdict), apply a bounded live-goal edit per the "
+          "improve-goal skill and quote the edit in full in your chat report."),
   }
   create_logged_task(
       trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr),

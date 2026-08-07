@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token usage by model</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --mut2:#7b8694; --acc:#1163c0; --grid:#e6eaef;
+    --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg:#121213; --panel:#1a1a19; --panel2:#232322; --bd:#38383a;
+      --tx:#f2f2ef; --mut:#c3c2b7; --mut2:#9a9a92; --acc:#6fa8e8; --grid:#2c2c2b;
+      --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:#121213; --panel:#1a1a19; --panel2:#232322; --bd:#38383a;
+    --tx:#f2f2ef; --mut:#c3c2b7; --mut2:#9a9a92; --acc:#6fa8e8; --grid:#2c2c2b;
+    --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--tx); padding:26px 24px 40px;
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:1080px; margin:0 auto }
+  h1 { font-size:22px; margin:0 0 6px; letter-spacing:-.2px }
+  .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
+  .meta { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 22px }
+  .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
+    border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }
+  h2 { font-size:15px; margin:30px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--bd);
+    display:flex; align-items:center; gap:8px }
+  h2 .n { display:inline-flex; width:22px; height:22px; border-radius:6px; background:var(--acc);
+    color:#fff; font-size:12px; font-weight:700; align-items:center; justify-content:center; flex:0 0 auto }
+  p { margin:8px 0 }
+  ul { margin:8px 0 0; padding-left:20px } li { margin:4px 0 }
+  code { font-family:var(--mono); background:var(--panel2); border:1px solid var(--bd);
+    border-radius:4px; padding:1px 5px; font-size:12.5px }
+  .hero { display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin:0 0 4px }
+  .heroCard { background:var(--panel); border:1px solid var(--bd); border-radius:12px;
+    padding:16px 20px; flex:1 1 240px; min-width:220px }
+  .heroCard .lab { font-size:12px; color:var(--mut); margin:0 0 2px }
+  .heroCard .val { font-size:50px; line-height:1.05; font-weight:640; letter-spacing:-1.5px }
+  .heroCard .foot { font-size:12px; color:var(--mut2); margin-top:4px }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; flex:2 1 420px }
+  .tile { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:13px 15px }
+  .tile .lab { font-size:11.5px; color:var(--mut) }
+  .tile .val { font-size:24px; font-weight:620; letter-spacing:-.4px; margin-top:2px }
+  .tile .foot { font-size:11.5px; color:var(--mut2); margin-top:3px }
+  .card { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:16px 18px 12px }
+  .legend { display:flex; flex-wrap:wrap; gap:16px; margin:0 0 14px; font-size:12.5px; color:var(--mut) }
+  .legend .k { display:inline-flex; align-items:center; gap:7px }
+  .legend .sw { width:11px; height:11px; border-radius:3px; display:inline-block }
+  .chart { display:grid; grid-template-columns:auto 1fr auto; gap:0 12px; align-items:center }
+  .chart .rw { display:grid; grid-template-columns:subgrid; grid-column:1/4; padding:3px 0; outline:none; border-radius:6px }
+  .chart .rw:hover, .chart .rw:focus-visible { background:var(--panel2) }
+  .chart .nm { font-size:12.5px; color:var(--tx); white-space:nowrap; padding-left:4px }
+  .chart .track { position:relative; height:22px }
+  .chart .bar { position:absolute; left:0; top:2px; height:18px; border-radius:0 4px 4px 0; min-width:2px }
+  .chart .vl { font-size:12px; color:var(--mut); font-variant-numeric:tabular-nums; white-space:nowrap; text-align:right; padding-right:4px }
+  .axis { position:relative; height:20px; grid-column:2/3; margin-top:2px }
+  .axis span { position:absolute; top:2px; transform:translateX(-50%); font-size:11px; color:var(--mut2);
+    font-variant-numeric:tabular-nums; white-space:nowrap }
+  .gridlines { position:absolute; inset:0; pointer-events:none }
+  .gridlines i { position:absolute; top:0; bottom:0; width:1px; background:var(--grid) }
+  .plot { position:relative; grid-column:1/4; display:grid; grid-template-columns:subgrid }
+  .tip { position:fixed; z-index:9; pointer-events:none; opacity:0; transition:opacity .09s;
+    background:var(--panel); border:1px solid var(--bd); border-radius:9px; padding:9px 11px;
+    box-shadow:0 6px 22px rgba(0,0,0,.16); font-size:12px; min-width:210px }
+  .tip .t { font-weight:650; margin-bottom:5px; display:flex; align-items:center; gap:7px }
+  .tip .t .sw { width:10px; height:3px; border-radius:2px; display:inline-block }
+  .tip table { border-collapse:collapse; width:100% }
+  .tip td { padding:1px 0; color:var(--mut) }
+  .tip td.v { text-align:right; color:var(--tx); font-weight:600; font-variant-numeric:tabular-nums; padding-left:14px }
+  table.data { border-collapse:collapse; width:100%; font-size:12.5px; font-variant-numeric:tabular-nums }
+  table.data th, table.data td { border:1px solid var(--bd); padding:6px 9px; text-align:right; white-space:nowrap }
+  table.data th { background:var(--panel2); color:var(--acc); font-weight:600; text-align:right }
+  table.data th:first-child, table.data td:first-child { text-align:left }
+  table.data td.mdl { display:flex; align-items:center; gap:7px }
+  table.data td.mdl .sw { width:9px; height:9px; border-radius:2px; flex:0 0 auto }
+  table.data tr.acct td { color:var(--mut2); font-size:11.5px; background:var(--panel) }
+  table.data tr.acct td:first-child { padding-left:26px }
+  table.data tr.sum td { font-weight:650; background:var(--panel2) }
+  .win { color:var(--mut2); font-family:var(--mono); font-size:11px }
+  details { margin-top:12px; border:1px solid var(--bd); border-radius:10px; background:var(--panel) }
+  details summary { cursor:pointer; padding:10px 14px; font-size:13px; font-weight:600; color:var(--mut) }
+  details[open] summary { color:var(--tx); border-bottom:1px solid var(--bd) }
+  details .body { padding:10px 16px 14px }
+  .note { font-family:var(--mono); font-size:11.5px; color:var(--mut); margin:3px 0 }
+  .foot { color:var(--mut2); font-size:12px; margin-top:22px }
+  @media (max-width:760px) { body { padding:18px 14px 30px } .heroCard .val { font-size:40px } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Token usage by model</h1>
+  <p class="sub">Across the <b>{{ window[0] }}</b> to <b>{{ window[1] }}</b> range covered by this
+  host&rsquo;s local logs, <b>{{ ctx.rows|length }}</b> models consumed <b>{{ ctx.tot_compact }}</b> tokens in total.
+  The top model by total is <b>{{ ctx.top_escaped }}</b> (<code>{{ ctx.top_compact }}</code>); of that,
+  <b>{{ "%.1f"%cache_share }}%</b> was cache reads (cached input tokens, cheapest per token), while output tokens
+  billed for real were only {{ ctx.out_compact }} in total, with the top rank going to <b>{{ ctx.top_out_escaped }}</b>
+  (<code>{{ ctx.top_out_compact }}</code>). Usage for the same model across multiple subscription accounts is merged into one row.</p>
+  <div class="meta">
+    <span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }}</span>
+    <span class="mtag">sources &middot; Claude Code / Codex / opencode local logs</span>
+    <span class="mtag">scope &middot; one model = one row (merged across subscriptions)</span>
+    <span class="mtag">API calls &middot; {{ ctx.tot_calls }}</span>
+    <span class="mtag">generated &middot; {{ generated }}</span>
+  </div>
+
+  <div class="hero">
+    <div class="heroCard">
+      <p class="lab">Total tokens, all models</p>
+      <div class="val">{{ ctx.tot_compact }}</div>
+      <p class="foot">= input {{ ctx.in_compact }} + output {{ ctx.out_compact }}</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><p class="lab">output tokens</p><div class="val">{{ ctx.out_compact }}</div><p class="foot">{{ "%.2f"%(ctx.out_share*100) }}% of the total</p></div>
+      <div class="tile"><p class="lab">cache read share</p><div class="val">{{ "%.1f"%cache_share }}%</div><p class="foot">cached input {{ ctx.cr_compact }}</p></div>
+      <div class="tile"><p class="lab">cache write</p><div class="val">{{ ctx.cw_compact }}</div><p class="foot">written to cache; Claude Code only</p></div>
+      <div class="tile"><p class="lab">fresh input</p><div class="val">{{ ctx.fresh_compact }}</div><p class="foot">cache miss, {{ "%.1f"%ctx.fresh_percent }}% of the total</p></div>
+    </div>
+  </div>
+
+  <h2><span class="n">1</span>Summary</h2>
+  <ul>
+    <li><b>Scale by platform:</b>
+      Claude Code {{ ctx.per_src["Claude Code"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["Claude Code"]["share"] }}%, {{ ctx.per_src["Claude Code"]["models"] }} models),
+      opencode {{ ctx.per_src["opencode"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["opencode"]["share"] }}%, {{ ctx.per_src["opencode"]["models"] }}),
+      Codex {{ ctx.per_src["Codex"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["Codex"]["share"] }}%, {{ ctx.per_src["Codex"]["models"] }}).
+    </li>
+    <li><b>The total mostly measures cache reuse, not work done:</b> {{ "%.1f"%cache_share }}% of tokens were cache reads,
+      because a long session re-reads its whole context every turn. Ranking by output tokens reflects real production,
+      and the two rankings do not agree.</li>
+    <li><b>Self-hosted endpoints may not report cache hits:</b> their input is counted entirely as fresh input,
+      while Claude Code almost always reads input from cache, so cross-platform totals are only loosely comparable.</li>
+  </ul>
+
+  <h2><span class="n">2</span>Total tokens by model</h2>
+  <div class="card"><div class="legend" id="lg"></div><div class="chart" id="c_total"></div></div>
+
+  <h2><span class="n">3</span>Output tokens by model</h2>
+  <p style="color:var(--mut);font-size:13px;margin:0 0 10px">Output tokens are the comparably-priced basis for a model&rsquo;s
+  task cost across time, and the most expensive tier.</p>
+  <div class="card"><div class="legend" id="lg2"></div><div class="chart" id="c_out"></div></div>
+
+  <h2><span class="n">4</span>Full breakdown</h2>
+  <p style="color:var(--mut);font-size:13px;margin:0 0 10px">One row per model; indented rows below are the per-account split for that model.</p>
+  <table class="data" id="tbl"></table>
+
+  <h2><span class="n">5</span>Methodology</h2>
+  <ul>
+    <li><b>Sources:</b> Claude Code reads each assistant message's <code>usage</code> from
+      <code>projects/**/*.jsonl</code> in every config dir; Codex reads <code>token_count</code> events from
+      <code>sessions/**/*.jsonl</code> in every home, with the model name taken from the same file&rsquo;s
+      <code>turn_context</code>; opencode reads the <code>message</code> table of its local database. All three are local logs;
+      no vendor usage API is called.</li>
+    <li><b>Dedupe:</b> Claude Code replays history verbatim on resume / fork, so responses are deduped on <code>message.id</code>.</li>
+    <li><b>Codex cumulative totals are not additive:</b> subagent threads inherit the parent&rsquo;s
+      <code>total_token_usage</code>, so summing across files double counts; the per-request
+      <code>last_token_usage</code> is summed instead, and the cumulative value only cross-checks root sessions.</li>
+    <li><b>Not covered:</b> Gemini (<code>gemini_api_key</code> direct) has no local token log; any call made on another
+      machine, or outside the config dirs / codex homes registered in <code>config.yaml</code>, is not in this table.</li>
+    <li><b>Retention:</b> the left edge {{ window[0] }} is the date of the oldest local log file, not an account start date;
+      earlier sessions that have been pruned cannot be counted.</li>
+    <li><b>Cost:</b> this reports tokens only and does not convert to money — these calls run on subscriptions, not per-token.</li>
+  </ul>
+
+  <details>
+    <summary>Self-check output</summary>
+    <div class="body">
+      {% for note in notes %}<p class="note">{{ note }}</p>{% else %}<p class="note">no notes</p>{% endfor %}
+    </div>
+  </details>
+
+  <p class="foot">Collected this session in <b>{{ "%.2f"%ctx.elapsed_s }}&thinsp;s</b>; scanned <b>{{ ctx.scanned_compact }}</b> of log data. Refresh to re-run.</p>
+</div>
+
+<div class="tip" id="tip" role="tooltip" aria-hidden="true"></div>
+
+<script>
+const DATA = {{ payload|safe }};
+const SLOT = {1:'var(--series-1)', 2:'var(--series-2)', 3:'var(--series-3)'};
+const LEG = [[1,"Claude Code"],[2,"Codex"],[3,"opencode"]];
+const SRC_SLOT = {'Claude Code':1,'Codex':2,'opencode':3};
+const fmt = n => n.toLocaleString('en-US');
+const compact = n => {
+  for (const [c,s] of [[1e9,'B'],[1e6,'M'],[1e3,'K']])
+    if (Math.abs(n) >= c) return (n/c).toFixed(2).replace(/\.?0+$/,'') + s;
+  return fmt(n);
+};
+const el = (t, cls, txt) => {
+  const e = document.createElement(t);
+  if (cls) e.className = cls;
+  if (txt !== undefined) e.textContent = txt;
+  return e;
+};
+
+for (const id of ['lg','lg2']) {
+  const box = document.getElementById(id);
+  for (const [slot, name] of LEG) {
+    const k = el('span','k');
+    const sw = el('span','sw'); sw.style.background = SLOT[slot];
+    k.append(sw, el('span', null, name));
+    box.append(k);
+  }
+}
+
+// Axis ticks at clean round numbers; the last tick covers max, so no bar overflows.
+function ticks(max) {
+  const raw = max / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1,1.5,2,2.5,3,4,5,7.5,10].map(m => m*mag).find(s => s >= raw) || 10*mag;
+  const out = [];
+  for (let v = 0; ; v += step) { out.push(v); if (v >= max - 1e-9) break; }
+  return out;
+}
+
+function bars(container, key) {
+  const host = document.getElementById(container);
+  const data = DATA.rows.slice().sort((a,b) => b[key] - a[key]);
+  const tk = ticks(data[0][key]);
+  const scale = v => (v / (tk[tk.length-1] || 1)) * 100;
+  const plot = el('div','plot');
+  const grid = el('div','gridlines');
+  for (const t of tk) { const i = el('i'); i.style.left = scale(t) + '%'; grid.append(i); }
+  for (const r of data) {
+    const row = el('div','rw');
+    row.tabIndex = 0;
+    const nm = el('div','nm'); nm.append(el('span', null, r.model));
+    const track = el('div','track');
+    const bar = el('div','bar');
+    bar.style.width = Math.max(scale(r[key]), 0.25) + '%';
+    bar.style.background = SLOT[r.slot];
+    track.append(bar);
+    row.append(nm, track, el('div','vl', compact(r[key])));
+    const show = ev => tip(ev, r);
+    row.addEventListener('pointermove', show);
+    row.addEventListener('pointerenter', show);
+    row.addEventListener('focus', show);
+    row.addEventListener('pointerleave', hide);
+    row.addEventListener('blur', hide);
+    plot.append(row);
+  }
+  const axis = el('div','axis');
+  for (const t of tk) { const s = el('span', null, compact(t)); s.style.left = scale(t) + '%'; axis.append(s); }
+  host.append(plot, el('div'), axis, el('div'));
+  // Gridlines sit behind the bars and span the bar column only.
+  plot.prepend(grid);
+  grid.style.left = plot.querySelector('.track').offsetLeft + 'px';
+  grid.style.right = host.querySelector('.vl').offsetWidth + 12 + 'px';
+  grid.style.zIndex = '0';
+  plot.querySelectorAll('.rw').forEach(r => { r.style.position = 'relative'; r.style.zIndex = '1'; });
+}
+
+const TIP = document.getElementById('tip');
+function tip(ev, r) {
+  TIP.textContent = '';
+  const t = el('div','t');
+  const sw = el('span','sw'); sw.style.background = SLOT[r.slot];
+  t.append(sw, el('span', null, r.model));
+  const tb = el('table');
+  const add = (k, v) => {
+    const tr = el('tr');
+    tr.append(el('td', null, k), el('td','v', v));
+    tb.append(tr);
+  };
+  add('total', fmt(r.total));
+  add('output', fmt(r.output));
+  add('cache read', fmt(r.cache_read));
+  add('cache write', fmt(r.cache_write));
+  add('fresh input', fmt(r.in_fresh));
+  add('API calls', fmt(r.calls));
+  add('window', r.window);
+  TIP.append(t, tb);
+  TIP.style.opacity = '1';
+  TIP.setAttribute('aria-hidden','false');
+  const box = TIP.getBoundingClientRect();
+  const src = ev.clientX ? {x: ev.clientX + 16, y: ev.clientY + 14}
+                         : (b => ({x: b.right - 40, y: b.bottom + 6}))(ev.target.getBoundingClientRect());
+  TIP.style.left = Math.min(src.x, innerWidth - box.width - 10) + 'px';
+  TIP.style.top = Math.min(src.y, innerHeight - box.height - 10) + 'px';
+}
+function hide() { TIP.style.opacity = '0'; TIP.setAttribute('aria-hidden','true'); }
+
+bars('c_total','total');
+bars('c_out','output');
+
+// Table view: the WCAG-clean twin of both charts.
+const T = document.getElementById('tbl');
+const thead = el('thead'), head = el('tr');
+for (const c of ['Model','Platform','API calls','Fresh input','Cache write','Cache read','Output','Total','Window'])
+  head.append(el('th', null, c));
+thead.append(head); T.append(thead);
+const tb = el('tbody');
+const sums = {calls:0, in_fresh:0, cache_write:0, cache_read:0, output:0, total:0};
+for (const r of DATA.rows) {
+  const tr = el('tr');
+  const td0 = el('td','mdl');
+  const sw = el('span','sw'); sw.style.background = SLOT[SRC_SLOT[r.source]];
+  td0.append(sw, el('span', null, r.model));
+  tr.append(td0, el('td', null, r.source));
+  for (const k of ['calls','in_fresh','cache_write','cache_read','output','total']) {
+    tr.append(el('td', null, fmt(r[k])));
+    sums[k] += r[k];
+  }
+  tr.append(el('td','win', r.window));
+  tb.append(tr);
+  if (r.accounts.length > 1) for (const a of r.accounts) {
+    const ar = el('tr','acct');
+    ar.append(el('td', null, '↳ ' + a.name), el('td', null, ''), el('td', null, fmt(a.calls)),
+              el('td', null, ''), el('td', null, ''), el('td', null, ''),
+              el('td', null, fmt(a.output)), el('td', null, fmt(a.total)), el('td', null, ''));
+    tb.append(ar);
+  }
+}
+const sum = el('tr','sum');
+sum.append(el('td', null, 'Sum (' + DATA.rows.length + ' models)'), el('td', null, ''));
+for (const k of ['calls','in_fresh','cache_write','cache_read','output','total']) sum.append(el('td', null, fmt(sums[k])));
+sum.append(el('td','win', {{ window_str }}));
+tb.append(sum); T.append(tb);
+</script>
+</body>
+</html>

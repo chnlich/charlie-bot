@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,6 +11,15 @@ from starlette.requests import Request
 from src.api import pages
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
+from src.core.token_tally import AccountRow, ModelRow, TokenTally
+
+
+@pytest.fixture(autouse=True)
+def _reset_token_usage_single_flight() -> None:
+  """Isolate the module-level single-flight holder between route tests."""
+  pages._token_usage_task = None
+  yield
+  pages._token_usage_task = None
 
 
 class FakeSessionManager:
@@ -32,6 +45,83 @@ def _build_request() -> Request:
       "client": ("127.0.0.1", 12345),
   }
   return Request(scope)
+
+
+@pytest.mark.asyncio
+async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+  tally = TokenTally(
+      rows=[
+          ModelRow(
+              model="claude-opus-5", source="Claude Code", calls=1, in_fresh=10,
+              cache_write=5, cache_read=20, output=30, total=65, first="2024-01-01",
+              last="2024-01-02",
+              accounts=[AccountRow(name="work (default)", calls=1, output=30, total=65)]),
+          ModelRow(
+              model="gpt-5.2", source="Codex", calls=2, in_fresh=40, cache_write=0,
+              cache_read=0, output=15, total=55, first="2024-01-01", last="2024-01-03",
+              accounts=[AccountRow(name="work (default)", calls=2, output=15, total=55)]),
+      ],
+      notes=["Claude Code: 1 unique API responses over 1 config dirs"],
+      elapsed_s=0.05,
+      scanned_bytes=999,
+  )
+
+  def fake_collect() -> TokenTally:
+    return tally
+
+  monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
+
+  response = await pages.token_usage_viewer(_build_request())
+  assert response.status_code == 200
+  body = response.body.decode("utf-8")
+  # The per-model table (the accessible equivalent of the charts) is present, carrying the
+  # same numbers the JS payload embeds.
+  assert 'id="tbl"' in body
+  assert "claude-opus-5" in body
+  assert "gpt-5.2" in body
+  assert "Token usage by model" in body
+  assert "0.05" in body
+  assert "999" in body
+
+
+@pytest.mark.asyncio
+async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+  calls = 0
+
+  def fake_collect() -> TokenTally:
+    nonlocal calls
+    calls += 1
+    time.sleep(0.2)  # keep the collection genuinely in flight so both requests share it
+    return TokenTally(rows=[], notes=[], elapsed_s=0.2, scanned_bytes=0)
+
+  monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
+
+  request_one = _build_request()
+  request_two = _build_request()
+  first, second = await asyncio.gather(
+      pages.token_usage_viewer(request_one), pages.token_usage_viewer(request_two))
+  assert first.status_code == 200
+  assert second.status_code == 200
+  # Two concurrent requests share one in-flight collection: exactly one scan ran.
+  assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_token_usage_viewer_clears_inflight_task_after_render(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  """A finished collection is cleared, so the next request re-scans afresh."""
+  calls = 0
+
+  def fake_collect() -> TokenTally:
+    nonlocal calls
+    calls += 1
+    return TokenTally(rows=[], notes=[], elapsed_s=0.01, scanned_bytes=0)
+
+  monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
+  await pages.token_usage_viewer(_build_request())
+  assert calls == 1
+  await pages.token_usage_viewer(_build_request())
+  assert calls == 2
 
 
 @pytest.mark.asyncio

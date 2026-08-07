@@ -407,7 +407,8 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
     del session, _cfg, _session_mgr
     triggered_payloads.append(json.loads(summary))
 
-  async def fake_git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
+  async def fake_git_create_worktree(
+      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     del repo_path
     wt_path.mkdir(parents=True, exist_ok=True)
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
@@ -547,7 +548,10 @@ async def test_run_improve_loop_fails_when_session_missing(tmp_path: Path, monke
   thread_mgr = _FakeImproveThreadManager(
       tmp_path,
       {
-          "thread-1": [{"type": "result", "result": "first iteration completed"}],
+          "thread-1": [{
+              "type": "result",
+              "result": "first iteration completed"
+          }],
       },
       {"thread-1": ThreadStatus.COMPLETED},
   )
@@ -680,7 +684,8 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
     del session, summary, _cfg, _session_mgr
 
-  async def fake_git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
+  async def fake_git_create_worktree(
+      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     del repo_path
     wt_path.mkdir(parents=True, exist_ok=True)
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
@@ -1191,9 +1196,7 @@ def _iter_broadcast(session_mgr: _FakeImproveSessionManager, iteration: int) -> 
 
 
 def _iter_trigger(payloads: list[dict], iteration: int) -> dict:
-  return next(
-      p for p in payloads
-      if p.get("type") == "improve_iteration_completed" and p.get("iteration") == iteration)
+  return next(p for p in payloads if p.get("type") == "improve_iteration_completed" and p.get("iteration") == iteration)
 
 
 @pytest.mark.asyncio
@@ -1202,8 +1205,7 @@ def _iter_trigger(payloads: list[dict], iteration: int) -> dict:
     [
         (None, "1", False, "missing_report"),
         ("no heading here at all\n", "1", False, "malformed_report"),
-        ("## Iter 1 \u2014 completed\n### What Changed\n- x\n", "0", False,
-         "no_commit_no_verdict"),
+        ("## Iter 1 \u2014 completed\n### What Changed\n- x\n", "0", False, "no_commit_no_verdict"),
         (_valid_report(1), "1", True, None),
         (_nothing_done_report(1), "0", True, None),
         (_valid_report(1, em_dash=False), "1", True, None),
@@ -1227,10 +1229,8 @@ async def test_iteration_validity_matrix(
   assert broadcast["invalid_reason"] == expected_reason
   assert trigger["report_valid"] is expected_valid
   assert trigger["invalid_reason"] == expected_reason
-  assert set(broadcast.keys()) >= {
-      "report_path", "report_valid", "invalid_reason", "tip", "commits_added", "diffstat"}
-  assert set(trigger.keys()) >= {
-      "report_path", "report_valid", "invalid_reason", "tip", "commits_added", "diffstat"}
+  assert set(broadcast.keys()) >= {"report_path", "report_valid", "invalid_reason", "tip", "commits_added", "diffstat"}
+  assert set(trigger.keys()) >= {"report_path", "report_valid", "invalid_reason", "tip", "commits_added", "diffstat"}
 
 
 @pytest.mark.asyncio

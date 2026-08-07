@@ -20,15 +20,15 @@ from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import (
-  _git_rev_parse,
-  _git_stdout,
-  git_create_worktree,
-  git_current_branch,
-  git_push_branch,
-  git_push_refspec,
-  git_worktree_dir_name,
-  git_worktree_prune,
-  git_worktree_remove,
+    _git_rev_parse,
+    _git_stdout,
+    git_create_worktree,
+    git_current_branch,
+    git_push_branch,
+    git_push_refspec,
+    git_worktree_dir_name,
+    git_worktree_prune,
+    git_worktree_remove,
 )
 from src.core.master_trigger import trigger_master
 from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
@@ -638,25 +638,39 @@ async def _run_single_iteration(
 
   # Trigger master after each iteration so it sees progress
   iter_trigger_payload = {
-      'type': ET.IMPROVE_ITERATION_COMPLETED,
-      'goal': goal,
-      'iteration': i,
-      'total_iterations': iterations,
-      'status': status,
-      'summary': summary[:200],
-      'work_branch': work_branch,
-      'report_path': str(report_path),
-      'report_valid': report_valid,
-      'invalid_reason': invalid_reason,
-      'tip': tip_after,
-      'commits_added': commits_added,
-      'diffstat': diffstat,
-      'instructions': (
-          "Audit this iteration before reporting: read the report file at report_path and check its "
-          "verdict and KPI readings against the live goal. Report iteration progress with commit "
-          "identifier and link. If drift signals are present (report_valid is false, or the report "
-          "omits a goal-declared KPI or verdict), apply a bounded live-goal edit per the "
-          "improve-goal skill and quote the edit in full in your chat report."),
+      'type':
+          ET.IMPROVE_ITERATION_COMPLETED,
+      'goal':
+          goal,
+      'iteration':
+          i,
+      'total_iterations':
+          iterations,
+      'status':
+          status,
+      'summary':
+          summary[:200],
+      'work_branch':
+          work_branch,
+      'report_path':
+          str(report_path),
+      'report_valid':
+          report_valid,
+      'invalid_reason':
+          invalid_reason,
+      'tip':
+          tip_after,
+      'commits_added':
+          commits_added,
+      'diffstat':
+          diffstat,
+      'instructions':
+          (
+              "Audit this iteration before reporting: read the report file at report_path and check its "
+              "verdict and KPI readings against the live goal. Report iteration progress with commit "
+              "identifier and link. If drift signals are present (report_valid is false, or the report "
+              "omits a goal-declared KPI or verdict), apply a bounded live-goal edit per the "
+              "improve-goal skill and quote the edit in full in your chat report."),
   }
   create_logged_task(
       trigger_master(session_id, json.dumps(iter_trigger_payload, indent=2), cfg, session_mgr),

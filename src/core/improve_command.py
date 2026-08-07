@@ -288,7 +288,7 @@ def _commits_section_first_none(text: str) -> bool:
         if not stripped:
           continue
         if stripped.startswith("- "):
-          return stripped[2:].strip().startswith("none")
+          return re.match(r"^none\b", stripped[2:].strip()) is not None
         break
       break
   return False

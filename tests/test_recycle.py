@@ -251,17 +251,22 @@ async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
-  events = [{"type": "user", "content": f"e{i}", "timestamp": f"2026-05-10T00:0{i}:00Z"} for i in range(4)]
+  # Turns of (user, separator) so tail(2) returns exactly the last turn.
+  events = []
+  for i in range(4):
+    events.append({"type": ET.USER, "content": f"e{i}", "timestamp": f"2026-05-10T00:0{i}:00Z"})
+    events.append({"type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": f"2026-05-10T00:0{i}:30Z"})
   _append_events(mgr.get_chat_events_path(session.id), events)
 
   bootstrap = await build_session_bootstrap_data(session.id, mgr, message_limit=2)
 
   assert bootstrap.session.id == session.id
-  assert bootstrap.total_event_count == 4
+  assert bootstrap.total_event_count == 8
   assert bootstrap.has_more is True
-  assert bootstrap.oldest_message_ordinal == 2
-  assert [m["content"] for m in bootstrap.messages] == ["e2", "e3"]
-  assert [m["event_index"] for m in bootstrap.messages] == [2, 3]
+  assert bootstrap.oldest_message_ordinal == 6
+  assert [m["role"] for m in bootstrap.messages] == ["user", "separator"]
+  assert bootstrap.messages[0]["content"] == "e3"
+  assert [m["event_index"] for m in bootstrap.messages] == [6, 7]
 
 
 @pytest.mark.asyncio

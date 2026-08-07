@@ -30,6 +30,7 @@ from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
+from src.core.token_tally import TokenTally, collect_token_usage
 from src.core.trace_merge import merge_traces
 
 log = structlog.get_logger()
@@ -40,6 +41,11 @@ _PERFETTO_MERGE_CACHE_LIMIT = 8
 # Prefixes the file server answers on (server.py mounts one router under both). A trace= input
 # names an absolute path under either of them.
 _FILE_SERVER_PREFIXES = ("/files", "/absolute_filepath")
+
+# Single-flight holder for the current in-flight token-usage collection. Concurrent requests
+# await the same task and share one scan; it is cleared on completion so the next request scans
+# afresh rather than re-servicing a stale snapshot.
+_token_usage_task: asyncio.Task | None = None
 
 
 def _perfetto_merge_cache_dir() -> Path:
@@ -367,6 +373,113 @@ async def ncu_viewer(
           "ncu_session_cmd": f"ncu --import {path} --page session",
           "hostname": socket.gethostname(),
       })
+
+
+def _compact(n: float) -> str:
+  """Render a large count compactly: 1.23M, 456K, else a plain comma-formatted number."""
+  for cut, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+    if abs(n) >= cut:
+      return f"{n / cut:.2f}".rstrip("0").rstrip(".") + suffix
+  return f"{int(n):,}"
+
+
+def _token_usage_context(tally: TokenTally) -> dict:
+  """Prepare the display context for the token_usage template from one tally.
+
+  Computes the aggregate stats the page renders server-side (hero, tiles, conclusions),
+  the compact number strings, and the serialized JS payload for the charts and table.
+  """
+  rows = tally.rows
+  tot = {
+      "in_fresh": sum(r.in_fresh for r in rows),
+      "cache_write": sum(r.cache_write for r in rows),
+      "cache_read": sum(r.cache_read for r in rows),
+      "output": sum(r.output for r in rows),
+      "total": sum(r.total for r in rows),
+      "calls": sum(r.calls for r in rows),
+  }
+  window = (
+      (min(r.first for r in rows if r.first), max(r.last for r in rows if r.last))
+      if rows and any(r.first for r in rows)
+      else ("", "")
+  )
+  cache_share = tot["cache_read"] / tot["total"] * 100 if tot["total"] else 0.0
+  out_share = tot["output"] / tot["total"] if tot["total"] else 0.0
+  top = max(rows, key=lambda r: r.total) if rows else None
+  top_out = max(rows, key=lambda r: r.output) if rows else None
+  per_src: dict[str, dict] = {}
+  for src in ("Claude Code", "Codex", "opencode"):
+    sub = [r for r in rows if r.source == src]
+    per_src[src] = {
+        "t_comp": _compact(sum(r.total for r in sub)),
+        "output": sum(r.output for r in sub),
+        "models": len(sub),
+        "share": sum(r.total for r in sub) / tot["total"] * 100 if tot["total"] else 0.0,
+    }
+  payload = {
+      "rows": [
+          {
+              "model": r.model, "source": r.source, "total": r.total, "output": r.output,
+              "in_fresh": r.in_fresh, "cache_write": r.cache_write, "cache_read": r.cache_read,
+              "calls": r.calls,
+              "accounts": [
+                  {"name": a.name, "calls": a.calls, "output": a.output, "total": a.total}
+                  for a in r.accounts
+              ],
+              "slot": {"Claude Code": 1, "Codex": 2, "opencode": 3}[r.source],
+              "window": f"{r.first} → {r.last}",
+          }
+          for r in rows
+      ],
+  }
+  payload = json.dumps(payload, ensure_ascii=False)
+  ctx = {
+      "rows": rows,
+      "tot_compact": _compact(tot["total"]),
+      "in_compact": _compact(tot["in_fresh"] + tot["cache_write"] + tot["cache_read"]),
+      "out_compact": _compact(tot["output"]),
+      "cr_compact": _compact(tot["cache_read"]),
+      "cw_compact": _compact(tot["cache_write"]),
+      "fresh_compact": _compact(tot["in_fresh"]),
+      "fresh_percent": tot["in_fresh"] / tot["total"] * 100 if tot["total"] else 0.0,
+      "out_share": out_share,
+      "per_src": per_src,
+      "tot_calls": f"{tot['calls']:,}",
+      "top_escaped": top.model if top else "",
+      "top_compact": _compact(top.total) if top else "0",
+      "top_out_escaped": top_out.model if top_out else "",
+      "top_out_compact": _compact(top_out.output) if top_out else "0",
+      "elapsed_s": tally.elapsed_s,
+      "scanned_compact": _compact(tally.scanned_bytes),
+  }
+  return {
+      "ctx": ctx,
+      "payload": payload,
+      "window": window,
+      "window_str": f"{window[0]} → {window[1]}" if rows else "",
+      "cache_share": cache_share,
+      "generated": _RUNTIME_GIT_VERSION,
+      "notes": tally.notes,
+  }
+
+
+@router.get("/token-usage", response_class=HTMLResponse)
+async def token_usage_viewer(request: Request):
+  """Render the per-model token usage tally page.
+
+  Runs the collection in a thread pool (never on the event loop) and, when a collection is
+  already in flight, awaits and shares it instead of starting a second scan.
+  """
+  global _token_usage_task
+  if _token_usage_task is None:
+    _token_usage_task = asyncio.create_task(asyncio.to_thread(collect_token_usage))
+  tally = await _token_usage_task
+  _token_usage_task = None
+  return templates.TemplateResponse(
+      request,
+      "token_usage.html",
+      context=_token_usage_context(tally),
+  )
 
 
 @router.get("/diff", response_class=HTMLResponse)

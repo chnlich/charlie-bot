@@ -47,6 +47,10 @@ iterations. The launch response includes loop_id and goal_path.
 
 Runtime authorization (takeoff gate) is derived from the chat
 event log; see skills/plan-approval/SKILL.md for the full contract.
+
+Invalid iterations (a missing, malformed, or zero-commit-no-verdict
+report) are quarantined from loop context and still consume an
+iteration slot.
 """
 
 

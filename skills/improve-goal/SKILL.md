@@ -25,11 +25,15 @@ When writing the `--goal-file` content for an improve loop:
 
 ## Master Discipline During Loop Execution
 
-Once the loop is running, do not repeatedly propose stop when iterations look unproductive. The user authorized the iteration count at take-off and will say "stop" if they want to stop. If a failure pattern emerges, diagnose it once and continue reporting iter-by-iter without re-proposing stop.
+On every iteration wake, read the report file at `report_path` and audit it against the live goal: its verdict is present, the goal-declared KPI readings are present, and the work direction is consistent with the goals' priority order. Do not trust the payload summary as the audit input — read the report file itself.
 
-After launch, report the `goal_path` to the user as the editable live goal.
+Drift signals are: `report_valid` being false (in the wake payload), or the semantic audit failing.
 
-Never edit `goal.md` yourself. A mid-loop goal change requires explicit user confirmation; the user edits the file (or asks you to, after confirming).
+When a drift signal is present, the master may edit `goal.md` without waiting for the user, but only in two allowed shapes: appending constraints to a `## Steering appendix` section at the end of `goal.md` (created on first use), or reordering the existing numbered goals. No other byte of `goal.md` may change — KPI numbers, acceptance lines, the iteration count, and the merge-back setting therefore sit in the immutable region by construction.
+
+Every such edit must be quoted as a full diff in the master's chat report. If the user reverts `goal.md`, the edit is undone and takes effect starting the next iteration.
+
+Stopping or cancelling the loop still requires explicit user approval. Without a drift signal, no edit.
 
 ## Planner / Executor Separation
 

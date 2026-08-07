@@ -38,6 +38,7 @@ _IGNORED_SSE_EVENT_TYPES = {
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
 # `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`).
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
+_LOCAL_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
 
 
 class OpenCodeBackend(AgentBackend):
@@ -46,9 +47,10 @@ class OpenCodeBackend(AgentBackend):
   _SERVER_START_TIMEOUT = 30.0
   _SERVER_STOP_TIMEOUT = 5.0
 
-  def __init__(self, **kwargs):
+  def __init__(self, *, opencode_proxy_url: str | None = None, **kwargs):
     super().__init__(**kwargs)
     self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
+    self._opencode_proxy_url = opencode_proxy_url
     self._server_url: str | None = None
     self._session_id: str | None = None
     self._stdout_task: asyncio.Task | None = None
@@ -81,13 +83,36 @@ class OpenCodeBackend(AgentBackend):
     cmd.extend(self._extra_flags)
     return cmd
 
-  def _prepare_env(self, env: dict) -> dict:
+  @staticmethod
+  def _merge_local_no_proxy(value: str) -> str:
+    entries: list[str] = []
+    seen_local_entries: set[str] = set()
+    for raw_entry in value.split(","):
+      entry = raw_entry.strip()
+      if not entry:
+        continue
+      if entry in _LOCAL_NO_PROXY_ENTRIES:
+        if entry in seen_local_entries:
+          continue
+        seen_local_entries.add(entry)
+        entries.append(entry)
+        continue
+      entries.append(raw_entry)
+    entries.extend(entry for entry in _LOCAL_NO_PROXY_ENTRIES if entry not in seen_local_entries)
+    return ",".join(entries)
+
+  def _prepare_env(self, env: dict, *, opencode_config: dict | None = None) -> dict:
     oc_env = {**env}
     opencode_bin_dir = str(Path.home() / ".opencode" / "bin")
     current_path = oc_env.get("PATH", "")
     if opencode_bin_dir not in current_path.split(":"):
       oc_env["PATH"] = f"{opencode_bin_dir}:{current_path}"
-    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(self._headless_config())
+    oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
+        self._headless_config() if opencode_config is None else opencode_config)
+    if self._opencode_proxy_url is not None:
+      oc_env["HTTP_PROXY"] = self._opencode_proxy_url
+      oc_env["HTTPS_PROXY"] = self._opencode_proxy_url
+      oc_env["NO_PROXY"] = self._merge_local_no_proxy(oc_env.get("NO_PROXY", ""))
     return oc_env
 
   def _headless_config(self) -> dict:
@@ -694,11 +719,7 @@ class OpenCodeBackend(AgentBackend):
         "--",
         framed,
     ]
-    env = dict(os.environ)
-    opencode_bin_dir = str(Path.home() / ".opencode" / "bin")
-    if opencode_bin_dir not in env.get("PATH", "").split(":"):
-      env["PATH"] = f"{opencode_bin_dir}:{env.get('PATH', '')}"
-    env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"permission": {"*": "deny"}})
+    env = self._prepare_env(dict(os.environ), opencode_config={"permission": {"*": "deny"}})
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,

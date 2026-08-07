@@ -11,6 +11,7 @@ import pytest
 
 from src.agents import master_cc
 from src.agents.backends import base as backend_base
+from src.agents.backends import registry
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core import models
@@ -58,6 +59,79 @@ def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
   project = config_dir / "projects" / "-home-user--charliebot-sessions-session-id"
   project.mkdir(parents=True, exist_ok=True)
   (project / f"{cc_session_id}.jsonl").write_text("{}\n", encoding="utf-8")
+
+
+def test_load_config_reads_opencode_proxy_url_per_backend(tmp_path: Path, monkeypatch) -> None:
+  home = tmp_path / "charliebot"
+  home.mkdir()
+  (home / "config.yaml").write_text(
+      """
+backend_options:
+  - id: opencode-proxied
+    label: Proxied OpenCode
+    type: opencode
+    model: provider/model
+    opencode_proxy_url: http://proxy.test:8080
+  - id: opencode-plain
+    label: Plain OpenCode
+    type: opencode
+    model: provider/model
+  - id: claude
+    label: Claude
+    type: cc-claude
+    model: model
+""",
+      encoding="utf-8")
+  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(home))
+
+  cfg = core_config.load_config()
+
+  assert [option.opencode_proxy_url for option in cfg.backend_options] == ["http://proxy.test:8080", None, None]
+
+
+def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> None:
+  captured: dict[str, dict] = {}
+
+  class _FakeOpenCodeBackend:
+
+    def __init__(self, **kwargs):
+      captured["opencode"] = kwargs
+
+  class _FakeClaudeBackend:
+
+    def __init__(self, **kwargs):
+      captured["claude"] = kwargs
+
+  monkeypatch.setattr(registry, "OpenCodeBackend", _FakeOpenCodeBackend)
+  monkeypatch.setattr(registry, "ClaudeCodeBackend", _FakeClaudeBackend)
+  cfg = core_config.CharlieBotConfig(charliebot_home=Path("/tmp/charliebot-test"))
+  proxied = models.BackendOption(
+      id="opencode-proxied",
+      label="Proxied OpenCode",
+      type="opencode",
+      model="provider/model",
+      opencode_proxy_url="http://proxy.test:8080",
+  )
+  plain = models.BackendOption(
+      id="opencode-plain",
+      label="Plain OpenCode",
+      type="opencode",
+      model="provider/model",
+  )
+  non_opencode = models.BackendOption(
+      id="claude",
+      label="Claude",
+      type="cc-claude",
+      model="model",
+      opencode_proxy_url="http://proxy.test:8080",
+  )
+
+  registry.build_backend(proxied, cfg)
+  assert captured["opencode"]["opencode_proxy_url"] == "http://proxy.test:8080"
+  registry.build_backend(plain, cfg)
+  assert captured["opencode"]["opencode_proxy_url"] is None
+  registry.build_backend(non_opencode, cfg)
+  assert "opencode_proxy_url" not in captured["claude"]
 
 
 # --------------------------------------------------------------- config reload

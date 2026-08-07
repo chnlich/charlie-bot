@@ -323,7 +323,7 @@ for (const r of DATA.rows) {
 const sum = el('tr','sum');
 sum.append(el('td', null, 'Sum (' + DATA.rows.length + ' models)'), el('td', null, ''));
 for (const k of ['calls','in_fresh','cache_write','cache_read','output','total']) sum.append(el('td', null, fmt(sums[k])));
-sum.append(el('td','win', {{ window_str }}));
+sum.append(el('td','win', {{ window_str|tojson }}));
 tb.append(sum); T.append(tb);
 </script>
 </body>

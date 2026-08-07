@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +47,20 @@ def _build_request() -> Request:
       "client": ("127.0.0.1", 12345),
   }
   return Request(scope)
+
+
+def _inline_scripts(body: str) -> list[str]:
+  """Extract inline `<script>...</script>` blocks without a `src` attribute."""
+  scripts: list[str] = []
+  idx = 0
+  while True:
+    open_idx = body.find("<script>", idx)
+    if open_idx == -1:
+      return scripts
+    close_idx = body.find("</script>", open_idx)
+    assert close_idx != -1, "unterminated <script> block"
+    scripts.append(body[open_idx + len("<script>"):close_idx])
+    idx = close_idx + len("</script>")
 
 
 @pytest.mark.asyncio
@@ -122,6 +138,46 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(
   assert calls == 1
   await pages.token_usage_viewer(_build_request())
   assert calls == 2
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="requires node on PATH")
+@pytest.mark.asyncio
+async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """The page's inline script must be valid JavaScript.
+
+  A bare `window_str` interpolation (a string containing spaces and a non-ASCII arrow) used to
+  be emitted unquoted, breaking script parse and leaving charts and table empty on every load.
+  This asserts the script parses under `node --check`, not that a literal string is present.
+  """
+  # Window string deliberately carries spaces and a `→` so an unquoted interpolation breaks.
+  tally = TokenTally(
+      rows=[
+          ModelRow(
+              model="claude-opus-5", source="Claude Code", calls=1, in_fresh=10,
+              cache_write=5, cache_read=20, output=30, total=65, first="2026-06-24",
+              last="2026-08-07",
+              accounts=[AccountRow(name="work (default)", calls=1, output=30, total=65)]),
+      ],
+      notes=["Claude Code: 1 unique API responses over 1 config dirs"],
+      elapsed_s=0.05,
+      scanned_bytes=999,
+  )
+
+  monkeypatch.setattr(pages, "collect_token_usage", lambda: tally)
+
+  response = await pages.token_usage_viewer(_build_request())
+  assert response.status_code == 200
+  body = response.body.decode("utf-8")
+
+  assert "2026-06-24 → 2026-08-07" in body
+
+  scripts = _inline_scripts(body)
+  assert scripts, "no inline <script> block to parse"
+
+  for idx, script in enumerate(scripts):
+    script_file = tmp_path / f"inline-{idx}.js"
+    script_file.write_text(script, encoding="utf-8")
+    subprocess.run(["node", "--check", str(script_file)], check=True)
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,12 @@
 """Acceptance tests for session-message-projection.
 
-Covers definitional equivalence, lossless paging, dirty-mark correctness,
-no-file-reads on the paging path, and archive fallback.
+Covers definitional equivalence, turn-aligned lossless paging, dirty-mark
+correctness, no-file-reads on the paging path, and archive fallback.
 """
 
 from __future__ import annotations
 
+import bisect
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -114,7 +115,7 @@ def _pending_draft_events() -> list[dict]:
 
 
 def _many_messages_events(count: int) -> list[dict]:
-  """Events that produce exactly *count* user messages."""
+  """Events that produce exactly *count* user messages (no separator at all)."""
   return [
       {
           "id": f"u{i}",
@@ -123,6 +124,34 @@ def _many_messages_events(count: int) -> list[dict]:
           "timestamp": f"2026-01-01T00:{i:02d}:00Z"
       } for i in range(count)
   ]
+
+
+def _turned_messages_events(turn_lengths: list[int]) -> list[dict]:
+  """Events producing one separator-terminated turn per entry of *turn_lengths*.
+
+  Each turn's body is one user message followed by enough assistant blocks to
+  reach the given body length, and it closes with a master_done separator, so
+  a turn of body length L produces L + 1 committed messages.
+  """
+  events: list[dict] = []
+  for turn_i, length in enumerate(turn_lengths):
+    if length < 1:
+      raise ValueError(f"turn body length must be >= 1, got {length}")
+    events.append({
+        "id": f"u{turn_i}",
+        "type": ET.USER,
+        "content": f"q{turn_i}",
+        "timestamp": f"t{turn_i}-u",
+    })
+    for j in range(length - 1):
+      events.append(_assistant_event(f"a{turn_i}-{j}", f"a{turn_i}-{j}"))
+    events.append({
+        "id": f"done{turn_i}",
+        "type": ET.MASTER_DONE,
+        "thinking_seconds": 1,
+        "timestamp": f"t{turn_i}-done",
+    })
+  return events
 
 
 def _identity_tuple(msg: dict) -> tuple:
@@ -167,6 +196,10 @@ def _real_session_events() -> list[tuple[str, list[dict]]]:
   return result
 
 
+# Loaded once so every real-session parametrization shares a single read.
+_REAL_SESSION_EVENTS = _real_session_events()
+
+
 # ---------------------------------------------------------------------------
 # 1. Definitional equivalence
 # ---------------------------------------------------------------------------
@@ -201,7 +234,7 @@ def test_projection_pending_draft_fixture_has_draft() -> None:
   assert projection.history[1] is projection.pending_draft
 
 
-@pytest.mark.parametrize("name,events", _real_session_events())
+@pytest.mark.parametrize("name,events", _REAL_SESSION_EVENTS)
 def test_projection_history_equals_events_to_messages_real_sessions(name: str, events: list[dict]) -> None:
   """Definitional equivalence on real sessions under ~/.charliebot/sessions."""
   projection = MessageProjection(events)
@@ -212,47 +245,86 @@ def test_projection_history_equals_events_to_messages_real_sessions(name: str, e
 
 
 # ---------------------------------------------------------------------------
-# 2. Lossless paging
+# 2. Turn-aligned, lossless paging
 # ---------------------------------------------------------------------------
+
+
+def _assert_turn_aligned_walk(projection: MessageProjection, limit: int, label: str) -> None:
+  """Walk the whole history backwards (tail, then slice_before) and assert the
+  paging contract on every page:
+
+  - page-start invariant: ``start == 0`` or ``committed[start - 1]`` is a separator
+  - ``len(page) >= limit`` unless the history is exhausted (``start == 0``)
+  - ``len(page) <= limit + L - 1`` where L is the turn the raw boundary fell inside
+  - strict progression: each next page start is strictly below the previous one
+  - pages tile ``[0, total]`` exactly (lossless, ordered, no duplicates)
+  """
+  committed = projection.committed
+  total = len(committed)
+  seps = projection.separator_ordinals
+  collected: list[dict] = []
+  intervals: list[tuple[int, int]] = []
+  page, start, has_more = projection.tail(limit)
+  before = total
+  steps = 0
+  while True:
+    steps += 1
+    assert steps <= max(1, total), f"{label}: walk did not terminate after {total} pages"
+    assert start == 0 or committed[start - 1]["role"] == "separator", (
+        f"{label}: page start {start} is not a turn start")
+    assert len(page) >= limit or start == 0, (
+        f"{label}: under-filled page ({len(page)} < {limit}) before history exhaustion")
+    # Upper bound: the page may over-run the raw boundary only up to the end
+    # of the turn that boundary fell inside.
+    raw = max(0, before - limit)
+    k = bisect.bisect_left(seps, raw)
+    turn_start = seps[k - 1] + 1 if k else 0
+    turn_end = seps[k] + 1 if k < len(seps) else total
+    assert len(page) <= limit + (turn_end - turn_start) - 1, f"{label}: page over-ran its crossing turn"
+    if page:
+      intervals.append((start, before))
+      collected = page + collected
+    if not has_more:
+      break
+    page, next_start, has_more = projection.slice_before(start, limit)
+    assert next_start < start, f"{label}: no strict progress ({next_start} !< {start})"
+    before = start
+    start = next_start
+
+  intervals.reverse()  # built newest-first; check tiling oldest-first
+  cursor = 0
+  for lo, hi in intervals:
+    assert lo == cursor, f"{label}: gap/overlap at ordinal {lo} (cursor {cursor})"
+    assert lo < hi, f"{label}: empty page interval ({lo}, {hi})"
+    cursor = hi
+  assert cursor == total, f"{label}: walk stopped at {cursor}, history has {total} messages"
+  assert [_identity_tuple(m) for m in collected] == [_identity_tuple(m) for m in committed], (
+      f"{label}: union of pages != full message list")
 
 
 @pytest.mark.parametrize("limit", [1, 7, 40, 100])
 def test_lossless_backwards_walk_returns_full_id_set(limit: int) -> None:
   """Full backwards walk with slice_before returns exactly the full message-id set."""
-  events = _many_messages_events(1015)
-  projection = MessageProjection(events)
-  reference = events_to_messages(events)
-  full_ids = [m["id"] for m in reference]
-  full_id_set = set(full_ids)
-  total = len(full_ids)
+  projection = MessageProjection(_turned_messages_events([3, 1, 6, 2] * 60))  # 240 turns, 960 messages
+  committed = projection.committed
+  full_ids = [m["id"] for m in committed]
 
   collected_ids: list[str] = []
-  page_sizes: list[int] = []
-  next_befores: list[int] = []
-  before = total
+  before = len(committed)
   while before > 0:
     page, next_before, has_more = projection.slice_before(before, limit)
-    page_ids = [m["id"] for m in page]
-    collected_ids.extend(page_ids)
-    page_sizes.append(len(page))
-    next_befores.append(next_before)
-    assert next_before < before or before == 0, "next_before must be strictly < before for a non-empty page"
+    assert next_before == 0 or committed[next_before - 1]["role"] == "separator", (
+        "page start must be a turn start")
+    assert len(page) >= limit or next_before == 0, (
+        "page must hold at least `limit` messages unless history is exhausted")
+    assert next_before < before, "next_before must be strictly < before for a non-empty page"
     assert has_more == (next_before > 0)
+    collected_ids.extend(m["id"] for m in page)
     before = next_before
 
-  assert len(collected_ids) == total, f"collected {len(collected_ids)} but expected {total}"
-  assert set(collected_ids) == full_id_set, "id SET mismatch — missing or duplicate ids"
+  assert len(collected_ids) == len(full_ids), f"collected {len(collected_ids)} but expected {len(full_ids)}"
+  assert set(collected_ids) == set(full_ids), "id SET mismatch — missing or duplicate ids"
   assert len(collected_ids) == len(set(collected_ids)), "duplicates found"
-  # Exact page sizes except the last
-  expected_full_pages = total // limit
-  remainder = total % limit
-  for i in range(expected_full_pages):
-    assert page_sizes[i] == limit, f"page {i} has {page_sizes[i]} messages, expected {limit}"
-  if remainder:
-    assert page_sizes[-1] == remainder, f"last page has {page_sizes[-1]}, expected {remainder}"
-  # Strictly decreasing next_before
-  for i in range(len(next_befores) - 1):
-    assert next_befores[i] > next_befores[i + 1], "next_before not strictly decreasing"
 
 
 def test_lossless_walk_on_reorder_session() -> None:
@@ -271,6 +343,90 @@ def test_lossless_walk_on_reorder_session() -> None:
     before = next_before
   assert set(collected) == set(full_ids)
   assert len(collected) == len(full_ids)
+
+
+@pytest.mark.parametrize("name,events", _REAL_SESSION_EVENTS)
+def test_turn_aligned_backwards_walk_real_sessions(name: str, events: list[dict]) -> None:
+  """Every page of a full backwards walk starts at a turn start and the pages
+  tile the whole history — on every real session under ~/.charliebot/sessions."""
+  _assert_turn_aligned_walk(MessageProjection(events), limit=40, label=f"real session '{name}'")
+
+
+@pytest.mark.parametrize(
+    "turn_lengths",
+    [
+        [1] * 6,
+        [3, 1, 7, 2, 5, 1, 4],
+        [12],  # a single turn longer than any limit
+        [2, 9, 1, 6, 3, 8, 1, 1, 5],
+    ])
+@pytest.mark.parametrize("limit", [1, 2, 5, 40])
+def test_turn_aligned_backwards_walk_synthetic(turn_lengths: list[int], limit: int) -> None:
+  """The full paging contract on generated histories with varied turn lengths."""
+  label = f"turns={turn_lengths} limit={limit}"
+  _assert_turn_aligned_walk(MessageProjection(_turned_messages_events(turn_lengths)), limit, label)
+
+
+def test_snap_is_idempotent_on_turn_starts() -> None:
+  """A requested start that is already a turn start does not move."""
+  projection = MessageProjection(_turned_messages_events([2, 5, 1, 7]))
+  committed = projection.committed
+  total = len(committed)
+  turn_starts = [0] + [s + 1 for s in projection.separator_ordinals]
+  assert len(turn_starts) > 2, "fixture must produce several turn starts"
+  for t in turn_starts:
+    if t >= total:
+      continue  # ordinal past the end is not a page start
+    page, start, _ = projection.tail(total - t)
+    assert start == t, f"already-aligned start {t} moved to {start}"
+    assert page == committed[t:]
+
+
+def test_separator_free_history_is_one_documented_page() -> None:
+  """A history with no separator at all snaps to 0: the whole history is one page."""
+  projection = MessageProjection(_many_messages_events(25))
+  total = len(projection.committed)
+  assert projection.separator_ordinals == []
+
+  page, start, has_more = projection.tail(5)
+  assert (len(page), start, has_more) == (total, 0, False)
+
+  page, start, has_more = projection.slice_before(20, 3)
+  assert (len(page), start, has_more) == (20, 0, False)
+
+
+def test_tail_snaps_mid_turn_boundary_to_the_turn_start() -> None:
+  """Regression for the outline orphan defect: a tail boundary landing strictly
+  inside a turn (here: on its task_delegated) returns a page beginning at that
+  turn's user message, not at the interior."""
+  events = _turned_messages_events([2, 2, 2])  # 3 earlier turns, 3 messages each
+  defect_turn = [
+      {"id": "ask", "type": ET.USER, "content": "take off using kimi", "timestamp": "t-u"},
+      _assistant_event("plan approved, step 1 starts", "a-plan"),
+      _assistant_event("kimi resolves to opencode-kimi-k3", "a-kimi"),
+      {"id": "td", "type": ET.TASK_DELEGATED, "thread_id": "th1", "description": "d", "timestamp": "t-td"},
+      {"id": "ws", "type": ET.WORKER_SUMMARY, "content": "merged", "timestamp": "t-ws"},
+      _assistant_event("Take off recorded, plan approved", "a-done"),
+      {"id": "sep", "type": ET.MASTER_DONE, "thinking_seconds": 96, "timestamp": "t-sep"},
+  ]
+  events += defect_turn
+  projection = MessageProjection(events)
+  committed = projection.committed
+  assert [m["role"] for m in committed[-7:]] == [
+      "user", "assistant", "assistant", "task_delegated", "worker_summary", "assistant", "separator"
+  ]
+
+  defect_turn_start = len(committed) - 7
+  interior = committed.index(next(m for m in committed if m["id"] == "td"))
+  assert defect_turn_start < interior < len(committed) - 1, "raw boundary must land strictly inside the turn"
+
+  # limit chosen so the raw start max(0, total - limit) == interior.
+  page, start, has_more = projection.tail(len(committed) - interior)
+  assert start == defect_turn_start, f"snapped start {start} != turn start {defect_turn_start}"
+  assert committed[start - 1]["role"] == "separator"
+  assert page[0]["id"] == "ask", "page must begin at the turn's user message"
+  assert page[-1]["role"] == "separator"
+  assert has_more is True
 
 
 # ---------------------------------------------------------------------------
@@ -397,22 +553,24 @@ def test_paging_path_does_not_call_parse_ndjson_range(monkeypatch: pytest.Monkey
 
 def test_page_latency_does_not_grow_with_session_size() -> None:
   """slice_before cost is O(page), independent of history length."""
-  small = MessageProjection(_many_messages_events(100))
-  large = MessageProjection(_many_messages_events(5000))
+  # Bounded turns (3 messages each) keep snapped page sizes independent of
+  # history length — the property this test exists to measure.
+  small = MessageProjection(_turned_messages_events([2] * 34))  # 102 messages
+  large = MessageProjection(_turned_messages_events([2] * 1700))  # 5100 messages
 
   # Warm up
-  small.slice_before(100, 40)
-  large.slice_before(5000, 40)
+  small.slice_before(102, 40)
+  large.slice_before(5100, 40)
 
   small_times = []
   large_times = []
   for _ in range(20):
     t0 = time.perf_counter()
-    small.slice_before(100, 40)
+    small.slice_before(102, 40)
     small_times.append(time.perf_counter() - t0)
 
     t0 = time.perf_counter()
-    large.slice_before(5000, 40)
+    large.slice_before(5100, 40)
     large_times.append(time.perf_counter() - t0)
 
   avg_small = sum(small_times) / len(small_times)

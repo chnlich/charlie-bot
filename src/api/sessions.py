@@ -466,9 +466,11 @@ async def get_session_events_page(
   """Paginate backwards through session messages by message ordinal.
 
   ``before`` is a message ordinal (exclusive upper bound). ``limit`` is the
-  number of MESSAGES per page (default 40, clamped 1..200). Returns
+  minimum number of MESSAGES per page (default 40, clamped 1..200) — the page
+  start is snapped back to its turn start, so a page holds at least ``limit``
+  messages unless the history below ``before`` is exhausted. Returns
   ``{"messages", "has_more", "next_before"}`` where messages are ascending,
-  ``next_before = max(0, before - limit)``, and ``has_more = next_before > 0``.
+  ``next_before`` is the snapped page start, and ``has_more = next_before > 0``.
 
   Sessions with ``archive_offset > 0`` fall back entirely to the legacy
   event-index cursor path (``load_chat_events_range`` + ``events_to_messages``)

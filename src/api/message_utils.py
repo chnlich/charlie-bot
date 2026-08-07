@@ -195,8 +195,9 @@ async def build_session_bootstrap_data(
   """Load the minimal session data needed for first paint or SPA switching.
 
   When a message projection is available (``archive_offset == 0``), first
-  paint is served from ``projection.tail(message_limit)`` — an exact message
-  count slice with O(page) cost and zero file reads. Otherwise the legacy
+  paint is served from ``projection.tail(message_limit)`` — a turn-aligned
+  page of at least ``message_limit`` messages (unless history is exhausted)
+  with O(page) cost and zero file reads. Otherwise the legacy
   tail-events path is used.
   """
   session_meta = await session_mgr.get_session(session_id)
@@ -264,8 +265,8 @@ async def build_session_view_data(
 
   When *message_limit* is None, loads all events. When set, loads the last
   *message_limit* messages — served from the message projection when
-  ``archive_offset == 0`` (exact message count, O(page) cost), or from the
-  legacy tail-events path otherwise.
+  ``archive_offset == 0`` (turn-aligned page of at least *message_limit*
+  messages, O(page) cost), or from the legacy tail-events path otherwise.
 
   Returns committed messages plus an optional pending_draft (the in-progress
   assistant draft that has not yet been flushed). Live render paths show the

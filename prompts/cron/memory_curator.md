@@ -12,10 +12,8 @@ uncommitted changes.
 
 Step 1: curate staging candidates, merge-first.
 Read every file in `~/.charliebot/memory/staging/`. For each candidate, first test it against
-the admission whitelist in memory_guideline.md and write its two proof lines: Action (the
-concrete future action the entry changes) and Home (why the store is the only home, checked
-against the homes the guideline names). A candidate whose Action or Home line cannot be written
-is rejected. For each passing candidate, the default action is a merge, not a new entry:
+the admission whitelist in memory_guideline.md and write the proof lines it requires. For each
+passing candidate, the default action is a merge, not a new entry:
 - **revise (merge)**: fold the candidate into the existing entry whose theme covers it,
   normally `entries/<topic>/<revises>.md` when the candidate carries `revises: <slug>`,
   otherwise the thematically-matching entry, editing it in place so `git diff` shows the
@@ -24,16 +22,15 @@ is rejected. For each passing candidate, the default action is a merge, not a ne
   title honestly describes the whole content. Create `entries/<topic>/<slug>.md` with a
   complete header (scope, topic, audience, title) and the candidate body. Add the topic to
   the `topics` vocabulary if it is not already there.
-- **reject**: do not admit; list the candidate in the report with the failed proof line or a
-  one-line reason (wrong home, theme already covered, dishonest title, and so on).
+- **reject**: do not admit; list the candidate in the report with the question it could not
+  answer or a one-line reason (wrong home, theme already covered, dishonest title, and so on).
 
 Run `charliebot memory lint`; it must pass before you present. If lint reports violations, fix
 the working tree until it is clean.
 
 Step 2: report to the user.
-Render the report from `prompts/memory_report_template.html`: one section per admit and revise,
-its Action and Home proof lines directly above its diff; rejected candidates in one table, each
-with the failed proof line or reason. Do not commit. Wait for explicit user approval.
+Render the report from `prompts/memory_report_template.html`. Do not commit. Wait for explicit
+user approval.
 
 Step 3: land only after approval.
 Only after the user explicitly approves: commit the working tree with the prefixed messages

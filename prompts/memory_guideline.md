@@ -30,24 +30,26 @@ kinds of entry, and only these:
 Everything else stays out by default; when in doubt, reject and name the candidate in the
 report.
 
-Every admit and every revise carries two proof lines in the report, and a candidate whose
-Action or Home line cannot be written is rejected:
+Every admit and every revise carries two proof lines in the report, each headed by the
+question it answers; a question that finds no answer is the signal to rethink whether the
+entry belongs in the store at all, and such a candidate is rejected:
 
-- **Action**: the concrete future action this entry changes, named as work that recurs or is
-  already planned in a named project or stack; a constructed possibility fails the line, and a
-  version- or build-specific fact is scoped to the stack that pins it.
-- **Home**: why the store is the only home, checked against the others: repo-scoped knowledge
-  lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives in the master prompt,
-  a skill, config, or the source; incidents and event history live in `LESSONS.md`; run
-  results, live state, and receipts live in the run dir or owning session. A project-scoped
-  finding lives under that project's topic or its repo docs; a cluster or host entry holds
-  only what binds every project there. The Home line also names the reader and the delivery path
-  that reaches them at the moment the entry changes their action. A reader who cannot know to
-  query fails the line: the knowledge belongs on a surface they already read. Residency is the
-  costliest slot, full text in every master spawn: process rules governing every session hold
-  it; domain conventions live with their domain. When the natural home is obstructed, fix the
-  obstruction or take another tracked path inside that home; the store does not absorb another
-  home's content.
+- **"When will this be used again, and what will it change?"** (the Action line): the concrete
+  future action this entry changes, named as work that recurs or is already planned in a named
+  project or stack; a constructed possibility fails the line, and a version- or build-specific
+  fact is scoped to the stack that pins it.
+- **"Why is the store the cheapest home?"** (the Home line): answered by checking the others:
+  repo-scoped knowledge lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives
+  in the master prompt, a skill, config, or the source; incidents and event history live in
+  `LESSONS.md`; run results, live state, and receipts live in the run dir or owning session.
+  A project-scoped finding lives under that project's topic or its repo docs; a cluster or host
+  entry holds only what binds every project there. The Home line also names the reader and the
+  delivery path that reaches them at the moment the entry changes their action. A reader who
+  cannot know to query fails the line: the knowledge belongs on a surface they already read.
+  Residency is the costliest slot, full text in every master spawn: process rules governing every
+  session hold it; domain conventions live with their domain. When the natural home is obstructed,
+  fix the obstruction or take another tracked path inside that home; the store does not absorb
+  another home's content.
 
 A candidate's text is a claim: verify version, build, and account figures against the live
 system before presenting them.

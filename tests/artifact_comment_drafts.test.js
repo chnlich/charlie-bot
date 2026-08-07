@@ -20,6 +20,15 @@ function jsonEqual(actual, expected) {
 }
 
 // Minimal element stub mirroring tests/artifact_comments.test.js (no jsdom).
+function makeClassList() {
+  const classes = new Set();
+  return {
+    add(...tokens) { for (const t of tokens) classes.add(t); },
+    remove(...tokens) { for (const t of tokens) classes.delete(t); },
+    contains(token) { return classes.has(token); },
+  };
+}
+
 function makeElement() {
   return {
     _textContent: '',
@@ -58,7 +67,7 @@ function makeElement() {
     get innerText() {
       return this.textContent;
     },
-    classList: {add() {}, remove() {}},
+    classList: makeClassList(),
     appendChild(child) {
       this.children.push(child);
       this.childNodes.push(child);

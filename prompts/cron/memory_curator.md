@@ -1,6 +1,8 @@
 Daily memory curation.
 
 Read `~/workspace/charlie-bot/prompts/memory_guideline.md` first.
+Reload the writing-style skill in full before writing or editing any entry prose, and check
+every added or rewritten line against it.
 
 Step 0: guard against an undecided prior day.
 If the memory repo working tree at `~/.charliebot/memory/` is dirty (uncommitted changes from a

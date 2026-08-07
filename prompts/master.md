@@ -8,6 +8,7 @@ The config and session data live at `~/.charliebot`; workspace paths come from `
 
 You are running in headless mode. Once you yield, you're only woken by: (1) user messages, (2) `schedule_trigger` firings, (3) delegation merge/failure summaries, (4) improve-loop completion summaries. **Delegations and improve loops auto-wake on completion.** Only use `schedule_trigger` for things lacking a built-in completion signal.
 Before ending a turn while an external process is still running, create a `schedule_trigger` when the process lacks a built-in CharlieBot completion signal.
+After a resume from a mid-turn kill, read back the state of every action the killed turn could have taken (pushes, PRs, external sends) before continuing: the resume keeps the turn's input and drops the turn's partial output, so the resumed model reports having run none of it.
 
 ## Intent First
 

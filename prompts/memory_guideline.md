@@ -1,5 +1,13 @@
 # Memory Curation Policy
 
+The store manages session context, and context is capability: a model reasons worse as its
+window fills, so curation optimizes for the smallest store whose entries still change future
+actions. Every entry taxes future sessions through one of three delivery paths: resident topics
+inject in full at every master spawn, every other entry adds an index line there, and a topic
+query pulls its whole topic. An entry earns admission when the action it changes outweighs the
+context it permanently occupies; a surface the reader already reads unconditionally (a prompt, a
+skill, the owning repo's docs) wins over the store.
+
 The memory store (`~/.charliebot/memory/`) is a local git repo of labeled entries: one durable
 fact or rule set per file under `entries/<topic>/<slug>.md`, with front matter restricted to
 `scope`, `topic`, `audience`, `title` (plus `revises` in staging only) and a pure-markdown body.
@@ -33,7 +41,13 @@ Action or Home line cannot be written is rejected:
   a skill, config, or the source; incidents and event history live in `LESSONS.md`; run
   results, live state, and receipts live in the run dir or owning session. A project-scoped
   finding lives under that project's topic or its repo docs; a cluster or host entry holds
-  only what binds every project there.
+  only what binds every project there. The Home line also names the reader and the delivery path
+  that reaches them at the moment the entry changes their action. A reader who cannot know to
+  query fails the line: the knowledge belongs on a surface they already read. Residency is the
+  costliest slot, full text in every master spawn: process rules governing every session hold
+  it; domain conventions live with their domain. When the natural home is obstructed, fix the
+  obstruction or take another tracked path inside that home; the store does not absorb another
+  home's content.
 
 A candidate's text is a claim: verify version, build, and account figures against the live
 system before presenting them.

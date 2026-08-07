@@ -420,7 +420,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function isLayerNode(el) {
       while (el) {
-        if (el.classList && typeof el.classList.contains === 'function' && el.classList.contains(UI_CLASS)) {
+        if (el.classList && el.classList.contains(UI_CLASS)) {
           return true;
         }
         el = el.parentElement;

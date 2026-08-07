@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -36,6 +37,15 @@ class _FakeSseResponse:
   async def aiter_lines(self):
     for line in self._lines:
       yield line
+
+
+class _FakeOneShotStdout:
+
+  def __aiter__(self):
+    return self
+
+  async def __anext__(self):
+    raise StopAsyncIteration
 
 
 @pytest.mark.asyncio
@@ -173,6 +183,120 @@ def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
   assert data["permission"] == {"*": "allow", "question": "deny"}
   assert data["default_agent"] == "charliebot"
   assert data["agent"]["charliebot"] == {"mode": "primary"}
+
+
+def test_prepare_env_merges_proxy_and_local_no_proxy_without_mutating_input(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, opencode_proxy_url="http://proxy.test:8080")
+  input_env = {
+      "PATH": "/usr/bin",
+      "NO_PROXY": "internal.test,localhost,127.0.0.1",
+  }
+  original_env = dict(input_env)
+
+  prepared = backend._prepare_env(input_env)
+
+  assert prepared["HTTP_PROXY"] == "http://proxy.test:8080"
+  assert prepared["HTTPS_PROXY"] == "http://proxy.test:8080"
+  assert prepared["NO_PROXY"] == "internal.test,localhost,127.0.0.1,::1"
+  assert input_env == original_env
+
+  repeated = backend._prepare_env(prepared)
+  assert repeated["NO_PROXY"] == prepared["NO_PROXY"]
+
+
+def test_prepare_env_without_proxy_preserves_proxy_related_environment(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+  input_env = {
+      "PATH": "/usr/bin",
+      "HTTP_PROXY": "http://existing-http.test:8080",
+      "HTTPS_PROXY": "http://existing-https.test:8080",
+      "NO_PROXY": "internal.test,localhost",
+  }
+  original_env = dict(input_env)
+
+  prepared = backend._prepare_env(input_env)
+
+  assert {
+      key: prepared[key] for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+  } == {
+      "HTTP_PROXY": "http://existing-http.test:8080",
+      "HTTPS_PROXY": "http://existing-https.test:8080",
+      "NO_PROXY": "internal.test,localhost",
+  }
+  assert input_env == original_env
+
+
+def test_proxy_state_is_isolated_between_backend_instances(monkeypatch) -> None:
+  proxied = _build_backend(monkeypatch, opencode_proxy_url="http://proxy.test:8080")
+  unproxied = _build_backend(monkeypatch)
+
+  proxied_env = proxied._prepare_env({"PATH": "/usr/bin"})
+  unproxied_env = unproxied._prepare_env({"PATH": "/usr/bin"})
+
+  assert proxied_env["HTTP_PROXY"] == "http://proxy.test:8080"
+  assert proxied_env["HTTPS_PROXY"] == "http://proxy.test:8080"
+  assert proxied_env["NO_PROXY"] == "localhost,127.0.0.1,::1"
+  assert "HTTP_PROXY" not in unproxied_env
+  assert "HTTPS_PROXY" not in unproxied_env
+  assert "NO_PROXY" not in unproxied_env
+
+
+@pytest.mark.asyncio
+async def test_run_passes_proxy_environment_to_serve_subprocess(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch, model="provider/model", opencode_proxy_url="http://proxy.test:8080")
+  process = MagicMock()
+  process.pid = 1234
+  create_process = AsyncMock(return_value=process)
+  monkeypatch.setattr("src.agents.backends.opencode.asyncio.create_subprocess_exec", create_process)
+  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
+  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
+  cleanup = AsyncMock()
+  monkeypatch.setattr(backend, "_cleanup_server", cleanup)
+  input_env = {"PATH": "/usr/bin", "NO_PROXY": "internal.test,localhost"}
+  original_env = dict(input_env)
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), input_env)]
+
+  child_env = create_process.await_args.kwargs["env"]
+  assert child_env["HTTP_PROXY"] == "http://proxy.test:8080"
+  assert child_env["HTTPS_PROXY"] == "http://proxy.test:8080"
+  assert child_env["NO_PROXY"] == "internal.test,localhost,127.0.0.1,::1"
+  assert json.loads(child_env["OPENCODE_CONFIG_CONTENT"])["permission"] == {
+      "*": "allow",
+      "question": "deny",
+  }
+  assert input_env == original_env
+  assert events[0]["type"] == ET.ERROR
+  cleanup.assert_awaited_once()
+  assert backend._stderr_task is not None
+  await backend._stderr_task
+
+
+@pytest.mark.asyncio
+async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="provider/model", opencode_proxy_url="http://proxy.test:8080")
+  monkeypatch.setenv("NO_PROXY", "internal.test,localhost")
+  monkeypatch.setenv("HTTP_PROXY", "http://ambient-http.test:8080")
+  monkeypatch.setenv("HTTPS_PROXY", "http://ambient-https.test:8080")
+  process = MagicMock()
+  process.stdout = _FakeOneShotStdout()
+  process.stderr = MagicMock()
+  process.stderr.read = AsyncMock(return_value=b"")
+  process.wait = AsyncMock(return_value=0)
+  process.pid = 5678
+  process.returncode = 0
+  create_process = AsyncMock(return_value=process)
+
+  with patch("src.agents.backends.opencode.asyncio.create_subprocess_exec", new=create_process):
+    result = await backend.one_shot_text("prompt", "system", timeout=5.0)
+
+  child_env = create_process.await_args.kwargs["env"]
+  assert result == ""
+  assert child_env["HTTP_PROXY"] == "http://proxy.test:8080"
+  assert child_env["HTTPS_PROXY"] == "http://proxy.test:8080"
+  assert child_env["NO_PROXY"] == "internal.test,localhost,127.0.0.1,::1"
+  assert json.loads(child_env["OPENCODE_CONFIG_CONTENT"]) == {"permission": {"*": "deny"}}
+  process.wait.assert_awaited_once()
 
 
 def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:

@@ -73,7 +73,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
   elif option.type == "gemini":
     return GeminiCliBackend(model=_require_model(option), **kwargs)
   elif option.type == "opencode":
-    return OpenCodeBackend(model=_require_model(option), **kwargs)
+    return OpenCodeBackend(model=_require_model(option), opencode_proxy_url=option.opencode_proxy_url, **kwargs)
   elif option.type == "antigravity":
     return AntigravityCliBackend(**kwargs)
   elif option.type == "tui-cli":

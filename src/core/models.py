@@ -178,6 +178,7 @@ class BackendOption(BaseModel):
   api_base: Optional[str] = None  # OpenAI-compatible base URL (charlie-code, cc-openai-compatible)
   api_key_env: Optional[str] = None  # cc-openai-compatible: env var holding the upstream API key
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
+  opencode_proxy_url: Optional[str] = None  # opencode only: per-backend HTTP/HTTPS proxy URL
 
 
 MODEL_REQUIRED_BACKEND_TYPES = frozenset(

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sqlite3
 import time
 from collections import defaultdict
@@ -127,16 +128,22 @@ def _account_label(path: Path, stem: str) -> str:
 
 
 def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
-  """Yield ``*.jsonl`` under *root*, recording a note when the walk itself fails.
+  """Yield ``*.jsonl`` under *root*, recording a note when a directory is unreadable.
 
-  A directory made unreadable mid-traversal surfaces as an ``OSError`` from ``is_dir()`` during
-  ``rglob``; wrapping the generator here turns that into a per-account note instead of bubbling out
-  of ``collect_token_usage``.
+  ``Path.rglob`` swallows ``PermissionError`` while walking (shell-glob semantics), so an
+  unreadable directory would vanish silently instead of surfacing. ``os.walk``'s ``onerror`` hook
+  gets the error instead, which becomes a per-account note; a missing directory is not an error
+  here (``discover_homes`` already filters those out for the real on-disk layout).
   """
-  try:
-    yield from root.rglob("*.jsonl")
-  except OSError as exc:
-    t.notes.append(f"{source}: unreadable {label}/{root.name}: {exc}")
+
+  def _onerror(exc: OSError) -> None:
+    if not isinstance(exc, FileNotFoundError):
+      t.notes.append(f"{source}: unreadable {label}/{root.name}: {exc}")
+
+  for dirpath, _, filenames in os.walk(root, onerror=_onerror):
+    for name in filenames:
+      if name.endswith(".jsonl"):
+        yield Path(dirpath) / name
 
 
 def collect_claude(t: _Tally, homes: dict[str, Path]) -> None:

@@ -1,6 +1,7 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
 import asyncio
+import datetime as dt
 import fnmatch
 import gzip
 import hashlib
@@ -458,7 +459,7 @@ def _token_usage_context(tally: TokenTally) -> dict:
       "window": window,
       "window_str": f"{window[0]} → {window[1]}" if rows else "",
       "cache_share": cache_share,
-      "generated": _RUNTIME_GIT_VERSION,
+      "generated": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z"),
       "notes": tally.notes,
   }
 
@@ -471,10 +472,14 @@ async def token_usage_viewer(request: Request):
   already in flight, awaits and shares it instead of starting a second scan.
   """
   global _token_usage_task
-  if _token_usage_task is None:
-    _token_usage_task = asyncio.create_task(asyncio.to_thread(collect_token_usage))
-  tally = await _token_usage_task
-  _token_usage_task = None
+  task = _token_usage_task
+  if task is None:
+    task = _token_usage_task = asyncio.create_task(asyncio.to_thread(collect_token_usage))
+  tally = await task
+  if _token_usage_task is task:
+    # Only the last joiner to observe its own task still installed clears it; a joiner that
+    # resumes after a newer task has already replaced it must not clobber that newer task.
+    _token_usage_task = None
   return templates.TemplateResponse(
       request,
       "token_usage.html",

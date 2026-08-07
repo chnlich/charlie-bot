@@ -87,6 +87,9 @@ Use this format:
 - bullet points of what you changed
 ### Evidence
 - test outcomes, measurements, concrete observations
+### Commits
+- <sha> <subject>
+- (or, if you made no commits: `- none — <one-line verdict>`)
 ### Advisory Notes
 - optional hints, risks, or ideas future iterations may consider; advisory only, not a required plan
 ```

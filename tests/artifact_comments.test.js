@@ -1713,3 +1713,70 @@ test('card click does not break the x button', () => {
   assert.equal(block.classList.contains('__cbc-marked'), false, 'block is unmarked after removing the only entry');
   assert.equal(gutter.children.length, 0, 'gutter is empty after removal');
 });
+
+// ---------------------------------------------------------------------------
+// Review-layer invisibility: every node the layer injects into document.body is
+// a recognised layer node (carries the __cbc-ui marker), so it can never be
+// misidentified as an artifact block. The marker is placed by the single
+// injectRoot entry point; the check here asserts the property over ALL injected
+// children rather than naming the five container classes, so a sixth injected
+// container that forgets the marker is caught too.
+// ---------------------------------------------------------------------------
+
+test('every injected body child carries the __cbc-ui marker even after trigger and popover exist', async () => {
+  // A wide layout so the review UI's gutter can engage and the popover/trigger
+  // paths are exercised, mirroring the gutter-mode fixtures above.
+  const block = makeBlock('seeded artifact content');
+  block.getBoundingClientRect = rectAt(200);
+  const {body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    bodyChildren: [block],
+    innerWidth: 1400,
+    fetch: FETCH_OK,
+  });
+
+  // Drive the trigger and the popover into existence, as the layering code
+  // would in real use, so every latent container is present for the check.
+  const mouseover = listeners.find((l) => l.target === 'document' && l.type === 'mouseover');
+  mouseover.handler({target: block});
+  addBlockComment(body, listeners, block, 'cmt');
+  await flushPromises();
+
+  // Styles go to head, never body, so any body child not seeded via
+  // bodyChildren is an injected layer root and must carry the marker.
+  const bodyChildrenBefore = [block];
+  for (const child of body.children) {
+    if (bodyChildrenBefore.indexOf(child) !== -1) continue;
+    assert.equal(child.classList.contains('__cbc-ui'), true,
+      'injected body child carries the __cbc-ui marker: ' + (child.className || child.textContent || child.constructor));
+  }
+});
+
+test('findBlock returns null for a block node planted inside the review layer', () => {
+  const {window, body} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    fetch: FETCH_OK,
+  });
+  const dock = dockOf(body);
+  const planted = makeBlock('<some text>');
+  dock.appendChild(planted);
+
+  assert.equal(window.__cbcFindBlock(planted), null,
+    'a text-bearing block inside the layer is never identified as an artifact block');
+});
+
+test('re-anchor never marks a layer node, even when its text matches a draft quote', () => {
+  const block = makeBlock('some artifact text');
+  const {window, body} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+    sessionStorage: seedDraft(SHORTCUT_PATH, [
+      {kind: 'block', quote: '<some text>', context: '', comment: 'quote targets the planted node'},
+    ]),
+    bodyChildren: [block],
+    fetch: FETCH_OK,
+  });
+  const dock = dockOf(body);
+  const planted = makeBlock('<some text>');
+  dock.appendChild(planted);
+
+  window.__cbcReanchor();
+  assert.equal(planted.classList.contains('__cbc-marked'), false,
+    'a draft entry never anchors to a node inside the review layer');
+});

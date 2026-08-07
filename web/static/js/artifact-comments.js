@@ -14,6 +14,7 @@ function _hasPanelReviewMarker(hash) {
 if (!framed || _hasPanelReviewMarker(window.location.hash)) {
   (function() {
     var GLOBAL_PREFIX = '__cbc';
+    var UI_CLASS = GLOBAL_PREFIX + '-ui';
     var HIDE_DELAY_MS = 300;
     var TRIGGER_SIZE = 34;
     var POPOVER_WIDTH = 460;
@@ -370,7 +371,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function installListeners() {
       document.addEventListener('mouseover', function(event) {
-        if (isCommentUi(event.target)) {
+        if (isLayerNode(event.target)) {
           cancelHide();
           return;
         }
@@ -384,14 +385,14 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       document.addEventListener('mouseout', function(event) {
         if (popover) return;
         var related = event.relatedTarget;
-        if (isCommentUi(related)) {
+        if (isLayerNode(related)) {
           cancelHide();
           return;
         }
         if (hovered && (!related || !hovered.contains(related))) scheduleHide();
       });
       document.addEventListener('click', function(event) {
-        if (isCommentUi(event.target) || isInteractiveElement(event.target) || hasActiveTextSelection()) return;
+        if (isLayerNode(event.target) || isInteractiveElement(event.target) || hasActiveTextSelection()) return;
         var block = findBlock(event.target);
         if (block) openPopover(block);
       });
@@ -417,10 +418,14 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return Boolean(el && textFor(el, 1));
     }
 
-    function isCommentUi(target) {
-      return Boolean(target && target.closest && target.closest(
-        '.' + GLOBAL_PREFIX + '-trigger,.' + GLOBAL_PREFIX + '-popover,.' + GLOBAL_PREFIX + '-toast,.' + GLOBAL_PREFIX + '-tray'
-      ));
+    function isLayerNode(el) {
+      while (el) {
+        if (el.classList && typeof el.classList.contains === 'function' && el.classList.contains(UI_CLASS)) {
+          return true;
+        }
+        el = el.parentElement;
+      }
+      return false;
     }
 
     function isInteractiveElement(target) {
@@ -454,7 +459,17 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return tagName === 'PRE' || tagName === 'TD' || tagName === 'TH';
     }
 
+    // Unique path for the layer's root nodes. Marking happens here so anything
+    // the layer inserts into document.body carries the ownership class, and any
+    // root that forgets it must have bypassed this entry point.
+    function injectRoot(node) {
+      node.classList.add(UI_CLASS);
+      document.body.appendChild(node);
+      return node;
+    }
+
     function findBlock(target) {
+      if (isLayerNode(target)) return null;
       var el = target;
       while (el && el !== document.body) {
         if (isCommentableBlock(el)) return el;
@@ -489,7 +504,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trigger.addEventListener('mouseleave', function() {
         if (!popover) scheduleHide();
       });
-      document.body.appendChild(trigger);
+      injectRoot(trigger);
       return trigger;
     }
 
@@ -694,7 +709,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       toast = node;
       node.className = GLOBAL_PREFIX + '-toast' + (isError ? ' ' + GLOBAL_PREFIX + '-toast-error' : '');
       node.textContent = message;
-      document.body.appendChild(node);
+      injectRoot(node);
       window.setTimeout(function() {
         if (node.parentNode) node.parentNode.removeChild(node);
         if (toast === node) toast = null;
@@ -735,7 +750,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (dock) return dock;
       var node = document.createElement('div');
       node.className = GLOBAL_PREFIX + '-dock';
-      document.body.appendChild(node);
+      injectRoot(node);
       dock = node;
       return dock;
     }
@@ -839,7 +854,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         });
       }
 
-      document.body.appendChild(node);
+      injectRoot(node);
       popover = node;
       positionPopover(node, block);
       textarea.focus();
@@ -884,6 +899,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function collectCommentableBlocks() {
       var blocks = [];
       function walk(el) {
+        if (isLayerNode(el)) return;
         if (isCommentableBlock(el)) blocks.push(el);
         if (el.children) {
           for (var i = 0; i < el.children.length; i++) {
@@ -1131,7 +1147,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (!gutter) {
         gutter = document.createElement('div');
         gutter.className = GLOBAL_PREFIX + '-gutter';
-        document.body.appendChild(gutter);
+        injectRoot(gutter);
         prevGutterLeft = gutter.style.left;
         prevGutterWidth = gutter.style.width;
         prevGutterBottom = gutter.style.bottom;

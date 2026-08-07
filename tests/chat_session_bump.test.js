@@ -497,14 +497,12 @@ function lastMatch(items, predicate) {
 function expectedTurns(items) {
   const spans = [];
   let span = [];
-  let leading = true;
   for (const item of items) {
     if (item.kind === 'fixture') continue;
     span.push(item);
     if (item.kind === 'msg' && item.role === 'separator') {
-      spans.push({items: span, leading});
+      spans.push({items: span});
       span = [];
-      leading = false;
     }
   }
   return spans.map(describeExpectedSpan).filter(Boolean);
@@ -517,7 +515,6 @@ function describeExpectedSpan(span) {
   const conclusion = lastMatch(body, (item) => item.role === 'assistant');
   const beforeConclusion = conclusion ? body.slice(0, body.indexOf(conclusion)) : body;
   const stimulus = lastMatch(beforeConclusion, (item) => STIMULUS_ROLES.includes(item.role));
-  if (!stimulus && span.leading) return null;
   const head = stimulus || body[0];
   if (!head) return null;
   const steps = conclusion
@@ -768,7 +765,9 @@ function generateCases() {
     ],
   });
   cases.push({
-    name: 'paginated leading span has no stimulus',
+    // The auto-wake shape: a stimulus-free but complete turn sits at the
+    // container top; it folds with the body[0] head fallback.
+    name: 'stimulus-free leading turn at the container top',
     items: [
       msg('assistant', 'p-a1'),
       msg('system', 'p-s1'),
@@ -1006,8 +1005,29 @@ test('I5: manual open/fold, an expanded N steps bar and an open recap panel surv
 });
 
 // --- I6: pagination --------------------------------------------------------
-test('I6: a leading partial turn stays flat until pagination prepends its head', () => {
+// Turn-aligned paging means a page always begins at a turn start, so a page
+// top can only ever hold complete turns. Any separator-terminated span at the
+// container top wraps — whether or not it carries a stimulus.
+test('I6: a complete separator-terminated span at the container top wraps, with or without a stimulus', () => {
+  // Without a stimulus: the head falls back to the body's first message.
+  const bareItems = [
+    msg('assistant', 'a1'),
+    msg('system', 's1'),
+    msg('assistant', 'a2'),
+    separator('sep1', {secs: 12}),
+  ];
+  const bareCase = mountCase(bareItems);
+  bareCase.context.setPageDepth('outline');
+
+  const bareTurns = expectedTurns(bareItems);
+  assert.equal(bareTurns.length, 1);
+  assert.equal(bareTurns[0].head, bareItems[0]);
+  assertWrapperCompleteness(bareCase.root, bareTurns, bareCase.nodes, 'stimulus-free top turn');
+  assertStateAndRows(bareCase.root, bareTurns, 'outline', 'stimulus-free top turn');
+
+  // With a stimulus: the same span wraps with the stimulus as head.
   const items = [
+    msg('user', 'u1', {text: 'the original ask', ts: '2026-04-02T08:15:00.000Z'}),
     msg('assistant', 'a1'),
     msg('system', 's1'),
     msg('assistant', 'a2'),
@@ -1016,24 +1036,72 @@ test('I6: a leading partial turn stays flat until pagination prepends its head',
   const {context, root, nodes} = mountCase(items);
   context.setPageDepth('outline');
 
-  assert.equal(wrappers(root).length, 0);
-  assertFlatBoundaries(root, expectedTurns(items), nodes, 'before the head arrives');
-
-  const head = msg('user', 'u1', {text: 'the original ask', ts: '2026-04-02T08:15:00.000Z'});
-  const headEl = buildElement(head);
-  nodes.set(head, headEl);
-  root.insertBefore(headEl, nodes.get(items[0]));
-  items.unshift(head);
-  context.applyTurnOutline(root);
-
   const turns = expectedTurns(items);
   assert.equal(turns.length, 1);
-  assertWrapperCompleteness(root, turns, nodes, 'after the head arrives');
-  assertStateAndRows(root, turns, 'outline', 'after the head arrives');
+  assertWrapperCompleteness(root, turns, nodes, 'stimulated top turn');
+  assertStateAndRows(root, turns, 'outline', 'stimulated top turn');
   assert.equal(root.querySelectorAll('.turn-fold-bar').length, 1);
   assert.deepEqual(
       root.querySelector('.turn-fold-content').children.map((child) => child.dataset.messageId),
       ['a1', 's1']);
+});
+
+// The skip_user_event auto-wake shape: a complete turn whose body is only
+// assistant messages. At the container top it still folds, and its row's head
+// is that first assistant message.
+test('a stimulus-free complete turn at the container top folds with its first assistant as head', () => {
+  const items = [
+    msg('assistant', 'w1', {text: 'compiling the round plan'}),
+    msg('assistant', 'w2', {text: 'running the checks'}),
+    msg('assistant', 'w3', {text: 'all green'}),
+    separator('wake-sep', {secs: 31}),
+  ];
+  const {context, root, nodes} = mountCase(items);
+  context.setPageDepth('outline');
+
+  const turns = expectedTurns(items);
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].head, items[0], 'head must be the first assistant message');
+  assert.equal(turns[0].head.role, 'assistant');
+  assertWrapperCompleteness(root, turns, nodes, 'wake turn');
+  assertStateAndRows(root, turns, 'outline', 'wake turn');
+  assertStimulusVisible(root, turns, nodes, 'wake turn');
+});
+
+// The orphan defect under turn-aligned input: a first paint starting at a
+// turn start, then an older page ending in a separator prepended above it.
+// No message may be left outside a turn wrapper.
+test('load-more under turn-aligned paging leaves no message outside a turn wrapper', () => {
+  const pageItems = [
+    msg('user', 'p1-head', {text: 'the ask', ts: '2026-04-02T09:00:00.000Z'}),
+    msg('assistant', 'p1-step'),
+    msg('assistant', 'p1-concl', {text: 'the answer'}),
+    separator('p1-sep', {secs: 55}),
+  ];
+  const {context, root, nodes} = mountCase(pageItems);
+  context.setPageDepth('outline');
+  assert.equal(wrappers(root).length, 1, 'first paint wraps the complete turn');
+
+  const olderItems = [
+    msg('user', 'p0-head', {text: 'an earlier ask', ts: '2026-04-02T08:00:00.000Z'}),
+    msg('assistant', 'p0-concl', {text: 'an earlier answer'}),
+    separator('p0-sep', {secs: 40}),
+  ];
+  const olderEls = olderItems.map((item) => {
+    const el = buildElement(item);
+    nodes.set(item, el);
+    return el;
+  });
+  for (let i = olderEls.length - 1; i >= 0; i--) root.prepend(olderEls[i]);
+  context.applyTurnOutline(root);
+  context.applyTurnOutline(root);  // repeated derives must not disturb it
+
+  const turns = expectedTurns([...olderItems, ...pageItems]);
+  assertWrapperCompleteness(root, turns, nodes, 'after load-more');
+  assertStateAndRows(root, turns, 'outline', 'after load-more');
+  for (const el of nodes.values()) {
+    assert.ok(el.closest('.turn-wrap'), `${el.dataset.messageId} is outside every turn wrapper`);
+  }
 });
 
 // --- the row's two value sources -------------------------------------------

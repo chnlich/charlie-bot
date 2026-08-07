@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home — CharlieBot</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --mut2:#7b8694; --acc:#1163c0;
+    --up-fg:#187f37; --up-bg:#dafbe1; --up-bd:#9cd6ac;
+    --down-fg:#b42318; --down-bg:#ffebe9; --down-bd:#efb0a9;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg:#121213; --panel:#1a1a19; --panel2:#232322; --bd:#38383a;
+      --tx:#f2f2ef; --mut:#c3c2b7; --mut2:#9a9a92; --acc:#6fa8e8;
+      --up-fg:#4ac26b; --up-bg:#12261e; --up-bd:#1d6339;
+      --down-fg:#f47067; --down-bg:#2d1715; --down-bd:#7d362f;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:#121213; --panel:#1a1a19; --panel2:#232322; --bd:#38383a;
+    --tx:#f2f2ef; --mut:#c3c2b7; --mut2:#9a9a92; --acc:#6fa8e8;
+    --up-fg:#4ac26b; --up-bg:#12261e; --up-bd:#1d6339;
+    --down-fg:#f47067; --down-bg:#2d1715; --down-bd:#7d362f;
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--tx); padding:26px 24px 40px;
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:1080px; margin:0 auto }
+  h1 { font-size:22px; margin:0 0 6px; letter-spacing:-.2px }
+  .sub { color:var(--mut); margin:0 0 22px; font-size:13.5px; max-width:82ch }
+  h2 { font-size:15px; margin:30px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--bd);
+    display:flex; align-items:center; gap:8px }
+  h2 .n { display:inline-flex; width:22px; height:22px; border-radius:6px; background:var(--acc);
+    color:#fff; font-size:12px; font-weight:700; align-items:center; justify-content:center; flex:0 0 auto }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px }
+  .card { display:flex; flex-direction:column; gap:5px; background:var(--panel); border:1px solid var(--bd);
+    border-radius:12px; padding:14px 16px; color:var(--tx); text-decoration:none }
+  .card:hover { border-color:var(--acc); text-decoration:none }
+  .card .head { display:flex; align-items:center; justify-content:space-between; gap:8px }
+  .card .nm { font-size:14px; font-weight:600 }
+  .card .desc { font-size:12.5px; color:var(--mut) }
+  .card .tgt { font-size:11.5px; font-family:var(--mono); color:var(--mut2);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .badge { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; font-size:11px;
+    font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+    border:1px solid; border-radius:999px; padding:1px 9px }
+  .badge::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor }
+  .badge-up { color:var(--up-fg); background:var(--up-bg); border-color:var(--up-bd) }
+  .badge-down { color:var(--down-fg); background:var(--down-bg); border-color:var(--down-bd) }
+  .foot { color:var(--mut2); font-size:12.5px; margin-top:26px; max-width:82ch; line-height:1.6 }
+  @media (max-width:760px) { body { padding:18px 14px 30px } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CharlieBot home</h1>
+  <p class="sub">Everything this host (<b>{{ hostname }}</b>) serves, in one place. The first block is
+  the pages this server itself renders; the second lists externally-hosted services with a live
+  reachability probe at page-load time.</p>
+
+  <h2><span class="n">1</span>Served by this server</h2>
+  <div class="cards">
+    {% for d in destinations %}
+    <a class="card" href="{{ d.url }}">
+      <span class="head"><span class="nm">{{ d.name }}</span></span>
+      <span class="desc">{{ d.description }}</span>
+      <span class="tgt">{{ d.url }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if services %}
+  <h2><span class="n">2</span>External services</h2>
+  <div class="cards">
+    {% for s in services %}
+    <a class="card svc-card" href="{{ s.url }}">
+      <span class="head">
+        <span class="nm">{{ s.name }}</span>
+        <span class="badge badge-{{ s.status }}">{{ s.status }}</span>
+      </span>
+      <span class="desc">{{ s.description }}</span>
+      <span class="tgt">{{ s.url }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <p class="foot">Three viewers are <b>not</b> listed above because they each need an input first:
+  <b>Perfetto</b> needs a trace file, <b>Nsight Compute</b> needs a <code>.ncu-rep</code> report, and
+  <b>Session events</b> need a session. Open them from the file browser or from a chat session.</p>
+</div>
+</body>
+</html>

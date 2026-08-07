@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -42,6 +42,43 @@ _PERFETTO_MERGE_CACHE_LIMIT = 8
 # Prefixes the file server answers on (server.py mounts one router under both). A trace= input
 # names an absolute path under either of them.
 _FILE_SERVER_PREFIXES = ("/files", "/absolute_filepath")
+
+# Destinations served by this server, listed on the home page. The same on every
+# host, so they live in code rather than config; each renders as a card linking
+# straight to the page.
+_HOME_DESTINATIONS: tuple[dict[str, str], ...] = (
+    {"name": "Chat", "url": "/", "description": "The CharlieBot chat and session UI."},
+    {"name": "Token usage by model", "url": "/token-usage",
+     "description": "Tokens per model across every agent log on this host."},
+    {"name": "Diff viewer", "url": "/diff", "description": "Browse a repository diff between two refs."},
+    {"name": "File browser", "url": "/files/", "description": "Browse any file on this host's filesystem."},
+)
+
+_HOME_PROBE_TIMEOUT_S = 0.3
+
+
+def _probe_home_service(url: str) -> bool:
+  """TCP-connect to the host and port parsed out of *url*; True when the connect succeeds.
+
+  The port defaults by scheme (443 for https, 80 for http). Any failure — refused or
+  timed-out connect, an unparseable or out-of-range port, or a URL with no host —
+  returns False; a probe never raises out of the home route.
+  """
+  try:
+    parsed = urlparse(url)
+    host = parsed.hostname
+    port = parsed.port
+  except ValueError:
+    return False
+  if not host:
+    return False
+  if port is None:
+    port = 443 if parsed.scheme == "https" else 80
+  try:
+    with socket.create_connection((host, port), timeout=_HOME_PROBE_TIMEOUT_S):
+      return True
+  except OSError:
+    return False
 
 # Single-flight holder for the current in-flight token-usage collection. Concurrent requests
 # await the same task and share one scan; it is cleared on completion so the next request scans
@@ -497,6 +534,35 @@ async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_conf
           "hostname": socket.gethostname(),
           "code_server_enabled": is_code_server_available(cfg),
           "static_asset_version": _static_asset_version(),
+      })
+
+
+@router.get("/home", response_class=HTMLResponse)
+async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config)):
+  """Render the home page: this server's destinations plus the per-host external services.
+
+  Each external service is probed by TCP-connecting to the host and port parsed out of
+  its configured ``url`` — the same address its card links to. Probes run off the event
+  loop, concurrently, and nothing is persisted or cached.
+  """
+  statuses = await asyncio.gather(
+      *(asyncio.to_thread(_probe_home_service, service.url) for service in cfg.home_services))
+  services = [
+      {
+          "name": service.name,
+          "description": service.description,
+          "url": service.url,
+          "status": "up" if up else "down",
+      }
+      for service, up in zip(cfg.home_services, statuses)
+  ]
+  return templates.TemplateResponse(
+      request,
+      "home.html",
+      context={
+          "hostname": socket.gethostname(),
+          "destinations": _HOME_DESTINATIONS,
+          "services": services,
       })
 
 

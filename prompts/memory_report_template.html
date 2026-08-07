@@ -1,19 +1,20 @@
 <!--
 USAGE: The daily memory curator renders its Step 2 report from this skeleton. Copy the file,
 replace every {{...}} placeholder, and delete the BLOCK comments. One <section> per admit or
-revise: the Action and Home proof lines sit directly above that entry's diff. A canon deletion
-or a vocabulary (`topics`) change reuses the same section shape with a one-line justification
-in place of the proof lines. Rejected candidates form one table, each row naming its failed
-proof line. Chinese prose; code, paths, and commands stay English. Diff rendering: one <span>
-per line inside <pre class="diff">, class add | del | hunk | meta | ctx by the line's first
-character.
+revise: the two proof lines sit directly above that entry's diff, each headed by the question
+it answers as memory_guideline.md words it. A canon deletion or a vocabulary (`topics`) change
+reuses the same section shape with a one-line justification in place of the proof lines.
+Rejected candidates form one table, each row naming the question it could not answer. Filled
+prose is Chinese; the skeleton's static text stays as written; code, paths, and commands stay
+English. Diff rendering: one <span> per line inside <pre class="diff">, class add | del | hunk |
+meta | ctx by the line's first character.
 -->
 <!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>记忆库待批提案 · {{YYYY-MM-DD}}</title>
+<title>Memory curation proposal · {{YYYY-MM-DD}}</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; max-width: 62rem;
@@ -43,32 +44,32 @@ character.
 </style>
 </head>
 <body>
-<h1>记忆库待批提案 · {{YYYY-MM-DD}}</h1>
-<p>{{处置计数，如：admit 3、revise 2、reject 9}}（<code>charliebot memory lint</code>：{{clean}}，未提交）。</p>
+<h1>Memory curation proposal · {{YYYY-MM-DD}}</h1>
+<p>{{disposition counts, e.g. admit 3, revise 2, reject 9}} (<code>charliebot memory lint</code>: {{clean}}, not committed).</p>
 
 <!-- BLOCK: one section per admit / revise -->
 <section>
 <h2><span class="chip {{admit|revise}}">{{admit|revise}}</span> {{entries/<topic>/<slug>.md}}</h2>
 <ul class="proof">
-<li><b>Action</b>：{{这条改变未来哪个具体动作}}</li>
-<li><b>Home</b>：{{为什么 repo 文档、master prompt、skill、config、源码、LESSONS、run 目录都不是它的家}}</li>
+<li><b>{{the first question, as the guideline words it}}</b>: {{full-sentence answer}}</li>
+<li><b>{{the second question, as the guideline words it}}</b>: {{full-sentence answer}}</li>
 </ul>
-<pre class="diff">{{该文件的 git diff}}</pre>
+<pre class="diff">{{the file's git diff}}</pre>
 </section>
 
 <!-- BLOCK: canon deletion or topics change, when present -->
 <section>
-<h2><span class="chip remove">删除</span> {{entries/<topic>/<slug>.md}}</h2>
-<ul class="proof"><li>{{一句话依据，如：执行用户裁定}}</li></ul>
-<pre class="diff">{{该文件的 git diff}}</pre>
+<h2><span class="chip remove">remove</span> {{entries/<topic>/<slug>.md}}</h2>
+<ul class="proof"><li>{{one-line justification, e.g. executing a user ruling}}</li></ul>
+<pre class="diff">{{the file's git diff}}</pre>
 </section>
 
-<h2>被拒候选（{{N}}），各标失败的举证行</h2>
+<h2>Rejected candidates ({{N}}), each naming the question left unanswered</h2>
 <table>
-<tr><th style="width:22rem">候选</th><th>失败行</th><th>理由</th></tr>
-<tr><td>{{staging 文件名主体}}</td><td>{{Action|Home}}</td><td>{{一句话}}</td></tr>
+<tr><th style="width:22rem">Candidate</th><th>Unanswered question</th><th>Reason</th></tr>
+<tr><td>{{staging filename stem}}</td><td>{{the question left unanswered}}</td><td>{{one line}}</td></tr>
 </table>
 
-<footer>批准后动作：按 admit / revise 前缀提交，删除全部已处理 staging 文件（含被拒）。</footer>
+<footer>Post-approval actions: commit with the admit / revise prefixes, delete all processed staging files (rejected ones included).</footer>
 </body>
 </html>

@@ -91,10 +91,18 @@ class FakeElement {
     this._className = className;
     this.innerHTML = '';
     this.scrollTop = 0;
-    this.scrollHeight = 0;
     this.clientHeight = 0;
     this.style = {};
     this._listeners = {};
+  }
+
+  // Like a real scroller, the scrollable range derives from laid-out content.
+  get scrollHeight() {
+    return this._scrollHeight != null ? this._scrollHeight : fakeElementHeight(this);
+  }
+
+  set scrollHeight(value) {
+    this._scrollHeight = value;
   }
 
   get className() {

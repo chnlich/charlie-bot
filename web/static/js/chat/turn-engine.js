@@ -501,8 +501,12 @@
     }
 
     isPinned() {
-      this.ensureOffsets();
-      return this.totalHeight - this.container.scrollTop - this.container.clientHeight < 150;
+      // The browser's real scroll range (spacers + window + sibling margins +
+      // the streaming fixture) differs from the engine's height model by the
+      // container's space-y-3 margins; pinning to the model would leave the
+      // bottom margin worth of content unreachable.
+      const el = this.container;
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 150;
     }
 
     // Window bookkeeping + DOM projection. One reproject covers everything:
@@ -601,7 +605,7 @@
 
       // 4. Scroll correction: anchor keeps its visual position, or stay pinned.
       if (wasPinned) {
-        this.container.scrollTop = Math.max(0, this.totalHeight - this.container.clientHeight);
+        this.container.scrollTop = this.container.scrollHeight;
       } else if (anchor != null && anchor >= 0 && this.offsets[anchor] != null) {
         const delta = this.offsets[anchor] - anchorOffsetBefore;
         if (delta !== 0) this.container.scrollTop = scrollTop + delta;
@@ -650,9 +654,13 @@
       if (streamEl) this.container.appendChild(streamEl);
 
       this.ensureOffsets();
-      this.container.scrollTop = Math.max(0, this.totalHeight - this.container.clientHeight);
+      // Seed the spacers so the browser exposes its full range, then pin
+      // against the real scrollHeight (margins included), then project.
+      this.topSpacer.style.height = '0px';
+      this.bottomSpacer.style.height = Math.round(this.totalHeight) + 'px';
+      this.container.scrollTop = this.container.scrollHeight;
       this.reproject('mount');
-      this.container.scrollTop = Math.max(0, this.totalHeight - this.container.clientHeight);
+      this.container.scrollTop = this.container.scrollHeight;
       this.scheduleIdle();
       globalThis.__turnEngineStats = this.stats;
     }
@@ -754,9 +762,8 @@
       }
       this.offsetsDirty = true;
       this.reproject('append');
-      this.ensureOffsets();
       if (forceScroll || wasPinned) {
-        this.container.scrollTop = Math.max(0, this.totalHeight - this.container.clientHeight);
+        this.container.scrollTop = this.container.scrollHeight;
       } else if (typeof showScrollToBottom === 'function') {
         showScrollToBottom();
       }

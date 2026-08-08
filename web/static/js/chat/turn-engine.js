@@ -652,7 +652,11 @@
       this.bottomSpacer.style.height = Math.round(Math.max(0, covered)) + 'px';
 
       // 4. Scroll correction: anchor keeps its visual position, or stay pinned.
-      if (wasPinned) {
+      // User scroll and quiet-phase pre-rendering are new engine reasons; they
+      // must not turn a near-bottom viewport back into a pinned one. The
+      // positional snap remains for the legacy-equivalent reasons.
+      const snapToBottom = wasPinned && reason !== 'scroll' && reason !== 'prerender-ready';
+      if (snapToBottom) {
         this.writeScrollTop(this.container.scrollHeight);
       } else if (anchor != null && anchor >= 0 && this.offsets[anchor] != null) {
         const delta = this.offsets[anchor] - anchorOffsetBefore;
@@ -674,7 +678,7 @@
     // it must not pause the pre-render queue nor kick a redundant reproject.
     writeScrollTop(value) {
       this.container.scrollTop = value;
-      this.lastProgrammaticScrollTop = value;
+      this.lastProgrammaticScrollTop = this.container.scrollTop;
     }
 
     handleScroll() {

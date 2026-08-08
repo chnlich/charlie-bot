@@ -1321,9 +1321,23 @@ function makeEngineTimers() {
   return {now: 0, idle: [], raf: [], timeout: []};
 }
 
-function mountEngine(messages, {clientHeight = 900} = {}) {
+function installScrollTopClamp(root) {
+  let scrollTop = root.scrollTop;
+  Object.defineProperty(root, 'scrollTop', {
+    configurable: true,
+    get() {
+      return scrollTop;
+    },
+    set(value) {
+      scrollTop = Math.max(0, Math.min(value, root.scrollHeight - root.clientHeight));
+    },
+  });
+}
+
+function mountEngine(messages, {clientHeight = 900, clampScrollTop = false} = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   root.clientHeight = clientHeight;
+  if (clampScrollTop) installScrollTopClamp(root);
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
   const control = new FakeElement('DIV', {id: 'page-depth-control'});
@@ -1382,6 +1396,10 @@ function scrollTo(timers, root, position) {
   root.fire('scroll');
   timers.now += 16;
   flushRaf(timers);
+}
+
+function distanceFromBottom(root) {
+  return root.scrollHeight - root.scrollTop - root.clientHeight;
 }
 
 // --- engine invariant readers --------------------------------------------------
@@ -1578,6 +1596,121 @@ test('turn engine: pre-render pauses during scroll activity and unready turns us
   assert.equal(root.querySelectorAll('.turn-placeholder').length, 0, 'placeholders replaced once ready');
   assertEngineInvariants(context, root, stream, 'after drain');
   assert.equal(engine.stats.slicesStartedDuringScrollWindow, 0, 'still zero after the full drain');
+});
+
+// --- plan 2 v4 wheel-pin legs ----------------------------------------------
+test('turn engine: 100px wheel steps monotonically leave the bottom band', () => {
+  const {root, timers} = mountEngine(ePage('wheel_', 24), {
+    clientHeight: 120,
+    clampScrollTop: true,
+  });
+  settle(timers);
+
+  root.scrollTop = root.scrollHeight;
+  assert.equal(distanceFromBottom(root), 0, 'fixture starts at the real bottom');
+
+  let previous = root.scrollTop;
+  for (let i = 0; i < 12; i++) {
+    scrollTo(timers, root, previous - 100);
+    assert.ok(root.scrollTop < previous, `wheel step ${i} moved upward without write-back`);
+    previous = root.scrollTop;
+  }
+  assert.ok(distanceFromBottom(root) > 150, 'small wheel steps escaped the follow band');
+});
+
+test('turn engine: quiet prerender-ready reproject preserves a one-notch landing', () => {
+  const {root, timers, engine} = mountEngine(ePage('ready_', 24), {
+    clientHeight: 120,
+    clampScrollTop: true,
+  });
+  settle(timers);
+
+  root.scrollTop = root.scrollHeight - 100;
+  const landedScrollTop = root.scrollTop;
+  assert.ok(distanceFromBottom(root) < 150, 'fixture is one notch inside the follow band');
+
+  timers.now += 250;
+  engine.reproject('prerender-ready');
+  assert.equal(root.scrollTop, landedScrollTop, 'quiet pre-render does not pin the viewport');
+});
+
+test('turn engine: append follow matches the legacy 150px auto-scroll band', () => {
+  function appendAtDistance(distance) {
+    const state = mountEngine(ePage(`append_${distance}_`, 24), {
+      clientHeight: 120,
+      clampScrollTop: true,
+    });
+    settle(state.timers);
+    state.root.scrollTop = state.root.scrollHeight - state.root.clientHeight - distance;
+    const before = state.root.scrollTop;
+    assert.equal(distanceFromBottom(state.root), distance, `fixture landed ${distance}px from bottom`);
+    state.engine.appendMessage(eMsg('assistant', `append-${distance}`, 'new answer'), false);
+    return {state, before};
+  }
+
+  const exact = appendAtDistance(0);
+  assert.equal(distanceFromBottom(exact.state.root), 0, 'append at the exact bottom follows');
+
+  const insideBand = appendAtDistance(149);
+  assert.equal(distanceFromBottom(insideBand.state.root), 0, 'append inside 150px follows');
+
+  const outsideBand = appendAtDistance(150);
+  assert.equal(outsideBand.state.root.scrollTop, outsideBand.before,
+      'append at exactly 150px does not follow');
+  assert.ok(distanceFromBottom(outsideBand.state.root) > 150,
+      'append outside the legacy band leaves the viewport where the user put it');
+});
+
+test('turn engine: a resize/clamp landing at the bottom still follows a later append', () => {
+  const {root, timers, engine} = mountEngine(ePage('resize_', 24), {
+    clientHeight: 300,
+    clampScrollTop: true,
+  });
+  settle(timers);
+
+  root.clientHeight = 480;
+  root.scrollTop = root.scrollHeight;
+  assert.equal(distanceFromBottom(root), 0, 'clamped resize landing is exactly at bottom');
+
+  engine.appendMessage(eMsg('assistant', 'resize-append', 'follow the resized viewport'), false);
+  assert.equal(distanceFromBottom(root), 0, 'positional append follow needs no resize observer');
+});
+
+test('turn engine: an engine snap echo does not defer the pre-render queue', () => {
+  const {root, timers, engine} = mountEngine(ePage('echo_', 12), {
+    clientHeight: 900,
+    clampScrollTop: true,
+  });
+  const initialIdle = timers.idle.splice(0);
+  assert.equal(initialIdle.length, 1, 'mount arms one pre-render slice');
+
+  root.scrollTop = root.scrollHeight;
+  engine.appendMessage(eMsg('assistant', 'echo-append', 'echo marker'), false);
+  assert.equal(distanceFromBottom(root), 0, 'append produced an engine snap');
+
+  const deferredBeforeEcho = engine.stats.slicesDeferredForScroll;
+  root.fire('scroll');
+  assert.equal(timers.raf.length, 0, 'the engine echo does not schedule a scroll frame');
+  assert.equal(engine.stats.slicesDeferredForScroll, deferredBeforeEcho,
+      'the engine echo is not counted as user activity');
+
+  initialIdle.forEach((fn) => fn());
+  assert.equal(engine.stats.slicesDeferredForScroll, deferredBeforeEcho,
+      'the queued slice runs without a false quiet-window deferral');
+});
+
+test('turn engine: the 900px wheel path still leaves the bottom follow band', () => {
+  const {root, timers} = mountEngine(ePage('large_', 24), {
+    clientHeight: 120,
+    clampScrollTop: true,
+  });
+  settle(timers);
+
+  root.scrollTop = root.scrollHeight;
+  const before = root.scrollTop;
+  scrollTo(timers, root, before - 900);
+  assert.ok(root.scrollTop < before, 'large wheel step moves upward');
+  assert.ok(distanceFromBottom(root) > 150, 'large wheel step remains outside the follow band');
 });
 
 // --- (c): open/override, expanded N steps and open recap survive eviction ----

@@ -1,8 +1,8 @@
 Daily memory curation.
 
-Read `~/workspace/charlie-bot/prompts/memory_guideline.md` first.
-Reload the writing-style skill in full before writing or editing any entry prose, and check
-every added or rewritten line against it.
+Read `~/workspace/charlie-bot/skills/llm-context-guideline/SKILL.md` first.
+Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` before writing or
+editing any entry prose, and check every added or rewritten line against it.
 
 Step 0: guard against an undecided prior day.
 If the memory repo working tree at `~/.charliebot/memory/` is dirty (uncommitted changes from a
@@ -12,7 +12,8 @@ uncommitted changes.
 
 Step 1: curate staging candidates, merge-first.
 Read every file in `~/.charliebot/memory/staging/`. For each candidate, first test it against
-the admission whitelist in memory_guideline.md and write the proof lines it requires. For each
+the admission whitelist in the llm-context-guideline skill and write the proof lines it requires.
+For each
 passing candidate, the default action is a merge, not a new entry:
 - **revise (merge)**: fold the candidate into the existing entry whose theme covers it,
   normally `entries/<topic>/<revises>.md` when the candidate carries `revises: <slug>`,
@@ -40,7 +41,8 @@ staging files; leave the rest staged for the next day.
 
 Step 4: prevent repeat feedback.
 Treat every user comment on a proposal as evidence of a rule gap. After applying the comment,
-check whether memory_guideline.md or this prompt would have blocked the commented content had
+check whether the llm-context-guideline skill or this prompt would have blocked the commented
+content had
 the rules been followed; when they would not, present in the same reply the one-line amendment
 that would, and land it through the normal repo change flow after approval.
 

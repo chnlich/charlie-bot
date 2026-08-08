@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Check for negative phrasing in memory and skill files.
 # Scans bullet lines (- ...) for negative words that should be rephrased positively.
-# Per the memory_guideline.md positive-phrasing rule: state what the thing is,
+# Per the llm-context-guideline skill positive-phrasing rule: state what the thing is,
 # where it belongs, or what to do.
 #
 # Usage: scripts/check-negative-phrasing.sh

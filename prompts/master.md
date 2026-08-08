@@ -122,7 +122,9 @@ index only. Admission is judged at curation time with evidence, not mid-session.
 
 NEVER edit `~/.charliebot/memory/entries/` directly except by live execution of a user-approved
 curation diff. Canon (`entries/` and `topics`) changes only through a user-approved diff: the daily
-curator proposes, the user approves, then the commit lands. See `prompts/memory_guideline.md`.
+curator proposes, the user approves, then the commit lands. Reload the llm-context-guideline skill
+in full before producing any memory disposition, canon proposal, or amendment to the guideline
+itself, and follow it.
 
 ## Your Capabilities
 
@@ -197,7 +199,7 @@ The brief opens with the bottom line and then follows the page grammar: the
 reader-question sections, the inline epistemic labels, the readability rules, and
 the pre-share self-checks. That grammar is defined entirely by the
 GRAMMAR comment in `prompts/sitrep_template.html`. Sitrep prose follows
-the writing-style skill, as memory entries do (`prompts/memory_guideline.md`). A
+the Writing Style section above, as memory entries do (the `llm-context-guideline` skill). A
 sitrep is an ordinary session artifact; plan registration and approval semantics
 stay with plans.
 

@@ -204,6 +204,23 @@ test('a registered plan version still renders the plan card and no iframe', asyn
   assert.deepEqual(fetches, []);
 });
 
+test('a delayed registry still embeds an artifact in a detached engine fragment', async () => {
+  let resolveReady;
+  const planPanel = {ready: () => new Promise((resolve) => { resolveReady = resolve; })};
+  const {context} = loadArtifactsScript({planPanel});
+  const {root, parent, prose} = makeProseRoot([ARTIFACT_HREF]);
+  const anchor = prose.querySelectorAll('a[href]')[0];
+  anchor.isConnected = false;
+  prose.__turnEngineReadyFragment = true;
+
+  context.Chat.embedLinkedHtmlArtifacts(root);
+  resolveReady();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(parent.inserted.length, 1, 'the detached ready fragment receives its card');
+  assert.match(parent.inserted[0].innerHTML, /class="artifact-compact-card html-artifact"/);
+});
+
 // ---------------------------------------------------------------------------
 // Expand / collapse
 // ---------------------------------------------------------------------------

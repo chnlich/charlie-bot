@@ -375,6 +375,7 @@ function buildTurnRow(turn) {
 // The fold-back control shares the separator line with clone-to-here, Elon-e,
 // Recap and the round rating.
 function installTurnCollapseControl(separator) {
+  if (separator.querySelector('.turn-collapse')) return;
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'turn-collapse';

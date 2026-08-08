@@ -504,48 +504,78 @@
     reproject(reason) {
       if (!this.alive) return;
       this.ensureOffsets();
+      // Hysteresis: while the viewport stays comfortably inside the current
+      // window, a scroll frame is pure bookkeeping — no DOM work at all.
+      if (reason === 'scroll' && this.window) {
+        const ws = this.window;
+        const vh = this.container.clientHeight;
+        const winTop = this.offsets[ws.start] || 0;
+        const winBottom = ws.end >= ws.start
+          ? this.offsets[ws.end] + this.heightOf(this.segments[ws.end])
+          : winTop;
+        const viewTop = this.container.scrollTop;
+        if (viewTop >= winTop + 0.5 * vh && viewTop + vh <= winBottom - 0.5 * vh) return;
+      }
       const range = this.computeTargetRange();
       const wasPinned = this.isPinned();
       const scrollTop = this.container.scrollTop;
       const anchor = this.segments.length ? this.anchorFor(scrollTop) : null;
       const anchorOffsetBefore = anchor != null && anchor >= 0 ? this.offsets[anchor] : 0;
 
-      // 1. Evict segments that leave the window, replacing with measured
-      //    height caches — reads happen before any write below.
+      // Classify the work first: evicted segments, changed segments replaced
+      // in place (materialization sig moved — policy flip, placeholder
+      // resolved, pending tail growth), brand-new window members.
       const evicted = [];
       this.domBySeg.forEach((el, seg) => {
         const index = this.segments.indexOf(seg);
         if (index < range.start || index > range.end) evicted.push(seg);
       });
-      evicted.forEach((seg) => {
-        const el = this.domBySeg.get(seg);
-        this.measureSegment(seg, el);
-        el.remove();
-        this.domBySeg.delete(seg);
-      });
-
-      // 2. Insert new / rebuild changed. `changed` = materialization sig moved
-      //    (policy flip, placeholder resolved, pending tail growth).
+      const replaced = [];
+      const inserted = [];
       for (let i = range.start; i <= range.end; i++) {
         const seg = this.segments[i];
         const sig = this.materializationSig(seg);
         const current = this.domBySeg.get(seg);
         if (current && seg.cachedSig === sig) continue;
+        if (current) replaced.push({seg, current, sig});
+        else inserted.push({seg, sig, index: i});
+      }
+
+      // Phase 1 (reads): measure every outgoing node in one layout pass.
+      evicted.forEach((seg) => this.measureSegment(seg, this.domBySeg.get(seg)));
+      replaced.forEach(({seg, current}) => this.measureSegment(seg, current));
+
+      // Phase 2 (writes): the whole mutation batch — removals, replacements,
+      // insertions — with no reads in between.
+      evicted.forEach((seg) => {
+        this.domBySeg.get(seg).remove();
+        this.domBySeg.delete(seg);
+      });
+      const freshNodes = [];
+      replaced.forEach(({seg, current, sig}) => {
         const node = this.materialize(seg);
-        if (current) {
-          this.measureSegment(seg, current);
-          current.replaceWith(node);
-          this.domBySeg.set(seg, node);
-        } else {
-          const next = this.nextInWindow(i + 1, range.end);
-          this.container.insertBefore(node, next || this.bottomSpacer);
-          this.domBySeg.set(seg, node);
-        }
+        current.replaceWith(node);
+        this.domBySeg.set(seg, node);
         seg.cachedSig = sig;
-        this.measureSegment(seg, node);
+        freshNodes.push({seg, node});
+      });
+      inserted.forEach(({seg, sig, index}) => {
+        const node = this.materialize(seg);
+        const next = this.nextInWindow(index + 1, range.end);
+        this.container.insertBefore(node, next || this.bottomSpacer);
+        this.domBySeg.set(seg, node);
+        seg.cachedSig = sig;
+        freshNodes.push({seg, node});
+      });
+
+      // Phase 3 (reads): measure the fresh nodes in one more layout pass.
+      freshNodes.forEach(({seg, node}) => this.measureSegment(seg, node));
+
+      if (evicted.length || replaced.length || inserted.length) {
+        this.stats.windowMigrations++;
+        this.offsetsDirty = true;
       }
       this.window = range;
-      this.stats.windowMigrations++;
 
       // 3. Heights moved: refresh offsets and rewrite both spacers.
       this.offsetsDirty = true;

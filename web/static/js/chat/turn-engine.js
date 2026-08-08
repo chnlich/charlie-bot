@@ -605,10 +605,10 @@
 
       // 4. Scroll correction: anchor keeps its visual position, or stay pinned.
       if (wasPinned) {
-        this.container.scrollTop = this.container.scrollHeight;
+        this.writeScrollTop(this.container.scrollHeight);
       } else if (anchor != null && anchor >= 0 && this.offsets[anchor] != null) {
         const delta = this.offsets[anchor] - anchorOffsetBefore;
-        if (delta !== 0) this.container.scrollTop = scrollTop + delta;
+        if (delta !== 0) this.writeScrollTop(scrollTop + delta);
       }
     }
 
@@ -620,8 +620,19 @@
       return null;
     }
 
+    // Browser scroll events arrive asynchronously, so the engine's own
+    // corrections mark their value target: an event whose scrollTop equals the
+    // last programmatic write is the echo of that write, not user activity —
+    // it must not pause the pre-render queue nor kick a redundant reproject.
+    writeScrollTop(value) {
+      this.container.scrollTop = value;
+      this.lastProgrammaticScrollTop = value;
+    }
+
     handleScroll() {
+      if (this.container.scrollTop === this.lastProgrammaticScrollTop) return;
       this.lastScrollTs = performance.now();
+      this.lastProgrammaticScrollTop = null;
       if (this.rafScheduled || !this.alive) return;
       this.rafScheduled = true;
       const fire = () => {
@@ -658,9 +669,9 @@
       // against the real scrollHeight (margins included), then project.
       this.topSpacer.style.height = '0px';
       this.bottomSpacer.style.height = Math.round(this.totalHeight) + 'px';
-      this.container.scrollTop = this.container.scrollHeight;
+      this.writeScrollTop(this.container.scrollHeight);
       this.reproject('mount');
-      this.container.scrollTop = this.container.scrollHeight;
+      this.writeScrollTop(this.container.scrollHeight);
       this.scheduleIdle();
       globalThis.__turnEngineStats = this.stats;
     }
@@ -728,7 +739,7 @@
           (seg) => seg.entries.includes(anchorEntriesBefore[0]));
         if (anchorIndexAfter >= 0) shift = this.offsets[anchorIndexAfter] - anchorOffsetBefore;
       }
-      if (shift) this.container.scrollTop = scrollTopBefore + shift;
+      if (shift) this.writeScrollTop(scrollTopBefore + shift);
       this.reproject('prepend');
       return shift;
     }
@@ -763,7 +774,7 @@
       this.offsetsDirty = true;
       this.reproject('append');
       if (forceScroll || wasPinned) {
-        this.container.scrollTop = this.container.scrollHeight;
+        this.writeScrollTop(this.container.scrollHeight);
       } else if (typeof showScrollToBottom === 'function') {
         showScrollToBottom();
       }
@@ -888,6 +899,7 @@
         inDom: engine.domBySeg.size,
         stats: engine.stats,
         queueLength: engine.queueEntries().length,
+        lastScrollAgeMs: performance.now() - engine.lastScrollTs,
       };
     },
   };

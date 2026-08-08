@@ -1,3 +1,12 @@
+---
+name: llm-context-guideline
+description: Placement and admission policy for content that enters LLM context;
+  its chapters currently govern the memory store (admission whitelist, the two
+  proof questions, entry form and labeling, canon change rules). Reload in full
+  before touching memory content.
+user-invocable: false
+---
+
 # Memory Curation Policy
 
 The store manages session context, and context is capability: a model reasons worse as its
@@ -101,7 +110,8 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Said once, in one
-language, lines 120 columns or fewer. Entry prose follows the writing-style skill. Apply the
+language, lines 120 columns or fewer. Entry prose follows the Writing Style section of
+prompts/master.md. Apply the
 admission test line by line as well as entry by entry: a line that changes no future action
 leaves.
 Brevity is part of the admission bar: lead with the action and keep only the mechanism the action

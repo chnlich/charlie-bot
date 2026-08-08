@@ -33,6 +33,7 @@
     'artifacts.js',
     'scroll.js',
     'rendering.js',
+    'turn-engine.js',
     'input.js',
   ].forEach((name) => {
     const code = fs.readFileSync(path.join(base, name), 'utf8');

@@ -294,10 +294,14 @@ function renderSessionView(data) {
   // Update usage
   renderUsageFromData(data.usage || null);
 
-  // Build message HTML
+  // Build message HTML — the turn window engine takes over when the DOM
+  // supports it; every session switch tears the previous engine down with it.
   const container = document.getElementById('messages');
   if (!container) return;
-  renderMessagesIntoContainer(container, messages, session.id);
+  const turnEngine = globalThis.Chat && Chat.TurnEngine
+    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id)
+    : null;
+  if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
 
   if (sessionHasMore) {
     const sentinel = document.createElement('div');
@@ -316,8 +320,8 @@ function renderSessionView(data) {
     hideStreaming();
   }
 
-  // Scroll to bottom
-  container.scrollTop = container.scrollHeight;
+  // Scroll to bottom — the engine already pinned its projection at mount.
+  if (!turnEngine) container.scrollTop = container.scrollHeight;
 
   if (Array.isArray(data.threads) || Array.isArray(data.triggers)) {
     renderWorkersTab(data.threads || [], session.id, data.triggers || []);
@@ -416,33 +420,41 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       sessionHasMore = false;
     }
 
-    const prevHeight = container.scrollHeight;
+    const engine = globalThis.Chat && Chat.TurnEngine ? Chat.TurnEngine.activeFor(container) : null;
 
     // Remove old sentinel before prepending messages
     const sentinel = document.getElementById('load-more-sentinel');
     if (sentinel) sentinel.remove();
 
-    // Build and prepend message elements that are not already present. Page
-    // boundaries can re-emit a message whose aggregator id is already shown.
-    const newMessages = data.messages.filter(msg => !isRenderedMessage(msg));
-    const tempDiv = renderMessagesToDetachedContainer(newMessages, SESSION_ID);
+    if (engine) {
+      // Incremental per-page ingestion: store prepend + boundary-span
+      // derivation + height-estimate scroll adjustment, all engine-side.
+      engine.prependMessages(data.messages);
+    } else {
+      const prevHeight = container.scrollHeight;
 
-    // Insert at top (sentinel was removed; recreate below if needed)
-    while (tempDiv.lastChild) {
-      container.prepend(tempDiv.lastChild);
+      // Build and prepend message elements that are not already present. Page
+      // boundaries can re-emit a message whose aggregator id is already shown.
+      const newMessages = data.messages.filter(msg => !isRenderedMessage(msg));
+      const tempDiv = renderMessagesToDetachedContainer(newMessages, SESSION_ID);
+
+      // Insert at top (sentinel was removed; recreate below if needed)
+      while (tempDiv.lastChild) {
+        container.prepend(tempDiv.lastChild);
+      }
+
+      applyTurnOutline(container);
+
+      // Preserve scroll position — suppress the scroll event this dispatches
+      suppressScrollLoad = true;
+      container.scrollTop = container.scrollHeight - prevHeight;
+      setTimeout(() => { suppressScrollLoad = false; }, 0);
     }
-
-    applyTurnOutline(container);
 
     // Recreate sentinel if more pages remain
     if (sessionHasMore) {
       ensureSentinel(container, 'idle');
     }
-
-    // Preserve scroll position — suppress the scroll event this dispatches
-    suppressScrollLoad = true;
-    container.scrollTop = container.scrollHeight - prevHeight;
-    setTimeout(() => { suppressScrollLoad = false; }, 0);
     pageLanded = true;
   } catch (err) {
     clearTimeout(timeout);

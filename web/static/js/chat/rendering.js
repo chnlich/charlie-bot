@@ -10,6 +10,7 @@
 // Page depth: 'outline' (one row per finished turn, last turn open),
 // 'compact' (every turn open, `N steps` bars closed), 'expanded' (all open).
 let pageDepth = 'outline';
+Chat.pageDepth = pageDepth;
 
 function toolInputSummary(tool) {
   var input = tool.input || {};
@@ -210,19 +211,25 @@ function buildTurnFoldBar(turnKey, count) {
 }
 
 // The `N steps` band: the stable messages between head and conclusion. New
-// bands start collapsed; Expand all opens them from the derive.
-function installTurnFold(wrap, turn) {
-  if (!turn.foldRange.length) return;
+// bands start collapsed; Expand all opens them from the derive. The engine
+// drives this with already-rendered elements; the legacy derive drives it
+// with its DOM turn.
+function installTurnFold(wrap, foldRange, turnKey) {
+  if (!foldRange.length) return;
 
   const content = document.createElement('div');
   content.className = 'turn-fold-content space-y-3 hidden';
-  content.dataset.turnFoldKey = turnFoldKey(turn);
+  content.dataset.turnFoldKey = turnKey;
 
-  const bar = buildTurnFoldBar(content.dataset.turnFoldKey, turn.foldRange.length);
-  const ref = turn.foldRange[0];
+  const bar = buildTurnFoldBar(content.dataset.turnFoldKey, foldRange.length);
+  const ref = foldRange[0];
   wrap.insertBefore(bar, ref);
   wrap.insertBefore(content, ref);
-  turn.foldRange.forEach(el => content.appendChild(el));
+  foldRange.forEach(el => content.appendChild(el));
+}
+
+function installTurnFoldFromTurn(wrap, turn) {
+  installTurnFold(wrap, turn.foldRange, turnFoldKey(turn));
 }
 
 function turnFoldContent(btn) {
@@ -245,15 +252,18 @@ function setAllTurnFolds(root, expanded) {
 }
 
 function toggleTurnFold(btn) {
+  const wrap = btn.closest && btn.closest('.turn-wrap');
+  const engine = turnEngineForWrap(wrap);
+  if (engine) {
+    engine.toggleNSteps(btn);
+    return;
+  }
   setTurnFoldExpanded(btn, turnFoldContent(btn).classList.contains('hidden'));
 }
 
 // ---------------------------------------------------------------------------
 // Fold row: six derived fields, all read off the turn's own messages
 // ---------------------------------------------------------------------------
-function turnTypeLabel(head) {
-  return TURN_TYPE_LABELS[renderedMessageRole(head)] || 'Turn';
-}
 
 // Rendered nodes read back with element boundaries as line breaks, so a
 // trailing time div can never merge into the first line.
@@ -287,13 +297,16 @@ function turnFirstLine(text) {
 
 // A worker summary titles itself by the worker it reports on; every other head
 // titles itself by its first line.
-function turnRowTitle(head) {
-  const text = messageSourceText(head);
-  if (renderedMessageRole(head) === 'worker_summary') {
+function turnRowTitleFromText(role, text) {
+  if (role === 'worker_summary') {
     const workerId = /`([0-9a-f]{6,})`/.exec(text);
     if (workerId) return workerId[1];
   }
   return turnFirstLine(text);
+}
+
+function turnRowTitle(head) {
+  return turnRowTitleFromText(renderedMessageRole(head), messageSourceText(head));
 }
 
 function formatTurnDuration(seconds) {
@@ -316,32 +329,47 @@ function turnRowField(className, text) {
   return span;
 }
 
-function buildTurnRow(turn) {
+// The row built from raw fields rather than rendered nodes — the engine's
+// descriptor and the legacy DOM turn produce the same row through this
+// single builder.
+function buildTurnRowFromSpec(spec) {
   const row = document.createElement('button');
   row.type = 'button';
   row.className = 'turn-row';
   row.setAttribute('title', 'Open this turn');
   row.onclick = function() { setTurnOverride(this.parentNode, true); };
 
-  const label = turnTypeLabel(turn.head);
+  const label = TURN_TYPE_LABELS[spec.headRole] || 'Turn';
   row.appendChild(turnRowField('turn-row-tag turn-row-tag-' + label.toLowerCase(), label));
-  row.appendChild(turnRowField('turn-row-title', turnRowTitle(turn.head)));
+  const title = turnRowTitleFromText(spec.headRole, spec.headText);
+  row.appendChild(turnRowField('turn-row-title', title));
   row.appendChild(turnRowField('turn-row-conclusion',
-      turn.conclusion ? turnFirstLine(messageSourceText(turn.conclusion)) : ''));
+      spec.conclusionText != null ? turnFirstLine(spec.conclusionText) : ''));
 
   const meta = document.createElement('span');
   meta.className = 'turn-row-meta';
   meta.appendChild(turnRowField('turn-row-steps',
-      turn.foldRange.length ? turnFoldLabel(turn.foldRange.length) : ''));
+      spec.foldCount ? turnFoldLabel(spec.foldCount) : ''));
   meta.appendChild(turnRowField('turn-row-duration',
-      formatTurnDuration(turn.separator.dataset.thinkingSeconds)));
-  const ts = turn.head.dataset.messageTs;
+      formatTurnDuration(spec.thinkingSeconds)));
+  const ts = spec.headTs;
   const time = turnRowField('turn-row-time', formatTurnTime(ts));
   if (ts) time.setAttribute('title', formatBubbleTime(ts));
   meta.appendChild(time);
   row.appendChild(meta);
 
   return row;
+}
+
+function buildTurnRow(turn) {
+  return buildTurnRowFromSpec({
+    headRole: renderedMessageRole(turn.head),
+    headText: messageSourceText(turn.head),
+    headTs: turn.head.dataset.messageTs || null,
+    conclusionText: turn.conclusion ? messageSourceText(turn.conclusion) : null,
+    thinkingSeconds: turn.separator.dataset.thinkingSeconds,
+    foldCount: turn.foldRange.length,
+  });
 }
 
 // The fold-back control shares the separator line with clone-to-here, Elon-e,
@@ -365,7 +393,7 @@ function wrapTurn(root, turn) {
   root.insertBefore(wrap, turn.nodes[0]);
   wrap.appendChild(buildTurnRow(turn));
   turn.nodes.forEach(node => wrap.appendChild(node));
-  installTurnFold(wrap, turn);
+  installTurnFoldFromTurn(wrap, turn);
   installTurnCollapseControl(turn.separator);
   return wrap;
 }
@@ -385,7 +413,19 @@ function turnIsOpen(wrap, isLast) {
   return pageDepth === 'outline' ? isLast : true;
 }
 
+// Engine-hosted wraps route open/fold through the engine's registry; legacy
+// wraps keep the dataset implementation.
+function turnEngineForWrap(wrap) {
+  if (!wrap || !wrap.dataset || !wrap.dataset.turnKey || !Chat.TurnEngine) return null;
+  return Chat.TurnEngine.activeFor(document.getElementById('messages'));
+}
+
 function setTurnOverride(wrap, open) {
+  const engine = turnEngineForWrap(wrap);
+  if (engine) {
+    engine.setOverride(wrap.dataset.turnKey, open);
+    return;
+  }
   wrap.dataset.turnOverride = open ? 'open' : 'folded';
   setTurnOpen(wrap, open);
 }
@@ -423,7 +463,14 @@ function updatePageDepthControl() {
 
 function setPageDepth(depth) {
   pageDepth = depth;
+  Chat.pageDepth = depth;
   const root = document.getElementById('messages');
+  const engine = Chat.TurnEngine && Chat.TurnEngine.activeFor(root);
+  if (engine) {
+    engine.setDepth(depth);
+    updatePageDepthControl();
+    return;
+  }
   // A depth click is the one place that closes a reader-expanded `N steps`
   // bar; Expand all reopens every bar from the derive.
   if (root && depth !== 'expanded') setAllTurnFolds(root, false);
@@ -591,7 +638,7 @@ function renderMessage(msg, sessionId) {
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
           + "</button>"
           + "<button onclick=\"toggleRecapPanel(this, \x27" + sessionId + "\x27, " + msg.event_index + ")\""
-          + " class=\"p-0.5 text-slate-500 hover:text-sky-400\" title=\"Recap: what this section covered\">"
+          + " class=\"recap-toggle p-0.5 text-slate-500 hover:text-sky-400\" title=\"Recap: what this section covered\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M3.75 6h16.5M3.75 12h16.5M3.75 18h10.5\"/></svg>"
           + "</button>";
       }
@@ -607,6 +654,19 @@ function renderMessage(msg, sessionId) {
       + "<div class=\"flex-1 border-t border-slate-600/40\"></div></div>";
   }
   return "";
+}
+
+// A live message appends to the engine's store when the container is hosted;
+// the engine renders it synchronously (like the legacy path), materializes
+// the projection and pins the bottom when the reader is there.
+function ingestLiveMessage(msg, sessionId, forceScroll) {
+  var container = document.getElementById("messages");
+  var engine = Chat.TurnEngine && Chat.TurnEngine.activeFor(container);
+  if (engine) {
+    engine.appendMessage(msg, forceScroll);
+    return true;
+  }
+  return false;
 }
 
 function _appendRenderedMessage(html, forceScroll) {
@@ -629,6 +689,7 @@ function _appendRenderedMessage(html, forceScroll) {
 }
 
 function appendMessageObject(msg, sessionId) {
+  if (ingestLiveMessage(msg, sessionId, msg.role === "user")) return;
   _appendRenderedMessage(globalThis.renderMessage(msg, sessionId || SESSION_ID), msg.role === "user");
 }
 
@@ -640,7 +701,9 @@ function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
     timestamp: timestamp || null,
     uploaded_files: uploadedFiles || null,
   };
-  _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID), role === "user");
+  if (!ingestLiveMessage(msg, SESSION_ID, role === "user")) {
+    _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID), role === "user");
+  }
   return msg;
 }
 
@@ -650,7 +713,9 @@ function appendSeparator(seconds, eventIndex) {
     thinking_seconds: seconds,
     event_index: eventIndex,
   };
-  _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID));
+  if (!ingestLiveMessage(msg, SESSION_ID, false)) {
+    _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID));
+  }
 }
 
 function appendCloneBanner(parentName, parentSessionId) {
@@ -659,7 +724,9 @@ function appendCloneBanner(parentName, parentSessionId) {
     content: parentName,
     parent_session_id: parentSessionId,
   };
-  _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID));
+  if (!ingestLiveMessage(msg, SESSION_ID, false)) {
+    _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID));
+  }
 }
 
 Chat.renderMessage = renderMessage;
@@ -673,6 +740,12 @@ Chat.appendCloneBanner = appendCloneBanner;
 Chat.applyTurnOutline = applyTurnOutline;
 Chat.setPageDepth = setPageDepth;
 Chat.toggleTurnFold = toggleTurnFold;
+// Turn primitives the window engine builds wraps from. Legacy callers go
+// through wrapTurn / applyTurnOutline above and never touch these directly.
+Chat.buildTurnRowFromSpec = buildTurnRowFromSpec;
+Chat.installTurnFold = installTurnFold;
+Chat.installTurnCollapseControl = installTurnCollapseControl;
+Chat.setTurnFoldExpanded = setTurnFoldExpanded;
 Chat.expose([
   'renderMessage',
   'renderMessagesIntoContainer',

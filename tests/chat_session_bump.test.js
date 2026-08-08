@@ -52,6 +52,19 @@ function escapeForFakeDom(str) {
   return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
+// Height model behind FakeElement.getBoundingClientRect — see the getter.
+const FAKE_LEAF_HEIGHT = 24;
+
+function fakeElementHeight(el) {
+  const styled = typeof el.style?.height === 'string' && el.style.height.endsWith('px');
+  if (styled) return parseFloat(el.style.height);
+  if (el.classList.contains('hidden')) return 0;
+  let total = el.__baseHeight || 0;
+  for (const child of el.children) total += fakeElementHeight(child);
+  if (total === 0 && el.children.length === 0) return FAKE_LEAF_HEIGHT;
+  return total;
+}
+
 class FakeText {
   constructor(text) {
     this.nodeType = TEXT_NODE;
@@ -80,6 +93,8 @@ class FakeElement {
     this.scrollTop = 0;
     this.scrollHeight = 0;
     this.clientHeight = 0;
+    this.style = {};
+    this._listeners = {};
   }
 
   get className() {
@@ -168,6 +183,46 @@ class FakeElement {
 
   get firstChild() {
     return this._nodes[0] || null;
+  }
+
+  // Deterministic layout stand-in for the turn engine: inline pixel heights
+  // win (spacers, placeholders), `.hidden` collapses, otherwise the height is
+  // the element's own base plus the sum of its children, with a default leaf
+  // height for text-bearing leaves.
+  getBoundingClientRect() {
+    return {height: fakeElementHeight(this)};
+  }
+
+  replaceWith(newNode) {
+    const parent = this.parentNode;
+    if (!parent) return;
+    const index = parent._nodes.indexOf(this);
+    if (index === -1) throw new Error('replaceWith: node not in parent');
+    parent.removeChild(this);
+    parent.insertBefore(newNode, parent._nodes[index] || null);
+  }
+
+  addEventListener(type, fn) {
+    if (!this._listeners[type]) this._listeners[type] = [];
+    this._listeners[type].push(fn);
+  }
+
+  removeEventListener(type, fn) {
+    const list = this._listeners[type];
+    if (!list) return;
+    const index = list.indexOf(fn);
+    if (index >= 0) list.splice(index, 1);
+  }
+
+  fire(type, event) {
+    (this._listeners[type] || []).slice().forEach((fn) => fn(event || {}));
+  }
+
+  get nextSibling() {
+    if (!this.parentNode) return null;
+    const siblings = this.parentNode._nodes;
+    const index = siblings.indexOf(this);
+    return index === -1 ? null : (siblings[index + 1] || null);
   }
 
   get nextElementSibling() {
@@ -1181,4 +1236,466 @@ test('the page depth control drives wrapper state, the N steps bars and its own 
   assert.deepEqual(pressed(), ['outline']);
   assert.deepEqual(openStates(), ['false', 'true']);
   assert.equal(bands().every((band) => band.classList.contains('hidden')), true);
+});
+
+// ---------------------------------------------------------------------------
+// Turn window engine — plan 1 v7 invariants.
+//
+// DOM = top spacer + one contiguous turn window near the viewport + bottom
+// spacer (+#streaming-msg fixture). Fetched messages live in the engine's
+// store; HTML build/postprocess runs in scroll-gated idle slices; folded
+// turn bodies and out-of-window turns are never in the DOM. These tests drive
+// the engine through its public surface (mount, scroll events, pagination
+// ingest, override/toggle globals) on the same fake DOM as the legacy suites,
+// extended with deterministic layout (fakeElementHeight) and queueable timers
+// so every scheduling step is explicit.
+// ---------------------------------------------------------------------------
+
+// --- engine fixtures --------------------------------------------------------
+function eMsg(role, id, content, extra = {}) {
+  return Object.assign(
+      {role, id, content: content == null ? `${role} ${id}` : content, timestamp: '2026-04-02T10:07:00.000Z'},
+      extra);
+}
+
+// A finished turn: user head, `steps` intermediate messages, assistant
+// conclusion, separator with an event index (recap restore needs one).
+function eTurn(prefix, i, steps = 2) {
+  const msgs = [eMsg('user', `${prefix}h${i}`, `question ${prefix} number ${i}`)];
+  for (let s = 0; s < steps; s++) {
+    msgs.push(eMsg(s % 2 ? 'system' : 'assistant', `${prefix}s${i}n${s}`, `step notice ${s}`));
+  }
+  msgs.push(eMsg('assistant', `${prefix}c${i}`, `the answer for ${i}`));
+  msgs.push(eMsg('separator', `${prefix}p${i}`, '', {thinking_seconds: 30 + i, event_index: 1000 + i}));
+  return msgs;
+}
+
+function ePage(prefix, turnCount, steps = 2) {
+  const msgs = [];
+  for (let i = 0; i < turnCount; i++) msgs.push(...eTurn(`${prefix}t${i}_`, 0, steps));
+  return msgs;
+}
+
+function eTurnKey(prefix, i) {
+  return `${prefix}h${i}|${prefix}c${i}|${prefix}p${i}`;
+}
+
+// The engine's message-node factory hook: mirrors where renderMessage puts
+// identity, text and the separator's recap/collapse anchors.
+function fakeEngineNode(msg) {
+  const el = new FakeElement('DIV');
+  if (msg.id != null) el.dataset.messageId = String(msg.id);
+  el.dataset.messageRole = msg.role;
+  if (msg.timestamp) el.dataset.messageTs = msg.timestamp;
+  if (msg.role === 'separator') {
+    el.className = 'separator-line group/sep';
+    if (msg.thinking_seconds != null) el.dataset.thinkingSeconds = String(msg.thinking_seconds);
+    el.__baseHeight = 30;
+    el.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t'}));
+    if (msg.event_index != null) {
+      el.appendChild(new FakeElement('BUTTON', {className: 'recap-toggle p-0.5 text-slate-500'}));
+    }
+    return el;
+  }
+  const bubble = new FakeElement('DIV', {
+    className: PROSE_ROLES.includes(msg.role) ? 'prose-msg' : 'whitespace-pre-wrap',
+  });
+  if (PROSE_ROLES.includes(msg.role)) bubble.dataset.raw = msg.content;
+  else bubble.textContent = msg.content;
+  const inner = new FakeElement('DIV', {className: 'max-w-[90%]'});
+  inner.appendChild(bubble);
+  el.appendChild(inner);
+  el.__baseHeight = 46;
+  return el;
+}
+
+function makeEngineTimers() {
+  return {now: 0, idle: [], raf: [], timeout: []};
+}
+
+function mountEngine(messages, {clientHeight = 900} = {}) {
+  const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
+  root.clientHeight = clientHeight;
+  const stream = new FakeElement('DIV', {id: 'streaming-msg'});
+  root.appendChild(stream);
+  const control = new FakeElement('DIV', {id: 'page-depth-control'});
+  for (const depth of DEPTHS) {
+    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
+    btn.dataset.pageDepth = depth;
+    control.appendChild(btn);
+  }
+  const timers = makeEngineTimers();
+  const {context} = loadChatContext({
+    createTreeWalker() {
+      return {};
+    },
+    getElementById(id) {
+      if (id === 'messages') return root;
+      if (id === 'streaming-msg') return stream;
+      if (id === 'page-depth-control') return control;
+      return null;
+    },
+  });
+  context.performance = {now: () => timers.now};
+  context.requestIdleCallback = (fn) => (timers.idle.push(fn), timers.idle.length);
+  context.requestAnimationFrame = (fn) => (timers.raf.push(fn), timers.raf.length);
+  context.setTimeout = (fn) => (timers.timeout.push(fn), timers.timeout.length);
+  context.clearTimeout = () => {};
+  context.fetch = async () => ({ok: false, status: 500, json: async () => ({})});
+  context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
+  const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-eng');
+  assert.ok(engine, 'engine mounts on a document with createTreeWalker');
+  return {context, root, stream, control, timers, engine};
+}
+
+// --- deterministic scheduling ------------------------------------------------
+function flushRaf(timers) {
+  timers.raf.splice(0).forEach((fn) => fn());
+}
+
+// Let every queued slice run until the queues settle; the clock keeps jumping
+// past the scroll-quiet window so gated slices become eligible.
+function settle(timers) {
+  for (let guard = 0; guard < 1000; guard++) {
+    timers.now += 500;
+    const idle = timers.idle.splice(0);
+    const timeouts = timers.timeout.splice(0);
+    const raf = timers.raf.splice(0);
+    if (!idle.length && !timeouts.length && !raf.length) return;
+    idle.forEach((fn) => fn());
+    timeouts.forEach((fn) => fn());
+    raf.forEach((fn) => fn());
+  }
+  throw new Error('engine scheduling did not settle');
+}
+
+function scrollTo(timers, root, position) {
+  root.scrollTop = position;
+  root.fire('scroll');
+  timers.now += 16;
+  flushRaf(timers);
+}
+
+// --- engine invariant readers --------------------------------------------------
+function containerDescendants(root) {
+  let count = 0;
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      count++;
+      if (child.nodeType === ELEMENT_NODE) walk(child);
+    }
+  };
+  walk(root);
+  return count;
+}
+
+function styleHeightPx(el) {
+  const height = el.style.height;
+  assert.ok(typeof height === 'string' && height.endsWith('px'), `spacer lacks a px height: ${height}`);
+  return parseFloat(height);
+}
+
+function engineDebug(context, root) {
+  const debug = context.Chat.TurnEngine.debug(root);
+  assert.ok(debug, 'engine debug is available');
+  return debug;
+}
+
+// 4.1 outline: DOM skeleton order + spacer arithmetic, exact within the
+// engine's own height model.
+function assertEngineInvariants(context, root, stream, label) {
+  const kids = root.children;
+  const topI = kids.findIndex((el) => el.classList.contains('turn-spacer-top'));
+  const bottomI = kids.findIndex((el) => el.classList.contains('turn-spacer-bottom'));
+  assert.ok(topI !== -1 && bottomI !== -1 && topI < bottomI, `${label}: spacer skeleton order`);
+  assert.equal(kids[kids.length - 1], stream, `${label}: streaming fixture stays last`);
+
+  const debug = engineDebug(context, root);
+  const {start, end} = debug.window;
+  const topExpected = start < debug.offsets.length ? debug.offsets[start] : 0;
+  const windowEnd = end >= start ? debug.offsets[end] + debug.heights[end] : topExpected;
+  const bottomExpected = debug.totalHeight - windowEnd;
+  assert.equal(styleHeightPx(kids[topI]), Math.round(topExpected), `${label}: top spacer`);
+  assert.equal(styleHeightPx(kids[bottomI]), Math.round(Math.max(0, bottomExpected)), `${label}: bottom spacer`);
+  assert.ok(
+      Math.abs((topExpected + (windowEnd - topExpected) + bottomExpected) - debug.totalHeight) < 1e-9,
+      `${label}: spacer sum + window content = full height`);
+
+  // The window in the DOM is exactly one contiguous run of segments.
+  const windowNodes = kids.slice(topI + 1, bottomI);
+  assert.equal(windowNodes.length, Math.max(0, end - start + 1), `${label}: window segment count`);
+  return debug;
+}
+
+function assertFoldedWrapsBodyFree(root, label) {
+  root.querySelectorAll('.turn-wrap').forEach((wrap) => {
+    if (wrap.dataset.turnOpen !== 'false') return;
+    const bodies = [];
+    const walk = (node) => {
+      for (const child of node.children) {
+        if (child.dataset.messageId) bodies.push(child.dataset.messageId);
+        walk(child);
+      }
+    };
+    walk(wrap);
+    assert.deepEqual(bodies, [], `${label}: folded wrap ${wrap.dataset.turnKey} holds body nodes`);
+  });
+}
+
+function wrapsByKey(root) {
+  const found = new Map();
+  root.querySelectorAll('.turn-wrap').forEach((wrap) => found.set(wrap.dataset.turnKey, wrap));
+  return found;
+}
+
+function messageIdsUnder(el) {
+  const ids = [];
+  const walk = (node) => {
+    for (const child of node.children) {
+      if (child.dataset.messageId) ids.push(child.dataset.messageId);
+      walk(child);
+    }
+  };
+  walk(el);
+  return ids;
+}
+
+// The fake DOM cannot parse innerHTML, so the real recap flow (which builds
+// its panel body from an HTML string) is stubbed at the Chat seam. The stub
+// keeps the open/close state machine and the engine's registry feedback.
+function stubRecapToggle(context, root) {
+  const stub = function (btn) {
+    const sep = btn.closest('.separator-line');
+    const next = sep.nextElementSibling;
+    if (next && next.classList.contains('recap-panel')) {
+      next.remove();
+    } else {
+      sep.parentNode.insertBefore(new FakeElement('DIV', {className: 'recap-panel'}), sep.nextSibling);
+    }
+    const engine = context.Chat.TurnEngine.activeFor(root);
+    if (engine) engine.noteRecapToggle(btn);
+  };
+  context.Chat.toggleRecapPanel = stub;
+  context.toggleRecapPanel = stub;
+}
+
+// --- (a)+(b): bounded DOM and spacer arithmetic through full-history paging ---
+test('turn engine: DOM stays bounded and spacer arithmetic holds while paging the full history', () => {
+  const PAGES = 12;
+  const perPage = 4;
+  const pages = [];
+  for (let p = 0; p < PAGES; p++) pages.push(ePage(`pg${p}_`, perPage, 2));
+
+  const {context, root, stream, timers, engine} = mountEngine([...pages[PAGES - 2], ...pages[PAGES - 1]]);
+  settle(timers);
+
+  // DOM node cap, calibrated 2026-08-08 in this fake layout by running this
+  // exact scenario with CALIBRATE_DOM_CAP=1: 144 nodes after mount, max 281
+  // across the full 48-turn history page-through (the ±2-screen margins bind
+  // before the 64-turn cap at folded-row heights). Cap set at 400 — history
+  // length never enters the bound (plan 4.1③); the browser-side absolute cap
+  // for the real profile is recorded from the integration run in the report.
+  const DOM_NODE_CAP = 400;
+
+  const debug0 = assertEngineInvariants(context, root, stream, 'after mount');
+  assertFoldedWrapsBodyFree(root, 'after mount');
+  const nodesAfterMount = containerDescendants(root);
+  assert.ok(nodesAfterMount <= DOM_NODE_CAP, `after mount: ${nodesAfterMount} nodes`);
+  assert.equal(debug0.entries, 2 * 4 * 5, 'two pages in the store');
+
+  let maxNodes = nodesAfterMount;
+  for (let p = PAGES - 3; p >= 0; p--) {
+    const shift = engine.prependMessages(pages[p]);
+    assert.ok(shift > 0, `page ${p}: content shifted down`);
+    settle(timers);
+    if (p % 2 === 0) {
+      // Interleave scroll positions across the grown history.
+      const debug = engineDebug(context, root);
+      scrollTo(timers, root, Math.max(0, Math.floor(debug.totalHeight / 2)));
+      settle(timers);
+      scrollTo(timers, root, Math.max(0, debug.totalHeight - root.clientHeight));
+      settle(timers);
+    }
+    const label = `after page ${p}`;
+    const debug = assertEngineInvariants(context, root, stream, label);
+    assertFoldedWrapsBodyFree(root, label);
+    assert.equal(debug.entries, (PAGES - p) * perPage * 5, `${label}: store holds every paged message`);
+    const nodes = containerDescendants(root);
+    maxNodes = Math.max(maxNodes, nodes);
+    assert.ok(nodes <= DOM_NODE_CAP, `${label}: ${nodes} nodes (cap ${DOM_NODE_CAP})`);
+    // Window membership stays capped regardless of history length.
+    assert.ok(debug.window.end - debug.window.start + 1 <= context.Chat.TurnEngine.MAX_WINDOW_TURNS,
+        `${label}: window turn count ${debug.window.end - debug.window.start + 1}`);
+  }
+
+  // The whole-history end state carries no more DOM than the two-page start.
+  if (process.env.CALIBRATE_DOM_CAP) console.log('CALIBRATION maxNodes', maxNodes, 'afterMount', nodesAfterMount);
+  assert.ok(maxNodes <= DOM_NODE_CAP, `max nodes ${maxNodes} <= ${DOM_NODE_CAP}`);
+  const finalDebug = engineDebug(context, root);
+  assert.equal(finalDebug.entries, PAGES * perPage * 5, 'full history in the store');
+  assert.equal(finalDebug.entries / 5, 48, '48 finished turns derived');
+});
+
+// --- scroll gating: no idle slices during scroll activity, placeholders shown ---
+test('turn engine: pre-render pauses during scroll activity and unready turns use placeholders', () => {
+  const {context, root, timers, engine} = mountEngine([...ePage('sg0_', 4), ...ePage('sg1_', 4)]);
+  const stream = root.children[root.children.length - 1];
+
+  // Right after mount (no idle slice has run): the open newest turn is
+  // unready and shows as an estimated-height placeholder row; folded rows
+  // need no bodies and materialize immediately.
+  const debugAtMount = engineDebug(context, root);
+  assert.ok(root.querySelectorAll('.turn-placeholder').length >= 1, 'placeholder shown for the unready open turn');
+  assert.equal(debugAtMount.stats.prerenderAtoms.length, 0, 'no atom ran before idle');
+  assertEngineInvariants(context, root, stream, 'at mount');
+
+  // Scroll fires: the trailing activity window must freeze the queue.
+  root.scrollTop = 10;
+  root.fire('scroll');
+  timers.now += 16;
+  flushRaf(timers);
+  const idleCallbacks = timers.idle.splice(0);
+  assert.ok(idleCallbacks.length >= 1, 'an idle slice is armed');
+  idleCallbacks.forEach((fn) => fn());   // fires inside the activity window
+  assert.equal(engine.stats.prerenderAtoms.length, 0, 'no pre-render atom started mid-scroll');
+  assert.ok(engine.stats.slicesDeferredForScroll >= 1, 'the slice deferred itself');
+  assert.equal(engine.stats.slicesStartedDuringScrollWindow, 0, 'no slice ever started inside the window');
+
+  // Once quiet, the queue drains and placeholders are swapped by reprojection.
+  settle(timers);
+  assert.equal(root.querySelectorAll('.turn-placeholder').length, 0, 'placeholders replaced once ready');
+  assertEngineInvariants(context, root, stream, 'after drain');
+  assert.equal(engine.stats.slicesStartedDuringScrollWindow, 0, 'still zero after the full drain');
+});
+
+// --- (c): open/override, expanded N steps and open recap survive eviction ----
+test('turn engine: override, expanded steps bar and open recap survive window eviction and re-materialization', () => {
+  const msgs = [];
+  for (let i = 0; i < 12; i++) msgs.push(...eTurn('st_', i, 2));
+  const {context, root, timers} = mountEngine(msgs, {clientHeight: 120});
+  stubRecapToggle(context, root);
+  settle(timers);
+
+  const keyX = eTurnKey('st_', 5);
+  const debug = () => engineDebug(context, root);
+  const indexOfX = () => debug().keys.indexOf(keyX);
+
+  // Bring X into the window, then set its state from the user surface.
+  scrollTo(timers, root, debug().offsets[indexOfX()] + 1);
+  settle(timers);
+  let wrap = wrapsByKey(root).get(keyX);
+  assert.ok(wrap, 'X materialized at its own scroll position');
+
+  wrap.querySelector('.turn-row').onclick.call(wrap.querySelector('.turn-row'));
+  settle(timers);
+  wrap = wrapsByKey(root).get(keyX);
+  assert.equal(wrap.dataset.turnOpen, 'true', 'X opened from its row');
+  assert.ok(wrap.querySelectorAll('.turn-fold-bar').length > 0 || debug().heights[indexOfX()] > 0);
+
+  const bar = wrap.querySelector('.turn-fold-bar');
+  context.toggleTurnFold(bar);
+  settle(timers);
+  wrap = wrapsByKey(root).get(keyX);
+  assert.equal(wrap.querySelector('.turn-fold-content').classList.contains('hidden'), false,
+      'steps band expanded');
+
+  const sep = wrap.querySelector('.separator-line');
+  context.toggleRecapPanel(sep.querySelector('.recap-toggle'), 'sess-eng', 1005);
+  assert.ok(sep.nextElementSibling && sep.nextElementSibling.classList.contains('recap-panel'),
+      'recap panel opened next to the separator');
+
+  // Evict X from the window entirely.
+  const lastIndex = debug().segments - 1;
+  scrollTo(timers, root, debug().offsets[lastIndex]);
+  settle(timers);
+  scrollTo(timers, root, debug().totalHeight - root.clientHeight);
+  settle(timers);
+  assert.equal(wrapsByKey(root).has(keyX), false, 'X left the DOM after eviction');
+
+  // Re-enter: every piece of state comes back from the registry.
+  scrollTo(timers, root, debug().offsets[indexOfX()] + 1);
+  settle(timers);
+  wrap = wrapsByKey(root).get(keyX);
+  assert.ok(wrap, 'X re-materialized');
+  assert.equal(wrap.dataset.turnOpen, 'true', 'manual open survived eviction');
+  assert.ok(messageIdsUnder(wrap).length > 0, 'body rebuilt');
+  assert.equal(wrap.querySelector('.turn-fold-content').classList.contains('hidden'), false,
+      'expanded steps band survived eviction');
+  const sep2 = wrap.querySelector('.separator-line');
+  assert.ok(sep2.nextElementSibling && sep2.nextElementSibling.classList.contains('recap-panel'),
+      'open recap panel restored');
+});
+
+// --- (d): prepending pages never re-derives or re-materializes settled wraps ---
+test('turn engine: prepending pages leaves existing window wrappers untouched', () => {
+  const pages = [];
+  for (let p = 0; p < 6; p++) pages.push(ePage(`kp${p}_`, 4, 2));
+  const {context, root, timers, engine} = mountEngine([...pages[4], ...pages[5]]);
+  settle(timers);
+
+  const before = wrapsByKey(root);
+  assert.ok(before.size >= 1, 'window holds wraps');
+  const materializationsBefore = engine.stats.segmentMaterializations;
+
+  engine.prependMessages(pages[3]);
+  settle(timers);
+  engine.prependMessages(pages[2]);
+  settle(timers);
+
+  assert.equal(engine.stats.rederivesOfSettledTurns, 0, 'turn-aligned pages consumed no settled segment');
+  assert.equal(engine.stats.segmentMaterializations, materializationsBefore,
+      'no in-window wrap was rebuilt by pagination');
+  const after = wrapsByKey(root);
+  for (const [key, el] of before) {
+    assert.equal(after.get(key), el, `wrap ${key} is the same DOM node after two prepends`);
+  }
+});
+
+// --- (e): non-aligned archived page heads and the live tail never block -------
+test('turn engine: archived non-aligned page heads and an unfinished live tail stay flat and unblocked', () => {
+  // Archived middle: a span that starts mid-turn (no stimulus) but still
+  // separator-terminated, then an unfinished live tail.
+  const initial = [
+    eMsg('assistant', 'arc-a1', 'mid-turn continuation'),
+    eMsg('assistant', 'arc-a2', 'mid-turn conclusion'),
+    eMsg('separator', 'arc-s1', '', {thinking_seconds: 21, event_index: 2000}),
+    eMsg('user', 'live-head', 'the live ask'),
+    eMsg('assistant', 'live-body', 'partial live answer'),
+  ];
+  const {context, root, stream, timers, engine} = mountEngine(initial);
+  settle(timers);
+
+  let debug = engineDebug(context, root);
+  assert.equal(debug.pending.filter(Boolean).length, 1, 'live tail is a pending flat segment');
+  assertEngineInvariants(context, root, stream, 'archived mount');
+
+  // An older page whose bottom is mid-turn merges into the leading span and
+  // closes it as one turn (head = the page's own user message).
+  const older = [
+    eMsg('user', 'old-h', 'the original ask'),
+    eMsg('assistant', 'old-s1', 'a step from before'),
+  ];
+  engine.prependMessages(older);
+  settle(timers);
+
+  debug = engineDebug(context, root);
+  assert.equal(debug.keys[0], 'old-h|arc-a2|arc-s1', 'boundary span re-derived across the page seam');
+  assert.equal(debug.pending[debug.pending.length - 1], true, 'live tail still pending');
+  assert.equal(debug.queueLength, 0, 'pre-render fully drained around the non-aligned page');
+  assertEngineInvariants(context, root, stream, 'after non-aligned prepend');
+
+  // The live stream finishes: the separator lands, the new turn opens and the
+  // previously open turn folds, all inside the engine.
+  engine.appendMessage({role: 'separator', id: 'live-sep', thinking_seconds: 9, event_index: 2001}, false);
+  settle(timers);
+
+  debug = engineDebug(context, root);
+  assert.equal(debug.pending.every((p) => !p), true, 'no pending span after the live separator');
+  assert.equal(debug.keys[debug.keys.length - 1], 'live-head|live-body|live-sep', 'live tail became a turn');
+  const wraps = wrapsByKey(root);
+  const oldWrap = wraps.get('old-h|arc-a2|arc-s1');
+  const liveWrap = wraps.get('live-head|live-body|live-sep');
+  assert.equal(oldWrap.dataset.turnOpen, 'false', 'previously open turn folded on landing');
+  assert.equal(liveWrap.dataset.turnOpen, 'true', 'newest finished turn is open');
+  assertEngineInvariants(context, root, stream, 'after live separator');
 });

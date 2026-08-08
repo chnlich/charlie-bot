@@ -500,6 +500,23 @@
       return this.segments.length - 1;
     }
 
+    // Bottom-pinned target window: the trailing segments covering the viewport
+    // plus the margins, walked back through the height model.
+    pinnedRange() {
+      this.ensureOffsets();
+      const count = this.segments.length;
+      if (count === 0) return {start: 0, end: -1};
+      const need = (WINDOW_MARGIN_SCREENS + 1) * this.container.clientHeight;
+      let total = 0;
+      let start = count - 1;
+      while (start > 0 && total < need) {
+        total += this.heightOf(this.segments[start]);
+        start--;
+      }
+      while (count - start > MAX_WINDOW_TURNS) start++;
+      return {start, end: count - 1};
+    }
+
     isPinned() {
       // The browser's real scroll range (spacers + window + sibling margins +
       // the streaming fixture) differs from the engine's height model by the
@@ -532,8 +549,13 @@
           return;
         }
       }
-      const range = this.computeTargetRange();
       const wasPinned = this.isPinned();
+      // At the pinned bottom the browser's scrollTop and the height model
+      // disagree by the container's sibling margins, which makes a
+      // scrollTop-derived range flap ±1 segment in a limit cycle. The pinned
+      // range is therefore derived from the model's own offsets — stable by
+      // construction.
+      const range = wasPinned ? this.pinnedRange() : this.computeTargetRange();
       const scrollTop = this.container.scrollTop;
       const anchor = this.segments.length ? this.anchorFor(scrollTop) : null;
       const anchorOffsetBefore = anchor != null && anchor >= 0 ? this.offsets[anchor] : 0;

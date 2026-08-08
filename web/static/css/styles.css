@@ -83,6 +83,9 @@
   box-sizing: border-box; overflow: hidden;
 }
 .turn-spacer { pointer-events: none; }
+/* The turn engine is the scroll-anchoring authority; Chrome's own scroll
+   anchoring fights its spacer corrections. */
+#messages { overflow-anchor: none; }
 .turn-collapse:hover { color: #cbd5e1; }
 /* Page depth control (Outline / Compact / Expand all) */
 .turn-depth-control {

@@ -1498,11 +1498,11 @@ test('turn engine: DOM stays bounded and spacer arithmetic holds while paging th
   settle(timers);
 
   // DOM node cap, calibrated 2026-08-08 in this fake layout by running this
-  // exact scenario with CALIBRATE_DOM_CAP=1: 144 nodes after mount, max 281
-  // across the full 48-turn history page-through (the ±2-screen margins bind
-  // before the 64-turn cap at folded-row heights). Cap set at 400 — history
-  // length never enters the bound (plan 4.1③); the browser-side absolute cap
-  // for the real profile is recorded from the integration run in the report.
+  // exact scenario with CALIBRATE_DOM_CAP=1: 144 nodes after mount, max 296
+  // across the full 48-turn history page-through (the ±2-screen margins size
+  // the window at folded-row heights). Cap set at 400 — history length never
+  // enters the bound (plan 4.1③); the browser-side absolute cap for the real
+  // profile is recorded from the integration run in the report.
   const DOM_NODE_CAP = 400;
 
   const debug0 = assertEngineInvariants(context, root, stream, 'after mount');

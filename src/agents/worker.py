@@ -84,7 +84,15 @@ class Worker:
     self._backend: Optional[AgentBackend] = None
 
   def _build_backend(self, on_spawn: Optional[Callable[[int], Awaitable[None]]]) -> AgentBackend:
-    """Build the backend for this task; *on_spawn* is None for translate-only instances."""
+    """Build the backend for this task; *on_spawn* is None for translate-only instances.
+
+    Launcher builds (on_spawn set) fail loudly: a missing CLI binary raises in
+    the constructor and a real run never silently degrades to another backend.
+    Translate-only builds (on_spawn None) only parse events, so a construction
+    failure (e.g. the host lacks the backend's CLI binary) degrades to the
+    method's binary-free fallback branch — same shape as spawner's stale-id
+    translate-only fallback — and never crashes restart recovery's drain.
+    """
     if self._backend_option:
       backend_kwargs = {
           "buffer_limit": self._cfg.subprocess_buffer_limit,
@@ -94,7 +102,17 @@ class Worker:
       }
       if self._backend_option.type == "cc-claude":
         backend_kwargs["claude_session_id"] = self._thread.claude_session_id
-      return build_backend(self._backend_option, self._cfg, **backend_kwargs)
+      if on_spawn is not None:
+        return build_backend(self._backend_option, self._cfg, **backend_kwargs)
+      try:
+        return build_backend(self._backend_option, self._cfg, **backend_kwargs)
+      except Exception as e:
+        log.warning(
+            "translate_backend_unresolved",
+            thread_id=self._thread.id,
+            backend=self._backend_option.id,
+            backend_type=self._backend_option.type,
+            error=str(e))
     # Fallback to default ClaudeCodeBackend
     return ClaudeCodeBackend(
         buffer_limit=self._cfg.subprocess_buffer_limit,

@@ -880,6 +880,78 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
 
 
 @pytest.mark.asyncio
+async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Install-state invariance: the same interrupted opencode-backed VERIFY
+  thread finalizes to the same worker_summary whether or not the host can
+  resolve the `opencode` binary.
+
+  Translate-only drain construction must not require the binary. The two arms
+  are compared by summary equality — never against a hardcoded reason string —
+  so the test pins the mechanism itself: the recorded outcome must not depend
+  on host install state. Absence is simulated in opencode's own module
+  namespace, where `resolve_binary` is bound (`from base import resolve_binary`).
+  """
+
+  async def run_once(binary: str | None) -> str:
+    if binary is None:
+
+      def _missing_binary(name: str, fallback: str) -> str:
+        raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
+
+      monkeypatch.setattr("src.agents.backends.opencode.resolve_binary", _missing_binary)
+      home = tmp_path / "home-absent"
+    else:
+      monkeypatch.setattr(
+          "src.agents.backends.opencode.resolve_binary", lambda name, fallback: binary)
+      home = tmp_path / "home-present"
+
+    cfg = CharlieBotConfig(
+        charliebot_home=home,
+        worktree_dir=str(home / "worktrees"),
+        backend_options=[
+            BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+            BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+        ],
+    )
+    session_mgr = SessionManager(cfg)
+    thread_mgr = ThreadManager(cfg)
+    session_meta = await session_mgr.create_session(CreateSessionRequest(name="invariance"))
+    # The id is pinned across arms: full_content embeds it, and the comparison
+    # below is by equality, so the two runs must narrate the SAME thread.
+    thread = ThreadMetadata(
+        id="invariance-opencode-verify",
+        session_id=session_meta.id,
+        description="Verify plan fixture",
+        task_type=TaskType.VERIFY,
+    )
+    thread.status = ThreadStatus.RUNNING
+    thread.backend = "fake-oc"
+    thread.model = "fake-model"
+    thread.pid = 4194304  # dead: beyond this host's live pids, /proc entry absent
+    thread.pid_start = "1"
+    thread.started_at = utc_now()
+    thread.require_review = False
+    thread_dir = home / "sessions" / session_meta.id / "threads" / thread.id
+    (thread_dir / "data").mkdir(parents=True, exist_ok=True)
+    await thread_mgr.save_metadata(thread)
+
+    recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home, cfg=cfg)
+
+    assert recovered == 1
+    assert alive_at_reattach == [False]  # judged dead: drained, never re-attached
+    meta = _read_meta(home, session_meta.id, thread.id)
+    assert meta["status"] == "failed"
+    summaries = _terminal_summaries(home, {"session": session_meta.id, "thread": thread.id})
+    assert len(summaries) == 1
+    return summaries[0]["full_content"]
+
+  resolvable_summary = await run_once("/usr/bin/opencode")
+  unresolvable_summary = await run_once(None)
+  assert resolvable_summary == unresolvable_summary
+
+
+@pytest.mark.asyncio
 async def test_graceful_shutdown_winds_down_improve_iteration_with_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An improve iteration dies with its loop at shutdown (terminated, not let

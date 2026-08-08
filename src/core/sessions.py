@@ -946,25 +946,83 @@ class SessionManager:
     return changed
 
   async def _iter_session_metas(self) -> list[SessionMetadata]:
-    """Load all session metadata from disk concurrently.
+    """Load all session metadata, batching disk reads for cache misses.
 
     Performs the standard three-step preamble shared by every listing entry point:
     (1) return [] if sessions_dir does not exist, (2) list session directories under
-    asyncio.to_thread to avoid blocking the event loop, (3) concurrently load each
-    session's metadata via asyncio.gather, logging and dropping any that fail to load.
+    asyncio.to_thread to avoid blocking the event loop, (3) use fresh cache entries
+    directly and load all missing metadata files serially in one asyncio.to_thread
+    call, logging and dropping any session that fails to load.
     """
     if not self._cfg.sessions_dir.exists():
       return []
     dirs = await asyncio.to_thread(lambda: [d for d in self._cfg.sessions_dir.iterdir() if d.is_dir()])
-    all_meta = await asyncio.gather(*(self.get_session(d.name) for d in dirs), return_exceptions=True)
+
+    cached_metas: dict[str, SessionMetadata] = {}
+    missing_ids: list[str] = []
+    for d in dirs:
+      cached = self._metadata_cache.get(d.name)
+      if cached is None:
+        missing_ids.append(d.name)
+        continue
+      meta, ts = cached
+      if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
+        cached_metas[d.name] = meta
+      else:
+        del self._metadata_cache[d.name]
+        missing_ids.append(d.name)
+
+    raw_by_id: dict[str, str] = {}
+    read_failures: dict[str, Exception] = {}
+    if missing_ids:
+      def _read_missing() -> tuple[dict[str, str], dict[str, Exception]]:
+        loaded: dict[str, str] = {}
+        failures: dict[str, Exception] = {}
+        for session_id in missing_ids:
+          path = self._metadata_path(session_id)
+          try:
+            if not path.exists():
+              continue
+            loaded[session_id] = path.read_text(encoding="utf-8")
+          except Exception as exc:
+            failures[session_id] = exc
+        return loaded, failures
+
+      raw_by_id, read_failures = await asyncio.to_thread(_read_missing)
+
     result: list[SessionMetadata] = []
-    for i, meta in enumerate(all_meta):
-      if isinstance(meta, BaseException):
-        log.warning('session_load_failed', session_id=dirs[i].name, error=str(meta))
+    for d in dirs:
+      session_id = d.name
+      loaded_from_cache = session_id in cached_metas
+      if loaded_from_cache:
+        meta = cached_metas[session_id]
+      else:
+        if session_id in read_failures:
+          log.warning('session_load_failed', session_id=session_id, error=str(read_failures[session_id]))
+          continue
+        if session_id not in raw_by_id:
+          continue
+        raw = raw_by_id[session_id]
+        if not raw.strip():
+          log.warning("session_metadata_empty", session_id=session_id, path=str(self._metadata_path(session_id)))
+          continue
+        try:
+          meta = SessionMetadata.model_validate_json(raw)
+        except Exception as exc:
+          log.warning('session_load_failed', session_id=session_id, error=str(exc))
+          continue
+
+      try:
+        migrated = self._migrate_round_rating_keys(meta)
+        if migrated:
+          await self._save_metadata(meta)
+      except Exception as exc:
+        log.warning('session_load_failed', session_id=session_id, error=str(exc))
         continue
-      if not meta:
-        continue
-      result.append(meta)
+
+      if not loaded_from_cache and not migrated:
+        self._metadata_cache.setdefault(session_id, (meta, time.monotonic()))
+      result.append(_stamp_thinking_since(meta.model_copy()))
     return result
 
   async def _active_scheduled_sessions(

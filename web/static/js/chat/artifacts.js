@@ -637,8 +637,9 @@ function renderArtifactLink(link, ordinal, prose) {
     renderPlanCompactCard(link, ordinal, prose, null);
     return;
   }
+  var isReadyFragment = isTurnEngineReadyFragment(prose);
   ready.then(function() {
-    if (!link.el.isConnected) return;
+    if (!link.el.isConnected && !isReadyFragment) return;
     if (link.el.dataset.embedded === '1') return;
     var currentProse = link.el.closest('.prose-msg');
     if (!currentProse || currentProse.closest('#streaming-msg')) return;
@@ -661,6 +662,13 @@ function makePlainTextArtifactHandle(prose) {
     get isConnected() { return prose.isConnected; },
     closest: function(sel) { return sel === '.prose-msg' ? prose : null; },
   };
+}
+
+function isTurnEngineReadyFragment(prose) {
+  for (var node = prose; node; node = node.parentNode) {
+    if (node.__turnEngineReadyFragment) return true;
+  }
+  return false;
 }
 
 function embedLinkedHtmlArtifacts(root) {

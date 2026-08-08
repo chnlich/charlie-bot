@@ -127,6 +127,14 @@ function resetLazySessionData() {
   if (typeof loadedThreads !== 'undefined') loadedThreads.clear();
 }
 
+function disposeActiveTurnEngine() {
+  const container = document.getElementById('messages');
+  const engine = globalThis.Chat && Chat.TurnEngine && container
+    ? Chat.TurnEngine.activeFor(container)
+    : null;
+  if (engine) engine.dispose();
+}
+
 function scheduleLazySessionDataLoad() {
   if (!SESSION_ID || lazySessionDataTimer) return;
   lazySessionDataTimer = scheduleIdleTask(() => {
@@ -180,6 +188,7 @@ async function switchSession(sessionId) {
   if (masterThinking) stopThinking();
   stopActiveSessionViewPolling();
   resetLazySessionData();
+  disposeActiveTurnEngine();
 
   // Clean up transient UI state from previous session
   resetVoiceState();
@@ -422,16 +431,27 @@ async function loadOlderIfNeeded(container, isViewportFill) {
 
     const engine = globalThis.Chat && Chat.TurnEngine ? Chat.TurnEngine.activeFor(container) : null;
 
-    // Remove old sentinel before prepending messages
     const sentinel = document.getElementById('load-more-sentinel');
-    if (sentinel) sentinel.remove();
 
     if (engine) {
       // Incremental per-page ingestion: store prepend + boundary-span
-      // derivation + height-estimate scroll adjustment, all engine-side.
+      // derivation + height-estimate scroll adjustment, all engine-side. Keep
+      // the pagination sentinel in place so its fixed top height cancels out
+      // of the engine's scroll-anchor delta.
       engine.prependMessages(data.messages);
+      if (!sessionHasMore && sentinel) {
+        const heightBeforeSentinelRemoval = container.scrollHeight;
+        sentinel.remove();
+        const removedHeight = heightBeforeSentinelRemoval - container.scrollHeight;
+        if (removedHeight) {
+          engine.writeScrollTop(Math.max(0, container.scrollTop - removedHeight));
+        }
+      }
     } else {
+      // The legacy path builds at container top, so remove the sentinel while
+      // inserting the detached message nodes.
       const prevHeight = container.scrollHeight;
+      if (sentinel) sentinel.remove();
 
       // Build and prepend message elements that are not already present. Page
       // boundaries can re-emit a message whose aggregator id is already shown.
@@ -454,6 +474,8 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     // Recreate sentinel if more pages remain
     if (sessionHasMore) {
       ensureSentinel(container, 'idle');
+    } else if (!engine && sentinel) {
+      sentinel.remove();
     }
     pageLanded = true;
   } catch (err) {
@@ -571,6 +593,7 @@ async function createSession() {
     if (masterThinking) stopThinking();
     stopActiveSessionViewPolling();
     resetLazySessionData();
+    disposeActiveTurnEngine();
     resetVoiceState();
     uploadedFiles = [];
     renderFileChips();
@@ -614,6 +637,7 @@ function renderNoActiveSessionView() {
   if (masterThinking) stopThinking({preserveSessionIndicator: true});
   stopActiveSessionViewPolling();
   resetLazySessionData();
+  disposeActiveTurnEngine();
   resetVoiceState();
   uploadedFiles = [];
   renderFileChips();

@@ -148,9 +148,13 @@
       this.totalHeight = 0;
       this.lastScrollTs = -Infinity;
       this.rafScheduled = false;
+      this.rafHandle = null;
       this.idleScheduled = false;
+      this.idleHandle = null;
+      this.cancelIdle = null;
       this.quietTimer = null;
       this.stats = makeStats();
+      this.liveMessageSequence = 0;
       this.onScroll = () => this.handleScroll();
       container.addEventListener('scroll', this.onScroll, {passive: true});
     }
@@ -289,8 +293,10 @@
       }
       const tmp = document.createElement('div');
       tmp.innerHTML = globalThis.renderMessage(entry.msg, this.sessionId);
+      const fragmentRoot = tmp.firstElementChild || tmp;
+      fragmentRoot.__turnEngineReadyFragment = true;
       Chat.postProcessRenderedMessages(tmp);
-      return tmp.firstElementChild || tmp;
+      return fragmentRoot;
     }
 
     renderAtom(entry, sync) {
@@ -417,6 +423,7 @@
 
     // ---- pre-render queue ---------------------------------------------------
     queueEntries() {
+      this.ensureOffsets();
       const out = [];
       this.segments.forEach((seg, segIndex) => {
         if (seg.kind === 'turn' && !this.effectiveOpen(seg)) return;
@@ -425,10 +432,13 @@
         });
       });
       if (out.length < 2) return out;
-      const center = this.window
-        ? (this.window.start + this.window.end) / 2
-        : this.segments.length;
-      return out.sort((a, b) => Math.abs(a.segIndex - center) - Math.abs(b.segIndex - center));
+      const viewportCenter = this.container.scrollTop + this.container.clientHeight / 2;
+      const distance = (item) => {
+        const seg = this.segments[item.segIndex];
+        const segmentCenter = this.offsets[item.segIndex] + this.heightOf(seg) / 2;
+        return Math.abs(segmentCenter - viewportCenter);
+      };
+      return out.sort((a, b) => distance(a) - distance(b));
     }
 
     scrollRecentlyActive() {
@@ -436,22 +446,38 @@
     }
 
     scheduleIdle() {
-      if (!this.alive || this.idleScheduled) return;
+      if (!this.alive || this.idleScheduled || this.quietTimer) return;
       this.idleScheduled = true;
       const arm = () => {
+        this.idleHandle = null;
+        this.cancelIdle = null;
         this.idleScheduled = false;
         this.runSlice();
       };
       // No forcing timeout: the queue only runs while the browser is idle.
-      if (typeof requestIdleCallback === 'function') requestIdleCallback(arm);
-      else setTimeout(arm, 0);
+      if (typeof requestIdleCallback === 'function') {
+        const handle = requestIdleCallback(arm);
+        this.idleHandle = handle;
+        if (typeof cancelIdleCallback === 'function') {
+          this.cancelIdle = () => cancelIdleCallback(handle);
+        }
+      } else {
+        const handle = setTimeout(arm, 0);
+        this.idleHandle = handle;
+        this.cancelIdle = () => clearTimeout(handle);
+      }
     }
 
     runSlice() {
       if (!this.alive) return;
       if (this.scrollRecentlyActive()) {
         this.stats.slicesDeferredForScroll++;
-        this.quietTimer = setTimeout(() => this.runSlice(), SCROLL_QUIET_MS);
+        if (!this.quietTimer) {
+          this.quietTimer = setTimeout(() => {
+            this.quietTimer = null;
+            this.runSlice();
+          }, SCROLL_QUIET_MS);
+        }
         return;
       }
       const queue = this.queueEntries();
@@ -658,11 +684,15 @@
       if (this.rafScheduled || !this.alive) return;
       this.rafScheduled = true;
       const fire = () => {
+        this.rafHandle = null;
         this.rafScheduled = false;
         this.reproject('scroll');
       };
-      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fire);
-      else setTimeout(fire, 0);
+      if (typeof requestAnimationFrame === 'function') {
+        this.rafHandle = requestAnimationFrame(fire);
+      } else {
+        this.rafHandle = setTimeout(fire, 0);
+      }
     }
 
     // ---- lifecycle -----------------------------------------------------------
@@ -701,7 +731,30 @@
     dispose() {
       this.alive = false;
       this.container.removeEventListener('scroll', this.onScroll);
+      if (this.cancelIdle) this.cancelIdle();
+      this.idleHandle = null;
+      this.cancelIdle = null;
+      this.idleScheduled = false;
       if (this.quietTimer) clearTimeout(this.quietTimer);
+      this.quietTimer = null;
+      if (this.rafHandle != null) {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this.rafHandle);
+        else clearTimeout(this.rafHandle);
+      }
+      this.rafHandle = null;
+      this.rafScheduled = false;
+      this.entries = [];
+      this.knownIds.clear();
+      this.segments = [];
+      this.registry.clear();
+      this.measuredFolded.clear();
+      this.measuredOpen.clear();
+      this.measuredFlat = new WeakMap();
+      this.foldedRowMeasures = [];
+      this.domBySeg.clear();
+      this.offsets = [];
+      this.offsetsDirty = false;
+      this.totalHeight = 0;
       if (globalThis.__turnEngineStats === this.stats) delete globalThis.__turnEngineStats;
       activeEngines().delete(this.container);
     }
@@ -726,22 +779,29 @@
       const anchorEntriesBefore = anchor >= 0 ? this.segments[anchor].entries : null;
       const anchorOffsetBefore = anchor >= 0 ? this.offsets[anchor] : 0;
 
-      let consumed = 0;
-      let region = fresh.slice();
-      for (;;) {
-        const derived = this.deriveSegments(region);
-        this.segments.splice(0, consumed, ...derived.segments);
-        if (!derived.tailSpan.length || consumed >= this.segments.length) {
-          if (derived.tailSpan.length) {
-            // The whole visible history is one unfinished span; it keeps
-            // growing into what used to be the leading pending segment.
-            this.segments.unshift({kind: 'flat', entries: derived.tailSpan.slice(), pending: true});
-          }
+      const firstPage = this.deriveSegments(fresh);
+      // Insert the page's settled prefix first. The page tail must then be
+      // merged with the existing leading segment after that prefix; using
+      // index 0 here would merge it back into the page's newest turn and lose
+      // the tail when an archived page contains both complete and partial
+      // spans.
+      this.segments.splice(0, 0, ...firstPage.segments);
+      let boundaryIndex = firstPage.segments.length;
+      let region = firstPage.tailSpan.slice();
+      while (region.length) {
+        if (boundaryIndex >= this.segments.length) {
+          this.segments.splice(boundaryIndex, 0, {
+            kind: 'flat', entries: region.slice(), pending: true,
+          });
           break;
         }
-        region = derived.tailSpan.concat(this.segments[consumed].entries);
-        consumed++;
+        const boundary = this.deriveSegments(
+          region.concat(this.segments[boundaryIndex].entries));
+        this.segments.splice(boundaryIndex, 1, ...boundary.segments);
         this.stats.rederivesOfSettledTurns++;
+        if (!boundary.tailSpan.length) break;
+        region = boundary.tailSpan.slice();
+        boundaryIndex += boundary.segments.length;
       }
       this.domBySeg.forEach((el, seg) => {
         if (!this.segments.includes(seg)) {
@@ -768,6 +828,11 @@
 
     // ---- ingest: live stream --------------------------------------------------
     appendMessage(msg, forceScroll) {
+      if (msg.id == null || msg.id === '') {
+        msg = Object.assign({}, msg, {
+          id: 'client:' + String(this.sessionId) + ':' + (++this.liveMessageSequence),
+        });
+      }
       const wasPinned = this.isPinned();
       const entry = {msg, node: null, ready: false};
       this.renderAtom(entry, true);

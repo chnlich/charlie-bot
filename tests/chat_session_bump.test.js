@@ -1631,6 +1631,7 @@ test('turn engine: override, expanded steps bar and open recap survive window ev
   assert.ok(wrap, 'X re-materialized');
   assert.equal(wrap.dataset.turnOpen, 'true', 'manual open survived eviction');
   assert.ok(messageIdsUnder(wrap).length > 0, 'body rebuilt');
+  assert.equal(wrap.querySelectorAll('.turn-collapse').length, 1, 'collapse control is not duplicated');
   assert.equal(wrap.querySelector('.turn-fold-content').classList.contains('hidden'), false,
       'expanded steps band survived eviction');
   const sep2 = wrap.querySelector('.separator-line');
@@ -1661,6 +1662,46 @@ test('turn engine: prepending pages leaves existing window wrappers untouched', 
   for (const [key, el] of before) {
     assert.equal(after.get(key), el, `wrap ${key} is the same DOM node after two prepends`);
   }
+});
+
+test('turn engine: archived pages with a settled prefix preserve their partial boundary span', () => {
+  const initial = [
+    eMsg('assistant', 'tail-a', 'continuation'),
+    eMsg('assistant', 'tail-c', 'conclusion'),
+    eMsg('separator', 'tail-p', '', {thinking_seconds: 12, event_index: 3000}),
+  ];
+  const {context, root, timers, engine} = mountEngine(initial, {clientHeight: 900});
+  settle(timers);
+
+  engine.prependMessages([
+    ...ePage('archived_', 1, 1),
+    eMsg('user', 'boundary-h', 'the earlier ask'),
+    eMsg('assistant', 'boundary-s', 'the earlier continuation'),
+  ]);
+  settle(timers);
+
+  const debug = engineDebug(context, root);
+  assert.deepEqual([...debug.keys], [
+    'archived_t0_h0|archived_t0_c0|archived_t0_p0',
+    'boundary-h|tail-c|tail-p',
+  ]);
+  assert.equal(debug.entries, 9, 'all page and boundary messages stay in the store');
+  assert.equal(debug.pending.some(Boolean), false, 'the boundary turn is settled');
+  assertEngineInvariants(context, root, root.children[root.children.length - 1], 'archived mixed page');
+});
+
+test('turn engine: live messages without server ids receive stable turn identities', () => {
+  const {context, root, timers, engine} = mountEngine([]);
+  engine.appendMessage({role: 'user', content: 'the live ask'}, true);
+  engine.appendMessage({role: 'assistant', id: 'live-answer', content: 'the live answer'}, true);
+  engine.appendMessage({role: 'separator', id: 'live-separator', thinking_seconds: 4}, false);
+  settle(timers);
+
+  const debug = engineDebug(context, root);
+  assert.match(debug.keys[0], /^client:sess-eng:1\|live-answer\|live-separator$/);
+  const row = root.querySelector('.turn-row');
+  assert.equal(row.querySelector('.turn-row-tag').textContent, 'You');
+  assert.ok(messageIdsUnder(root).includes('client:sess-eng:1'), 'the optimistic user is rendered in the turn');
 });
 
 // --- (e): non-aligned archived page heads and the live tail never block -------

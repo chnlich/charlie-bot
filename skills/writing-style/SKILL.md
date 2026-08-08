@@ -1,27 +1,15 @@
 ---
 name: writing-style
-description: Writing rules across all content types. Use when writing code, drafting articles, or composing coordination messages.
-version: 1.0.0
+description: Genre style packs for code, READMEs, commits and PRs, article
+  shares, and coordination messages. Load the matching genre file at its
+  writing moment. General prose rules live in the master prompt's Writing
+  Style section.
+version: 2.0.0
 ---
 
 # Writing Style
 
-Writing rules organized by content type. Each section below links to a
-dedicated file.
-
-## General
-
-Applies to all writing.
-
-- Plain, matter-of-fact tone.
-- Prefer commas, colons, parentheses, or restructure over dashes in prose
-  (code excepted).
-- Prefer the full form over contractions.
-- Open with the purpose together with the problem it solves (these are one
-  idea), then how it works, then where to find it and how to invoke it.
-- State rules at the category level: an instance list narrows the rule to its examples.
-- Positive framing: state the working action or standing reality; a sentence
-  built around what fails leads with the alternative that works.
+Genre packs, one file per genre.
 
 ## Code
 
@@ -38,10 +26,6 @@ See [genres/commits-and-prs.md](genres/commits-and-prs.md).
 ## Sharing articles
 
 See [genres/sharing-articles.md](genres/sharing-articles.md).
-
-## Explaining to the user
-
-See [genres/explaining-to-the-user.md](genres/explaining-to-the-user.md).
 
 ## Coordination messages
 

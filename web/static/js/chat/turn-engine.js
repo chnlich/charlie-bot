@@ -25,7 +25,12 @@
   // the queue and renders that single turn synchronously.
   // ---------------------------------------------------------------------------
   const WINDOW_MARGIN_SCREENS = 2;
-  const MAX_WINDOW_TURNS = 64;
+  // Safety bound, not the operative policy: the ±2-screen margins size the
+  // window in pixels, and the cap only binds when rows are so thin that even
+  // the margins hold more turns than this (small viewports, 4k screens). If
+  // the cap binds where it shouldn't, its smaller window also collapses the
+  // scroll hysteresis runway and forces a migration per wheel impulse.
+  const MAX_WINDOW_TURNS = 256;
   const SCROLL_QUIET_MS = 200;
   const FRAME_BUDGET_MS = 16.7;
   const FOLDED_ROW_DEFAULT_EST = 30;
@@ -117,6 +122,9 @@
       segmentMaterializations: 0,
       rederivesOfSettledTurns: 0,
       measuredTurnCount: 0,
+      scrollFramesConsidered: 0,
+      scrollFramesSkipped: 0,
+      scrollFramesMigrated: 0,
     };
   }
 
@@ -507,6 +515,7 @@
       // Hysteresis: while the viewport stays comfortably inside the current
       // window, a scroll frame is pure bookkeeping — no DOM work at all.
       if (reason === 'scroll' && this.window) {
+        this.stats.scrollFramesConsidered++;
         const ws = this.window;
         const vh = this.container.clientHeight;
         const winTop = this.offsets[ws.start] || 0;
@@ -514,7 +523,10 @@
           ? this.offsets[ws.end] + this.heightOf(this.segments[ws.end])
           : winTop;
         const viewTop = this.container.scrollTop;
-        if (viewTop >= winTop + 0.5 * vh && viewTop + vh <= winBottom - 0.5 * vh) return;
+        if (viewTop >= winTop + 0.5 * vh && viewTop + vh <= winBottom - 0.5 * vh) {
+          this.stats.scrollFramesSkipped++;
+          return;
+        }
       }
       const range = this.computeTargetRange();
       const wasPinned = this.isPinned();
@@ -573,6 +585,7 @@
 
       if (evicted.length || replaced.length || inserted.length) {
         this.stats.windowMigrations++;
+        if (reason === 'scroll') this.stats.scrollFramesMigrated++;
         this.offsetsDirty = true;
       }
       this.window = range;

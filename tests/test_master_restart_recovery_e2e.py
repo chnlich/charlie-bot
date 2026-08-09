@@ -630,6 +630,63 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+  """The recorded turn's pid_start is scrubbed (death unprovable): recovery
+  keeps it on the RUNNING channel — re-attached with a constant-true probe,
+  master_run kept while following, the user message never replayed — and the
+  turn's real result event then closes the round exactly once."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  # sleep_first: assistant line, ~3s of silence, then the result event.
+  proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "sleep_first")
+  _wait_for(
+      lambda: _session_meta(home, session_id)["master_run"] is not None
+      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      timeout=20.0,
+      what="turn A did not start/persist identity and first output")
+  proc.kill()
+  proc.wait(timeout=10)
+
+  # Scrub pid_start from the recorded turn: the agent is alive, but the
+  # recorded identity can no longer prove death.
+  meta_path = home / "sessions" / session_id / "metadata.json"
+  meta = json.loads(meta_path.read_text(encoding="utf-8"))
+  record = meta["master_run"]
+  assert record is not None and record["pid"] is not None
+  record["pid_start"] = None
+  meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  # With a constant-true probe the follow ends on the post-result timeout;
+  # keep it fast.
+  monkeypatch.setattr("src.agents.backends.base.AgentBackend._POST_RESULT_TIMEOUT", 1.0)
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+
+  # Mid-state (the shim is still sleeping toward its result): re-attached via
+  # the RUNNING channel — the record is kept, no replay was dispatched, and
+  # no master-side report was posted for a mounted row.
+  assert _session_meta(home, session_id)["master_run"] is not None
+  assert not (state / "inv-2.argv").exists()
+
+  await _await_recovery_tasks()
+
+  # The turn's real result event closed the round: exactly one answer, the
+  # original user event unreplayed, the record cleared by the normal path.
+  assert not (state / "inv-2.argv").exists(), "a second master process was spawned"
+  assert not _shim_prompt(state, 1).startswith(master_cc._REPLAY_MARKER)
+  events = _chat_events(home, session_id)
+  assert len([e for e in events if e.get("type") == "user"]) == 1
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  assert master_done[0].get("exit_code") == 0
+  assert _session_meta(home, session_id)["master_run"] is None
+  assert not any(e.get("source") == "crash_recovery" for e in events)
+
+
+@pytest.mark.asyncio
 async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
   """A delegate/cron wake has no user event to replay: a result that landed

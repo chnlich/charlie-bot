@@ -178,16 +178,39 @@ def test_resolve_never_started_when_no_raw_and_no_pid(tmp_path: Path) -> None:
   assert resolution.outcome is runs.RunOutcome.NEVER_STARTED
 
 
-def test_resolve_uncovered_backend_type_dies_with_transport_reason(tmp_path: Path) -> None:
+def test_resolve_uncovered_backend_with_result_event_completes(tmp_path: Path) -> None:
+  """An uncovered run whose raw already holds a result event falls through to
+  the downstream result row and completes normally. Re-judged: this fixture
+  previously asserted DIED on the uncovered row — a fossil of the original
+  misjudgment that row-ordered an already-written result into a death verdict."""
   _write_raw(tmp_path, [RESULT_SUCCESS_LINE])
   for backend_type in ("opencode", "antigravity", "tui-cli"):
     resolution = _resolve(tmp_path, backend_type=backend_type)
+    assert resolution.outcome is runs.RunOutcome.COMPLETED
+    assert resolution.success is True
+
+
+def test_resolve_uncovered_backend_type_dies_with_transport_reason(tmp_path: Path) -> None:
+  """Verifiable death without a result event keeps the uncovered DIED row."""
+  _write_raw(tmp_path, [ASSISTANT_LINE])
+  for backend_type in ("opencode", "antigravity", "tui-cli"):
+    resolution = _resolve(tmp_path, backend_type=backend_type, pid=999999, pid_start="1")
     assert resolution.outcome is runs.RunOutcome.DIED
     assert resolution.reason == runs.TRANSPORT_NOT_COVERED_REASON
 
 
-def test_resolve_died_when_raw_missing_but_pid_recorded(tmp_path: Path) -> None:
+def test_resolve_raw_missing_with_unverifiable_pid_is_kept_alive(tmp_path: Path) -> None:
+  """Raw missing with pid recorded but pid_start absent: death cannot be
+  proven, so the run is effective-alive. Re-judged fossil: this previously
+  asserted DIED — the original misjudgment that finalized runs on missing
+  evidence."""
   resolution = _resolve(tmp_path, pid=4242)
+  assert resolution.outcome is runs.RunOutcome.RUNNING
+  assert resolution.reason == runs.RAW_MISSING_ALIVE_REASON
+
+
+def test_resolve_died_when_raw_missing_and_death_verifiable(tmp_path: Path) -> None:
+  resolution = _resolve(tmp_path, pid=999999, pid_start="1")
   assert resolution.outcome is runs.RunOutcome.DIED
   assert resolution.reason == runs.LEGACY_RAW_MISSING_REASON
 
@@ -231,20 +254,34 @@ def test_resolve_stalled_when_alive_and_silent_beyond_threshold(tmp_path: Path) 
   assert "no raw output" in resolution.reason
 
 
-def test_resolve_died_when_not_alive_and_no_result(tmp_path: Path) -> None:
+def test_resolve_kept_alive_when_death_unverifiable_and_no_result(tmp_path: Path) -> None:
+  """pid recorded but pid_start absent: even a dead pid cannot prove THIS
+  run's death (pid reuse), so the run is effective-alive and the reason names
+  the missing field. Re-judged fossil: previously asserted DIED — the
+  original misjudgment."""
   _write_raw(tmp_path, [ASSISTANT_LINE])
   resolution = _resolve(tmp_path, pid=999999)
+  assert resolution.outcome is runs.RunOutcome.RUNNING
+  assert "pid_start" in resolution.reason
+
+
+def test_resolve_died_when_death_verifiable_and_no_result(tmp_path: Path) -> None:
+  _write_raw(tmp_path, [ASSISTANT_LINE])
+  resolution = _resolve(tmp_path, pid=999999, pid_start="1")
   assert resolution.outcome is runs.RunOutcome.DIED
   assert resolution.reason == runs.DIED_WITHOUT_RESULT_REASON
 
 
 def test_resolve_drops_torn_final_line_from_the_result_scan(tmp_path: Path) -> None:
   # Producer killed mid-write: the torn tail must not manufacture a result.
+  # (Re-judged fossil: with pid_start unrecorded, death is unverifiable and
+  # the run is kept alive — what this test pins is "no COMPLETED from a torn
+  # tail", previously asserted via the DIED verdict.)
   raw = tmp_path / "data" / runs.RAW_LOG_NAME
   raw.parent.mkdir(parents=True)
   raw.write_bytes((ASSISTANT_LINE + '\n{"type": "result", "subty').encode("utf-8"))
   resolution = _resolve(tmp_path, pid=999999)
-  assert resolution.outcome is runs.RunOutcome.DIED
+  assert resolution.outcome is runs.RunOutcome.RUNNING
 
 
 # ---------------------------------------------------------------------------
@@ -293,10 +330,18 @@ def test_resolve_attaches_leftover_holders_only_when_not_alive(sleep_holding_std
   _write_raw(tmp_path, [ASSISTANT_LINE])
   holders_scan = { (target.stat().st_dev, target.stat().st_ino): [runs.HolderProcess(pid=proc.pid, cmdline="sleep 30")] }
 
-  # Dead run: the leftover holder is attached for reporting + row-5 cleanup.
-  resolution = _resolve(tmp_path, pid=999999, holders_scan=holders_scan)
+  # Provably dead run (full liveness identity recorded): the leftover holder
+  # is attached for reporting + row-5 cleanup.
+  resolution = _resolve(tmp_path, pid=999999, pid_start="1", holders_scan=holders_scan)
   assert resolution.outcome is runs.RunOutcome.DIED
   assert [h.pid for h in resolution.leftover_holders] == [proc.pid]
+
+  # Unverifiable death (pid recorded, pid_start absent): effective-alive —
+  # the run is kept RUNNING and no kill list is attached. (Re-judged fossil:
+  # the dead arm above previously ran with this exact incomplete identity.)
+  resolution = _resolve(tmp_path, pid=999999, holders_scan=holders_scan)
+  assert resolution.outcome is runs.RunOutcome.RUNNING
+  assert resolution.leftover_holders == ()
 
   # Alive run: fd holders are descendants, never liveness, and not reported.
   pid = os.getpid()

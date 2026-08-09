@@ -528,9 +528,50 @@ def test_scan_skips_post_boot_running_thread(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconcile_pre_boot_run_without_raw_log_drains_failed_without_killing(
+async def test_reconcile_pre_boot_run_without_raw_log_kept_alive_when_death_unverifiable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A pre-boot run whose raw log is missing is DIED: drain-finalized failed, never killed.
+  """Raw log missing with pid recorded but pid_start absent: death cannot be
+  proven, so the run is effective-alive (raw-missing-alive) — reported once,
+  never killed, never finalized failed. Re-judged fossil: this previously
+  asserted failed/-1, the original误杀 shape (pid reuse must never
+  finalize an innocent run).
+  """
+  import json
+
+  from src.core import runs
+
+  cfg = _cfg(tmp_path)
+  killed: list[int] = []
+  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+  boot_time = utc_now()
+  meta_path = _write_thread_meta(
+      cfg, "s1", {
+          "id": "pre-boot",
+          "status": "running",
+          "pid": 4242,
+          "started_at": (boot_time - timedelta(minutes=5)).isoformat(),
+      })
+
+  recovered = await init_module.run_crash_recovery(cfg, boot_time)
+  await _await_recovery_tasks()
+
+  assert recovered == 1
+  assert killed == []
+  meta = json.loads(meta_path.read_text(encoding="utf-8"))
+  assert meta["status"] == "running"
+  chat_path = cfg.sessions_dir / "s1" / "data" / "chat_events.jsonl"
+  chat_events = [json.loads(line) for line in chat_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+  reports = [e for e in chat_events if e.get("source") == "crash_recovery"]
+  assert len(reports) == 1
+  assert runs.RAW_MISSING_ALIVE_REASON in reports[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pre_boot_run_without_raw_log_and_verifiable_death_drains_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The unchanged真死回收: raw log missing with the full liveness identity
+  recorded and the process proven dead is DIED — drain-finalized failed,
+  never killed.
 
   Reconciliation resolves truth from disk and NEVER kills the recorded pid —
   only leftover descendants holding the raw-log fd are killed, and a missing
@@ -547,6 +588,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_drains_failed_without_kill
           "id": "pre-boot",
           "status": "running",
           "pid": 4242,
+          "pid_start": "1",
           "started_at": (boot_time - timedelta(minutes=5)).isoformat(),
       })
 
@@ -586,7 +628,7 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
   resume_calls: list[bool] = []
 
   async def fake_resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, *, is_alive,
-                               interrupt_reason=""):
+                               interrupt_reason="", on_silence=None):
     resume_calls.append(is_alive())
 
   monkeypatch.setattr("src.core.spawner.resume_worker", fake_resume_worker)

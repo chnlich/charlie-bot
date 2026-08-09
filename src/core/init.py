@@ -5,7 +5,7 @@ import copy
 import os
 import signal
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -54,6 +54,12 @@ _TERMINAL_THREAD_STATUSES = frozenset({"completed", "failed", "cancelled"})
 # the recovery sweep consumes (a failed thread's metadata mtime == its completed_at
 # write time), so no quarantine-eligible thread is ever skipped.
 RUNNING_SCAN_WINDOW = timedelta(days=30)
+
+# Boot-scoped once-key for "alive but silent" reports: at most one recovery
+# event per thread per boot, shared by the boot STALLED report and the
+# follow-time silence recheck (whichever emits first claims the key). Process
+# lifetime only — deliberately nothing on disk.
+_silence_reported_thread_ids: set[str] = set()
 
 
 def iter_recent_thread_metas(
@@ -419,6 +425,20 @@ async def _await_reattach(future: asyncio.Future) -> None:
   await future
 
 
+def _liveness_probe(pid, pid_start, started_at, host_boot: datetime) -> Callable[[], bool]:
+  """The liveness probe a boot re-attach mounts with, by input completeness.
+
+  A missing input (pid/pid_start/started_at) makes death unprovable, so the
+  probe is constant-true: the follow waits for the run's real result event
+  instead of ever judging death from incomplete evidence. Complete inputs get
+  the recorded (pid, pid_start) identity judgment. Worker and master branches
+  share this one rule.
+  """
+  if pid is None or pid_start is None or started_at is None:
+    return lambda: True
+  return lambda: runs.is_run_alive(pid, pid_start, started_at, host_boot)
+
+
 async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
   """Resolve each session's recorded master turn, then replay unanswered user messages.
 
@@ -493,6 +513,22 @@ async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
         reason=resolution.reason,
     )
 
+    if (resolution.outcome is runs.RunOutcome.RUNNING
+        and resolution.reason in (runs.UNCOVERED_ALIVE_REASON, runs.RAW_MISSING_ALIVE_REASON)):
+      # Same rule as the worker branch: treated as alive but nothing
+      # followable — report only. The record is kept (the turn still owns its
+      # user message until a real outcome lands) and the message stays out of
+      # this boot's replay set.
+      await _report_recovery_event(
+          session_mgr,
+          meta.id,
+          f"The recorded master turn on this session is treated as still alive ({resolution.reason}); "
+          "it is NOT being killed or re-answered — left running without re-attach and judged "
+          "again on the next restart.")
+      if record.user_event_id:
+        excluded.setdefault(meta.id, set()).add(record.user_event_id)
+      continue
+
     follow = (
         resolution.outcome in (
             runs.RunOutcome.COMPLETED,
@@ -509,7 +545,7 @@ async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
           meta,
           record,
           session_mgr.callbacks(),
-          is_alive=lambda r=record: runs.is_run_alive(r.pid, r.pid_start, r.started_at, host_boot),
+          is_alive=_liveness_probe(record.pid, record.pid_start, record.started_at, host_boot),
       )
       create_logged_task(_await_reattach(future), name=f"master-resume-{meta.id[:8]}")
       # The follower answers this round; keep its user message (if any) out
@@ -592,7 +628,22 @@ async def _reconcile_one(
     return True
 
   if resolution.outcome in (runs.RunOutcome.RUNNING, runs.RunOutcome.STALLED):
+    if resolution.outcome is runs.RunOutcome.RUNNING and resolution.reason in (
+        runs.UNCOVERED_ALIVE_REASON, runs.RAW_MISSING_ALIVE_REASON):
+      # Treated as alive but nothing followable (uncovered transport / no raw
+      # log): report only — no re-attach, nothing torn down, judged again on
+      # the next restart.
+      await _report_recovery_event(
+          session_mgr,
+          session_id,
+          f"Worker thread {thread_id[:8]} is treated as still alive ({resolution.reason}); "
+          "it is NOT being killed — left running without re-attach and judged again on "
+          "the next restart.",
+      )
+      return True
     if resolution.outcome is runs.RunOutcome.STALLED:
+      # The boot report claims this thread's one-per-boot silence report.
+      _silence_reported_thread_ids.add(thread_id)
       await _report_recovery_event(
           session_mgr,
           session_id,
@@ -600,9 +651,6 @@ async def _reconcile_one(
           f"{NO_OUTPUT_REPORT_THRESHOLD // 3600}h ({resolution.reason}). Suspected hung; "
           "it is NOT being killed — re-attached and left running.",
       )
-    pid = meta.get("pid")
-    pid_start = meta.get("pid_start")
-    started_at = _parse_started_at(meta)
     create_logged_task(
         spawner.resume_worker(
             session_id,
@@ -611,8 +659,8 @@ async def _reconcile_one(
             cfg,
             session_mgr,
             thread_mgr,
-            is_alive=lambda pid=pid, pid_start=pid_start, started_at=started_at: runs.is_run_alive(
-                pid, pid_start, started_at, host_boot),
+            is_alive=_liveness_probe(meta.get("pid"), meta.get("pid_start"), _parse_started_at(meta), host_boot),
+            on_silence=lambda: _follow_silence_recheck(session_mgr, session_id, thread_id),
         ),
         name=f"resume-follow-{thread_id[:8]}")
     return True
@@ -663,6 +711,24 @@ async def _report_recovery_event(session_mgr, session_id: str, content: str) -> 
     await session_mgr.mark_unread(session_id)
   except Exception as e:
     log.warning("recovery_report_failed", session=session_id, error=str(e))
+
+
+async def _follow_silence_recheck(session_mgr, session_id: str, thread_id: str) -> None:
+  """Emit this thread's one-per-boot silence report from a mounted follow.
+
+  Same text shape as the boot STALLED report, and shares its once-key:
+  whichever side emits first claims the thread for this boot, so repeated
+  re-mounts within one boot can never re-emit.
+  """
+  if thread_id in _silence_reported_thread_ids:
+    return
+  _silence_reported_thread_ids.add(thread_id)
+  await _report_recovery_event(
+      session_mgr,
+      session_id,
+      f"Worker thread {thread_id[:8]} is still alive but produced no output for over "
+      f"{NO_OUTPUT_REPORT_THRESHOLD // 3600}h (silence crossed after re-attach). Suspected hung; "
+      "it is NOT being killed — re-attached and left running.")
 
 
 async def _maybe_respawn(

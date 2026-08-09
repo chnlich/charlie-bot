@@ -50,6 +50,13 @@ TRANSPORT_NOT_COVERED_REASON = "backend transport not covered by restart-safe ru
 LEGACY_RAW_MISSING_REASON = "raw log missing (run predates restart-safe transport)"
 DIED_WITHOUT_RESULT_REASON = "process exited without a final result event"
 
+# Effective-alive verdicts: wherever death cannot be PROVEN (a liveness input
+# is missing, or the probe says alive), the run is treated as alive and never
+# finalized failed on missing evidence. These reasons route init.py's
+# report-only branch (no re-attach) for rows that have nothing followable.
+UNCOVERED_ALIVE_REASON = "uncovered-alive"
+RAW_MISSING_ALIVE_REASON = "raw-missing-alive"
+
 # Improve-loop iteration threads are identified by their description prefix;
 # the loop task itself does not survive a restart (loop continuation is an
 # explicit non-goal), so these threads are finalized, never respawned, and
@@ -325,6 +332,22 @@ def write_raw_cursor(cursor: Path, offset: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _missing_liveness_fields(
+    pid: Optional[int],
+    pid_start: Optional[str],
+    started_at: Optional[datetime],
+) -> list[str]:
+  """Names of the liveness inputs that are absent, in fixed order."""
+  missing = []
+  if pid is None:
+    missing.append("pid")
+  if pid_start is None:
+    missing.append("pid_start")
+  if started_at is None:
+    missing.append("started_at")
+  return missing
+
+
 def resolve_run(
     *,
     raw_path: Path,
@@ -343,6 +366,12 @@ def resolve_run(
   coverage (a fresh spawn works for any backend), and coverage is judged
   before semantics that need the shared read loop's artifacts.
 
+  One invariant governs every row below: death is reported only when it can be
+  PROVEN — pid, pid_start, and started_at all present AND ``is_run_alive``
+  says dead. Anything else (any input missing so death is unverifiable, or the
+  probe says alive) is treated as alive and resolves to a RUNNING/STALLED row,
+  never a DIED-on-missing-evidence finalize.
+
   ``holders_scan`` is the output of one ``scan_stdout_holders`` call shared by
   a whole reconcile pass; when given and the run is not alive, row-5 leftover
   descendants are attached to the resolution (the outcome itself still comes
@@ -353,15 +382,32 @@ def resolve_run(
 
   if not raw_exists and pid is None:
     return RunResolution(outcome=RunOutcome.NEVER_STARTED)
-  if backend_type in UNCOVERED_BACKEND_TYPES:
-    return RunResolution(outcome=RunOutcome.DIED, reason=TRANSPORT_NOT_COVERED_REASON)
-  if not raw_exists:
-    return RunResolution(outcome=RunOutcome.DIED, reason=LEGACY_RAW_MISSING_REASON)
 
-  completed_at = raw_completion_time(raw_path)
-  events = project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
-  result = summarize_result(events)
+  missing = _missing_liveness_fields(pid, pid_start, started_at)
+  missing_note = f"missing liveness field(s): {', '.join(missing)}" if missing else ""
   alive = is_run_alive(pid, pid_start, started_at, host_boot_time)
+  # Effective-alive, defined once for the whole table: verified-alive, or death
+  # unverifiable because a liveness input is missing. Both mean "treat as alive".
+  effectively_alive = alive or bool(missing)
+
+  completed_at: Optional[datetime] = None
+  result: Optional[dict] = None
+  if raw_exists:
+    completed_at = raw_completion_time(raw_path)
+    events = project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
+    result = summarize_result(events)
+
+  if backend_type in UNCOVERED_BACKEND_TYPES and result is None:
+    # A result event already on disk falls through to the downstream result
+    # row and completes normally; this row only judges runs without one.
+    if effectively_alive:
+      return RunResolution(outcome=RunOutcome.RUNNING, reason=UNCOVERED_ALIVE_REASON, completed_at=completed_at)
+    return RunResolution(
+        outcome=RunOutcome.DIED, reason=TRANSPORT_NOT_COVERED_REASON, completed_at=completed_at)
+  if not raw_exists:
+    if effectively_alive:
+      return RunResolution(outcome=RunOutcome.RUNNING, reason=RAW_MISSING_ALIVE_REASON)
+    return RunResolution(outcome=RunOutcome.DIED, reason=LEGACY_RAW_MISSING_REASON)
 
   leftovers: tuple[HolderProcess, ...] = ()
   if not alive and holders_scan is not None:
@@ -374,16 +420,20 @@ def resolve_run(
         completed_at=completed_at,
         leftover_holders=leftovers,
     )
-  if alive:
+  if effectively_alive:
     silent_for = (now - completed_at).total_seconds() if completed_at else 0.0
     if silent_for > NO_OUTPUT_REPORT_THRESHOLD:
+      reason = (
+          f"alive but no raw output for {int(silent_for)}s "
+          f"(>{NO_OUTPUT_REPORT_THRESHOLD}s threshold)")
+      if missing_note:
+        reason = f"{reason}; {missing_note}"
       return RunResolution(
           outcome=RunOutcome.STALLED,
-          reason=f"alive but no raw output for {int(silent_for)}s "
-          f"(>{NO_OUTPUT_REPORT_THRESHOLD}s threshold)",
+          reason=reason,
           completed_at=completed_at,
       )
-    return RunResolution(outcome=RunOutcome.RUNNING, completed_at=completed_at)
+    return RunResolution(outcome=RunOutcome.RUNNING, reason=missing_note, completed_at=completed_at)
   return RunResolution(
       outcome=RunOutcome.DIED,
       reason=DIED_WITHOUT_RESULT_REASON,

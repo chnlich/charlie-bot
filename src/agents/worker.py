@@ -158,7 +158,12 @@ class Worker:
     log.info("worker_finished", thread=self._thread.id, exit_code=exit_code)
     return exit_code
 
-  async def resume(self, *, is_alive: Callable[[], bool]) -> int:
+  async def resume(
+      self,
+      *,
+      is_alive: Callable[[], bool],
+      on_silence: Optional[Callable[[], Awaitable[None]]] = None,
+  ) -> int:
     """Re-attach to an interrupted run and stream its remaining output.
 
     Consumer-side this is identical to run(): the same tail-follow loop (from
@@ -167,6 +172,9 @@ class Worker:
     (pid, pid_start) judgment instead of an in-process handle, and the exit
     code is derived from the raw log's trailing result event (the run's true
     outcome, independent of the exit code a long-gone process had).
+
+    ``on_silence`` is the follow-time silence recheck, forwarded to the
+    tail-follow loop; it reports, never judges.
     """
     data_dir = self._events_log.parent
     raw_path = self._raw_log_path()
@@ -186,6 +194,7 @@ class Worker:
           cursor=cursor,
           start_offset=runs.read_raw_cursor(cursor),
           post_result_timeout=stream_backend._POST_RESULT_TIMEOUT,
+          on_silence=on_silence,
       ):
         await self._process_event(event, log_file)
 

@@ -28,6 +28,7 @@ import structlog
 from src.core import event_types as ET
 from src.core import runs
 from src.core.process import kill_process_group
+from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 log = structlog.get_logger()
 
@@ -154,6 +155,7 @@ async def tail_follow_events(
     start_offset: int = 0,
     post_result_timeout: float,
     poll_interval: float = _TAIL_POLL_INTERVAL,
+    on_silence: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> AsyncIterator[dict]:
   """Tail-follow a raw NDJSON log from *start_offset*, yielding translated events.
 
@@ -175,6 +177,11 @@ async def tail_follow_events(
       handle on the live path, the (pid, pid_start) identity pair after
       re-attach. A producer that closed stdout or had its raw file replaced
       still counts as alive — liveness never reads the fd.
+    - ``on_silence`` is the follow-time silence recheck: invoked at most once
+      per mount when the raw log's last write ages past
+      ``NO_OUTPUT_REPORT_THRESHOLD`` (its silence age is seeded from the
+      file's mtime, so pre-follow silence counts). It never judges death —
+      the follow continues unchanged afterwards.
   """
   while not raw_path.exists():
     # The raw file is created by the spawner before the subprocess starts, so
@@ -187,6 +194,13 @@ async def tail_follow_events(
   offset = start_offset
   saw_result = False
   last_growth = time.monotonic()
+  try:
+    # Seed the silence clock from the raw log's mtime so output produced
+    # before this mount counts toward the recheck threshold.
+    last_output_at = time.monotonic() - max(0.0, time.time() - raw_path.stat().st_mtime)
+  except OSError:
+    last_output_at = last_growth
+  silence_reported = False
   pending_tool_calls: set[str] = set()
 
   with open(raw_path, "rb") as f:
@@ -196,6 +210,9 @@ async def tail_follow_events(
       chunk = f.read(65536)
       if chunk:
         last_growth = time.monotonic()
+        # The producer's last write, anchored to the monotonic clock (the
+        # file's mtime — reading pre-mount backlog must not count as output).
+        last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
         buf += chunk
         lines = buf.split(b"\n")
         buf = lines.pop()  # trailing partial line; re-read once completed
@@ -266,6 +283,12 @@ async def tail_follow_events(
         break
       if not is_alive():
         break  # producer gone and fully drained
+      if (
+          on_silence is not None and not silence_reported
+          and time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD
+      ):
+        silence_reported = True
+        await on_silence()
       await asyncio.sleep(poll_interval)
 
     if buf.strip():

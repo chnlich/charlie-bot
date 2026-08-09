@@ -6,7 +6,7 @@ import signal
 import time
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -1106,6 +1106,12 @@ def _run_completion_time(cfg: CharlieBotConfig, session_id: str, thread_id: str)
   return runs.raw_completion_time(runs.raw_log_path(thread_dir))
 
 
+# Recovery-event reason recorded when the finalize liveness gate keeps a run
+# alive: resume hit an exception or cancellation while the run's death was
+# unproven, so the FAILED finalize was skipped (resume-exception-alive).
+RESUME_EXCEPTION_ALIVE_REASON = "resume-exception-alive"
+
+
 async def resume_worker(
     session_id: str,
     description: str,
@@ -1116,6 +1122,7 @@ async def resume_worker(
     *,
     is_alive: Callable[[], bool],
     interrupt_reason: str = "",
+    on_silence: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> None:
   """Re-attach to an interrupted run's raw stream, then run the finalize chain.
 
@@ -1128,6 +1135,19 @@ async def resume_worker(
   ends without a successful result and no harder error occurred, it becomes
   the finalize error, so the master's summary states why the run failed
   instead of a bare exit -1.
+
+  ``on_silence`` is the follow-time silence recheck, forwarded to the
+  re-attached follow loop.
+
+  Liveness gate: before a FAILED outcome is recorded under any exception or
+  cancellation path (asyncio.CancelledError included — it bypasses
+  ``except Exception`` and lands in the same finally), the same ``is_alive``
+  probe is consulted. Probe true (alive, or constant-true because death is
+  unverifiable) means the failure is our own, not the run's: a recovery event
+  is emitted and the FAILED finalize is skipped, leaving the thread running.
+  Probe false (proven dead) finalizes exactly as before. Normal completion
+  (exit_code 0) and the quota branch (which kills the process itself) are
+  not gated.
   """
   thread = None
   worker = None
@@ -1150,7 +1170,7 @@ async def resume_worker(
     events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
     working_dir = Path(thread.worktree_path) if thread.worktree_path else events_log.parent
     worker = Worker(thread, working_dir, events_log, description, cfg, backend_option=backend_option)
-    exit_code = await worker.resume(is_alive=is_alive)
+    exit_code = await worker.resume(is_alive=is_alive, on_silence=on_silence)
   except QuotaExhaustedException:
     log.warning("resume_worker_quota_exhausted", thread_id=thread_id)
     if is_alive() and thread is not None and thread.pid is not None:
@@ -1163,19 +1183,32 @@ async def resume_worker(
     if exit_code != 0 and not quota_exhausted and not error_msg and interrupt_reason:
       error_msg = interrupt_reason
     if thread is not None:
-      await _finalize_worker_safely(
-          session_id,
-          description,
-          thread,
-          exit_code,
-          thread_mgr,
-          session_mgr,
-          cfg,
-          quota_exhausted,
-          error_msg,
-          False,
-          task_type=thread.task_type or TaskType.IMPLEMENT,
-          completed_at=_run_completion_time(cfg, session_id, thread.id))
+      if exit_code != 0 and not quota_exhausted and is_alive():
+        # Alive or unverifiable death: never record FAILED on our own error.
+        log.warning("resume_finalize_skipped_alive", thread_id=thread_id, error=error_msg)
+        from src.core import (
+          init as init_module,  # lazy: init imports this module lazily too
+        )
+        await init_module._report_recovery_event(
+            session_mgr,
+            session_id,
+            f"Worker thread {thread_id[:8]} hit a resume error but its process cannot be proven "
+            f"dead ({RESUME_EXCEPTION_ALIVE_REASON}). It is NOT being killed — left running "
+            "and judged again on the next restart.")
+      else:
+        await _finalize_worker_safely(
+            session_id,
+            description,
+            thread,
+            exit_code,
+            thread_mgr,
+            session_mgr,
+            cfg,
+            quota_exhausted,
+            error_msg,
+            False,
+            task_type=thread.task_type or TaskType.IMPLEMENT,
+            completed_at=_run_completion_time(cfg, session_id, thread.id))
 
 
 async def _broadcast_completion(

@@ -64,8 +64,8 @@
   }
 
   // The 9953270 rule over message JSON: any separator-terminated span with a
-  // non-empty body is a turn; head = last stimulus before the conclusion,
-  // else body[0]. An empty-body bare separator stays flat.
+  // non-empty body is a turn; head = last user message before the conclusion,
+  // else last stimulus, else body[0]. An empty-body bare separator stays flat.
   function describeSpan(span) {
     const stable = span.filter((entry) => isStable(entry.msg));
     const separator = stable[stable.length - 1];

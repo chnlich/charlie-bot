@@ -78,7 +78,8 @@
     let stimulus = null;
     const limit = conclusion ? body.indexOf(conclusion) : body.length;
     for (let i = limit - 1; i >= 0; i--) {
-      if (STIMULUS_ROLES.includes(body[i].msg.role)) { stimulus = body[i]; break; }
+      if (body[i].msg.role === 'user') { stimulus = body[i]; break; }
+      if (!stimulus && STIMULUS_ROLES.includes(body[i].msg.role)) stimulus = body[i];
     }
     const head = stimulus || body[0];
     if (!head) return null;

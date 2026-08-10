@@ -577,7 +577,8 @@ function describeExpectedSpan(span) {
   const body = messages.slice(0, -1);
   const conclusion = lastMatch(body, (item) => item.role === 'assistant');
   const beforeConclusion = conclusion ? body.slice(0, body.indexOf(conclusion)) : body;
-  const stimulus = lastMatch(beforeConclusion, (item) => STIMULUS_ROLES.includes(item.role));
+  const stimulus = lastMatch(beforeConclusion, (item) => item.role === 'user')
+    || lastMatch(beforeConclusion, (item) => STIMULUS_ROLES.includes(item.role));
   const head = stimulus || body[0];
   if (!head) return null;
   const steps = conclusion
@@ -798,9 +799,10 @@ function generateCases() {
     ],
   });
   cases.push({
-    // Two stimuli in one span (a second ask lands while the master is running):
-    // the head is the last one before the conclusion.
-    name: 'two stimuli in one span',
+    // Two stimuli in one span (a worker summary lands while the master is
+    // answering the user's ask): the user prompt wins the head over the later
+    // worker_summary, so the tag is "You" and the title is the user text.
+    name: 'user prompt wins over worker_summary in one span',
     items: [
       ...finishedTurn('h1', {}),
       msg('user', 'h2-first', {text: 'first ask', ts: '2026-04-02T13:00:00.000Z'}),

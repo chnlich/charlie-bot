@@ -173,10 +173,12 @@ function lastMessageWithRole(messages, role) {
 
 function lastStimulusBefore(messages, conclusion) {
   const limit = conclusion ? messages.indexOf(conclusion) : messages.length;
+  let stimulus = null;
   for (let i = limit - 1; i >= 0; i--) {
-    if (isStimulusMessage(messages[i])) return messages[i];
+    if (renderedMessageRole(messages[i]) === 'user') return messages[i];
+    if (!stimulus && isStimulusMessage(messages[i])) stimulus = messages[i];
   }
-  return null;
+  return stimulus;
 }
 
 function turnFoldKey(turn) {

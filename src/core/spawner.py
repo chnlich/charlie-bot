@@ -445,8 +445,6 @@ async def _create_worktree_and_process(
     req: SpawnRequest,
 ) -> Worker:
   """Create worktree, build prompt, resolve backend, and construct Worker."""
-  worktree_path: Optional[Path] = None
-
   if req.prompt_override:
     worker_prompt = req.prompt_override
     if not thread.worktree_path:
@@ -458,55 +456,36 @@ async def _create_worktree_and_process(
       )
       raise RuntimeError("thread metadata missing worktree_path")
     worktree_path = Path(thread.worktree_path).resolve()
-  elif req.worktree_path_override:
-    # Reuse an existing worktree (e.g. improve loop iterations sharing a single worktree).
-    base_branch = req.base_branch or await git_current_branch(resolved_repo)
-    branch_name = req.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
-    wt_path = Path(req.worktree_path_override)
-
-    thread.branch_name = branch_name
-    thread.repo_path = str(resolved_repo)
-    thread.worktree_path = str(wt_path)
-    thread.base_branch = base_branch
-    thread.skip_cleanup = req.skip_cleanup
-    thread.keep_worktree = req.keep_worktree
-    thread.context = req.context
-
-    session_meta = await session_mgr.get_session(session_id)
-    if session_meta is None:
-      raise ValueError(f"session '{session_id}' not found")
-    worker_prompt = _build_worker_prompt(
-        description,
-        resolved_repo,
-        base_branch,
-        branch_name,
-        str(wt_path),
-        session_meta,
-        cfg,
-        task_type=req.task_type,
-        loop_dir=req.loop_dir,
-        iteration_number=req.iteration_number,
-        is_continuation=req.is_continuation,
-        keep_worktree=req.keep_worktree)
-    worktree_path = wt_path.resolve()
   else:
     # Get current branch as the base for the worktree
     base_branch = req.base_branch or await git_current_branch(resolved_repo)
 
-    # Compute branch name and worktree path
-    ts = int(time.time())
-    branch_name = req.branch_name_override or f"charliebot/task-{ts}-{thread.id[:8]}"
-    wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
+    # Compute branch name; the fresh-worktree branch derives the path from it.
+    branch_name = req.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
 
-    # Ensure worktree parent dir exists and create worktree before launch.
-    Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
-    resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
+    canonical_branch = base_branch
+    is_continuation = req.is_continuation
+    start_point: Optional[str] = None
+
+    if req.worktree_path_override:
+      # Reuse an existing worktree (e.g. improve loop iterations sharing a single worktree).
+      wt_path = Path(req.worktree_path_override)
+      thread.skip_cleanup = req.skip_cleanup
+    else:
+      wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
+
+      # Ensure worktree parent dir exists and create worktree before launch.
+      Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
+      resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
+      canonical_branch = resolution.canonical
+      is_continuation = False
+      start_point = resolution.start_point
 
     # Store branch_name, repo_path, worktree path, and optional context on thread metadata.
     thread.branch_name = branch_name
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
-    thread.base_branch = resolution.canonical
+    thread.base_branch = canonical_branch
     thread.keep_worktree = req.keep_worktree
     thread.context = req.context
 
@@ -517,7 +496,7 @@ async def _create_worktree_and_process(
     worker_prompt = _build_worker_prompt(
         description,
         resolved_repo,
-        resolution.canonical,
+        canonical_branch,
         branch_name,
         str(wt_path),
         session_meta,
@@ -525,12 +504,11 @@ async def _create_worktree_and_process(
         task_type=req.task_type,
         loop_dir=req.loop_dir,
         iteration_number=req.iteration_number,
+        is_continuation=is_continuation,
         keep_worktree=req.keep_worktree,
-        start_point=resolution.start_point)
+        start_point=start_point)
     worktree_path = wt_path.resolve()
 
-  if worktree_path is None:
-    raise RuntimeError("worktree path was not resolved")
   if worktree_path == resolved_repo:
     log.error(
         "spawn_worker_repo_root_cwd_detected",

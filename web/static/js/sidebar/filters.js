@@ -33,6 +33,36 @@ function getRestorableSidebarFilters() {
   return sidebarFilters.filter(filter => filter.restoreFromUrl).map(filter => filter.name);
 }
 
+// ---------------------------------------------------------------------------
+// Manager entry (an entry point, not a registered sidebar filter: it is never
+// in sidebarFilters, never gets filter-active styling, and setSidebarFilterPill
+// does not touch it because it carries no .filter-pill class)
+// ---------------------------------------------------------------------------
+let managerEntryBusy = false;
+
+function renderManagerEntryButton() {
+  const disabled = managerEntryBusy ? ' disabled' : '';
+  return `<button onclick="openSessionManager()" id="manager-entry-btn"${disabled} title="Open the Session Manager" class="manager-entry px-2.5 py-1 text-xs rounded-full font-medium transition-colors border border-slate-600 text-slate-300 hover:bg-slate-700 disabled:opacity-40">Manager</button>`;
+}
+
+async function openSessionManager() {
+  if (managerEntryBusy) return;
+  managerEntryBusy = true;
+  const btn = document.getElementById('manager-entry-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/sessions/manager');
+    if (!res.ok) throw new Error(`Manager entry failed: ${res.status}`);
+    const data = await res.json();
+    await switchSession(data.id);
+  } catch (err) {
+    console.error('Manager entry failed:', err);
+  } finally {
+    managerEntryBusy = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
 function renderSidebarFilterPills() {
   const container = document.getElementById('sidebar-filter-pills');
   if (!container) return;
@@ -44,7 +74,7 @@ function renderSidebarFilterPills() {
       : 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200';
     return `<button onclick="switchSidebarFilter('${filter.name}')" id="filter-${filter.name}" class="${cls}">${filter.label}</button>`;
   }).join('');
-  container.innerHTML = buttons;
+  container.innerHTML = renderManagerEntryButton() + buttons;
   if (addBtn) container.appendChild(addBtn);
 }
 
@@ -320,6 +350,8 @@ Object.assign(Sidebar, {
   registerSidebarFilter,
   getSidebarFilter,
   getRestorableSidebarFilters,
+  renderManagerEntryButton,
+  openSessionManager,
   renderSidebarFilterPills,
   markSessionRead,
   getCurrentSidebarViewRequest,
@@ -346,6 +378,7 @@ Sidebar.Filters = {
   all: () => sidebarFilters.slice(),
 };
 Sidebar.expose([
+  'openSessionManager',
   'markSessionRead',
   'getCurrentSidebarViewRequest',
   'fetchSidebarSessionsForCurrentView',

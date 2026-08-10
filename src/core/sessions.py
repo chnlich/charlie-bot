@@ -120,7 +120,10 @@ class SessionManager:
     """Create a new session."""
     name = req.name or await self._next_session_name()
     meta = SessionMetadata(
-        name=name, scheduled_task=req.scheduled_task, backend=backend or self._cfg.backend_options[0].id)
+        name=name,
+        scheduled_task=req.scheduled_task,
+        role=req.role,
+        backend=backend or self._cfg.backend_options[0].id)
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure

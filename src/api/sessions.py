@@ -43,9 +43,12 @@ from src.core.models import (
   SetGroupRequest,
   SwitchBackendRequest,
   ThreadMetadata,
+  TriggerStatus,
 )
 from src.core.sessions import SessionManager
+from src.core.thinking_state import busy_since
 from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -263,6 +266,68 @@ async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_sess
     else:
       s.schedule_enabled = False
   return sessions
+
+
+# ---------------------------------------------------------------------------
+# Session Manager
+# ---------------------------------------------------------------------------
+
+_MANAGER_ROLE = "manager"
+
+# Guards resolve-and-create for the manager session. The server is one process
+# with one event loop, so an in-process lock makes concurrent first clicks
+# resolve the same session instead of racing to create duplicates.
+_manager_session_lock = asyncio.Lock()
+
+MANAGER_ORIENTATION_MESSAGE = (
+    "Read prompts/session_manager.md in the charlie-bot repo and take up your Session Manager duties "
+    "per that document; arm your patrol trigger as your first step.")
+
+
+def _send_manager_orientation(
+    cfg: CharlieBotConfig,
+    meta: SessionMetadata,
+    session_mgr: SessionManager,
+) -> None:
+  """Fire-and-forget the orientation message through the same chat-turn path the message route uses."""
+  from src.api.chat import run_and_finalize
+  from src.core.tasks import create_logged_task
+  create_logged_task(run_and_finalize(cfg, meta, MANAGER_ORIENTATION_MESSAGE, session_mgr, skip_user_event=False))
+
+
+@router.get("/manager")
+async def get_manager_session(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Resolve (creating on first click) the Session Manager session and report its patrol state.
+
+  The resolve-and-create runs under a module-level lock so two concurrent calls
+  cannot both create. An existing manager whose patrol chain died gets the
+  orientation message re-sent, provided its master is idle.
+  """
+  async with _manager_session_lock:
+    active = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+    manager = next((s for s in active if s.role == _MANAGER_ROLE), None)
+
+    if manager is None:
+      backend = _resolve_requested_backend(None, cfg, fallback_backend=_default_backend_id(cfg))
+      manager = await session_mgr.create_session(
+          CreateSessionRequest(name="Session Manager", role=_MANAGER_ROLE), backend=backend)
+      _send_manager_orientation(cfg, manager, session_mgr)
+      log.info("manager_session_created", session_id=manager.id)
+      return {"id": manager.id, "created": True, "patrol_armed": False}
+
+    triggers = await trigger_mgr.list_triggers(manager.id)
+    patrol_armed = any(t.status == TriggerStatus.PENDING and t.message.startswith("[patrol]") for t in triggers)
+    if patrol_armed:
+      return {"id": manager.id, "created": False, "patrol_armed": True}
+
+    if busy_since(manager.id) is None:
+      _send_manager_orientation(cfg, manager, session_mgr)
+      log.info("manager_orientation_resent", session_id=manager.id)
+    return {"id": manager.id, "created": False, "patrol_armed": False}
 
 
 def _parse_session_ids(ids: str) -> list[str]:

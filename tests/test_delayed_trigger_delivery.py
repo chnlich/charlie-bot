@@ -73,3 +73,32 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   assert stored_trigger.fired_at is not None
   # Pure-delay triggers (no watch targets) converge on the 'timeout' reason.
   assert stored_trigger.fire_reason == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_archived_session_trigger_is_cancelled_without_waking_master(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Archived trigger"))
+  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger = PendingTrigger(
+      id="archived-trigger",
+      session_id=session.id,
+      fire_at=datetime.now(timezone.utc),
+      message="must not wake",
+  )
+  await trigger_mgr._save_trigger(trigger)
+  await session_mgr.archive_session(session.id)
+
+  with (
+      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
+      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_trigger_master,
+      patch("src.core.triggers.get_config", return_value=cfg),
+  ):
+    await trigger_mgr._wait_and_fire(trigger)
+
+  assert session_mgr.load_chat_events_sync(session.id) == []
+  mock_broadcast.assert_not_awaited()
+  mock_trigger_master.assert_not_awaited()
+  stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
+  assert stored_trigger.status == TriggerStatus.CANCELLED

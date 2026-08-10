@@ -9,6 +9,9 @@ You report. You do not act. The user acts.
 
 ## 1. Patrol self-renewal (first step of every wake)
 
+If this session is archived, or it no longer carries the manager role, do not arm
+a patrol trigger and end the turn; the manager role has moved to another session.
+
 At the very start of every wake, before any other work in the turn, confirm this
 session has a pending trigger whose message starts with `[patrol]`. Your own
 triggers come back in `GET /api/sessions/<this-session-id>/view` (API access is

@@ -48,8 +48,14 @@ async function switchBackend(backendId) {
     });
     if (res.ok) {
       const data = await res.json();
-      setActiveBackendId(data.backend);
-      updateActiveBackendBadges();
+      if (data.id !== SESSION_ID) {
+        const backendLabel = BACKEND_OPTIONS[backendId] || backendId;
+        showToast('Session Manager moved to a new session on ' + backendLabel + '; the previous session was archived.');
+        await switchSession(data.id);
+      } else {
+        setActiveBackendId(data.backend);
+        updateActiveBackendBadges();
+      }
     } else {
       let detail = '';
       try {

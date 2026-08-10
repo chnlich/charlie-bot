@@ -64,7 +64,7 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   return {
       "active_backend": active_backend,
       "active_backend_type": active_backend_opt.type if active_backend_opt else "",
-      "switchable_backends": _switchable_backend_ids(active_backend, cfg),
+      "switchable_backends": _switchable_backend_ids(active_backend, cfg, meta.role),
   }
 
 
@@ -95,13 +95,22 @@ def _same_backend_domain(cur_id: str, tgt_id: str, cfg: CharlieBotConfig) -> boo
   return cur_domain is not None and cur_domain == tgt_domain
 
 
-def _switchable_backend_ids(active_backend: str, cfg: CharlieBotConfig) -> list[str]:
-  """Backend option ids in the effective backend's resume domain, current first.
+def _switchable_backend_ids(
+    active_backend: str,
+    cfg: CharlieBotConfig,
+    role: str | None = None,
+) -> list[str]:
+  """Return backend option ids available for this session.
 
-  Empty when the effective backend is missing from config or lies outside the
-  cc-claude domain (nothing is switchable from it in place). The current id is
-  always included; ids keep config order.
+  Role-carrying sessions can migrate to any configured backend, so their list
+  contains every configured id in config order. For ordinary sessions, the list
+  is empty when the effective backend is missing from config or lies outside the
+  cc-claude domain (nothing is switchable from it in place); otherwise it
+  contains the same-domain ids in config order.
   """
+  if role is not None:
+    return [opt.id for opt in cfg.backend_options]
+
   active_domain = _backend_domain_for(active_backend, cfg)
   if active_domain is None:
     return []
@@ -283,6 +292,10 @@ MANAGER_ORIENTATION_MESSAGE = (
     "Read prompts/session_manager.md in the charlie-bot repo and take up your Session Manager duties "
     "per that document; arm your patrol trigger as your first step.")
 
+_ROLE_ORIENTATION_MESSAGES = {
+    _MANAGER_ROLE: MANAGER_ORIENTATION_MESSAGE,
+}
+
 
 def _send_manager_orientation(
     cfg: CharlieBotConfig,
@@ -292,7 +305,108 @@ def _send_manager_orientation(
   """Fire-and-forget the orientation message through the same chat-turn path the message route uses."""
   from src.api.chat import run_and_finalize
   from src.core.tasks import create_logged_task
-  create_logged_task(run_and_finalize(cfg, meta, MANAGER_ORIENTATION_MESSAGE, session_mgr, skip_user_event=False))
+  orientation_message = _ROLE_ORIENTATION_MESSAGES[meta.role]
+  create_logged_task(run_and_finalize(cfg, meta, orientation_message, session_mgr, skip_user_event=False))
+
+
+async def _rollback_role_migration(
+    session_id: str,
+    original_role: str,
+    original_status: SessionStatus,
+    replacement: SessionMetadata | None,
+    preexisting_session_ids: set[str] | None,
+    session_mgr: SessionManager,
+) -> None:
+  """Restore the old role-carrying session after a failed migration."""
+  try:
+    if replacement is not None:
+      replacement_meta = await session_mgr.get_session(replacement.id)
+      if replacement_meta is None:
+        raise RuntimeError(f"replacement session disappeared during migration rollback: {replacement.id}")
+      replacement_meta.role = None
+      replacement_meta.status = SessionStatus.ARCHIVED
+      await session_mgr.save_metadata(replacement_meta)
+    elif preexisting_session_ids is not None:
+      for candidate in await session_mgr.list_sessions():
+        if candidate.id in preexisting_session_ids or candidate.role != original_role:
+          continue
+        candidate.role = None
+        candidate.status = SessionStatus.ARCHIVED
+        await session_mgr.save_metadata(candidate)
+  finally:
+    original = await session_mgr.get_session(session_id)
+    if original is None:
+      raise RuntimeError(f"original session disappeared during migration rollback: {session_id}")
+    original.role = original_role
+    original.status = original_status
+    await session_mgr.save_metadata(original)
+
+
+async def _migrate_role_session(
+    session_id: str,
+    current: SessionMetadata,
+    target_backend: str,
+    previous_backend: str,
+    trigger_mgr: TriggerManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+) -> SessionMetadata:
+  """Move a role to a fresh target-backend session."""
+  original_role = current.role
+  original_status = current.status
+  if original_role is None:
+    raise RuntimeError(f"role migration called without a role: {session_id}")
+
+  replacement: SessionMetadata | None = None
+  preexisting_session_ids: set[str] | None = None
+  try:
+    cleared = await session_mgr._update_field(
+        session_id,
+        "role",
+        None,
+        "session_role_cleared_for_backend_migration",
+    )
+    if cleared is None:
+      raise HTTPException(status_code=404, detail="Session not found")
+
+    triggers = await trigger_mgr.list_triggers(session_id)
+    for trigger in triggers:
+      if trigger.status == TriggerStatus.PENDING:
+        await trigger_mgr.cancel_trigger(session_id, trigger.id)
+
+    archived = await session_mgr.archive_session(session_id)
+    if archived is None:
+      raise HTTPException(status_code=404, detail="Session not found")
+
+    preexisting_session_ids = {meta.id for meta in await session_mgr.list_sessions()}
+    replacement = await session_mgr.create_session(
+        CreateSessionRequest(name=current.name, role=original_role),
+        backend=target_backend,
+    )
+    _send_manager_orientation(cfg, replacement, session_mgr)
+
+    audit_event = {
+        "type": BACKEND_SWITCHED,
+        "from": previous_backend,
+        "to": target_backend,
+        "old_session_id": session_id,
+        "new_session_id": replacement.id,
+    }
+    await session_mgr.persist_and_broadcast(session_id, audit_event)
+    return replacement
+  except BaseException:
+    try:
+      await _rollback_role_migration(
+          session_id,
+          original_role,
+          original_status,
+          replacement,
+          preexisting_session_ids,
+          session_mgr,
+      )
+    except BaseException:
+      log.exception("session_role_migration_rollback_failed", session_id=session_id)
+    raise
 
 
 @router.get("/manager")
@@ -676,6 +790,7 @@ async def switch_session_backend(
     body: SwitchBackendRequest,
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Switch a session's backend in place, refused across resume domains.
@@ -699,13 +814,56 @@ async def switch_session_backend(
     return parent
 
   if not _same_backend_domain(effective_current, body.backend, cfg):
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            f"backend '{body.backend}' cannot be switched to in place: it does not "
-            "share this session's resume domain (backend types differ or config dirs "
-            "differ). Clone/fork the session with the target backend instead."),
-    )
+    if parent.role is None:
+      raise HTTPException(
+          status_code=400,
+          detail=(
+              f"backend '{body.backend}' cannot be switched to in place: it does not "
+              "share this session's resume domain (backend types differ or config dirs "
+              "differ). Clone/fork the session with the target backend instead."),
+      )
+
+    async with _manager_session_lock:
+      current = await session_mgr.get_session(session_id)
+      if current is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+      effective_current = current.backend or _default_backend_id(cfg)
+      if body.backend == effective_current:
+        return current
+
+      if _same_backend_domain(effective_current, body.backend, cfg):
+        previous = effective_current
+        meta = await session_mgr.switch_backend(session_id, body.backend)
+        if meta is None:
+          raise HTTPException(status_code=404, detail="Session not found")
+
+        audit_event = {
+            "type": BACKEND_SWITCHED,
+            "from": previous,
+            "to": body.backend,
+        }
+        await session_mgr.persist_and_broadcast(session_id, audit_event)
+        return meta
+
+      if current.role is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"backend '{body.backend}' cannot be switched to in place: it does not "
+                "share this session's resume domain (backend types differ or config dirs "
+                "differ). Clone/fork the session with the target backend instead."),
+        )
+
+      return await _migrate_role_session(
+          session_id,
+          current,
+          body.backend,
+          effective_current,
+          trigger_mgr,
+          session_mgr,
+          cfg,
+      )
 
   previous = effective_current
   meta = await session_mgr.switch_backend(session_id, body.backend)

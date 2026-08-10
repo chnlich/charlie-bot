@@ -61,7 +61,7 @@ function loadSessionContext({elements, BACKEND_OPTIONS, SESSION_ID, fetchImpl}) 
     showToast: () => {},
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
     SESSION_ID: SESSION_ID || 'session-a',
-    fetch: fetchImpl || (() => Promise.resolve({ ok: true, async json() { return { backend: SESSION_ID }; } })),
+    fetch: fetchImpl || (() => Promise.resolve({ ok: true, async json() { return { id: SESSION_ID, backend: SESSION_ID }; } })),
   };
   vm.createContext(context);
   vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
@@ -129,7 +129,7 @@ test('switchBackend POSTs the target and updates the active id on success', asyn
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
     fetchImpl: (url, opts) => {
       calls.push({ url, opts });
-      return Promise.resolve({ ok: true, async json() { return { backend: 'claude-fable-5' }; } });
+      return Promise.resolve({ ok: true, async json() { return { id: 'session-a', backend: 'claude-fable-5' }; } });
     },
   });
   context.setSwitchableBackends(['claude-opus-5', 'claude-fable-5']);

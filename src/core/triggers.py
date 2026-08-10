@@ -18,6 +18,7 @@ from src.core.models import (
   LocalPid,
   PendingTrigger,
   RemotePid,
+  SessionStatus,
   SlurmJob,
   TriggerStatus,
   WatchKind,
@@ -579,6 +580,18 @@ class TriggerManager:
       log.warning("trigger_file_missing_after_sleep", trigger_id=trigger.id)
       return
     if fresh.status != TriggerStatus.PENDING:
+      return
+
+    session_meta = await self._session_mgr.get_session(fresh.session_id)
+    if session_meta.status == SessionStatus.ARCHIVED:
+      fresh.status = TriggerStatus.CANCELLED
+      await self._save_trigger(fresh)
+      self._tasks.pop(trigger.id, None)
+      log.info(
+          "trigger_cancelled_archived_session",
+          trigger_id=fresh.id,
+          session=fresh.session_id,
+      )
       return
 
     if fresh.watch_targets:

@@ -1,7 +1,9 @@
-Weekly code-health cleanup.
+Code-health cleanup (runs every 6 hours).
 
-This run works directly in the repo worktree: branch, test, push, `gh pr create`. Never push to
-`main`, never merge; the PR is the deliverable and merging is the user's action.
+This run works directly in the repo worktree: branch, test, push, `gh pr create`, then enable
+squash auto-merge. Never push to `main` directly. With auto-merge, CI (ruff, pytest, the
+300-line-budget / evidence contract check) remains the pre-merge gate; the human review step is
+removed because CI is the gate and these changes are small and reversible.
 
 Step 0: check for an open contract PR before anything else.
 List open pull requests whose head branch matches `code-health/*`. If any exists: produce no new
@@ -47,7 +49,9 @@ Known-alive symbols:
 - `kill_tmux_session` — documented `# noqa` re-export, reached by string reference.
 - `ScheduledSessionBusyError` — documented `# noqa` re-export, kept deliberately.
 
-Step 5: open the PR.
+Step 5: open the PR and enable auto-merge.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug
 self-describes the cleanup topic. Include every deleted symbol and its `## Evidence` in the body.
-Never push to `main`, never merge. Report the PR URL when done.
+Immediately after `gh pr create`, enable squash auto-merge: `gh pr merge --auto --squash <PR>`.
+If auto-merge cannot be enabled or CI fails, leave the PR open and report that; the Step 0
+open-PR reminder covers the nudge on the next run. Report the PR URL when done.

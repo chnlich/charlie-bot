@@ -19,9 +19,10 @@ skill, the owning repo's docs) wins over the store.
 
 The memory store (`~/.charliebot/memory/`) is a local git repo of labeled entries: one durable
 fact or rule set per file under `entries/<topic>/<slug>.md`, with front matter restricted to
-`scope`, `topic`, `audience`, `title` (plus `revises` in staging only) and a pure-markdown body.
-Sessions only stage candidates (`charliebot memory add` writes to `staging/`); the canon
-changes only through user-approved diffs.
+`scope`, `topic`, `audience`, `title` and a pure-markdown body.
+Sessions only stage candidates (`charliebot memory add` writes to `staging/`): a staging
+candidate is a free-form capture whose labels are assigned at curation and whose change intent
+lives in the body; the canon changes only through user-approved diffs.
 
 This file governs the daily curator AND ad-hoc user-directed promotions: the same admission test
 and labeling rules apply in both flows.
@@ -119,8 +120,8 @@ is unintelligible without; receipts, verification notes, and secondary effects l
 bullet to about three lines and an entry body to about a dozen; a merge that would grow past that
 re-trims the whole entry by the same test.
 Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
-moves. When context changes, revise the entry in place (a `revises` candidate stages the proposed
-new text).
+moves. When context changes, revise the entry in place (a capture whose body states the change
+stages the proposed new text).
 
 ## Commit message prefixes
 

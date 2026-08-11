@@ -11,12 +11,14 @@ to approve or reject before doing anything else. Do not proceed to staging while
 uncommitted changes.
 
 Step 1: curate staging candidates, merge-first.
-Read every file in `~/.charliebot/memory/staging/`. For each candidate, first test it against
+Read every file in `~/.charliebot/memory/staging/`. Candidates are free-form captures: for
+each candidate, first test it against
 the admission whitelist in the llm-context-guideline skill and write the proof lines it requires.
 For each
-passing candidate, the default action is a merge, not a new entry:
+passing candidate, decide and finalize its `topic`, `scope`, `audience`, and `title`; the
+default action is a merge, not a new entry:
 - **revise (merge)**: fold the candidate into the existing entry whose theme covers it,
-  normally `entries/<topic>/<revises>.md` when the candidate carries `revises: <slug>`,
+  normally the entry named in the candidate body when the body expresses a change intent,
   otherwise the thematically-matching entry, editing it in place so `git diff` shows the
   before and after.
 - **admit (new entry)**: ONLY when no existing entry's theme covers the candidate AND the

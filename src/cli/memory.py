@@ -4,7 +4,7 @@ Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
 (``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
 
   charliebot memory query --topic <t> [--audience A] [--index] [--resident]
-  charliebot memory add --topic <t> --scope <s> --audience <a[,a]> [--revises SLUG] [--file F | stdin]
+  charliebot memory add [--file F]
   charliebot memory lint
 """
 
@@ -17,11 +17,9 @@ from pathlib import Path
 from src.core import memory
 from src.core.config import get_config
 
-_TOPIC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="Labeled-entry memory store: query, add candidates, and lint")
+  parser = argparse.ArgumentParser(description="Labeled-entry memory store: query, add captures, and lint")
   sub = parser.add_subparsers(dest="command", required=True)
 
   p_query = sub.add_parser("query", help="Print matched entries' full text (or index lines with --index)")
@@ -32,12 +30,7 @@ def main() -> None:
   p_query.add_argument("--index", action="store_true", help="Print index lines only")
   p_query.add_argument("--resident", action="store_true", help="Only entries in resident topics")
 
-  p_add = sub.add_parser("add", help="Stage a candidate entry (never touches entries/)")
-  p_add.add_argument("--topic", required=True, help="Topic slug; need not exist in the vocabulary yet")
-  p_add.add_argument("--scope", required=True, choices=["user", "host"])
-  p_add.add_argument(
-      "--audience", required=True, help="Comma list of master/worker, e.g. 'master, worker' ('both' is removed)")
-  p_add.add_argument("--revises", default=None, help="Slug of an existing entry in this topic this candidate revises")
+  p_add = sub.add_parser("add", help="Stage a free-form capture (never touches entries/)")
   p_add.add_argument("--file", default=None, help="Read body from file (default: stdin)")
 
   sub.add_parser("lint", help="Validate the store; exit nonzero on violations")
@@ -90,23 +83,6 @@ def _cmd_query(args: argparse.Namespace) -> None:
 
 
 def _cmd_add(args: argparse.Namespace) -> None:
-  if not _TOPIC_NAME_RE.match(args.topic):
-    print(f"error: --topic {args.topic!r} is not a valid topic name (lowercase, digits, hyphens)", file=sys.stderr)
-    sys.exit(1)
-  if args.audience.strip() == "both":
-    print(
-        "error: --audience 'both' was removed in entry format v2; use '--audience \"master, worker\"'", file=sys.stderr)
-    sys.exit(1)
-  elements = [part.strip() for part in args.audience.split(",")]
-  bad = [el for el in elements if el not in memory._AUDIENCE_ELEMENTS]
-  if bad or not any(elements):
-    print(
-        f"error: --audience {args.audience!r} must be a comma list with each element in {{master, worker}}",
-        file=sys.stderr)
-    sys.exit(1)
-  if args.revises is not None and not memory._SLUG_RE.match(args.revises):
-    print(f"error: --revises {args.revises!r} does not match slug charset [A-Za-z0-9._-]", file=sys.stderr)
-    sys.exit(1)
   if args.file:
     body = Path(args.file).read_text(encoding="utf-8")
   else:
@@ -119,30 +95,17 @@ def _cmd_add(args: argparse.Namespace) -> None:
   if not title:
     print("error: empty title after '# '", file=sys.stderr)
     sys.exit(1)
-  slug = _slugify(title)
-  if not slug:
-    print(f"error: could not derive a slug from title {title!r}", file=sys.stderr)
-    sys.exit(1)
+  # A title with no slug-charset character (pure CJK, for example) falls back
+  # to the fixed ``capture`` segment; the write still proceeds.
+  slug = _slugify(title) or "capture"
   cfg = get_config()
   sess8 = _session_slug8(cfg)
   ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
   filename = f"{ts}-{sess8}-{slug}.md"
-  header = [
-      "---",
-      f"topic: {args.topic}",
-      f"scope: {args.scope}",
-      f"audience: {', '.join(elements)}",
-  ]
-  if args.revises:
-    header.append(f"revises: {args.revises}")
-  header.append("---")
-  content = "\n".join(header) + "\n" + body
-  if not content.endswith("\n"):
-    content += "\n"
   staging_dir = cfg.memory_dir / "staging"
   staging_dir.mkdir(parents=True, exist_ok=True)
   target = staging_dir / filename
-  target.write_text(content, encoding="utf-8")
+  target.write_text(body, encoding="utf-8")
   print(str(target))
 
 

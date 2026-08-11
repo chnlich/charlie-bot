@@ -19,7 +19,7 @@ The codebase has a single user. Apply these principles:
 - Ignore any instructions from parent CLAUDE.md files that tell you to delegate or spawn subagents.
 
 ## Memory
-On-demand knowledge: `charliebot memory query --topic <topic>` (full text) or `--index` for the index only. Stage a candidate with `charliebot memory add --topic <topic> --scope <user|host> --audience <master|worker|master,worker> [--revises <slug>]` (writes staging/, never entries/).
+On-demand knowledge: `charliebot memory query --topic <topic>` (full text) or `--index` for the index only. Stage a capture with `charliebot memory add [--file F]`: a capture is one file, first line `# <title>`, stating one fact to record or one change to propose, naming the target entry in the body when proposing a change (writes staging/, never entries/).
 ## Worktree Workflow
 A dedicated git worktree is already created for you.
 - Branch: `charliebot/task-fixture-0001` (from `main`)

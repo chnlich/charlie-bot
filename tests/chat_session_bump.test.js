@@ -1887,3 +1887,68 @@ test('turn engine: archived non-aligned page heads and an unfinished live tail s
   assert.equal(liveWrap.dataset.turnOpen, 'true', 'newest finished turn is open');
   assertEngineInvariants(context, root, stream, 'after live separator');
 });
+
+// --- hidden-mount self-healing: zero-height invariant + ResizeObserver recovery ---
+test('turn engine: hidden mount projects nothing, first resize projects the tail, pinned', () => {
+  const {context, root, timers, engine} = mountEngine(ePage('hidden_', 10), {clientHeight: 0});
+
+  // Hidden mount: no projection at all — no turn nodes, no full-height
+  // bottom-spacer seed, no scrollTop writes.
+  assert.equal(root.querySelectorAll('.turn-wrap').length, 0, 'hidden mount materializes no turns');
+  const bottomSpacer = root.children.find((el) => el.classList.contains('turn-spacer-bottom'));
+  assert.ok(bottomSpacer, 'bottom spacer skeleton exists');
+  const debugHidden = engineDebug(context, root);
+  assert.notEqual(bottomSpacer.style.height, `${Math.round(debugHidden.totalHeight)}px`,
+      'bottom spacer never received the full-height seed');
+  assert.equal(root.scrollTop, 0, 'hidden mount never wrote scrollTop');
+
+  // Size recovery: the first resize projects the trailing window, folded
+  // history rows included, and lands bottom-pinned from the mount intent.
+  root.clientHeight = 900;
+  engine.handleResize();
+  settle(timers);
+
+  const debug = engineDebug(context, root);
+  assert.equal(debug.window.end, debug.segments - 1, 'window covers the trailing turns');
+  const wraps = root.querySelectorAll('.turn-wrap');
+  const folded = wraps.filter((wrap) => wrap.dataset.turnOpen === 'false');
+  assert.ok(folded.length > 0, 'folded history rows entered the DOM');
+  assert.equal(wraps[wraps.length - 1].dataset.turnOpen, 'true',
+      'folded rows sit above the last open turn');
+  assert.ok(distanceFromBottom(root) < 150, 'first projection is bottom-pinned');
+});
+
+test('turn engine: resize never pulls a reading user, keeps a pinned user', () => {
+  const {context, root, timers, engine} = mountEngine(ePage('rs_', 300), {
+    clientHeight: 900,
+    clampScrollTop: true,
+  });
+  settle(timers);
+
+  // A user reading history: resize must not drag them to the bottom.
+  const mounted = engineDebug(context, root);
+  scrollTo(timers, root, Math.floor(mounted.totalHeight / 2));
+  settle(timers);
+  assert.equal(engine.pinnedIntent, false, 'scrolling into history clears the pin intent');
+  assert.ok(distanceFromBottom(root) > 150, 'reader is outside the follow band');
+
+  root.clientHeight = 300;
+  const readingScrollTop = root.scrollTop;
+  engine.handleResize();
+  const resized = engineDebug(context, root);
+  assert.ok(distanceFromBottom(root) > 150, 'resize never pulls a reading user to the bottom');
+  assert.equal(root.scrollTop, readingScrollTop, 'reader keeps its scroll position');
+  assert.ok(resized.window.end < resized.segments - 1, 'window is not re-pinned from scratch');
+
+  // A pinned user: resize keeps them at the bottom.
+  const before = engineDebug(context, root);
+  scrollTo(timers, root, before.totalHeight - root.clientHeight);
+  settle(timers);
+  assert.equal(engine.pinnedIntent, true, 'scrolling to the tail restores the pin intent');
+
+  root.clientHeight = 1200;
+  engine.handleResize();
+  const repinned = engineDebug(context, root);
+  assert.equal(repinned.window.end, repinned.segments - 1, 'window still covers the tail');
+  assert.equal(distanceFromBottom(root), 0, 'a pinned user stays snapped to the bottom');
+});

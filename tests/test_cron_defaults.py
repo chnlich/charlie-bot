@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from src.core.config import (
     ScheduledTaskConfig,
@@ -493,3 +494,15 @@ def test_api_rejects_path_traversal_name(temp_home: Path, bad: str) -> None:
   # no files escaped cron.d/ (a ".." or "a/b" name must never reach the FS)
   assert not (temp_home / ".charliebot" / "config.d" / bad).exists()
   assert list(_cron_d_dir(temp_home).glob("*.yaml")) == []
+
+
+# --- config surface: no base-branch key ----------------------------------------
+
+
+def test_scheduled_task_config_has_no_base_branch_field() -> None:
+  """Branch policy must not migrate back into per-task YAML: the launch fallback
+  resolves a base-less task's base from the remote's default branch, and
+  ``extra='forbid'`` keeps a stray ``base_branch:`` key an error, not a silent drop."""
+  assert "base_branch" not in ScheduledTaskConfig.model_fields
+  with pytest.raises(ValidationError, match="base_branch"):
+    ScheduledTaskConfig(name="t", cron="0 0 * * *", prompt="p", base_branch="main")  # type: ignore[call-arg]

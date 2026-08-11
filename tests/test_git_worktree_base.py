@@ -12,19 +12,32 @@ Validates resolve_base_branch semantics (the only accepted forms):
   - no origin remote at all → local tip
   - full SHA                → pinned, origin may move meanwhile
   - unknown SHA / garbage   → hard error
+
+Plus the launch path's base-less fallback (spawner._create_worktree_and_process):
+  - the remote's default branch is read from the remote itself (ls-remote symref),
+    never from the clone-time refs/remotes/origin/HEAD metadata
+  - a request without a base starts at origin/<remote-default> even when the local
+    checkout is stale (local main behind origin, checkout on a local-only branch)
+  - the local-branch read is tripwired off: the fallback must never call
+    git_current_branch
 """
 
 import subprocess
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 
+from src.core import spawner
+from src.core.config import CharlieBotConfig
 from src.core.git import (
     BaseBranchResolutionError,
     BaseResolution,
     git_create_worktree,
+    git_current_branch,
+    git_remote_default_branch,
 )
+from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -262,3 +275,221 @@ async def test_garbage_input_raises(repo_setup: dict[str, Path], raw: str) -> No
   with pytest.raises(BaseBranchResolutionError):
     await git_create_worktree(
         main_checkout, raw, "charliebot/task-garbage", repo_setup["tmp_path"] / "wt-garbage")
+
+
+# --- launch path: base-less fallback resolves to the remote's default branch ------
+
+
+@pytest.fixture
+def remote_default_repo(tmp_path: Path) -> Iterator[dict[str, Path]]:
+  """Bare origin whose HEAD points at main, plus a clone of it.
+
+  The clone's refs/remotes/origin/HEAD symref is written once at clone time and
+  is never refreshed afterwards — clone-time metadata that silently goes stale
+  if the remote's default branch later moves.
+  """
+  origin = tmp_path / "origin.git"
+  seed = tmp_path / "seed"
+  clone = tmp_path / "clone"
+
+  _git(tmp_path, "init", "--bare", str(origin))
+  _git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+
+  _git(tmp_path, "clone", str(origin), str(seed))
+  _git(seed, "config", "user.email", "test@example.com")
+  _git(seed, "config", "user.name", "Test")
+  _git(seed, "symbolic-ref", "HEAD", "refs/heads/main")
+  _commit(seed, "README.md", "seed\n", "seed main")
+  _git(seed, "push", "-u", "origin", "main")
+
+  _git(tmp_path, "clone", str(origin), str(clone))
+  _git(clone, "config", "user.email", "test@example.com")
+  _git(clone, "config", "user.name", "Test")
+
+  yield {
+      "origin": origin,
+      "seed": seed,
+      "clone": clone,
+      "tmp_path": tmp_path,
+  }
+
+
+@pytest.mark.asyncio
+async def test_remote_default_branch_read_from_remote(remote_default_repo: dict[str, Path]) -> None:
+  """The default branch comes from the remote, so clone-time metadata cannot
+  make a task silently build on the wrong branch."""
+  origin = remote_default_repo["origin"]
+  seed = remote_default_repo["seed"]
+  clone = remote_default_repo["clone"]
+
+  assert await git_remote_default_branch(clone) == "main"
+
+  # Publish a second branch and repoint the remote's HEAD at it.
+  _git(seed, "checkout", "-b", "develop")
+  _git(seed, "push", "-u", "origin", "develop")
+  _git(origin, "symbolic-ref", "HEAD", "refs/heads/develop")
+
+  # The clone's own symref still points at the old default (it is written at
+  # clone time only); the helper must follow the remote's new value regardless.
+  assert _git(clone, "symbolic-ref", "refs/remotes/origin/HEAD") == "refs/remotes/origin/main"
+  assert await git_remote_default_branch(clone) == "develop"
+
+
+@pytest.mark.asyncio
+async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo: dict[str, Path]) -> None:
+  """The incident state: origin's main advanced, local main stale, checkout on a
+  branch origin does not have. A base-less launch must still start at origin's
+  main tip."""
+  seed = remote_default_repo["seed"]
+  clone = remote_default_repo["clone"]
+  tmp_path = remote_default_repo["tmp_path"]
+
+  origin_tip = _commit(seed, "advance.txt", "advance\n", "advance origin main")
+  _git(seed, "push", "origin", "main")
+  assert _git(clone, "rev-parse", "main") != origin_tip  # sanity: local main is behind
+
+  _git(clone, "checkout", "-b", "local-only")
+
+  base = f"origin/{await git_remote_default_branch(clone)}"
+  wt_path = tmp_path / "wt-baseless"
+  resolution = await git_create_worktree(clone, base, "charliebot/task-baseless", wt_path)
+
+  assert _git(clone, "rev-parse", resolution.start_point) == origin_tip
+  assert wt_path.is_dir()
+  assert _worktree_head(wt_path) == origin_tip
+
+  # The old fallback (the checkout's current branch) must never land on origin's
+  # main tip: it either hard-errors or starts from a different commit. This
+  # catches a silent regression back to reading local refs.
+  old_base = await git_current_branch(clone)
+  try:
+    old_wt = tmp_path / "wt-old-fallback"
+    await git_create_worktree(clone, old_base, "charliebot/task-old-fallback", old_wt)
+  except BaseBranchResolutionError:
+    pass
+  else:
+    assert _worktree_head(old_wt) != origin_tip
+
+
+class _SpawnSessionManager:
+  """Minimal session manager for driving spawner._create_worktree_and_process."""
+
+  async def get_session(self, session_id: str) -> SessionMetadata:
+    return SessionMetadata(id=session_id, name="Test Session")
+
+
+class _SpawnThreadManager:
+  """Minimal thread manager for driving spawner._create_worktree_and_process."""
+
+  def __init__(self, events_log: Path) -> None:
+    self._events_log = events_log
+
+  async def save_metadata(self, meta: ThreadMetadata) -> None:
+    return None
+
+  async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
+    return self._events_log
+
+
+def _spawn_cfg(tmp_path: Path) -> CharlieBotConfig:
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+      ],
+  )
+
+
+async def _run_spawn_request(
+    clone: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: SpawnRequest,
+    *,
+    thread_id: str,
+) -> ThreadMetadata:
+  """Drive _create_worktree_and_process end-to-end with real git (no git mocking).
+
+  The local-branch read is tripwired: if the launch fallback ever consults
+  git_current_branch again, the AssertionError fails the test.
+  """
+  async def _forbidden_current_branch(repo_path: Path) -> str:
+    raise AssertionError("launch fallback consulted git_current_branch (the local checkout)")
+
+  # raising=False: the launch path does not import the symbol at all today, and a
+  # regression that re-adds the call re-adds the binding this tripwire then catches.
+  monkeypatch.setattr(spawner, "git_current_branch", _forbidden_current_branch, raising=False)
+
+  thread = ThreadMetadata(id=thread_id, session_id="session-id", description="Do work")
+  await spawner._create_worktree_and_process(
+      "session-id",
+      thread,
+      "Do work",
+      _spawn_cfg(tmp_path),
+      _SpawnSessionManager(),
+      _SpawnThreadManager(tmp_path / f"events-{thread_id}.jsonl"),
+      clone,
+      request,
+  )
+  return thread
+
+
+@pytest.mark.asyncio
+async def test_baseless_spawn_request_never_reads_local_branch(
+    remote_default_repo: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """A base-less SpawnRequest records the remote's default branch as the base and
+  never consults the local checkout, even when local main is behind origin."""
+  seed = remote_default_repo["seed"]
+  clone = remote_default_repo["clone"]
+
+  _commit(seed, "advance.txt", "advance\n", "advance origin main")
+  _git(seed, "push", "origin", "main")  # local main is now behind origin
+
+  thread = await _run_spawn_request(
+      clone,
+      remote_default_repo["tmp_path"],
+      monkeypatch,
+      SpawnRequest(
+          repo_path=str(clone),
+          base_branch=None,
+          resolved_backend="codex-o3",
+          resolved_model="o3",
+      ),
+      thread_id="thread-baseless",
+  )
+
+  assert thread.base_branch == await git_remote_default_branch(clone)
+
+
+@pytest.mark.asyncio
+async def test_crash_respawn_reaches_the_same_fallback(
+    remote_default_repo: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """Crash-respawn of a scheduled task whose worktree never existed: the rebuilt
+  request carries no base (init.py's `invocation.get(...) or meta.get(...)` is
+  None), so respawn and first launch share the same fallback."""
+  clone = remote_default_repo["clone"]
+
+  invocation: dict[str, Any] = {}
+  meta: dict[str, Any] = {"base_branch": None}
+  request = SpawnRequest(
+      repo_path=str(clone),
+      base_branch=invocation.get("base_branch") or meta.get("base_branch"),
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+  assert request.base_branch is None
+
+  thread = await _run_spawn_request(
+      clone,
+      remote_default_repo["tmp_path"],
+      monkeypatch,
+      request,
+      thread_id="thread-respawn",
+  )
+
+  assert thread.base_branch == await git_remote_default_branch(clone)

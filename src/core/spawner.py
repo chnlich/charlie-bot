@@ -22,7 +22,7 @@ from src.core import finalize_effects, review, runs
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.git import (
   git_create_worktree,
-  git_current_branch,
+  git_remote_default_branch,
   git_worktree_dir_name,
   git_worktree_prune,
   git_worktree_remove,
@@ -515,8 +515,10 @@ async def _create_worktree_and_process(
       raise RuntimeError("thread metadata missing worktree_path")
     worktree_path = Path(thread.worktree_path).resolve()
   else:
-    # Get current branch as the base for the worktree
-    base_branch = req.base_branch or await git_current_branch(resolved_repo)
+    # An unattended launch has nobody present to reconcile a local/remote
+    # disagreement, so a request that names no base starts from the remote's
+    # published default branch; the local checkout's refs never enter the decision.
+    base_branch = req.base_branch or f"origin/{await git_remote_default_branch(resolved_repo)}"
 
     # Compute branch name; the fresh-worktree branch derives the path from it.
     branch_name = req.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"

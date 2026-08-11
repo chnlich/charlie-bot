@@ -148,8 +148,14 @@
       this.offsetsDirty = true;
       this.totalHeight = 0;
       this.lastScrollTs = -Infinity;
+      // Mount intent is bottom-pinned; genuine user scrolls re-derive it and
+      // follow-appends re-arm it. It is the pin source for 'resize' projects.
+      this.pinnedIntent = true;
       this.rafScheduled = false;
       this.rafHandle = null;
+      this.resizeObserver = null;
+      this.resizeRafScheduled = false;
+      this.resizeRafHandle = null;
       this.idleScheduled = false;
       this.idleHandle = null;
       this.cancelIdle = null;
@@ -158,6 +164,28 @@
       this.liveMessageSequence = 0;
       this.onScroll = () => this.handleScroll();
       container.addEventListener('scroll', this.onScroll, {passive: true});
+      // Container size is a projection input, so the engine observes it
+      // itself: tab visibility flips and window/sidebar resizes all funnel
+      // into reproject('resize'), coalesced to one frame per burst on its own
+      // scheduling flag (never the scroll flag). Runtimes without
+      // ResizeObserver install nothing and keep today's behavior exactly.
+      if (typeof ResizeObserver === 'function') {
+        this.resizeObserver = new ResizeObserver(() => {
+          if (this.resizeRafScheduled || !this.alive) return;
+          this.resizeRafScheduled = true;
+          const fire = () => {
+            this.resizeRafHandle = null;
+            this.resizeRafScheduled = false;
+            this.handleResize();
+          };
+          if (typeof requestAnimationFrame === 'function') {
+            this.resizeRafHandle = requestAnimationFrame(fire);
+          } else {
+            this.resizeRafHandle = setTimeout(fire, 0);
+          }
+        });
+        this.resizeObserver.observe(container);
+      }
     }
 
     // ---- registry -----------------------------------------------------------
@@ -559,6 +587,11 @@
     // second, one measurement batch after the swap, scroll correction last.
     reproject(reason) {
       if (!this.alive) return;
+      // Zero-height invariant: a hidden container cannot size a window, so
+      // for every reason there is no projection at all — no nodes, no spacer
+      // writes, no scrollTop writes. The first non-zero 'resize' projects
+      // from scratch instead of repairing a degenerate window.
+      if (this.container.clientHeight === 0) return;
       this.ensureOffsets();
       // Hysteresis: while the viewport stays comfortably inside the current
       // window, a scroll frame is pure bookkeeping — no DOM work at all.
@@ -576,7 +609,11 @@
           return;
         }
       }
-      const wasPinned = this.isPinned();
+      // A resize moves the very geometry isPinned() would read (hidden-mount
+      // recovery starts from scrollTop 0; a growing viewport drops content
+      // into the follow band), so 'resize' projects pin from the user's
+      // intent instead. Every other reason keeps live geometry.
+      const wasPinned = reason === 'resize' ? this.pinnedIntent : this.isPinned();
       // At the pinned bottom the browser's scrollTop and the height model
       // disagree by the container's sibling margins, which makes a
       // scrollTop-derived range flap ±1 segment in a limit cycle. The pinned
@@ -684,6 +721,7 @@
 
     handleScroll() {
       if (this.container.scrollTop === this.lastProgrammaticScrollTop) return;
+      this.pinnedIntent = this.isPinned();
       this.lastScrollTs = performance.now();
       this.lastProgrammaticScrollTop = null;
       if (this.rafScheduled || !this.alive) return;
@@ -698,6 +736,15 @@
       } else {
         this.rafHandle = setTimeout(fire, 0);
       }
+    }
+
+    // The ResizeObserver funnel: size recovery (tab shown, window or sidebar
+    // drag) re-projects. Zero height is already the reproject invariant's
+    // business and the 'resize' pin source is pinnedIntent, so there is no
+    // scrollTop pre-write here.
+    handleResize() {
+      if (!this.alive) return;
+      this.reproject('resize');
     }
 
     // ---- lifecycle -----------------------------------------------------------
@@ -723,12 +770,17 @@
 
       this.ensureOffsets();
       // Seed the spacers so the browser exposes its full range, then pin
-      // against the real scrollHeight (margins included), then project.
+      // against the real scrollHeight (margins included), then project. A
+      // hidden (zero-height) container skips the bottom-spacer seed and both
+      // pin writes: reproject guards itself, so a hidden mount projects
+      // nothing and the first 'resize' builds the window instead.
       this.topSpacer.style.height = '0px';
-      this.bottomSpacer.style.height = Math.round(this.totalHeight) + 'px';
-      this.writeScrollTop(this.container.scrollHeight);
+      if (this.container.clientHeight !== 0) {
+        this.bottomSpacer.style.height = Math.round(this.totalHeight) + 'px';
+        this.writeScrollTop(this.container.scrollHeight);
+      }
       this.reproject('mount');
-      this.writeScrollTop(this.container.scrollHeight);
+      if (this.container.clientHeight !== 0) this.writeScrollTop(this.container.scrollHeight);
       this.scheduleIdle();
       globalThis.__turnEngineStats = this.stats;
     }
@@ -748,6 +800,16 @@
       }
       this.rafHandle = null;
       this.rafScheduled = false;
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect();
+        this.resizeObserver = null;
+      }
+      if (this.resizeRafHandle != null) {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this.resizeRafHandle);
+        else clearTimeout(this.resizeRafHandle);
+      }
+      this.resizeRafHandle = null;
+      this.resizeRafScheduled = false;
       this.entries = [];
       this.knownIds.clear();
       this.segments = [];
@@ -866,6 +928,9 @@
       this.offsetsDirty = true;
       this.reproject('append');
       if (forceScroll || wasPinned) {
+        // A follow-append re-arms the pin intent; it never clears it here —
+        // only a genuine user scroll may do that (handleScroll).
+        this.pinnedIntent = true;
         this.writeScrollTop(this.container.scrollHeight);
       } else if (typeof showScrollToBottom === 'function') {
         showScrollToBottom();

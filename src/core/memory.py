@@ -4,7 +4,7 @@ The store is a local git repo at ``cfg.memory_dir`` (``~/.charliebot/memory/``):
 
   entries/<topic>/<slug>.md   # canonical entries, one fact/rule set per file
   topics                      # controlled vocabulary, one topic per line
-  staging/                    # candidate files (.gitignore'd)
+  staging/                    # free-form capture files, labels assigned at curation (.gitignore'd)
 
 Agent-facing read contract: the topic is the sole read unit. ``memory query
 --topic <topic>`` returns every entry of that topic admitted for the caller's
@@ -222,8 +222,9 @@ def _audience_violations(entry: Entry, v: Callable[[str], str]) -> list[str]:
 def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, strict_v2: bool = False) -> list[str]:
   """Return a list of semantic violations for *entry* (empty = valid).
 
-  ``relaxed`` matches the staging/ rules: header fields are optional except
-  ``topic`` (which need not be in the vocabulary), ``revises`` is allowed, and
+  ``relaxed`` matches the staging/ rules for legacy frontmatter candidates:
+  header fields are optional except ``topic`` (which need not be in the
+  vocabulary), ``revises`` is allowed, and
   ``created``/``source`` are not violations (existing staged candidates stay
   lint-clean). Strict (entries/) requires ``scope``/``audience``, topic
   vocabulary membership, and a matching directory name, and forbids
@@ -322,10 +323,13 @@ def lint(memory_dir: Path) -> list[str]:
   """Return all store violations (empty = clean).
 
   Validates entries/ with the strict v2 rules (frontmatter ``title`` required;
-  literal ``both`` and ``created``/``source`` are violations) and staging/
-  candidates with relaxed rules (header fields optional except ``topic``;
-  ``revises`` allowed; topic need not be in the vocabulary; comma-list
-  audience and legacy ``both`` accepted; ``created``/``source`` not flagged).
+  literal ``both`` and ``created``/``source`` are violations). staging/ files
+  dispatch on the first line: a first line of exactly ``---`` parses as a
+  frontmatter candidate under the relaxed rules (header fields optional except
+  ``topic``; ``revises`` allowed; topic need not be in the vocabulary;
+  comma-list audience and legacy ``both`` accepted; ``created``/``source``
+  not flagged); any other file is a free-form capture, valid iff it is
+  non-empty and its first line is a non-empty ``# <title>``.
   A malformed topics file or entry body is reported as a violation rather than
   raised, so the full list surfaces at once.
   """
@@ -350,12 +354,24 @@ def lint(memory_dir: Path) -> list[str]:
   staging_dir = memory_dir / _STAGING_DIRNAME
   if staging_dir.is_dir():
     for md_file in sorted(staging_dir.glob("*.md")):
-      try:
-        entry = parse_entry(md_file)
-      except MemoryFormatError as e:
-        violations.append(str(e))
+      text = md_file.read_text(encoding="utf-8")
+      first_line = text.split("\n", 1)[0]
+      if first_line == "---":
+        # Legacy frontmatter candidate: relaxed rules, unchanged.
+        try:
+          entry = parse_entry(md_file)
+        except MemoryFormatError as e:
+          violations.append(str(e))
+          continue
+        violations.extend(_validate_entry(entry, topics, relaxed=True))
         continue
-      violations.extend(_validate_entry(entry, topics, relaxed=True))
+      # Free-form capture: valid iff non-empty with a '# <title>' first line.
+      if not text:
+        violations.append(f"{md_file}: empty capture file")
+      elif not first_line.startswith("# "):
+        violations.append(f"{md_file}: line 1: capture must start with '# <title>'")
+      elif not first_line[2:].strip():
+        violations.append(f"{md_file}: line 1: empty title after '# '")
   return violations
 
 
@@ -426,7 +442,7 @@ def assemble_worker(memory_dir: Path, repo_basename: str) -> Optional[str]:
   contains ``worker``, then the INDEX_HEADER line and index lines for all
   other worker-audience entries, then one usage line explaining
   ``charliebot memory query`` and ``charliebot memory add`` (workers may stage
-  candidates).
+  captures).
 
   Returns None when the memory dir is missing (logged). When the store exists
   the usage line is always present, so the result is non-None. A malformed
@@ -449,9 +465,10 @@ def assemble_worker(memory_dir: Path, repo_basename: str) -> Optional[str]:
   index_entries.sort(key=lambda e: (e.topic, e.slug))
   usage_line = (
       "On-demand knowledge: `charliebot memory query --topic <topic>` (full text) or `--index` "
-      "for the index only. Stage a candidate with `charliebot memory add --topic <topic> "
-      "--scope <user|host> --audience <master|worker|master,worker> [--revises <slug>]` "
-      "(writes staging/, never entries/).")
+      "for the index only. Stage a capture with `charliebot memory add [--file F]`: a capture "
+      "is one file, first line `# <title>`, stating one fact to record or one change to "
+      "propose, naming the target entry in the body when proposing a change (writes staging/, "
+      "never entries/).")
   chunks: list[str] = []
   if full_body_entries:
     chunks.append("\n\n".join(full_text(e) for e in full_body_entries))

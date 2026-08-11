@@ -396,6 +396,35 @@ def test_lint_staging_missing_topic_flagged(tmp_path: Path) -> None:
   assert any("missing required header field 'topic'" in v for v in violations)
 
 
+def test_lint_staging_free_form_capture_stays_clean(tmp_path: Path) -> None:
+  """A free-form capture (no frontmatter, '# <title>' first line) lints clean."""
+  _write_topics(tmp_path)
+  staging = tmp_path / "staging"
+  staging.mkdir()
+  staging.joinpath("20260810T000000Z-nosess-dark-mode.md").write_text(
+      "# Dark Mode\n\nUser prefers dark UI.\n", encoding="utf-8")
+  assert lint(tmp_path) == []
+
+
+def test_lint_staging_capture_bad_first_line_flagged(tmp_path: Path) -> None:
+  """A staging file whose first line is neither '---' nor '# <title>' is a violation."""
+  _write_topics(tmp_path)
+  staging = tmp_path / "staging"
+  staging.mkdir()
+  staging.joinpath("cand.md").write_text("no title here\n", encoding="utf-8")
+  violations = lint(tmp_path)
+  assert any("cand.md" in v for v in violations)
+
+
+def test_lint_staging_capture_empty_title_flagged(tmp_path: Path) -> None:
+  _write_topics(tmp_path)
+  staging = tmp_path / "staging"
+  staging.mkdir()
+  staging.joinpath("cand.md").write_text("# \n\nbody\n", encoding="utf-8")
+  violations = lint(tmp_path)
+  assert any("cand.md" in v and "empty title" in v for v in violations)
+
+
 # --- assemble_master ----------------------------------------------------------
 
 
@@ -531,12 +560,15 @@ def test_assemble_worker_no_index_header_without_index_entries(tmp_path: Path) -
   assert memory.INDEX_HEADER not in block2
 
 
-def test_assemble_worker_usage_line_uses_comma_audience_form(tmp_path: Path) -> None:
+def test_assemble_worker_usage_line_matches_free_capture_contract(tmp_path: Path) -> None:
   _write_topics(tmp_path)
   block = assemble_worker(tmp_path, "charliebot")
   assert block is not None
-  assert "--audience <master|worker|master,worker>" in block
-  assert "master|worker|both" not in block
+  assert "`charliebot memory add [--file F]`" in block
+  assert "one fact to record or one change to propose" in block
+  assert "--scope" not in block
+  assert "--audience" not in block
+  assert "--revises" not in block
 
 
 def test_assemble_worker_audience_filtering(tmp_path: Path) -> None:
@@ -576,88 +608,75 @@ def _fake_cfg(tmp_path: Path) -> SimpleNamespace:
 
 
 def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Flag-less invocation writes exactly one staging file whose content is the body verbatim."""
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
   body = "# Prefers Dark Mode\n\nThe user prefers dark themes across all UIs.\n"
   monkeypatch.setattr("sys.stdin", io.StringIO(body))
   import src.cli.memory as cli
-  monkeypatch.setattr(
-      "sys.argv", ["charliebot memory", "add", "--topic", "profile", "--scope", "user", "--audience", "master, worker"])
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
   cli.main()
   staging = cfg.memory_dir / "staging"
   files = list(staging.glob("*.md"))
   assert len(files) == 1
+  assert files[0].name.endswith("-prefers-dark-mode.md")
   text = files[0].read_text(encoding="utf-8")
-  assert text.startswith("---\n")
-  assert "topic: profile" in text
-  assert "audience: master, worker" in text
-  assert "created:" not in text  # dropped in format v2
-  assert "source:" not in text  # dropped in format v2
-  assert "revises:" not in text
-  assert "# Prefers Dark Mode" in text
+  assert text == body  # verbatim: no '---' frontmatter, no header fields
+  assert "---" not in text
   # entries/ untouched
   entries = cfg.memory_dir / "entries"
   assert not entries.exists() or not list(entries.glob("**/*.md"))
 
 
-def test_cli_add_rejects_both_audience(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-  """'both' is rejected fail-loud; no silent mapping to 'master, worker'."""
+def test_cli_add_cjk_title_uses_capture_segment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A title with no slug-charset character (pure CJK) falls back to the fixed 'capture' slug."""
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
-  monkeypatch.setattr("sys.stdin", io.StringIO("# T\n\nbody\n"))
-  import src.cli.memory as cli
-  monkeypatch.setattr(
-      "sys.argv", ["charliebot memory", "add", "--topic", "profile", "--scope", "user", "--audience", "both"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code != 0
-  assert "both" in capsys.readouterr().err
-  assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
-
-
-def test_cli_add_rejects_bad_audience_element(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
-  monkeypatch.setattr("sys.stdin", io.StringIO("# T\n\nbody\n"))
-  import src.cli.memory as cli
-  monkeypatch.setattr(
-      "sys.argv", ["charliebot memory", "add", "--topic", "profile", "--scope", "user", "--audience", "master,all"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code != 0
-  assert "audience" in capsys.readouterr().err
-  assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
-
-
-def test_cli_add_with_revises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _fake_cfg(tmp_path)
-  _write_entry(cfg.memory_dir, "profile", "old-entry")
-  monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
-  body = "# New Version\n\nrevised body\n"
+  body = "# 本地渲染环境\n\n渲染机约束逐条列出。\n"
   monkeypatch.setattr("sys.stdin", io.StringIO(body))
   import src.cli.memory as cli
-  monkeypatch.setattr(
-      "sys.argv", [
-          "charliebot memory", "add", "--topic", "profile", "--scope", "user", "--audience", "worker", "--revises",
-          "old-entry"
-      ])
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
   cli.main()
   files = list((cfg.memory_dir / "staging").glob("*.md"))
   assert len(files) == 1
-  assert "revises: old-entry" in files[0].read_text(encoding="utf-8")
-  # entries/ still has exactly the one pre-existing file
-  assert len(list((cfg.memory_dir / "entries").glob("**/*.md"))) == 1
+  assert files[0].name.endswith("-capture.md")
+  assert files[0].read_text(encoding="utf-8") == body
 
 
-def test_cli_add_rejects_bad_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_add_rejects_missing_title_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
   monkeypatch.setattr("sys.stdin", io.StringIO("no title here\n"))
   import src.cli.memory as cli
-  monkeypatch.setattr(
-      "sys.argv", ["charliebot memory", "add", "--topic", "profile", "--scope", "user", "--audience", "master"])
-  with pytest.raises(SystemExit):
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
+  with pytest.raises(SystemExit) as exc:
     cli.main()
+  assert exc.value.code == 1
+  assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
+
+
+def test_cli_add_rejects_empty_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _fake_cfg(tmp_path)
+  monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
+  monkeypatch.setattr("sys.stdin", io.StringIO("# \n\nbody\n"))
+  import src.cli.memory as cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
+  with pytest.raises(SystemExit) as exc:
+    cli.main()
+  assert exc.value.code == 1
+  assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
+
+
+def test_cli_add_removed_flag_fails_via_argparse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Removed flags (--topic/--scope/--audience/--revises) hit the argparse unrecognized-argument error."""
+  cfg = _fake_cfg(tmp_path)
+  monkeypatch.setattr("src.cli.memory.get_config", lambda: cfg)
+  monkeypatch.setattr("sys.stdin", io.StringIO("# T\n\nbody\n"))
+  import src.cli.memory as cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "add", "--topic", "x"])
+  with pytest.raises(SystemExit) as exc:
+    cli.main()
+  assert exc.value.code == 2  # argparse: unrecognized arguments
   assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
 
 

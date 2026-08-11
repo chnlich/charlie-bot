@@ -163,6 +163,8 @@ function loadScript(opts = {}) {
   };
   window.self = window;
   window.parent = opts.framed ? {} : window;
+  // Session identity is server-injected in production; reproduce that tag here.
+  window.__cbcServerSessionId = 'sess-draft';
 
   const head = makeElement();
   const body = makeElement();

@@ -174,6 +174,8 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
   };
   window.self = window;
   window.parent = framed ? (opts.parent || {}) : window;
+  // The server's inline tag, reproduced by the tests that own a session identity.
+  if (opts.serverSessionId !== undefined) window.__cbcServerSessionId = opts.serverSessionId;
 
   const head = makeElement();
   const body = makeElement();
@@ -276,47 +278,46 @@ function seedDraft(pathname, entries) {
   return storage;
 }
 
-test('extractSessionIdFromPath parses session ids from artifact file paths', () => {
-  const {window} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
-  );
-
-  const parse = window.__cbcExtractSessionIdFromPath;
-  assert.equal(
-    parse('/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'),
-    'session-270'
-  );
-  assert.equal(
-    parse('/files/%2Fdata%2Fhome%2Fchaoli%2F.charliebot%2Fsessions%2Fabc123%2Fartifacts%2Fplan.html'),
-    'abc123'
-  );
-  assert.equal(parse('/files/data/home/chaoli/.charliebot/artifacts/plan.html'), null);
-});
-
-test('resolveSessionId prefers a valid cbsession hash over the artifact path session', () => {
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(pathName, false, {hash: '#cbsession=view-session'});
+test('resolveSessionId resolves the injected server session id and ignores the URL path', () => {
+  // The pathname carries a different id on purpose: session identity is owned by the
+  // server-injected value, never by the URL shape.
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/WRONG/artifacts/x.html';
+  const {window} = loadArtifactCommentsScript(pathName, false, {serverSessionId: 'RIGHT'});
   const resolve = window.__cbcResolveSessionId;
 
-  assert.equal(resolve(pathName, '#cbsession=view-session'), 'view-session');
-  assert.equal(resolve(pathName, '#cbsession=%20view-session%20'), 'view-session');
+  assert.equal(resolve(''), 'RIGHT');
 });
 
-test('resolveSessionId keeps path-derived behavior when hash is absent', () => {
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
-  const {window} = loadArtifactCommentsScript(pathName);
-
-  assert.equal(window.__cbcResolveSessionId(pathName, ''), 'path-session');
-});
-
-test('resolveSessionId falls back to the path for malformed cbsession hashes', () => {
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+test('resolveSessionId returns null with no injected id and no hash, ignoring the URL path', () => {
+  // This assertion fails if a path parser is kept as a fallback: the path says WRONG,
+  // and the resolved id must be null rather than WRONG.
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/WRONG/artifacts/x.html';
   const {window} = loadArtifactCommentsScript(pathName);
   const resolve = window.__cbcResolveSessionId;
 
-  assert.equal(resolve(pathName, '#cbsession='), 'path-session');
-  assert.equal(resolve(pathName, '#cbsession=%20'), 'path-session');
-  assert.equal(resolve(pathName, '#cbsession=bad%2Fsession'), 'path-session');
+  assert.equal(resolve(''), null);
+});
+
+test('resolveSessionId prefers a valid cbsession hash over the injected server session id', () => {
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const {window} = loadArtifactCommentsScript(pathName, false, {
+    hash: '#cbsession=view-session',
+    serverSessionId: 'path-session',
+  });
+  const resolve = window.__cbcResolveSessionId;
+
+  assert.equal(resolve('#cbsession=view-session'), 'view-session');
+  assert.equal(resolve('#cbsession=%20view-session%20'), 'view-session');
+});
+
+test('resolveSessionId falls back to the injected id for malformed cbsession hashes', () => {
+  const pathName = '/files/data/home/chaoli/.charliebot/sessions/WRONG/artifacts/x.html';
+  const {window} = loadArtifactCommentsScript(pathName, false, {serverSessionId: 'RIGHT'});
+  const resolve = window.__cbcResolveSessionId;
+
+  assert.equal(resolve('#cbsession='), 'RIGHT');
+  assert.equal(resolve('#cbsession=%20'), 'RIGHT');
+  assert.equal(resolve('#cbsession=bad%2Fsession'), 'RIGHT');
 });
 
 test('batch tray labels and POST target use the hash session when it resolves', async () => {
@@ -352,21 +353,22 @@ test('batch tray labels and POST target use the hash session when it resolves', 
   assert.ok(calls.some((call) => call.url === '/api/chat/view-session/message' && call.method === 'POST'));
 });
 
-test('hash session name 404 falls back to the artifact path session', async () => {
+test('hash session name 404 falls back to the injected server session id', async () => {
   const calls = [];
   const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
   const {body} = loadArtifactCommentsScript(pathName, false, {
     hash: '#cbsession=missing-session',
+    serverSessionId: 'server-session',
     console: {warn() {}, error() {}},
     fetch: async (url, options = {}) => {
       calls.push({url, method: options.method || 'GET'});
       if (url === '/api/sessions/missing-session') {
         return {ok: false, status: 404};
       }
-      if (url === '/api/sessions/path-session') {
-        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
+      if (url === '/api/sessions/server-session') {
+        return {ok: true, status: 200, async json() { return {name: 'Server Session'}; }};
       }
-      if (url === '/api/chat/path-session/message') {
+      if (url === '/api/chat/server-session/message') {
         return {ok: true, status: 200};
       }
       throw new Error('Unexpected fetch: ' + url);
@@ -382,11 +384,11 @@ test('hash session name 404 falls back to the artifact path session', async () =
   const header = findChildByClass(tray, '__cbc-tray-header');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
-  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 Server Session');
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Server Session');
 
   await clickElement(sendBtn);
-  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'));
+  assert.ok(calls.some((call) => call.url === '/api/chat/server-session/message' && call.method === 'POST'));
   assert.equal(calls.some((call) => call.url === '/api/chat/missing-session/message'), false);
 });
 
@@ -761,7 +763,8 @@ test('comment tray activates inside a framed page when the fragment carries the 
     {hash: '#cbsession=session-270&cbpanel=1'}
   );
 
-  assert.equal(typeof window.__cbcExtractSessionIdFromPath, 'function');
+  // The path parser is gone on both sides; identity comes from the injected id or the hash.
+  assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
   assert.equal(typeof window.__cbcResolveSessionId, 'function');
   assert.equal(typeof window.__cbcBuildBatchMessage, 'function');
   assert.equal(typeof window.__cbcBuildTrayItem, 'function');
@@ -790,7 +793,9 @@ test('comment tray is active when not framed regardless of marker (unchanged)', 
     false
   );
 
-  assert.equal(typeof window.__cbcExtractSessionIdFromPath, 'function');
+  // No code derives a session id from a URL path anymore, as a primary source or a fallback.
+  assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
+  assert.equal(typeof window.__cbcResolveSessionId, 'function');
   assert.ok(head.children.length > 0, 'styles are installed');
 });
 
@@ -801,7 +806,7 @@ test('resolveSessionId extracts the session from a fragment with the panel marke
   });
   const resolve = window.__cbcResolveSessionId;
 
-  assert.equal(resolve(pathName, '#cbsession=marker-session&cbpanel=1'), 'marker-session');
+  assert.equal(resolve('#cbsession=marker-session&cbpanel=1'), 'marker-session');
 });
 
 test('resolveSessionId still extracts the session from a plain cbsession fragment without marker', () => {
@@ -809,7 +814,7 @@ test('resolveSessionId still extracts the session from a plain cbsession fragmen
   const {window} = loadArtifactCommentsScript(pathName);
   const resolve = window.__cbcResolveSessionId;
 
-  assert.equal(resolve(pathName, '#cbsession=plain-session'), 'plain-session');
+  assert.equal(resolve('#cbsession=plain-session'), 'plain-session');
 });
 
 // ---------------------------------------------------------------------------
@@ -954,6 +959,7 @@ const SHORTCUT_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/
 function loadWithShortcuts(width = 1024) {
   return loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     innerWidth: width,
+    serverSessionId: 'session-270',
     console: {warn() {}, error() {}},
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
@@ -1266,6 +1272,7 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
   });
   const {window, head, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: blocks,
+    serverSessionId: 'session-270',
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
   const stackCards = window.__cbcStackCards;
@@ -1302,6 +1309,7 @@ test('gutter mode never writes the artifact\'s own layout', async () => {
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
   const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: [block],
+    serverSessionId: 'session-270',
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
   const fireResize = () => {
@@ -1359,6 +1367,7 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
   const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: [block],
+    serverSessionId: 'session-270',
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
   const fireResize = () => {
@@ -1417,6 +1426,7 @@ test('gutter mode never relocates the action bar as window width changes', async
   const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: [block],
     innerWidth: 1400,
+    serverSessionId: 'session-270',
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
   });
   const fireResize = () => {
@@ -1731,6 +1741,7 @@ test('every injected body child carries the __cbc-ui marker even after trigger a
   const {body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
     bodyChildren: [block],
     innerWidth: 1400,
+    serverSessionId: 'session-270',
     fetch: FETCH_OK,
   });
 

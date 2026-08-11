@@ -55,9 +55,13 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         prompt: 'Delegate a fresh verify worker for this plan and report its findings.',
       },
     ];
-    var pathSessionId = extractSessionIdFromPath(window.location.pathname);
+    // Session identity has exactly one owner: the server injects the resolved id into
+    // the page, and the URL path is never consulted. Only the #cbsession= hash (a
+    // deliberate cross-session viewing link) overrides it.
+    var serverSessionId = (typeof window.__cbcServerSessionId === 'string' &&
+      window.__cbcServerSessionId.trim()) || null;
     var hashSessionId = extractSessionIdFromHash(window.location.hash);
-    var sessionId = resolveSessionIdFromLocation(window.location.pathname, window.location.hash);
+    var sessionId = resolveSessionId(window.location.hash);
     var artifactPath = artifactPathFromPath(window.location.pathname);
     var sessionNameCache = {};
     var sessionNameRequests = {};
@@ -93,8 +97,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var cardHeights = null;
     var reflowScheduled = false;
 
-    window.__cbcExtractSessionIdFromPath = extractSessionIdFromPath;
-    window.__cbcResolveSessionId = resolveSessionIdFromLocation;
+    window.__cbcResolveSessionId = resolveSessionId;
     window.__cbcBuildBatchMessage = buildBatchMessage;
     window.__cbcResolveEntryDraft = resolveEntryDraft;
     window.__cbcBuildTrayItem = buildTrayItem;
@@ -116,14 +119,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     installShortcuts();
     installBatchTray();
 
-    function extractSessionIdFromPath(pathname) {
-      var normalized = String(pathname || '').replace(/%2F/gi, '/');
-      var match = normalized.match(/(?:^|\/)sessions\/([^/]+)\/artifacts(?:\/|$)/);
-      if (!match) return null;
-      var value = decodeURIComponent(match[1]).trim();
-      return value || null;
-    }
-
     function extractSessionIdFromHash(hash) {
       var text = String(hash || '');
       var prefix = '#cbsession=';
@@ -141,8 +136,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return value;
     }
 
-    function resolveSessionIdFromLocation(pathname, hash) {
-      return extractSessionIdFromHash(hash) || extractSessionIdFromPath(pathname);
+    function resolveSessionId(hash) {
+      return extractSessionIdFromHash(hash) || serverSessionId;
     }
 
     function artifactPathFromPath(pathname) {
@@ -297,15 +292,15 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       fetchSessionName(requestedId).then(function() {
         if (resolveTargetSessionId() === requestedId) refreshTray();
       }).catch(function(err) {
-        // The 404-driven fallback reassignment (sessionId = pathSessionId) is
+        // The 404-driven fallback reassignment (sessionId = serverSessionId) is
         // the base case for standalone mode and when the live accessor is
         // unavailable. When framed and the parent supplies a truthy live
         // session, requestedId is that live id (not the artifact-URL hash
         // session), so the `requestedId === hashSessionId` guard below keeps
         // this branch from clobbering the live session.
-        if (err.status === 404 && hashSessionId && requestedId === hashSessionId && pathSessionId && pathSessionId !== requestedId) {
-          console.warn('Artifact comment target session not found; falling back to path session:', requestedId);
-          sessionId = pathSessionId;
+        if (err.status === 404 && hashSessionId && requestedId === hashSessionId && serverSessionId && serverSessionId !== requestedId) {
+          console.warn('Artifact comment target session not found; falling back to server session:', requestedId);
+          sessionId = serverSessionId;
           hashSessionId = null;
           ensureTargetSessionName();
           refreshTray();

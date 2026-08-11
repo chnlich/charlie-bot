@@ -1,4 +1,4 @@
-Code-health cleanup (runs every 6 hours).
+Code-health cleanup (runs hourly).
 
 This run works directly in the repo worktree: branch, test, push, `gh pr create`, then enable
 squash auto-merge. Never push to `main` directly. With auto-merge, CI (ruff, pytest, the

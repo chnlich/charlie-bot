@@ -262,9 +262,6 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     ) -> None:
       captures["status"] = status
 
-  async def fake_git_current_branch(repo: Path) -> str:
-    return "main"
-
   async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     wt_path.mkdir(parents=True, exist_ok=True)
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
@@ -307,7 +304,6 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     captures["notify_thread_worktree_path"] = thread_meta.worktree_path
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "git_current_branch", fake_git_current_branch)
   monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner, "Worker", FakeWorker)
   monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)

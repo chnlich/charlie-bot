@@ -109,6 +109,38 @@ async def _git_rev_parse(repo_path: Path, ref: str) -> str | None:
   return out if ok and out else None
 
 
+async def git_remote_default_branch(repo_path: Path) -> str:
+  """Read the remote's published default branch via `git ls-remote --symref origin HEAD`.
+
+  Deliberately never consults refs/remotes/origin/HEAD or any local branch: the
+  local symref is clone-time metadata that goes stale silently when upstream
+  changes its default branch. Raises BaseBranchResolutionError when origin is
+  not configured, unreachable, or advertises no symref -- a caller that cannot
+  read the remote's default must fail loudly, never substitute a local ref.
+  """
+  ok, out, err = await _git_stdout(
+      repo_path,
+      "ls-remote",
+      "--symref",
+      "origin",
+      "HEAD",
+      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+      timeout_label="git ls-remote",
+  )
+  if not ok:
+    raise BaseBranchResolutionError(
+        f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
+  symref_prefix = "ref: refs/heads/"
+  for line in out.splitlines():
+    if line.startswith(symref_prefix):
+      branch = line[len(symref_prefix):].split("\t", 1)[0].strip()
+      if branch:
+        return branch
+  raise BaseBranchResolutionError(
+      f"git ls-remote --symref origin HEAD in {repo_path} advertised no {symref_prefix}<branch> symref "
+      f"line; refusing to infer a default from local refs. Output: {out!r}")
+
+
 async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResolution:
   """Resolve a --base-branch value to a worktree start point, failing loudly on ambiguity.
 

@@ -400,10 +400,6 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  async def fake_git_current_branch(repo: Path) -> str:
-    assert repo == repo_path
-    return "main"
-
   async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     captures["git_create_worktree"] = {
         "repo": repo,
@@ -451,7 +447,6 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     captures["notify_exit_code"] = exit_code
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "git_current_branch", fake_git_current_branch)
   monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner, "Worker", FakeWorker)
   monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)

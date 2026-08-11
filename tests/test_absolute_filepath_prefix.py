@@ -100,7 +100,15 @@ def test_both_prefixes_return_the_same_status_and_bytes(targets: dict[str, Path]
     assert len(bodies) == 1, f"{label}: body differs between prefixes"
 
 
-def test_artifact_injection_decides_the_same_way_under_both_prefixes(targets: dict[str, Path]) -> None:
+def test_artifact_injection_decides_the_same_way_under_both_prefixes(
+    targets: dict[str, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  # Injection is anchored on the configured sessions root, which the test owns here —
+  # the prefix spelling plays no part in the decision.
+  monkeypatch.setattr(
+      files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
   client = _client()
   for label, target in targets.items():
     injected = {ARTIFACT_SCRIPT in client.get(f"{prefix}{target}").text for prefix in PREFIXES}

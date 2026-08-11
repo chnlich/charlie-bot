@@ -1,7 +1,9 @@
 """Tests for artifact review-UI injection in the file server (src/api/files.py)."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -10,10 +12,26 @@ from src.api import files as files_api
 SCRIPT = "<script src=/static/js/artifact-comments.js></script>"
 
 
+@pytest.fixture
+def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Point the configured sessions root at tmp_path.
+
+  files.py imports ``get_config`` by name, so the patch lands on the module.
+  """
+  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path))
+  return tmp_path
+
+
 def _build_client() -> TestClient:
   app = FastAPI()
   app.include_router(files_api.router, prefix="/files")
   return TestClient(app)
+
+
+def _write(path: Path) -> Path:
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text("<html><body><h1>Plan</h1></body></html>")
+  return path
 
 
 # --- pure string-transform helper: structural invariants ---
@@ -21,17 +39,20 @@ def _build_client() -> TestClient:
 
 def test_inject_inserts_exactly_one_before_body() -> None:
   html = "<html><body><p>plan body</p></body></html>"
-  out = files_api._inject_artifact_ui(html)
+  out = files_api._inject_artifact_ui(html, "S")
   assert out.count("artifact-comments.js") == 1
   # The closing tag is preserved and the script sits before it.
   assert out.count("</body>") == 1
   assert out.index("artifact-comments.js") < out.index("</body>")
+  # The inline id assignment precedes the external script tag, so the id is set
+  # before artifact-comments.js runs.
+  assert out.index("window.__cbcServerSessionId=") < out.index(SCRIPT)
 
 
 def test_inject_targets_the_last_body() -> None:
   html = "<html><body>first</body>\n<!-- stray -->\n</body></html>"
   assert html.count("</body>") == 2
-  out = files_api._inject_artifact_ui(html)
+  out = files_api._inject_artifact_ui(html, "S")
   first = out.index("</body>")
   last = out.rindex("</body>")
   script = out.index("artifact-comments.js")
@@ -41,56 +62,83 @@ def test_inject_targets_the_last_body() -> None:
 
 def test_inject_appends_when_no_body() -> None:
   html = "<html><div>no closing body tag here</div></html>"
-  out = files_api._inject_artifact_ui(html)
+  out = files_api._inject_artifact_ui(html, "S")
   assert out.count("artifact-comments.js") == 1
   assert "</body>" not in out
-  # Original content is left intact and the script is appended after it.
+  # Original content is left intact and the tags are appended after it.
   assert out.startswith(html)
   assert out.rstrip().endswith(SCRIPT)
 
 
-# --- route-level: match vs not-match decision ---
+# --- route-level: inject vs not-inject decision, anchored on the sessions root ---
 
 
-def test_serve_file_injects_for_artifact_path(tmp_path: Path) -> None:
-  art_dir = tmp_path / "sessions" / "abc" / "artifacts"
-  art_dir.mkdir(parents=True)
-  page = art_dir / "plan_07.html"
-  page.write_text("<html><body><h1>Plan</h1></body></html>")
+def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
 
   resp = _build_client().get("/files" + str(page))
   assert resp.status_code == 200
   assert resp.headers["content-type"].startswith("text/html")
   body = resp.text
-  assert body.count("artifact-comments.js") == 1
-  assert body.index("artifact-comments.js") < body.index("</body>")
+  assert body.count(SCRIPT) == 1
+  assert 'window.__cbcServerSessionId="S";' in body
+  # The inline id assignment precedes the external script tag.
+  assert body.index("window.__cbcServerSessionId=") < body.index(SCRIPT)
+  assert body.index(SCRIPT) < body.index("</body>")
   # Injected pages are rendered (HTMLResponse), not served from disk (FileResponse),
   # so they carry no file-serving validators.
   assert "last-modified" not in resp.headers
 
 
-def test_serve_file_session_path_outside_artifacts_not_injected(tmp_path: Path) -> None:
-  notes_dir = tmp_path / "sessions" / "abc" / "notes"
-  notes_dir.mkdir(parents=True)
-  page = notes_dir / "memo.html"
-  original = "<html><body>not an artifact</body></html>"
-  page.write_text(original)
+def test_serve_file_injects_thread_artifact_with_session_id_not_thread_id(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "threads" / "T" / "artifacts" / "x.html")
+
+  resp = _build_client().get("/files" + str(page))
+  assert resp.status_code == 200
+  assert 'window.__cbcServerSessionId="S";' in resp.text
+  assert '"T"' not in resp.text
+
+
+def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
+  # A depth the old path-shape regex never matched: the predicate only cares that the
+  # page sits under <session>/... with an `artifacts` parent, not how deep.
+  page = _write(sessions_root / "S" / "threads" / "T" / "sub" / "artifacts" / "x.html")
+
+  resp = _build_client().get("/files" + str(page))
+  assert resp.status_code == 200
+  assert 'window.__cbcServerSessionId="S";' in resp.text
+
+
+def test_serve_file_session_html_outside_artifacts_not_injected(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "notes" / "x.html")
 
   resp = _build_client().get("/files" + str(page))
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
-  assert resp.text == original
   # Kept as a FileResponse: served from disk with a last-modified validator.
   assert "last-modified" in resp.headers
 
 
-def test_serve_file_plain_html_not_injected(tmp_path: Path) -> None:
-  page = tmp_path / "standalone.html"
-  original = "<html><body>plain page</body></html>"
-  page.write_text(original)
+def test_serve_file_root_level_artifacts_dir_not_injected(sessions_root: Path) -> None:
+  # <root>/artifacts/x.html belongs to no session — there is no session component.
+  page = _write(sessions_root / "artifacts" / "x.html")
 
   resp = _build_client().get("/files" + str(page))
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
-  assert resp.text == original
+  assert "last-modified" in resp.headers
+
+
+def test_serve_file_artifact_shape_outside_sessions_root_not_injected(
+    sessions_root: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+  # Same shape as a real artifact page but outside the configured sessions root. This
+  # is the assertion that fails if anyone reintroduces a path-shape regex on the server.
+  outside = tmp_path_factory.mktemp("outside")
+  page = _write(outside / "a" / "sessions" / "S" / "artifacts" / "x.html")
+
+  resp = _build_client().get("/files" + str(page))
+  assert resp.status_code == 200
+  assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers

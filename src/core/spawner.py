@@ -105,6 +105,46 @@ _VERIFY_PROMPT_PREAMBLE = (
     "single-line form; fidelity findings keep it.")
 
 
+def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> str:
+  """Build the full prompt for a repo-less VERIFY task (preamble + scope contract + task)."""
+  canonical_template_path = (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()
+  return (
+      f"{_VERIFY_PROMPT_PREAMBLE}\n"
+      "Verification scope:\n"
+      "Check exactly the scope the task spec declares. A spec that declares neither scope "
+      "is verified as full.\n"
+      "- Full verification (the spec declares full): read the plan artifact by itself and complete an "
+      "artifact-only standalone-comprehension pass first, then read the canonical plan template at "
+      f"`{canonical_template_path}` and all task-provided evidence, and check the plan against every canonical "
+      "rule in the template's BLOCK KIT.\n"
+      "- Delta verification (the spec declares delta): check exactly the declared terms, their dependent "
+      "claims, prior mismatches (including whether previously reported findings are closed), and document "
+      "structure; unchanged content keeps its verdict from the round that checked it.\n"
+      "- Adequacy (full scope only): assume the plan's claims are true and its design "
+      "implemented as written, then test each outcome its section 1 claims by attempted refutation. Report "
+      "one labelled block per claimed outcome, one aspect per line:\n"
+      "  `mismatch:` or `confirmed:` — the outcome being judged\n"
+      "  `gap-design:` — why the described mechanism does not entail it, or `gap-goal:` — why the goal "
+      "statement itself is the defect (omit both when confirmed)\n"
+      "  `scenario:` — the counterexample you built, or the strongest you tried and why it failed, stated "
+      "as a scenario rather than a restatement of the plan\n"
+      "  `anchor:` — where in the plan\n"
+      "A boundary section 1 states explicitly is correct-as-scoped. When the spec quotes the originating "
+      "request, also report `gap-goal:` for an outcome it asks that section 1 neither claims nor scopes "
+      "out.\n"
+      "Use reasonable allowed local and network reads through already-available tools, commands, connectivity, "
+      "and credentials when checking evidence, including web search/fetch, read-only API queries, and read-only "
+      "SSH commands. The boundary remains "
+      "semantic read-only behavior, not a transport or HTTP-method allowlist. Refuse and report any check that "
+      "would mutate local or external state instead of executing it, including operations that create, update, "
+      "delete, trigger, submit, upload, or send messages, as well as file edits, Git writes, and job submissions.\n"
+      "Report a missing or unreadable plan artifact or canonical template, a missing required in-scope source "
+      "anchor, or any in-scope canonical-rule deviation as `mismatch`. Preserve `unverifiable` only when "
+      "reasonable allowed local or network reads cannot access the evidence, or verification would require "
+      "state mutation. Network access alone never makes a claim `unverifiable`."
+      f"\n\n{description}")
+
+
 def _parse_worker_prompt_sections(text: str) -> dict[str, str]:
   """Split prompts/worker.md's raw text on its `<!-- section: <id> -->` marker lines."""
   sections: dict[str, str] = {}
@@ -434,6 +474,24 @@ def _prepare_thread_backend_metadata(
   thread.cli_command = shlex.join(backend._build_command(description) + [description])
 
 
+async def _apply_backend_option(
+    thread: ThreadMetadata,
+    description: str,
+    cfg: CharlieBotConfig,
+    thread_mgr: ThreadManager,
+    req: SpawnRequest,
+) -> BackendOption:
+  """Resolve the request's backend option onto the thread, persist it, and return the option."""
+  backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
+  thread.backend = backend_option.id
+  thread.model = backend_option.model
+  if req.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
+    thread.tried_backends.append(backend_option.id)
+  _prepare_thread_backend_metadata(thread, backend_option, description)
+  await thread_mgr.save_metadata(thread)
+  return backend_option
+
+
 async def _create_worktree_and_process(
     session_id: str,
     thread: ThreadMetadata,
@@ -519,11 +577,7 @@ async def _create_worktree_and_process(
     )
     raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
-  backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
-  thread.backend = backend_option.id
-  thread.model = backend_option.model
-  _prepare_thread_backend_metadata(thread, backend_option, description)
-  await thread_mgr.save_metadata(thread)
+  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, req)
 
   # Build Worker
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
@@ -548,42 +602,7 @@ async def _create_repoless_process(
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
   if req.task_type == TaskType.VERIFY:
-    canonical_template_path = (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()
-    worker_prompt = (
-        f"{_VERIFY_PROMPT_PREAMBLE}\n"
-        "Verification scope:\n"
-        "Check exactly the scope the task spec declares. A spec that declares neither scope "
-        "is verified as full.\n"
-        "- Full verification (the spec declares full): read the plan artifact by itself and complete an "
-        "artifact-only standalone-comprehension pass first, then read the canonical plan template at "
-        f"`{canonical_template_path}` and all task-provided evidence, and check the plan against every canonical "
-        "rule in the template's BLOCK KIT.\n"
-        "- Delta verification (the spec declares delta): check exactly the declared terms, their dependent "
-        "claims, prior mismatches (including whether previously reported findings are closed), and document "
-        "structure; unchanged content keeps its verdict from the round that checked it.\n"
-        "- Adequacy (full scope only): assume the plan's claims are true and its design "
-        "implemented as written, then test each outcome its section 1 claims by attempted refutation. Report "
-        "one labelled block per claimed outcome, one aspect per line:\n"
-        "  `mismatch:` or `confirmed:` — the outcome being judged\n"
-        "  `gap-design:` — why the described mechanism does not entail it, or `gap-goal:` — why the goal "
-        "statement itself is the defect (omit both when confirmed)\n"
-        "  `scenario:` — the counterexample you built, or the strongest you tried and why it failed, stated "
-        "as a scenario rather than a restatement of the plan\n"
-        "  `anchor:` — where in the plan\n"
-        "A boundary section 1 states explicitly is correct-as-scoped. When the spec quotes the originating "
-        "request, also report `gap-goal:` for an outcome it asks that section 1 neither claims nor scopes "
-        "out.\n"
-        "Use reasonable allowed local and network reads through already-available tools, commands, connectivity, "
-        "and credentials when checking evidence, including web search/fetch, read-only API queries, and read-only "
-        "SSH commands. The boundary remains "
-        "semantic read-only behavior, not a transport or HTTP-method allowlist. Refuse and report any check that "
-        "would mutate local or external state instead of executing it, including operations that create, update, "
-        "delete, trigger, submit, upload, or send messages, as well as file edits, Git writes, and job submissions.\n"
-        "Report a missing or unreadable plan artifact or canonical template, a missing required in-scope source "
-        "anchor, or any in-scope canonical-rule deviation as `mismatch`. Preserve `unverifiable` only when "
-        "reasonable allowed local or network reads cannot access the evidence, or verification would require "
-        "state mutation. Network access alone never makes a claim `unverifiable`."
-        f"\n\n{description}")
+    worker_prompt = _build_verify_repoless_prompt(description, cfg)
   elif req.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
     worker_prompt = req.prompt_override or description
   else:
@@ -597,13 +616,7 @@ async def _create_repoless_process(
   thread.require_review = False
   thread.context = req.context
 
-  backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
-  thread.backend = backend_option.id
-  thread.model = backend_option.model
-  if req.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
-    thread.tried_backends.append(backend_option.id)
-  _prepare_thread_backend_metadata(thread, backend_option, description)
-  await thread_mgr.save_metadata(thread)
+  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, req)
 
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(

@@ -119,8 +119,10 @@ During execution of an approved plan, the agent may autonomously complete any re
 
 ## Memory
 
-Mid-session facts worth keeping go to `charliebot memory add` — it writes a staging candidate
-(never touches `entries/`); include `--revises <slug>` to propose a revision to an existing entry.
+Mid-session facts worth keeping go to `charliebot memory add` as one free-form markdown file
+per capture: first line `# <title>`, body stating the fact to record or the change to propose
+(naming the target entry when proposing one). It writes a staging candidate (never touches
+`entries/`); labels are assigned at curation.
 On-demand knowledge: `charliebot memory query --topic <topic>` for full text, or `--index` for the
 index only. Admission is judged at curation time with evidence, not mid-session.
 

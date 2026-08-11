@@ -65,7 +65,9 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
   scheduler = Scheduler(cfg, AsyncMock())
   session = SessionMetadata(name="Backup session")
-  session.last_scheduled_run = (datetime.now(timezone.utc) - timedelta(seconds=1)).replace(tzinfo=None).isoformat()
+  # Base is in the future so croniter's next fire is always after now, removing the minute-boundary
+  # race a past base had: with cron "* * * * *" it fired whenever the test ran just after a boundary.
+  session.last_scheduled_run = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(tzinfo=None).isoformat()
   task_cfg = ScheduledTaskConfig(
       name="backup",
       cron="* * * * *",

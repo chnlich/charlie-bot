@@ -45,6 +45,10 @@ Applies to all writing.
 - State rules at the category level: an instance list narrows the rule to its examples.
 - Positive framing: state the working action or standing reality; a sentence
   built around what fails leads with the alternative that works.
+- Before writing new content, search for an existing canonical home and reuse it when one
+  exists.
+- Give every fact one canonical home: state it there, reference it elsewhere, and delete
+  duplicates rather than updating them.
 
 ### Explaining to the user
 

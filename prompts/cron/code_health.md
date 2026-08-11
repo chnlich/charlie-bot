@@ -1,9 +1,8 @@
-Code-health cleanup (runs hourly).
+Code-health cleanup.
 
-This run works directly in the repo worktree: branch, test, push, `gh pr create`, then enable
-squash auto-merge. Never push to `main` directly. With auto-merge, CI (ruff, pytest, the
-300-line-budget / evidence contract check) remains the pre-merge gate; the human review step is
-removed because CI is the gate and these changes are small and reversible.
+This run works in the repo worktree: branch, test, push, then `gh pr create`. Wait for CI on
+the pull request and squash-merge it once CI passes. Never push to `main` directly; the pull
+request remains as the triage record.
 
 Step 0: check for an open contract PR before anything else.
 List open pull requests whose head branch matches `code-health/*`. If any exists: produce no new

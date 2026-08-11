@@ -1,4 +1,4 @@
-Daily memory curation.
+Memory curation.
 
 Read `~/workspace/charlie-bot/skills/llm-context-guideline/SKILL.md` first.
 Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` before writing or

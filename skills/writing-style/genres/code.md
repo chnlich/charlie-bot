@@ -40,6 +40,8 @@ implementing; master includes them as constraints in task specs.
 
 ## Comments
 
+- A routine change documents its reason in the commit message and its PR, reachable by git blame. Comments serve
+  the anomalous change: a workaround pinned to an outside fact that a reader would otherwise revert or simplify.
 - Give the reason the code takes this form: the constraint that rules
   out the simpler alternative, the cost that dictates the shape, the
   invariant a reader cannot see. The code already states what it does.

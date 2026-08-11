@@ -793,11 +793,13 @@ async def switch_session_backend(
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  """Switch a session's backend in place, refused across resume domains.
+  """Switch a session's backend; cross-domain targets migrate the role to a fresh session.
 
   ``meta.backend`` is an effective current backend: the raw field when set,
   else ``backend_options[0]``. Only cc-claude options sharing the same
-  ``claude_config_dir`` are switchable for free; anything else must fork/clone.
+  ``claude_config_dir`` are switchable in place; an ordinary session targeting
+  anything else must fork/clone, while a role-carrying session hands its role
+  to a new session on the target backend and is archived.
   """
   valid_ids = {opt.id for opt in cfg.backend_options}
   if body.backend not in valid_ids:

@@ -583,7 +583,7 @@ class TriggerManager:
       return
 
     session_meta = await self._session_mgr.get_session(fresh.session_id)
-    if session_meta.status == SessionStatus.ARCHIVED:
+    if session_meta is None or session_meta.status == SessionStatus.ARCHIVED:
       fresh.status = TriggerStatus.CANCELLED
       await self._save_trigger(fresh)
       self._tasks.pop(trigger.id, None)
@@ -591,6 +591,7 @@ class TriggerManager:
           "trigger_cancelled_archived_session",
           trigger_id=fresh.id,
           session=fresh.session_id,
+          reason="metadata_unavailable" if session_meta is None else "archived",
       )
       return
 

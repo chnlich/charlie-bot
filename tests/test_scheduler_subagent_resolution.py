@@ -107,7 +107,7 @@ async def test_requested_backend_none_raises_for_stale_session_backend() -> None
 
 
 @pytest.mark.asyncio
-async def test_session_default_raises_when_fallback_has_no_model() -> None:
+async def test_session_default_raises_when_option_has_no_model() -> None:
   cfg = _build_cfg([
       BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model=None),
   ])

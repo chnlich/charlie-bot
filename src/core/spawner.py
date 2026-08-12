@@ -334,6 +334,15 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: Option
   return option.model_copy(update={"model": resolved_model})
 
 
+def _option_default_backend_model(option: BackendOption, *, source: str) -> tuple[str, Optional[str]]:
+  """Pair a configured option with its own default model, or raise when it needs one and has none."""
+  if backend_type_allows_missing_model(option.type):
+    return option.id, None
+  if not option.model:
+    raise ValueError(f"{source} backend '{option.id}' has no default model")
+  return option.id, option.model
+
+
 def _resolve_configured_backend_model(
     cfg: CharlieBotConfig,
     backend_id: str,
@@ -346,14 +355,10 @@ def _resolve_configured_backend_model(
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"{source} backend '{backend_id}' is not in backend_options")
-  if backend_type_allows_missing_model(option.type):
-    return option.id, None
-  if not option.model:
-    raise ValueError(f"{source} backend '{backend_id}' has no default model")
-  return option.id, option.model
+  return _option_default_backend_model(option, source=source)
 
 
-def _resolve_session_backend_with_fallback(
+def _resolve_session_default_backend_model(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
     session_id: str,
@@ -374,18 +379,14 @@ def _resolve_session_backend_with_fallback(
       log.error(
           "session_backend_unresolved",
           stored=session_meta.backend,
-          fallback=cfg.backend_options[0].id,
+          refused_substitute=cfg.backend_options[0].id,
           session_id=session_id,
       )
       raise ValueError(
           f"session backend '{session_meta.backend}' is not in config.yaml backend_options — "
           f"refusing to substitute '{cfg.backend_options[0].id}'")
     option = cfg.backend_options[0]
-  if backend_type_allows_missing_model(option.type):
-    return option.id, None
-  if not option.model:
-    raise ValueError(f"session backend '{option.id}' has no default model")
-  return option.id, option.model
+  return _option_default_backend_model(option, source="session")
 
 
 async def resolve_session_subagent_backend_model(
@@ -393,11 +394,8 @@ async def resolve_session_subagent_backend_model(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
 ) -> tuple[str, Optional[str]]:
-  """Resolve backend+model from the session default, with graceful fallback on stale metadata."""
-  session_meta = await session_mgr.get_session(session_id)
-  if session_meta is None:
-    raise ValueError(f"session '{session_id}' not found")
-  return _resolve_session_backend_with_fallback(cfg, session_meta, session_id)
+  """Resolve backend+model from the session's recorded default, ignoring any caller preference."""
+  return await resolve_requested_subagent_backend_model(session_id, cfg, session_mgr)
 
 
 async def resolve_requested_subagent_backend_model(
@@ -408,15 +406,16 @@ async def resolve_requested_subagent_backend_model(
 ) -> tuple[str, Optional[str]]:
   """Resolve backend+model from an explicit configured backend or the session default.
 
-  Explicit `requested_backend` stays strict (typo in user input must fail). Session-default
-  resolution falls back gracefully when the stored backend id is stale.
+  Both paths are strict: an unknown explicit `requested_backend` (a typo in user input) and a
+  session pinned to an id config.yaml no longer defines both raise. Only an empty session
+  backend defaults, and it defaults to cfg.backend_options[0].
   """
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' not found")
   if requested_backend is not None:
     return _resolve_configured_backend_model(cfg, requested_backend, source="requested")
-  return _resolve_session_backend_with_fallback(cfg, session_meta, session_id)
+  return _resolve_session_default_backend_model(cfg, session_meta, session_id)
 
 
 async def _select_verify_quota_retry_backend(

@@ -207,6 +207,11 @@ def backend_type_allows_missing_model(backend_type: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# Role carried by the dedicated session of a mode: master cron task — the
+# Project Manager for the task's ``project`` (group) value.
+PROJECT_ROLE = "project"
+
+
 class MasterRunRecord(BaseModel):
   """Identity of one in-flight master turn, persisted for restart reconciliation.
 
@@ -401,6 +406,15 @@ class ScheduleTriggerRequest(BaseModel):
   delay_seconds: int
   message: str
   watch_targets: Optional[list[WatchTarget]] = None
+
+
+class SessionMessageRequest(BaseModel):
+  """Request body for the internal session-message (agent relay) endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str  # caller session (provenance)
+  target_session_id: str
+  content: str
 
 
 # ---------------------------------------------------------------------------

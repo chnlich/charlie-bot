@@ -13,6 +13,7 @@ from src.api.deps import (
   get_thread_manager,
   get_trigger_manager,
 )
+from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
@@ -22,6 +23,7 @@ from src.core.improve_command import (
   reserve_loop_state,
   run_improve_loop,
 )
+from src.core.master_trigger import trigger_master
 from src.core.models import (
   DelegateInvocationMetadata,
   DelegateRequest,
@@ -31,7 +33,9 @@ from src.core.models import (
   PlanCloseRequest,
   PlanPresentRequest,
   ScheduleTriggerRequest,
+  SessionMessageRequest,
   SessionMetadata,
+  SessionStatus,
   SpawnRequest,
   TaskType,
   WatchKind,
@@ -306,6 +310,54 @@ async def cancel_trigger(
   except FileNotFoundError as exc:
     raise HTTPException(status_code=404, detail="Trigger not found") from exc
   return {"ok": True}
+
+
+@router.post("/session-message")
+async def session_message(
+    req: SessionMessageRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Relay an agent message into another session's event log and wake its master.
+
+  Persists an ``agent_message`` event (never a ``user`` event, so no takeoff
+  window is minted or revoked), then wakes the target master with the relay
+  prefix. The injected content bypasses slash-command dispatch; when the target
+  session is mid-run the wake enqueues on the master work-item queue.
+  """
+  caller = await session_mgr.get_session(req.session_id)
+  if caller is None:
+    raise HTTPException(status_code=404, detail="Session not found")
+  target = await session_mgr.get_session(req.target_session_id)
+  if target is None:
+    raise HTTPException(status_code=404, detail="Target session not found")
+  if target.status == SessionStatus.ARCHIVED:
+    raise HTTPException(status_code=409, detail="Target session is archived")
+
+  await session_mgr.persist_and_broadcast(
+      req.target_session_id,
+      build_agent_message_event(
+          req.content,
+          from_session=caller.id,
+          from_session_name=caller.name,
+      ),
+  )
+  create_logged_task(
+      trigger_master(
+          req.target_session_id,
+          f"[Message from session {caller.name}] {req.content}",
+          cfg,
+          session_mgr,
+      ),
+      name=f"session-message-relay-{req.target_session_id}",
+  )
+  log.info(
+      "session_message_relayed",
+      session=req.session_id,
+      target_session=req.target_session_id,
+      content_chars=len(req.content),
+  )
+  return {"status": "accepted"}
 
 
 # ---------------------------------------------------------------------------

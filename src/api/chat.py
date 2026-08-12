@@ -145,11 +145,11 @@ async def send_message(
 @router.post("/{session_id}/cancel")
 async def cancel_master_agent(
     session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
+    meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
   """Send SIGTERM to the running master CC agent for this session."""
-  found = await cancel_master(session_id)
+  found = await cancel_master(session_id, meta=meta, session_mgr=session_mgr)
   if not found:
     await session_mgr.persist_and_broadcast(
         session_id, {

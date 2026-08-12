@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 
@@ -28,6 +28,9 @@ from src.core.models import (
 from src.core.process import kill_process_group
 from src.core.streaming import handle_compaction_events, streaming_manager
 from src.core.thinking_state import busy_since, clear_busy, mark_busy
+
+if TYPE_CHECKING:
+  from src.core.sessions import SessionManager
 
 log = structlog.get_logger()
 
@@ -598,17 +601,23 @@ async def _resume_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str]
       if exit_code != 0:
         error_msg = stderr_text[:500]
 
-    # The loop ended on the post-result timeout while the process is still
-    # alive: same contract as the live path's cleanup — SIGTERM the recorded
-    # process group, escalate to SIGKILL.
-    if is_alive() and record.pid is not None:
-      log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
-      kill_process_group(record.pid, signal.SIGTERM)
-      deadline = time.monotonic() + 5.0
-      while is_alive() and time.monotonic() < deadline:
-        await asyncio.sleep(0.2)
-      if is_alive():
-        kill_process_group(record.pid, signal.SIGKILL)
+    # The loop ended on the post-result timeout: same contract as the live
+    # path's cleanup — SIGTERM the recorded process group, escalate to
+    # SIGKILL. An irreversible kill is authorized only by the record's own
+    # liveness proof (is_run_alive); the follower's is_alive probe stays the
+    # stream's liveness input and is constant-true for an unpinned record,
+    # which must never authorize a kill.
+    if record.pid is not None:
+      host_boot = await asyncio.to_thread(runs.read_host_boot_time)
+      if runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot):
+        log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
+        kill_process_group(record.pid, signal.SIGTERM)
+        deadline = time.monotonic() + 5.0
+        while (runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
+               and time.monotonic() < deadline):
+          await asyncio.sleep(0.2)
+        if runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot):
+          kill_process_group(record.pid, signal.SIGKILL)
 
   except asyncio.CancelledError:
     log.warning("master_cc_resume_cancelled", session=session_meta.id)
@@ -888,19 +897,54 @@ async def run_message(
   return await future
 
 
-async def cancel_master(session_id: str) -> bool:
-  """Terminate the running master CC backend for this session.
+async def cancel_master(
+    session_id: str,
+    *,
+    meta: Optional[SessionMetadata] = None,
+    session_mgr: Optional["SessionManager"] = None,
+) -> bool:
+  """Terminate the running master CC turn for this session.
 
-  Returns True if a backend was found and terminate() was called, False otherwise.
+  In-process hit: terminate the live backend. In-process miss with session
+  metadata: the turn may have detached across a graceful restart, so fall
+  back to the on-disk master_run record — an irreversible kill goes out only
+  when ``runs.is_run_alive`` proves the recorded (pid, pid_start, started_at)
+  triple still names a live process; an unprovable record gets no signal at
+  all and the endpoint keeps its 404. Callers that pass neither optional keep
+  the in-memory-only behavior.
+
+  Returns True if a turn was found and signalled, False otherwise.
   """
   log.info("master_cancel_requested", session=session_id)
   backend = _active_procs.get(session_id)
-  if backend is None:
-    log.info("master_cancel_no_active_master", session=session_id)
-    return False
-  await backend.terminate()
-  log.info("master_cancel_succeeded", session=session_id)
-  return True
+  if backend is not None:
+    await backend.terminate()
+    log.info("master_cancel_succeeded", session=session_id)
+    return True
+
+  record = meta.master_run if meta is not None else None
+  if record is not None and session_mgr is not None:
+    host_boot = await asyncio.to_thread(runs.read_host_boot_time)
+
+    def _alive() -> bool:
+      return runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
+
+    if _alive() and record.pid is not None:
+      # Detached turn still running: same SIGTERM -> 5 s -> SIGKILL escalation
+      # shape as the resume hang guard above, judged on the record.
+      log.info("master_cancel_killing_detached_run", session=session_id, pid=record.pid)
+      kill_process_group(record.pid, signal.SIGTERM)
+      deadline = time.monotonic() + 5.0
+      while _alive() and time.monotonic() < deadline:
+        await asyncio.sleep(0.2)
+      if _alive():
+        kill_process_group(record.pid, signal.SIGKILL)
+      await session_mgr.persist_master_run(session_id, None)
+      log.info("master_cancel_succeeded", session=session_id)
+      return True
+
+  log.info("master_cancel_no_active_master", session=session_id)
+  return False
 
 
 async def enqueue_master_resume(

@@ -165,6 +165,13 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "role": "scheduled_trigger",
             "content": ev.get("content", ""),
         },
+    ET.AGENT_MESSAGE:
+        lambda ev: {
+            "role": "agent_message",
+            "content": ev.get("content", ""),
+            "from_session": ev.get("from_session", ""),
+            "from_session_name": ev.get("from_session_name", ""),
+        },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
 }

@@ -110,8 +110,8 @@ function isStableRenderedMessage(el) {
 // reader-expanded `N steps` bar, an open recap panel and embedded artifact
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
-const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'worker_summary'];
-const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', worker_summary: 'Worker'};
+const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary'];
+const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker'};
 const TEXT_NODE = 3;
 
 function isStimulusMessage(el) {
@@ -624,6 +624,15 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "scheduled_trigger") {
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-400 whitespace-pre-wrap break-words\">"
       + escapeHtml(msg.content) + timeDiv() + "</div></div>";
+  }
+  if (msg.role === "agent_message") {
+    return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-300\">"
+      + "<div class=\"flex items-center gap-2 mb-1 text-indigo-300 font-semibold\">"
+      + "<span class=\"px-1.5 py-0.5 rounded bg-indigo-900 text-[10px] tracking-wide\">AGENT</span>"
+      + "<span class=\"truncate\">" + escapeHtml(msg.from_session_name || "") + "</span>"
+      + "</div>"
+      + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</div>"
+      + timeDiv() + "</div></div>";
   }
   if (msg.role === "separator") {
     var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";

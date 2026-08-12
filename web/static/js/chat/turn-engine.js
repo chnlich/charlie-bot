@@ -39,7 +39,7 @@
   const CHARS_PER_LINE_EST = 75;
   const FOLDED_MEASURE_MEMORY = 32;
 
-  const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'worker_summary'];
+  const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary'];
 
   function activeEngines() {
     if (!globalThis.__turnEngineInstances) globalThis.__turnEngineInstances = new WeakMap();

@@ -761,6 +761,45 @@ def _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) -> boo
   return thread.require_review and can_spawn_reviewer
 
 
+async def _run_finalize_effects(
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    exit_code: int,
+    thread_mgr: ThreadManager,
+    session_mgr: SessionManager,
+    cfg: CharlieBotConfig,
+    *,
+    quota_exhausted: bool,
+    error: str,
+    skip_notify: bool,
+    task_type: TaskType,
+) -> None:
+  """Run a finalized thread's side effects — worktree cleanup, then the notify chain.
+
+  Holds no status write: the caller owns that. Every effect behind this call is
+  judgment-idempotent (src/core/finalize_effects), so repetition converges to a no-op.
+  """
+  skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
+  cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
+  if cleanup_error:
+    await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
+
+  if skip_notify:
+    return
+  await _notify_completion(
+      session_id,
+      description,
+      thread,
+      exit_code,
+      thread_mgr,
+      session_mgr,
+      cfg,
+      quota_exhausted=quota_exhausted,
+      error=error,
+      task_type=task_type)
+
+
 async def _finalize_worker(
     session_id: str,
     description: str,
@@ -806,23 +845,18 @@ async def _finalize_worker(
         session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code, completed_at=completed_at)
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
 
-  skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
-  cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
-  if cleanup_error:
-    await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
-
-  if not skip_notify:
-    await _notify_completion(
-        session_id,
-        description,
-        thread,
-        exit_code,
-        thread_mgr,
-        session_mgr,
-        cfg,
-        quota_exhausted=quota_exhausted,
-        error=error,
-        task_type=task_type)
+  await _run_finalize_effects(
+      session_id,
+      description,
+      thread,
+      exit_code,
+      thread_mgr,
+      session_mgr,
+      cfg,
+      quota_exhausted=quota_exhausted,
+      error=error,
+      skip_notify=skip_notify,
+      task_type=task_type)
 
 
 async def _finalize_worker_safely(
@@ -885,11 +919,7 @@ async def recomplete_finalize_effects(
   judgment-idempotent (src/core/finalize_effects), so repetition converges to
   a no-op; the status/completed_at fields are left exactly as recorded.
   """
-  skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
-  cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
-  if cleanup_error:
-    await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
-  await _notify_completion(
+  await _run_finalize_effects(
       session_id,
       description,
       thread,
@@ -899,6 +929,7 @@ async def recomplete_finalize_effects(
       cfg,
       quota_exhausted=quota_exhausted,
       error=error,
+      skip_notify=False,
       task_type=task_type)
 
 
@@ -1204,6 +1235,28 @@ async def resume_worker(
             completed_at=_run_completion_time(cfg, session_id, thread.id))
 
 
+async def _persist_worker_summary_once(
+    session_id: str,
+    thread_id: str,
+    event: dict,
+    session_mgr: SessionManager,
+    *,
+    fallback: bool = False,
+) -> None:
+  """Persist and broadcast a worker_summary event unless the session already carries one.
+
+  Idempotency judgment: a rerun of the finalize chain (e.g. startup reconcile
+  completing a crashed finalize) never duplicates the summary. ``fallback`` marks
+  the degraded summary written when the notify chain itself failed.
+  """
+  if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread_id):
+    log.info("worker_summary_skip_duplicate", session=session_id, thread=thread_id, fallback=fallback)
+    return
+  await session_mgr.mark_unread(session_id)
+  await session_mgr.persist_and_broadcast(session_id, event)
+  log.info("worker_summary_sent", session=session_id, thread=thread_id, fallback=fallback)
+
+
 async def _broadcast_completion(
     session_id: str,
     description: str,
@@ -1263,14 +1316,7 @@ async def _broadcast_completion(
       backend=thread.backend,
       model=thread.model,
   )
-  # Idempotency judgment: a rerun of the finalize chain (e.g. startup
-  # reconcile completing a crashed finalize) never duplicates the summary.
-  if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread.id):
-    log.info("worker_summary_skip_duplicate", session=session_id, thread=thread.id)
-  else:
-    await session_mgr.mark_unread(session_id)
-    await session_mgr.persist_and_broadcast(session_id, worker_event)
-    log.info("worker_summary_sent", session=session_id, thread=thread.id)
+  await _persist_worker_summary_once(session_id, thread.id, worker_event, session_mgr)
   return events_summary, full_summary
 
 
@@ -1325,11 +1371,7 @@ async def _notify_completion(
           backend=thread.backend,
           model=thread.model,
       )
-      if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread.id):
-        log.info("worker_summary_fallback_skip_duplicate", session=session_id, thread=thread.id)
-      else:
-        await session_mgr.mark_unread(session_id)
-        await session_mgr.persist_and_broadcast(session_id, fallback_event)
+      await _persist_worker_summary_once(session_id, thread.id, fallback_event, session_mgr, fallback=True)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
 

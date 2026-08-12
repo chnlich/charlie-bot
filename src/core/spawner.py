@@ -460,6 +460,30 @@ async def _apply_backend_option(
   return backend_option
 
 
+async def _construct_worker(
+    session_id: str,
+    thread: ThreadMetadata,
+    description: str,
+    working_dir: Path,
+    worker_prompt: str,
+    cfg: CharlieBotConfig,
+    thread_mgr: ThreadManager,
+    req: SpawnRequest,
+) -> Worker:
+  """Apply the request's backend onto the thread and build its Worker around working_dir."""
+  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, req)
+  events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
+  return Worker(
+      thread,
+      working_dir,
+      events_log,
+      worker_prompt,
+      cfg,
+      backend_option=backend_option,
+      on_spawned=thread_mgr.save_metadata,
+  )
+
+
 async def _create_worktree_and_process(
     session_id: str,
     thread: ThreadMetadata,
@@ -547,19 +571,7 @@ async def _create_worktree_and_process(
     )
     raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
-  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, req)
-
-  # Build Worker
-  events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
-  return Worker(
-      thread,
-      worktree_path,
-      events_log,
-      worker_prompt,
-      cfg,
-      backend_option=backend_option,
-      on_spawned=thread_mgr.save_metadata,
-  )
+  return await _construct_worker(session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, req)
 
 
 async def _create_repoless_process(
@@ -586,18 +598,7 @@ async def _create_repoless_process(
   thread.require_review = False
   thread.context = req.context
 
-  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, req)
-
-  events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
-  return Worker(
-      thread,
-      thread_dir,
-      events_log,
-      worker_prompt,
-      cfg,
-      backend_option=backend_option,
-      on_spawned=thread_mgr.save_metadata,
-  )
+  return await _construct_worker(session_id, thread, description, thread_dir, worker_prompt, cfg, thread_mgr, req)
 
 
 async def _stream_worker_events(

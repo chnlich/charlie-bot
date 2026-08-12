@@ -4,7 +4,7 @@ Covers the seed mechanism in ``src/core/init.py::seed_default_cron_tasks``, the
 loader-level ``prompt_file`` / ``timezone: local`` resolution and hot-reload in
 ``src/core/config.py::get_scheduled_tasks`` / ``get_scheduled_task_errors``, the
 per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
-``configs/cron.default.yaml`` + ``prompts/cron/memory_curator.md``.
+``configs/cron.default.yaml`` + ``prompts/cron/memory_curator/memory_curator.md``.
 """
 
 import asyncio
@@ -88,7 +88,7 @@ def test_seed_idempotence(temp_home: Path) -> None:
   assert body1 == {
       "cron": "27 6 * * *",
       "timezone": "local",
-      "prompt_file": "prompts/cron/memory_curator.md",
+      "prompt_file": "prompts/cron/memory_curator/memory_curator.md",
   }
   assert "backend" not in body1
   assert "name" not in body1
@@ -212,7 +212,7 @@ def test_explicit_timezone_untouched(temp_home: Path) -> None:
 
 
 def test_memory_curator_prompt_no_host_paths() -> None:
-  body = (REPO_ROOT / "prompts" / "cron" / "memory_curator.md").read_text(encoding="utf-8")
+  body = (REPO_ROOT / "prompts" / "cron" / "memory_curator" / "memory_curator.md").read_text(encoding="utf-8")
   assert "/home/" not in body
   assert "chaoli" not in body
 

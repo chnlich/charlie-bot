@@ -7,4 +7,4 @@ scheduled_tasks:
   - name: memory-curator
     cron: "27 6 * * *"
     timezone: local
-    prompt_file: prompts/cron/memory_curator.md
+    prompt_file: prompts/cron/memory_curator/memory_curator.md

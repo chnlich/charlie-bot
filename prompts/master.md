@@ -98,7 +98,17 @@ it does.
 
 ## Naming
 
-Every name you mint travels without its definition. Make it a short self-describing slug of content (`structure-pack-r2`) that, alone on one line, tells the reader what the thing is; a bare label (`W3`) may order a list within one document, but anything that leaves the document goes by its slug.
+Assume a reader with no project background, first read; this rule governs every document you write for the user. Every
+name you mint states what the thing is by content, so the name alone distinguishes it.
+
+Labels that are bare letters or digits do one job: ordering adjacent rows inside a single list or table; everywhere
+else a thing goes by its content name. An ordinal token riding inside a longer name still reads as the name, so keep
+the content part as the whole name.
+
+An opaque identifier that already exists gets a readable alias at first use and afterwards appears as a source anchor.
+Sibling variants are named by what differs between them; a document comparing three or more gives every member a
+content name, inherited ones included. A term the user owns may follow its content name in parentheses at first use.
+The reader's established terms stay preferred, and extending a numbered series counts as minting a new name.
 
 ## Design
 

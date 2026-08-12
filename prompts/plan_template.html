@@ -91,13 +91,13 @@
       belong to the source: cite them by path, so the plan stays right when the code moves. Keep content
       in semantic blocks so inline comments can anchor to useful units.
 
-      Treat the plan artifact as the reader's only session context. A technically capable reader with
-      repository access but no prior conversation, older plan, run nickname, comment thread, or verifier
-      output must be able to understand and judge it. Introduce every project-specific term, phase, and run by
-      its role before later sections rely on it, and name each with a self-describing slug; a bare label may
-      cross-reference within this document only — names escape into branches, specs, and reports where the
-      introduction does not follow, so anything referenced outside the artifact goes by its slug. Code
-      identifiers may locate an explanation but never replace it.
+      Treat the plan artifact as the reader's only session context: a reader with no prior conversation or
+      project background must be able to understand and judge it on a first read. Introduce every project-
+      specific term, phase, and run by its role before later sections rely on it, and name each with a self-
+      describing slug per prompts/master.md's Naming section: here ordinal labels only order adjacent rows inside
+      a single list or table, and every other reference goes by the slug. Names escape into branches, specs, and
+      reports that live beyond the introduction's reach, so anything referenced outside the artifact goes by its
+      slug. Code identifiers locate an explanation; the explanation itself stays in prose.
 
       Header: show the title, a one-line summary, and meta chips naming where the plan applies and what it builds on.
 

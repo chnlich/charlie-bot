@@ -10,6 +10,21 @@ prior day's undecided proposal), fail loud: stop, re-present the pending diff, a
 to approve or reject before doing anything else. Do not proceed to staging while the canon has
 uncommitted changes.
 
+Step 0.5: mine cross-session user messages into staging.
+Run the digest script and read its output in full:
+`python3 ~/workspace/charlie-bot/prompts/cron/memory_curator/user_message_digest.py > /tmp/curator_user_digest.txt`
+Each output line is `<YYYY-MM-DD> <session-short-id> [NEW] <text>`: one user message from the
+last 7 days across all sessions, artifact comments included, slash commands excluded; NEW marks
+messages from the last 24 hours, and the digest caps at 120K characters, oldest lines dropped
+first.
+A theme becomes a mined candidate when all three hold: it appears in user messages of at least
+two distinct sessions in the digest; at least one supporting message carries the NEW flag; and
+the store index (`charliebot memory query --index`) has no entry covering it.
+Write each qualifying theme as one staging capture via `charliebot memory add --file <tmpfile>`:
+the first line `# <theme>` states the theme, and the body states the fact or preference to
+record plus its provenance (each supporting session short id, date, and one quoted line). Step 1
+curates these captures exactly like every other candidate.
+
 Step 1: curate staging candidates, merge-first.
 Read every file in `~/.charliebot/memory/staging/`. Candidates are free-form captures: for
 each candidate, first test it against
@@ -48,5 +63,6 @@ content had
 the rules been followed; when they would not, present in the same reply the one-line amendment
 that would, and land it through the normal repo change flow after approval.
 
-Never mine sessions for memory. Never auto-commit. Never edit any file outside
-`~/.charliebot/memory/`.
+Session mining reads user events only, at daily curation; its findings enter the store only
+as staging captures through the same admission test. Never auto-commit. Never edit any file
+outside `~/.charliebot/memory/`.

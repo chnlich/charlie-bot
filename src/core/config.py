@@ -3,7 +3,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -82,6 +82,9 @@ class ScheduledTaskConfig(BaseModel):
   timezone: str = "America/Los_Angeles"
   enabled: bool = True
   project: Optional[str] = None
+  # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);
+  # 'master' wakes the dedicated session's master with the PM inline prompt.
+  mode: Optional[Literal['worker', 'master']] = None
   allow_failure: bool = False
   notify: Optional[str] = None  # 'telegram' or None
 
@@ -92,6 +95,8 @@ class ScheduledTaskConfig(BaseModel):
       raise ValueError("task must have exactly one of 'prompt', 'handler', or 'loop'")
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
+    if self.mode == 'master' and not self.project:
+      raise ValueError("mode 'master' requires 'project' (the group the PM session is bound to)")
     return self
 
 

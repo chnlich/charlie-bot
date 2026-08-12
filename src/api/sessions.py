@@ -815,6 +815,19 @@ async def switch_session_backend(
   if body.backend == effective_current:
     return parent
 
+  # The yaml is the single control point for a cron-dedicated session's backend:
+  # the scheduler reconciles the dedicated session against the task file on every
+  # fire, so an in-place switch here would be overridden at the next fire (or
+  # trigger an unintended generation rotation). Reject and direct at the yaml.
+  if parent.scheduled_task and parent.role is not None:
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"session '{session_id}' is dedicated to scheduled task '{parent.scheduled_task}' "
+            f"with role '{parent.role}'; its backend is controlled by the task config — "
+            f"edit ~/.charliebot/config.d/cron.d/{parent.scheduled_task}.yaml instead."),
+    )
+
   if not _same_backend_domain(effective_current, body.backend, cfg):
     if parent.role is None:
       raise HTTPException(

@@ -19,7 +19,8 @@ from src.core.config import (
   get_scheduled_tasks,
   load_config,
 )
-from src.core.models import SessionMetadata, SpawnRequest, TaskType, parse_utc_datetime
+from src.core.master_trigger import trigger_master
+from src.core.models import PROJECT_ROLE, SessionMetadata, SpawnRequest, TaskType, parse_utc_datetime
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
 from src.core.tasks import create_logged_task
@@ -193,12 +194,36 @@ class Scheduler:
     return cfg, session_mgr, session
 
   async def _execute_task(self, task_cfg: ScheduledTaskConfig) -> dict:
-    """Route to handler, loop, or prompt execution based on task config."""
+    """Route to handler, loop, prompt, or master execution based on task config."""
+    if task_cfg.mode == 'master':
+      return await self._execute_master_task(task_cfg)
     if task_cfg.handler:
       return await self._execute_handler_task(task_cfg)
     if task_cfg.loop:
       return await self._execute_loop_task(task_cfg)
     return await self._execute_prompt_task(task_cfg)
+
+  async def _execute_master_task(self, task_cfg: ScheduledTaskConfig) -> dict:
+    """Wake the dedicated session's master with the PM inline prompt.
+
+    No worker thread and no TASK_DELEGATED event: the fire is a single master
+    turn in the task's dedicated session, delivered through the shared
+    trigger_master primitive (fire-and-forget so the scheduler loop never
+    stalls behind a master turn).
+    """
+    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
+    inline_prompt = (
+        "Read prompts/project_manager.md in the charlie-bot repo and run your "
+        f"Project Manager duties for group {task_cfg.project}.")
+    create_logged_task(
+        trigger_master(session.id, inline_prompt, cfg, session_mgr),
+        name=f"scheduled_master_{task_cfg.name}",
+    )
+    session.last_run_status = "success"
+    session.updated_at = datetime.now(timezone.utc)
+    await session_mgr.save_metadata(session)
+    log.info("master_task_fired", task=task_cfg.name, session=session.id)
+    return {"session_id": session.id, "thread_id": None}
 
   async def _execute_handler_task(self, task_cfg: ScheduledTaskConfig) -> dict:
     """Run a built-in handler inline; track last_scheduled_run via session."""
@@ -339,14 +364,23 @@ class Scheduler:
     """Return the active dedicated session for task/backend, rotating if needed.
 
     When session_cache is provided, uses it instead of scanning the sessions
-    directory. Newly created sessions are added to the cache.
+    directory. Newly created sessions are added to the cache. A mode: master
+    task binds its dedicated session to the task's project: role=project and
+    group=<project value> ride onto both creation paths downstream.
     """
     effective_backend = effective_scheduled_task_backend(task_cfg, cfg)
+    role: Optional[str] = None
+    group: Optional[str] = None
+    if task_cfg.mode == 'master':
+      role = PROJECT_ROLE
+      group = task_cfg.project
     return await session_mgr.ensure_scheduled_session_backend(
         task_cfg.name,
         effective_backend,
         session_cache=session_cache,
         skip_if_busy=True,
+        role=role,
+        group=group,
     )
 
   # ---------------------------------------------------------------------------

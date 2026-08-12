@@ -4,7 +4,7 @@ import asyncio
 import copy
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +21,7 @@ from src.core.config import (
   get_scheduled_task_errors,
   get_scheduled_tasks,
 )
+from src.core.models import PROJECT_ROLE
 from src.core.scheduler import effective_scheduled_task_backend
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
 from src.core.yaml_utils import load_yaml, save_yaml
@@ -88,10 +89,32 @@ async def _ensure_backend_update_session(
   if 'backend' not in req.model_fields_set:
     return
   backend = effective_scheduled_task_backend(cand_model, cfg)
+  role: Optional[str] = None
+  group: Optional[str] = None
+  if cand_model.mode == 'master':
+    role = PROJECT_ROLE
+    group = cand_model.project
   try:
-    await session_mgr.ensure_scheduled_session_backend(name, backend)
+    await session_mgr.ensure_scheduled_session_backend(name, backend, role=role, group=group)
   except ScheduledSessionBusyError as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+def _check_master_project_unique(name: str, mode: Optional[str], project: Optional[str]) -> None:
+  """Reject when another mode: master task already carries the same project (group).
+
+  At most one active mode: master task per group, so at most one live
+  role=project session per group. The check names the conflicting task.
+  """
+  if mode != 'master':
+    return
+  for other in get_scheduled_tasks():
+    if other.name != name and other.mode == 'master' and other.project == project:
+      raise HTTPException(
+          status_code=409,
+          detail=(
+              f"mode 'master' task for project '{project}' already exists: '{other.name}' "
+              "(at most one Project Manager task per group)"))
 
 
 class TaskUpdate(BaseModel):
@@ -114,6 +137,7 @@ class TaskCreate(BaseModel):
   timezone: str = 'America/Los_Angeles'
   enabled: bool = True
   project: Optional[str] = None
+  mode: Optional[Literal['worker', 'master']] = None
   allow_failure: bool = False
 
 
@@ -181,6 +205,8 @@ async def update_cron_task(
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
 
+  if cand_model.enabled:
+    _check_master_project_unique(name, cand_model.mode, cand_model.project)
   await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
   await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
@@ -193,6 +219,9 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   if not _CRON_NAME_RE.fullmatch(req.name):
     raise HTTPException(status_code=400, detail=f'invalid cron name: {req.name!r}')
   _validate_backend_id(req.backend, cfg)
+  if req.mode == 'master' and not req.project:
+    raise HTTPException(status_code=400, detail="mode 'master' requires 'project' (the group the PM session is bound to)")
+  _check_master_project_unique(req.name, req.mode, req.project)
   path = cron_path(req.name)
   if path.exists():
     raise HTTPException(status_code=409, detail=f'Task "{req.name}" already exists')

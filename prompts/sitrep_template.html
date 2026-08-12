@@ -86,14 +86,16 @@
 <!--
       USAGE — build each brief as artifacts/sitrep_<topic-slug>_v<n>.html in the session dir.
       Reuse this file's <head> and <style> verbatim; replace the <main> content following the
-      grammar below. Each generated page is self-contained: a technically capable reader with no
-      prior conversation understands it on its own. The generated page's language follows the
+      grammar below. Each generated page is self-contained: a reader with no
+      prior conversation or project background understands it on its own,
+      first read. The generated page's language follows the
       user's artifact-language preference; this template stays English.
 
       Pre-share self-checks, applied to the finished page:
       1. Reading only the first sentences of every section and block retells the whole story.
       2. No coined term or count is left undefined at its first occurrence.
       3. Every fact label carries a source anchor.
+      4. Every name distinguishes its bearer by content alone.
 
       Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
       blockquote, pre, table, td, div.callout, div.flow, div.fork with its folded explainer, and
@@ -133,7 +135,8 @@
         example small enough to check by hand.
       - reader-vocabulary: prefer the reader's established terms over coined descriptions; gloss
         every coined slug and every count at first occurrence; re-hint a term's meaning when it
-        recurs in a distant section.
+        recurs in a distant section; ordinal labels stay confined to adjacent-row ordering, so
+        everything else goes by its content name (prompts/master.md, Naming section).
       - density: one fact per sentence; table cells hold short enumerable facts, with explanation
         in the surrounding prose.
 

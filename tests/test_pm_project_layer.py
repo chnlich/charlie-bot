@@ -2,13 +2,16 @@
 
 The contract: a master-mode cron task binds one dedicated session carrying
 ``role=project`` and ``group=<project>``; each fire wakes that session's master
-with the exact PM inline prompt (no worker thread, no TASK_DELEGATED event);
-at most one master-mode task per project; the task yaml is the single control
-point for the bound session's backend.
+with the task's resolved prompt plus an appended ``Group:`` line (no worker
+thread, no TASK_DELEGATED event); a role=project session with a group also
+carries an ambient PM identity part in its master instructions; at most one
+master-mode task per project; the task yaml is the single control point for
+the bound session's backend and wake text.
 """
 
 from collections.abc import Coroutine
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
@@ -17,10 +20,17 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from src.agents import master_cc
 from src.api import cron as cron_api
 from src.api import sessions as sessions_api
 from src.api.deps import get_session_manager
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_config
+from src.core.config import (
+  CharlieBotConfig,
+  ImprovementLoopConfig,
+  ScheduledTaskConfig,
+  _validate_cron_body,
+  get_config,
+)
 from src.core.models import (
   PROJECT_ROLE,
   BackendOption,
@@ -30,9 +40,11 @@ from src.core.models import (
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 
-PM_WAKE_PROMPT = (
-    "Read prompts/project_manager.md in the charlie-bot repo and run your "
-    "Project Manager duties for group bp-eval.")
+# The task's resolved prompt — in production the body of
+# prompts/project_manager.md supplied via prompt_file and resolved into
+# `prompt` by the loader. The wake message appends the task's Group line.
+PM_TASK_PROMPT = "# Project Manager\n\nDo the PM things."
+PM_WAKE_PROMPT = f"{PM_TASK_PROMPT}\n\nGroup: bp-eval"
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -50,7 +62,7 @@ def _master_task(**overrides: Any) -> ScheduledTaskConfig:
   kwargs: dict[str, Any] = {
       "name": "pm_bp_eval",
       "cron": "30 8 * * *",
-      "prompt": PM_WAKE_PROMPT,
+      "prompt": PM_TASK_PROMPT,
       "mode": "master",
       "project": "bp-eval",
   }
@@ -83,13 +95,48 @@ def test_task_config_worker_mode_allows_no_project() -> None:
   assert task.mode == "worker"
 
 
+def test_task_config_master_mode_with_handler_is_rejected() -> None:
+  with pytest.raises(ValidationError, match="mode 'master' requires a prompt source"):
+    ScheduledTaskConfig(
+        name="pm_x", cron="30 8 * * *", handler="backup", mode="master", project="bp-eval")
+
+
+def test_task_config_master_mode_with_loop_is_rejected() -> None:
+  with pytest.raises(ValidationError, match="mode 'master' requires a prompt source"):
+    ScheduledTaskConfig(
+        name="pm_x",
+        cron="30 8 * * *",
+        loop=ImprovementLoopConfig(backlog="backlog/backlog.yaml", role="reviewer", scope_files=["src/"]),
+        mode="master",
+        project="bp-eval")
+
+
+def test_master_task_with_prompt_file_loads(tmp_path: Path) -> None:
+  """prompt_file resolves into prompt before model validation, so mode master accepts it."""
+  md_path = tmp_path / "pm_contract.md"
+  md_path.write_text("# Project Manager\n\nThe contract.\n", encoding="utf-8")
+  cfg = _build_cfg(tmp_path)
+  task, _ = _validate_cron_body(
+      {
+          "cron": "30 8 * * *",
+          "prompt_file": str(md_path),
+          "mode": "master",
+          "project": "bp-eval",
+      },
+      cfg.charlie_bot_repo,
+      "pm_bp_eval")
+  assert task.mode == "master"
+  assert task.project == "bp-eval"
+  assert task.prompt == "# Project Manager\n\nThe contract.\n"
+
+
 # ---------------------------------------------------------------------------
-# Master fire: _execute_task(mode=master) wakes the session's master inline
+# Master fire: _execute_task(mode=master) wakes the session's master directly
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_master_task_fire_wakes_master_with_exact_inline_prompt(
+async def test_master_task_fire_wakes_master_with_prompt_plus_group_line(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -119,7 +166,7 @@ async def test_master_task_fire_wakes_master_with_exact_inline_prompt(
 
   # No worker spawn on the master path.
   assert spawned == []
-  # The wake is trigger_master(session, exact inline prompt, cfg, session_mgr),
+  # The wake is trigger_master(session, prompt + Group line, cfg, session_mgr),
   # fire-and-forget through create_logged_task named by task.
   assert task_names == ["scheduled_master_pm_bp_eval"]
   assert len(triggered) == 1
@@ -201,7 +248,7 @@ def _master_task_payload(name: str, project: str = "bp-eval", **overrides: Any) 
   payload: dict[str, Any] = {
       "name": name,
       "cron": "30 8 * * *",
-      "prompt": PM_WAKE_PROMPT,
+      "prompt": PM_TASK_PROMPT,
       "mode": "master",
       "project": project,
   }
@@ -230,6 +277,44 @@ def test_cron_create_master_task_without_project_is_400(cron_dir: Path, tmp_path
   assert resp.status_code == 400
   assert "requires 'project'" in resp.json()["detail"]
   assert not (cron_dir / "pm_orphan.yaml").exists()
+
+
+def test_cron_create_master_task_with_prompt_file_writes_prompt_file_key(
+    cron_dir: Path,
+    tmp_path: Path,
+) -> None:
+  md_path = tmp_path / "pm_contract.md"
+  md_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  with _build_cron_client(cfg, session_mgr) as client:
+    payload = _master_task_payload("pm_bp_eval")
+    payload.pop("prompt")
+    payload["prompt_file"] = str(md_path)
+    resp = client.post("/api/cron/tasks", json=payload)
+
+  assert resp.status_code == 200
+  on_disk = yaml.safe_load((cron_dir / "pm_bp_eval.yaml").read_text(encoding="utf-8"))
+  assert on_disk["prompt_file"] == str(md_path)
+  assert "prompt" not in on_disk
+
+
+def test_cron_create_master_task_with_unreadable_prompt_file_is_409(
+    cron_dir: Path,
+    tmp_path: Path,
+) -> None:
+  missing = tmp_path / "no_such_contract.md"
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  with _build_cron_client(cfg, session_mgr) as client:
+    payload = _master_task_payload("pm_bp_eval")
+    payload.pop("prompt")
+    payload["prompt_file"] = str(missing)
+    resp = client.post("/api/cron/tasks", json=payload)
+
+  assert resp.status_code == 409
+  assert str(missing) in resp.json()["detail"]
+  assert not (cron_dir / "pm_bp_eval.yaml").exists()
 
 
 def test_cron_create_second_master_task_for_project_is_409(cron_dir: Path, tmp_path: Path) -> None:
@@ -332,3 +417,57 @@ async def test_regular_scheduled_session_without_role_keeps_clone_fork_guard(tmp
 
   assert resp.status_code == 400
   assert "Clone/fork" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Master instructions: ambient PM identity part for role=project sessions
+# ---------------------------------------------------------------------------
+
+
+def _instructions_cfg(tmp_path: Path) -> SimpleNamespace:
+  """Minimal instruction inputs: a repo base prompt and a one-entry memory store."""
+  home = tmp_path / "home"
+  repo = tmp_path / "repo"
+  (repo / "prompts").mkdir(parents=True)
+  (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
+  memory_dir = home / "memory"
+  (memory_dir / "entries" / "profile").mkdir(parents=True)
+  (memory_dir / "topics").write_text("profile resident\n", encoding="utf-8")
+  (memory_dir / "entries" / "profile" / "note.md").write_text(
+      "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Note\n---\n"
+      "MEMORY BODY\n",
+      encoding="utf-8")
+  return SimpleNamespace(
+      charlie_bot_repo=repo,
+      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
+      memory_dir=memory_dir)
+
+
+def test_pm_identity_part_appended_for_project_session_with_group(tmp_path: Path) -> None:
+  cfg = _instructions_cfg(tmp_path)
+  meta = SimpleNamespace(id="s1", role=PROJECT_ROLE, group="bp-eval")
+
+  out = master_cc._build_instructions_content(meta, cfg)
+
+  assert out is not None
+  # Pointer semantics: identity + group + contract path, not contract clauses.
+  assert out.count("# Project Manager session") == 1
+  assert "This session is the Project Manager for group bp-eval." in out
+  assert "prompts/project_manager.md" in out
+  # Appended exactly once, after the memory block, at the very end.
+  assert out.index("MEMORY BODY") < out.index("# Project Manager session")
+  assert out.endswith("before acting on any message in this session, and follow it.")
+
+
+def test_pm_identity_part_absent_without_role_or_group(tmp_path: Path) -> None:
+  cfg = _instructions_cfg(tmp_path)
+  metas = [
+      SimpleNamespace(id="s1", role=None, group="bp-eval"),  # group but no role
+      SimpleNamespace(id="s2", role=PROJECT_ROLE, group=None),  # role but no group
+      SimpleNamespace(id="s3", role=PROJECT_ROLE, group=""),  # empty group
+  ]
+
+  for meta in metas:
+    out = master_cc._build_instructions_content(meta, cfg)
+    assert out is not None
+    assert "# Project Manager session" not in out

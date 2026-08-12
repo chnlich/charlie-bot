@@ -210,19 +210,20 @@ class Scheduler:
     return await self._execute_prompt_task(task_cfg)
 
   async def _execute_master_task(self, task_cfg: ScheduledTaskConfig) -> dict:
-    """Wake the dedicated session's master with the PM inline prompt.
+    """Wake the dedicated session's master with the task prompt plus its group.
 
-    No worker thread and no TASK_DELEGATED event: the fire is a single master
-    turn in the task's dedicated session, delivered through the shared
-    trigger_master primitive (fire-and-forget so the scheduler loop never
-    stalls behind a master turn).
+    The wake message is the task's resolved prompt (a PM task supplies
+    prompts/project_manager.md itself via prompt_file, resolved into `prompt`
+    by the loader) with a `Group: <project>` line appended — the yaml is the
+    single control point for the wake text. No worker thread and no
+    TASK_DELEGATED event: the fire is a single master turn in the task's
+    dedicated session, delivered through the shared trigger_master primitive
+    (fire-and-forget so the scheduler loop never stalls behind a master turn).
     """
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
-    inline_prompt = (
-        "Read prompts/project_manager.md in the charlie-bot repo and run your "
-        f"Project Manager duties for group {task_cfg.project}.")
+    wake_prompt = f"{task_cfg.prompt}\n\nGroup: {task_cfg.project}"
     create_logged_task(
-        trigger_master(session.id, inline_prompt, cfg, session_mgr),
+        trigger_master(session.id, wake_prompt, cfg, session_mgr),
         name=f"scheduled_master_{task_cfg.name}",
     )
     session.last_run_status = "success"

@@ -83,7 +83,8 @@ class ScheduledTaskConfig(BaseModel):
   enabled: bool = True
   project: Optional[str] = None
   # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);
-  # 'master' wakes the dedicated session's master with the PM inline prompt.
+  # 'master' wakes the dedicated session's master with the task's prompt
+  # (typically supplied via prompt_file) plus an appended Group line.
   mode: Optional[Literal['worker', 'master']] = None
   allow_failure: bool = False
   notify: Optional[str] = None  # 'telegram' or None
@@ -93,6 +94,11 @@ class ScheduledTaskConfig(BaseModel):
     sources = sum([bool(self.prompt), bool(self.handler), bool(self.loop)])
     if sources != 1:
       raise ValueError("task must have exactly one of 'prompt', 'handler', or 'loop'")
+    # prompt_file is resolved into prompt before model validation, so an empty
+    # prompt here means master woke up with no message at all — including the
+    # master+handler and master+loop combinations the exactly-one rule allows.
+    if self.mode == 'master' and not self.prompt:
+      raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
     if self.mode == 'master' and not self.project:

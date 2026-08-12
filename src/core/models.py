@@ -251,7 +251,7 @@ class SessionMetadata(BaseModel):
   master_run: Optional[MasterRunRecord] = None
   backend: str = ""  # empty default; create_session always provides the real value
   scheduled_task: Optional[str] = None  # task name; None = regular session
-  role: Optional[str] = None  # session role ("manager" = the Session Manager); None = regular session
+  role: Optional[str] = None  # role ("project" from the scheduler; arbitrary via create API); None = regular session
   last_scheduled_run: Optional[str] = None  # ISO datetime of last scheduler execution
   last_run_status: Optional[str] = None  # "running" / "success" / "failed"
   last_scheduled_cron: Optional[str] = None  # cron expr at last run; detects changes

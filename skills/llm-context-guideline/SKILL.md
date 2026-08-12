@@ -122,6 +122,9 @@ re-trims the whole entry by the same test.
 Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
 moves. When context changes, revise the entry in place (a capture whose body states the change
 stages the proposed new text).
+A retired or archived system's content leaves the store outright, entries and lines alike: the
+store states standing reality, and `LESSONS.md` holds the retirement event when it matters
+(ruling: `rulings/retired-systems-leave-the-store`).
 
 ## Commit message prefixes
 

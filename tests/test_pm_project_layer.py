@@ -7,7 +7,6 @@ at most one master-mode task per project; the task yaml is the single control
 point for the bound session's backend.
 """
 
-import asyncio
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, Optional
@@ -22,10 +21,14 @@ from src.api import cron as cron_api
 from src.api import sessions as sessions_api
 from src.api.deps import get_session_manager
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_config
-from src.core.models import PROJECT_ROLE, BackendOption, CreateSessionRequest, SessionStatus
+from src.core.models import (
+  PROJECT_ROLE,
+  BackendOption,
+  CreateSessionRequest,
+  SessionStatus,
+)
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
-
 
 PM_WAKE_PROMPT = (
     "Read prompts/project_manager.md in the charlie-bot repo and run your "

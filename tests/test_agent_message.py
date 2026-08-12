@@ -25,7 +25,6 @@ from src.core.message_aggregator import MessageAggregator
 from src.core.models import SessionMetadata, SessionStatus
 from src.core.spawner import DelegationBlockedError, check_takeoff_gate
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

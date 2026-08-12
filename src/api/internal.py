@@ -43,12 +43,11 @@ from src.core.models import (
 from src.core.review import select_reviewer_backend
 from src.core.sessions import SessionManager
 from src.core.spawner import (
-  DelegationBlockedError,
-  check_takeoff_gate,
   resolve_requested_subagent_backend_model,
   resolve_session_subagent_backend_model,
   spawn_worker,
 )
+from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 from src.core.triggers import RemoteVerifyError, TriggerManager

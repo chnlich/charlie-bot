@@ -276,6 +276,18 @@ def _build_worker_event(
   return event
 
 
+def _thread_worker_event(thread: ThreadMetadata, status: str, full_content: str = '') -> dict:
+  """Build a worker_summary event whose chat content is the thread's locator summary."""
+  return _build_worker_event(
+      thread.id,
+      _worker_locator_summary(thread.id, status, _worker_summary_timestamp()),
+      status,
+      full_content=full_content,
+      backend=thread.backend,
+      model=thread.model,
+  )
+
+
 def _resolve_routing_model(option: BackendOption, model: Optional[str], *, source: str) -> Optional[str]:
   if backend_type_allows_missing_model(option.type):
     return None
@@ -611,15 +623,7 @@ async def _stream_worker_events(
   await thread_mgr.save_metadata(thread)
   log.info("worker_running", thread_id=thread.id, session=session_id)
 
-  now = _worker_summary_timestamp()
-  started_event = _build_worker_event(
-      thread.id,
-      _worker_locator_summary(thread.id, 'running', now),
-      'running',
-      backend=thread.backend,
-      model=thread.model,
-  )
-  await session_mgr.persist_and_broadcast(session_id, started_event)
+  await session_mgr.persist_and_broadcast(session_id, _thread_worker_event(thread, 'running'))
 
   try:
     exit_code = await worker.run()
@@ -1246,8 +1250,6 @@ async def _broadcast_completion(
   cancelled = current_thread and current_thread.status == ThreadStatus.CANCELLED
 
   status = 'cancelled' if cancelled else ('completed' if exit_code == 0 else 'failed')
-  now = _worker_summary_timestamp()
-  chat_summary = _worker_locator_summary(thread.id, status, now)
   if task_type == TaskType.VERIFY:
     report = events_summary or "(no verifier final report)"
     full_summary = f"**Verifier completion: thread `{thread.id}`**\n\n{report}"
@@ -1268,14 +1270,7 @@ async def _broadcast_completion(
     suffix = f"\n\n*Worker exited with code {exit_code}.*"
   full_summary += suffix
 
-  worker_event = _build_worker_event(
-      thread.id,
-      chat_summary,
-      status,
-      full_content=full_summary,
-      backend=thread.backend,
-      model=thread.model,
-  )
+  worker_event = _thread_worker_event(thread, status, full_content=full_summary)
   await _persist_worker_summary_once(session_id, thread.id, worker_event, session_mgr)
   return events_summary, full_summary
 

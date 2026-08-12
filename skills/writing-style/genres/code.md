@@ -40,14 +40,12 @@ implementing; master includes them as constraints in task specs.
 
 ## Comments
 
-- A routine change documents its reason in the commit message and its PR, reachable by git blame. Comments serve
-  the anomalous change: a workaround pinned to an outside fact that a reader would otherwise revert or simplify.
-- Give the reason the code takes this form: the constraint that rules
-  out the simpler alternative, the cost that dictates the shape, the
-  invariant a reader cannot see. The code already states what it does.
-- Name the outside fact the reason rests on, concretely enough for a
-  reader to re-check whether it still holds: the library behavior, the
-  version boundary, the measured cost.
+- A comment tells the next editor what to keep true, since the code already states what it does: the constraint
+  that rules out the simpler form, the outside fact the code is pinned to, the invariant the code cannot show.
+- Name that outside fact concretely enough for a reader to re-check whether it still holds: the library behavior,
+  the version boundary, the measured cost.
+- Everything about the change, its motive included, lives in the commit message and the PR, which blame reaches
+  from any line; a comment that narrates a change duplicates them and goes stale at the next one.
 
 ## Error Handling
 

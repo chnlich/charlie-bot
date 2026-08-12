@@ -58,8 +58,8 @@ _PRE_TAKEOFF_PHRASE = "pre take off"
 _TAKEOFF_PHRASE = "take off"
 _PRE_TAKEOFF_WINDOW = timedelta(hours=12)
 
-_WORKER_PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
-_WORKER_PROMPT_SECTION_MARKER_SUFFIX = " -->"
+_PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
+_PROMPT_SECTION_MARKER_SUFFIX = " -->"
 
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "session_info",
@@ -79,82 +79,19 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "memory",
 )
 
-_VERIFY_PROMPT_PREAMBLE = (
-    "You are a read-only plan verifier. Retrieve evidence through allowed local and network reads, and report "
-    "findings.\n"
-    "Local and network evidence reads are allowed through already-available tools, commands, connectivity, and "
-    "credentials. Network examples include web search/fetch, read-only API queries, and read-only SSH commands; "
-    "the boundary is semantic read-only behavior, not a transport or HTTP-method allowlist.\n"
-    "Refuse and report any requested part that would mutate local or external state instead of executing it. This "
-    "includes operations that create, update, delete, trigger, submit, upload, or send messages, as well as file "
-    "edits, Git writes, and job submissions.\n"
-    "Mark a claim `unverifiable` only when reasonable allowed local or network reads cannot access the evidence, "
-    "or verification would require state mutation. Network access alone never makes a claim `unverifiable`.\n"
-    "Report format: one line per checked claim, `<verdict> | <claim> | <anchor> | <one-line evidence>` "
-    "with verdict exactly one of `confirmed` / `mismatch` / `mismatch-approval` / `unverifiable`. "
-    "`mismatch-approval` is a mismatch that invalidates a term of the approval object "
-    "(the plan's 4.1 Schema, resolved Trade-offs, or promoted Other Details entries). "
-    f"The final line must match {_VERIFY_RESULT_TRAILER_EXPECTED}. Complete examples are "
-    "`RESULT: clean`, `RESULT: 2 mismatches (1 approval)`, and `RESULT: 1 mismatch (0 approval)`. "
-    "For a non-clean result, N is the total count of `mismatch` and `mismatch-approval` lines, "
-    "and M is the count of `mismatch-approval` lines, with 0 <= M <= N; when N = 1, both "
-    "singular `mismatch` and plural `mismatches` are legal.\n"
-    "This report format is fixed by the harness and overrides any output format the task spec requests; "
-    "a task spec may add checks or scope, never change the report format.\n"
-    "Adequacy findings use the labelled block form defined in the plan scope block instead of this "
-    "single-line form; fidelity findings keep it.")
+_REQUIRED_VERIFY_PROMPT_SECTIONS = ("preamble", "scope")
 
 
-def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> str:
-  """Build the full prompt for a repo-less VERIFY task (preamble + scope contract + task)."""
-  canonical_template_path = (cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()
-  return (
-      f"{_VERIFY_PROMPT_PREAMBLE}\n"
-      "Verification scope:\n"
-      "Check exactly the scope the task spec declares. A spec that declares neither scope "
-      "is verified as full.\n"
-      "- Full verification (the spec declares full): read the plan artifact by itself and complete an "
-      "artifact-only standalone-comprehension pass first, then read the canonical plan template at "
-      f"`{canonical_template_path}` and all task-provided evidence, and check the plan against every canonical "
-      "rule in the template's BLOCK KIT.\n"
-      "- Delta verification (the spec declares delta): check exactly the declared terms, their dependent "
-      "claims, prior mismatches (including whether previously reported findings are closed), and document "
-      "structure; unchanged content keeps its verdict from the round that checked it.\n"
-      "- Adequacy (full scope only): assume the plan's claims are true and its design "
-      "implemented as written, then test each outcome its section 1 claims by attempted refutation. Report "
-      "one labelled block per claimed outcome, one aspect per line:\n"
-      "  `mismatch:` or `confirmed:` — the outcome being judged\n"
-      "  `gap-design:` — why the described mechanism does not entail it, or `gap-goal:` — why the goal "
-      "statement itself is the defect (omit both when confirmed)\n"
-      "  `scenario:` — the counterexample you built, or the strongest you tried and why it failed, stated "
-      "as a scenario rather than a restatement of the plan\n"
-      "  `anchor:` — where in the plan\n"
-      "A boundary section 1 states explicitly is correct-as-scoped. When the spec quotes the originating "
-      "request, also report `gap-goal:` for an outcome it asks that section 1 neither claims nor scopes "
-      "out.\n"
-      "Use reasonable allowed local and network reads through already-available tools, commands, connectivity, "
-      "and credentials when checking evidence, including web search/fetch, read-only API queries, and read-only "
-      "SSH commands. The boundary remains "
-      "semantic read-only behavior, not a transport or HTTP-method allowlist. Refuse and report any check that "
-      "would mutate local or external state instead of executing it, including operations that create, update, "
-      "delete, trigger, submit, upload, or send messages, as well as file edits, Git writes, and job submissions.\n"
-      "Report a missing or unreadable plan artifact or canonical template, a missing required in-scope source "
-      "anchor, or any in-scope canonical-rule deviation as `mismatch`. Preserve `unverifiable` only when "
-      "reasonable allowed local or network reads cannot access the evidence, or verification would require "
-      "state mutation. Network access alone never makes a claim `unverifiable`."
-      f"\n\n{description}")
-
-
-def _parse_worker_prompt_sections(text: str) -> dict[str, str]:
-  """Split prompts/worker.md's raw text on its `<!-- section: <id> -->` marker lines."""
+def _parse_prompt_sections(text: str) -> dict[str, str]:
+  """Split a prompt template's raw text on its `<!-- section: <id> -->` marker lines."""
   sections: dict[str, str] = {}
   current_id: Optional[str] = None
   current_lines: list[str] = []
   for line in text.split("\n"):
-    if line.startswith(_WORKER_PROMPT_SECTION_MARKER_PREFIX) and line.endswith(_WORKER_PROMPT_SECTION_MARKER_SUFFIX):
+    if line.startswith(_PROMPT_SECTION_MARKER_PREFIX) and line.endswith(_PROMPT_SECTION_MARKER_SUFFIX):
       if current_id is not None:
         sections[current_id] = "\n".join(current_lines)
-      current_id = line[len(_WORKER_PROMPT_SECTION_MARKER_PREFIX):-len(_WORKER_PROMPT_SECTION_MARKER_SUFFIX)]
+      current_id = line[len(_PROMPT_SECTION_MARKER_PREFIX):-len(_PROMPT_SECTION_MARKER_SUFFIX)]
       current_lines = []
       continue
     if current_id is not None:
@@ -164,26 +101,37 @@ def _parse_worker_prompt_sections(text: str) -> dict[str, str]:
   return sections
 
 
-def load_worker_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
-  """Read prompts/worker.md fresh and split it into its required sections.
+def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
+  """Read a marker-sectioned prompt template fresh and return its sections.
 
   Stateless and uncached: every call re-reads the file so an edit takes effect on the
   next spawn. Missing file or missing required section raises with the file's full
-  path and the most likely cause -- the repo checkout predates the worker-prompt
-  extraction commit. No embedded-text fallback.
+  path and the most likely cause -- the repo checkout predates the *extraction*
+  commit that moved this prompt out of Python. No embedded-text fallback.
   """
-  path = cfg.charlie_bot_repo / "prompts" / "worker.md"
   if not path.is_file():
     raise FileNotFoundError(
-        f"worker prompt template not found at {path} — the repo checkout most likely "
-        "predates the worker-prompt extraction commit")
-  sections = _parse_worker_prompt_sections(path.read_text(encoding="utf-8"))
-  missing = [section_id for section_id in _REQUIRED_WORKER_PROMPT_SECTIONS if section_id not in sections]
+        f"prompt template not found at {path} — the repo checkout most likely "
+        f"predates the {extraction} extraction commit")
+  sections = _parse_prompt_sections(path.read_text(encoding="utf-8"))
+  missing = [section_id for section_id in required if section_id not in sections]
   if missing:
     raise ValueError(
         f"{path} is missing required section(s): {', '.join(missing)} — the repo checkout "
-        "most likely predates the worker-prompt extraction commit")
+        f"most likely predates the {extraction} extraction commit")
   return sections
+
+
+def load_worker_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
+  """Read prompts/worker.md fresh and split it into its required sections."""
+  return _load_prompt_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", _REQUIRED_WORKER_PROMPT_SECTIONS, extraction="worker-prompt")
+
+
+def load_verify_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
+  """Read prompts/verify.md fresh and split it into its required sections."""
+  return _load_prompt_sections(
+      cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
 
 
 def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
@@ -193,6 +141,19 @@ def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   for token, value in tokens.items():
     result = result.replace(token, value)
   return result
+
+
+def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> str:
+  """Build the full prompt for a repo-less VERIFY task (preamble + scope contract + task)."""
+  sections = load_verify_prompt_sections(cfg)
+  contract = _substitute_tokens(
+      "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
+          "{{result_trailer_expected}}": _VERIFY_RESULT_TRAILER_EXPECTED,
+          "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
+      })
+  if "{{" in contract:
+    raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
+  return f"{contract}\n\n{description}"
 
 
 def _build_worker_prompt(

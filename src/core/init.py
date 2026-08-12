@@ -484,9 +484,31 @@ async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
       continue
     option = cfg.get_backend_option(meta.backend)
     if option is None:
+      if runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot):
+        # The translate and the transport judgment both need the session's
+        # backend option, but the record proves the turn alive: same "alive
+        # but unfollowable" route as the RUNNING branch below — report, keep
+        # the record, keep the user message out of this boot's replay set.
+        log.warning(
+            "master_run_resolved",
+            session=meta.id,
+            pid=record.pid,
+            outcome=None,
+            reason=f"backend option {meta.backend!r} unresolved, record alive",
+        )
+        await _report_recovery_event(
+            session_mgr,
+            meta.id,
+            f"The recorded master turn on this session is treated as still alive "
+            f"(backend option {meta.backend!r} unresolved); "
+            "it is NOT being killed or re-answered — left running without re-attach and judged "
+            "again on the next restart.")
+        if record.user_event_id:
+          excluded.setdefault(meta.id, set()).add(record.user_event_id)
+        continue
       # The translate and the transport judgment both need the session's
-      # backend option; without it the turn can only be cleared, leaving its
-      # user message (if any) to the replay pass.
+      # backend option; without it and with liveness unprovable the turn can
+      # only be cleared, leaving its user message (if any) to the replay pass.
       log.warning(
           "master_run_resolved",
           session=meta.id,

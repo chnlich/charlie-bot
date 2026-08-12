@@ -1,4 +1,4 @@
-"""Emit a digest of user messages across all sessions for the memory curator's Step 0.5.
+"""Emit a digest of user messages across all sessions for the memory curator's mining step (Step 2).
 
 One line per user message from the last 7 days: `<YYYY-MM-DD> <session-short-id> [NEW] <text>`,
 NEW marking messages from the last 24 hours. Read-only; output goes to stdout, capped at 120K

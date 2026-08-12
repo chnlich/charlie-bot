@@ -4,13 +4,13 @@ Read `~/workspace/charlie-bot/skills/llm-context-guideline/SKILL.md` first.
 Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` before writing or
 editing any entry prose, and check every added or rewritten line against it.
 
-Step 0: guard against an undecided prior day.
+Step 1: guard against an undecided prior day.
 If the memory repo working tree at `~/.charliebot/memory/` is dirty (uncommitted changes from a
 prior day's undecided proposal), fail loud: stop, re-present the pending diff, and ask the user
 to approve or reject before doing anything else. Do not proceed to staging while the canon has
 uncommitted changes.
 
-Step 0.5: mine cross-session user messages into staging.
+Step 2: mine cross-session user messages into staging.
 Run the digest script and read its output in full:
 `python3 ~/workspace/charlie-bot/prompts/cron/memory_curator/user_message_digest.py > /tmp/curator_user_digest.txt`
 Each output line is `<YYYY-MM-DD> <session-short-id> [NEW] <text>`: one user message from the
@@ -22,10 +22,10 @@ two distinct sessions in the digest; at least one supporting message carries the
 the store index (`charliebot memory query --index`) has no entry covering it.
 Write each qualifying theme as one staging capture via `charliebot memory add --file <tmpfile>`:
 the first line `# <theme>` states the theme, and the body states the fact or preference to
-record plus its provenance (each supporting session short id, date, and one quoted line). Step 1
+record plus its provenance (each supporting session short id, date, and one quoted line). Step 3
 curates these captures exactly like every other candidate.
 
-Step 1: curate staging candidates, merge-first.
+Step 3: curate staging candidates, merge-first.
 Read every file in `~/.charliebot/memory/staging/`. Candidates are free-form captures: for
 each candidate, first test it against
 the admission whitelist in the llm-context-guideline skill and write the proof lines it requires.
@@ -46,17 +46,17 @@ default action is a merge, not a new entry:
 Run `charliebot memory lint`; it must pass before you present. If lint reports violations, fix
 the working tree until it is clean.
 
-Step 2: report to the user.
+Step 4: report to the user.
 Render the report from `prompts/memory_report_template.html`. Do not commit. Wait for explicit
 user approval.
 
-Step 3: land only after approval.
+Step 5: land only after approval.
 Only after the user explicitly approves: commit the working tree with the prefixed messages
 (`admit:` / `revise:` / `migrate:`), then delete the processed staging files, including the
 rejected ones. If approval is partial, commit only the approved changes and delete only their
 staging files; leave the rest staged for the next day.
 
-Step 4: prevent repeat feedback.
+Step 6: prevent repeat feedback.
 Treat every user comment on a proposal as evidence of a rule gap. After applying the comment,
 check whether the llm-context-guideline skill or this prompt would have blocked the commented
 content had

@@ -89,26 +89,28 @@ async def _run_cc_with_stderr_backend(
 @pytest.mark.asyncio
 async def test_cancel_master_agent_success() -> None:
   session_mgr = AsyncMock()
+  meta = object()
 
   with patch("src.api.chat.cancel_master", new=AsyncMock(return_value=True)) as mock_cancel:
-    result = await cancel_master_agent("session-ok", _meta=object(), session_mgr=session_mgr)
+    result = await cancel_master_agent("session-ok", meta=meta, session_mgr=session_mgr)
 
   assert result == {"ok": True}
-  mock_cancel.assert_awaited_once_with("session-ok")
+  mock_cancel.assert_awaited_once_with("session-ok", meta=meta, session_mgr=session_mgr)
   session_mgr.persist_and_broadcast.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_cancel_master_agent_no_active_master_broadcasts_error() -> None:
   session_mgr = AsyncMock()
+  meta = object()
 
   with patch("src.api.chat.cancel_master", new=AsyncMock(return_value=False)) as mock_cancel:
     with pytest.raises(HTTPException) as exc_info:
-      await cancel_master_agent("session-missing", _meta=object(), session_mgr=session_mgr)
+      await cancel_master_agent("session-missing", meta=meta, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 404
   assert exc_info.value.detail == "No active master agent"
-  mock_cancel.assert_awaited_once_with("session-missing")
+  mock_cancel.assert_awaited_once_with("session-missing", meta=meta, session_mgr=session_mgr)
   session_mgr.persist_and_broadcast.assert_awaited_once_with(
       "session-missing",
       {

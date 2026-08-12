@@ -24,6 +24,9 @@ Scenarios:
   - undrainable rows: raw log missing (legacy transport), never started, and
     uncovered transports clear the record; a turn with a user message is then
     answered by the replay pass, never by a drain.
+  - graceful teardown: a real event-loop shutdown mid-turn detaches the
+    covered child instead of killing it; the next boot re-attaches and the
+    round is answered exactly once.
   - queued: A running + B queued when the server dies. Recovery re-attaches A
     (excluded from replay) and replays B AFTER A drains.
   - idempotency: a replayed delegate call re-crossing the restart hits the
@@ -160,6 +163,66 @@ async def main() -> None:
 asyncio.run(main())
 """
 
+# A second driver protocol (mirrors the worker side's GRACEFUL_DRIVER): a real
+# child process runs asyncio.run(...), starts a real master turn, then cancels
+# the consumer task and exits 0 — exactly what a closing event loop does. What
+# the change avoids is the transport's default kill when the loop closes its
+# handle, so only a real loop teardown proves it.
+GRACEFUL_DRIVER = """import asyncio
+import contextlib
+import json
+import sys
+from pathlib import Path
+
+from src.agents import master_cc
+from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption, CreateSessionRequest
+from src.core.sessions import SessionManager
+
+
+async def main() -> None:
+  home = Path(sys.argv[1])
+  shim = sys.argv[2]
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=shim)],
+  )
+  # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
+  master_cc._build_instructions_content = lambda session_meta, cfg: "instructions"
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="master-graceful"))
+  (home / "driver_ids.json").write_text(json.dumps({"session": meta.id}))
+
+  callbacks = session_mgr.callbacks()
+  turn = asyncio.create_task(master_cc.run_message(cfg, meta, "message A", callbacks))
+
+  # The mid-run state a graceful shutdown interrupts. Waiting for assistant
+  # output durable in CHAT (then a beat) guarantees the read cursor already
+  # advanced past it, so the cancel can land nowhere near the
+  # persist/cursor window — never a forfeited or duplicated marker.
+  chat_path = home / "sessions" / meta.id / "data" / "chat_events.jsonl"
+  while not (chat_path.exists()
+             and "ASSISTANT-INV-1" in chat_path.read_text(encoding="utf-8", errors="replace")):
+    await asyncio.sleep(0.05)
+  await asyncio.sleep(0.2)
+
+  # Graceful shutdown: exactly what the closing event loop does to the
+  # consumer task that owns the turn.
+  consumer = master_cc._session_consumers[meta.id]
+  consumer.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await consumer
+  turn.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await turn
+  (home / "driver_done.json").write_text("{}")
+
+
+asyncio.run(main())
+"""
+
 SPEC_TEXT = """## Goal
 Implement the widget.
 
@@ -266,6 +329,30 @@ def _launch_driver(tmp_path: Path, home: Path, shim: Path, kind: str, shim_mode:
   ids_file = home / "driver_ids.json"
   _wait_for(ids_file.exists, timeout=20.0, what="driver did not create session / persist user events")
   return proc, json.loads(ids_file.read_text(encoding="utf-8"))["session"]
+
+
+def _launch_master_graceful_driver(tmp_path: Path, home: Path, shim: Path) -> tuple[subprocess.Popen, str]:
+  """Run the graceful driver to completion: start a master turn, cancel the
+  consumer like a closing event loop, exit 0."""
+  driver = tmp_path / "shim" / "graceful_driver.py"
+  driver.write_text(GRACEFUL_DRIVER, encoding="utf-8")
+  home.mkdir(exist_ok=True)
+  env = dict(os.environ)
+  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["SHIM_MODE"] = "sleep_first"
+  env["SHIM_STATE"] = str(tmp_path / "shim_state")
+  env["SHIM_SLEEP"] = "5"
+  proc = subprocess.Popen(
+      [sys.executable, str(driver), str(home), str(shim)],
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+      env=env,
+  )
+  done = home / "driver_done.json"
+  _wait_for(done.exists, timeout=30.0, what="graceful master driver never finished cancelling")
+  proc.wait(timeout=10)
+  ids = json.loads((home / "driver_ids.json").read_text(encoding="utf-8"))
+  return proc, ids["session"]
 
 
 def _master_pid(home: Path, session_id: str) -> int:
@@ -922,3 +1009,43 @@ async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkey
   assert len([e for e in events if e.get("type") == "user"]) == 1
   assert sum(1 for e in events if e.get("type") == "master_done") == 1
   assert _session_meta(home, meta.id)["master_run"] is None
+
+
+@pytest.mark.asyncio
+async def test_graceful_teardown_detached_turn_reattached_and_answered_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A REAL event-loop teardown mid-turn (the driver cancels the consumer and
+  exits 0) leaves the master agent child alive, the master_run record on
+  disk, and no terminal state behind; a fresh reconcile then re-attaches and
+  the round is answered exactly once. This is the only proof the transport's
+  default kill on loop close is avoided — a SIGKILL driver cannot exercise the
+  detach, and an in-process cancel cannot exercise the loop teardown."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  proc, session_id = _launch_master_graceful_driver(tmp_path, home, shim)
+  assert proc.returncode == 0
+
+  # The child outlived the closing event loop — asserted BEFORE any reconcile
+  # runs, so this cannot pass by the reconcile respawning something.
+  record = _session_meta(home, session_id)["master_run"]
+  assert record is not None, "teardown cleared the record a boot needs"
+  os.kill(record["pid"], 0)
+  events = _chat_events(home, session_id)
+  assert not any(e.get("type") == "master_done" for e in events)
+  assert not _session_meta(home, session_id).get("has_unread"), "teardown wrote terminal state"
+
+  # Next boot: re-attach and finish — the round is answered exactly once.
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await _await_recovery_tasks()
+
+  assert not (state / "inv-2.argv").exists(), "a second master process was spawned"
+  events = _chat_events(home, session_id)
+  markers = [e for e in events if "ASSISTANT-INV-1" in json.dumps(e)]
+  assert len(markers) == 1, "the shim's assistant marker must land exactly once"
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  assert master_done[0].get("exit_code") == 0
+  assert _session_meta(home, session_id)["master_run"] is None

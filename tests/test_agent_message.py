@@ -23,7 +23,7 @@ from src.cli.session import main as session_cli_main
 from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import SessionMetadata, SessionStatus
-from src.core.spawner import DelegationBlockedError, check_takeoff_gate
+from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 

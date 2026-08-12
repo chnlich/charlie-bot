@@ -32,6 +32,7 @@ __all__ = [
     "build_agent_input_content",
     "build_user_event",
     "build_scheduled_trigger_event",
+    "build_agent_message_event",
     "strip_attached_files_block",
     "normalize_user_message_event",
     "SessionBootstrapData",
@@ -89,6 +90,23 @@ def build_scheduled_trigger_event(content: str) -> dict:
   return {
       "type": ET.SCHEDULED_TRIGGER,
       "content": content,
+      "timestamp": datetime.now(timezone.utc).isoformat(),
+  }
+
+
+def build_agent_message_event(content: str, *, from_session: str, from_session_name: str) -> dict:
+  """Build the persisted agent-relay event for a cross-session message.
+
+  Parallel to ``build_scheduled_trigger_event`` but carries the dedicated
+  ``ET.AGENT_MESSAGE`` type plus the caller session's provenance. Agent
+  messages are not real user messages: the authorization gate excludes them
+  by type, so they neither mint nor revoke an authorization window.
+  """
+  return {
+      "type": ET.AGENT_MESSAGE,
+      "content": content,
+      "from_session": from_session,
+      "from_session_name": from_session_name,
       "timestamp": datetime.now(timezone.utc).isoformat(),
   }
 

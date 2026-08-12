@@ -132,7 +132,11 @@ and `/api/internal/improve`:
 
 - `verify` is always allowed without authorization and remains repo-less.
 - A real user event is `ET.USER` with string `content`. Scheduled-trigger events
-  are `ET.SCHEDULED_TRIGGER`, not `ET.USER`, and are excluded on that basis. Nested
+  are `ET.SCHEDULED_TRIGGER`, not `ET.USER`, and are excluded on that basis.
+  Agent-relay events (`ET.AGENT_MESSAGE`, injected cross-session via
+  `/api/internal/session-message`) are excluded by type alongside
+  `scheduled_trigger`: an `agent_message` neither mints nor revokes an
+  authorization window. Nested
   tool-result events are not real user messages for authorization.
 - Match `pre take off` and `take off` independently, case-insensitively, after
   normalizing consecutive whitespace. The `take off` substring inside `pre take off`

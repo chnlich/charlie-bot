@@ -29,6 +29,11 @@ COMPLETE = "complete"
 HANDLER_RESULT = "handler_result"
 SCHEDULED_TRIGGER = "scheduled_trigger"
 
+# -- Agent relay -------------------------------------------------------------
+# Cross-session agent message: carries the caller session's provenance and is
+# never a real user message (the authorization gate excludes it by type).
+AGENT_MESSAGE = "agent_message"
+
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
 CONTEXT_COMPACT_FAILED = "context_compact_failed"

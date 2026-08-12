@@ -4,8 +4,8 @@ The plan-registration block used to be quoted verbatim from prompts/master.md.
 The contract moved: master.md now routes plan approval through
 skills/plan-approval/SKILL.md, which carries the registration, approval, and
 verify-step wording, while the verifier's read-only network envelope lives in
-the verify worker prompt (src.core.spawner._VERIFY_PROMPT_PREAMBLE). These
-tests pin the current wording so contract changes stay deliberate.
+the verify worker prompt (prompts/verify.md). These tests pin the current
+wording so contract changes stay deliberate.
 """
 
 from pathlib import Path
@@ -97,7 +97,7 @@ def test_plan_registration_closes_superseded_lineage_and_no_reverify() -> None:
 
 
 def test_verify_worker_prompt_documents_read_only_network_contract() -> None:
-  preamble = spawner._VERIFY_PROMPT_PREAMBLE
+  preamble = _read_repo_file("prompts/verify.md")
 
   assert "You are a read-only plan verifier." in preamble
   assert "Retrieve evidence through allowed local and network reads, and report findings." in preamble

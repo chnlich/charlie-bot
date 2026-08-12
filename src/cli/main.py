@@ -6,6 +6,7 @@ Canonical invocations:
   charliebot improve ...
   charliebot schedule-trigger ...
   charliebot remote-launch ...
+  charliebot session ...
 
 The legacy ``python -m src.cli.<command>`` entrypoints remain owned by their
 individual modules.
@@ -24,6 +25,7 @@ _COMMANDS = {
     "gc-trash": "src.cli.gc_trash",
     "plan": "src.cli.plan",
     "memory": "src.cli.memory",
+    "session": "src.cli.session",
 }
 
 

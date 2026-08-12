@@ -475,6 +475,19 @@ class _MasterScanFailed(Exception):
   """
 
 
+def _master_alive_unfollowable_message(reason: str) -> str:
+  """The one "alive but unfollowable" report for a master turn.
+
+  Every "alive but unfollowable" branch reports the same outcome; only the
+  parenthesised reason varies (an unresolved backend option, an uncovered
+  transport, a missing raw log).
+  """
+  return (
+      f"The recorded master turn on this session is treated as still alive ({reason}); "
+      "it is NOT being killed or re-answered — left running without re-attach and judged "
+      "again on the next restart.")
+
+
 async def reconcile_master_identity(cfg, session_mgr, boot_time: datetime) -> dict[str, set[str]]:
   """Resolve each active session's recorded master turn; return the replay exclusion set.
 
@@ -538,10 +551,7 @@ async def reconcile_master_identity(cfg, session_mgr, boot_time: datetime) -> di
         await _report_recovery_event(
             session_mgr,
             meta.id,
-            f"The recorded master turn on this session is treated as still alive "
-            f"(backend option {meta.backend!r} unresolved); "
-            "it is NOT being killed or re-answered — left running without re-attach and judged "
-            "again on the next restart.")
+            _master_alive_unfollowable_message(f"backend option {meta.backend!r} unresolved"))
         if record.user_event_id:
           excluded.setdefault(meta.id, set()).add(record.user_event_id)
         continue
@@ -581,11 +591,7 @@ async def reconcile_master_identity(cfg, session_mgr, boot_time: datetime) -> di
       # user message until a real outcome lands) and the message stays out of
       # this boot's replay set.
       await _report_recovery_event(
-          session_mgr,
-          meta.id,
-          f"The recorded master turn on this session is treated as still alive ({resolution.reason}); "
-          "it is NOT being killed or re-answered — left running without re-attach and judged "
-          "again on the next restart.")
+          session_mgr, meta.id, _master_alive_unfollowable_message(resolution.reason))
       if record.user_event_id:
         excluded.setdefault(meta.id, set()).add(record.user_event_id)
       continue

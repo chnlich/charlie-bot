@@ -324,14 +324,156 @@ function toggleCronGroup(key) {
 }
 
 // ---------------------------------------------------------------------------
+// Project Manager rows — one role=project session per named group (project layer)
+// ---------------------------------------------------------------------------
+// The PM wake prompt must match the one the scheduler's master mode fires; the
+// sidebar materializes the same inline prompt when creating a PM task.
+function projectManagerWakePrompt(group) {
+  return `Read prompts/project_manager.md in the charlie-bot repo and run your Project Manager duties for group ${group}.`;
+}
+
+// Cron task names must match src/api/cron.py _CRON_NAME_RE; sanitize a group
+// name into a valid slug (alnum first char).
+function projectManagerSlug(group) {
+  return group.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '');
+}
+
+// Live role=project sessions keyed by group, and mode:master cron tasks keyed
+// by project. At most one each per group (server-enforced); first match wins.
+async function fetchProjectManagerState() {
+  const [scheduledRes, tasksRes] = await Promise.all([
+    fetch('/api/sessions/scheduled'),
+    fetch('/api/cron/tasks'),
+  ]);
+  if (!scheduledRes.ok) throw new Error(`scheduled sessions fetch failed: ${scheduledRes.status}`);
+  if (!tasksRes.ok) throw new Error(`cron tasks fetch failed: ${tasksRes.status}`);
+  const scheduled = await scheduledRes.json();
+  const tasks = await tasksRes.json();
+  const pmByGroup = {};
+  scheduled.forEach(s => {
+    if (s.role === 'project' && s.group && !pmByGroup[s.group]) pmByGroup[s.group] = s;
+  });
+  const taskByGroup = {};
+  tasks.forEach(t => {
+    if (!t.broken && t.mode === 'master' && t.project && !taskByGroup[t.project]) taskByGroup[t.project] = t;
+  });
+  return {pmByGroup, taskByGroup};
+}
+
+const PM_BADGE_CLASS = 'px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide flex-shrink-0';
+
+function renderProjectManagerRow(pm) {
+  const isActive = SESSION_ID === pm.id;
+  const indicatorState = getSessionIndicatorState(pm);
+  const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
+  const timeStr = pm.updated_at ? relativeTime(pm.updated_at) : '';
+  const timeIso = pm.updated_at || '';
+  return `<a href="/?session=${pm.id}"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
+     onclick="event.preventDefault(); switchSession('${pm.id}')"
+     id="session-${pm.id}">
+    <svg id="spinner-${pm.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+    <svg id="worker-indicator-${pm.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+    <span id="unread-${pm.id}" data-has-unread="${pm.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${pm.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
+    ${renderPendingPlanApprovalIndicator(pm)}
+    <span class="${PM_BADGE_CLASS} bg-indigo-900 text-indigo-300">PM</span>
+    <span class="flex-1 min-w-0 truncate">${escapeHtml(pm.name)}</span>
+    <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="enabled"></span>
+    <span class="session-time text-xs text-slate-500 flex-shrink-0" data-time="${timeIso}">${timeStr}</span>
+  </a>`;
+}
+
+function renderProjectManagerSlotRow(group) {
+  const safeKey = escapeHtmlAttr(group);
+  return `<button type="button"
+     class="flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors border border-dashed border-slate-700/50 text-slate-500 hover:bg-slate-700/50 hover:text-slate-300"
+     data-group-name="${safeKey}"
+     onclick="event.stopPropagation(); Sidebar.openPmSlotEditor(this.dataset.groupName)"
+     title="Enable the Project Manager for this group">
+    <span class="${PM_BADGE_CLASS} bg-slate-700/30 text-slate-500">PM</span>
+    <span class="flex-1 min-w-0 text-left truncate italic">Disabled · click to enable</span>
+    <span class="w-2 h-2 rounded-full bg-slate-600 flex-shrink-0" title="disabled"></span>
+  </button>`;
+}
+
+// Enable flow from a gray slot row: reuse the existing mode:master task for the
+// group when one exists, otherwise materialize pm_<slug> with the standard wake
+// prompt; either way the cron editor opens on the task (single control point).
+async function openPmSlotEditor(group) {
+  let tasks;
+  try {
+    const res = await fetch('/api/cron/tasks');
+    if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
+    tasks = await res.json();
+  } catch (err) {
+    console.error('PM slot: failed to load cron tasks:', err);
+    return;
+  }
+  const existing = tasks.find(t => !t.broken && t.mode === 'master' && t.project === group);
+  if (existing) {
+    openCronEditor(existing.name);
+    return;
+  }
+  const name = `pm_${projectManagerSlug(group)}`;
+  try {
+    const res = await fetch('/api/cron/tasks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        name,
+        cron: '30 8 * * *',
+        prompt: projectManagerWakePrompt(group),
+        mode: 'master',
+        project: group,
+        enabled: true,
+      }),
+    });
+    if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`);
+  } catch (err) {
+    console.error('PM slot: failed to create Project Manager task:', err);
+    return;
+  }
+  openCronEditor(name);
+}
+
+// PM state cache: null until the first enrichment resolves. Painted list uses
+// the cache synchronously; enrichment re-paints with fresh state afterwards, so
+// renders never block on PM fetches and the page's first paint issues none.
+let pmStateCache = null;
+let pmRefreshPending = false;
+let lastGroupedRenderArgs = null;
+
+function scheduleProjectManagerRefresh() {
+  if (pmRefreshPending) return;
+  pmRefreshPending = true;
+  setTimeout(async () => {
+    pmRefreshPending = false;
+    let fresh;
+    try {
+      fresh = await fetchProjectManagerState();
+    } catch (err) {
+      // Keep the last-known state; the next render schedules another attempt.
+      console.error('Project Manager state unavailable:', err);
+      return;
+    }
+    pmStateCache = fresh;
+    if (lastGroupedRenderArgs) {
+      renderGroupedSessionList(lastGroupedRenderArgs.sessions, lastGroupedRenderArgs.filter, {skipRefresh: true});
+    }
+  }, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Grouped session list rendering (by session.group)
 // ---------------------------------------------------------------------------
-function renderGroupedSessionList(sessions, filter) {
+function renderGroupedSessionList(sessions, filter, options = {}) {
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
     nav.innerHTML = '<p class="text-slate-500 text-sm px-3 py-2">No sessions yet</p>';
     return;
   }
+  lastGroupedRenderArgs = {sessions, filter};
+  if (!options.skipRefresh) scheduleProjectManagerRefresh();
   // Group by s.group
   const groups = {};
   sessions.forEach(s => {
@@ -353,11 +495,28 @@ function renderGroupedSessionList(sessions, filter) {
   let html = '';
   for (const key of sortedKeys) {
     const label = key || '(No group)';
-    const groupSessions = groups[key];
+    const isNamedGroup = key !== '';
+    // The PM session is rendered as the group head row, never among task rows.
+    const groupSessions = isNamedGroup ? groups[key].filter(s => s.role !== 'project') : groups[key];
+    // While PM state is unknown (null cache) paint no PM row at all; the
+    // enrichment re-paint fills it in shortly.
+    const pm = isNamedGroup && pmStateCache ? pmStateCache.pmByGroup[key] : null;
+    const pmTask = isNamedGroup && pmStateCache ? pmStateCache.taskByGroup[key] : null;
+    const pmEnabled = !!(pm && pmTask && pmTask.enabled !== false);
+    const pmRowHtml = isNamedGroup && pmStateCache
+      ? (pmEnabled ? renderProjectManagerRow(pm) : renderProjectManagerSlotRow(key))
+      : '';
     const isCollapsed = collapsedState[key] === true; // expanded by default
     const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
+    const taskRowOptions = (s, index) => {
+      const base = groupLimitItemOptions('session', key, s, index, isLimitExpanded);
+      if (!isNamedGroup) return base;
+      // Indent task rows under the PM head row with a connecting line.
+      const indent = 'ml-3 border-l border-slate-700/50';
+      return {...base, extraClass: [base.extraClass, indent].filter(Boolean).join(' ')};
+    };
 
     const groupActions = key ? `
       <button data-group-name="${safeKey}"
@@ -383,10 +542,11 @@ function renderGroupedSessionList(sessions, filter) {
         <span class="text-xs text-slate-500 ml-auto">${groupSessions.length}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
+        ${pmRowHtml}
         ${groupSessions.map((s, index) => renderSessionItem(
           s,
           filter,
-          groupLimitItemOptions('session', key, s, index, isLimitExpanded)
+          taskRowOptions(s, index)
         )).join('')}
         ${renderGroupLimitToggle('session', key, groupSessions.length, isLimitExpanded)}
       </div>
@@ -394,6 +554,9 @@ function renderGroupedSessionList(sessions, filter) {
   }
   nav.innerHTML = html;
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  if (pmStateCache) {
+    Object.values(pmStateCache.pmByGroup).forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  }
   updateRelativeTimes();
   refreshTuiDots();
 }
@@ -593,6 +756,9 @@ Object.assign(Sidebar, {
   renderScheduledSessionItem,
   renderGroupedScheduledList,
   toggleCronGroup,
+  renderProjectManagerRow,
+  renderProjectManagerSlotRow,
+  openPmSlotEditor,
   renderGroupedSessionList,
   toggleSessionGroup,
   renameGroup,
@@ -610,6 +776,9 @@ Sidebar.expose([
   'renderScheduledSessionItem',
   'renderGroupedScheduledList',
   'toggleCronGroup',
+  'renderProjectManagerRow',
+  'renderProjectManagerSlotRow',
+  'openPmSlotEditor',
   'renderGroupedSessionList',
   'toggleSessionGroup',
   'renameGroup',

@@ -1623,6 +1623,10 @@ video {
   background-color: rgb(51 65 85 / var(--tw-bg-opacity, 1));
 }
 
+.bg-slate-700\/30 {
+  background-color: rgb(51 65 85 / 0.3);
+}
+
 .bg-slate-700\/40 {
   background-color: rgb(51 65 85 / 0.4);
 }

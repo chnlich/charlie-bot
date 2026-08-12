@@ -142,17 +142,22 @@ class SessionManager:
       backend: str,
       session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
       skip_if_busy: bool = False,
+      role: Optional[str] = None,
+      group: Optional[str] = None,
   ) -> Optional[SessionMetadata]:
     """Return the active scheduled session for task_name/backend, rotating history if needed.
 
     Backend changes are generation changes: the old active session is archived and a new
-    scheduled session is created with only scheduler bookkeeping copied over.
+    scheduled session is created with only scheduler bookkeeping copied over. ``role`` and
+    ``group`` (mode: master PM tasks) carry onto the created session.
     """
     return await self._scheduled_sessions.ensure_scheduled_session_backend(
         task_name,
         backend,
         session_cache,
         skip_if_busy,
+        role,
+        group,
     )
 
   async def _backend_create_hook(self, meta: SessionMetadata) -> None:

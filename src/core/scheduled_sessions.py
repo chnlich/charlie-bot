@@ -45,11 +45,15 @@ class ScheduledSessionStore:
       backend: str,
       session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
       skip_if_busy: bool = False,
+      role: Optional[str] = None,
+      group: Optional[str] = None,
   ) -> Optional[SessionMetadata]:
     """Return the active scheduled session for task_name/backend, rotating history if needed.
 
     Backend changes are generation changes: the old active session is archived and a new
-    scheduled session is created with only scheduler bookkeeping copied over.
+    scheduled session is created with only scheduler bookkeeping copied over. ``role`` and
+    ``group`` (passed for mode: master PM tasks) ride along on both creation paths — first
+    creation and generation rotation alike.
     """
     active_sessions = await self._active_scheduled_sessions(task_name, session_cache)
     for session in active_sessions:
@@ -59,7 +63,12 @@ class ScheduledSessionStore:
     old_session = active_sessions[0] if active_sessions else None
     if old_session is None:
       meta = await self.create_session(
-          CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=backend)
+          CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role),
+          backend=backend)
+      if group is not None:
+        meta.group = group
+        meta.updated_at = utc_now()
+        await self.save_metadata(meta)
       log.info("scheduled_session_created", task=task_name, session=meta.id, backend=backend)
       if session_cache is not None:
         session_cache.setdefault(task_name, []).insert(0, meta)
@@ -82,10 +91,13 @@ class ScheduledSessionStore:
 
     await self.archive_session(old_session.id)
     meta = await self.create_session(
-        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=backend)
+        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role),
+        backend=backend)
     meta.last_scheduled_run = old_session.last_scheduled_run
     meta.last_scheduled_cron = old_session.last_scheduled_cron
     meta.last_run_status = old_session.last_run_status
+    if group is not None:
+      meta.group = group
     meta.updated_at = utc_now()
     await self.save_metadata(meta)
     if session_cache is not None:

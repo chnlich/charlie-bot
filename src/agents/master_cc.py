@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Optional
 
 import structlog
 
-from src.agents.backends.base import AgentBackend, _read_stderr_tail, tail_follow_events
+from src.agents.backends.base import (
+  AgentBackend,
+  _read_stderr_tail,
+  make_text_event,
+  tail_follow_events,
+)
 from src.core import event_types as ET
 from src.core import runs
 from src.core.config import CharlieBotConfig, claude_config_dir
@@ -35,6 +40,11 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
+# Prefixed to a salvaged silent turn so the user sees the thinking the model
+# produced instead of nothing. Local chat-stream only: preserved verbatim even
+# though it is non-English, because it never leaves the session's stream.
+NOTICE = "[模型未输出正文，以下为其思考内容]"
+
 
 class _RunTimingTracker:
   """Tracks monotonic timing milestones during a single _run_cc execution."""
@@ -48,6 +58,12 @@ class _RunTimingTracker:
     self._t_first_event: Optional[float] = None
     self._t_first_assistant: Optional[float] = None
     self._saw_first_assistant = False
+    # Per-run salvage state: accumulations with the same lifecycle as the timing
+    # fields above, created/destroyed with the tracker. Thinking text lands here
+    # when the turn never produces assistant text, so teardown can surface it;
+    # the result flag does so only for a turn the stream actually settled.
+    self._thinking_text: list[str] = []
+    self._saw_result = False
 
   async def on_spawn(self, pid: int) -> None:
     self._t_spawn = time.monotonic()
@@ -71,12 +87,26 @@ class _RunTimingTracker:
             spawn_to_first_event_ms=spawn_to_first_ms,
         )
 
+    if event.get("type") == ET.RESULT:
+      self._saw_result = True
+
+    # Standalone thinking events (opencode/codex deltas) carry their text in
+    # "content". Accumulated unconditionally: a turn that later speaks is
+    # untouched, and a silent turn gets the whole stream surfaced.
+    if event.get("type") == ET.THINKING and event.get("content"):
+      self._thinking_text.append(event["content"])
+
     if not self._saw_first_assistant and event.get("type") == ET.ASSISTANT:
       msg = event.get("message", {})
       content_blocks = msg.get("content") if isinstance(msg, dict) else None
       if content_blocks:
         for block in content_blocks:
-          if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+          if not isinstance(block, dict):
+            continue
+          # claude-family thinking blocks nest the text under "thinking".
+          if block.get("type") == "thinking" and block.get("thinking"):
+            self._thinking_text.append(block["thinking"])
+          if block.get("type") == "text" and block.get("text"):
             self._saw_first_assistant = True
             self._t_first_assistant = time.monotonic()
             log.info(
@@ -101,6 +131,47 @@ class _RunTimingTracker:
     if total_ms > 120_000:
       log.warning("master_cc_slow_total", session=self._session_id, total_ms=total_ms)
     return extras
+
+  def _salvage_thinking_text(self) -> Optional[str]:
+    """Thinking to surface for a silent run, or None when nothing should emit.
+
+    The visibility criterion is assistant text: only a result-settled turn with
+    no assistant text and non-empty thinking warrants a salvage. The result
+    check doubles as the single guard for user cancellation, let-go handover,
+    and mid-run death — none of them reach a result event, so the stream cut
+    before it and there is nothing to surface.
+    """
+    if self._saw_result and not self._saw_first_assistant:
+      thinking = "".join(self._thinking_text)
+      if thinking.strip():
+        return thinking
+    return None
+
+
+async def _salvage_silent_turn(
+    tracker: _RunTimingTracker,
+    error_msg: Optional[str],
+    session_id: str,
+    persist_and_broadcast,
+) -> None:
+  """Emit accumulated thinking as a visible assistant text event on a silent turn.
+
+  Shared salvage rule for both master run paths. Emits only when all four hold:
+  the run saw a terminal result event, it never spoke assistant text, the
+  thinking is non-empty, and no error event was already synthesized this turn
+  (avoids two contradicting closing messages). The result check is the single
+  guard for cancellation / let-go / mid-run death — those never reach a result
+  event, so nothing emits. Whole text, never truncated: truncation would
+  recreate the incomplete-answer symptom this rule exists to heal.
+  """
+  if error_msg:
+    return
+  thinking = tracker._salvage_thinking_text()
+  if thinking is None:
+    return
+  event = make_text_event(f"{NOTICE}\n\n{thinking}")
+  await persist_and_broadcast(session_id, event)
+  log.info("master_cc_silent_turn_salvaged", session=session_id)
 
 
 # Per-session FIFO queue for serializing run_message calls.
@@ -499,6 +570,14 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
       err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
       await item.callbacks.persist_and_broadcast(session_meta.id, err_event)
 
+    # Salvage a run that settled with only thinking and no assistant text. This
+    # sits before and outside the let-go branch below: a user-cancelled run
+    # still enters that branch, but it also still reaches a result event only
+    # when the stream genuinely settled — the salvage helper's result check is
+    # what distinguishes "finished silently" from "cancelled mid-stream".
+    await _salvage_silent_turn(
+        tracker, error_msg, session_meta.id, item.callbacks.persist_and_broadcast)
+
     # On the let-go path the turn is still running in another process: writing
     # any terminal state (unread marker, tex snapshot, finished log) would lie
     # about it. The next boot's reconcile owns the outcome of this turn.
@@ -649,6 +728,8 @@ async def _resume_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str]
     if error_msg:
       err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
       await item.callbacks.persist_and_broadcast(session_meta.id, err_event)
+    await _salvage_silent_turn(
+        tracker, error_msg, session_meta.id, item.callbacks.persist_and_broadcast)
     await item.callbacks.mark_unread(session_meta.id)
     log.info(
         "master_cc_resume_finished",

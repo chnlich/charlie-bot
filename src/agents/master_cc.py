@@ -386,6 +386,13 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   cc_session_id: Optional[str] = session_meta.cc_session_id
   exit_code = 1
   error_msg: Optional[str] = None
+  # Set inside _on_spawn the moment the master_run record hits disk; the cancel
+  # path lets the turn go only once a boot can find it, so this flag — not
+  # backend.pid — is the let-go precondition.
+  record_persisted = False
+  # True only on the cancel path when the turn is handed to the next boot: the
+  # finally block then skips every terminal state write.
+  let_go = False
 
   tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
   backend: Optional[AgentBackend] = None
@@ -398,6 +405,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 
   async def _on_spawn(pid: int) -> None:
+    nonlocal record_persisted
     await tracker.on_spawn(pid)
     # pid_start was pinned to this exact process instance just before this
     # callback fired — same contract as the worker path — so the pair cannot
@@ -411,6 +419,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
         user_event_id=item.user_event_id,
     )
     await item.callbacks.persist_master_run(session_meta.id, record)
+    record_persisted = True
 
   try:
     backend = build_backend(
@@ -436,9 +445,26 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
         error_msg = backend.stderr_text[:500]
 
   except asyncio.CancelledError:
-    log.warning("master_cc_cancelled", session=session_meta.id)
+    # Only live trigger: event-loop shutdown (graceful restart). Same let-go
+    # rule as the worker path (spawner.py): a covered transport whose
+    # master_run record is already persisted keeps running on its own raw-log
+    # fds, and the next boot's reconcile re-attaches for the real result.
+    # Uncovered transports die with their transport process, and a process
+    # whose record never hit disk can never be found by a boot, so both are
+    # still terminated.
+    let_go = (backend is not None and option.type not in runs.UNCOVERED_BACKEND_TYPES
+              and record_persisted)
+    log.warning(
+        "master_cc_cancelled",
+        session=session_meta.id,
+        transport=option.type,
+        action="let_go" if let_go else "terminate",
+    )
     if backend:
-      await backend.terminate()
+      if let_go:
+        backend.detach()
+      else:
+        await backend.terminate()
     _active_procs.pop(session_meta.id, None)
     raise
   except Exception as e:
@@ -453,23 +479,27 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
       err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
       await item.callbacks.persist_and_broadcast(session_meta.id, err_event)
 
-    await item.callbacks.mark_unread(session_meta.id)
+    # On the let-go path the turn is still running in another process: writing
+    # any terminal state (unread marker, tex snapshot, finished log) would lie
+    # about it. The next boot's reconcile owns the outcome of this turn.
+    if not let_go:
+      await item.callbacks.mark_unread(session_meta.id)
 
-    if item.should_check_tex:
-      proposal = await asyncio.to_thread(check_tex_changed)
-      if proposal:
-        tex_event = {'type': ET.TEX_EDIT_PROPOSED}
-        await item.callbacks.persist_and_broadcast(session_meta.id, tex_event)
-        log.info('tex_edit_proposed', session=session_meta.id)
-      else:
-        clear_snapshot()
+      if item.should_check_tex:
+        proposal = await asyncio.to_thread(check_tex_changed)
+        if proposal:
+          tex_event = {'type': ET.TEX_EDIT_PROPOSED}
+          await item.callbacks.persist_and_broadcast(session_meta.id, tex_event)
+          log.info('tex_edit_proposed', session=session_meta.id)
+        else:
+          clear_snapshot()
 
-    log.info(
-        "master_cc_finished",
-        session=session_meta.id,
-        exit_code=exit_code,
-        **(finish_extras or {}),
-    )
+      log.info(
+          "master_cc_finished",
+          session=session_meta.id,
+          exit_code=exit_code,
+          **(finish_extras or {}),
+      )
 
   return cc_session_id, exit_code, error_msg, finish_extras
 

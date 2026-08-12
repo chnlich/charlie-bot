@@ -5,6 +5,7 @@ import hmac
 import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Optional
 
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -17,10 +18,11 @@ from src.api import anthropic_proxy, backlog, chat, code_server, cron, ext_usage
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
 from src.core import event_types as ET
+from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import get_config
 from src.core.http import close_http_client
-from src.core.init import init_charliebot_home, run_crash_recovery
+from src.core.init import init_charliebot_home, reconcile_master_identity, run_crash_recovery
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import utc_now
 from src.core.scheduler import Scheduler
@@ -100,16 +102,18 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> 
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
-async def _run_crash_recovery(cfg, boot_time) -> None:
+async def _run_crash_recovery(cfg, boot_time, identity: Optional[asyncio.Task] = None) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
   Wraps init.run_crash_recovery so an exception surfaces loudly instead of
   vanishing into the event loop, and reports the recovered count + elapsed time
-  once the deferred scan finishes.
+  once the deferred scan finishes. *identity* is the lifespan's one shielded
+  reconcile_master_identity task, forwarded for the replay pass.
   """
   started = utc_now()
   try:
-    recovered = await run_crash_recovery(cfg, boot_time, get_session_manager(), get_thread_manager())
+    recovered = await run_crash_recovery(
+        cfg, boot_time, get_session_manager(), get_thread_manager(), master_identity=identity)
     elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
     log.info("crash_recovery_done", count=recovered, elapsed_ms=elapsed_ms)
   except Exception:
@@ -134,10 +138,24 @@ async def lifespan(app: FastAPI):
   # thread's metadata (O(history)). Run it off the critical path so the server
   # reaches readiness immediately; boot_time guards against killing a worker
   # spawned during the recovery window.
-  app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time))
-  app.state.speech_model_task = transcriber.start_model_provisioning(cfg)
-
+  #
+  # The master_run identity judgment is the exception: master_run is a single
+  # slot per session that a new turn overwrites unconditionally, so the
+  # judgment must complete before any door that can start a new turn — the
+  # worker-finalize chain dispatched by this same background task,
+  # scheduler.start(), and trigger_mgr.recover_pending() below. Barrier on it
+  # with a timeout; the shield keeps the one judgment running past the bound
+  # and the recovery task re-awaits that same task for the replay pass.
   session_mgr = get_session_manager()
+  identity = asyncio.create_task(reconcile_master_identity(cfg, session_mgr, boot_time))
+  try:
+    await asyncio.wait_for(asyncio.shield(identity), timeout=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
+  except asyncio.TimeoutError:
+    log.warning("master_identity_barrier_timeout", timeout_s=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
+  except Exception:
+    pass  # reported where the task is awaited: crash recovery logs it loudly
+  app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time, identity))
+  app.state.speech_model_task = transcriber.start_model_provisioning(cfg)
 
   scheduler = Scheduler(cfg, session_mgr)
   app.state.scheduler = scheduler

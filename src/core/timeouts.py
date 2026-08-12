@@ -92,3 +92,15 @@ NO_OUTPUT_REPORT_THRESHOLD = 2 * 3600  # seconds
 # (server down/restarting); exponential backoff inside. Measured server cold
 # start is <0.5 s, so 60 s is two orders of magnitude of headroom.
 CLI_CONNECT_TOTAL_TIMEOUT = 60  # seconds
+
+# ---------------------------------------------------------------------------
+# Master-run identity barrier (boot)
+# ---------------------------------------------------------------------------
+
+# How long the lifespan startup waits on reconcile_master_identity before
+# falling through to the doors that can create a new turn; the pass itself is
+# shielded and keeps running, re-awaited by the crash-recovery task. What the
+# barrier bounds: an active-session metadata scan (~11 ms measured) plus
+# roughly 10 ms per in-flight master_run record. The bound exists so a stalled
+# mount degrades to a raw log line instead of holding boot forever.
+MASTER_IDENTITY_BARRIER_TIMEOUT = 5.0  # seconds

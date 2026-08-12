@@ -358,10 +358,18 @@ def _iter_local_worktree_artifacts(wt_path: Path):
 
 
 async def _remove_local_worktree_artifacts(wt_path: Path, thread_id: str) -> None:
-  """Pre-clean known local cache/env/build artifacts inside the worktree."""
+  """Pre-clean known local cache/env/build artifacts inside the worktree.
+
+  A symlinked artifact (e.g. `.venv -> <main checkout>/.venv`) is skipped rather
+  than treated as an error: the pre-clean exists to avoid an expensive recursive
+  delete inside the worktree, while a symlink is one cheap directory entry that
+  `git worktree remove --force` deletes on its own, and deleting a symlink never
+  touches its target.
+  """
   for artifact_path in _iter_local_worktree_artifacts(wt_path):
     if artifact_path.is_symlink():
-      raise RuntimeError(f"refusing to remove symlinked worktree artifact: {artifact_path}")
+      log.warning("worktree_artifact_symlink_skipped", thread_id=thread_id, path=str(artifact_path))
+      continue
     await asyncio.to_thread(shutil.rmtree, artifact_path)
     log.info("worktree_local_artifact_removed", thread_id=thread_id, path=str(artifact_path))
 

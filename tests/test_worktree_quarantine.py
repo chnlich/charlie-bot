@@ -153,6 +153,39 @@ async def test_quarantine_rejects_unexpected_residue_name(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# _remove_local_worktree_artifacts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_remove_local_artifacts_skips_symlink_and_keeps_target(
+    tmp_path: Path) -> None:
+  """A `.venv` symlink into an outside checkout survives cleanup without raising.
+
+  The symlink (one cheap directory entry `git worktree remove --force` deletes on
+  its own) is skipped and logged, never deleted, and its target is never touched;
+  a real regenerable artifact directory in the same tree is still removed.
+  """
+  wt = tmp_path / "worktrees" / "charliebot-task-sym"
+  wt.mkdir(parents=True)
+  outside = tmp_path / "venv-target"
+  outside.mkdir()
+  (outside / "site.py").write_text("real", encoding="utf-8")
+  (wt / ".venv").symlink_to(outside, target_is_directory=True)
+  (wt / ".pixi").mkdir()
+  (wt / ".pixi" / "cached").write_text("regenerable", encoding="utf-8")
+
+  await git_module._remove_local_worktree_artifacts(wt, "thread-sym")
+
+  # The symlink survives cleanup (the remove --force deletes it), its target is
+  # untouched, and the real artifact dir is still removed.
+  assert (wt / ".venv").is_symlink()
+  assert (wt / ".venv").readlink() == outside
+  assert (outside / "site.py").exists()
+  assert not (wt / ".pixi").exists()
+
+
+# ---------------------------------------------------------------------------
 # _quarantine_stale_failed_worktrees sweep
 # ---------------------------------------------------------------------------
 

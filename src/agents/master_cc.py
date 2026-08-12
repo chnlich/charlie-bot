@@ -19,6 +19,7 @@ from src.core.config import CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot, get_tex_path, snapshot_tex
 from src.core.memory import assemble_master
 from src.core.models import (
+    PROJECT_ROLE,
     BackendOption,
     MasterRunRecord,
     SessionCallbacks,
@@ -150,6 +151,18 @@ class _WorkItem:
 _current_items: dict[str, _WorkItem] = {}
 
 
+# Ambient Project Manager identity: appended after the memory block for
+# role=project sessions bound to a group, so the behavior contract travels with
+# every master turn in the session (user messages, agent relays, triggers),
+# not only scheduled fires. Filled via str.format; keep `{group}` the only
+# placeholder.
+_PM_IDENTITY_PART = """# Project Manager session
+
+This session is the Project Manager for group {group}. Your behavior
+contract is prompts/project_manager.md in the charlie-bot repo: read it
+before acting on any message in this session, and follow it."""
+
+
 def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
   """Build master agent instructions: base prompt + per-host override + memory store.
 
@@ -181,6 +194,10 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
   memory_block = assemble_master(cfg.memory_dir)
   if memory_block:
     parts.append(memory_block)
+
+  # 4. Ambient Project Manager identity (role=project sessions bound to a group)
+  if session_meta.role == PROJECT_ROLE and session_meta.group:
+    parts.append(_PM_IDENTITY_PART.format(group=session_meta.group))
 
   return "\n\n".join(parts)
 

@@ -326,12 +326,6 @@ function toggleCronGroup(key) {
 // ---------------------------------------------------------------------------
 // Project Manager rows — one role=project session per named group (project layer)
 // ---------------------------------------------------------------------------
-// The PM wake prompt must match the one the scheduler's master mode fires; the
-// sidebar materializes the same inline prompt when creating a PM task.
-function projectManagerWakePrompt(group) {
-  return `Read prompts/project_manager.md in the charlie-bot repo and run your Project Manager duties for group ${group}.`;
-}
-
 // Cron task names must match src/api/cron.py _CRON_NAME_RE; sanitize a group
 // name into a valid slug (alnum first char).
 function projectManagerSlug(group) {
@@ -397,8 +391,9 @@ function renderProjectManagerSlotRow(group) {
 }
 
 // Enable flow from a gray slot row: reuse the existing mode:master task for the
-// group when one exists, otherwise materialize pm_<slug> with the standard wake
-// prompt; either way the cron editor opens on the task (single control point).
+// group when one exists, otherwise materialize pm_<slug> with
+// prompt_file: 'prompts/project_manager.md' (the yaml is the single control
+// point for the wake text); either way the cron editor opens on the task.
 async function openPmSlotEditor(group) {
   let tasks;
   try {
@@ -422,7 +417,7 @@ async function openPmSlotEditor(group) {
       body: JSON.stringify({
         name,
         cron: '30 8 * * *',
-        prompt: projectManagerWakePrompt(group),
+        prompt_file: 'prompts/project_manager.md',
         mode: 'master',
         project: group,
         enabled: true,

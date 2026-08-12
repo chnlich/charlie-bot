@@ -131,7 +131,8 @@ class TaskUpdate(BaseModel):
 class TaskCreate(BaseModel):
   name: str
   cron: str
-  prompt: str
+  prompt: Optional[str] = None
+  prompt_file: Optional[str] = None
   repo: Optional[str] = None
   backend: Optional[str] = None
   timezone: str = 'America/Los_Angeles'
@@ -229,7 +230,17 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   if not payload.get('backend'):
     payload.pop('backend', None)
   body = {k: v for k, v in payload.items()
-          if k != 'name' and (v is not None or k in ('cron', 'prompt', 'enabled'))}
+          if k != 'name' and (v is not None or k in ('cron', 'enabled'))}
+  # Validate the assembled body through the exact same body-processing code the
+  # production loader uses, on a deep copy (that code mutates the body in place
+  # — see _validate_cron_body), exactly as the update route does: an unreadable
+  # prompt_file or a master task without a prompt source becomes a 409 with the
+  # loader's error text, and nothing is written to disk.
+  try:
+    await asyncio.to_thread(
+        _validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
+  except Exception as e:
+    raise HTTPException(status_code=409, detail=str(e)) from e
   cron_dir().mkdir(parents=True, exist_ok=True)
   await asyncio.to_thread(_write_cron_yaml, req.name, body)
   log.debug('cron_task_created', name=req.name)

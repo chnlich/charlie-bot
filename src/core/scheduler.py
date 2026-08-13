@@ -71,6 +71,12 @@ class Scheduler:
     self._cfg = cfg
     self._session_mgr = session_mgr
     self._task: Optional[asyncio.Task] = None
+    # Process-local registry of the background task each task's most recent
+    # *scheduled* fire spawned (keyed by task name). Empty after a restart, so
+    # the first fire after a restart is judged idle by design. Manual /run
+    # rounds never register here, so they neither block nor are blocked by a
+    # scheduled round.
+    self._handles: dict[str, asyncio.Task] = {}
 
   async def start(self) -> None:
     self._task = asyncio.create_task(self._loop(), name="scheduler_loop")
@@ -171,8 +177,28 @@ class Scheduler:
 
     next_fire = croniter(task_cfg.cron, last_run_at).get_next(datetime)
     if next_fire <= now:
+      handle = self._handles.get(task_cfg.name)
+      if handle is not None and not handle.done():
+        session.last_scheduled_run = now.isoformat()
+        session.last_run_status = "skipped"
+        session.updated_at = datetime.now(timezone.utc)
+        await session_mgr.save_metadata(session)
+        event = {
+            'type': ET.SCHEDULED_RUN_SKIPPED,
+            'task': task_cfg.name,
+            'skipped_at': now.isoformat(),
+            'reason': f"previous round still running ({handle.get_name()})",
+        }
+        await session_mgr.persist_and_broadcast(session.id, event)
+        log.info(
+            "scheduler_run_skipped",
+            task=task_cfg.name,
+            skipped_at=now.isoformat(),
+            handle=handle.get_name(),
+        )
+        return
       log.info("scheduler_firing", task=task_cfg.name, next_fire=next_fire.isoformat())
-      await self._execute_task(task_cfg)
+      await self._execute_task(task_cfg, record_handle=True)
 
   # ---------------------------------------------------------------------------
   # Task execution
@@ -199,17 +225,23 @@ class Scheduler:
     await session_mgr.save_metadata(session)
     return cfg, session_mgr, session
 
-  async def _execute_task(self, task_cfg: ScheduledTaskConfig) -> dict:
-    """Route to handler, loop, prompt, or master execution based on task config."""
+  async def _execute_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+    """Route to handler, loop, prompt, or master execution based on task config.
+
+    ``record_handle`` gates whether the background round spawned by this fire is
+    registered in the overlap-skip registry. The scheduled path records it via
+    ``_maybe_run``; manual ``run_task_now`` leaves it off so manual rounds stay
+    outside the skip judgment.
+    """
     if task_cfg.mode == 'master':
-      return await self._execute_master_task(task_cfg)
+      return await self._execute_master_task(task_cfg, record_handle=record_handle)
     if task_cfg.handler:
       return await self._execute_handler_task(task_cfg)
     if task_cfg.loop:
-      return await self._execute_loop_task(task_cfg)
-    return await self._execute_prompt_task(task_cfg)
+      return await self._execute_loop_task(task_cfg, record_handle=record_handle)
+    return await self._execute_prompt_task(task_cfg, record_handle=record_handle)
 
-  async def _execute_master_task(self, task_cfg: ScheduledTaskConfig) -> dict:
+  async def _execute_master_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Wake the dedicated session's master with the task prompt plus its group.
 
     The wake message is the task's resolved prompt (a PM task supplies
@@ -222,10 +254,12 @@ class Scheduler:
     """
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
     wake_prompt = f"{task_cfg.prompt}\n\nGroup: {task_cfg.project}"
-    create_logged_task(
+    handle = create_logged_task(
         trigger_master(session.id, wake_prompt, cfg, session_mgr),
         name=f"scheduled_master_{task_cfg.name}",
     )
+    if record_handle:
+      self._handles[task_cfg.name] = handle
     session.last_run_status = "success"
     session.updated_at = datetime.now(timezone.utc)
     await session_mgr.save_metadata(session)
@@ -262,7 +296,7 @@ class Scheduler:
     await session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 
-  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig) -> dict:
+  async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
     return await self._spawn_scheduled_worker(
@@ -273,9 +307,10 @@ class Scheduler:
         "scheduled_task_fired",
         cfg,
         session_mgr,
-        require_review=False)
+        require_review=False,
+        record_handle=record_handle)
 
-  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig) -> dict:
+  async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Run an improvement-loop task: determine action, then spawn worker if needed."""
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
 
@@ -303,7 +338,8 @@ class Scheduler:
         cfg,
         session_mgr,
         require_review=(action_type == 'implement'),
-        action=action_type)
+        action=action_type,
+        record_handle=record_handle)
 
   async def _spawn_scheduled_worker(
       self,
@@ -315,6 +351,7 @@ class Scheduler:
       cfg: CharlieBotConfig,
       session_mgr: SessionManager,
       require_review: bool = True,
+      record_handle: bool = False,
       **log_extra: str,
   ) -> dict:
     """Create thread, spawn worker, broadcast task_delegated, and return result dict."""
@@ -325,7 +362,7 @@ class Scheduler:
     resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
         session.id, cfg, session_mgr, requested_backend=effective_backend)
 
-    create_logged_task(
+    handle = create_logged_task(
         spawn_worker(
             session_id=session.id,
             description=description,
@@ -342,6 +379,8 @@ class Scheduler:
         ),
         name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
     )
+    if record_handle:
+      self._handles[task_cfg.name] = handle
 
     event = {
         "type": ET.TASK_DELEGATED,

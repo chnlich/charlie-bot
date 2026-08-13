@@ -74,15 +74,6 @@ def _is_auto_injected(content: str) -> bool:
   return any(stripped.startswith(prefix) for prefix in _AUTO_INJECTED_PREFIXES)
 
 
-def _message_text(msg: dict) -> str:
-  """Return the display text for a message, preferring full_content when present."""
-  full_content = msg.get("full_content")
-  if isinstance(full_content, str) and full_content:
-    return full_content
-  content = msg.get("content", "")
-  return content if isinstance(content, str) else str(content)
-
-
 def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None = None) -> dict:
   """Scan events [0, upto] and return ``{asks, last}`` via pure extraction (no LLM).
 

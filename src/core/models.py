@@ -181,21 +181,7 @@ class BackendOption(BaseModel):
   opencode_proxy_url: Optional[str] = None  # opencode only: per-backend HTTP/HTTPS proxy URL
 
 
-MODEL_REQUIRED_BACKEND_TYPES = frozenset(
-    {
-        "cc-claude",
-        "cc-kimi",
-        "cc-openai-compatible",
-        "codex",
-        "charlie-code",
-        "gemini",
-        "opencode",
-    })
 MODEL_OPTIONAL_ROUTING_BACKEND_TYPES = frozenset({"antigravity"})
-
-
-def backend_type_requires_model(backend_type: str) -> bool:
-  return backend_type in MODEL_REQUIRED_BACKEND_TYPES
 
 
 def backend_type_allows_missing_model(backend_type: str) -> bool:

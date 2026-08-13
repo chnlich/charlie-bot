@@ -1565,3 +1565,105 @@ test('submitSessionActionModal sends backend and event_index for message-level c
     backend: 'claude-opus-4.6',
   });
 });
+
+test('switchBackend confirms before POSTing when the switch rotates', async () => {
+  const confirms = [];
+  const {context, fetchRequests} = buildContext({
+    confirm: () => {
+      confirms.push(1);
+      return false;
+    },
+  });
+  context.setBackendSwitchRotates(true);
+
+  await context.switchBackend('codex-o3');
+
+  assert.equal(confirms.length, 1, 'rotating switch must confirm once');
+  assert.deepEqual(fetchRequests, [], 'cancelled switch must not POST');
+});
+
+test('switchBackend does not confirm for a non-rotating switch', async () => {
+  const confirms = [];
+  const {context, fetchRequests} = buildContext({
+    ACTIVE_BACKEND_ID: 'claude-opus-4.6',
+    confirm: () => {
+      confirms.push(1);
+      return true;
+    },
+  });
+  context.setBackendSwitchRotates(false);
+  context.fetch = async (url, opts = {}) => {
+    assert.equal(url, '/api/sessions/session-a/backend');
+    return {ok: true, async json() { return {id: 'session-a', backend: 'codex-o3'}; }};
+  };
+
+  await context.switchBackend('codex-o3');
+
+  assert.equal(confirms.length, 0, 'in-place switch must not confirm');
+  assert.equal(context.getActiveBackendId(), 'codex-o3');
+});
+
+test('switchBackend navigates to the new session when the rotation returns a different id', async () => {
+  const {context} = buildContext({
+    ACTIVE_BACKEND_ID: 'claude-opus-4.6',
+    confirm: () => true,
+  });
+  context.setBackendSwitchRotates(true);
+  context.currentFilter = 'all';
+  const filtersRefreshed = [];
+  const pushedUrls = [];
+  context.switchSidebarFilter = (f) => { filtersRefreshed.push(f); };
+  context.history.pushState = (_state, _title, url) => { pushedUrls.push(url); };
+  context.fetch = async (url, opts = {}) => {
+    if (url === '/api/sessions/session-a/backend') {
+      assert.equal(opts.method, 'POST');
+      return {ok: true, async json() { return {id: 'session-new', backend: 'codex-o3'}; }};
+    }
+    if (url === '/api/sessions/session-new/bootstrap') {
+      return {
+        ok: true,
+        async json() {
+          return {
+            session: makeSession('session-new', 'Session New', {backend: 'codex-o3'}),
+            messages: [],
+            pending_draft: null,
+            event_count: 0,
+            active_backend: 'codex-o3',
+            active_backend_type: 'codex',
+            has_more: false,
+          };
+        },
+      };
+    }
+    throw new Error('unexpected fetch ' + url);
+  };
+
+  await context.switchBackend('codex-o3');
+
+  assert.equal(context.SESSION_ID, 'session-new');
+  assert.deepEqual(pushedUrls, ['/?session=session-new']);
+  assert.deepEqual(filtersRefreshed, ['all'], 'must refresh the sidebar');
+  assert.equal(context.getActiveBackendId(), 'codex-o3');
+});
+
+test('switchBackend stays in place and skips sidebar refresh when the rotation returns the same id', async () => {
+  const {context} = buildContext({
+    ACTIVE_BACKEND_ID: 'claude-opus-4.6',
+    confirm: () => true,
+  });
+  context.setBackendSwitchRotates(false);
+  const filtersRefreshed = [];
+  context.switchSidebarFilter = (f) => { filtersRefreshed.push(f); };
+  context.fetch = async (url, opts = {}) => {
+    if (url === '/api/sessions/session-a/backend') {
+      return {ok: true, async json() { return {id: 'session-a', backend: 'codex-o3'}; }};
+    }
+    throw new Error('unexpected fetch ' + url);
+  };
+
+  await context.switchBackend('codex-o3');
+
+  assert.equal(context.SESSION_ID, 'session-a', 'same id must not navigate');
+  assert.deepEqual(filtersRefreshed, [], 'same id must not refresh the sidebar');
+  assert.equal(context.getActiveBackendId(), 'codex-o3');
+});

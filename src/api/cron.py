@@ -21,7 +21,7 @@ from src.core.config import (
   get_scheduled_task_errors,
   get_scheduled_tasks,
 )
-from src.core.models import PROJECT_ROLE
+from src.core.models import PROJECT_ROLE, SessionMetadata
 from src.core.scheduler import effective_scheduled_task_backend
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
 from src.core.yaml_utils import load_yaml, save_yaml
@@ -85,9 +85,9 @@ async def _ensure_backend_update_session(
     req: "TaskUpdate",
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-) -> None:
+) -> Optional[SessionMetadata]:
   if 'backend' not in req.model_fields_set:
-    return
+    return None
   backend = effective_scheduled_task_backend(cand_model, cfg)
   role: Optional[str] = None
   group: Optional[str] = None
@@ -95,7 +95,7 @@ async def _ensure_backend_update_session(
     role = PROJECT_ROLE
     group = cand_model.project
   try:
-    await session_mgr.ensure_scheduled_session_backend(name, backend, role=role, group=group)
+    return await session_mgr.ensure_scheduled_session_backend(name, backend, role=role, group=group)
   except ScheduledSessionBusyError as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
 
@@ -157,25 +157,32 @@ async def list_cron_tasks():
   return valid + broken
 
 
-@router.put('/tasks/{name}')
-async def update_cron_task(
+async def apply_task_yaml_update(
     name: str,
     req: TaskUpdate,
-    cfg: CharlieBotConfig = Depends(get_config),
-    session_mgr: SessionManager = Depends(get_session_manager),
-):
-  if not _CRON_NAME_RE.fullmatch(name):
-    raise HTTPException(status_code=400, detail=f'invalid cron task name: {name!r}')
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+) -> tuple[dict, Optional[SessionMetadata]]:
+  """Apply a ``TaskUpdate`` to one job's yaml: load, validate, rotate, write.
+
+  Shared by the cron PUT route and the sessions write-through switch. Returns
+  the candidate task body (the PUT response) and the rotated/ensured
+  ``SessionMetadata`` (None when the request carries no backend change or the
+  session already matches). Raises HTTPException with the cron editor's exact
+  contract: 404 when the task file is missing, 400 on a non-recognized backend
+  or a guarded prompt edit, and 409 when the loader fails or the dedicated
+  session is busy (busy 409 surfaces before any yaml write).
+  """
   path = cron_path(name)
   if not path.exists():
     raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
   if 'backend' in req.model_fields_set:
     _validate_backend_id(req.backend, cfg)
-  # A syntax-error or otherwise unparseable file must surface as a 409 with the
-  # loader's error text, never a 500. Validate via the loader on the real file
-  # so the error matches what the list route reports for the job. Mirrors the
-  # loader's own catch-all: any failure in _load_cron_file becomes this job's
-  # error, never an unhandled exception.
+  # A syntax-error or otherwise unparseable file body must surface as a 409 with
+  # the loader's error text, never a 500. Validate via the loader on the real
+  # file so the error matches what the list route reports for the job. Mirrors
+  # the loader's own catch-all: any failure in _load_cron_file becomes this
+  # job's error, never an unhandled exception.
   try:
     current, _ = await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
     raw = await asyncio.to_thread(_read_cron_yaml, name)
@@ -207,11 +214,25 @@ async def update_cron_task(
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
 
+  rotated: Optional[SessionMetadata] = None
   if cand_model.enabled:
     _check_master_project_unique(name, cand_model.mode, cand_model.project)
-  await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
+  rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
   await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
+  return candidate, rotated
+
+
+@router.put('/tasks/{name}')
+async def update_cron_task(
+    name: str,
+    req: TaskUpdate,
+    cfg: CharlieBotConfig = Depends(get_config),
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  if not _CRON_NAME_RE.fullmatch(name):
+    raise HTTPException(status_code=400, detail=f'invalid cron task name: {name!r}')
+  candidate, _ = await apply_task_yaml_update(name, req, cfg, session_mgr)
   return candidate
 
 

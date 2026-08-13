@@ -381,9 +381,23 @@ def _build_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -
 
 
 @pytest.mark.asyncio
-async def test_role_bound_scheduled_session_backend_switch_is_409(tmp_path: Path) -> None:
+async def test_role_bound_scheduled_session_backend_switch_writes_through_and_rotates(
+    cron_dir: Path,
+    tmp_path: Path,
+) -> None:
+  """A PM session's backend switch writes through to the task yaml and rotates."""
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
+  yaml_path = cron_dir / "pm_bp_eval.yaml"
+  yaml_path.write_text(
+      yaml.safe_dump({
+          "cron": "30 8 * * *",
+          "prompt": PM_TASK_PROMPT,
+          "mode": "master",
+          "project": "bp-eval",
+          "enabled": True,
+      }),
+      encoding="utf-8")
   pm = await session_mgr.create_session(
       CreateSessionRequest(name="PM: bp-eval", scheduled_task="pm_bp_eval", role=PROJECT_ROLE),
       backend="claude-opus-4.6",
@@ -393,13 +407,23 @@ async def test_role_bound_scheduled_session_backend_switch_is_409(tmp_path: Path
   with _build_sessions_client(cfg, session_mgr) as client:
     resp = client.post(f"/api/sessions/{pm.id}/backend", json={"backend": "codex-o3"})
 
-  assert resp.status_code == 409
-  detail = resp.json()["detail"]
-  assert "pm_bp_eval" in detail
-  assert "config.d/cron.d/pm_bp_eval.yaml" in detail
-  # The switch did not happen in place.
+  assert resp.status_code == 200
+  rotated = resp.json()
+  assert rotated is not None
+  # Rotation created a fresh session with the same role and group.
+  assert rotated["id"] != pm.id
+  assert rotated["backend"] == "codex-o3"
+  assert rotated["role"] == PROJECT_ROLE
+  assert rotated["group"] == "bp-eval"
+  assert rotated["scheduled_task"] == "pm_bp_eval"
+  # The yaml picked up the backend key.
+  assert yaml.safe_load(yaml_path.read_text(encoding="utf-8"))["backend"] == "codex-o3"
+  # The old dedicated session is archived; the new one is the sole active one.
   reloaded = await session_mgr.get_session(pm.id)
-  assert reloaded.backend == "claude-opus-4.6"
+  assert reloaded is not None
+  assert reloaded.status == SessionStatus.ARCHIVED
+  active = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
+  assert [s.id for s in active] == [rotated["id"]]
 
 
 @pytest.mark.asyncio

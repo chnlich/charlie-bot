@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -103,23 +104,38 @@ def test_guard_is_exactly_transcript_reachability(tmp_path: Path, tgt_id: str) -
 
 
 def test_switchable_backend_ids_follow_uniform_domain_rule(tmp_path: Path) -> None:
-  """Sessions follow the domain rule; a cron-dedicated role session lists nothing."""
+  """Ordinary sessions follow the domain rule; PM dedicated sessions offer all backends."""
   cfg, _config_a, _config_b = _build_cfg(tmp_path)
   meta = SessionMetadata(id="m_id", name="t", backend="claude-opus-5")
   payload = _active_backend_payload(meta, cfg)
   assert payload["active_backend"] == "claude-opus-5"
   assert payload["switchable_backends"] == ["claude-opus-5", "claude-fable-5"]
+  assert payload["backend_switch_rotates"] is False
 
   # A role-carrying session follows the same domain rule: outside the
   # cc-claude domain (codex here) it has no switchable targets either.
   role_session = SessionMetadata(id="role-id", name="t", backend="codex-o3", role="project")
-  assert _active_backend_payload(role_session, cfg)["switchable_backends"] == []
+  role_payload = _active_backend_payload(role_session, cfg)
+  assert role_payload["switchable_backends"] == []
+  assert role_payload["backend_switch_rotates"] is False
 
-  # A cron-dedicated role-carrying session's backend is controlled by the task
-  # yaml (the 409 guard), so the payload offers no in-place switch.
+  # A cron-dedicated role-carrying (PM) session's switch writes through to the
+  # task yaml and rotates, so the payload offers every backend option and flags
+  # that switching rotates.
   dedicated = SessionMetadata(
       id="pm-id", name="pm", backend="claude-opus-5", scheduled_task="pm_x", role="project")
-  assert _active_backend_payload(dedicated, cfg)["switchable_backends"] == []
+  dedicated_payload = _active_backend_payload(dedicated, cfg)
+  assert dedicated_payload["switchable_backends"] == [
+      opt.id for opt in cfg.backend_options]
+  assert dedicated_payload["backend_switch_rotates"] is True
+
+  # A cron-dedicated role-less session keeps the domain-filtered list (its
+  # session-page switch stays an in-place switch).
+  rl = SessionMetadata(
+      id="rl-id", name="rl", backend="claude-opus-5", scheduled_task="nightly", role=None)
+  rl_payload = _active_backend_payload(rl, cfg)
+  assert rl_payload["switchable_backends"] == ["claude-opus-5", "claude-fable-5"]
+  assert rl_payload["backend_switch_rotates"] is False
 
 
 def test_payload_resolves_default_when_backend_empty(tmp_path: Path) -> None:
@@ -295,3 +311,155 @@ async def test_switch_missing_session_returns_404(tmp_path: Path, monkeypatch: p
     response = client.post("/api/sessions/does-not-exist/backend", json={"backend": "claude-fable-5"})
   assert response.status_code == 404
   assert captured == []
+
+
+# ---------------------------------------------------------------------------
+# §4.1 write-through: PM dedicated session switch updates the task yaml
+# ---------------------------------------------------------------------------
+
+
+def _seed_pm_task(home: Path, name: str) -> Path:
+  """Write a mode: master cron yaml plus the env-rooted cron dir it loads from."""
+  cron_dir = home / "config.d" / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  path = cron_dir / f"{name}.yaml"
+  body = {
+      "cron": "0 2 * * *",
+      "prompt": "review and report",
+      "mode": "master",
+      "project": "the-group",
+      "timezone": "America/Los_Angeles",
+      "enabled": True,
+  }
+  path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+  return path
+
+
+def _read_yaml(path: Path) -> dict:
+  return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+async def _seed_pm_session(session_mgr: SessionManager) -> SessionMetadata:
+  return await session_mgr.create_session(
+      CreateSessionRequest(name="Scheduled: pm_x", scheduled_task="pm_x", role="project"),
+      backend="claude-opus-5",
+  )
+
+
+@pytest.mark.asyncio
+async def test_switch_pm_dedicated_session_writes_through_to_yaml_and_rotates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  home = tmp_path / ".charliebot"
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+  session_mgr = SessionManager(cfg)
+  yaml_path = _seed_pm_task(home, "pm_x")
+  parent = await _seed_pm_session(session_mgr)
+  parent.group = "the-group"
+  await session_mgr.save_metadata(parent)
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(f"/api/sessions/{parent.id}/backend", json={"backend": "claude-fable-5"})
+
+  assert response.status_code == 200
+  rotated = response.json()
+  assert rotated is not None
+  assert rotated["id"] != parent.id
+  assert rotated["backend"] == "claude-fable-5"
+  assert rotated["role"] == "project"
+  assert rotated["group"] == "the-group"
+  assert rotated["scheduled_task"] == "pm_x"
+
+  # The yaml is the single control point: the backend key is now persisted.
+  assert _read_yaml(yaml_path)["backend"] == "claude-fable-5"
+
+  # The old session is archived, the new one is the sole active dedicated one.
+  on_disk_parent = await session_mgr.get_session(parent.id)
+  assert on_disk_parent is not None
+  assert on_disk_parent.status == SessionStatus.ARCHIVED
+  active = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
+  assert [s.id for s in active] == [rotated["id"]]
+
+
+@pytest.mark.asyncio
+async def test_switch_pm_dedicated_session_busy_is_409_without_yaml_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  from src.core.thinking_state import clear_busy, mark_busy
+
+  home = tmp_path / ".charliebot"
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  yaml_path = _seed_pm_task(home, "pm_x")
+  parent = await _seed_pm_session(session_mgr)
+  before = yaml_path.read_bytes()
+
+  mark_busy(parent.id)
+  try:
+    with _build_client(cfg, session_mgr) as client:
+      response = client.post(f"/api/sessions/{parent.id}/backend", json={"backend": "claude-fable-5"})
+  finally:
+    clear_busy(parent.id)
+
+  assert response.status_code == 409
+  assert "backend switch" in response.json()["detail"]
+  # Busy 409 surfaces before any yaml write.
+  assert yaml_path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_switch_pm_dedicated_session_unknown_backend_is_400(tmp_path: Path) -> None:
+  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  parent = SessionMetadata(
+      id="pm-id", name="pm", scheduled_task="pm_x", role="project", backend="claude-opus-5")
+  await session_mgr.save_metadata(parent)
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(
+        f"/api/sessions/{parent.id}/backend", json={"backend": "missing-backend"})
+
+  assert response.status_code == 400
+  assert "clone" in response.json()["detail"].lower() or "fork" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_switch_pm_dedicated_session_missing_task_yaml_is_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  home = tmp_path / ".charliebot"
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+  session_mgr = SessionManager(cfg)
+  _seed_pm_task(home, "pm_x")
+  parent = await _seed_pm_session(session_mgr)
+  (home / "config.d" / "cron.d" / "pm_x.yaml").unlink()
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(f"/api/sessions/{parent.id}/backend", json={"backend": "claude-fable-5"})
+
+  assert response.status_code == 404
+  assert 'Task "pm_x" not found' in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_switch_role_less_dedicated_session_stays_in_place(tmp_path: Path) -> None:
+  """A cron-dedicated role-less session keeps the in-place domain switch."""
+  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  rl = await session_mgr.create_session(
+      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
+      backend="claude-opus-5",
+  )
+
+  with _build_client(cfg, session_mgr) as client:
+    response = client.post(f"/api/sessions/{rl.id}/backend", json={"backend": "claude-fable-5"})
+
+  assert response.status_code == 200
+  assert response.json()["id"] == rl.id
+  updated = await session_mgr.get_session(rl.id)
+  assert updated is not None
+  assert updated.backend == "claude-fable-5"
+  assert len(await session_mgr.list_sessions()) == 1

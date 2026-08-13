@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core import git as git_module
-from src.core.git import BaseResolution
 from src.core import improve_command, review, spawner
+from src.core.git import BaseResolution
 from src.core.improve_command import load_loop_state
 from src.core.models import ThreadMetadata
 

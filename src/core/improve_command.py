@@ -463,7 +463,7 @@ def _event_text(event: dict) -> str:
 def _quota_blocker_reason(events: list[dict]) -> Optional[str]:
   for ev in reversed(events):
     event_type = ev.get('type')
-    if event_type == 'rate_limit_event':
+    if event_type == ET.RATE_LIMIT_EVENT:
       rli = ev.get('rate_limit_info', {})
       status = str(rli.get('status', '')).lower()
       overage_status = str(rli.get('overageStatus', '')).lower()

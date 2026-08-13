@@ -826,6 +826,8 @@ async def _session_consumer(session_id: str) -> None:
             thinking_seconds = int((datetime.now(timezone.utc) - busy_start).total_seconds())
 
         done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking": still_thinking}
+        if item.user_event_id:
+          done_event["input_event_id"] = item.user_event_id
         if thinking_seconds is not None:
           done_event["thinking_seconds"] = thinking_seconds
         done_event.update({k: v for k, v in finish_extras.items()})

@@ -28,6 +28,7 @@ COMPLETE = "complete"
 # -- Scheduler / handler ----------------------------------------------------
 HANDLER_RESULT = "handler_result"
 SCHEDULED_TRIGGER = "scheduled_trigger"
+SCHEDULED_RUN_SKIPPED = "scheduled_run_skipped"
 
 # -- Agent relay -------------------------------------------------------------
 # Cross-session agent message: carries the caller session's provenance and is

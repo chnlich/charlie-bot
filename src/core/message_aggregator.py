@@ -102,6 +102,16 @@ def _backend_switched_msg(ev: dict) -> dict:
   }
 
 
+def _scheduled_run_skipped_msg(ev: dict) -> dict:
+  task = ev.get('task', '')
+  skipped_at = ev.get('skipped_at', '')
+  reason = ev.get('reason', '')
+  return {
+      'role': 'system',
+      'content': f"Scheduled run of '{task}' skipped at {skipped_at}: {reason}",
+  }
+
+
 def _task_delegated_msg(ev: dict) -> dict:
   backend = ev.get("backend") or ev.get("resolved_backend") or ""
   model = ev.get("model") or ev.get("resolved_model") or ""
@@ -174,6 +184,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
+    ET.SCHEDULED_RUN_SKIPPED:
+        _scheduled_run_skipped_msg,
 }
 
 

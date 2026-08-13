@@ -56,6 +56,8 @@ reached by string. Do not delete a symbol on this list.
 Known-alive symbols:
 - `kill_tmux_session` — documented `# noqa` re-export, reached by string reference.
 - `ScheduledSessionBusyError` — documented `# noqa` re-export, kept deliberately.
+- `_no_master_wake` — pytest fixture in `tests/test_spawner_finalize_liveness_gate.py`, reached by
+  string via `@pytest.mark.usefixtures("_no_master_wake")`; invisible to static dead-code tools.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

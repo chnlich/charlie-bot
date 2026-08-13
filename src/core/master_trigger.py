@@ -22,13 +22,14 @@ async def run_message_with_resume_recovery(
     summary: str,
     session_mgr: SessionManager,
     expect_fresh_session: bool = False,
+    user_event_id: Optional[str] = None,
 ) -> Optional[str]:
   """Call run_message, retrying once with cc_session_id cleared on stale-resume errors.
 
-  ``expect_fresh_session`` is forwarded to the first ``run_message`` call only.
-  The stale-resume retry deliberately clears the anchor but must NOT forward the
-  flag: an anchor-missing alarm there is correct (the resume failed and context
-  is being dropped as recovery).
+  ``expect_fresh_session`` and ``user_event_id`` are forwarded to the first
+  ``run_message`` call only. The stale-resume retry deliberately clears the
+  anchor but must NOT forward either: an anchor-missing alarm there is correct
+  (the resume failed and context is being dropped as recovery).
   """
   backend_id = session_meta.backend
   backend_option = cfg.get_backend_option(backend_id)
@@ -42,6 +43,7 @@ async def run_message_with_resume_recovery(
         auto_trigger=True,
         backend_option=backend_option,
         expect_fresh_session=expect_fresh_session,
+        user_event_id=user_event_id,
     )
   except Exception as e:
     if not is_resume_not_found_error(e):
@@ -87,6 +89,7 @@ async def trigger_master(
     summary: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
+    user_event_id: Optional[str] = None,
 ) -> None:
   """Best-effort trigger of the master agent to process a worker result."""
   try:
@@ -131,7 +134,8 @@ async def trigger_master(
 
     await run_message_with_resume_recovery(
         cfg, session_meta, master_summary, session_mgr,
-        expect_fresh_session=expect_fresh_session)
+        expect_fresh_session=expect_fresh_session,
+        user_event_id=user_event_id)
   except Exception as e:
     log.error("trigger_master_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
     try:

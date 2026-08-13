@@ -119,11 +119,16 @@ class SessionManager:
   async def create_session(self, req: CreateSessionRequest, backend: str | None = None) -> SessionMetadata:
     """Create a new session."""
     name = req.name or await self._next_session_name()
+    overrides: dict = {}
+    if req.session_id:
+      overrides["id"] = req.session_id
     meta = SessionMetadata(
         name=name,
         scheduled_task=req.scheduled_task,
         role=req.role,
-        backend=backend or self._cfg.backend_options[0].id)
+        backend=backend or self._cfg.backend_options[0].id,
+        slack_origin=req.slack_origin,
+        **overrides)
 
     session_dir = self._session_dir(meta.id)
     # Create directory structure

@@ -204,6 +204,11 @@ class CharlieBotConfig(BaseModel):
   telegram_bot_token: Optional[str] = None
   telegram_chat_id: Optional[str] = None
 
+  # Slack summon entrypoint
+  slack_bot_token: Optional[str] = None       # xoxb-…, chat:write + history scopes
+  slack_app_token: Optional[str] = None       # xapp-…, connections:write, Socket Mode only
+  slack_allowed_user_ids: list[str] = []      # Slack user ids allowed to summon; empty = nobody
+
   @model_validator(mode="before")
   @classmethod
   def migrate_and_expand(cls, values: dict) -> dict:

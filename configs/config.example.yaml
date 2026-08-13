@@ -43,3 +43,11 @@ backlog_repos: []
 # model, and api_key_env per backend_option above (no top-level fields).
 # Skill integration tokens (github / linear / slack / feishu / google) are omitted
 # for now, pending a cleanup of which keys are still used.
+
+# --- Slack summon entrypoint ---
+# Slack app bot token (xoxb-…); requires chat:write + history scopes.
+slack_bot_token: ""
+# Slack app-level token (xapp-…); requires connections:write, Socket Mode only.
+slack_app_token: ""
+# Slack user ids allowed to summon; empty = nobody.
+slack_allowed_user_ids: []

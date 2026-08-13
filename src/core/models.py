@@ -215,6 +215,13 @@ class MasterRunRecord(BaseModel):
   user_event_id: Optional[str] = None  # chat event this turn answers
 
 
+class SlackOrigin(BaseModel):
+  """Slack thread a session was summoned from; set at creation, never mutated."""
+  team_id: str
+  channel_id: str
+  thread_ts: str
+
+
 class SessionMetadata(BaseModel):
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   name: str
@@ -250,6 +257,8 @@ class SessionMetadata(BaseModel):
   schedule_allow_failure: Optional[bool] = None
   # Parent session for clone/elone-derived sessions
   parent_session_id: Optional[str] = None
+  # Slack thread this session was summoned from; set at creation, never mutated.
+  slack_origin: Optional[SlackOrigin] = None
   # Rating
   rating: Optional[SessionRating] = None
   # Key is the round event id (UUID generated at event write time, or
@@ -294,6 +303,8 @@ class CreateSessionRequest(BaseModel):
   scheduled_task: Optional[str] = None
   backend: Optional[str] = None
   role: Optional[str] = None
+  session_id: Optional[str] = None
+  slack_origin: Optional[SlackOrigin] = None
 
 
 class ForkSessionRequest(BaseModel):

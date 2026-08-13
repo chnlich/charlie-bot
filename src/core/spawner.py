@@ -890,6 +890,39 @@ async def recomplete_finalize_effects(
       task_type=task_type)
 
 
+async def _rerun_verify_on_fresh_backend(
+    session_id: str,
+    description: str,
+    thread: ThreadMetadata,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    req: SpawnRequest,
+) -> tuple[int, bool, str]:
+  """Re-run an exhausted VERIFY task once on the next untried checking-role backend.
+
+  Returns the retry's (exit_code, quota_exhausted, error_message). When no retry
+  backend is available, the original exhaustion state (-1, True, "") is returned
+  unchanged. A ``_create_repoless_process`` failure propagates: the caller has
+  already cleared ``quota_exhausted``, so it lands as a generic setup error.
+  """
+  retry_backend = await _select_verify_quota_retry_backend(session_id, cfg, session_mgr, thread)
+  if retry_backend is None:
+    return -1, True, ""
+  resolved_backend, resolved_model, tried_backends = retry_backend
+  log.warning(
+      "verify_quota_retry",
+      thread_id=thread.id,
+      exhausted_backend=thread.backend,
+      retry_backend=resolved_backend,
+  )
+  req.resolved_backend = resolved_backend
+  req.resolved_model = resolved_model
+  thread.tried_backends = tried_backends
+  worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, req)
+  return await _stream_worker_events(worker, session_id, description, thread, thread_mgr, session_mgr)
+
+
 async def spawn_worker(
     session_id: str,
     description: str,
@@ -926,22 +959,10 @@ async def spawn_worker(
         worker, session_id, description, thread, thread_mgr, session_mgr)
 
     if req.task_type == TaskType.VERIFY and quota_exhausted:
-      retry_backend = await _select_verify_quota_retry_backend(session_id, cfg, session_mgr, thread)
-      if retry_backend is not None:
-        resolved_backend, resolved_model, tried_backends = retry_backend
-        log.warning(
-            "verify_quota_retry",
-            thread_id=thread.id,
-            exhausted_backend=thread.backend,
-            retry_backend=resolved_backend,
-        )
-        req.resolved_backend = resolved_backend
-        req.resolved_model = resolved_model
-        thread.tried_backends = tried_backends
-        quota_exhausted = False
-        worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, req)
-        exit_code, quota_exhausted, error_msg = await _stream_worker_events(
-            worker, session_id, description, thread, thread_mgr, session_mgr)
+      # A retry's own setup failure is a generic error, not quota exhaustion.
+      quota_exhausted = False
+      exit_code, quota_exhausted, error_msg = await _rerun_verify_on_fresh_backend(
+          session_id, description, thread, cfg, session_mgr, thread_mgr, req)
 
     if exit_code != 0 and not quota_exhausted and not error_msg:
       exit_code = await _maybe_override_exit_code_from_result(exit_code, session_id, thread, thread_mgr)

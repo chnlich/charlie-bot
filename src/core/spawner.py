@@ -226,7 +226,7 @@ def _build_worker_prompt(
   return result
 
 
-def _short_desc(description: str, limit: int = 120) -> str:
+def short_desc(description: str, limit: int = 120) -> str:
   """First line of description, truncated."""
   first_line = description.split('\n', 1)[0].strip()
   if len(first_line) > limit:
@@ -390,7 +390,7 @@ async def _select_verify_quota_retry_backend(
     thread: ThreadMetadata,
 ) -> Optional[tuple[str, Optional[str], list[str]]]:
   """Select the next untried checking-role backend after verifier quota exhaustion."""
-  current_backend, _ = _require_thread_backend_model(thread, cfg)
+  current_backend, _ = require_thread_backend_model(thread, cfg)
   checked_backend, checked_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
   tried_backends = list(thread.tried_backends)
   retry = review.select_reviewer_backend(cfg, checked_backend, checked_model, tried_backends)
@@ -405,7 +405,7 @@ async def _select_verify_quota_retry_backend(
   return retry
 
 
-def _require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, Optional[str]]:
+def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, Optional[str]]:
   """Return backend+model from thread metadata or raise."""
   if not thread.backend:
     raise ValueError(f"thread '{thread.id}' missing backend metadata")
@@ -1179,7 +1179,7 @@ async def _broadcast_completion(
   if task_type == TaskType.VERIFY:
     events_summary = await read_verify_final_report(session_id, thread.id, thread_mgr)
   else:
-    events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
+    events_summary = await read_events_summary(session_id, thread.id, thread_mgr)
 
   # Re-read to pick up cancel endpoint's status
   current_thread = await thread_mgr.get_thread(session_id, thread.id)
@@ -1267,7 +1267,7 @@ async def _notify_completion(
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
 
 
-async def _read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:
+async def read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:
   """Read the last N lines from a thread's events.jsonl for summarization."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
   events = await asyncio.to_thread(parse_ndjson_file, events_path)

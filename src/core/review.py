@@ -355,7 +355,7 @@ async def _resolve_review_spawn_context(
   Returns a `ReviewSpawnContext` on success, or None to short-circuit (retries
   exceeded, prerequisites missing, or all backends exhausted).
   """
-  from src.core.spawner import _require_thread_backend_model
+  from src.core.spawner import require_thread_backend_model
 
   tried_backends = list(tried_backends) if tried_backends is not None else []
 
@@ -370,7 +370,7 @@ async def _resolve_review_spawn_context(
   repo_path, branch_name, wt_path = prerequisites
 
   base_branch = original_thread.base_branch or await git_current_branch(repo_path)
-  worker_backend, worker_model = _require_thread_backend_model(original_thread, cfg)
+  worker_backend, worker_model = require_thread_backend_model(original_thread, cfg)
 
   backend_result = select_reviewer_backend(cfg, worker_backend, worker_model, tried_backends)
   if backend_result is None:
@@ -406,7 +406,7 @@ async def spawn_review_worker(
   failed-reviewer retry path the failed reviewer itself matches the
   reviewer-exists judgment and must not block its own replacement.
   """
-  from src.core.spawner import _short_desc, spawn_worker
+  from src.core.spawner import short_desc, spawn_worker
 
   # Idempotency judgment: never derive a second reviewer for the same original
   # thread, so the merge happens exactly once (the reviewer pushes; the server
@@ -445,7 +445,7 @@ async def spawn_review_worker(
     return False
   review_thread = await thread_mgr.create_thread(
       session_meta,
-      f"Review: {original_thread.context or _short_desc(original_thread.description)}",
+      f"Review: {original_thread.context or short_desc(original_thread.description)}",
       review_of=original_thread.id,
   )
   review_thread.branch_name = ctx.branch_name
@@ -527,7 +527,7 @@ async def maybe_spawn_reviewer(
     cfg: CharlieBotConfig,
 ) -> None:
   """Handle review spawning logic and trigger master when appropriate."""
-  from src.core.spawner import _read_events_summary
+  from src.core.spawner import read_events_summary
 
   # Re-read thread metadata to get review_of field
   thread_meta = await thread_mgr.get_thread(session_id, thread.id)
@@ -551,7 +551,7 @@ async def maybe_spawn_reviewer(
         return
 
     # Review done (success or retries exhausted) -> combine summaries, trigger master.
-    original_events = await _read_events_summary(session_id, thread_meta.review_of, thread_mgr)
+    original_events = await read_events_summary(session_id, thread_meta.review_of, thread_mgr)
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
     await _trigger_master_judged(session_id, combined, thread_meta.id, cfg, session_mgr)
     if exit_code == 0 and original_thread:

@@ -570,6 +570,11 @@ async def _create_worktree_and_process(
   return await _construct_worker(session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, req)
 
 
+def _thread_dir(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Path:
+  """A thread's canonical on-disk directory (metadata.json and data/)."""
+  return cfg.sessions_dir / session_id / "threads" / thread_id
+
+
 async def _create_repoless_process(
     session_id: str,
     thread: ThreadMetadata,
@@ -585,7 +590,7 @@ async def _create_repoless_process(
     worker_prompt = req.prompt_override or description
   else:
     raise ValueError(f"unsupported task_type: {req.task_type!r}")
-  thread_dir = cfg.sessions_dir / session_id / 'threads' / thread.id
+  thread_dir = _thread_dir(cfg, session_id, thread.id)
 
   # Repo-less tasks cannot produce branch/worktree review artifacts.
   thread.branch_name = None
@@ -1021,7 +1026,7 @@ def _run_completion_time(cfg: CharlieBotConfig, session_id: str, thread_id: str)
   finalize chain writes it into completed_at so downtime never shifts a run's
   recorded end.
   """
-  thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
+  thread_dir = _thread_dir(cfg, session_id, thread_id)
   return runs.raw_completion_time(runs.raw_log_path(thread_dir))
 
 

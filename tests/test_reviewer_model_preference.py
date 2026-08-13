@@ -4,12 +4,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pytest
+from conftest import JudgmentShim
 
+from src.core import review, spawner
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata
-from src.core import review, spawner
-
-from conftest import JudgmentShim
 
 BACKEND_OPTIONS = [
     BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),

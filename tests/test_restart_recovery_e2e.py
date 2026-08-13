@@ -618,7 +618,7 @@ async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_repla
   raw_path = data_dir / runs.RAW_LOG_NAME
   assert raw_path.exists()
   assert "ATTEMPT-1-MARKER" in raw_path.read_text(encoding="utf-8")
-  attempt1_line_count = len([l for l in events_log.read_text(encoding="utf-8").splitlines() if l.strip()])
+  attempt1_line_count = len([line for line in events_log.read_text(encoding="utf-8").splitlines() if line.strip()])
   assert attempt1_line_count > 0
 
   # Attempt 2: same thread data dir (the retry fallback's own respawn shape),
@@ -648,8 +648,8 @@ async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_repla
   # events.jsonl accumulates across both attempts (same thread, same file) --
   # exactly like a real retry. What must NOT happen is attempt 2's own
   # contribution replaying attempt 1's assistant marker or its quota event.
-  all_lines = [l for l in events_log.read_text(encoding="utf-8").splitlines() if l.strip()]
-  attempt2_events = [json.loads(l) for l in all_lines[attempt1_line_count:]]
+  all_lines = [line for line in events_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+  attempt2_events = [json.loads(line) for line in all_lines[attempt1_line_count:]]
   assert attempt2_events
   assert not any("ATTEMPT-1-MARKER" in json.dumps(e) for e in attempt2_events)
   assert not any(e.get("type") == "rate_limit_event" for e in attempt2_events)

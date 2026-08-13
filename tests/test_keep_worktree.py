@@ -9,13 +9,19 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pytest
+from conftest import JudgmentShim
 
 from src.core import review, spawner
-from src.core.git import BaseResolution
-
-from conftest import JudgmentShim
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
+from src.core.git import BaseResolution
+from src.core.models import (
+  BackendOption,
+  SessionMetadata,
+  SpawnRequest,
+  TaskType,
+  ThreadMetadata,
+  ThreadStatus,
+)
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:

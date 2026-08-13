@@ -7,16 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from src.cli import claude_sub
-from src.cli import claude_sub_hook
+from src.cli import claude_sub, claude_sub_hook
 from src.cli.claude_sub_bridge import (
-    HookBridge,
-    HookProtocolError,
-    HookTurnState,
-    PromptDelivery,
+  HookBridge,
+  HookProtocolError,
+  HookTurnState,
+  PromptDelivery,
 )
 from src.core import event_types as ET
-
 
 SESSION_ID = "session-id"
 WORKING_DIRECTORY = "/tmp/claude-sub-test"
@@ -338,7 +336,7 @@ def test_stop_rejects_background_work_and_stop_failure_preserves_error() -> None
           last_assistant_message="partial answer",
       ))
 
-  assert [event["type"] for event in events] == ["rate_limit_event", ET.ERROR]
+  assert [event["type"] for event in events] == [ET.RATE_LIMIT_EVENT, ET.ERROR]
   assert events[0]["rate_limit_info"]["status"] == "rejected"
   assert events[1]["error"] == "rate_limit"
   assert events[1]["error_details"] == "limit reached"

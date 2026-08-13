@@ -267,7 +267,7 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
     del session_id, thread_id, thread_mgr
     return "Worker output body"
 
-  monkeypatch.setattr(spawner, "_read_events_summary", fake_read_events_summary)
+  monkeypatch.setattr(spawner, "read_events_summary", fake_read_events_summary)
   monkeypatch.setattr(spawner, "_worker_summary_timestamp", lambda: "2026-07-01 12:35 PDT")
 
   events_summary, full_summary = await spawner._broadcast_completion(

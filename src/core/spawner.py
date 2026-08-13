@@ -1299,7 +1299,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     parts = ([text] if text else []) + tool_parts
     return " ".join(parts)[:300] if parts else ""
 
-  if ev_type == "rate_limit_event":
+  if ev_type == ET.RATE_LIMIT_EVENT:
     rli = ev.get("rate_limit_info", {})
     status = rli.get("status", "unknown")
     rate_type = rli.get("rateLimitType", "unknown")

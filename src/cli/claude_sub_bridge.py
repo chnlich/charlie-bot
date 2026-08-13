@@ -386,7 +386,7 @@ class HookTurnState:
     events: list[dict[str, Any]] = []
     if error == "rate_limit":
       events.append({
-          "type": "rate_limit_event",
+          "type": ET.RATE_LIMIT_EVENT,
           "rate_limit_info": {
               "status": "rejected",
               "rateLimitType": "unknown",

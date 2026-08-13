@@ -314,8 +314,8 @@ class Worker:
     if not event_data.get("timestamp"):
       event_data["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-    # Detect rate-limit rejections from Claude Code (type='rate_limit_event')
-    if event_type == "rate_limit_event":
+    # Detect rate-limit rejections from Claude Code (type=ET.RATE_LIMIT_EVENT)
+    if event_type == ET.RATE_LIMIT_EVENT:
       rli = event_data.get("rate_limit_info", {})
       if rli.get("status") == "rejected":
         rate_type = rli.get("rateLimitType", "unknown")

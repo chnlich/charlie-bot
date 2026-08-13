@@ -14,7 +14,23 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import Receive, Scope, Send
 
 from src.agents import transcriber
-from src.api import anthropic_proxy, backlog, chat, code_server, cron, ext_usage, files, git, internal, latex, pages, sessions, slash, threads, voice
+from src.api import (
+  anthropic_proxy,
+  backlog,
+  chat,
+  code_server,
+  cron,
+  ext_usage,
+  files,
+  git,
+  internal,
+  latex,
+  pages,
+  sessions,
+  slash,
+  threads,
+  voice,
+)
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
 from src.core import event_types as ET
@@ -22,11 +38,16 @@ from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import get_config
 from src.core.http import close_http_client
-from src.core.init import init_charliebot_home, reconcile_master_identity, run_crash_recovery
+from src.core.init import (
+  init_charliebot_home,
+  reconcile_master_identity,
+  run_crash_recovery,
+)
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import utc_now
 from src.core.scheduler import Scheduler
 from src.core.streaming import streaming_manager
+from src.core.tasks import create_logged_task
 from src.core.triggers import TriggerManager
 
 # Raw event types replaced by aggregator deltas on the wire (kept in sync
@@ -168,6 +189,18 @@ async def lifespan(app: FastAPI):
 
   await ext_usage.start_poller()
 
+  slack_listener_task = None
+  if cfg.slack_bot_token and cfg.slack_app_token and cfg.slack_allowed_user_ids:
+    from src.core.slack_listener import (
+      run_listener,  # lazy: avoids import cycle at module scope
+    )
+
+    slack_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="slack-listener")
+    app.state.slack_listener_task = slack_listener_task
+    log.info("slack_entrypoint_started")
+  else:
+    log.info("slack_entrypoint_off")
+
   log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
   yield
 
@@ -176,6 +209,11 @@ async def lifespan(app: FastAPI):
     speech_model_task.cancel()
     with suppress(asyncio.CancelledError):
       await speech_model_task
+  slack_listener_task = getattr(app.state, "slack_listener_task", None)
+  if slack_listener_task is not None and not slack_listener_task.done():
+    slack_listener_task.cancel()
+    with suppress(asyncio.CancelledError):
+      await slack_listener_task
   await ext_usage.stop_poller()
   await close_http_client()
   await scheduler.stop()

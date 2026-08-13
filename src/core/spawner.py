@@ -762,6 +762,17 @@ async def _run_finalize_effects(
       task_type=task_type)
 
 
+async def _thread_cancelled(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> bool:
+  """Re-read the thread from disk: the cancel endpoint may have already set CANCELLED."""
+  current = await thread_mgr.get_thread(session_id, thread_id)
+  return current is not None and current.status == ThreadStatus.CANCELLED
+
+
+def _exit_status_label(exit_code: int) -> str:
+  """The worker_summary status label for a run's exit code."""
+  return "completed" if exit_code == 0 else "failed"
+
+
 async def _finalize_worker(
     session_id: str,
     description: str,
@@ -782,9 +793,7 @@ async def _finalize_worker(
   caller passes the raw log's final mtime so the recorded completion time is
   the run's true end, not whenever finalization happened to run.
   """
-  # Re-read from disk: the cancel endpoint may have already set CANCELLED.
-  current = await thread_mgr.get_thread(session_id, thread.id)
-  cancelled = current and current.status == ThreadStatus.CANCELLED
+  cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
   if task_type == TaskType.VERIFY and not cancelled and not quota_exhausted:
     report = await read_verify_final_report(session_id, thread.id, thread_mgr)
     trailer_error = verify_result_trailer_error(report)
@@ -1181,11 +1190,9 @@ async def _broadcast_completion(
   else:
     events_summary = await read_events_summary(session_id, thread.id, thread_mgr)
 
-  # Re-read to pick up cancel endpoint's status
-  current_thread = await thread_mgr.get_thread(session_id, thread.id)
-  cancelled = current_thread and current_thread.status == ThreadStatus.CANCELLED
+  cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
 
-  status = 'cancelled' if cancelled else ('completed' if exit_code == 0 else 'failed')
+  status = 'cancelled' if cancelled else _exit_status_label(exit_code)
   if task_type == TaskType.VERIFY:
     report = events_summary or "(no verifier final report)"
     full_summary = f"**Verifier completion: thread `{thread.id}`**\n\n{report}"
@@ -1252,7 +1259,7 @@ async def _notify_completion(
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
-      status = "completed" if exit_code == 0 else "failed"
+      status = _exit_status_label(exit_code)
       fallback = _worker_locator_summary(thread.id, status, _worker_summary_timestamp())
       fallback_event = _build_worker_event(
           thread.id,

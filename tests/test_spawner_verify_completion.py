@@ -147,7 +147,7 @@ async def test_verify_final_report_falls_back_to_untruncated_last_assistant_mess
   )
   thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="Verify")
 
-  result = await spawner._read_verify_final_report(thread.session_id, thread.id, FakeThreadManager(thread, events_path))
+  result = await spawner.read_verify_final_report(thread.session_id, thread.id, FakeThreadManager(thread, events_path))
 
   assert result == report
 

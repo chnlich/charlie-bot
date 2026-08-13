@@ -68,6 +68,10 @@ PROMPT_DISPATCHED = "prompt_dispatched"
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"
 FILE_WRITE = "file_write"
+# Claude Code emits this raw-stream event when the subscription/API answers
+# with a rate-limit status; workers persist it verbatim, so the quota-
+# detection chain consumes the same type on read-back.
+RATE_LIMIT_EVENT = "rate_limit_event"
 
 # -- Session backend switching ----------------------------------------------
 BACKEND_SWITCHED = "backend_switched"

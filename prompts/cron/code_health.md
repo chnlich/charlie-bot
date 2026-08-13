@@ -58,6 +58,10 @@ Known-alive symbols:
 - `ScheduledSessionBusyError` — documented `# noqa` re-export, kept deliberately.
 - `_no_master_wake` — pytest fixture in `tests/test_spawner_finalize_liveness_gate.py`, reached by
   string via `@pytest.mark.usefixtures("_no_master_wake")`; invisible to static dead-code tools.
+- `_handle_agent_message`, `_handle_reasoning`, `_handle_command_execution`, `_handle_file_change`,
+  `_handle_mcp_tool_call`, `_handle_web_search`, `_handle_todo_list`, `_handle_error` — Codex backend
+  item-event handlers in `src/agents/backends/codex.py`, reached by string via the `_ITEM_HANDLERS`
+  name list and `getattr(self, handler_name)` dispatch in `_translate_item_event`.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

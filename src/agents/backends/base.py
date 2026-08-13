@@ -361,7 +361,6 @@ class AgentBackend(ABC):
       extra_flags: Optional[list[str]] = None,
       buffer_limit: Optional[int] = None,
       on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
-      system_prompt_path: Optional[str] = None,
       instructions_content: Optional[str] = None,
       resume_session_id: Optional[str] = None,
       log_dir: Optional[Path] = None,
@@ -371,7 +370,6 @@ class AgentBackend(ABC):
     self._extra_flags = extra_flags or []
     self._buffer_limit = buffer_limit or DEFAULT_BUFFER_LIMIT
     self._on_spawn = on_spawn
-    self._system_prompt_path = system_prompt_path
     self._instructions_content = instructions_content
     self._resume_session_id = resume_session_id
     self._log_dir = log_dir

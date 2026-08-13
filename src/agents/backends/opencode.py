@@ -665,9 +665,6 @@ class OpenCodeBackend(AgentBackend):
       return [make_text_event(text)]
     return []
 
-  def _translate_tool(self, ev: dict) -> list[dict]:
-    return self._translate_tool_part(ev.get("part", {}))
-
   def _translate_error(self, ev: dict) -> list[dict]:
     msg = ev.get("part", {}).get("error", str(ev))
     return [make_error_event(msg)]

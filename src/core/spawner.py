@@ -43,13 +43,9 @@ from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.verify_trailer import (
-  VERIFY_RESULT_TRAILER_EXPECTED as _VERIFY_RESULT_TRAILER_EXPECTED,
-)
-from src.core.verify_trailer import (
-  read_verify_final_report as _read_verify_final_report,
-)
-from src.core.verify_trailer import (
-  verify_result_trailer_error as _verify_result_trailer_error,
+  VERIFY_RESULT_TRAILER_EXPECTED,
+  read_verify_final_report,
+  verify_result_trailer_error,
 )
 
 log = structlog.get_logger()
@@ -144,7 +140,7 @@ def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> st
   sections = load_verify_prompt_sections(cfg)
   contract = _substitute_tokens(
       "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
-          "{{result_trailer_expected}}": _VERIFY_RESULT_TRAILER_EXPECTED,
+          "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
           "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
       })
   if "{{" in contract:
@@ -785,8 +781,8 @@ async def _finalize_worker(
   current = await thread_mgr.get_thread(session_id, thread.id)
   cancelled = current and current.status == ThreadStatus.CANCELLED
   if task_type == TaskType.VERIFY and not cancelled and not quota_exhausted:
-    report = await _read_verify_final_report(session_id, thread.id, thread_mgr)
-    trailer_error = _verify_result_trailer_error(report)
+    report = await read_verify_final_report(session_id, thread.id, thread_mgr)
+    trailer_error = verify_result_trailer_error(report)
     if trailer_error:
       exit_code = -1
       error = f"{error}; {trailer_error}" if error else trailer_error
@@ -1155,7 +1151,7 @@ async def _broadcast_completion(
     await session_mgr.save_metadata(session_meta)
 
   if task_type == TaskType.VERIFY:
-    events_summary = await _read_verify_final_report(session_id, thread.id, thread_mgr)
+    events_summary = await read_verify_final_report(session_id, thread.id, thread_mgr)
   else:
     events_summary = await _read_events_summary(session_id, thread.id, thread_mgr)
 

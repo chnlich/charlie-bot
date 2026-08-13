@@ -508,3 +508,43 @@ def test_cron_api_prompt_echo_is_not_persisted_on_prompt_file_task(
 
   loaded, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
   assert loaded.prompt == md_content
+
+
+def test_cron_api_tolerates_trimmed_prompt_echo_on_prompt_file_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  yaml_path, _md_path, md_content = _seed_prompt_file_task(cron_dir, tmp_path)
+  original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+
+  with _build_cron_client(cfg, session_mgr) as client:
+    # The editor's saveCronTask sends the full field set and trims the prompt
+    # before the PUT, so the echo arrives without the file's trailing newline;
+    # the guard must treat it as unchanged and persist the backend change.
+    response = client.put(
+        "/api/cron/tasks/nightly",
+        json={
+            "cron": "0 3 * * *",
+            "prompt": md_content.strip(),
+            "repo": None,
+            "backend": "codex-o3",
+            "project": None,
+            "timezone": "America/Los_Angeles",
+            "enabled": True,
+        },
+    )
+
+  assert response.status_code == 200
+  persisted = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+  # The PUT must add exactly the backend key/value and touch nothing else, in
+  # either direction.
+  assert set(persisted.items()) - set(original.items()) == {("backend", "codex-o3")}
+  assert set(original.items()) - set(persisted.items()) == set()
+
+  loaded, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
+  assert loaded.backend == "codex-o3"

@@ -183,12 +183,13 @@ async def update_cron_task(
     raise HTTPException(status_code=409, detail=str(e)) from e
 
   # prompt_file jobs manage `prompt` from the referenced file; the UI modal
-  # always echoes the resolved text back on save, so an unchanged echo must
+  # echoes the resolved text back on save trimmed of edge whitespace, so an
+  # unchanged echo (compared edge-whitespace-tolerantly, None as empty) must
   # not be persisted (that would leave the file with two prompt sources — see
   # _resolve_prompt_file), while a genuinely changed value must be rejected
   # before any write happens.
   if raw.get('prompt_file') and 'prompt' in req.model_fields_set:
-    if req.prompt != current.prompt:
+    if (req.prompt or '').strip() != (current.prompt or '').strip():
       raise HTTPException(
           status_code=400,
           detail=f"prompt is managed by prompt_file '{raw['prompt_file']}'; edit that file instead")

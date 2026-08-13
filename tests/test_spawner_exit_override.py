@@ -6,7 +6,6 @@ failed. The helper inspects events.jsonl and overrides non-zero exit codes accor
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import pytest
 

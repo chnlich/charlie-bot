@@ -3,13 +3,19 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pytest
+from conftest import JudgmentShim
 
 from src.core import event_types as ET
 from src.core import spawner
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata, ThreadStatus
-
-from conftest import JudgmentShim
+from src.core.models import (
+  BackendOption,
+  SessionMetadata,
+  SpawnRequest,
+  TaskType,
+  ThreadMetadata,
+  ThreadStatus,
+)
 
 BACKEND_OPTIONS = [
     BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),

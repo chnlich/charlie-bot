@@ -781,6 +781,7 @@ async def _finalize_worker(
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
+    *,
     quota_exhausted: bool = False,
     error: str = "",
     skip_notify: bool = False,
@@ -838,6 +839,7 @@ async def _finalize_worker_safely(
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
+    *,
     quota_exhausted: bool,
     error: str,
     skip_notify: bool,
@@ -1021,9 +1023,9 @@ async def spawn_worker(
           thread_mgr,
           session_mgr,
           cfg,
-          quota_exhausted,
-          error_msg,
-          req.skip_notify,
+          quota_exhausted=quota_exhausted,
+          error=error_msg,
+          skip_notify=req.skip_notify,
           task_type=req.task_type,
           completed_at=_run_completion_time(cfg, session_id, thread.id))
 
@@ -1137,9 +1139,9 @@ async def resume_worker(
             thread_mgr,
             session_mgr,
             cfg,
-            quota_exhausted,
-            error_msg,
-            False,
+            quota_exhausted=quota_exhausted,
+            error=error_msg,
+            skip_notify=False,
             task_type=thread.task_type or TaskType.IMPLEMENT,
             completed_at=_run_completion_time(cfg, session_id, thread.id))
 

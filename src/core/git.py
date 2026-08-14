@@ -181,7 +181,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResoluti
     raise BaseBranchResolutionError(f"invalid branch name in --base-branch: {raw!r}")
 
   # Probe origin state: configured? reachable? branch published?
-  ok, _, url_err = await _git_stdout(
+  ok, _, _ = await _git_stdout(
       repo_path,
       "remote",
       "get-url",

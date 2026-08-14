@@ -67,6 +67,24 @@ Known-alive symbols:
   `cc-openai-compatible` backend registry builds that URL by f-string in
   `src/agents/backends/registry.py`. The Python name has exactly zero whole-repo matches outside
   its own definition, so static dead-code tools (vulture) flag it as an unused function.
+- Every FastAPI route handler in `src/api/*.py` (functions under `@router.get/post/patch/put/
+  delete/websocket` decorators, e.g. `list_projects`, `get_backlog`, `list_cron_tasks`,
+  `get_session_view`, `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` mounts
+  each router with `include_router(prefix=...)` and `web/static/js/` fetches the composed paths
+  (e.g. `/api/sessions/projects` from `context-panel.js`, `/rounds/{id}/rate` from
+  `chat/ratings-recap.js`). The Python function names have exactly zero whole-repo matches outside
+  their definitions, so vulture flags each one as an unused function; they must never be deleted on
+  that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
+  because its URL is built inside the Python registry rather than `web/`.
+- `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
+  (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
+  `_worktree_paths` (`tests/test_reviewer_model_preference.py`) — pytest `autouse=True` fixtures,
+  reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
+  definitions, so vulture flags them as unused functions. Vulture also flags
+  `_clean_ceiling_env` (`tests/test_session_usage.py`) and `pidfd_open_available`
+  (`tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`), but those fixtures are
+  named in the parameter lists of the tests that use them, so the Step 3 grep already finds their
+  references; no list entries needed.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

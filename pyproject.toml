@@ -20,6 +20,10 @@ dependencies = [
     "python-multipart>=0.0.22",
     "pyyaml>=6.0.3",
     "sherpa-onnx>=1.13.4",
+    # sherpa-onnx-core ships libonnxruntime.so; sherpa-onnx's PyPI sdist omits
+    # the dependency, so uv's universal resolution would drop it without this
+    # direct requirement. Keep the pin matched to the resolved sherpa-onnx.
+    "sherpa-onnx-core==1.13.4",
     "structlog>=25.5.0",
     "uvicorn[standard]>=0.42.0",
     "websockets>=16.0",

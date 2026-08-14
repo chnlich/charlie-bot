@@ -27,11 +27,20 @@ BACKEND_OPTIONS = [
 ]
 
 
+def _write_stub_chrome(tmp_path: Path, height: int) -> str:
+  """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
+  stub = tmp_path / f"stub-chrome-{height}.sh"
+  stub.write_text(f"#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n", encoding="utf-8")
+  stub.chmod(0o755)
+  return str(stub)
+
+
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=BACKEND_OPTIONS,
+      headless_chrome_bin=_write_stub_chrome(tmp_path, 800),
   )
 
 

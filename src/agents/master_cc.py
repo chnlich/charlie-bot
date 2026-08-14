@@ -330,7 +330,7 @@ def _route_resume_session(backend_type: str, cc_session_id: Optional[str]) -> tu
   return [], None
 
 
-def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
+def _build_master_env(cfg: CharlieBotConfig) -> dict[str, str]:
   """Build the environment for the master backend subprocess."""
   env = {**os.environ}
   env.pop("CLAUDECODE", None)
@@ -460,7 +460,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   if item.extra_claude_flags:
     extra_flags.extend(item.extra_claude_flags)
 
-  env = _build_master_env(cfg, session_meta.id)
+  env = _build_master_env(cfg)
 
   prompt = _build_prompt(item.user_content, item.is_voice)
 

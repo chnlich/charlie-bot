@@ -45,7 +45,7 @@ def test_build_master_env_removes_session_env_and_prepends_repo_venv(
   monkeypatch.setenv("CLAUDECODE", "1")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
 
-  env = master_cc._build_master_env(cfg, "session-id")
+  env = master_cc._build_master_env(cfg)
 
   assert "CHARLIEBOT_SESSION_ID" not in env
   assert env["GIT_CEILING_DIRECTORIES"] == str(tmp_path / "home")

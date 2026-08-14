@@ -63,7 +63,8 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   # A cron-dedicated role-carrying (PM) session's backend is controlled by the
   # task yaml: the switch is a write-through that rotates the session, so the
   # payload offers every backend option and flags that switching rotates.
-  rotates = meta.scheduled_task is not None and meta.role is not None
+  # Same trigger condition as the write-through guard in switch_session_backend.
+  rotates = bool(meta.scheduled_task and meta.role is not None)
   if rotates:
     switchable = [opt.id for opt in cfg.backend_options]
   else:

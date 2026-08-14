@@ -365,7 +365,8 @@ function renderProjectManagerRow(pm) {
   return `<a href="/?session=${pm.id}"
      class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}"
      onclick="event.preventDefault(); switchSession('${pm.id}')"
-     id="session-${pm.id}">
+     id="session-${pm.id}"
+     data-pm-head="1">
     <svg id="spinner-${pm.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
     <svg id="worker-indicator-${pm.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
     <span id="unread-${pm.id}" data-has-unread="${pm.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${pm.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
@@ -382,6 +383,7 @@ function renderProjectManagerSlotRow(group) {
   return `<button type="button"
      class="flex w-full items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors border border-dashed border-slate-700/50 text-slate-500 hover:bg-slate-700/50 hover:text-slate-300"
      data-group-name="${safeKey}"
+     data-pm-head="1"
      onclick="event.stopPropagation(); Sidebar.openPmSlotEditor(this.dataset.groupName)"
      title="Enable the Project Manager for this group">
     <span class="${PM_BADGE_CLASS} bg-slate-700/30 text-slate-500">PM</span>

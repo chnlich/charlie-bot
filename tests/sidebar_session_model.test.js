@@ -109,3 +109,24 @@ test('scheduled rows keep their cron lines untouched', () => {
   assert.ok(scheduled.includes('0 9 * * *'));
   assert.equal(modelSpan(scheduled), null);
 });
+
+// bumpCurrentSessionToTop() (web/static/js/chat/input.js) locates the PM head
+// row purely by this attribute; if the builders drift away from it, the bump
+// tests stay green while the bug returns in production.
+function rootOpenTag(html) {
+  const match = html.match(/^<[a-z]+\b[^>]*>/);
+  assert.ok(match, `no root open tag in: ${html}`);
+  return match[0];
+}
+
+test('both Project Manager row builders mark their root element with data-pm-head="1"', () => {
+  const {Sidebar} = loadGroups();
+  const pmRow = Sidebar.renderProjectManagerRow(
+    {id: 'pm1', name: 'PM · demo', updated_at: '2026-07-29T17:12:00Z'}
+  );
+  const slotRow = Sidebar.renderProjectManagerSlotRow('demo group');
+  assert.ok(rootOpenTag(pmRow).startsWith('<a'), pmRow);
+  assert.ok(rootOpenTag(pmRow).includes('data-pm-head="1"'), rootOpenTag(pmRow));
+  assert.ok(rootOpenTag(slotRow).startsWith('<button'), slotRow);
+  assert.ok(rootOpenTag(slotRow).includes('data-pm-head="1"'), rootOpenTag(slotRow));
+});

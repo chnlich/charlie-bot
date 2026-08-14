@@ -9,7 +9,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -77,7 +76,7 @@ _REQUIRED_VERIFY_PROMPT_SECTIONS = ("preamble", "scope")
 def _parse_prompt_sections(text: str) -> dict[str, str]:
   """Split a prompt template's raw text on its `<!-- section: <id> -->` marker lines."""
   sections: dict[str, str] = {}
-  current_id: Optional[str] = None
+  current_id: str | None = None
   current_lines: list[str] = []
   for line in text.split("\n"):
     if line.startswith(_PROMPT_SECTION_MARKER_PREFIX) and line.endswith(_PROMPT_SECTION_MARKER_SUFFIX):
@@ -157,11 +156,11 @@ def _build_worker_prompt(
     session_meta: SessionMetadata,
     cfg: CharlieBotConfig,
     task_type: TaskType,
-    loop_dir: Optional[str] = None,
-    iteration_number: Optional[int] = None,
+    loop_dir: str | None = None,
+    iteration_number: int | None = None,
     is_continuation: bool = False,
     keep_worktree: bool = False,
-    start_point: Optional[str] = None,
+    start_point: str | None = None,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   sections = load_worker_prompt_sections(cfg)
@@ -250,8 +249,8 @@ def _build_worker_event(
     content: str,
     status: str,
     full_content: str = '',
-    backend: Optional[str] = None,
-    model: Optional[str] = None,
+    backend: str | None = None,
+    model: str | None = None,
 ) -> dict:
   """Build a worker_summary event dict."""
   event = {
@@ -273,7 +272,7 @@ def _thread_worker_event(
     status: str,
     full_content: str = '',
     *,
-    content: Optional[str] = None,
+    content: str | None = None,
 ) -> dict:
   """Build a worker_summary event whose chat content is the thread's locator summary.
 
@@ -290,7 +289,7 @@ def _thread_worker_event(
   )
 
 
-def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: Optional[str]) -> BackendOption:
+def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str | None) -> BackendOption:
   """Resolve a runtime backend option from explicit backend/model values."""
   if not backend_id:
     raise ValueError("resolved backend is required")
@@ -306,7 +305,7 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: Option
   return option.model_copy(update={"model": resolved_model})
 
 
-def _option_default_backend_model(option: BackendOption, *, source: str) -> tuple[str, Optional[str]]:
+def _option_default_backend_model(option: BackendOption, *, source: str) -> tuple[str, str | None]:
   """Pair a configured option with its own default model, or raise when it needs one and has none."""
   if backend_type_allows_missing_model(option.type):
     return option.id, None
@@ -320,7 +319,7 @@ def _resolve_configured_backend_model(
     backend_id: str,
     *,
     source: str,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, str | None]:
   """Resolve a configured backend option id to its default backend+model pair."""
   if not backend_id:
     raise ValueError(f"{source} backend is required")
@@ -333,7 +332,7 @@ def _resolve_configured_backend_model(
 def _resolve_session_default_backend_model(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, str | None]:
   """Resolve backend+model from a session's default.
 
   A session with no backend recorded takes cfg.backend_options[0] as its default. A session
@@ -364,7 +363,7 @@ async def resolve_session_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, str | None]:
   """Resolve backend+model from the session's recorded default, ignoring any caller preference."""
   return await resolve_requested_subagent_backend_model(session_id, cfg, session_mgr)
 
@@ -373,8 +372,8 @@ async def resolve_requested_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-    requested_backend: Optional[str] = None,
-) -> tuple[str, Optional[str]]:
+    requested_backend: str | None = None,
+) -> tuple[str, str | None]:
   """Resolve backend+model from an explicit configured backend or the session default.
 
   Both paths are strict: an unknown explicit `requested_backend` (a typo in user input) and a
@@ -394,7 +393,7 @@ async def _select_verify_quota_retry_backend(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread: ThreadMetadata,
-) -> Optional[tuple[str, Optional[str], list[str]]]:
+) -> tuple[str, str | None, list[str]] | None:
   """Select the next untried checking-role backend after verifier quota exhaustion."""
   current_backend, _ = require_thread_backend_model(thread, cfg)
   checked_backend, checked_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
@@ -411,7 +410,7 @@ async def _select_verify_quota_retry_backend(
   return retry
 
 
-def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, Optional[str]]:
+def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, str | None]:
   """Return backend+model from thread metadata or raise."""
   if not thread.backend:
     raise ValueError(f"thread '{thread.id}' missing backend metadata")
@@ -519,7 +518,7 @@ async def _create_worktree_and_process(
 
     canonical_branch = base_branch
     is_continuation = request.is_continuation
-    start_point: Optional[str] = None
+    start_point: str | None = None
 
     if request.worktree_path_override:
       # Reuse an existing worktree (e.g. improve loop iterations sharing a single worktree).
@@ -675,7 +674,7 @@ async def _maybe_override_exit_code_from_result(
   return exit_code
 
 
-async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, worktree_parent: Path) -> Optional[str]:
+async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, worktree_parent: Path) -> str | None:
   """Remove the worker's worktree after a successful run.
 
   Returns an error message when the (success-path) cleanup fails so the caller can
@@ -790,7 +789,7 @@ async def _finalize_worker(
     error: str,
     skip_notify: bool,
     task_type: TaskType,
-    completed_at: Optional[datetime],
+    completed_at: datetime | None,
 ) -> None:
   """Update thread status and notify completion.
 
@@ -848,7 +847,7 @@ async def _finalize_worker_safely(
     error: str,
     skip_notify: bool,
     task_type: TaskType,
-    completed_at: Optional[datetime],
+    completed_at: datetime | None,
 ) -> None:
   """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
   try:
@@ -1033,7 +1032,7 @@ async def spawn_worker(
           completed_at=_run_completion_time(cfg, session_id, thread.id))
 
 
-def _run_completion_time(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Optional[datetime]:
+def _run_completion_time(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> datetime | None:
   """The run's true completion time: its raw log's final mtime, when one exists.
 
   Independent of backend, event content, and how long the server was down; the
@@ -1060,7 +1059,7 @@ async def resume_worker(
     *,
     is_alive: Callable[[], bool],
     interrupt_reason: str = "",
-    on_silence: Optional[Callable[[], Awaitable[None]]] = None,
+    on_silence: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
   """Re-attach to an interrupted run's raw stream, then run the finalize chain.
 
@@ -1175,7 +1174,7 @@ async def _record_scheduled_run_status(
     session_mgr: SessionManager,
     session_id: str,
     exit_code: int,
-) -> Optional[str]:
+) -> str | None:
   """Record the run's outcome on a scheduled session and return its scheduled task name.
 
   Fetches the session metadata exactly once for the whole notify chain; None means the

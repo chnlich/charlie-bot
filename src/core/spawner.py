@@ -1271,14 +1271,8 @@ async def _notify_completion(
     try:
       status = _exit_status_label(exit_code)
       fallback = _worker_locator_summary(thread.id, status, _worker_summary_timestamp())
-      fallback_event = _build_worker_event(
-          thread.id,
-          fallback,
-          status,
-          full_content=f"{fallback}\n\n*(summary unavailable: {e})*",
-          backend=thread.backend,
-          model=thread.model,
-      )
+      fallback_event = _thread_worker_event(
+          thread, status, full_content=f"{fallback}\n\n*(summary unavailable: {e})*")
       await _persist_worker_summary_once(session_id, thread.id, fallback_event, session_mgr, fallback=True)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())

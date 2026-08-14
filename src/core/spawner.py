@@ -333,7 +333,6 @@ def _resolve_configured_backend_model(
 def _resolve_session_default_backend_model(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
-    session_id: str,
 ) -> tuple[str, Optional[str]]:
   """Resolve backend+model from a session's default.
 
@@ -352,7 +351,7 @@ def _resolve_session_default_backend_model(
           "session_backend_unresolved",
           stored=session_meta.backend,
           refused_substitute=cfg.backend_options[0].id,
-          session_id=session_id,
+          session_id=session_meta.id,
       )
       raise ValueError(
           f"session backend '{session_meta.backend}' is not in config.yaml backend_options — "
@@ -387,7 +386,7 @@ async def resolve_requested_subagent_backend_model(
     raise ValueError(f"session '{session_id}' not found")
   if requested_backend is not None:
     return _resolve_configured_backend_model(cfg, requested_backend, source="requested")
-  return _resolve_session_default_backend_model(cfg, session_meta, session_id)
+  return _resolve_session_default_backend_model(cfg, session_meta)
 
 
 async def _select_verify_quota_retry_backend(

@@ -1192,6 +1192,7 @@ async def _broadcast_completion(
     exit_code: int,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
+    *,
     quota_exhausted: bool,
     error: str,
     task_type: TaskType,
@@ -1238,6 +1239,7 @@ async def _notify_completion(
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
+    *,
     quota_exhausted: bool,
     error: str,
     task_type: TaskType,
@@ -1252,8 +1254,8 @@ async def _notify_completion(
         exit_code,
         thread_mgr,
         session_mgr,
-        quota_exhausted,
-        error,
+        quota_exhausted=quota_exhausted,
+        error=error,
         task_type=task_type)
 
     # Send Telegram notification if the session's scheduled task has notify='telegram'.

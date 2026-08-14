@@ -222,7 +222,6 @@ async def test_worker_start_summary_is_locator_without_task_description(monkeypa
   exit_code, quota_exhausted, error = await spawner._stream_worker_events(
       FakeWorker(),
       "session-id",
-      "Sensitive task description",
       thread,
       FakeThreadManager(),
       FakeSessionManager(),

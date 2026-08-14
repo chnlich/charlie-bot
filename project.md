@@ -195,7 +195,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 1. User presses/clicks button to start recording
 2. Presses/clicks again to stop and send
 3. Audio uploaded to backend
-4. **Gemini 3.1 Pro** transcribes (supports Chinese, English, mixed)
+4. **Local sherpa-onnx Qwen3-ASR** transcribes (VAD + simulated-streaming partials; supports Chinese, English, mixed, and ~30 languages)
 5. Transcription displayed in UI first
 6. Passed to Master with disclaimer: *"This is a voice-transcribed message and may not be exactly accurate. Please ask clarifying questions if anything is unclear."*
 

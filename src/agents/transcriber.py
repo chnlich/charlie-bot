@@ -22,18 +22,23 @@ log = structlog.get_logger()
 SAMPLE_RATE = 16_000
 MAX_RECORDING_SECONDS = 5 * 60
 MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
-LIVE_DECODE_INTERVAL_SAMPLES = SAMPLE_RATE
+# Qwen3-ASR is an autoregressive encoder-decoder, so a live decode of the open
+# VAD segment is much costlier than a non-autoregressive one: measured on this
+# host (aarch64, num_threads=4) it takes ~2s for a 10s segment and ~4.2s for a
+# 20s segment. Re-decoding every 1s of audio would saturate the decode thread,
+# so partials refresh every 5s of speech instead.
+LIVE_DECODE_INTERVAL_SAMPLES = SAMPLE_RATE * 5
 LIVE_DECODE_MIN_SAMPLES = SAMPLE_RATE // 2
 SEGMENT_DECODE_PAD_SAMPLES = 6_400
 VAD_BUFFER_SECONDS = MAX_RECORDING_SECONDS + 10
 
-SENSEVOICE_DIR_NAME = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
-SENSEVOICE_ARCHIVE_NAME = f"{SENSEVOICE_DIR_NAME}.tar.bz2"
-SENSEVOICE_URL = (
+QWEN3_ASR_DIR_NAME = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+QWEN3_ASR_ARCHIVE_NAME = f"{QWEN3_ASR_DIR_NAME}.tar.bz2"
+QWEN3_ASR_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-    "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2"
+    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
 )
-SENSEVOICE_SHA256 = "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e"
+QWEN3_ASR_SHA256 = "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96"
 
 SILERO_VAD_NAME = "silero_vad.onnx"
 SILERO_VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
@@ -47,10 +52,12 @@ class SpeechModelsNotReady(RuntimeError):
 @dataclass(frozen=True)
 class VoiceModelPaths:
   cache_dir: Path
-  sensevoice_archive: Path
-  sensevoice_dir: Path
-  sensevoice_model: Path
-  sensevoice_tokens: Path
+  qwen3_archive: Path
+  qwen3_dir: Path
+  qwen3_conv_frontend: Path
+  qwen3_encoder: Path
+  qwen3_decoder: Path
+  qwen3_tokenizer: Path
   silero_vad: Path
 
 
@@ -76,13 +83,15 @@ _bundle: _SpeechModelBundle | None = None
 
 def voice_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
   cache_dir = cfg.charliebot_home / "models"
-  sensevoice_dir = cache_dir / SENSEVOICE_DIR_NAME
+  qwen3_dir = cache_dir / QWEN3_ASR_DIR_NAME
   return VoiceModelPaths(
       cache_dir=cache_dir,
-      sensevoice_archive=cache_dir / SENSEVOICE_ARCHIVE_NAME,
-      sensevoice_dir=sensevoice_dir,
-      sensevoice_model=sensevoice_dir / "model.int8.onnx",
-      sensevoice_tokens=sensevoice_dir / "tokens.txt",
+      qwen3_archive=cache_dir / QWEN3_ASR_ARCHIVE_NAME,
+      qwen3_dir=qwen3_dir,
+      qwen3_conv_frontend=qwen3_dir / "conv_frontend.onnx",
+      qwen3_encoder=qwen3_dir / "encoder.int8.onnx",
+      qwen3_decoder=qwen3_dir / "decoder.int8.onnx",
+      qwen3_tokenizer=qwen3_dir / "tokenizer",
       silero_vad=cache_dir / SILERO_VAD_NAME,
   )
 
@@ -131,13 +140,13 @@ def get_ready_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
 
 
 def ensure_models_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
-  """Download missing model artifacts, verify hashes, and extract SenseVoice."""
+  """Download missing model artifacts, verify hashes, and extract Qwen3-ASR."""
   paths = voice_model_paths(cfg)
   paths.cache_dir.mkdir(parents=True, exist_ok=True)
 
-  _ensure_artifact(paths.sensevoice_archive, SENSEVOICE_URL, SENSEVOICE_SHA256)
+  _ensure_artifact(paths.qwen3_archive, QWEN3_ASR_URL, QWEN3_ASR_SHA256)
   _ensure_artifact(paths.silero_vad, SILERO_VAD_URL, SILERO_VAD_SHA256)
-  _ensure_sensevoice_extracted(paths)
+  _ensure_qwen3_extracted(paths)
   _verify_model_files(paths)
 
   global _ready_paths
@@ -148,7 +157,7 @@ def ensure_models_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
 
 def models_are_cached(cfg: CharlieBotConfig) -> bool:
   paths = voice_model_paths(cfg)
-  return paths.sensevoice_model.is_file() and paths.sensevoice_tokens.is_file() and paths.silero_vad.is_file()
+  return all(path.is_file() for path in _qwen3_model_files(paths)) and paths.silero_vad.is_file()
 
 
 def create_transcription_session(cfg: CharlieBotConfig) -> "SimulatedStreamingTranscriptionSession":
@@ -181,30 +190,37 @@ def _ensure_artifact(path: Path, url: str, expected_sha256: str) -> None:
       tmp_path.unlink()
 
 
-def _ensure_sensevoice_extracted(paths: VoiceModelPaths) -> None:
-  if paths.sensevoice_model.is_file() and paths.sensevoice_tokens.is_file():
+def _qwen3_model_files(paths: VoiceModelPaths) -> tuple[Path, ...]:
+  return (
+      paths.qwen3_conv_frontend,
+      paths.qwen3_encoder,
+      paths.qwen3_decoder,
+      paths.qwen3_tokenizer / "merges.txt",
+      paths.qwen3_tokenizer / "tokenizer_config.json",
+      paths.qwen3_tokenizer / "vocab.json",
+  )
+
+
+def _ensure_qwen3_extracted(paths: VoiceModelPaths) -> None:
+  if all(path.is_file() for path in _qwen3_model_files(paths)):
     return
 
-  tmp_root = paths.cache_dir / f".{SENSEVOICE_DIR_NAME}.{uuid.uuid4().hex}.extracting"
+  tmp_root = paths.cache_dir / f".{QWEN3_ASR_DIR_NAME}.{uuid.uuid4().hex}.extracting"
   try:
     tmp_root.mkdir()
-    with tarfile.open(paths.sensevoice_archive, "r:bz2") as tar:
+    with tarfile.open(paths.qwen3_archive, "r:bz2") as tar:
       tar.extractall(tmp_root)
-    extracted = tmp_root / SENSEVOICE_DIR_NAME
+    extracted = tmp_root / QWEN3_ASR_DIR_NAME
     if not extracted.is_dir():
-      raise RuntimeError(f"SenseVoice archive did not contain {SENSEVOICE_DIR_NAME}")
-    os.replace(extracted, paths.sensevoice_dir)
+      raise RuntimeError(f"Qwen3-ASR archive did not contain {QWEN3_ASR_DIR_NAME}")
+    os.replace(extracted, paths.qwen3_dir)
   finally:
     if tmp_root.exists():
       shutil.rmtree(tmp_root)
 
 
 def _verify_model_files(paths: VoiceModelPaths) -> None:
-  missing = [
-      str(path)
-      for path in (paths.sensevoice_model, paths.sensevoice_tokens, paths.silero_vad)
-      if not path.is_file()
-  ]
+  missing = [str(path) for path in (*_qwen3_model_files(paths), paths.silero_vad) if not path.is_file()]
   if missing:
     raise RuntimeError("speech model files are missing: " + ", ".join(missing))
 
@@ -226,13 +242,18 @@ def _get_model_bundle(paths: VoiceModelPaths) -> _SpeechModelBundle:
 
   import sherpa_onnx
 
-  recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
-      model=str(paths.sensevoice_model),
-      tokens=str(paths.sensevoice_tokens),
+  # Dense 20s Chinese segments decode to ~140 tokens, so the 128-token sherpa
+  # default can truncate; 256 new tokens plus a 1024-position KV cache covers
+  # the 20s max VAD segment with headroom.
+  recognizer = sherpa_onnx.OfflineRecognizer.from_qwen3_asr(
+      conv_frontend=str(paths.qwen3_conv_frontend),
+      encoder=str(paths.qwen3_encoder),
+      decoder=str(paths.qwen3_decoder),
+      tokenizer=str(paths.qwen3_tokenizer),
       num_threads=4,
       sample_rate=SAMPLE_RATE,
-      language="",
-      use_itn=True,
+      max_total_len=1024,
+      max_new_tokens=256,
   )
   vad_config = sherpa_onnx.VadModelConfig()
   vad_config.silero_vad.model = str(paths.silero_vad)

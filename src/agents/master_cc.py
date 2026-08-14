@@ -15,6 +15,7 @@ import structlog
 from src.agents.backends.base import (
   AgentBackend,
   _read_stderr_tail,
+  make_error_event,
   make_text_event,
   tail_follow_events,
 )
@@ -64,6 +65,14 @@ class _RunTimingTracker:
     # the result flag does so only for a turn the stream actually settled.
     self._thinking_text: list[str] = []
     self._saw_result = False
+    # Zero-output guard state (same lifecycle as the timing fields): whether a
+    # terminal result settled with all-zero usage, and whether the turn ever
+    # produced thinking content or a tool_use event. Used by the guard at
+    # teardown so a genuinely-empty master run fails loudly instead of
+    # silently consuming its trigger.
+    self._saw_zero_usage = False
+    self._saw_thinking = False
+    self._saw_tool_use = False
 
   async def on_spawn(self, pid: int) -> None:
     self._t_spawn = time.monotonic()
@@ -89,12 +98,23 @@ class _RunTimingTracker:
 
     if event.get("type") == ET.RESULT:
       self._saw_result = True
+      usage = event.get("usage")
+      if isinstance(usage, dict) and all(
+          usage.get(k, 0) == 0
+          for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+      ):
+        self._saw_zero_usage = True
+
+    # Standalone tool_use events (codex/gemini flat format).
+    if event.get("type") == ET.TOOL_USE:
+      self._saw_tool_use = True
 
     # Standalone thinking events (opencode/codex deltas) carry their text in
     # "content". Accumulated unconditionally: a turn that later speaks is
     # untouched, and a silent turn gets the whole stream surfaced.
     if event.get("type") == ET.THINKING and event.get("content"):
       self._thinking_text.append(event["content"])
+      self._saw_thinking = True
 
     if not self._saw_first_assistant and event.get("type") == ET.ASSISTANT:
       msg = event.get("message", {})
@@ -106,6 +126,10 @@ class _RunTimingTracker:
           # claude-family thinking blocks nest the text under "thinking".
           if block.get("type") == "thinking" and block.get("thinking"):
             self._thinking_text.append(block["thinking"])
+            self._saw_thinking = True
+          # Wrapped tool_use blocks (opencode/glm) live in assistant content.
+          if block.get("type") == ET.TOOL_USE:
+            self._saw_tool_use = True
           if block.get("type") == "text" and block.get("text"):
             self._saw_first_assistant = True
             self._t_first_assistant = time.monotonic()
@@ -116,6 +140,23 @@ class _RunTimingTracker:
             )
             break
 
+  def _zero_output_guard(self) -> bool:
+    """True when this run settled with zero model output and must fail loudly.
+
+    Four-part conjunction, mirroring the salvage rule's shape: a terminal
+    result event was received, its usage is all-zero, and the turn produced no
+    assistant text, no thinking content, and no tool_use events. The result
+    check is the same single guard for cancellation / let-go / mid-run death
+    — none of those reach a result event, so the guard stays quiet for them.
+    """
+    return (
+        self._saw_result
+        and self._saw_zero_usage
+        and not self._saw_first_assistant
+        and not self._saw_thinking
+        and not self._saw_tool_use
+    )
+
   def build_finish_extras(self) -> dict:
     total_ms = int((time.monotonic() - self._t_start) * 1000)
     extras: dict = {
@@ -123,6 +164,8 @@ class _RunTimingTracker:
         "model": self._model,
         "total_ms": total_ms,
     }
+    if self._zero_output_guard():
+      extras["zero_output"] = True
     if self._t_first_event is not None:
       spawn_ref = self._t_spawn if self._t_spawn is not None else self._t_start
       extras["spawn_to_first_event_ms"] = int((self._t_first_event - spawn_ref) * 1000)
@@ -788,6 +831,25 @@ async def _session_consumer(session_id: str) -> None:
           item.session_meta.cc_session_id = last_cc_session_id
         result = await (_resume_cc(item) if item.resume_record is not None else _run_cc(item))
         cc_session_id, exit_code, _error_msg, finish_extras = result
+
+        # Zero-output guard: a run that settled with a result event of all-zero
+        # usage and no assistant text/thinking/tool_use must fail loudly — the
+        # backend reported it as done but produced nothing, so the triggering
+        # message would otherwise be consumed silently. Lives on the single
+        # MASTER_DONE path, so both the fresh-run and resume outcomes are
+        # covered by construction. If an error event was already emitted this
+        # turn (error_msg set), skip a second contradicting ERROR but still
+        # exit nonzero — mirrors the salvage rule's error_msg gate. mark_unread
+        # is already invoked by both run paths' teardown.
+        if finish_extras.get("zero_output"):
+          if not _error_msg:
+            resume_ref = cc_session_id if cc_session_id else "fresh session"
+            zero_err = make_error_event(
+                f"Master run produced zero model output (cc_session_id={resume_ref}) "
+                f"and the triggering message was left unread. "
+                f"See LESSONS.md: opencode message-ID wraparound, 2026-08-14.")
+            await item.callbacks.persist_and_broadcast(session_id, zero_err)
+          exit_code = 1
 
         # Update session_meta.cc_session_id for subsequent queued runs.
         if cc_session_id:

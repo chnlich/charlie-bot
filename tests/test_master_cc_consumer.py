@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.agents import master_cc
+from src.agents.backends.base import make_result_event, make_text_event
 from src.api import sessions as sessions_api
 from src.api.deps import get_session_manager
 from src.core import event_types as ET
@@ -645,3 +646,153 @@ async def test_resume_reattach_uses_persisted_interval_start(
     await asyncio.wait_for(future, timeout=5)
   finally:
     _reset_master_state(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Zero-output guard: a settled run with all-zero usage and no output fails loudly
+# ---------------------------------------------------------------------------
+
+
+class _EventsBackend:
+  """Backend double that yields a fixed event stream, then exits cleanly."""
+
+  exit_code = 0
+  stderr_text = ""
+  terminated = False
+
+  def __init__(self, events: list[dict]) -> None:
+    self.events = events
+
+  async def terminate(self) -> None:
+    self.terminated = True
+
+  async def run(self, prompt: str, cwd: str, env: dict):
+    for event in self.events:
+      yield event
+
+
+def _guard_events(cb: SessionCallbacks) -> tuple[list[dict], list[dict]]:
+  """Split persisted/broadcast events into zero-output ERRORs and MASTER_DONEs."""
+  errors = [
+      c.args[1] for c in cb.persist_and_broadcast.await_args_list
+      if c.args[1].get("type") == ET.ERROR
+  ]
+  dones = [
+      c.args[1] for c in cb.persist_and_broadcast.await_args_list
+      if c.args[1].get("type") == ET.MASTER_DONE
+  ]
+  return errors, dones
+
+
+async def _run_stream_consumer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_id: str,
+    events: list[dict],
+) -> SessionCallbacks:
+  """Run a simulated event stream through the production consumer path."""
+  cfg = _make_consumer_cfg(tmp_path)
+  meta = _make_meta(session_id)
+  cb = _make_callbacks()
+  backend = _EventsBackend(events)
+
+  monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **k: backend)
+  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda *a, **k: "instructions")
+  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+
+  _reset_master_state(session_id)
+  try:
+    await master_cc.run_message(cfg, meta, "hi", cb, skip_user_event=True)
+    consumer = master_cc._session_consumers.get(session_id)
+    if consumer is not None:
+      await asyncio.wait_for(consumer, timeout=5)
+  finally:
+    _reset_master_state(session_id)
+  return cb
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_fires_on_all_zero_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Positive: a result with all-zero usage and nothing else fails loudly."""
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "zero-pos", [make_result_event()])
+
+  errors, dones = _guard_events(cb)
+  assert len(errors) == 1
+  assert "zero model output" in errors[0].get("message", "")
+  assert "fresh session" in errors[0].get("message", "")
+  assert "left unread" in errors[0].get("message", "")
+  assert "LESSONS.md" in errors[0].get("message", "")
+  assert dones and dones[0]["exit_code"] == 1, "MASTER_DONE must exit nonzero"
+  cb.mark_unread.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_skips_nonzero_usage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Negative: a result with real output tokens must not fire the guard."""
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "zero-neg-usage", [make_result_event(output_tokens=5)])
+
+  errors, dones = _guard_events(cb)
+  assert errors == []
+  assert dones and dones[0]["exit_code"] == 0, "clean run keeps its exit code"
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_skips_assistant_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Negative: assistant text alongside an all-zero usage result must not fire."""
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "zero-neg-text",
+      [make_text_event("hello"), make_result_event()])
+
+  errors, dones = _guard_events(cb)
+  assert errors == []
+  assert dones and dones[0]["exit_code"] == 0
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_skips_missing_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Negative: a stream that never settles with a result must not fire."""
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "zero-neg-noresult", [make_text_event("hello")])
+
+  errors, dones = _guard_events(cb)
+  assert errors == []
+  assert dones and dones[0]["exit_code"] == 0
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The guard fires on the resume (re-attach) outcome, not just fresh runs."""
+  session_id = "zero-resume"
+  started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+  record = MasterRunRecord(pid=1234, pid_start="100", started_at=started_at, raw_log="<fake>")
+
+  cfg = _make_consumer_cfg(tmp_path)
+  meta = _make_meta(session_id)
+  cb = _make_callbacks()
+
+  async def fake_resume_cc(item: master_cc._WorkItem) -> tuple:
+    return "cc-resumed-id", 0, None, {"zero_output": True}
+
+  monkeypatch.setattr(master_cc, "_resume_cc", fake_resume_cc)
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: MagicMock(
+      _has_running_tasks=AsyncMock(return_value=False)))
+
+  _reset_master_state(session_id)
+  try:
+    future = await master_cc.enqueue_master_resume(
+        cfg, meta, record, cb, is_alive=lambda: True)
+    await asyncio.wait_for(future, timeout=5)
+    consumer = master_cc._session_consumers.get(session_id)
+    if consumer is not None:
+      await asyncio.wait_for(consumer, timeout=5)
+  finally:
+    _reset_master_state(session_id)
+
+  errors, dones = _guard_events(cb)
+  assert len(errors) == 1
+  assert "cc-resumed" in errors[0].get("message", "")
+  assert dones and dones[0]["exit_code"] == 1

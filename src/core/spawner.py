@@ -119,12 +119,6 @@ def load_worker_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
       cfg.charlie_bot_repo / "prompts" / "worker.md", _REQUIRED_WORKER_PROMPT_SECTIONS, extraction="worker-prompt")
 
 
-def _load_verify_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
-  """Read prompts/verify.md fresh and split it into its required sections."""
-  return _load_prompt_sections(
-      cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
-
-
 def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   """Sequentially `str.replace` every `{{name}}` token (not `str.format` -- section text may
   contain literal single braces)."""
@@ -136,7 +130,8 @@ def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
 
 def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> str:
   """Build the full prompt for a repo-less VERIFY task (preamble + scope contract + task)."""
-  sections = _load_verify_prompt_sections(cfg)
+  sections = _load_prompt_sections(
+      cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
   contract = _substitute_tokens(
       "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
           "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,

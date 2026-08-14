@@ -38,7 +38,7 @@ def charliebot_home_dir() -> Path:
   raw = os.environ.get(CHARLIEBOT_HOME_ENV, "").strip()
   if not raw:
     return default_charliebot_home()
-  if not (raw.startswith("~") or raw.startswith("/")):
+  if not raw.startswith(("~", "/")):
     raise ValueError(
         f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
   return Path(raw).expanduser().resolve()

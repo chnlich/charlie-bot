@@ -103,7 +103,7 @@ def test_sherpa_simulated_streaming_acceptance_baseline() -> None:
 def test_voice_websocket_streams_partials_final_and_persists_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
   cfg.charliebot_home.mkdir(parents=True)
-  model_cache = Path.home() / ".charliebot" / "models"
+  model_cache = CharlieBotConfig().charliebot_home / "models"
   if not model_cache.exists():
     pytest.skip("speech models are not present locally")
   (cfg.charliebot_home / "models").symlink_to(model_cache, target_is_directory=True)

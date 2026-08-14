@@ -12,6 +12,10 @@ server_port: 18498
 # Web UI access token. Secret. Set this if the server is reachable beyond localhost.
 charliebot_access_key: ""
 
+# Externally reachable base URL of this server, no trailing slash (e.g. https://bot.example.com).
+# Used to build file links for readers outside the host (Slack replies). Empty = no link is built.
+public_base_url: ""
+
 # --- Paths ---
 
 # Directories scanned for git repos.

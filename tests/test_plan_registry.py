@@ -25,11 +25,20 @@ BACKEND_OPTIONS = [
 ]
 
 
+def _write_stub_chrome(tmp_path: Path, height: int) -> str:
+  """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
+  stub = tmp_path / f"stub-chrome-{height}.sh"
+  stub.write_text(f"#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n", encoding="utf-8")
+  stub.chmod(0o755)
+  return str(stub)
+
+
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=BACKEND_OPTIONS,
+      headless_chrome_bin=_write_stub_chrome(tmp_path, 800),
   )
 
 
@@ -795,4 +804,49 @@ async def test_present_rejects_artifact_without_goal_section(tmp_path: Path) -> 
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content="<html>plan</html>")
   with pytest.raises(ValueError, match="no 'Problem / Goal' section"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+
+# ---------------------------------------------------------------------------
+# Page budget gate: present/amend reject artifacts over the 1400 px height budget
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_present_registers_artifact_within_page_budget(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
+  result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  assert result == {"plan": 1, "v": 1, "state": "awaiting approval"}
+
+
+@pytest.mark.asyncio
+async def test_page_budget_rejects_over_budget_naming_measured_height_and_gates_amend(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  at_budget = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=at_budget, title="P1")
+  cfg.headless_chrome_bin = _write_stub_chrome(tmp_path, 1401)
+  over = _write_artifact(cfg, meta.id, "plan_02.html")
+  with pytest.raises(ValueError, match=r"measures 1401 px tall as it opens \(budget 1400 px\)"):
+    await plan_mgr.amend(meta.id, file=over)
+
+
+@pytest.mark.asyncio
+async def test_present_rejects_when_headless_chrome_bin_unset(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg.headless_chrome_bin = ""
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
+  with pytest.raises(ValueError, match="headless_chrome_bin is required for plan registration"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+
+@pytest.mark.asyncio
+async def test_present_rejects_failing_renderer_with_reason(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  stub = tmp_path / "stub-chrome-fail.sh"
+  stub.write_text("#!/bin/sh\necho 'renderer exploded' >&2\nexit 1\n", encoding="utf-8")
+  stub.chmod(0o755)
+  cfg.headless_chrome_bin = str(stub)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
+  with pytest.raises(ValueError, match="renderer exploded"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")

@@ -246,7 +246,7 @@ class SessionMetadata(BaseModel):
   scheduled_task: Optional[str] = None  # task name; None = regular session
   role: Optional[str] = None  # role ("project" from the scheduler; arbitrary via create API); None = regular session
   last_scheduled_run: Optional[str] = None  # ISO datetime of last scheduler execution
-  last_run_status: Optional[str] = None  # "running" / "success" / "failed"
+  last_run_status: Optional[str] = None  # "running" / "success" / "failed" / "skipped"
   last_scheduled_cron: Optional[str] = None  # cron expr at last run; detects changes
   # Transient fields, populated by API layer for scheduled sessions only
   schedule_cron: Optional[str] = None

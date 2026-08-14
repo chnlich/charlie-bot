@@ -440,13 +440,13 @@ async def _apply_backend_option(
     description: str,
     cfg: CharlieBotConfig,
     thread_mgr: ThreadManager,
-    req: SpawnRequest,
+    request: SpawnRequest,
 ) -> BackendOption:
   """Resolve the request's backend option onto the thread, persist it, and return the option."""
-  backend_option = resolve_backend_option(cfg, req.resolved_backend, req.resolved_model)
+  backend_option = resolve_backend_option(cfg, request.resolved_backend, request.resolved_model)
   thread.backend = backend_option.id
   thread.model = backend_option.model
-  if req.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
+  if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
     thread.tried_backends.append(backend_option.id)
   _prepare_thread_backend_metadata(thread, backend_option, description)
   await thread_mgr.save_metadata(thread)
@@ -461,10 +461,10 @@ async def _construct_worker(
     worker_prompt: str,
     cfg: CharlieBotConfig,
     thread_mgr: ThreadManager,
-    req: SpawnRequest,
+    request: SpawnRequest,
 ) -> Worker:
   """Apply the request's backend onto the thread and build its Worker around working_dir."""
-  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, req)
+  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, request)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
       thread,
@@ -485,11 +485,11 @@ async def _create_worktree_and_process(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     resolved_repo: Path,
-    req: SpawnRequest,
+    request: SpawnRequest,
 ) -> Worker:
   """Create worktree, build prompt, resolve backend, and construct Worker."""
-  if req.prompt_override:
-    worker_prompt = req.prompt_override
+  if request.prompt_override:
+    worker_prompt = request.prompt_override
     if not thread.worktree_path:
       log.error(
           "spawn_worker_missing_worktree_path",
@@ -503,19 +503,19 @@ async def _create_worktree_and_process(
     # An unattended launch has nobody present to reconcile a local/remote
     # disagreement, so a request that names no base starts from the remote's
     # published default branch; the local checkout's refs never enter the decision.
-    base_branch = req.base_branch or f"origin/{await git_remote_default_branch(resolved_repo)}"
+    base_branch = request.base_branch or f"origin/{await git_remote_default_branch(resolved_repo)}"
 
     # Compute branch name; the fresh-worktree branch derives the path from it.
-    branch_name = req.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
+    branch_name = request.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
 
     canonical_branch = base_branch
-    is_continuation = req.is_continuation
+    is_continuation = request.is_continuation
     start_point: Optional[str] = None
 
-    if req.worktree_path_override:
+    if request.worktree_path_override:
       # Reuse an existing worktree (e.g. improve loop iterations sharing a single worktree).
-      wt_path = Path(req.worktree_path_override)
-      thread.skip_cleanup = req.skip_cleanup
+      wt_path = Path(request.worktree_path_override)
+      thread.skip_cleanup = request.skip_cleanup
     else:
       wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
 
@@ -531,8 +531,8 @@ async def _create_worktree_and_process(
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
     thread.base_branch = canonical_branch
-    thread.keep_worktree = req.keep_worktree
-    thread.context = req.context
+    thread.keep_worktree = request.keep_worktree
+    thread.context = request.context
 
     # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
@@ -546,11 +546,11 @@ async def _create_worktree_and_process(
         str(wt_path),
         session_meta,
         cfg,
-        task_type=req.task_type,
-        loop_dir=req.loop_dir,
-        iteration_number=req.iteration_number,
+        task_type=request.task_type,
+        loop_dir=request.loop_dir,
+        iteration_number=request.iteration_number,
         is_continuation=is_continuation,
-        keep_worktree=req.keep_worktree,
+        keep_worktree=request.keep_worktree,
         start_point=start_point)
     worktree_path = wt_path.resolve()
 
@@ -564,7 +564,8 @@ async def _create_worktree_and_process(
     )
     raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
-  return await _construct_worker(session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, req)
+  return await _construct_worker(
+      session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, request)
 
 
 def _thread_dir(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Path:
@@ -578,15 +579,15 @@ async def _create_repoless_process(
     description: str,
     cfg: CharlieBotConfig,
     thread_mgr: ThreadManager,
-    req: SpawnRequest,
+    request: SpawnRequest,
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
-  if req.task_type == TaskType.VERIFY:
+  if request.task_type == TaskType.VERIFY:
     worker_prompt = _build_verify_repoless_prompt(description, cfg)
-  elif req.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
-    worker_prompt = req.prompt_override or description
+  elif request.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
+    worker_prompt = request.prompt_override or description
   else:
-    raise ValueError(f"unsupported task_type: {req.task_type!r}")
+    raise ValueError(f"unsupported task_type: {request.task_type!r}")
   thread_dir = _thread_dir(cfg, session_id, thread.id)
 
   # Repo-less tasks cannot produce branch/worktree review artifacts.
@@ -594,9 +595,9 @@ async def _create_repoless_process(
   thread.repo_path = None
   thread.worktree_path = str(thread_dir)
   thread.require_review = False
-  thread.context = req.context
+  thread.context = request.context
 
-  return await _construct_worker(session_id, thread, description, thread_dir, worker_prompt, cfg, thread_mgr, req)
+  return await _construct_worker(session_id, thread, description, thread_dir, worker_prompt, cfg, thread_mgr, request)
 
 
 async def _stream_worker_events(
@@ -908,7 +909,7 @@ async def _rerun_verify_on_fresh_backend(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-    req: SpawnRequest,
+    request: SpawnRequest,
 ) -> tuple[int, bool, str]:
   """Re-run an exhausted VERIFY task once on the next untried checking-role backend.
 
@@ -927,10 +928,10 @@ async def _rerun_verify_on_fresh_backend(
       exhausted_backend=thread.backend,
       retry_backend=resolved_backend,
   )
-  req.resolved_backend = resolved_backend
-  req.resolved_model = resolved_model
+  request.resolved_backend = resolved_backend
+  request.resolved_model = resolved_model
   thread.tried_backends = tried_backends
-  worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, req)
+  worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
   return await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
 
@@ -944,8 +945,6 @@ async def spawn_worker(
     request: SpawnRequest,
 ) -> None:
   """Spawn a worker for the given thread on its resolved backend. Fire-and-forget via asyncio.create_task()."""
-  req = request
-
   thread = None
   worker = None
   exit_code = -1
@@ -958,22 +957,22 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    if req.repo_path is None:
+    if request.repo_path is None:
       # Repo-less worker: run prompt directly without worktree
-      worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, req)
+      worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
     else:
-      resolved_repo = Path(req.repo_path).resolve()
+      resolved_repo = Path(request.repo_path).resolve()
       worker = await _create_worktree_and_process(
-          session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, req)
+          session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, request)
 
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
         worker, session_id, thread, thread_mgr, session_mgr)
 
-    if req.task_type == TaskType.VERIFY and quota_exhausted:
+    if request.task_type == TaskType.VERIFY and quota_exhausted:
       # A retry's own setup failure is a generic error, not quota exhaustion.
       quota_exhausted = False
       exit_code, quota_exhausted, error_msg = await _rerun_verify_on_fresh_backend(
-          session_id, description, thread, cfg, session_mgr, thread_mgr, req)
+          session_id, description, thread, cfg, session_mgr, thread_mgr, request)
 
     if exit_code != 0 and not quota_exhausted and not error_msg:
       exit_code = await _maybe_override_exit_code_from_result(exit_code, session_id, thread, thread_mgr)
@@ -1020,8 +1019,8 @@ async def spawn_worker(
           cfg,
           quota_exhausted=quota_exhausted,
           error=error_msg,
-          skip_notify=req.skip_notify,
-          task_type=req.task_type,
+          skip_notify=request.skip_notify,
+          task_type=request.task_type,
           completed_at=_run_completion_time(cfg, session_id, thread.id))
 
 

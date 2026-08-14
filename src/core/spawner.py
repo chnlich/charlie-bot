@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
-from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
+from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
@@ -614,8 +614,6 @@ async def _stream_worker_events(
 
   Returns (exit_code, quota_exhausted, error_message).
   """
-  if thread.cli_command is None:
-    thread.cli_command = " ".join(BASE_COMMAND + [description])
   thread.status = ThreadStatus.RUNNING
   thread.started_at = datetime.now(timezone.utc)
   await thread_mgr.save_metadata(thread)
@@ -948,7 +946,7 @@ async def spawn_worker(
     thread_mgr: ThreadManager,
     request: Optional[SpawnRequest] = None,
 ) -> None:
-  """Spawn a Claude Code worker for the given thread. Fire-and-forget via asyncio.create_task()."""
+  """Spawn a worker for the given thread on its resolved backend. Fire-and-forget via asyncio.create_task()."""
   req = request or SpawnRequest()
 
   thread = None

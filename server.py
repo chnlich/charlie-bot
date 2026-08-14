@@ -36,7 +36,7 @@ from src.api.deps import get_session_manager, get_thread_manager, set_trigger_ma
 from src.core import event_types as ET
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
-from src.core.config import get_config
+from src.core.config import CharlieBotConfig, get_config
 from src.core.http import close_http_client
 from src.core.init import (
   init_charliebot_home,
@@ -46,6 +46,7 @@ from src.core.init import (
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import utc_now
 from src.core.scheduler import Scheduler
+from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.triggers import TriggerManager
@@ -141,6 +142,23 @@ async def _run_crash_recovery(cfg, boot_time, identity: Optional[asyncio.Task] =
     log.exception("crash_recovery_failed")
 
 
+async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager,
+                              recovery_task: asyncio.Task) -> None:
+  """Report Slack summons lost across the restart, once recovery has had its chance.
+
+  Waits on the crash-recovery task first so re-attach and the user-message
+  replay have already answered everything they can; whatever is still
+  unanswered after that is genuinely lost and gets a notice in its thread.
+  """
+  from src.core.slack_listener import (
+    backfill_lost_summons,  # lazy: avoids import cycle at module scope
+  )
+
+  await recovery_task
+  reported = await backfill_lost_summons(cfg, session_mgr)
+  log.info("slack_backfill_done", count=reported)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """Application lifespan: startup and shutdown tasks."""
@@ -197,6 +215,8 @@ async def lifespan(app: FastAPI):
 
     slack_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="slack-listener")
     app.state.slack_listener_task = slack_listener_task
+    app.state.slack_backfill_task = create_logged_task(
+        _run_slack_backfill(cfg, session_mgr, app.state.recovery_task), name="slack-backfill")
     log.info("slack_entrypoint_started")
   else:
     log.info("slack_entrypoint_off")
@@ -209,11 +229,12 @@ async def lifespan(app: FastAPI):
     speech_model_task.cancel()
     with suppress(asyncio.CancelledError):
       await speech_model_task
-  slack_listener_task = getattr(app.state, "slack_listener_task", None)
-  if slack_listener_task is not None and not slack_listener_task.done():
-    slack_listener_task.cancel()
-    with suppress(asyncio.CancelledError):
-      await slack_listener_task
+  for attr in ("slack_listener_task", "slack_backfill_task"):
+    task = getattr(app.state, attr, None)
+    if task is not None and not task.done():
+      task.cancel()
+      with suppress(asyncio.CancelledError):
+        await task
   await ext_usage.stop_poller()
   await close_http_client()
   await scheduler.stop()

@@ -38,6 +38,7 @@ from src.core.scheduled_sessions import (  # noqa: F401  # re-export: src/api/cr
 )
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import streaming_manager
+from src.core.tasks import create_logged_task
 from src.core.thinking_state import busy_since
 
 # Raw event types whose render content is now produced by the per-session
@@ -809,6 +810,19 @@ class SessionManager:
       await streaming_manager.broadcast(channel, delta)
     if event.get('type') not in _RAW_EVENTS_REPLACED_BY_DELTAS:
       await streaming_manager.broadcast(channel, event)
+
+    # Slack delivery hangs off the round's terminal event, after the broadcast
+    # and in its own task: the funnel neither waits on Slack nor breaks when a
+    # post fails, and a round re-attached after a restart delivers through this
+    # same point. deliver_done decides for itself whether the round is one a
+    # Slack thread is waiting for.
+    if event.get('type') == ET.MASTER_DONE:
+      from src.core.slack_listener import (
+        deliver_done,  # lazy: cycle guard, as in src/core/init.py
+      )
+
+      create_logged_task(
+          deliver_done(session_id, event, self._cfg, self), name=f"slack-deliver-{session_id}")
 
   async def broadcast_only(self, session_id: str, event: dict) -> None:
     """Broadcast an event on the session channel without persisting it as a chat event.

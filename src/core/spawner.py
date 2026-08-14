@@ -268,11 +268,21 @@ def _build_worker_event(
   return event
 
 
-def _thread_worker_event(thread: ThreadMetadata, status: str, full_content: str = '') -> dict:
-  """Build a worker_summary event whose chat content is the thread's locator summary."""
+def _thread_worker_event(
+    thread: ThreadMetadata,
+    status: str,
+    full_content: str = '',
+    *,
+    content: Optional[str] = None,
+) -> dict:
+  """Build a worker_summary event whose chat content is the thread's locator summary.
+
+  ``content`` overrides the locator summary when the caller already computed it, so
+  content and a full_content quoting it stay byte-consistent (one wall-clock read).
+  """
   return _build_worker_event(
       thread.id,
-      _worker_locator_summary(thread.id, status, _worker_summary_timestamp()),
+      content if content is not None else _worker_locator_summary(thread.id, status, _worker_summary_timestamp()),
       status,
       full_content=full_content,
       backend=thread.backend,
@@ -1271,14 +1281,8 @@ async def _notify_completion(
     try:
       status = _exit_status_label(exit_code)
       fallback = _worker_locator_summary(thread.id, status, _worker_summary_timestamp())
-      fallback_event = _build_worker_event(
-          thread.id,
-          fallback,
-          status,
-          full_content=f"{fallback}\n\n*(summary unavailable: {e})*",
-          backend=thread.backend,
-          model=thread.model,
-      )
+      fallback_event = _thread_worker_event(
+          thread, status, full_content=f"{fallback}\n\n*(summary unavailable: {e})*", content=fallback)
       await _persist_worker_summary_once(session_id, thread.id, fallback_event, session_mgr, fallback=True)
     except Exception as inner:
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())

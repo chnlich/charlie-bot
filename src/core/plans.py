@@ -15,6 +15,8 @@ import json
 import os
 import posixpath
 import re
+import subprocess
+import uuid
 from enum import IntEnum
 from pathlib import Path
 from typing import Optional
@@ -60,6 +62,104 @@ def _check_goal_budget(artifact: Path) -> None:
     raise ValueError(
         f"plan goal is {weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET}): keep the goal "
         "and non-goals; demote diagnosis, thresholds, paths, and justifications to Context or 4.1")
+
+
+# ---------------------------------------------------------------------------
+# Page budget — registration-time gate on the artifact's opening rendered height
+# ---------------------------------------------------------------------------
+
+PAGE_HEIGHT_BUDGET = 1400
+
+_PAGE_PROBE_WIDTH_PX = 1280
+_RENDER_TIMEOUT_S = 60
+_HEIGHT_MARKER_RE = re.compile(r'<pre id="page-height">(\d+)</pre>')
+
+# The probe loads the artifact in a fixed-width iframe over file://, hides the revision
+# marks (revision badges and revnotes ride outside the budget, per the plan template's
+# Page budget rule), leaves details elements in their default collapsed state, then
+# writes the artifact's measured height into its own DOM so --dump-dom hands it back.
+_PAGE_PROBE_TEMPLATE = """<!doctype html>
+<html><head><meta charset="utf-8">
+<style>html,body{{margin:0;padding:0}}iframe{{width:{width}px;border:0;display:block}}</style>
+</head><body>
+<iframe id="artifact" src="{src}"></iframe>
+<script>
+  const frame = document.getElementById('artifact');
+  frame.addEventListener('load', () => {{
+    const doc = frame.contentDocument;
+    for (const mark of doc.querySelectorAll('.revbadge,.revnote')) mark.style.display = 'none';
+    const marker = document.createElement('pre');
+    marker.id = 'page-height';
+    marker.textContent = String(doc.documentElement.scrollHeight);
+    document.body.appendChild(marker);
+  }});
+</script>
+</body></html>
+"""
+
+
+def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
+  """Render *artifact* headlessly through a session-unique probe page; return its scroll height."""
+  probe = artifact.parent / f".page-height-probe-{uuid.uuid4().hex}.html"
+  probe.write_text(
+      _PAGE_PROBE_TEMPLATE.format(width=_PAGE_PROBE_WIDTH_PX, src=artifact.resolve().as_uri()),
+      encoding="utf-8")
+  try:
+    try:
+      proc = subprocess.run(
+          [
+              str(chrome_bin),
+              "--headless",
+              "--disable-gpu",
+              "--no-sandbox",
+              "--allow-file-access-from-files",
+              "--virtual-time-budget=8000",
+              "--dump-dom",
+              probe.as_uri(),
+          ],
+          capture_output=True,
+          timeout=_RENDER_TIMEOUT_S,
+      )
+    except subprocess.TimeoutExpired:
+      raise ValueError(
+          f"headless renderer timed out after {_RENDER_TIMEOUT_S}s while measuring the plan page height")
+    except OSError as e:
+      raise ValueError(f"headless renderer could not be launched: {chrome_bin} ({e})") from e
+    if proc.returncode != 0:
+      stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+      tail = stderr[-400:] if stderr else "no stderr output"
+      raise ValueError(f"headless renderer exited {proc.returncode} while measuring the plan page height: {tail}")
+    match = _HEIGHT_MARKER_RE.search(proc.stdout.decode("utf-8", errors="replace"))
+    if match is None:
+      raise ValueError("headless renderer output carried no page-height marker; cannot measure the plan page")
+    return int(match.group(1))
+  finally:
+    probe.unlink()
+
+
+def _check_page_height(cfg: CharlieBotConfig, artifact: Path) -> None:
+  """Reject registration when the artifact's opening page exceeds the height budget.
+
+  Fail-loud like the goal gate: a missing or unusable renderer rejects with the reason
+  instead of skipping the check. Runs only at present/amend — registered plans are
+  never re-checked.
+  """
+  chrome_bin = cfg.headless_chrome_bin
+  if not chrome_bin:
+    raise ValueError(
+        "headless_chrome_bin is required for plan registration: set it in the host config.yaml "
+        "to the absolute path of a headless-chromium-compatible binary")
+  chrome = Path(chrome_bin)
+  if not chrome.exists():
+    raise ValueError(
+        "headless_chrome_bin is required for plan registration but the configured path "
+        f"does not exist: {chrome}")
+  height = _measure_page_height(chrome, artifact)
+  if height > PAGE_HEIGHT_BUDGET:
+    raise ValueError(
+        f"plan page measures {height} px tall as it opens (budget {PAGE_HEIGHT_BUDGET} px): "
+        "fold depth into details-layer blocks (collapsed by default) so the opening page "
+        "reads in one screen")
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +413,7 @@ class PlanRegistryManager:
       data = await self._load(session_id)
       file_relative = self._validate_file_in_session_dir(session_id, file)
       _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
+      _check_page_height(self._cfg, self._cfg.sessions_dir / session_id / file_relative)
       existing_file = self._find_binding_by_file(session_id, data, file_relative)
       if existing_file is not None:
         raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
@@ -351,6 +452,7 @@ class PlanRegistryManager:
       data = await self._load(session_id)
       file_relative = self._validate_file_in_session_dir(session_id, file)
       _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
+      _check_page_height(self._cfg, self._cfg.sessions_dir / session_id / file_relative)
       existing_file = self._find_binding_by_file(session_id, data, file_relative)
       if existing_file is not None:
         raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")

@@ -169,6 +169,11 @@ class CharlieBotConfig(BaseModel):
   code_server_config: str = "configs/code-server.yaml"
   code_server_bin: Optional[str] = None
 
+  # Plan registration page-height gate — absolute path of a headless-chromium-compatible
+  # binary on the host running the server. The value stays host-local in config.yaml;
+  # nothing in the repo hardcodes a path.
+  headless_chrome_bin: str = ""
+
   # Backlog panel
   backlog_repos: list[BacklogRepoConfig] = []
   # Home page — externally-hosted services probed for reachability; default empty

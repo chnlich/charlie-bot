@@ -403,6 +403,82 @@ test('bumpCurrentSessionToTop moves flat sidebar sessions to the top-level front
   assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
 });
 
+test('bumpCurrentSessionToTop lands the bumped row below the group PM head row', () => {
+  const nav = new FakeElement('DIV', {id: 'session-list'});
+  const group = new FakeElement('DIV', {className: 'session-group'});
+  const toggle = new FakeElement('DIV');
+  const items = new FakeElement('DIV', {className: 'session-group-items'});
+  const pmHead = createSession('pm', '2026-04-01T03:00:00.000Z', 'old-pm');
+  pmHead.dataset.pmHead = '1';
+  const before = createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b');
+  const current = createSession('session-a', '2026-04-01T01:00:00.000Z', 'old-a');
+  const after = createSession('session-c', '2026-04-01T02:00:00.000Z', 'old-c');
+
+  items.appendChild(pmHead);
+  items.appendChild(before);
+  items.appendChild(current);
+  items.appendChild(after);
+  group.appendChild(toggle);
+  group.appendChild(items);
+  nav.appendChild(group);
+
+  const {context, nowIso} = loadChatContext({
+    getElementById(id) {
+      if (id === 'session-list') return nav;
+      if (id === 'session-session-a') return current;
+      return null;
+    },
+  });
+
+  context.bumpCurrentSessionToTop();
+
+  assert.equal(current.parentElement, items);
+  assert.deepEqual(items.children.map((child) => child.id), [
+    'session-pm',
+    'session-session-a',
+    'session-session-b',
+    'session-session-c',
+  ]);
+  assert.equal(items.firstElementChild, pmHead);
+  assert.equal(current.querySelector('.session-time').dataset.time, nowIso);
+  assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
+});
+
+test('bumpCurrentSessionToTop does not move the current row when it is the PM head row', () => {
+  const nav = new FakeElement('DIV', {id: 'session-list'});
+  const group = new FakeElement('DIV', {className: 'session-group'});
+  const toggle = new FakeElement('DIV');
+  const items = new FakeElement('DIV', {className: 'session-group-items'});
+  const pmHead = createSession('session-a', '2026-04-01T03:00:00.000Z', 'old-pm');
+  pmHead.dataset.pmHead = '1';
+  const other = createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b');
+
+  items.appendChild(pmHead);
+  items.appendChild(other);
+  group.appendChild(toggle);
+  group.appendChild(items);
+  nav.appendChild(group);
+
+  const {context, nowIso} = loadChatContext({
+    getElementById(id) {
+      if (id === 'session-list') return nav;
+      if (id === 'session-session-a') return pmHead;
+      return null;
+    },
+  });
+
+  context.bumpCurrentSessionToTop();
+
+  assert.deepEqual(items.children.map((child) => child.id), [
+    'session-session-a',
+    'session-session-b',
+  ]);
+  assert.equal(items.firstElementChild, pmHead);
+  // The .session-time refresh runs even on the no-move path.
+  assert.equal(pmHead.querySelector('.session-time').dataset.time, nowIso);
+  assert.equal(pmHead.querySelector('.session-time').textContent, `relative:${nowIso}`);
+});
+
 // ---------------------------------------------------------------------------
 // Turn outline fold — invariants I0-I6.
 //

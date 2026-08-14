@@ -64,6 +64,9 @@ entry belongs in the store at all, and such a candidate is rejected:
 A candidate's text is a claim: verify version, build, and account figures against the live
 system before presenting them.
 
+A trap claim about shared infrastructure enters only with its root cause named and reproduced
+outside the originating session; a fixable obstruction is fixed instead of recorded.
+
 Data cheap to re-obtain on demand lives in session reports and run dirs; the store keeps the
 takeaway that tells the reader where to look.
 
@@ -119,6 +122,8 @@ Brevity is part of the admission bar: lead with the action and keep only the mec
 is unintelligible without; receipts, verification notes, and secondary effects leave. Hold a
 bullet to about three lines and an entry body to about a dozen; a merge that would grow past that
 re-trims the whole entry by the same test.
+A measured figure lives in its canonical source (run dir, canon table, ticket); an entry states
+the rule and points there.
 Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
 moves. When context changes, revise the entry in place (a capture whose body states the change
 stages the proposed new text).

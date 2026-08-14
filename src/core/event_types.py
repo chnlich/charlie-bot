@@ -59,7 +59,6 @@ TEX_EDIT_PROPOSED = "tex_edit_proposed"
 
 # -- Slash command responses -------------------------------------------------
 HELP = "help"
-IMPROVE_STARTED = "improve_started"
 IMPROVE_STOPPED = "improve_stopped"
 TASK_TRIGGERED = "task_triggered"
 SHELL_RESULT = "shell_result"

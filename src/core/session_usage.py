@@ -278,22 +278,3 @@ class SessionUsageResolver:
     if not events:
       return None
     return _resolve_no_source_tier(events)
-
-  @staticmethod
-  def usage_from_events(events: list[dict]) -> dict | None:
-    """Pure projection over a pre-loaded event list (no caching).
-
-    Provided for callers that already hold the full list. Resolves the claude
-    tier, then the snapshot tier, then the no-source tier; the codex tier
-    requires backend + rollout state that this entry point does not have, so
-    callers needing codex should use ``resolve_session_usage`` instead.
-    """
-    if not events:
-      return None
-    usage = _resolve_claude_tier(events)
-    if usage is not None:
-      return usage
-    usage = _resolve_snapshot_tier(events)
-    if usage is not None:
-      return usage
-    return _resolve_no_source_tier(events)

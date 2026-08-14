@@ -1168,6 +1168,25 @@ async def _persist_worker_summary_once(
   log.info("worker_summary_sent", session=session_id, thread=thread_id, fallback=fallback)
 
 
+async def _record_scheduled_run_status(
+    session_mgr: SessionManager,
+    session_id: str,
+    exit_code: int,
+) -> Optional[str]:
+  """Record the run's outcome on a scheduled session and return its scheduled task name.
+
+  Fetches the session metadata exactly once for the whole notify chain; None means the
+  session is unscheduled, which the Telegram notify reads as "nothing to look up".
+  """
+  session_meta = await session_mgr.get_session(session_id)
+  if session_meta is None or not session_meta.scheduled_task:
+    return None
+  session_meta.last_run_status = "success" if exit_code == 0 else "failed"
+  session_meta.updated_at = datetime.now(timezone.utc)
+  await session_mgr.save_metadata(session_meta)
+  return session_meta.scheduled_task
+
+
 async def _broadcast_completion(
     session_id: str,
     description: str,
@@ -1180,13 +1199,6 @@ async def _broadcast_completion(
     task_type: TaskType = TaskType.IMPLEMENT,
 ) -> tuple[str, str]:
   """Build and broadcast the worker_summary event. Returns (events_summary, full_summary)."""
-  # Update last_run_status for scheduled sessions
-  session_meta = await session_mgr.get_session(session_id)
-  if session_meta and session_meta.scheduled_task:
-    session_meta.last_run_status = "success" if exit_code == 0 else "failed"
-    session_meta.updated_at = datetime.now(timezone.utc)
-    await session_mgr.save_metadata(session_meta)
-
   if task_type == TaskType.VERIFY:
     events_summary = await read_verify_final_report(session_id, thread.id, thread_mgr)
   else:
@@ -1234,6 +1246,7 @@ async def _notify_completion(
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
+    scheduled_task_name = await _record_scheduled_run_status(session_mgr, session_id, exit_code)
     events_summary, full_summary = await _broadcast_completion(
         session_id,
         description,
@@ -1246,15 +1259,14 @@ async def _notify_completion(
         task_type=task_type)
 
     # Send Telegram notification if the session's scheduled task has notify='telegram'.
-    try:
-      session_meta = await session_mgr.get_session(session_id)
-      if session_meta and session_meta.scheduled_task:
+    if scheduled_task_name:
+      try:
         for task in get_scheduled_tasks():
-          if task.name == session_meta.scheduled_task and task.notify == 'telegram':
+          if task.name == scheduled_task_name and task.notify == 'telegram':
             await send_telegram(events_summary, cfg)
             break
-    except Exception as tg_err:
-      log.warning("telegram_notify_failed", session=session_id, error=str(tg_err))
+      except Exception as tg_err:
+        log.warning("telegram_notify_failed", session=session_id, error=str(tg_err))
 
     await review.maybe_spawn_reviewer(
         session_id, thread, exit_code, events_summary, full_summary, thread_mgr, session_mgr, cfg)

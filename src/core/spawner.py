@@ -841,8 +841,8 @@ async def _finalize_worker_safely(
     quota_exhausted: bool,
     error: str,
     skip_notify: bool,
-    task_type: TaskType = TaskType.IMPLEMENT,
-    completed_at: Optional[datetime] = None,
+    task_type: TaskType,
+    completed_at: Optional[datetime],
 ) -> None:
   """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
   try:
@@ -879,16 +879,17 @@ async def recomplete_finalize_effects(
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
-    quota_exhausted: bool = False,
-    error: str = "",
-    task_type: TaskType = TaskType.IMPLEMENT,
+    *,
+    task_type: TaskType,
 ) -> None:
   """Re-run ONLY the side effects of _finalize_worker — never the status write.
 
   Startup-reconcile entry point for threads already marked terminal when a
   crash interrupted their notify chain. Every effect behind this call is
   judgment-idempotent (src/core/finalize_effects), so repetition converges to
-  a no-op; the status/completed_at fields are left exactly as recorded.
+  a no-op; the status/completed_at fields are left exactly as recorded. The
+  original quota/error outcome state is not persisted, so a re-run summarizes
+  from exit_code alone.
   """
   await _run_finalize_effects(
       session_id,
@@ -898,8 +899,8 @@ async def recomplete_finalize_effects(
       thread_mgr,
       session_mgr,
       cfg,
-      quota_exhausted=quota_exhausted,
-      error=error,
+      quota_exhausted=False,
+      error="",
       skip_notify=False,
       task_type=task_type)
 
@@ -1238,9 +1239,9 @@ async def _notify_completion(
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
-    quota_exhausted: bool = False,
-    error: str = "",
-    task_type: TaskType = TaskType.IMPLEMENT,
+    quota_exhausted: bool,
+    error: str,
+    task_type: TaskType,
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:

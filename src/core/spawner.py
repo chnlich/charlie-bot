@@ -564,7 +564,8 @@ async def _create_worktree_and_process(
     )
     raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
-  return await _construct_worker(session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, request)
+  return await _construct_worker(
+      session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, request)
 
 
 def _thread_dir(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Path:

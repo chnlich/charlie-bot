@@ -490,7 +490,6 @@ async def _create_worktree_and_process(
     # published default branch; the local checkout's refs never enter the decision.
     base_branch = request.base_branch or f"origin/{await git_remote_default_branch(resolved_repo)}"
 
-    # Compute branch name; the fresh-worktree branch derives the path from it.
     branch_name = request.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
 
     canonical_branch = base_branch
@@ -504,14 +503,12 @@ async def _create_worktree_and_process(
     else:
       wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
 
-      # Ensure worktree parent dir exists and create worktree before launch.
       Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
       resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
       canonical_branch = resolution.canonical
       is_continuation = False
       start_point = resolution.start_point
 
-    # Store branch_name, repo_path, worktree path, and optional context on thread metadata.
     thread.branch_name = branch_name
     thread.repo_path = str(resolved_repo)
     thread.worktree_path = str(wt_path)
@@ -519,7 +516,6 @@ async def _create_worktree_and_process(
     thread.keep_worktree = request.keep_worktree
     thread.context = request.context
 
-    # Build enriched prompt with worktree workflow instructions
     session_meta = await session_mgr.get_session(session_id)
     if session_meta is None:
       raise ValueError(f"session '{session_id}' not found")
@@ -660,7 +656,6 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, 
   if skip_cleanup:
     return None
 
-  # Git worktree removal for repo-based workers.
   if thread.worktree_path and thread.repo_path:
     wt = Path(thread.worktree_path)
     if wt.exists():
@@ -943,7 +938,6 @@ async def spawn_worker(
       return
 
     if request.repo_path is None:
-      # Repo-less worker: run prompt directly without worktree
       worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
     else:
       resolved_repo = Path(request.repo_path).resolve()
@@ -971,7 +965,7 @@ async def spawn_worker(
     # (detach stops the closing loop's transports from killing them);
     # uncovered transports and improve iterations (whose loop dies with this
     # process) cannot outlive the server usefully, so their processes are
-    # still terminated (ff82c34's orphan prevention).
+    # still terminated.
     cancelled = True
     transport = runs.backend_type(cfg, thread.backend if thread else None)
     let_go = (worker is not None and transport not in runs.UNCOVERED_BACKEND_TYPES
@@ -1239,7 +1233,6 @@ async def _notify_completion(
         error=error,
         task_type=task_type)
 
-    # Send Telegram notification if the session's scheduled task has notify='telegram'.
     if scheduled_task_name:
       try:
         for task in get_scheduled_tasks():

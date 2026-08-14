@@ -62,6 +62,11 @@ Known-alive symbols:
   `_handle_mcp_tool_call`, `_handle_web_search`, `_handle_todo_list`, `_handle_error` — Codex backend
   item-event handlers in `src/agents/backends/codex.py`, reached by string via the `_ITEM_HANDLERS`
   name list and `getattr(self, handler_name)` dispatch in `_translate_item_event`.
+- `openai_compatible_messages` — FastAPI route handler in `src/api/anthropic_proxy.py`
+  (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`), reached by string: the
+  `cc-openai-compatible` backend registry builds that URL by f-string in
+  `src/agents/backends/registry.py`. The Python name has exactly zero whole-repo matches outside
+  its own definition, so static dead-code tools (vulture) flag it as an unused function.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

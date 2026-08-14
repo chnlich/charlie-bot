@@ -239,29 +239,6 @@ def _worker_locator_summary(thread_id: str, status: str, timestamp: str) -> str:
       f"find in Workers panel by thread ID")
 
 
-def _build_worker_event(
-    thread_id: str,
-    content: str,
-    status: str,
-    full_content: str = '',
-    backend: str | None = None,
-    model: str | None = None,
-) -> dict:
-  """Build a worker_summary event dict."""
-  event = {
-      "type": ET.WORKER_SUMMARY,
-      "thread_id": thread_id,
-      "content": content,
-      "status": status,
-      "full_content": full_content,
-  }
-  if backend:
-    event["resolved_backend"] = backend
-  if model:
-    event["resolved_model"] = model
-  return event
-
-
 def _thread_worker_event(
     thread: ThreadMetadata,
     status: str,
@@ -274,14 +251,19 @@ def _thread_worker_event(
   ``content`` overrides the locator summary when the caller already computed it, so
   content and a full_content quoting it stay byte-consistent (one wall-clock read).
   """
-  return _build_worker_event(
-      thread.id,
-      content if content is not None else _worker_locator_summary(thread.id, status, _worker_summary_timestamp()),
-      status,
-      full_content=full_content,
-      backend=thread.backend,
-      model=thread.model,
-  )
+  event = {
+      "type": ET.WORKER_SUMMARY,
+      "thread_id": thread.id,
+      "content": content if content is not None
+      else _worker_locator_summary(thread.id, status, _worker_summary_timestamp()),
+      "status": status,
+      "full_content": full_content,
+  }
+  if thread.backend:
+    event["resolved_backend"] = thread.backend
+  if thread.model:
+    event["resolved_model"] = thread.model
+  return event
 
 
 def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str | None) -> BackendOption:

@@ -280,14 +280,6 @@ def _thread_worker_event(thread: ThreadMetadata, status: str, full_content: str 
   )
 
 
-def _resolve_routing_model(option: BackendOption, model: Optional[str], *, source: str) -> Optional[str]:
-  if backend_type_allows_missing_model(option.type):
-    return None
-  if not model:
-    raise ValueError(f"{source} model is required")
-  return model
-
-
 def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: Optional[str]) -> BackendOption:
   """Resolve a runtime backend option from explicit backend/model values."""
   if not backend_id:
@@ -295,7 +287,12 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: Option
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise ValueError(f"resolved backend '{backend_id}' is not configured")
-  resolved_model = _resolve_routing_model(option, model, source="resolved")
+  if backend_type_allows_missing_model(option.type):
+    resolved_model = None
+  elif not model:
+    raise ValueError("resolved model is required")
+  else:
+    resolved_model = model
   return option.model_copy(update={"model": resolved_model})
 
 

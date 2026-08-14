@@ -941,10 +941,10 @@ async def spawn_worker(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-    request: Optional[SpawnRequest] = None,
+    request: SpawnRequest,
 ) -> None:
   """Spawn a worker for the given thread on its resolved backend. Fire-and-forget via asyncio.create_task()."""
-  req = request or SpawnRequest()
+  req = request
 
   thread = None
   worker = None

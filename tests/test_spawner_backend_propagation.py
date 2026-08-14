@@ -282,6 +282,9 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
       0,
       FakeThreadManager(),
       FakeSessionManager(),
+      quota_exhausted=False,
+      error="",
+      task_type=TaskType.IMPLEMENT,
   )
 
   assert events_summary == "Worker output body"
@@ -616,6 +619,11 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       thread_mgr=FakeThreadManager(),
       session_mgr=object(),
       cfg=cfg,
+      quota_exhausted=False,
+      error="",
+      skip_notify=False,
+      task_type=TaskType.IMPLEMENT,
+      completed_at=None,
   )
 
   assert captures["status"] == ThreadStatus.COMPLETED

@@ -134,6 +134,11 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
       thread_mgr=FakeThreadManager(),
       session_mgr=object(),
       cfg=cfg,
+      quota_exhausted=False,
+      error="",
+      skip_notify=False,
+      task_type=TaskType.IMPLEMENT,
+      completed_at=None,
   )
 
   assert captures["status"] == ThreadStatus.COMPLETED

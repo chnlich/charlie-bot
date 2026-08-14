@@ -145,6 +145,15 @@
 
       Shrink rule: depth scales with complexity. Any section may shrink to a sentence. 4.2 Design Details and
                     6. Other Details may be empty and omitted entirely. Section order and numbering never change.
+      Page budget: the page as it opens is the complete decision surface, so it reads in one screen: every
+                    details-layer block collapsed, content stays within 1400 px height at the 1000 px wrap.
+                    Depth is welcome, folded: anything deeper belongs in a details-layer block, collapsed by
+                    default. The budget counts standing content: revision badges and revnotes, cleared by the
+                    next revision, ride outside it. The always-visible minimum is the surface approval binds to:
+                    the header, section 1, 4.1 Schema, and each Trade-off's question, recommendation, and trade
+                    lines. Shrink or split a plan whose minimum alone overflows. Registration enforces the
+                    budget for plans; an understanding page self-checks with a headless render (it never
+                    registers).
       Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
                     resolution; unmentioned items accept the recommendation. Any Other Details entry the user
                     asks to control is promoted and then joins the approval object. "take off" releases the plan.

@@ -40,7 +40,7 @@ An understanding page precedes the plan when the master must first align the rea
 (the trigger and its exemptions live in the master prompt).
 
 - The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
-  `prompts/plan_template.html`. Five blocks: goal with the why one level up; the
+  `prompts/plan_template.html`. Five blocks: goal in one sentence carrying the why one level up; the
   deliverable through two or three concrete examples; acceptance criteria, each a trigger
   condition plus an observable behavior (EARS phrasing, "WHEN <condition> THE SYSTEM
   SHALL <behavior>", is an example shape, not a requirement); non-goals; numbered
@@ -58,6 +58,9 @@ An understanding page precedes the plan when the master must first align the rea
   their recommendation. Confirmation is ordinary feedback and introduces no new approval token.
 - The subsequent plan carries the confirmed understanding's file path as a header
   meta chip; section 1 states the goal in its own words.
+- The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in
+  `prompts/plan_template.html`); the always-visible minimum here is the goal sentence and
+  each divergence's question, recommendation, and trade lines.
 
 ## Plan
 

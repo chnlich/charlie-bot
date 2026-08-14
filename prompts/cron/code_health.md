@@ -3,7 +3,9 @@ Code-health cleanup.
 This run works in the repo worktree: branch, test, push, `gh pr create`, review the diff on the
 pull request, then squash-merge it once the checks are green. A red check earns a fix on the same
 branch, or the pull request is abandoned. Every change lands through the pull request, which stays
-the triage record; `main` takes no direct pushes.
+the triage record; `main` takes no direct pushes. Before writing code, read
+`skills/writing-style/genres/code.md` and follow it: comments carry constraints only; provenance
+lives in blame.
 
 Step 0: check for an open contract PR before anything else.
 List open pull requests whose head branch matches `code-health/*`. If any exists: produce no new
@@ -99,14 +101,28 @@ reading the PR. The skill ships with the Claude CLI, so a backend that lacks it 
 step as unavailable and continues.
 
 Step 7: land it, or abandon it.
-Wait for the checks in this run, then merge:
+Wait for the checks in this run:
 
-    gh pr checks <PR> --watch --fail-fast && gh pr merge --squash <PR>
+    gh pr checks <PR> --watch --fail-fast
 
 Retry `--watch` a few times, several seconds apart, while it reports "no checks reported": the
 workflow needs a moment to register after the push. Leave `gh pr merge --auto` out of this step:
 this repository has auto-merge disabled and no required status checks, so `--auto` merges
 immediately and the wait above is what gates the merge instead.
+
+With the checks green, confirm the pull request still carries net content against a fresh `main`;
+a rival run that already merged the same cleanup is a merged PR, which Step 0's open-PR check
+cannot see, so this guard lives at merge time:
+
+    git fetch origin main && git diff origin/main...HEAD --stat
+
+A non-empty diff merges:
+
+    gh pr merge --squash <PR>
+
+An empty diff means the change already lives on `main`: close the pull request with
+`gh pr close <PR> --comment 'code-health-abandoned: duplicate of #<N>'`, naming the landed pull
+request when the `main` history identifies it.
 
 A red check earns one fix on the same branch: read it with `gh run view --log-failed`, fix, push,
 and watch again, at most twice. Abandon the pull request when it stays red after the second fix,

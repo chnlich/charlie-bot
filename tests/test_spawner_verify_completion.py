@@ -117,6 +117,8 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
       0,
       thread_mgr,
       session_mgr,
+      quota_exhausted=False,
+      error="",
       task_type=TaskType.VERIFY,
   )
 

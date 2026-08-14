@@ -779,11 +779,11 @@ async def _finalize_worker(
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
     *,
-    quota_exhausted: bool = False,
-    error: str = "",
-    skip_notify: bool = False,
-    task_type: TaskType = TaskType.IMPLEMENT,
-    completed_at: Optional[datetime] = None,
+    quota_exhausted: bool,
+    error: str,
+    skip_notify: bool,
+    task_type: TaskType,
+    completed_at: Optional[datetime],
 ) -> None:
   """Update thread status and notify completion.
 
@@ -1192,9 +1192,9 @@ async def _broadcast_completion(
     exit_code: int,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
-    quota_exhausted: bool = False,
-    error: str = "",
-    task_type: TaskType = TaskType.IMPLEMENT,
+    quota_exhausted: bool,
+    error: str,
+    task_type: TaskType,
 ) -> tuple[str, str]:
   """Build and broadcast the worker_summary event. Returns (events_summary, full_summary)."""
   if task_type == TaskType.VERIFY:

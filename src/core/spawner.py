@@ -605,7 +605,6 @@ async def _create_repoless_process(
 async def _stream_worker_events(
     worker: Worker,
     session_id: str,
-    description: str,
     thread: ThreadMetadata,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
@@ -935,7 +934,7 @@ async def _rerun_verify_on_fresh_backend(
   req.resolved_model = resolved_model
   thread.tried_backends = tried_backends
   worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, req)
-  return await _stream_worker_events(worker, session_id, description, thread, thread_mgr, session_mgr)
+  return await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
 
 async def spawn_worker(
@@ -971,7 +970,7 @@ async def spawn_worker(
           session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, req)
 
     exit_code, quota_exhausted, error_msg = await _stream_worker_events(
-        worker, session_id, description, thread, thread_mgr, session_mgr)
+        worker, session_id, thread, thread_mgr, session_mgr)
 
     if req.task_type == TaskType.VERIFY and quota_exhausted:
       # A retry's own setup failure is a generic error, not quota exhaustion.

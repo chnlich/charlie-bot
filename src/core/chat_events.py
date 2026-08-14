@@ -41,9 +41,6 @@ class ChatEventStore:
   def events_cache(self) -> dict[str, list[dict]]:
     return self._events_cache
 
-  def has_cache(self, session_id: str) -> bool:
-    return session_id in self._events_cache
-
   def cached_event_count(self, session_id: str) -> int:
     return len(self._events_cache[session_id])
 

@@ -1,2 +1,0 @@
-timestamp=2026-08-15T08:44:20.797Z level=ERROR run=efb0dc6f message="share subscriber failed" type=message.updated cause="Cause([Fail(ProviderModelNotFoundError: Model not found: totally-bogus-provider-zz/no-such-model-qq.)])"
-timestamp=2026-08-15T08:44:20.806Z level=ERROR run=efb0dc6f message=failed ref=err_4a01f445 error="ProviderModelNotFoundError: Model not found: totally-bogus-provider-zz/no-such-model-qq." cause="ProviderModelNotFoundError: Model not found: totally-bogus-provider-zz/no-such-model-qq.

@@ -173,6 +173,7 @@ class _DerivedState(IntEnum):
   APPROVED = 2
   SUPERSEDED = 3
   ABANDONED = 4
+  COMPLETED = 5
 
 
 _DERIVED_STATE_STR: dict[_DerivedState, str] = {
@@ -180,6 +181,7 @@ _DERIVED_STATE_STR: dict[_DerivedState, str] = {
     _DerivedState.APPROVED: "approved",
     _DerivedState.SUPERSEDED: "superseded",
     _DerivedState.ABANDONED: "abandoned",
+    _DerivedState.COMPLETED: "completed",
 }
 
 
@@ -199,6 +201,8 @@ def _derive_state(closed: Optional[dict], takeoff: Optional[dict]) -> _DerivedSt
       return _DerivedState.SUPERSEDED
     if close_as == "abandoned":
       return _DerivedState.ABANDONED
+    if close_as == "completed":
+      return _DerivedState.COMPLETED
     raise ValueError(f"unknown closed.as: {close_as!r}")
   if takeoff is None:
     return _DerivedState.AWAITING_APPROVAL
@@ -516,8 +520,8 @@ class PlanRegistryManager:
     return candidates[0]
 
   async def close(self, session_id: str, plan_id: int, close_as: str) -> dict:
-    if close_as not in ("superseded", "abandoned"):
-      raise ValueError(f"--as must be superseded|abandoned, got {close_as!r}")
+    if close_as not in ("superseded", "abandoned", "completed"):
+      raise ValueError(f"--as must be superseded|abandoned|completed, got {close_as!r}")
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       plan = self._get_plan(data, plan_id)

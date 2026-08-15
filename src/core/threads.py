@@ -47,7 +47,7 @@ class ThreadManager:
         task_type=task_type,
     )
 
-    thread_dir = self._thread_dir(session_meta.id, thread.id)
+    thread_dir = self.thread_dir(session_meta.id, thread.id)
     (thread_dir / "data").mkdir(parents=True, exist_ok=True)
 
     await self._save_metadata(thread)
@@ -96,8 +96,12 @@ class ThreadManager:
       meta.completed_at = completed_at or utc_now()
     await self._save_metadata(meta)
 
+  def thread_dir(self, session_id: str, thread_id: str) -> Path:
+    """A thread's canonical on-disk directory (metadata.json and data/)."""
+    return self._cfg.sessions_dir / session_id / "threads" / thread_id
+
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-    return self._thread_dir(session_id, thread_id) / "data" / "events.jsonl"
+    return self.thread_dir(session_id, thread_id) / "data" / "events.jsonl"
 
   async def save_metadata(self, meta: ThreadMetadata) -> None:
     """Persist thread metadata to disk."""
@@ -113,8 +117,5 @@ class ThreadManager:
     async with aiofiles.open(path, "w") as f:
       await f.write(meta.model_dump_json(indent=2))
 
-  def _thread_dir(self, session_id: str, thread_id: str) -> Path:
-    return self._cfg.sessions_dir / session_id / "threads" / thread_id
-
   def _metadata_path(self, session_id: str, thread_id: str) -> Path:
-    return self._thread_dir(session_id, thread_id) / "metadata.json"
+    return self.thread_dir(session_id, thread_id) / "metadata.json"

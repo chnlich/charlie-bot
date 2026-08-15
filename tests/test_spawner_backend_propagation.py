@@ -933,6 +933,9 @@ async def test_create_repoless_worker_prepends_verify_preamble(
 
   class FakeThreadManager(JudgmentShim):
 
+    def thread_dir(self, session_id: str, thread_id: str) -> Path:
+      return cfg.sessions_dir / session_id / "threads" / thread_id
+
     async def save_metadata(self, meta: ThreadMetadata) -> None:
       captures["saved_thread"] = meta
 
@@ -1054,6 +1057,9 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       captures["broadcast_event"] = event
 
   class FakeThreadManager(JudgmentShim):
+
+    def thread_dir(self, session_id: str, thread_id: str) -> Path:
+      return cfg.sessions_dir / session_id / "threads" / thread_id
 
     async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
       return thread

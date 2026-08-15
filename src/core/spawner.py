@@ -336,6 +336,14 @@ def _resolve_session_default_backend_model(
   return _option_default_backend_model(option, source="session")
 
 
+async def _require_session(session_mgr: SessionManager, session_id: str) -> SessionMetadata:
+  """Fetch the session's metadata; raise ValueError when the session doesn't exist."""
+  session_meta = await session_mgr.get_session(session_id)
+  if session_meta is None:
+    raise ValueError(f"session '{session_id}' not found")
+  return session_meta
+
+
 async def resolve_session_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
@@ -357,9 +365,7 @@ async def resolve_requested_subagent_backend_model(
   session pinned to an id config.yaml no longer defines both raise. Only an empty session
   backend defaults, and it defaults to cfg.backend_options[0].
   """
-  session_meta = await session_mgr.get_session(session_id)
-  if session_meta is None:
-    raise ValueError(f"session '{session_id}' not found")
+  session_meta = await _require_session(session_mgr, session_id)
   if requested_backend is not None:
     return _resolve_configured_backend_model(cfg, requested_backend, source="requested")
   return _resolve_session_default_backend_model(cfg, session_meta)
@@ -516,9 +522,7 @@ async def _create_worktree_and_process(
     thread.keep_worktree = request.keep_worktree
     thread.context = request.context
 
-    session_meta = await session_mgr.get_session(session_id)
-    if session_meta is None:
-      raise ValueError(f"session '{session_id}' not found")
+    session_meta = await _require_session(session_mgr, session_id)
     worker_prompt = _build_worker_prompt(
         description,
         resolved_repo,

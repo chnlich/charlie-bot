@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 _COMMANDS = {
+    "config": "src.cli.config",
     "delegate": "src.cli.delegate",
     "improve": "src.cli.improve",
     "schedule-trigger": "src.cli.schedule_trigger",

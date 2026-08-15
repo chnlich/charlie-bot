@@ -136,6 +136,7 @@ The Claude backend defaults to a 400k window. The working knob is `CLAUDE_CODE_A
 ## Sidebar & Frontend
 
 - New sidebar filter panels: Register the filter once in `web/static/js/sidebar/filters.js`; the filter pills, switching URLs, and URL restoration all derive from that registry.
+- New utilities in `web/static/js/**` or templates: check the exact class name against committed `web/static/css/tailwind.css` first — `text-emerald-400` and `text-emerald-400/50` are different selectors and only the suffixed form may exist. Tailwind's content scan token-extracts from comments too, so never write an unused class name even inside a code comment. Verify with `tests/test_tailwind_css_build.py` (byte-identity of committed vs rebuilt CSS) — `-k frontend` does NOT match it by test name, so run it explicitly alongside the `-k frontend` sweep whenever template or JS classes change.
 
 ---
 

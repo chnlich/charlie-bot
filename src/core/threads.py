@@ -25,7 +25,6 @@ class ThreadManager:
 
   def __init__(self, cfg: CharlieBotConfig):
     self._cfg = cfg
-    self._thread_session_index: dict[str, str] = {}  # thread_id -> session_id
 
   async def create_thread(
       self,
@@ -52,7 +51,6 @@ class ThreadManager:
     (thread_dir / "data").mkdir(parents=True, exist_ok=True)
 
     await self._save_metadata(thread)
-    self._thread_session_index[thread.id] = session_meta.id
     log.info("thread_created", thread_id=thread.id)
     return thread
 
@@ -62,7 +60,6 @@ class ThreadManager:
       return None
     async with aiofiles.open(path, "r") as f:
       raw = await f.read()
-    self._thread_session_index[thread_id] = session_id
     return ThreadMetadata.model_validate_json(raw)
 
   async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
@@ -101,29 +98,6 @@ class ThreadManager:
 
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
     return self._thread_dir(session_id, thread_id) / "data" / "events.jsonl"
-
-  def resolve_events_file(self, thread_id: str) -> Path | None:
-    """Resolve the events.jsonl path for a thread, using the in-memory index with directory-scan fallback."""
-    # Fast path: check the index
-    session_id = self._thread_session_index.get(thread_id)
-    if session_id:
-      candidate = self._cfg.sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
-      if candidate.exists():
-        return candidate
-      # Stale index entry — fall through to scan
-      self._thread_session_index.pop(thread_id, None)
-
-    # Fallback: O(n) directory scan
-    if not self._cfg.sessions_dir.exists():
-      return None
-    for session_dir in self._cfg.sessions_dir.iterdir():
-      if not session_dir.is_dir():
-        continue
-      candidate = session_dir / "threads" / thread_id / "data" / "events.jsonl"
-      if candidate.exists():
-        self._thread_session_index[thread_id] = session_dir.name
-        return candidate
-    return None
 
   async def save_metadata(self, meta: ThreadMetadata) -> None:
     """Persist thread metadata to disk."""

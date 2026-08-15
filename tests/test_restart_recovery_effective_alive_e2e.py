@@ -307,3 +307,52 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
   reports = _recovery_reports(home, ids["session"])
   assert len(reports) == 1
   assert runs.UNCOVERED_ALIVE_REASON in reports[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The provably-dead counterpart of the effective-alive row: with pid_start
+  pinned, reconcile proves the uncovered-backend process dead, resolves DIED
+  with the transport reason, drains the run's pending output, and finalizes
+  the thread failed with that reason carried into the worker summary."""
+  home = tmp_path / "home"
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+      ],
+  )
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered-dead"))
+  thread = await thread_mgr.create_thread(session_meta, "uncovered dead task")
+  thread.status = ThreadStatus.RUNNING
+  thread.backend = "fake-oc"
+  thread.model = "fake-model"
+  thread.pid = 999999  # dead: no /proc/999999 entry
+  thread.pid_start = "1"  # pinned at spawn: the death above is provable
+  thread.started_at = utc_now()
+  await thread_mgr.save_metadata(thread)
+  ids = {"session": session_meta.id, "thread": thread.id}
+
+  # Pending work the dead server never drained: output without a result event.
+  data_dir = home / "sessions" / session_meta.id / "threads" / thread.id / "data"
+  data_dir.mkdir(parents=True, exist_ok=True)
+  (data_dir / runs.RAW_LOG_NAME).write_text(
+      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n',
+      encoding="utf-8")
+
+  recovered, alive_at_reattach, _master_wakes, outcomes = await _recover(monkeypatch, home, cfg=cfg)
+
+  assert recovered == 1
+  assert outcomes == [runs.RunOutcome.DIED]
+  assert alive_at_reattach == [False]
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]

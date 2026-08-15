@@ -50,6 +50,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from src.agents import master_cc
 from src.core import init as init_module
@@ -909,7 +910,9 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
 async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                             with_user_message: bool) -> None:
   """An interrupted turn on an uncovered backend transport (opencode /
-  antigravity / tui-cli) is drained NEVER: the record clears and the user
+  antigravity / tui-cli) is drained NEVER: with the pid_start pin present the
+  dead instance's death is provable, so the record resolves DIED with the
+  transport reason, clears WITHOUT any uncovered-alive report, and the user
   message — when one exists — is answered by the replay pass. No user
   message, nothing to answer: the round simply closes."""
   home = tmp_path / "home"
@@ -948,11 +951,19 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
   monkeypatch.setattr(master_cc, "run_message", _capture_run_message)
   monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
-  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  with capture_logs() as logs:
+    await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
   await _await_recovery_tasks()
 
+  # Provable death, not liveness limbo: DIED carrying the transport reason —
+  # never an uncovered-alive report, which is the pin-less record's judgment.
+  resolved = [e for e in logs if e.get("event") == "master_run_resolved"]
+  assert len(resolved) == 1
+  assert resolved[0]["outcome"] == runs.RunOutcome.DIED.value
+  assert resolved[0]["reason"] == runs.TRANSPORT_NOT_COVERED_REASON
   assert _session_meta(home, meta.id)["master_run"] is None
   events = _chat_events(home, meta.id)
+  assert not any(e.get("source") == "crash_recovery" for e in events)
   # The drain invariant: no drain ran, so this turn never produced a MASTER_DONE.
   assert not any(e.get("type") == "master_done" for e in events)
   if with_user_message:
@@ -963,6 +974,66 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
   else:
     assert replays == []
   assert not (state / "inv-1.argv").exists(), "recovery must not spawn any agent for this row"
+
+
+@pytest.mark.asyncio
+async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_path: Path,
+                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+  """The provably-ALIVE counterpart of the dead pinned row: a pinned
+  opencode-flavored master_run whose recorded process still lives resolves
+  RUNNING uncovered-alive — reported exactly once, record kept, user message
+  excluded from replay and judged again on the next restart."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
+          BackendOption(id="oc", label="OC", type="opencode", model="oc-model"),
+      ],
+  )
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
+  user_event = {"type": "user", "content": "message A"}
+  await session_mgr.save_chat_event(meta.id, user_event)
+
+  # A live stand-in for the persisted turn's process instance: reconcile must
+  # prove liveness off the REAL (pid, pid_start) pair, never off the test's say-so.
+  live_shim = subprocess.Popen(["sleep", "60"])
+  try:
+    stat_pair = runs.read_pid_stat(live_shim.pid)
+    assert stat_pair is not None
+    record = MasterRunRecord(
+        pid=live_shim.pid,
+        pid_start=stat_pair[0],
+        started_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+        raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "live" / runs.RAW_LOG_NAME),
+        user_event_id=user_event["id"],
+    )
+    await session_mgr.persist_master_run(meta.id, record)
+
+    replays: list[dict] = []
+
+    async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
+      replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
+
+    monkeypatch.setattr(master_cc, "run_message", _capture_run_message)
+    monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+
+    await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+    await _await_recovery_tasks()
+
+    events = _chat_events(home, meta.id)
+    reports = [e for e in events if e.get("source") == "crash_recovery"]
+    assert len(reports) == 1
+    assert runs.UNCOVERED_ALIVE_REASON in reports[0]["content"]
+    assert _session_meta(home, meta.id)["master_run"] is not None
+    assert replays == []
+    assert not (state / "inv-1.argv").exists(), "a report-only row must not spawn any agent"
+  finally:
+    live_shim.kill()
+    live_shim.wait(timeout=10)
 
 
 @pytest.mark.asyncio

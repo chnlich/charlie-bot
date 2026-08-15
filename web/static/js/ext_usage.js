@@ -10,6 +10,58 @@
 // client-side refresh can recompute labels without a server round-trip.
 let _extUsageRows = [];
 
+// ---------------------------------------------------------------------------
+// Collapse state: one in-memory boolean, evaluated once on DOMContentLoaded.
+// localStorage["ext_usage_strip_collapsed_v1"] holds "1" (collapsed) or "0"
+// (expanded). A missing or invalid value falls back to the platform default
+// and is never written back — only a user toggle writes. Any storage failure
+// silently degrades to the in-memory boolean (same guard shape as the
+// sessionStorage draft handling in artifact-comments.js).
+// ---------------------------------------------------------------------------
+const EXT_USAGE_COLLAPSED_KEY = 'ext_usage_strip_collapsed_v1';
+let _extUsageCollapsed = false;
+
+function _readCollapsedPreference() {
+  try {
+    const raw = localStorage.getItem(EXT_USAGE_COLLAPSED_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch (e) {
+    // storage refused the read — treat as no recorded preference
+  }
+  return null;
+}
+
+function _writeCollapsedPreference(collapsed) {
+  try {
+    localStorage.setItem(EXT_USAGE_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch (e) {
+    // storage refused the write — the in-memory boolean still applies
+  }
+}
+
+// A user toggle updates the in-memory boolean immediately, persists it
+// (guarded), and reapplies the collapsed class + chip glyph without
+// rebuilding any rows — the strip's children never change on a toggle.
+function _setExtUsageCollapsed(collapsed) {
+  _extUsageCollapsed = collapsed;
+  _writeCollapsedPreference(collapsed);
+  const strip = document.getElementById('ext-usage-strip');
+  if (strip) _syncExtUsageChrome(strip);
+}
+
+// The collapsed class mirrors the in-memory boolean on every render, and the
+// chip tracks the strip: hidden whenever the strip is, glyph ▸ collapsed /
+// ▾ expanded. Called from renderExtUsage and from toggle clicks.
+function _syncExtUsageChrome(strip) {
+  strip.classList.toggle('collapsed', _extUsageCollapsed);
+  const chip = document.getElementById('ext-usage-toggle');
+  if (!chip) return;
+  chip.classList.toggle('hidden', strip.classList.contains('hidden'));
+  chip.textContent = _extUsageCollapsed ? '▸' : '▾';
+  chip.title = _extUsageCollapsed ? 'Show quota details' : 'Hide quota details';
+}
+
 function _parseTimestampMs(isoString) {
   if (!isoString) return NaN;
   return new Date(isoString).getTime();
@@ -105,6 +157,21 @@ function _barColor(pct) {
   if (pct > 80) return 'bg-red-500';
   if (pct >= 50) return 'bg-yellow-500';
   return 'bg-emerald-500';
+}
+
+// Text-colour sibling of the bar thresholds: the committed stylesheet has no
+// text-…-500 utilities and no plain emerald-400 text utility, so the summary
+// percentage maps each bar hue to its nearest existing -400 text class.
+// (Class-name literals must stay out of this comment: the Tailwind scanner
+// reads comments as candidate tokens.)
+const _BAR_TEXT_COLORS = {
+  'bg-red-500': 'text-red-400',
+  'bg-yellow-500': 'text-yellow-400',
+  'bg-emerald-500': 'text-green-400',
+};
+
+function _barTextColor(pct) {
+  return _BAR_TEXT_COLORS[_barColor(pct)];
 }
 
 function _formatSpendUsd(value) {
@@ -285,6 +352,65 @@ function _buildRow(key, providerData) {
   return {row: row, buckets: buckets, asOfEl: asOfEl};
 }
 
+// The collapsed summary's worst reading per account: the maximum utilization
+// across every window the provider reported — scoped windows included — with
+// expired and unknown readings excluded. An account whose readings all lose to
+// those filters shows "—"; the account-level states mirror _buildRow's
+// short-circuits: pending → loading, error → error, no windows → no cap.
+function _summaryReading(providerData) {
+  if (providerData.pending) return { text: 'loading', pct: null };
+  if (providerData.error) return { text: 'error', pct: null };
+  const windows = Array.isArray(providerData.windows) ? providerData.windows : [];
+  if (windows.length === 0) return { text: 'no cap', pct: null };
+  let worst = null;
+  for (const win of windows) {
+    if (_isExpiredReading(providerData, win)) continue;
+    if (typeof win.utilization !== 'number' || !Number.isFinite(win.utilization)) continue;
+    if (worst === null || win.utilization > worst) worst = win.utilization;
+  }
+  if (worst === null) return { text: '—', pct: null };
+  const pct = Math.round(worst);
+  return { text: pct + '%', pct: pct };
+}
+
+// Summary row: the strip's first child on every render with providers, shown
+// only in collapsed state (CSS keys off the strip's .collapsed class). One
+// segment per account — provider pill + account name + worst reading — then a
+// trailing ▸. Clicking anywhere on the row expands the strip.
+function _buildSummaryRow(providers) {
+  const row = _el('div', 'flex items-center gap-1.5');
+  row.setAttribute('data-field', 'summary');
+  row.addEventListener('click', () => {
+    if (_extUsageCollapsed) _setExtUsageCollapsed(false);
+  });
+  let first = true;
+  for (const [key, providerData] of Object.entries(providers)) {
+    if (!first) {
+      const sep = _el('span', 'text-slate-700');
+      sep.textContent = '·';
+      row.appendChild(sep);
+    }
+    first = false;
+    const seg = _el('span', 'inline-flex items-center gap-1.5');
+    seg.setAttribute('data-summary-account', key);
+    seg.appendChild(_providerPill(providerData.provider));
+    const name = _el('span', 'text-slate-300 font-medium');
+    name.textContent = providerData.account || key;
+    seg.appendChild(name);
+    const reading = _summaryReading(providerData);
+    const pctEl = _el('span', reading.pct === null ? 'text-slate-500' : _barTextColor(reading.pct));
+    pctEl.setAttribute('data-field', 'summary-pct');
+    pctEl.textContent = reading.text;
+    seg.appendChild(pctEl);
+    row.appendChild(seg);
+  }
+  const chevron = _el('span', 'ml-auto text-slate-500');
+  chevron.setAttribute('data-field', 'summary-chevron');
+  chevron.textContent = '▸';
+  row.appendChild(chevron);
+  return row;
+}
+
 function renderExtUsage(data) {
   const strip = document.getElementById('ext-usage-strip');
   if (!strip) return;
@@ -292,6 +418,9 @@ function renderExtUsage(data) {
   const providers = (data && data.providers) || {};
   const nodes = [];
   const rows = [];
+  if (Object.keys(providers).length > 0) {
+    nodes.push(_buildSummaryRow(providers));
+  }
   for (const [key, providerData] of Object.entries(providers)) {
     const built = _buildRow(key, providerData);
     nodes.push(built.row);
@@ -305,6 +434,7 @@ function renderExtUsage(data) {
   if (nodes.length > 0) {
     strip.classList.remove('hidden');
   }
+  _syncExtUsageChrome(strip);
 }
 
 // Repaint rather than patch text: a reading can cross into "expired" purely by
@@ -321,6 +451,20 @@ function _refreshResetTimers() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Evaluate the collapsed default exactly once: a recorded preference wins; a
+  // missing/invalid one falls back to the platform (mobile → collapsed, and
+  // expanded when platform is unavailable — rather show data than hide it).
+  // The platform-derived default is never written back to storage.
+  const stored = _readCollapsedPreference();
+  _extUsageCollapsed = stored !== null
+    ? stored
+    : (typeof platform !== 'undefined' && !!platform.isMobile);
+
+  const chip = document.getElementById('ext-usage-toggle');
+  if (chip) {
+    chip.addEventListener('click', () => _setExtUsageCollapsed(!_extUsageCollapsed));
+  }
+
   fetch('/api/ext-usage')
     .then(r => r.json())
     .then(data => renderExtUsage(data))

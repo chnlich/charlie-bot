@@ -56,6 +56,7 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "session_info",
     "coding_principles",
     "skills_discovery",
+    "remote_scratch",
     "role",
     "intro_new",
     "intro_continuation",
@@ -211,8 +212,8 @@ def _build_worker_prompt(
     keep_worktree_section = f"\n\n{sections['worktree_persistence']}"
 
   result = (
-      f"{session_info}\n{sections['coding_principles']}\n{skills_section}\n{role_section}{memory_section}\n"
-      f"{worktree_section}{iteration_reports_section}{keep_worktree_section}")
+      f"{session_info}\n{sections['coding_principles']}\n{skills_section}\n{sections['remote_scratch']}\n{role_section}"
+      f"{memory_section}\n{worktree_section}{iteration_reports_section}{keep_worktree_section}")
 
   if "{{" in result:
     raise ValueError("worker prompt assembly left an unresolved {{token}} in the output")

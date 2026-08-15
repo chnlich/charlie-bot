@@ -87,6 +87,18 @@ Known-alive symbols:
   (`tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`), but those fixtures are
   named in the parameter lists of the tests that use them, so the Step 3 grep already finds their
   references; no list entries needed.
+- `session_websocket`, `voice_websocket` — `@app.websocket` handlers in `server.py`
+  (`/ws/sessions/{session_id}`, `/ws/voice/{session_id}`), reached by URL string:
+  `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}` and `web/static/js/voice-input.js`
+  dials `/ws/voice/${...}`. The Python names have exactly zero whole-repo matches outside their
+  definitions, so vulture flags them as unused functions. Same class as the `src/api/*.py` route
+  handlers above, kept as its own entry because these live in `server.py` itself.
+  (`terminal_websocket` needs no entry: `tests/test_terminal_backend.py` imports it by name, so the
+  Step 3 grep finds it.)
+- `check_prompt_or_handler_or_loop`, `migrate_and_expand` — pydantic `@model_validator` methods on
+  `ScheduledTaskConfig`/`CharlieBotConfig` in `src/core/config.py`, registered with pydantic at
+  class-definition time and invoked during model validation. The method names have exactly zero
+  whole-repo matches outside their definitions, so vulture flags them as unused methods.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

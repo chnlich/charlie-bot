@@ -379,6 +379,44 @@ body.resizing { cursor: col-resize; user-select: none; }
    overflow:hidden — without a scroll container here the row tail is clipped and
    unreachable. */
 #ext-usage-strip { overflow-x: auto; }
+/* Quota-strip collapse chip: floats over the strip's top-right corner from a
+   position:relative wrapper, so the strip's horizontal scrolling never drags
+   it along (same pattern as #scroll-to-bottom inside #tab-chat). The template
+   reuses #scroll-to-bottom's class list for look and feel; the geometry that
+   has no existing utility class lives here. */
+#ext-usage-toggle {
+  top: 2px;
+  right: 2px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+/* Specificity: plain .hidden cannot beat the id selector above. */
+#ext-usage-toggle.hidden { display: none; }
+/* Collapsed hides the detail rows, expanded hides the summary row; both key
+   off the strip's .collapsed class, which renderExtUsage reapplies from the
+   in-memory boolean on every render (initial load, websocket push, 10-minute
+   poll). The 60s repaint never rebuilds children and stays unaware of it. */
+#ext-usage-strip.collapsed [data-key] { display: none; }
+#ext-usage-strip:not(.collapsed) [data-field="summary"] { display: none; }
+/* Reserve the chip's corner on every row so resting content never sits under
+   it; horizontally scrolled content may briefly pass beneath the chip — the
+   accepted trade-off for any control that does not scroll with the content. */
+#ext-usage-strip [data-key],
+#ext-usage-strip [data-field="summary"] { padding-right: 44px; }
+/* The summary row is the collapsed-state expand affordance: whole-row click
+   on a 44px touch target. */
+#ext-usage-strip [data-field="summary"] {
+  min-height: 44px;
+  cursor: pointer;
+  user-select: none;
+}
 .diff-modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.6);
   z-index: 200; display: flex; align-items: center; justify-content: center;

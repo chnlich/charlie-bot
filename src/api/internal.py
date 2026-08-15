@@ -431,7 +431,7 @@ async def plan_close(
     session_mgr: SessionManager = Depends(get_session_manager),
     plan_mgr=Depends(get_plan_manager),
 ):
-  """Terminate a plan lineage as superseded or abandoned."""
+  """Terminate a plan lineage as superseded, abandoned, or completed."""
   await _authorize_plan_session(req.session_id, session_mgr)
   try:
     return await plan_mgr.close(req.session_id, req.plan_id, req.close_as)

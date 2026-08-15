@@ -114,7 +114,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ## Plan Registry
 
-`charliebot plan` (present/amend/approve/close): `amend` rejects duplicate artifact filenames — each version is a new `plan_NN_vK.html`. A delivered plan stays open; `close` covers superseded/abandoned only, and `approved` is the terminal delivery state.
+`charliebot plan` (present/amend/approve/close): `amend` rejects duplicate artifact filenames — each version is a new `plan_NN_vK.html`. A delivered plan stays open; `close` covers superseded/abandoned/completed, and `approved` is the terminal delivery state.
 
 ---
 

@@ -458,7 +458,7 @@ class PlanCloseRequest(BaseModel):
 
   session_id: str
   plan_id: int
-  close_as: Literal["superseded", "abandoned"]
+  close_as: Literal["superseded", "abandoned", "completed"]
 
 
 # ---------------------------------------------------------------------------

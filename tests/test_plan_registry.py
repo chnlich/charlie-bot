@@ -106,6 +106,10 @@ def _plan(closed=None, takeoff=None) -> dict:
             "as": "abandoned",
             "at": "2026-07-20T00:00:00+00:00"
         }, None, "abandoned"),
+        ({
+            "as": "completed",
+            "at": "2026-07-20T00:00:00+00:00"
+        }, None, "completed"),
         (None, None, "awaiting approval"),
         (None, {
             "v": 1,
@@ -360,7 +364,7 @@ async def test_close_rejects_invalid_close_as(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   f1 = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f1, title="P1")
-  with pytest.raises(ValueError, match="--as must be superseded|abandoned"):
+  with pytest.raises(ValueError, match="--as must be superseded|abandoned|completed"):
     await plan_mgr.close(meta.id, plan_id=1, close_as="weird")
 
 

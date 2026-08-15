@@ -570,11 +570,6 @@ async def _create_worktree_and_process(
       session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, request)
 
 
-def _thread_dir(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Path:
-  """A thread's canonical on-disk directory (metadata.json and data/)."""
-  return cfg.sessions_dir / session_id / "threads" / thread_id
-
-
 async def _create_repoless_process(
     session_id: str,
     thread: ThreadMetadata,
@@ -590,7 +585,7 @@ async def _create_repoless_process(
     worker_prompt = request.prompt_override or description
   else:
     raise ValueError(f"unsupported task_type: {request.task_type!r}")
-  thread_dir = _thread_dir(cfg, session_id, thread.id)
+  thread_dir = thread_mgr.thread_dir(session_id, thread.id)
 
   # Repo-less tasks cannot produce branch/worktree review artifacts.
   thread.branch_name = None
@@ -881,7 +876,7 @@ async def _finalize_worker_safely(
         error=error,
         skip_notify=skip_notify,
         task_type=task_type,
-        completed_at=_run_completion_time(cfg, session_id, thread.id))
+        completed_at=_run_completion_time(thread_mgr, session_id, thread.id))
   except Exception as e:
     log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
     try:
@@ -1050,14 +1045,14 @@ async def spawn_worker(
           task_type=request.task_type)
 
 
-def _run_completion_time(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> datetime | None:
+def _run_completion_time(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> datetime | None:
   """The run's true completion time: its raw log's final mtime, when one exists.
 
   Independent of backend, event content, and how long the server was down; the
   finalize chain writes it into completed_at so downtime never shifts a run's
   recorded end.
   """
-  thread_dir = _thread_dir(cfg, session_id, thread_id)
+  thread_dir = thread_mgr.thread_dir(session_id, thread_id)
   return runs.raw_completion_time(runs.raw_log_path(thread_dir))
 
 

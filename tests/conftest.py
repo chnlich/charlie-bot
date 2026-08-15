@@ -13,9 +13,10 @@ class JudgmentShim:
 
   The finalize chain gates its side effects on judgment reads
   (src/core/finalize_effects): chat events for the summary/master-wake checks,
-  thread lists for the reviewer-exists check. Fakes that predate those gates
-  inherit "nothing recorded yet" from here so their tests keep exercising the
-  always-persist / always-trigger / always-spawn behavior.
+  thread lists for the reviewer-exists check, the thread dir for the raw-log
+  completion-time read. Fakes that predate those gates inherit "nothing
+  recorded yet" from here so their tests keep exercising the always-persist /
+  always-trigger / always-spawn behavior.
   """
 
   def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
@@ -23,3 +24,6 @@ class JudgmentShim:
 
   async def list_threads(self, session_id: str) -> list[Any]:
     return []
+
+  def thread_dir(self, session_id: str, thread_id: str) -> Path:
+    return Path("/nonexistent-thread-dir") / session_id / thread_id

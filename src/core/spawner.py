@@ -823,7 +823,6 @@ async def _finalize_worker_safely(
     error: str,
     skip_notify: bool,
     task_type: TaskType,
-    completed_at: datetime | None,
 ) -> None:
   """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
   try:
@@ -839,7 +838,7 @@ async def _finalize_worker_safely(
         error=error,
         skip_notify=skip_notify,
         task_type=task_type,
-        completed_at=completed_at)
+        completed_at=_run_completion_time(cfg, session_id, thread.id))
   except Exception as e:
     log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
     try:
@@ -1003,8 +1002,7 @@ async def spawn_worker(
           quota_exhausted=quota_exhausted,
           error=error_msg,
           skip_notify=request.skip_notify,
-          task_type=request.task_type,
-          completed_at=_run_completion_time(cfg, session_id, thread.id))
+          task_type=request.task_type)
 
 
 def _run_completion_time(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> datetime | None:
@@ -1119,8 +1117,7 @@ async def resume_worker(
             quota_exhausted=quota_exhausted,
             error=error_msg,
             skip_notify=False,
-            task_type=thread.task_type or TaskType.IMPLEMENT,
-            completed_at=_run_completion_time(cfg, session_id, thread.id))
+            task_type=thread.task_type or TaskType.IMPLEMENT)
 
 
 async def _persist_worker_summary_once(

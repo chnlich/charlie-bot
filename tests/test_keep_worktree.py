@@ -288,9 +288,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
         task_description: str,
         worker_cfg: CharlieBotConfig,
         backend_option: Optional[BackendOption] = None,
-        extra_env: Optional[dict[str, str]] = None,
         on_spawned: Optional[callable] = None,
-        instructions_content: Optional[str] = None,
     ) -> None:
       captures["prompt"] = task_description
 

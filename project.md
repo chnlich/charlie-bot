@@ -273,7 +273,6 @@ Each Thread's `CLAUDE.md` contains:
 
 **WebSocket Endpoints**
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)
-- `/ws/threads/{thread_id}` — thread-level events (live Worker NDJSON output streaming)
 
 **Frontend**
 - React SPA (Vite + TypeScript) built to `web/static/`, served by FastAPI StaticFiles (Node.js/npm is build-time only)

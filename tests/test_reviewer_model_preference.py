@@ -493,7 +493,6 @@ async def _fake_read_events_summary(
     session_id: str,
     thread_id: str,
     thread_mgr: Any,
-    max_lines: int = 80,
 ) -> str:
   return "(test events)"
 

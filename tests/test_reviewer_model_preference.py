@@ -557,18 +557,18 @@ async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.Monkey
   trigger_calls: list[bool] = []
 
   async def fake_spawn_review(
-      session_id: str,
-      orig: Any,
-      cfg: Any,
-      sm: Any,
-      tm: Any,
+      _session_id: str,
+      _orig: Any,
+      _cfg: Any,
+      _sm: Any,
+      _tm: Any,
       tried_backends: Any = None,
       exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True
 
-  async def fake_trigger(session_id: str, summary: str, cfg: Any, sm: Any) -> None:
+  async def fake_trigger(_session_id: str, summary: str, _cfg: Any, _sm: Any) -> None:
     trigger_calls.append(True)
 
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
@@ -600,18 +600,18 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
   trigger_calls: list[str] = []
 
   async def fake_spawn_review(
-      session_id: str,
-      orig: Any,
-      cfg: Any,
-      sm: Any,
-      tm: Any,
+      _session_id: str,
+      _orig: Any,
+      _cfg: Any,
+      _sm: Any,
+      _tm: Any,
       tried_backends: Any = None,
       exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True
 
-  async def fake_trigger(session_id: str, summary: str, cfg: Any, sm: Any) -> None:
+  async def fake_trigger(_session_id: str, summary: str, _cfg: Any, _sm: Any) -> None:
     trigger_calls.append(summary)
 
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
@@ -642,18 +642,18 @@ async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.Monk
   trigger_calls: list[str] = []
 
   async def fake_spawn_review(
-      session_id: str,
-      orig: Any,
-      cfg: Any,
-      sm: Any,
-      tm: Any,
+      _session_id: str,
+      _orig: Any,
+      _cfg: Any,
+      _sm: Any,
+      _tm: Any,
       tried_backends: Any = None,
       exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return False
 
-  async def fake_trigger(session_id: str, summary: str, cfg: Any, sm: Any) -> None:
+  async def fake_trigger(_session_id: str, summary: str, _cfg: Any, _sm: Any) -> None:
     trigger_calls.append(summary)
 
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
@@ -695,18 +695,18 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
   trigger_calls: list[str] = []
 
   async def fake_spawn_review(
-      session_id: str,
-      orig: Any,
-      cfg: Any,
-      sm: Any,
-      tm: Any,
+      _session_id: str,
+      _orig: Any,
+      _cfg: Any,
+      _sm: Any,
+      _tm: Any,
       tried_backends: Any = None,
       exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True
 
-  async def fake_trigger(session_id: str, summary: str, cfg: Any, sm: Any) -> None:
+  async def fake_trigger(_session_id: str, summary: str, _cfg: Any, _sm: Any) -> None:
     trigger_calls.append(summary)
 
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
@@ -747,18 +747,18 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
   trigger_calls: list[str] = []
 
   async def fake_spawn_review(
-      session_id: str,
-      orig: Any,
-      cfg: Any,
-      sm: Any,
-      tm: Any,
+      _session_id: str,
+      _orig: Any,
+      _cfg: Any,
+      _sm: Any,
+      _tm: Any,
       tried_backends: Any = None,
       exclude_thread_id: Any = None,
   ) -> bool:
     spawn_calls.append({"tried_backends": tried_backends})
     return True
 
-  async def fake_trigger(session_id: str, summary: str, cfg: Any, sm: Any) -> None:
+  async def fake_trigger(_session_id: str, summary: str, _cfg: Any, _sm: Any) -> None:
     trigger_calls.append(summary)
 
   cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])

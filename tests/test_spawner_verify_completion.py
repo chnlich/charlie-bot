@@ -94,6 +94,41 @@ class FakeSessionManager(JudgmentShim):
     self.events.append(event)
 
 
+class _FakeWorker:
+
+  def __init__(
+      self,
+      thread_metadata: ThreadMetadata,
+      working_dir: Path,
+      events_log_path: Path,
+      task_description: str,
+      worker_cfg: CharlieBotConfig,
+      backend_option: BackendOption | None = None,
+      **kwargs: Any,
+  ) -> None:
+    del working_dir, events_log_path, task_description, worker_cfg, kwargs
+    self.thread_id = thread_metadata.id
+    self.backend = backend_option.id
+
+
+async def _ignore(*args: Any, **kwargs: Any) -> None:
+  del args, kwargs
+
+
+def _install_worker_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_runs: list[tuple[str, str]],
+    stream_result: tuple[int, bool, str],
+) -> None:
+  async def fake_stream_worker_events(worker: _FakeWorker, *args: Any) -> tuple[int, bool, str]:
+    del args
+    worker_runs.append((worker.thread_id, worker.backend))
+    return stream_result
+
+  monkeypatch.setattr(spawner, "Worker", _FakeWorker)
+  monkeypatch.setattr(spawner, "_stream_worker_events", fake_stream_worker_events)
+
+
 @pytest.mark.asyncio
 async def test_verify_completion_uses_untruncated_result_without_task_spec_prefix(tmp_path: Path) -> None:
   report = "confirmed | claim | /tmp/source.py:1 | " + "x" * 1200 + "\nRESULT: clean"
@@ -190,34 +225,9 @@ async def test_verify_result_trailer_controls_completion_without_retry(
   thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="## Verify plan")
   thread_mgr = FakeThreadManager(thread, events_path)
   session_mgr = FakeSessionManager(thread.session_id)
-  worker_runs: list[str] = []
-
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        **kwargs: Any,
-    ) -> None:
-      del thread_metadata, working_dir, events_log_path, task_description, worker_cfg, kwargs
-      self.backend = backend_option.id
-
-  async def fake_stream_worker_events(worker: FakeWorker, *args: Any) -> tuple[int, bool, str]:
-    del args
-    worker_runs.append(worker.backend)
-    return 0, False, worker_error
-
-  async def fake_maybe_spawn_reviewer(*args: Any, **kwargs: Any) -> None:
-    del args, kwargs
-
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
-  monkeypatch.setattr(spawner, "_stream_worker_events", fake_stream_worker_events)
-  monkeypatch.setattr(spawner.review, "maybe_spawn_reviewer", fake_maybe_spawn_reviewer)
+  worker_runs: list[tuple[str, str]] = []
+  _install_worker_fakes(monkeypatch, worker_runs, (0, False, worker_error))
+  monkeypatch.setattr(spawner.review, "maybe_spawn_reviewer", _ignore)
 
   await spawner.spawn_worker(
       thread.session_id,
@@ -233,7 +243,7 @@ async def test_verify_result_trailer_controls_completion_without_retry(
       ),
   )
 
-  assert worker_runs == ["codex-o3"]
+  assert worker_runs == [("verify-thread-id", "codex-o3")]
   assert thread.status == expected_status
   assert thread.exit_code == expected_exit_code
   completion = session_mgr.events[-1]
@@ -261,27 +271,7 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
   session_mgr = FakeSessionManager(thread.session_id)
   worker_runs: list[tuple[str, str]] = []
   finalized: dict[str, Any] = {}
-
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        **kwargs: Any,
-    ) -> None:
-      del working_dir, events_log_path, task_description, worker_cfg, kwargs
-      self.thread_id = thread_metadata.id
-      self.backend = backend_option.id
-
-  async def fake_stream_worker_events(worker: FakeWorker, *args: Any) -> tuple[int, bool, str]:
-    del args
-    worker_runs.append((worker.thread_id, worker.backend))
-    return -1, True, ""
+  _install_worker_fakes(monkeypatch, worker_runs, (-1, True, ""))
 
   async def fake_finalize_worker_safely(
       session_id: str,
@@ -305,8 +295,6 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
         task_type=task_type,
     )
 
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
-  monkeypatch.setattr(spawner, "_stream_worker_events", fake_stream_worker_events)
   monkeypatch.setattr(spawner, "_finalize_worker_safely", fake_finalize_worker_safely)
 
   await spawner.spawn_worker(
@@ -337,34 +325,9 @@ async def test_implement_quota_exhaustion_does_not_retry(tmp_path: Path, monkeyp
   thread = ThreadMetadata(id="implement-thread-id", session_id="session-id", description="Implement")
   thread_mgr = FakeThreadManager(thread, tmp_path / "events.jsonl")
   session_mgr = FakeSessionManager(thread.session_id)
-  worker_runs: list[str] = []
-
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        **kwargs: Any,
-    ) -> None:
-      del thread_metadata, working_dir, events_log_path, task_description, worker_cfg, kwargs
-      self.backend = backend_option.id
-
-  async def fake_stream_worker_events(worker: FakeWorker, *args: Any) -> tuple[int, bool, str]:
-    del args
-    worker_runs.append(worker.backend)
-    return -1, True, ""
-
-  async def fake_finalize_worker_safely(*args: Any, **kwargs: Any) -> None:
-    del args, kwargs
-
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
-  monkeypatch.setattr(spawner, "_stream_worker_events", fake_stream_worker_events)
-  monkeypatch.setattr(spawner, "_finalize_worker_safely", fake_finalize_worker_safely)
+  worker_runs: list[tuple[str, str]] = []
+  _install_worker_fakes(monkeypatch, worker_runs, (-1, True, ""))
+  monkeypatch.setattr(spawner, "_finalize_worker_safely", _ignore)
 
   await spawner.spawn_worker(
       thread.session_id,
@@ -380,4 +343,4 @@ async def test_implement_quota_exhaustion_does_not_retry(tmp_path: Path, monkeyp
       ),
   )
 
-  assert worker_runs == ["codex-o3"]
+  assert worker_runs == [("implement-thread-id", "codex-o3")]

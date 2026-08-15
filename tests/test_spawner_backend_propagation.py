@@ -285,6 +285,7 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
       quota_exhausted=False,
       error="",
       task_type=TaskType.IMPLEMENT,
+      verify_report=None,
   )
 
   assert events_summary == "Worker output body"
@@ -451,6 +452,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
       quota_exhausted: bool = False,
       error: str = "",
       task_type: TaskType = TaskType.IMPLEMENT,
+      verify_report: str | None = None,
   ) -> None:
     captures["notify_exit_code"] = exit_code
 
@@ -606,6 +608,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       quota_exhausted: bool = False,
       error: str = "",
       task_type: TaskType = TaskType.IMPLEMENT,
+      verify_report: str | None = None,
   ) -> None:
     captures["notified"] = True
 
@@ -1107,6 +1110,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       quota_exhausted: bool = False,
       error: str = "",
       task_type: TaskType = TaskType.IMPLEMENT,
+      verify_report: str | None = None,
   ) -> None:
     captures["notify_exit_code"] = exit_code
     captures["notify_require_review"] = thread_meta.require_review

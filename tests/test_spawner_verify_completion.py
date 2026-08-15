@@ -132,8 +132,6 @@ def _install_worker_fakes(
 @pytest.mark.asyncio
 async def test_verify_completion_uses_untruncated_result_without_task_spec_prefix(tmp_path: Path) -> None:
   report = "confirmed | claim | /tmp/source.py:1 | " + "x" * 1200 + "\nRESULT: clean"
-  events_path = tmp_path / "events.jsonl"
-  _write_events(events_path, [{"type": ET.RESULT, "result": report}])
   thread = ThreadMetadata(
       id="verify-thread-id",
       session_id="session-id",
@@ -142,7 +140,7 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
       model="o3",
       require_review=False,
   )
-  thread_mgr = FakeThreadManager(thread, events_path)
+  thread_mgr = FakeThreadManager(thread, tmp_path / "events.jsonl")
   session_mgr = FakeSessionManager(thread.session_id)
 
   events_summary, full_summary = await spawner._broadcast_completion(
@@ -155,6 +153,7 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
       quota_exhausted=False,
       error="",
       task_type=TaskType.VERIFY,
+      verify_report=report,
   )
 
   assert events_summary == report

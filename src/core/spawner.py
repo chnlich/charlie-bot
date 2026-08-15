@@ -741,6 +741,7 @@ async def _run_finalize_effects(
     error: str,
     skip_notify: bool,
     task_type: TaskType,
+    verify_report: str | None,
 ) -> None:
   """Run a finalized thread's side effects — worktree cleanup, then the notify chain.
 
@@ -764,7 +765,8 @@ async def _run_finalize_effects(
       cfg,
       quota_exhausted=quota_exhausted,
       error=error,
-      task_type=task_type)
+      task_type=task_type,
+      verify_report=verify_report)
 
 
 async def _thread_cancelled(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> bool:
@@ -800,9 +802,13 @@ async def _finalize_worker(
   the run's true end, not whenever finalization happened to run.
   """
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
-  if task_type == TaskType.VERIFY and not cancelled and not quota_exhausted:
-    report = await read_verify_final_report(session_id, thread.id, thread_mgr)
-    trailer_error = verify_result_trailer_error(report)
+  # One read of events.jsonl per finalize pass: the trailer gate below and the
+  # notify chain's summary must judge and quote the identical string.
+  verify_report = (
+      await read_verify_final_report(session_id, thread.id, thread_mgr)
+      if task_type == TaskType.VERIFY else None)
+  if verify_report is not None and not cancelled and not quota_exhausted:
+    trailer_error = verify_result_trailer_error(verify_report)
     if trailer_error:
       exit_code = -1
       error = f"{error}; {trailer_error}" if error else trailer_error
@@ -833,7 +839,8 @@ async def _finalize_worker(
       quota_exhausted=quota_exhausted,
       error=error,
       skip_notify=skip_notify,
-      task_type=task_type)
+      task_type=task_type,
+      verify_report=verify_report)
 
 
 async def _finalize_worker_safely(
@@ -897,6 +904,9 @@ async def recomplete_finalize_effects(
   original quota/error outcome state is not persisted, so a re-run summarizes
   from exit_code alone.
   """
+  verify_report = (
+      await read_verify_final_report(session_id, thread.id, thread_mgr)
+      if task_type == TaskType.VERIFY else None)
   await _run_finalize_effects(
       session_id,
       description,
@@ -908,7 +918,8 @@ async def recomplete_finalize_effects(
       quota_exhausted=False,
       error="",
       skip_notify=False,
-      task_type=task_type)
+      task_type=task_type,
+      verify_report=verify_report)
 
 
 async def _rerun_verify_on_fresh_backend(
@@ -1198,10 +1209,15 @@ async def _broadcast_completion(
     quota_exhausted: bool,
     error: str,
     task_type: TaskType,
+    verify_report: str | None,
 ) -> tuple[str, str]:
-  """Build and broadcast the worker_summary event. Returns (events_summary, full_summary)."""
+  """Build and broadcast the worker_summary event. Returns (events_summary, full_summary).
+
+  ``verify_report`` is the finalize pass's single read of events.jsonl: the trailer
+  gate judged the same string this summary quotes. None for non-VERIFY tasks.
+  """
   if task_type == TaskType.VERIFY:
-    events_summary = await read_verify_final_report(session_id, thread.id, thread_mgr)
+    events_summary = verify_report
   else:
     events_summary = await read_events_summary(session_id, thread.id, thread_mgr)
 
@@ -1245,6 +1261,7 @@ async def _notify_completion(
     quota_exhausted: bool,
     error: str,
     task_type: TaskType,
+    verify_report: str | None,
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
@@ -1258,7 +1275,8 @@ async def _notify_completion(
         session_mgr,
         quota_exhausted=quota_exhausted,
         error=error,
-        task_type=task_type)
+        task_type=task_type,
+        verify_report=verify_report)
 
     if scheduled_task_name:
       try:

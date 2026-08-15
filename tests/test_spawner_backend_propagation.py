@@ -428,9 +428,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
         task_description: str,
         worker_cfg: CharlieBotConfig,
         backend_option: Optional[BackendOption] = None,
-        extra_env: Optional[dict[str, str]] = None,
         on_spawned: Optional[callable] = None,
-        instructions_content: Optional[str] = None,
     ) -> None:
       captures["worker_dir"] = working_dir
       captures["worker_backend"] = backend_option
@@ -825,9 +823,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
         task_description: str,
         worker_cfg: CharlieBotConfig,
         backend_option: Optional[BackendOption] = None,
-        extra_env: Optional[dict[str, str]] = None,
         on_spawned: Optional[callable] = None,
-        instructions_content: Optional[str] = None,
     ) -> None:
       captures["backend_option"] = backend_option
       captures["task_description"] = task_description
@@ -887,9 +883,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
         task_description: str,
         worker_cfg: CharlieBotConfig,
         backend_option: Optional[BackendOption] = None,
-        extra_env: Optional[dict[str, str]] = None,
         on_spawned: Optional[callable] = None,
-        instructions_content: Optional[str] = None,
     ) -> None:
       captures["backend_option"] = backend_option
 
@@ -952,9 +946,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
         task_description: str,
         worker_cfg: CharlieBotConfig,
         backend_option: Optional[BackendOption] = None,
-        extra_env: Optional[dict[str, str]] = None,
         on_spawned: Optional[callable] = None,
-        instructions_content: Optional[str] = None,
     ) -> None:
       captures["worker_dir"] = working_dir
       captures["task_description"] = task_description
@@ -1092,9 +1084,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
         task_description: str,
         worker_cfg: CharlieBotConfig,
         backend_option: Optional[BackendOption] = None,
-        extra_env: Optional[dict[str, str]] = None,
         on_spawned: Optional[callable] = None,
-        instructions_content: Optional[str] = None,
     ) -> None:
       captures["worker_dir"] = working_dir
       captures["worker_backend"] = backend_option

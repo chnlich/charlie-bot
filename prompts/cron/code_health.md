@@ -104,6 +104,12 @@ Known-alive symbols:
   `ScheduledTaskConfig`/`CharlieBotConfig` in `src/core/config.py`, registered with pydantic at
   class-definition time and invoked during model validation. The method names have exactly zero
   whole-repo matches outside their definitions, so vulture flags them as unused methods.
+- `seed_default_cron_tasks` (`src/core/init.py`) — production-scope vulture (`src/ server.py`)
+  flags it as an unused function because its only production caller is the Python heredoc embedded
+  in `scripts/setup.sh` (a shell script, invisible to Python dead-code tools). The absence from the
+  server-start path is deliberate: seeding belongs to the explicitly invoked setup command, and
+  `tests/test_cron_defaults.py` asserts the name stays out of
+  `init_charliebot_home.__code__.co_names`.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

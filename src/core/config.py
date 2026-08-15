@@ -323,41 +323,99 @@ class CharlieBotConfig(BaseModel):
 
 
 _config: Optional[CharlieBotConfig] = None
-_config_mtime: float = 0.0
+# The last fingerprint _config_fingerprint() returned for the cached config; tests
+# assign a sentinel (e.g. 0.0) to force a reload.
+_config_mtime: object = None
+
+
+def _config_fragments(home: Path) -> list[Path]:
+  """config.d/*.yaml, sorted by name; dotfiles and the legacy cron.yaml excluded."""
+  config_d = home / "config.d"
+  if not config_d.is_dir():
+    return []
+  return sorted(
+      (p for p in config_d.glob("*.yaml")
+       if p.is_file() and not p.name.startswith(".") and p.name != "cron.yaml"),
+      key=lambda p: p.name)
+
+
+def _stat_mtime_size(path: Path) -> tuple[float, int]:
+  """``(mtime, size)`` for *path*; a missing file contributes a fixed sentinel."""
+  try:
+    st = path.stat()
+  except OSError:
+    return (0.0, 0)
+  return (st.st_mtime, st.st_size)
+
+
+def _config_fingerprint() -> tuple:
+  """The reload cache key over ``config.yaml`` and every config fragment.
+
+  ``config.yaml``'s ``(mtime, size)`` plus ``(name, mtime, size)`` for each
+  fragment in name order. Size comes from the same stat call and costs nothing
+  extra; it catches mtime-preserving writes (``cp -p``, ``touch -r``, two writes
+  inside one second on a coarse-resolution filesystem) that an mtime-only key
+  would miss silently. A content change that preserves both mtime and size is
+  deliberately not covered. A missing file stats to a sentinel rather than
+  raising, mirroring the old mtime-only key.
+  """
+  home = charliebot_home_dir()
+  return (
+      _stat_mtime_size(home / "config.yaml"),
+      tuple((p.name, *_stat_mtime_size(p)) for p in _config_fragments(home)),
+  )
 
 
 def load_config() -> CharlieBotConfig:
-  """Load config from this profile's ``config.yaml`` (see :func:`charliebot_home_dir`)."""
+  """Load config from this profile's ``config.yaml`` and ``config.d`` fragments.
+
+  The merged mapping starts from ``config.yaml``'s top-level mapping; each
+  fragment from :func:`_config_fragments` then merges its own top-level mapping
+  in file-name order. The merge is shallow and disjoint: a top-level key belongs
+  entirely to the one file that sets it, and a key defined in two files raises
+  naming the key and both paths — there is no override precedence. With no
+  ``config.d/`` directory (or an empty one) the result is exactly what loading
+  ``config.yaml`` alone gives.
+  """
   home = charliebot_home_dir()
   config_path = home / "config.yaml"
 
   yaml_data: dict = load_yaml(config_path, default={})
+  key_origin: dict[str, Path] = {key: config_path for key in yaml_data}
+  for fragment in _config_fragments(home):
+    fragment_data: dict = load_yaml(fragment, default={})
+    if not isinstance(fragment_data, dict):
+      raise ValueError(f"config fragment must be a top-level mapping: {fragment}")
+    for key, value in fragment_data.items():
+      if key in key_origin:
+        raise ValueError(
+            f"config key {key!r} is defined in both {key_origin[key]} and {fragment}; "
+            "a top-level key must live in exactly one file")
+      key_origin[key] = fragment
+      yaml_data[key] = value
 
-  # The home directory is chosen by the environment, never by the file that lives
+  # The home directory is chosen by the environment, never by a file that lives
   # inside it: honouring the key would leave the config loaded from one profile and
   # the state written to another, and dropping it silently would hide the mistake.
   if "charliebot_home" in yaml_data:
     raise ValueError(
-        f"{config_path} sets 'charliebot_home'; that path is chosen by the "
+        f"{key_origin['charliebot_home']} sets 'charliebot_home'; that path is chosen by the "
         f"{CHARLIEBOT_HOME_ENV} environment variable. Remove the key.")
   return CharlieBotConfig(charliebot_home=home, **yaml_data)
 
 
 def get_config() -> CharlieBotConfig:
-  """Return the process-wide config, refreshed in place when config.yaml changes.
+  """Return the process-wide config, refreshed in place when any config file changes.
 
-  The returned instance keeps a stable identity across reloads: holders that
-  captured it earlier (manager singletons, in-flight coroutines) observe the new
-  values without re-fetching. Replacing the object instead would leave every such
-  holder pinned to a stale snapshot.
+  The reload key covers ``config.yaml`` and every ``config.d`` fragment — see
+  :func:`_config_fingerprint`. The returned instance keeps a stable identity
+  across reloads: holders that captured it earlier (manager singletons,
+  in-flight coroutines) observe the new values without re-fetching. Replacing
+  the object instead would leave every such holder pinned to a stale snapshot.
   """
   global _config, _config_mtime
-  config_path = charliebot_home_dir() / "config.yaml"
-  try:
-    mtime = config_path.stat().st_mtime
-  except OSError:
-    mtime = 0.0
-  if _config is None or mtime != _config_mtime:
+  fingerprint = _config_fingerprint()
+  if _config is None or fingerprint != _config_mtime:
     try:
       fresh = load_config()
     except Exception as e:
@@ -372,7 +430,7 @@ def get_config() -> CharlieBotConfig:
         # off, so the source must already be a fully validated CharlieBotConfig.
         for name in type(fresh).model_fields:
           setattr(_config, name, getattr(fresh, name))
-      _config_mtime = mtime
+      _config_mtime = fingerprint
   return _config
 
 

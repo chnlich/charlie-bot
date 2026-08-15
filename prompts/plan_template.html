@@ -148,7 +148,12 @@
       Page budget: the page as it opens is the complete decision surface, so it reads in one screen: every
                     details-layer block collapsed, content stays within 1400 px height at the 1000 px wrap.
                     Depth is welcome, folded: anything deeper belongs in a details-layer block, collapsed by
-                    default. The budget counts standing content: revision badges and revnotes, cleared by the
+                    default.
+                    Folding preserves information: over budget, content moves into collapsed blocks
+                    and stays on the page. The stylesheet is copied verbatim from the template
+                    (USAGE), and the budget counts the page at the template's type and spacing, so
+                    headroom comes from folding content.
+                    The budget counts standing content: revision badges and revnotes, cleared by the
                     next revision, ride outside it. The always-visible minimum is the surface approval binds to:
                     the header, section 1, 4.1 Schema, and each Trade-off's question, recommendation, and trade
                     lines. Shrink or split a plan whose minimum alone overflows. Registration enforces the

@@ -617,7 +617,7 @@ async def _stream_worker_events(
     return -1, False, str(e)
 
 
-async def _read_thread_events(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> list[dict]:
+async def _read_thread_events(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> list[dict]:
   """Read a thread's recorded events.jsonl, parsed off the event loop.
 
   The ``asyncio.to_thread`` hop is load-bearing: parsing a long log inline
@@ -642,7 +642,7 @@ async def _maybe_override_exit_code_from_result(
   if exit_code == 0:
     return exit_code
   try:
-    events = await _read_thread_events(thread_mgr, session_id, thread.id)
+    events = await _read_thread_events(session_id, thread.id, thread_mgr)
   except Exception as e:
     log.warning("worker_exit_override_read_failed", thread_id=thread.id, error=str(e))
     return exit_code
@@ -1269,7 +1269,7 @@ async def _notify_completion(
 
 async def read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
   """Read the last 80 events from a thread's events.jsonl for summarization."""
-  events = await _read_thread_events(thread_mgr, session_id, thread_id)
+  events = await _read_thread_events(session_id, thread_id, thread_mgr)
   if not events:
     return "(no events recorded)"
   tail = events[-80:]

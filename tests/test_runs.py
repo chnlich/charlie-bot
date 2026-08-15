@@ -184,7 +184,7 @@ def test_resolve_uncovered_backend_with_result_event_completes(tmp_path: Path) -
   previously asserted DIED on the uncovered row — a fossil of the original
   misjudgment that row-ordered an already-written result into a death verdict."""
   _write_raw(tmp_path, [RESULT_SUCCESS_LINE])
-  for backend_type in ("opencode", "antigravity", "tui-cli"):
+  for backend_type in ("antigravity", "tui-cli"):
     resolution = _resolve(tmp_path, backend_type=backend_type)
     assert resolution.outcome is runs.RunOutcome.COMPLETED
     assert resolution.success is True
@@ -193,7 +193,7 @@ def test_resolve_uncovered_backend_with_result_event_completes(tmp_path: Path) -
 def test_resolve_uncovered_backend_type_dies_with_transport_reason(tmp_path: Path) -> None:
   """Verifiable death without a result event keeps the uncovered DIED row."""
   _write_raw(tmp_path, [ASSISTANT_LINE])
-  for backend_type in ("opencode", "antigravity", "tui-cli"):
+  for backend_type in ("antigravity", "tui-cli"):
     resolution = _resolve(tmp_path, backend_type=backend_type, pid=999999, pid_start="1")
     assert resolution.outcome is runs.RunOutcome.DIED
     assert resolution.reason == runs.TRANSPORT_NOT_COVERED_REASON

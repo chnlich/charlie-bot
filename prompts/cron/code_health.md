@@ -95,6 +95,11 @@ Known-alive symbols:
   handlers above, kept as its own entry because these live in `server.py` itself.
   (`terminal_websocket` needs no entry: `tests/test_terminal_backend.py` imports it by name, so the
   Step 3 grep finds it.)
+- `slack_listener_task`, `slack_backfill_task` — `app.state` task handles assigned in the root
+  `server.py` lifespan and read by string: the shutdown loop iterates
+  `for attr in ("slack_listener_task", "slack_backfill_task")` and fetches each via
+  `getattr(app.state, attr, None)`. Vulture flags the `slack_backfill_task` assignment as an unused
+  attribute; the names appear only at the write and inside the string tuple.
 - `check_prompt_or_handler_or_loop`, `migrate_and_expand` — pydantic `@model_validator` methods on
   `ScheduledTaskConfig`/`CharlieBotConfig` in `src/core/config.py`, registered with pydantic at
   class-definition time and invoked during model validation. The method names have exactly zero

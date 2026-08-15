@@ -8,7 +8,7 @@ written to stderr as a JSON error with a non-zero exit code.
   charliebot plan present --file artifacts/plan_01.html --title "…"
   charliebot plan amend --file artifacts/plan_02.html [--plan N]
   charliebot plan approve [--plan N]
-  charliebot plan close --plan N --as superseded|abandoned
+  charliebot plan close --plan N --as superseded|abandoned|completed
   charliebot plan list
 """
 
@@ -105,7 +105,7 @@ def _add_approve(parser: argparse.ArgumentParser) -> None:
 
 def _add_close(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--plan", type=int, required=True, help="Target plan id")
-  parser.add_argument("--as", dest="close_as", required=True, choices=["superseded", "abandoned"])
+  parser.add_argument("--as", dest="close_as", required=True, choices=["superseded", "abandoned", "completed"])
 
 
 def _build_parser() -> argparse.ArgumentParser:

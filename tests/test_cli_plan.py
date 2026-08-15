@@ -143,6 +143,22 @@ def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
   assert payload == {"session_id": "abc", "plan_id": 1, "close_as": "superseded"}
 
 
+def test_plan_close_posts_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  resp = _mock_response({"plan": 1, "state": "completed"})
+  with patch("sys.argv", [
+      "plan", "close",
+      "--plan", "1",
+      "--as", "completed",
+  ]), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+    main()
+
+  payload = post_mock.call_args.kwargs["json"]
+  assert payload == {"session_id": "abc", "plan_id": 1, "close_as": "completed"}
+
+
 def test_plan_list_uses_get_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")

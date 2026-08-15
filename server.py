@@ -87,29 +87,6 @@ async def _check_ws_auth(websocket: WebSocket) -> bool:
   return False
 
 
-@asynccontextmanager
-async def _ws_connection(websocket: WebSocket, channels: list[str], log_label: str, **log_context):
-  """Handle auth, accept, subscribe, and cleanup for a WebSocket endpoint.
-
-  Yields the websocket if the connection was authorized and accepted, otherwise
-  yields None. Subscribes to every channel before yielding and unsubscribes +
-  logs disconnection in the finally block.
-  """
-  if not await _check_ws_auth(websocket):
-    yield None
-    return
-  await websocket.accept()
-  log.info(f"{log_label}_connected", **log_context)
-  for channel in channels:
-    await streaming_manager.subscribe(channel, websocket)
-  try:
-    yield websocket
-  finally:
-    for channel in channels:
-      await streaming_manager.unsubscribe(channel, websocket)
-    log.info(f"{log_label}_disconnected", **log_context)
-
-
 async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> None:
   """Hold a WebSocket open with periodic pings until the client disconnects."""
   try:

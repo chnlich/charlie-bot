@@ -110,6 +110,28 @@ Known-alive symbols:
   server-start path is deliberate: seeding belongs to the explicitly invoked setup command, and
   `tests/test_cron_defaults.py` asserts the name stays out of
   `init_charliebot_home.__code__.co_names`.
+- `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration`, `sample_rate`
+  — attribute writes on the sherpa-onnx `VadModelConfig` in `src/agents/transcriber.py`
+  (`_load_speech_models`). The vendor C++ binding reads them when the VAD runs; nothing in the
+  repo reads them back, so vulture flags the writes as unused attributes. `min_silence_duration`,
+  `min_speech_duration`, and `max_speech_duration` each have exactly one whole-repo match (the
+  write site), so they sit one grep away from looking phase-1-deletable.
+- Pydantic response-model fields read by JSON key from `web/` and nowhere else in Python —
+  vulture flags the model declarations as unused variables and the write sites as unused
+  attributes:
+  `schedule_cron`, `schedule_enabled`, `schedule_next_run`, `schedule_timezone`,
+  `schedule_project`, `schedule_allow_failure` (`SessionMetadata`, `src/core/models.py`), written
+  in `src/api/sessions.py:list_scheduled_sessions`, read in `web/static/js/sidebar/groups.js`;
+  `parent_session_id` (same model), read in `web/static/js/chat/rendering.js`;
+  `lines_added` (`WorkerEvent`, `src/core/models.py`), read in `web/static/js/workers.js`;
+  `attach_command`, `attach_available` (`ThreadMetadataResponse`, `src/api/threads.py`), read in
+  `web/static/js/workers.js`;
+  `placeholder` (`SlashCommandParam`, `src/core/slash_commands.py`, served via `model_dump` in
+  `src/api/slash.py`), read in `web/static/js/slash-form.js`;
+  `fired_at` (`PendingTrigger`, `src/core/models.py`), read by attribute name in the Jinja
+  template `web/templates/index.html`.
+  (`fire_reason` needs no entry: the trigger tests name it, so the Step 3 grep already finds
+  it.)
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

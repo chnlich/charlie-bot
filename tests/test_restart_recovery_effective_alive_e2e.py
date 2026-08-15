@@ -147,6 +147,82 @@ def _launch_driver(tmp_path: Path, home: Path, result_delay: float) -> tuple[sub
   return proc, json.loads(ids_file.read_text(encoding="utf-8"))
 
 
+# ---------------------------------------------------------------------------
+# A1 alive leg (plan 02 v3): opencode run-json flavor
+# ---------------------------------------------------------------------------
+
+# A fake `opencode` CLI emitting run-json (NDJSON) on stdout: the covered
+# transport for opencode after the serve+SSE retirement. argv is accepted and
+# ignored (`run --format json -m <model> [--session <id>] -- <prompt>`).
+OC_SHIM = """#!/bin/sh
+echo '{"type":"step_start","timestamp":1,"sessionID":"ses_E2E_SHIM","part":{"id":"prt_1","messageID":"msg_1","sessionID":"ses_E2E_SHIM","type":"step-start"}}'
+echo '{"type":"text","timestamp":2,"sessionID":"ses_E2E_SHIM","part":{"id":"prt_2","messageID":"msg_1","sessionID":"ses_E2E_SHIM","type":"text","text":"E2E-ASSISTANT-MARKER"}}'
+sleep "$FAKE_RESULT_DELAY"
+echo '{"type":"step_finish","timestamp":3,"sessionID":"ses_E2E_SHIM","part":{"id":"prt_3","reason":"stop","messageID":"msg_1","sessionID":"ses_E2E_SHIM","type":"step-finish","tokens":{"total":2,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}'
+exit 0
+"""
+
+OC_DRIVER = """import asyncio
+import json
+import sys
+from pathlib import Path
+
+from src.core import spawner
+from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption, CreateSessionRequest, SpawnRequest
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+
+
+async def main() -> None:
+  home = Path(sys.argv[1])
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model")],
+  )
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e-oc"))
+  thread = await thread_mgr.create_thread(meta, "e2e oc task")
+  (home / "driver_ids.json").write_text(json.dumps({"session": meta.id, "thread": thread.id}))
+  await spawner.spawn_worker(
+      meta.id,
+      "e2e oc task",
+      thread.id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      request=SpawnRequest(resolved_backend="fake-oc", resolved_model="fake-model", prompt_override="do the thing"))
+
+
+asyncio.run(main())
+"""
+
+
+def _launch_oc_driver(tmp_path: Path, home: Path, result_delay: float) -> tuple[subprocess.Popen, dict]:
+  shim_dir = tmp_path / "oc_shim"
+  shim_dir.mkdir()
+  shim = shim_dir / "opencode"
+  shim.write_text(OC_SHIM, encoding="utf-8")
+  shim.chmod(0o755)
+  driver = tmp_path / "oc_driver.py"
+  driver.write_text(OC_DRIVER, encoding="utf-8")
+  env = dict(os.environ)
+  env["PYTHONPATH"] = str(REPO_ROOT)
+  env["PATH"] = f"{shim_dir}:{env['PATH']}"
+  env["FAKE_RESULT_DELAY"] = str(result_delay)
+  proc = subprocess.Popen(
+      [sys.executable, str(driver), str(home)],
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+      env=env,
+  )
+  ids_file = home / "driver_ids.json"
+  _wait_for(ids_file.exists, timeout=20.0, what="oc driver did not create session/thread")
+  return proc, json.loads(ids_file.read_text(encoding="utf-8"))
+
+
 def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
   """SIGKILL the driver once the run's identity is persisted and output is flowing."""
   thread_dir = home / "sessions" / ids["session"] / "threads" / ids["thread"]
@@ -273,7 +349,7 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
       worktree_dir=str(home / "worktrees"),
       backend_options=[
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+          BackendOption(id="fake-agy", label="FakeAgy", type="antigravity", model="fake-model"),
       ],
   )
   session_mgr = SessionManager(cfg)
@@ -281,7 +357,7 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
   session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered-alive"))
   thread = await thread_mgr.create_thread(session_meta, "uncovered task")
   thread.status = ThreadStatus.RUNNING
-  thread.backend = "fake-oc"
+  thread.backend = "fake-agy"
   thread.model = "fake-model"
   thread.pid = 4242
   thread.pid_start = None  # the scrubbed-input shape: death unverifiable
@@ -322,7 +398,7 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
       worktree_dir=str(home / "worktrees"),
       backend_options=[
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+          BackendOption(id="fake-agy", label="FakeAgy", type="antigravity", model="fake-model"),
       ],
   )
   session_mgr = SessionManager(cfg)
@@ -330,7 +406,7 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
   session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered-dead"))
   thread = await thread_mgr.create_thread(session_meta, "uncovered dead task")
   thread.status = ThreadStatus.RUNNING
-  thread.backend = "fake-oc"
+  thread.backend = "fake-agy"
   thread.model = "fake-model"
   thread.pid = 999999  # dead: no /proc/999999 entry
   thread.pid_start = "1"  # pinned at spawn: the death above is provable
@@ -356,3 +432,45 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
   summaries = _terminal_summaries(home, ids)
   assert len(summaries) == 1
   assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
+
+
+@pytest.mark.asyncio
+async def test_alive_opencode_run_reattaches_without_uncovered_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A1 alive leg (plan 02 v3): an opencode-backed worker run whose CLI is
+  still alive at boot resolves RUNNING through the COVERED row — the follower
+  re-attaches (record kept, is_alive consulted), the real step-finish closes
+  the round, and no report ever mentions uncovered-alive."""
+  home = tmp_path / "home"
+  proc, ids = _launch_oc_driver(tmp_path, home, result_delay=3.0)
+  _kill_driver_mid_run(proc, home, ids)
+
+  # The agent is still alive for ~3s; recovery must judge the run ALIVE and
+  # re-attach. Keep the post-result drain window fast. Fresh translates built
+  # during recovery must not depend on the host's opencode install.
+  monkeypatch.setattr(AgentBackend, "_POST_RESULT_TIMEOUT", 1.0)
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.resolve_binary", lambda name, fallback: "/usr/bin/opencode")
+
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model")],
+  )
+
+  recovered, alive_at_reattach, master_wakes, outcomes = await _recover(monkeypatch, home, cfg=cfg)
+
+  assert recovered == 1
+  assert outcomes == [runs.RunOutcome.RUNNING]
+  assert alive_at_reattach == [True]
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "completed"
+  assert meta["exit_code"] == 0
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert len(master_wakes) == 1
+  # Re-attached through the covered row: no report-only分流, and the one thing
+  # this leg must never say again is the uncovered-alive string.
+  assert _recovery_reports(home, ids["session"]) == []
+  assert not any(
+      runs.UNCOVERED_ALIVE_REASON in json.dumps(e) for e in _recovery_reports(home, ids["session"]))

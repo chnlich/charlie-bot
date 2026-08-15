@@ -839,7 +839,7 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
 @pytest.mark.asyncio
 async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The incident shape: an opencode-backed verify thread left running by a
+  """The incident shape: an antigravity-backed verify thread left running by a
   graceful shutdown. The next boot cannot re-attach (transport not covered),
   so the thread fails with resolve_run's reason — the module constant, not a
   retyped literal — in the worker_summary the master reads."""
@@ -849,7 +849,7 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
       worktree_dir=str(home / "worktrees"),
       backend_options=[
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+          BackendOption(id="fake-agy", label="FakeAgy", type="antigravity", model="fake-model"),
       ],
   )
   session_mgr = SessionManager(cfg)
@@ -857,7 +857,7 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
   session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered"))
   thread = await thread_mgr.create_thread(session_meta, "Verify plan fixture", task_type=TaskType.VERIFY)
   thread.status = ThreadStatus.RUNNING
-  thread.backend = "fake-oc"
+  thread.backend = "fake-agy"
   thread.model = "fake-model"
   thread.pid = 4194304  # dead: beyond this host's live pids, /proc entry absent
   thread.pid_start = "1"
@@ -882,14 +882,14 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
 @pytest.mark.asyncio
 async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Install-state invariance: the same interrupted opencode-backed VERIFY
+  """Install-state invariance: the same interrupted antigravity-backed VERIFY
   thread finalizes to the same worker_summary whether or not the host can
-  resolve the `opencode` binary.
+  resolve the `agy` binary.
 
   Translate-only drain construction must not require the binary. The two arms
   are compared by summary equality — never against a hardcoded reason string —
   so the test pins the mechanism itself: the recorded outcome must not depend
-  on host install state. Absence is simulated in opencode's own module
+  on host install state. Absence is simulated in antigravity's own module
   namespace, where `resolve_binary` is bound (`from base import resolve_binary`).
   """
 
@@ -899,11 +899,11 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
       def _missing_binary(name: str, fallback: str) -> str:
         raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
 
-      monkeypatch.setattr("src.agents.backends.opencode.resolve_binary", _missing_binary)
+      monkeypatch.setattr("src.agents.backends.antigravity_cli.resolve_binary", _missing_binary)
       home = tmp_path / "home-absent"
     else:
       monkeypatch.setattr(
-          "src.agents.backends.opencode.resolve_binary", lambda name, fallback: binary)
+          "src.agents.backends.antigravity_cli.resolve_binary", lambda name, fallback: binary)
       home = tmp_path / "home-present"
 
     cfg = CharlieBotConfig(
@@ -911,7 +911,7 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
         worktree_dir=str(home / "worktrees"),
         backend_options=[
             BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-            BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+            BackendOption(id="fake-agy", label="FakeAgy", type="antigravity", model="fake-model"),
         ],
     )
     session_mgr = SessionManager(cfg)
@@ -920,13 +920,13 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
     # The id is pinned across arms: full_content embeds it, and the comparison
     # below is by equality, so the two runs must narrate the SAME thread.
     thread = ThreadMetadata(
-        id="invariance-opencode-verify",
+        id="invariance-antigravity-verify",
         session_id=session_meta.id,
         description="Verify plan fixture",
         task_type=TaskType.VERIFY,
     )
     thread.status = ThreadStatus.RUNNING
-    thread.backend = "fake-oc"
+    thread.backend = "fake-agy"
     thread.model = "fake-model"
     thread.pid = 4194304  # dead: beyond this host's live pids, /proc entry absent
     thread.pid_start = "1"
@@ -946,9 +946,95 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
     assert len(summaries) == 1
     return summaries[0]["full_content"]
 
-  resolvable_summary = await run_once("/usr/bin/opencode")
+  resolvable_summary = await run_once("/usr/bin/agy")
   unresolvable_summary = await run_once(None)
   assert resolvable_summary == unresolvable_summary
+
+
+@pytest.mark.asyncio
+async def test_restart_dead_pinned_opencode_run_drained_and_failed_by_covered_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A1 dead leg (plan 02 v3): a pinned opencode-backed worker run whose
+  process provably died mid-turn is recovered through the COVERED drain —
+  resolve_run returns DIED with DIED_WITHOUT_RESULT_REASON (never the
+  transport reason), the run's own CLI transport files exist (raw log,
+  stderr log, cursor), the pending run-json bytes are replayed exactly once,
+  and no report or summary ever mentions uncovered-alive."""
+  home = tmp_path / "home"
+  cfg = CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+      ],
+  )
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session_meta = await session_mgr.create_session(CreateSessionRequest(name="covered-dead"))
+  thread = await thread_mgr.create_thread(session_meta, "covered dead opencode task")
+  thread.status = ThreadStatus.RUNNING
+  thread.backend = "fake-oc"
+  thread.model = "fake-model"
+  thread.pid = 999999  # dead: no /proc/999999 entry
+  thread.pid_start = "1"  # pinned at spawn: the death above is provable
+  thread.started_at = utc_now()
+  thread.require_review = False
+  await thread_mgr.save_metadata(thread)
+  ids = {"session": session_meta.id, "thread": thread.id}
+
+  # The run's own CLI transport: run-json bytes the CLI wrote straight to the
+  # raw log; the turn was mid-flight (a text part, no closing step-finish).
+  data_dir = home / "sessions" / session_meta.id / "threads" / thread.id / "data"
+  data_dir.mkdir(parents=True, exist_ok=True)
+  (data_dir / runs.RAW_LOG_NAME).write_text(
+      '{"type":"step_start","sessionID":"ses_COVERED",'
+      '"part":{"id":"prt_1","messageID":"msg_1","sessionID":"ses_COVERED","type":"step-start"}}\n'
+      '{"type":"text","sessionID":"ses_COVERED",'
+      '"part":{"id":"prt_2","messageID":"msg_1","sessionID":"ses_COVERED","type":"text",'
+      '"text":"COV-ASSISTANT-MARKER"}}\n',
+      encoding="utf-8")
+  (data_dir / runs.STDERR_LOG_NAME).write_text("", encoding="utf-8")
+
+  # Fresh translates for the drain must not depend on the host's opencode install.
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.resolve_binary", lambda name, fallback: "/usr/bin/opencode")
+
+  reasons: list[str] = []
+  real_resolve = runs.resolve_run
+
+  def spy_resolve(**kwargs):
+    resolution = real_resolve(**kwargs)
+    reasons.append(resolution.reason)
+    return resolution
+
+  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
+
+  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home, cfg=cfg)
+
+  assert recovered == 1
+  assert reasons == [runs.DIED_WITHOUT_RESULT_REASON]
+  assert alive_at_reattach == [False]
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
+
+  # The covered transport artifacts: CLI raw log and its read cursor, drained
+  # exactly to the end; the pending bytes landed exactly once (no replay dup).
+  raw = data_dir / runs.RAW_LOG_NAME
+  assert runs.read_raw_cursor(data_dir / runs.CURSOR_NAME) == raw.stat().st_size
+  events = _read_events(home, ids["session"], ids["thread"])
+  assert sum("COV-ASSISTANT-MARKER" in json.dumps(e) for e in events) == 1
+
+  # Covered finalize: exactly one summary, carrying the covered DIED reason and
+  # never either uncovered string; no crash_recovery report was emitted at all.
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert runs.DIED_WITHOUT_RESULT_REASON in summaries[0]["full_content"]
+  assert runs.TRANSPORT_NOT_COVERED_REASON not in summaries[0]["full_content"]
+  assert runs.UNCOVERED_ALIVE_REASON not in summaries[0]["full_content"]
+  assert not [e for e in _session_chat_events(home, ids["session"]) if e.get("source") == "crash_recovery"]
+  assert len(master_wakes) == 1
 
 
 @pytest.mark.asyncio

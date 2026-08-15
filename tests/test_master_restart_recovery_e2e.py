@@ -909,8 +909,8 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
 @pytest.mark.parametrize("with_user_message", [True, False], ids=["user-wake", "delegate-wake"])
 async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                             with_user_message: bool) -> None:
-  """An interrupted turn on an uncovered backend transport (opencode /
-  antigravity / tui-cli) is drained NEVER: with the pid_start pin present the
+  """An interrupted turn on an uncovered backend transport
+  (antigravity / tui-cli) is drained NEVER: with the pid_start pin present the
   dead instance's death is provable, so the record resolves DIED with the
   transport reason, clears WITHOUT any uncovered-alive report, and the user
   message — when one exists — is answered by the replay pass. No user
@@ -922,11 +922,11 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
       worktree_dir=str(home / "worktrees"),
       backend_options=[
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
-          BackendOption(id="oc", label="OC", type="opencode", model="oc-model"),
+          BackendOption(id="agy", label="Agy", type="antigravity", model="agy-model"),
       ],
   )
   session_mgr = SessionManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
+  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="agy")
   user_event_id = None
   if with_user_message:
     user_event = {"type": "user", "content": "message A"}
@@ -980,7 +980,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
 async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_path: Path,
                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
   """The provably-ALIVE counterpart of the dead pinned row: a pinned
-  opencode-flavored master_run whose recorded process still lives resolves
+  antigravity-flavored master_run whose recorded process still lives resolves
   RUNNING uncovered-alive — reported exactly once, record kept, user message
   excluded from replay and judged again on the next restart."""
   home = tmp_path / "home"
@@ -990,11 +990,11 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
       worktree_dir=str(home / "worktrees"),
       backend_options=[
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
-          BackendOption(id="oc", label="OC", type="opencode", model="oc-model"),
+          BackendOption(id="agy", label="Agy", type="antigravity", model="agy-model"),
       ],
   )
   session_mgr = SessionManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
+  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="agy")
   user_event = {"type": "user", "content": "message A"}
   await session_mgr.save_chat_event(meta.id, user_event)
 

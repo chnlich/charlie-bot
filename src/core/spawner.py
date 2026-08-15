@@ -220,11 +220,11 @@ def _build_worker_prompt(
   return result
 
 
-def short_desc(description: str, limit: int = 120) -> str:
-  """First line of description, truncated."""
+def short_desc(description: str) -> str:
+  """First line of description, truncated to 120 chars."""
   first_line = description.split('\n', 1)[0].strip()
-  if len(first_line) > limit:
-    return first_line[:limit] + '...'
+  if len(first_line) > 120:
+    return first_line[:120] + '...'
   return first_line
 
 
@@ -1256,13 +1256,13 @@ async def _notify_completion(
       log.error("fallback_notify_failed", thread_id=thread.id, error=str(inner), traceback=traceback.format_exc())
 
 
-async def read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager, max_lines: int = 80) -> str:
-  """Read the last N lines from a thread's events.jsonl for summarization."""
+async def read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
+  """Read the last 80 events from a thread's events.jsonl for summarization."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
   events = await asyncio.to_thread(parse_ndjson_file, events_path)
   if not events:
     return "(no events recorded)"
-  tail = events[-max_lines:]
+  tail = events[-80:]
   parts = []
   for ev in tail:
     ev_type = ev.get("type", "unknown")

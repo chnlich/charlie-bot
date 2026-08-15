@@ -1,8 +1,16 @@
 # CharlieBot config template.
 # setup.sh copies this to ~/.charliebot/config.yaml when that file does not exist,
 # and the server startup path (init_charliebot_home) seeds it too if still missing.
-# Every field below is uncommented and set to its default. Edit per host, fill in
-# secrets, and never commit your filled-in config.yaml.
+# Every uncommented field below sits at its default; the optional per-host settings
+# at the bottom ship commented out. Edit per host, fill in secrets, and never commit
+# your filled-in config.yaml.
+#
+# --- Config fragments ---
+# Any top-level key may instead live in ~/.charliebot/config.d/<topic>.yaml
+# (e.g. config.d/slack.yaml); the loader merges those fragments with this file.
+# A key must appear in exactly one file: defining the same key in config.yaml and
+# a fragment (or in two fragments) fails startup. `charliebot config get <key>`
+# prints a key's value wherever it lives — prefer it over opening a file by path.
 
 # --- Server ---
 
@@ -11,10 +19,6 @@ server_port: 18498
 
 # Web UI access token. Secret. Set this if the server is reachable beyond localhost.
 charliebot_access_key: ""
-
-# Externally reachable base URL of this server, no trailing slash (e.g. https://bot.example.com).
-# Used to build file links for readers outside the host (Slack replies). Empty = no link is built.
-public_base_url: ""
 
 # --- Paths ---
 
@@ -41,17 +45,25 @@ backend_options:
 # Repos shown in the backlog panel, each {label, path}.
 backlog_repos: []
 
-# --- Optional credentials (add per host when used) ---
+# --- Optional per-host settings (uncomment here or set in a fragment when used) ---
+# Host addresses and credentials that ship unset. Add each in exactly one place:
+# uncomment it here, or put it in ~/.charliebot/config.d/<topic>.yaml — see the
+# fragments note above.
+
+# Externally reachable base URL of this server, no trailing slash (e.g. https://bot.example.com).
+# Used to build file links for readers outside the host (Slack replies). Empty = no link is built.
+# public_base_url: ""
+
+# Slack summon entrypoint.
+# Slack app bot token (xoxb-…); requires chat:write + history scopes.
+# slack_bot_token: ""
+# Slack app-level token (xapp-…); requires connections:write, Socket Mode only.
+# slack_app_token: ""
+# Slack user ids allowed to summon; empty = nobody.
+# slack_allowed_user_ids: []
+
 # Other backend / notification secrets: moonshot_api_key, telegram_bot_token,
 # telegram_chat_id. cc-openai-compatible backends configure the upstream api_base,
 # model, and api_key_env per backend_option above (no top-level fields).
-# Skill integration tokens (github / linear / slack / feishu / google) are omitted
+# Skill integration tokens (github / linear / feishu / google) are omitted
 # for now, pending a cleanup of which keys are still used.
-
-# --- Slack summon entrypoint ---
-# Slack app bot token (xoxb-…); requires chat:write + history scopes.
-slack_bot_token: ""
-# Slack app-level token (xapp-…); requires connections:write, Socket Mode only.
-slack_app_token: ""
-# Slack user ids allowed to summon; empty = nobody.
-slack_allowed_user_ids: []

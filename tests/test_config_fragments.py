@@ -104,6 +104,62 @@ def test_split_equivalence(profile_home: Path, partition: Callable[[list[str]], 
   assert actual.charliebot_home == profile_home
 
 
+# The first real split use case: the Slack summon keys plus public_base_url.
+# These live outside the example mapping (the template ships them commented
+# out), so the partition property above cannot cover them.
+_SLACK_VALUES = {
+    "slack_bot_token": "xoxb-example",
+    "slack_app_token": "xapp-example",
+    "slack_allowed_user_ids": ["U01", "U02"],
+    "public_base_url": "https://bot.example.com",
+}
+
+
+def _example_path() -> Path:
+  return Path(__file__).resolve().parents[1] / "configs" / "config.example.yaml"
+
+
+def test_slack_four_split_equivalence(profile_home: Path) -> None:
+  """The Slack keys + public_base_url load identically from config.yaml or a fragment."""
+  save_yaml(profile_home / "config.yaml", dict(_SLACK_VALUES))
+  reference = core_config.load_config()
+
+  (profile_home / "config.yaml").unlink()
+  _write_key_set(profile_home, "config.yaml", [], {})
+  _write_key_set(profile_home, "config.d/slack.yaml", sorted(_SLACK_VALUES), _SLACK_VALUES)
+  actual = core_config.load_config()
+
+  assert _without_home(actual) == _without_home(reference)
+
+
+def test_seeded_template_plus_slack_fragment_loads(profile_home: Path) -> None:
+  """A config seeded from the template must not collide with config.d/slack.yaml.
+
+  Regression for the template change: when the four keys were live empty keys
+  in the template, every seeded host hit the key-in-two-files error as soon as
+  a fragment set them.
+  """
+  (profile_home / "config.yaml").write_text(_example_path().read_text(encoding="utf-8"), encoding="utf-8")
+  _write_key_set(profile_home, "config.d/slack.yaml", sorted(_SLACK_VALUES), _SLACK_VALUES)
+
+  cfg = core_config.load_config()
+  assert cfg.slack_bot_token == _SLACK_VALUES["slack_bot_token"]
+  assert cfg.slack_app_token == _SLACK_VALUES["slack_app_token"]
+  assert cfg.slack_allowed_user_ids == _SLACK_VALUES["slack_allowed_user_ids"]
+  assert cfg.public_base_url == _SLACK_VALUES["public_base_url"]
+
+
+def test_example_yaml_keeps_optional_keys_commented_out() -> None:
+  """The four keys are absent from the parsed mapping but present as comments."""
+  text = _example_path().read_text(encoding="utf-8")
+  mapping = load_yaml(_example_path())
+  assert isinstance(mapping, dict)
+  comment_lines = [line for line in text.splitlines() if line.lstrip().startswith("#")]
+  for key in _SLACK_VALUES:
+    assert key not in mapping
+    assert any(key in line for line in comment_lines)
+
+
 def test_key_in_both_config_yaml_and_fragment_raises(profile_home: Path) -> None:
   """There is no override precedence; the error names the key and both paths."""
   save_yaml(profile_home / "config.yaml", {"server_port": 18498})

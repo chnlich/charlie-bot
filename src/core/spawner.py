@@ -780,6 +780,18 @@ def _exit_status_label(exit_code: int) -> str:
   return "completed" if exit_code == 0 else "failed"
 
 
+async def _verify_report_for_task(
+    task_type: TaskType,
+    session_id: str,
+    thread_id: str,
+    thread_mgr: ThreadManager,
+) -> str | None:
+  """The run's verifier final report when the task is VERIFY; None for every other task type."""
+  if task_type != TaskType.VERIFY:
+    return None
+  return await read_verify_final_report(session_id, thread_id, thread_mgr)
+
+
 async def _finalize_worker(
     session_id: str,
     description: str,
@@ -804,9 +816,7 @@ async def _finalize_worker(
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
   # One read of events.jsonl per finalize pass: the trailer gate below and the
   # notify chain's summary must judge and quote the identical string.
-  verify_report = (
-      await read_verify_final_report(session_id, thread.id, thread_mgr)
-      if task_type == TaskType.VERIFY else None)
+  verify_report = await _verify_report_for_task(task_type, session_id, thread.id, thread_mgr)
   if verify_report is not None and not cancelled and not quota_exhausted:
     trailer_error = verify_result_trailer_error(verify_report)
     if trailer_error:
@@ -904,9 +914,7 @@ async def recomplete_finalize_effects(
   original quota/error outcome state is not persisted, so a re-run summarizes
   from exit_code alone.
   """
-  verify_report = (
-      await read_verify_final_report(session_id, thread.id, thread_mgr)
-      if task_type == TaskType.VERIFY else None)
+  verify_report = await _verify_report_for_task(task_type, session_id, thread.id, thread_mgr)
   await _run_finalize_effects(
       session_id,
       description,

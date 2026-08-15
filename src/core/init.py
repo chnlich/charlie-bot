@@ -867,13 +867,7 @@ async def _maybe_respawn(
   requested_backend = invocation.get("backend")
   try:
     if request_task_type == TaskType.VERIFY and requested_backend is None:
-      # Mirrors _authorize_spawn_request's VERIFY branch (api/internal.py): verify
-      # checks the session's work, so its backend defaults cross-model via
-      # model_preference, exactly like the delegation reviewer.
-      from src.core.review import select_reviewer_backend
-      session_backend, session_model = await spawner.resolve_session_subagent_backend_model(
-          session_id, cfg, session_mgr)
-      resolved_backend, resolved_model, _ = select_reviewer_backend(cfg, session_backend, session_model, [])
+      resolved_backend, resolved_model, _ = await spawner.select_verify_backend(session_id, cfg, session_mgr, [])
     else:
       resolved_backend, resolved_model = await spawner.resolve_requested_subagent_backend_model(
           session_id, cfg, session_mgr, requested_backend=requested_backend)

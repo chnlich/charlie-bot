@@ -372,6 +372,23 @@ async def resolve_requested_subagent_backend_model(
   return _resolve_session_default_backend_model(cfg, session_meta)
 
 
+async def select_verify_backend(
+    session_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    tried_backends: list[str],
+) -> tuple[str, str | None, list[str]] | None:
+  """Select a VERIFY task's checking backend when none was requested.
+
+  Verify checks the session's work, so its default backend moves cross-model via
+  model_preference, exactly like the delegation reviewer (select_reviewer_backend).
+  Never None with an untried (empty) list; None only when every configured backend
+  has already been tried.
+  """
+  session_backend, session_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
+  return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)
+
+
 async def _select_verify_quota_retry_backend(
     session_id: str,
     cfg: CharlieBotConfig,
@@ -380,9 +397,8 @@ async def _select_verify_quota_retry_backend(
 ) -> tuple[str, str | None, list[str]] | None:
   """Select the next untried checking-role backend after verifier quota exhaustion."""
   current_backend, _ = require_thread_backend_model(thread, cfg)
-  checked_backend, checked_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
   tried_backends = list(thread.tried_backends)
-  retry = review.select_reviewer_backend(cfg, checked_backend, checked_model, tried_backends)
+  retry = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
   if retry is None or retry[0] == current_backend:
     log.warning(
         "verify_quota_retry_backend_unavailable",

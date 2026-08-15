@@ -201,10 +201,8 @@ def test_build_command_extra_flags_before_prompt_and_effective_prompt(monkeypatc
       extra_flags=["--print-logs"],
   )
   cmd = backend._build_command("the prompt")
-  separator = cmd.index("--")
-  assert cmd[separator - 1] == "--print-logs"
-  assert cmd[separator + 1] == "<system-instructions>\n# Instructions\n</system-instructions>\n\nthe prompt"
-  assert len(cmd) == separator + 2
+  assert cmd[-2] == "--print-logs"
+  assert cmd[-1] == "<system-instructions>\n# Instructions\n</system-instructions>\n\nthe prompt"
 
 
 def test_build_command_requires_a_model(monkeypatch: pytest.MonkeyPatch) -> None:

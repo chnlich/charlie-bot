@@ -314,7 +314,7 @@ async def test_cancel_uncovered_transport_terminates(tmp_path: Path, monkeypatch
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
   backend = _HungBackend()
   _install_backend(monkeypatch, backend)
-  option = BackendOption(id="agy", label="Agy", type="antigravity", model=None)
+  option = BackendOption(id="oc", label="OC", type="opencode", model=None)
 
   await _cancel_run(_cancel_item(cfg, meta, _persisting_callbacks(session_mgr), option), backend.spawned)
 

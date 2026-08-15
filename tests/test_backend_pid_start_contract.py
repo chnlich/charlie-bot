@@ -54,7 +54,6 @@ _BASE_CTOR_KWARGS: dict[type[AgentBackend], dict] = {
     CharlieCodeBackend: {"model": "contract-model", "api_base": "https://contract.invalid"},
     CodexBackend: {"model": "contract-model"},
     GeminiCliBackend: {"model": "contract-model"},
-    OpenCodeBackend: {"model": "contract-model"},
     OpenAICompatibleClaudeBackend: {
         "proxy_base_url": "https://contract.invalid",
         "auth_token": "contract-token",
@@ -124,6 +123,34 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
   assert backend.pid_start == _SENTINEL_STAT[0]
 
 
+async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """opencode custom run() harness (test_opencode_backend.py's MagicMock spawn shape)."""
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.resolve_binary", lambda name, fallback: "/usr/bin/opencode")
+  _install_sentinel_read_pid_stat(monkeypatch)
+  observed: list[tuple[int, str | None]] = []
+  backend: AgentBackend
+
+  async def on_spawn(pid: int) -> None:
+    observed.append((pid, backend.pid_start))
+
+  backend = cls(model="provider/model", on_spawn=on_spawn)
+  process = MagicMock()
+  process.pid = 1234
+  create_process = AsyncMock(return_value=process)
+  monkeypatch.setattr("src.agents.backends.opencode.asyncio.create_subprocess_exec", create_process)
+  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
+  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
+  monkeypatch.setattr(backend, "_cleanup_server", AsyncMock())
+
+  _events = [event async for event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert observed == [(1234, _SENTINEL_STAT[0])]
+  assert backend.pid_start == _SENTINEL_STAT[0]
+  assert backend._stderr_task is not None
+  await backend._stderr_task
+
+
 async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """antigravity custom run() harness (test_antigravity_cli_backend.py's real-script shape)."""
   fake_agy = tmp_path / "agy"
@@ -150,11 +177,12 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 HarnessFn = Callable[[type[AgentBackend], pytest.MonkeyPatch, Path], Awaitable[None]]
 
-# Harness-by-class map: the base-path classes share one harness driving the
-# inherited base.run(); antigravity drives its own run(). This map is the ONLY
-# opt-in — enumeration does not consult it.
+# Harness-by-class map: the six base-path classes share one harness driving the
+# inherited base.run(); opencode and antigravity each drive their own run().
+# This map is the ONLY opt-in — enumeration does not consult it.
 HARNESSES: dict[type[AgentBackend], HarnessFn] = {
     **{cls: _drive_base_path for cls in _BASE_PATH_CLASSES},
+    OpenCodeBackend: _drive_opencode,
     AntigravityCliBackend: _drive_antigravity,
 }
 

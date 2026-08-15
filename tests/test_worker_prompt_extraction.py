@@ -159,6 +159,38 @@ def test_missing_required_section_raises(tmp_path: Path) -> None:
     spawner.load_worker_prompt_sections(_cfg_with_repo(tmp_path))
 
 
+def test_missing_remote_scratch_section_raises(tmp_path: Path) -> None:
+  text = _real_worker_prompt_text()
+  start = text.index("<!-- section: remote_scratch -->")
+  end = text.index("<!-- section: role -->")
+  mutated = text[:start] + text[end:]  # drop the entire "remote_scratch" section
+
+  prompts_dir = tmp_path / "prompts"
+  prompts_dir.mkdir()
+  (prompts_dir / "worker.md").write_text(mutated, encoding="utf-8")
+
+  with pytest.raises(ValueError, match="remote_scratch"):
+    spawner.load_worker_prompt_sections(_cfg_with_repo(tmp_path))
+
+
+def test_remote_scratch_assembled_directly_after_skills_discovery() -> None:
+  cfg = CharlieBotConfig(charliebot_home=Path("/tmp/unused"), worktree_dir="/tmp/worktrees")
+  sections = spawner.load_worker_prompt_sections(cfg)
+
+  prompt = spawner._build_worker_prompt(
+      description=DESCRIPTION,
+      repo_path=REPO_PATH,
+      base_branch=BASE_BRANCH,
+      branch_name=BRANCH_NAME,
+      wt_path=WT_PATH,
+      session_meta=SessionMetadata(id="s", name="s"),
+      cfg=cfg,
+      task_type=TaskType.IMPLEMENT,
+  )
+  assert sections["skills_discovery"] + "\n" + sections["remote_scratch"] in prompt
+  assert sections["remote_scratch"] + "\n" + sections["role"] in prompt
+
+
 def test_unresolved_token_in_assembled_output_raises(tmp_path: Path) -> None:
   text = _real_worker_prompt_text()
   mutated = text.replace(

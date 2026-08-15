@@ -17,6 +17,18 @@ The codebase has a single user. Apply these principles:
 - **Read matching skills first** to avoid wasting time on environment setup, tooling issues, or reinventing existing workflows.
 - **Mandatory for tasks in any domain that has a matching skill**: you MUST read that skill BEFORE writing any code, running any command, or submitting any job. This includes profiling, metrics analysis, data processing — not just training. Starting work without reading the relevant skill is forbidden.
 
+<!-- section: remote_scratch -->
+## Remote Scratch
+Your worktree lives on this host and the remote side mounts nothing from it, so work on a remote host needs a place of
+its own there. That place is one directory per run, named for the task by content:
+
+    ~/scripts/<YYYYMMDD>_<slug>/
+
+Every file you create on that host belongs in it, whatever produced it.
+
+A working directory carries only within one ssh one-shot, so each command creates that directory if absent and enters it
+before anything else.
+
 <!-- section: role -->
 ## Role
 - You are a **worker agent**. Do NOT delegate tasks to subagents — implement the work yourself directly.

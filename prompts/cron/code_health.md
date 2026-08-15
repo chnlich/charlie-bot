@@ -123,7 +123,16 @@ Known-alive symbols:
   `attach_available` on `ThreadMetadataResponse`, `placeholder` on `SlashCommandParam`,
   `fired_at` on `PendingTrigger`) as unused variables/attributes, but every one of those names
   is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS, Jinja templates), so
-  the Step 3 grep already protects them and they get no entries.
+  the Step 3 grep already protects them and they get no entries. Production-scope vulture
+  likewise flags the `cli_command` attribute write in `src/core/spawner.py`
+  (`_prepare_thread_backend_metadata`; the tests-inclusive scope clears it): the name resolves
+  to the `ThreadMetadata.cli_command` field in `src/core/models.py` plus two assertions in
+  `tests/test_spawner_backend_propagation.py`, so the Step 3 grep protects it too; no entry.
+  `cli_command` rides the same implicit whole-model dump as the response-model fields above —
+  `get_session_view` serves every `ThreadMetadata` field verbatim in its `threads` payload —
+  and nothing web-side or production-side reads it back (whole-repo grep finds only the field,
+  the write site, and the two test assertions); the write + field + assertions form one
+  deletion candidate for a later phase that permits name matches.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

@@ -295,7 +295,6 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
       error: str,
       skip_notify: bool,
       task_type: TaskType = TaskType.IMPLEMENT,
-      completed_at: Any = None,
   ) -> None:
     del session_id, description, manager, sessions, worker_cfg, skip_notify
     finalized.update(

@@ -119,7 +119,7 @@ def test_complete_identity_verifiable_death_still_dies(tmp_path: Path) -> None:
 def test_uncovered_verified_alive_resolves_running(tmp_path: Path) -> None:
   _write_raw(tmp_path, [ASSISTANT_LINE])
   pid, pid_start = _live_identity()
-  resolution = _resolve(tmp_path, backend_type="antigravity", pid=pid, pid_start=pid_start, started_at=NOW)
+  resolution = _resolve(tmp_path, backend_type="opencode", pid=pid, pid_start=pid_start, started_at=NOW)
   assert resolution.outcome is runs.RunOutcome.RUNNING
   assert resolution.reason == runs.UNCOVERED_ALIVE_REASON
 
@@ -128,13 +128,13 @@ def test_uncovered_unverifiable_death_resolves_running(tmp_path: Path) -> None:
   """Missing any liveness input, an uncovered run is kept alive too — the
   alive check does not depend on which fork resolved the result pre-check."""
   _write_raw(tmp_path, [ASSISTANT_LINE])
-  resolution = _resolve(tmp_path, backend_type="antigravity", pid=999999)  # pid_start absent
+  resolution = _resolve(tmp_path, backend_type="opencode", pid=999999)  # pid_start absent
   assert resolution.outcome is runs.RunOutcome.RUNNING
   assert resolution.reason == runs.UNCOVERED_ALIVE_REASON
 
 
 def test_uncovered_without_raw_and_unverifiable_resolves_running(tmp_path: Path) -> None:
-  resolution = _resolve(tmp_path, backend_type="antigravity", pid=4242)  # no raw, pid_start absent
+  resolution = _resolve(tmp_path, backend_type="opencode", pid=4242)  # no raw, pid_start absent
   assert resolution.outcome is runs.RunOutcome.RUNNING
   assert resolution.reason == runs.UNCOVERED_ALIVE_REASON
 

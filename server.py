@@ -436,48 +436,6 @@ async def _replay_aggregated_catchup(
 
 
 # ---------------------------------------------------------------------------
-# WebSocket endpoint for live Worker output
-# ---------------------------------------------------------------------------
-
-
-@app.websocket("/ws/threads/{thread_id}")
-async def thread_websocket(websocket: WebSocket, thread_id: str):
-  """
-  Stream live Worker events to the browser.
-  On connect, sends all historical events first (catch-up), then live events.
-  """
-  async with _ws_connection(websocket, [thread_id], "ws", thread_id=thread_id) as ws:
-    if ws is None:
-      return
-    # Send catch-up events from on-disk log
-    # Find the events.jsonl for this thread (search across all sessions)
-    thread_mgr = get_thread_manager()
-    events_file = await asyncio.to_thread(thread_mgr.resolve_events_file, thread_id)
-    if events_file and events_file.exists():
-      try:
-        lines = await asyncio.to_thread(events_file.read_text, "utf-8")
-        for line in lines.splitlines():
-          line = line.strip()
-          if line:
-            try:
-              await ws.send_text(line)
-            except Exception as e:
-              log.debug("ws_catchup_send_failed", thread_id=thread_id, error=str(e))
-              return
-      except Exception as e:
-        log.warning("ws_catchup_failed", thread_id=thread_id, error=str(e))
-
-    # Signal end of catch-up
-    try:
-      await ws.send_json({"type": "catchup_complete"})
-    except Exception as e:
-      log.debug("ws_catchup_complete_failed", thread_id=thread_id, error=str(e))
-      return
-
-    await _ws_keepalive(ws, "ws", thread_id=thread_id)
-
-
-# ---------------------------------------------------------------------------
 # WebSocket endpoint for the host-global terminal
 # ---------------------------------------------------------------------------
 

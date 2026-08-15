@@ -144,6 +144,36 @@ async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_plan_close_completed_then_list_shows_completed(tmp_path: Path) -> None:
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  f = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=f, title="P1")
+  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  with TestClient(app) as client:
+    resp = client.post(
+        "/api/internal/plan/close", json={
+            "session_id": meta.id,
+            "plan_id": 1,
+            "close_as": "completed",
+        })
+    assert resp.status_code == 200
+    assert resp.json() == {"plan": 1, "state": "completed"}
+
+    listing = client.get(f"/api/sessions/{meta.id}/plans")
+    assert listing.status_code == 200
+    assert listing.json()["plans"][0]["state"] == "completed"
+
+    second = client.post(
+        "/api/internal/plan/close", json={
+            "session_id": meta.id,
+            "plan_id": 1,
+            "close_as": "completed",
+        })
+  assert second.status_code == 400
+  assert "already closed" in second.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_get_plans_endpoint_returns_registry(tmp_path: Path) -> None:
   cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   f = _write_artifact(cfg, meta.id, "plan_01.html")

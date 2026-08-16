@@ -1052,18 +1052,6 @@ class SessionManager:
       result.append(_stamp_thinking_since(meta.model_copy()))
     return result
 
-  async def _active_scheduled_sessions(
-      self,
-      task_name: str,
-      session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
-  ) -> list[SessionMetadata]:
-    """Return active scheduled sessions for task_name, newest first."""
-    return await self._scheduled_sessions._active_scheduled_sessions(task_name, session_cache)
-
-  async def _scheduled_session_busy(self, session: SessionMetadata) -> bool:
-    """Return whether a scheduled session has active master thinking or worker threads."""
-    return await self._scheduled_sessions._scheduled_session_busy(session)
-
   def _lock_for(self, session_id: str) -> asyncio.Lock:
     """Return (creating on first use) the per-session metadata RMW lock."""
     lock = self._metadata_locks.get(session_id)

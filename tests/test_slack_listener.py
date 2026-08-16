@@ -32,14 +32,14 @@ _spawn_round_tasks.tasks: list[asyncio.Task] = []
 
 
 class _FakeSlackClient:
-  """Records calls and returns canned payloads; never touches the network."""
+  """Records calls and fabricates per-input permalinks; never touches the network.
 
-  def __init__(self, messages: Optional[list[dict]] = None) -> None:
+  Implements only what the summon path may call: a regression to reading
+  thread content fails here with an AttributeError by construction.
+  """
+
+  def __init__(self) -> None:
     self.calls: list[tuple[str, dict]] = []
-    self.messages: list[dict] = messages or [
-        {"user": "U_ALLOWED", "text": "please summarize"},
-        {"user": "U_ALLOWED", "text": "and check git status"},
-    ]
 
   async def open_connection(self) -> str:
     self.calls.append(("open_connection", {"channel": None}))
@@ -49,9 +49,9 @@ class _FakeSlackClient:
     self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
     return {"ok": True}
 
-  async def thread_text(self, channel: str, ts: str) -> list[dict]:
-    self.calls.append(("thread_text", {"channel": channel, "ts": ts}))
-    return self.messages
+  async def get_permalink(self, channel: str, ts: str) -> str:
+    self.calls.append(("get_permalink", {"channel": channel, "ts": ts}))
+    return f"https://fake.slack.test/archives/{channel}/p{ts}"
 
 
 def _make_event(**overrides: object) -> dict:
@@ -119,10 +119,17 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   assert meta.slack_origin.channel_id == "C_TEST"
   assert meta.slack_origin.thread_ts == _TS
 
+  # The Slack traffic is exactly the acceptance signal plus one permalink
+  # lookup for the mention's own ts — no thread-content read of any kind.
   posts = [c for name, c in client.calls if name == "post_message"]
   assert len(posts) == 1
-  thread_reads = [c for name, c in client.calls if name == "thread_text"]
-  assert len(thread_reads) == 1
+  permalinks = [c for name, c in client.calls if name == "get_permalink"]
+  assert permalinks == [{"channel": "C_TEST", "ts": _TS}]
+  assert len(client.calls) == len(posts) + len(permalinks)
+
+  # The persisted content carries exactly the URL the client produced for this
+  # mention, and nothing else Slack-derived beyond the citation boundary.
+  expected_url = f"https://fake.slack.test/archives/C_TEST/p{_TS}"
 
   events = session_mgr.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
@@ -132,10 +139,12 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
       "thread_ts": _TS,
       "mention_ts": _TS,
   }
+  assert expected_url in agent_messages[0]["content"]
   assert agent_messages[0]["content"].endswith(CITATION_BOUNDARY)
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
+  assert expected_url in trigger.await_args.args[1]
 
 
 @pytest.mark.asyncio

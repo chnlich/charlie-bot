@@ -7,10 +7,7 @@ import pytest
 
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
-from src.core.spawner import (
-    resolve_requested_subagent_backend_model,
-    resolve_session_subagent_backend_model,
-)
+from src.core.spawner import resolve_requested_subagent_backend_model
 
 
 def _build_cfg(options: list[BackendOption]) -> CharlieBotConfig:
@@ -34,7 +31,7 @@ async def test_session_default_returns_configured_backend() -> None:
   session = SessionMetadata(name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)
 
-  backend, model = await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+  backend, model = await resolve_requested_subagent_backend_model(session.id, cfg, mgr)
 
   assert backend == "claude-opus-4.7"
   assert model == "claude-opus-4-7"
@@ -52,7 +49,7 @@ async def test_session_default_raises_for_stale_backend(caplog: pytest.LogCaptur
   mgr = _mock_session_mgr(session)
 
   with pytest.raises(ValueError, match="refusing to substitute"):
-    await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+    await resolve_requested_subagent_backend_model(session.id, cfg, mgr)
 
 
 @pytest.mark.asyncio
@@ -64,7 +61,7 @@ async def test_session_default_uses_first_option_when_no_backend_pinned() -> Non
   session = SessionMetadata(name="s", backend="")
   mgr = _mock_session_mgr(session)
 
-  backend, model = await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+  backend, model = await resolve_requested_subagent_backend_model(session.id, cfg, mgr)
 
   assert backend == "claude-opus-4.7"
   assert model == "claude-opus-4-7"
@@ -77,7 +74,7 @@ async def test_session_default_raises_when_no_backend_options() -> None:
   mgr = _mock_session_mgr(session)
 
   with pytest.raises(ValueError, match="configured backend_options entry"):
-    await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+    await resolve_requested_subagent_backend_model(session.id, cfg, mgr)
 
 
 @pytest.mark.asyncio
@@ -115,4 +112,4 @@ async def test_session_default_raises_when_option_has_no_model() -> None:
   mgr = _mock_session_mgr(session)
 
   with pytest.raises(ValueError, match="has no default model"):
-    await resolve_session_subagent_backend_model(session.id, cfg, mgr)
+    await resolve_requested_subagent_backend_model(session.id, cfg, mgr)

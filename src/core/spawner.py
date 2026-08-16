@@ -905,8 +905,9 @@ async def _rerun_verify_on_fresh_backend(
 
   When no untried checking-role backend remains (selection empty, or looped back
   to the exhausted backend), the original exhaustion outcome is returned
-  unchanged. A ``_create_repoless_process`` failure propagates: the caller has
-  already cleared ``quota_exhausted``, so it lands as a generic setup error.
+  unchanged. A ``_create_repoless_process`` failure propagates: the caller's
+  generic-``except`` rebuilds the outcome as a setup error, never quota
+  exhaustion.
   """
   current_backend, _ = require_thread_backend_model(thread, cfg)
   tried_backends = list(thread.tried_backends)

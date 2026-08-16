@@ -125,7 +125,7 @@ Known-alive symbols:
   is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS, Jinja templates), so
   the Step 3 grep already protects them and they get no entries. Production-scope vulture
   likewise flags the `cli_command` attribute write in `src/core/spawner.py`
-  (`_prepare_thread_backend_metadata`; the tests-inclusive scope clears it): the name resolves
+  (`_construct_worker`; the tests-inclusive scope clears it): the name resolves
   to the `ThreadMetadata.cli_command` field in `src/core/models.py` plus two assertions in
   `tests/test_spawner_backend_propagation.py`, so the Step 3 grep protects it too; no entry.
   `cli_command` rides the same implicit whole-model dump as the response-model fields above —

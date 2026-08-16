@@ -359,25 +359,6 @@ def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) 
   raise ValueError(f"thread '{thread.id}' missing model metadata")
 
 
-def _prepare_thread_backend_metadata(
-    thread: ThreadMetadata,
-    backend_option: BackendOption,
-    description: str,
-) -> None:
-  if backend_option.type != "cc-claude":
-    return
-  if thread.claude_session_id is None:
-    thread.claude_session_id = str(uuid.uuid4())
-  backend = ClaudeCodeBackend(
-      model=backend_option.model,
-      effort=backend_option.effort,
-      cli_binary=backend_option.cli_binary,
-      fast_mode=backend_option.fast_mode,
-      claude_session_id=thread.claude_session_id,
-  )
-  thread.cli_command = shlex.join(backend._build_command(description) + [description])
-
-
 async def _construct_worker(
     session_id: str,
     thread: ThreadMetadata,
@@ -394,7 +375,17 @@ async def _construct_worker(
   thread.model = backend_option.model
   if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
     thread.tried_backends.append(backend_option.id)
-  _prepare_thread_backend_metadata(thread, backend_option, description)
+  if backend_option.type == "cc-claude":
+    if thread.claude_session_id is None:
+      thread.claude_session_id = str(uuid.uuid4())
+    backend = ClaudeCodeBackend(
+        model=backend_option.model,
+        effort=backend_option.effort,
+        cli_binary=backend_option.cli_binary,
+        fast_mode=backend_option.fast_mode,
+        claude_session_id=thread.claude_session_id,
+    )
+    thread.cli_command = shlex.join(backend._build_command(description) + [description])
   await thread_mgr.save_metadata(thread)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(

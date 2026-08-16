@@ -133,20 +133,6 @@ def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   return result
 
 
-def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> str:
-  """Build the full prompt for a repo-less VERIFY task (preamble + scope contract + task)."""
-  sections = _load_prompt_sections(
-      cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
-  contract = _substitute_tokens(
-      "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
-          "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
-          "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
-      })
-  if "{{" in contract:
-    raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
-  return f"{contract}\n\n{description}"
-
-
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
@@ -373,25 +359,6 @@ def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) 
   raise ValueError(f"thread '{thread.id}' missing model metadata")
 
 
-def _prepare_thread_backend_metadata(
-    thread: ThreadMetadata,
-    backend_option: BackendOption,
-    description: str,
-) -> None:
-  if backend_option.type != "cc-claude":
-    return
-  if thread.claude_session_id is None:
-    thread.claude_session_id = str(uuid.uuid4())
-  backend = ClaudeCodeBackend(
-      model=backend_option.model,
-      effort=backend_option.effort,
-      cli_binary=backend_option.cli_binary,
-      fast_mode=backend_option.fast_mode,
-      claude_session_id=thread.claude_session_id,
-  )
-  thread.cli_command = shlex.join(backend._build_command(description) + [description])
-
-
 async def _construct_worker(
     session_id: str,
     thread: ThreadMetadata,
@@ -408,7 +375,17 @@ async def _construct_worker(
   thread.model = backend_option.model
   if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
     thread.tried_backends.append(backend_option.id)
-  _prepare_thread_backend_metadata(thread, backend_option, description)
+  if backend_option.type == "cc-claude":
+    if thread.claude_session_id is None:
+      thread.claude_session_id = str(uuid.uuid4())
+    backend = ClaudeCodeBackend(
+        model=backend_option.model,
+        effort=backend_option.effort,
+        cli_binary=backend_option.cli_binary,
+        fast_mode=backend_option.fast_mode,
+        claude_session_id=thread.claude_session_id,
+    )
+    thread.cli_command = shlex.join(backend._build_command(description) + [description])
   await thread_mgr.save_metadata(thread)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
@@ -517,7 +494,16 @@ async def _create_repoless_process(
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
   if request.task_type == TaskType.VERIFY:
-    worker_prompt = _build_verify_repoless_prompt(description, cfg)
+    sections = _load_prompt_sections(
+        cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
+    contract = _substitute_tokens(
+        "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
+            "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
+            "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
+        })
+    if "{{" in contract:
+      raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
+    worker_prompt = f"{contract}\n\n{description}"
   elif request.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
     worker_prompt = request.prompt_override or description
   else:
@@ -867,48 +853,6 @@ async def recomplete_finalize_effects(
       verify_report=verify_report)
 
 
-async def _rerun_verify_on_fresh_backend(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread_mgr: ThreadManager,
-    request: SpawnRequest,
-) -> _WorkerRunOutcome:
-  """Re-run an exhausted VERIFY task once on the next untried checking-role backend.
-
-  When no untried checking-role backend remains (selection empty, or looped back
-  to the exhausted backend), the original exhaustion outcome is returned
-  unchanged. A ``_create_repoless_process`` failure propagates: the caller's
-  generic-``except`` rebuilds the outcome as a setup error, never quota
-  exhaustion.
-  """
-  current_backend, _ = require_thread_backend_model(thread, cfg)
-  tried_backends = list(thread.tried_backends)
-  retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
-  if retry_backend is None or retry_backend[0] == current_backend:
-    log.warning(
-        "verify_quota_retry_backend_unavailable",
-        thread_id=thread.id,
-        current_backend=current_backend,
-        tried=tried_backends,
-    )
-    return _QUOTA_EXHAUSTED_OUTCOME
-  resolved_backend, resolved_model, tried_backends = retry_backend
-  log.warning(
-      "verify_quota_retry",
-      thread_id=thread.id,
-      exhausted_backend=thread.backend,
-      retry_backend=resolved_backend,
-  )
-  request.resolved_backend = resolved_backend
-  request.resolved_model = resolved_model
-  thread.tried_backends = tried_backends
-  worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
-  return await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
-
-
 async def spawn_worker(
     session_id: str,
     description: str,
@@ -938,9 +882,34 @@ async def spawn_worker(
 
     outcome = await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
+    # Re-run an exhausted VERIFY once on the next untried checking-role backend;
+    # with none remaining (selection empty, or looped back to the exhausted
+    # backend) the existing outcome is already _QUOTA_EXHAUSTED_OUTCOME and
+    # stands as-is.
     if request.task_type == TaskType.VERIFY and outcome.quota_exhausted:
-      outcome = await _rerun_verify_on_fresh_backend(
-          session_id, description, thread, cfg, session_mgr, thread_mgr, request)
+      current_backend, _ = require_thread_backend_model(thread, cfg)
+      tried_backends = list(thread.tried_backends)
+      retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
+      if retry_backend is None or retry_backend[0] == current_backend:
+        log.warning(
+            "verify_quota_retry_backend_unavailable",
+            thread_id=thread.id,
+            current_backend=current_backend,
+            tried=tried_backends,
+        )
+      else:
+        resolved_backend, resolved_model, tried_backends = retry_backend
+        log.warning(
+            "verify_quota_retry",
+            thread_id=thread.id,
+            exhausted_backend=thread.backend,
+            retry_backend=resolved_backend,
+        )
+        request.resolved_backend = resolved_backend
+        request.resolved_model = resolved_model
+        thread.tried_backends = tried_backends
+        worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
+        outcome = await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
     if outcome.failed and not outcome.error:
       outcome = outcome._replace(

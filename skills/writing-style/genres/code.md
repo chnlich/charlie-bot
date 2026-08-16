@@ -37,6 +37,9 @@ implementing; master includes them as constraints in task specs.
 - Prefer an enum over a bare boolean for categorical or internal state.
   Reserve `0 = UNKNOWN` and start real values at `1`.
 - Store computed or derivable values on demand.
+- Pass every value explicitly at each call and construction site, structure fields included:
+  neither add a default that lets a site omit what it passes, nor drop an explicit argument to lean on a default;
+  when all sites pass the same value, the repetition is what keeps that value visible, and it stays.
 
 ## Comments
 

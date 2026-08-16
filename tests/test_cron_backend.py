@@ -14,7 +14,12 @@ from fastapi.testclient import TestClient
 
 from src.api import cron as cron_api
 from src.api.deps import get_session_manager
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig, _load_cron_file, get_config
+from src.core.config import (
+  CharlieBotConfig,
+  ScheduledTaskConfig,
+  _load_cron_file,
+  get_config,
+)
 from src.core.models import (
   BackendOption,
   CreateSessionRequest,

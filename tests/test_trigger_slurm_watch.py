@@ -12,10 +12,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, LocalPid, PendingTrigger, SlurmJob, TriggerStatus
+from src.core.models import (
+  CreateSessionRequest,
+  LocalPid,
+  PendingTrigger,
+  SlurmJob,
+  TriggerStatus,
+)
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
-
 
 # ---------------------------------------------------------------------------
 # Mock helpers

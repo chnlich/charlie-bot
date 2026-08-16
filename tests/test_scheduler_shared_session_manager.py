@@ -14,7 +14,12 @@ import pytest
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
-from src.core.models import BackendOption, CreateSessionRequest, SessionMetadata, ThreadMetadata
+from src.core.models import (
+  BackendOption,
+  CreateSessionRequest,
+  SessionMetadata,
+  ThreadMetadata,
+)
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 

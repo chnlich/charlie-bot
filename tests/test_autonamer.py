@@ -8,7 +8,10 @@ import pytest
 
 from src.core import autonamer
 from src.core.autonamer import (
-    iter_light_backends, maybe_auto_name, maybe_auto_name_from_claude_ai_title)
+  iter_light_backends,
+  maybe_auto_name,
+  maybe_auto_name_from_claude_ai_title,
+)
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
 

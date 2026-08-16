@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 NODE_TEST = ROOT / 'tests' / 'sidebar_usage_poll.test.js'
 

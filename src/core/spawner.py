@@ -806,6 +806,10 @@ async def _finalize_worker_safely(
 ) -> None:
   """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
   try:
+    # completed_at is the run's true end — its raw log's final mtime — so server
+    # downtime before finalization never shifts the recorded end.
+    thread_dir = thread_mgr.thread_dir(session_id, thread.id)
+    completed_at = runs.raw_completion_time(runs.raw_log_path(thread_dir))
     await _finalize_worker(
         session_id,
         description,
@@ -816,7 +820,7 @@ async def _finalize_worker_safely(
         cfg,
         skip_notify=skip_notify,
         task_type=task_type,
-        completed_at=_run_completion_time(thread_mgr, session_id, thread.id))
+        completed_at=completed_at)
   except Exception as e:
     log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
     try:
@@ -989,17 +993,6 @@ async def spawn_worker(
           task_type=request.task_type)
 
 
-def _run_completion_time(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> datetime | None:
-  """The run's true completion time: its raw log's final mtime, when one exists.
-
-  Independent of backend, event content, and how long the server was down; the
-  finalize chain writes it into completed_at so downtime never shifts a run's
-  recorded end.
-  """
-  thread_dir = thread_mgr.thread_dir(session_id, thread_id)
-  return runs.raw_completion_time(runs.raw_log_path(thread_dir))
-
-
 # Recovery-event reason recorded when the finalize liveness gate keeps a run
 # alive: resume hit an exception or cancellation while the run's death was
 # unproven, so the FAILED finalize was skipped (resume-exception-alive).
@@ -1122,25 +1115,6 @@ async def _persist_worker_summary_once(
   log.info("worker_summary_sent", session=session_id, thread=thread_id, fallback=fallback)
 
 
-async def _record_scheduled_run_status(
-    session_mgr: SessionManager,
-    session_id: str,
-    exit_code: int,
-) -> str | None:
-  """Record the run's outcome on a scheduled session and return its scheduled task name.
-
-  Fetches the session metadata exactly once for the whole notify chain; None means the
-  session is unscheduled, which the Telegram notify reads as "nothing to look up".
-  """
-  session_meta = await session_mgr.get_session(session_id)
-  if session_meta is None or not session_meta.scheduled_task:
-    return None
-  session_meta.last_run_status = "success" if exit_code == 0 else "failed"
-  session_meta.updated_at = datetime.now(timezone.utc)
-  await session_mgr.save_metadata(session_meta)
-  return session_meta.scheduled_task
-
-
 async def _broadcast_completion(
     session_id: str,
     description: str,
@@ -1204,7 +1178,15 @@ async def _notify_completion(
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
-    scheduled_task_name = await _record_scheduled_run_status(session_mgr, session_id, outcome.exit_code)
+    # Fetch session metadata exactly once for the whole notify chain; an
+    # unscheduled session gives the Telegram notify nothing to look up.
+    scheduled_task_name = None
+    session_meta = await session_mgr.get_session(session_id)
+    if session_meta is not None and session_meta.scheduled_task:
+      session_meta.last_run_status = "success" if outcome.exit_code == 0 else "failed"
+      session_meta.updated_at = datetime.now(timezone.utc)
+      await session_mgr.save_metadata(session_meta)
+      scheduled_task_name = session_meta.scheduled_task
     events_summary, full_summary = await _broadcast_completion(
         session_id,
         description,

@@ -182,12 +182,11 @@ def _build_worker_prompt(
   else:
     raise ValueError(f"unsupported task_type: {task_type!r}")
 
-  task_spec_section = sections["task_spec_source_files"]
   task_section = sections["task"].replace("{{description}}", description)
 
   worktree_section = (
       f"{sections['worktree_workflow_header']}\n{workflow_body}\n\n"
-      f"{task_spec_section}\n{task_section}")
+      f"{sections['task_spec_source_files']}\n{task_section}")
 
   iteration_reports_section = ""
   if loop_dir and iteration_number is not None:
@@ -199,9 +198,6 @@ def _build_worker_prompt(
         })
     iteration_reports_section = f"\n\n{iteration_body}"
 
-  skills_section = sections["skills_discovery"]
-  role_section = sections["role"]
-
   memory_section = ""
   memory_block = assemble_worker(cfg.memory_dir, repo_path.name)
   if memory_block:
@@ -212,7 +208,8 @@ def _build_worker_prompt(
     keep_worktree_section = f"\n\n{sections['worktree_persistence']}"
 
   result = (
-      f"{session_info}\n{sections['coding_principles']}\n{skills_section}\n{sections['remote_scratch']}\n{role_section}"
+      f"{session_info}\n{sections['coding_principles']}\n{sections['skills_discovery']}\n"
+      f"{sections['remote_scratch']}\n{sections['role']}"
       f"{memory_section}\n{worktree_section}{iteration_reports_section}{keep_worktree_section}")
 
   if "{{" in result:

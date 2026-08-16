@@ -83,12 +83,23 @@ _WORKFLOW_PROMPT_SECTION = {
 }
 
 
-def _parse_prompt_sections(text: str) -> dict[str, str]:
-  """Split a prompt template's raw text on its `<!-- section: <id> -->` marker lines."""
+def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
+  """Read a marker-sectioned prompt template fresh and return its sections.
+
+  Sections are split on the template's `<!-- section: <id> -->` marker lines.
+  Stateless and uncached: every call re-reads the file so an edit takes effect on the
+  next spawn. Missing file or missing required section raises with the file's full
+  path and the most likely cause -- the repo checkout predates the *extraction*
+  commit that moved this prompt out of Python. No embedded-text fallback.
+  """
+  if not path.is_file():
+    raise FileNotFoundError(
+        f"prompt template not found at {path} — the repo checkout most likely "
+        f"predates the {extraction} extraction commit")
   sections: dict[str, str] = {}
   current_id: str | None = None
   current_lines: list[str] = []
-  for line in text.split("\n"):
+  for line in path.read_text(encoding="utf-8").split("\n"):
     if line.startswith(_PROMPT_SECTION_MARKER_PREFIX) and line.endswith(_PROMPT_SECTION_MARKER_SUFFIX):
       if current_id is not None:
         sections[current_id] = "\n".join(current_lines)
@@ -99,22 +110,6 @@ def _parse_prompt_sections(text: str) -> dict[str, str]:
       current_lines.append(line)
   if current_id is not None:
     sections[current_id] = "\n".join(current_lines)
-  return sections
-
-
-def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
-  """Read a marker-sectioned prompt template fresh and return its sections.
-
-  Stateless and uncached: every call re-reads the file so an edit takes effect on the
-  next spawn. Missing file or missing required section raises with the file's full
-  path and the most likely cause -- the repo checkout predates the *extraction*
-  commit that moved this prompt out of Python. No embedded-text fallback.
-  """
-  if not path.is_file():
-    raise FileNotFoundError(
-        f"prompt template not found at {path} — the repo checkout most likely "
-        f"predates the {extraction} extraction commit")
-  sections = _parse_prompt_sections(path.read_text(encoding="utf-8"))
   missing = [section_id for section_id in required if section_id not in sections]
   if missing:
     raise ValueError(

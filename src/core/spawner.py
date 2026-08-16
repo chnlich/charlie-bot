@@ -853,48 +853,6 @@ async def recomplete_finalize_effects(
       verify_report=verify_report)
 
 
-async def _rerun_verify_on_fresh_backend(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread_mgr: ThreadManager,
-    request: SpawnRequest,
-) -> _WorkerRunOutcome:
-  """Re-run an exhausted VERIFY task once on the next untried checking-role backend.
-
-  When no untried checking-role backend remains (selection empty, or looped back
-  to the exhausted backend), the original exhaustion outcome is returned
-  unchanged. A ``_create_repoless_process`` failure propagates: the caller's
-  generic-``except`` rebuilds the outcome as a setup error, never quota
-  exhaustion.
-  """
-  current_backend, _ = require_thread_backend_model(thread, cfg)
-  tried_backends = list(thread.tried_backends)
-  retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
-  if retry_backend is None or retry_backend[0] == current_backend:
-    log.warning(
-        "verify_quota_retry_backend_unavailable",
-        thread_id=thread.id,
-        current_backend=current_backend,
-        tried=tried_backends,
-    )
-    return _QUOTA_EXHAUSTED_OUTCOME
-  resolved_backend, resolved_model, tried_backends = retry_backend
-  log.warning(
-      "verify_quota_retry",
-      thread_id=thread.id,
-      exhausted_backend=thread.backend,
-      retry_backend=resolved_backend,
-  )
-  request.resolved_backend = resolved_backend
-  request.resolved_model = resolved_model
-  thread.tried_backends = tried_backends
-  worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
-  return await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
-
-
 async def spawn_worker(
     session_id: str,
     description: str,
@@ -924,9 +882,34 @@ async def spawn_worker(
 
     outcome = await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
+    # Re-run an exhausted VERIFY once on the next untried checking-role backend;
+    # with none remaining (selection empty, or looped back to the exhausted
+    # backend) the existing outcome is already _QUOTA_EXHAUSTED_OUTCOME and
+    # stands as-is.
     if request.task_type == TaskType.VERIFY and outcome.quota_exhausted:
-      outcome = await _rerun_verify_on_fresh_backend(
-          session_id, description, thread, cfg, session_mgr, thread_mgr, request)
+      current_backend, _ = require_thread_backend_model(thread, cfg)
+      tried_backends = list(thread.tried_backends)
+      retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
+      if retry_backend is None or retry_backend[0] == current_backend:
+        log.warning(
+            "verify_quota_retry_backend_unavailable",
+            thread_id=thread.id,
+            current_backend=current_backend,
+            tried=tried_backends,
+        )
+      else:
+        resolved_backend, resolved_model, tried_backends = retry_backend
+        log.warning(
+            "verify_quota_retry",
+            thread_id=thread.id,
+            exhausted_backend=thread.backend,
+            retry_backend=resolved_backend,
+        )
+        request.resolved_backend = resolved_backend
+        request.resolved_model = resolved_model
+        thread.tried_backends = tried_backends
+        worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
+        outcome = await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
     if outcome.failed and not outcome.error:
       outcome = outcome._replace(

@@ -1,6 +1,6 @@
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from conftest import JudgmentShim
@@ -54,8 +54,8 @@ def _capturing_worker(captures: dict[str, Any]) -> type:
         events_log_path: Path,
         task_description: str,
         worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
+        backend_option: BackendOption | None = None,
+        on_spawned: Callable | None = None,
     ) -> None:
       captures["worker_dir"] = working_dir
       captures["worker_backend"] = backend_option
@@ -446,7 +446,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
 
   class FakeThreadManager(JudgmentShim):
 
-    async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
       return thread
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
@@ -460,8 +460,8 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
@@ -517,7 +517,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_worktr
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return None
 
   with pytest.raises(ValueError, match="session 'session-id' not found"):
@@ -559,7 +559,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return None
 
   async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
@@ -610,8 +610,8 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
@@ -650,7 +650,7 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
   class FakeThreadManager(JudgmentShim):
@@ -659,8 +659,8 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
         self,
         session_meta: SessionMetadata,
         description: str,
-        branch_name: Optional[str] = None,
-        review_of: Optional[str] = None,
+        branch_name: str | None = None,
+        review_of: str | None = None,
     ) -> ThreadMetadata:
       return ThreadMetadata(
           id="review-thread-id",
@@ -683,11 +683,11 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
       cfg: CharlieBotConfig,
       session_mgr: Any,
       thread_mgr: Any,
-      request: Optional[SpawnRequest] = None,
+      request: SpawnRequest | None = None,
   ) -> None:
     return None
 
-  def fake_create_logged_task(coro: Any, *, name: Optional[str] = None) -> Any:
+  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
     if coro.cr_frame is not None:
       captured.update(coro.cr_frame.f_locals)
     coro.close()
@@ -740,7 +740,7 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
   class FakeThreadManager(JudgmentShim):
@@ -749,8 +749,8 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
         self,
         session_meta: SessionMetadata,
         description: str,
-        branch_name: Optional[str] = None,
-        review_of: Optional[str] = None,
+        branch_name: str | None = None,
+        review_of: str | None = None,
     ) -> ThreadMetadata:
       return ThreadMetadata(
           id="review-thread-id",
@@ -1014,7 +1014,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
     def thread_dir(self, session_id: str, thread_id: str) -> Path:
       return cfg.sessions_dir / session_id / "threads" / thread_id
 
-    async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
       return thread
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
@@ -1028,8 +1028,8 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status

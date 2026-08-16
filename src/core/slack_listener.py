@@ -1,8 +1,8 @@
 """Slack Socket Mode listener — both halves of the Slack entrypoint.
 
 Summon path: an allowed ``app_mention`` resolves/creates a per-thread session,
-persists the thread as an agent message, and starts a master round via
-``trigger_master`` (without awaiting it).
+persists the thread permalink as an agent message, and starts a master round
+via ``trigger_master`` (without awaiting it).
 
 Delivery path: ``deliver_done`` hangs off the round's terminal ``master_done``
 event (called from ``SessionManager.persist_and_broadcast``), not off a waiting
@@ -76,7 +76,7 @@ def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
 
 
 class SlackClient:
-  """Thin Slack Web API wrapper: open_connection / post_message / thread_text."""
+  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink."""
 
   def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
     self._http = http
@@ -106,32 +106,30 @@ class SlackClient:
       raise RuntimeError(f"chat.postMessage failed: {payload}")
     return payload
 
-  async def thread_text(self, channel: str, ts: str) -> list[dict]:
-    """Return the raw message dicts for a channel thread via conversations.replies."""
+  async def get_permalink(self, channel: str, ts: str) -> str:
+    """GET chat.getPermalink for one message; return its permalink url."""
     resp = await self._http.get(
-        "https://slack.com/api/conversations.replies",
+        "https://slack.com/api/chat.getPermalink",
         headers=self._bot_headers,
-        params={"channel": channel, "ts": ts},
+        params={"channel": channel, "message_ts": ts},
     )
     resp.raise_for_status()
     payload = resp.json()
     if not payload.get("ok"):
-      raise RuntimeError(f"conversations.replies failed: {payload}")
-    return payload.get("messages", [])
+      raise RuntimeError(f"chat.getPermalink failed: {payload}")
+    return payload["permalink"]
 
 
-def _build_prompt(messages: list[dict]) -> str:
-  """Render a thread's messages into the prompt body, ending at the citation boundary."""
-  lines: list[str] = []
-  for msg in messages:
-    text = msg.get("text")
-    if text is None:
-      continue
-    user = msg.get("user")
-    sender = f"<@{user}>" if user else "unknown"
-    lines.append(f"{sender}: {text}")
-  body = "\n".join(lines).strip()
-  return f"{body}\n\n{CITATION_BOUNDARY}" if body else CITATION_BOUNDARY
+def _build_summon_prompt(permalink: str) -> str:
+  """The persisted summon: the thread link plus a self-fetch hint, ending at the citation boundary.
+
+  Only the permalink is stored because the master reads the thread itself via
+  its slack skill when the round runs — a snapshot persisted here would go
+  stale as the thread keeps changing after the mention.
+  """
+  return (f"Slack 线程召唤：{permalink}\n\n"
+          "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
+          f"{CITATION_BOUNDARY}")
 
 
 def _local_time() -> str:
@@ -172,8 +170,8 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
 
   await client.post_message(channel_id, _ACCEPTANCE_REPLY, thread_ts=thread_ts)
 
-  messages = await client.thread_text(channel_id, thread_ts)
-  content = _build_prompt(messages)
+  permalink = await client.get_permalink(channel_id, event["ts"])
+  content = _build_summon_prompt(permalink)
 
   evt = build_agent_message_event(content, from_session=sid, from_session_name="Slack")
   evt["slack"] = {

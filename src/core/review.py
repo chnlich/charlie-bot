@@ -388,6 +388,14 @@ async def _resolve_review_spawn_context(
   )
 
 
+def _short_desc(description: str) -> str:
+  """First line of description, truncated to 120 chars."""
+  first_line = description.split("\n", 1)[0].strip()
+  if len(first_line) > 120:
+    return first_line[:120] + "..."
+  return first_line
+
+
 async def spawn_review_worker(
     session_id: str,
     original_thread,
@@ -406,7 +414,7 @@ async def spawn_review_worker(
   failed-reviewer retry path the failed reviewer itself matches the
   reviewer-exists judgment and must not block its own replacement.
   """
-  from src.core.spawner import short_desc, spawn_worker
+  from src.core.spawner import spawn_worker
 
   # Idempotency judgment: never derive a second reviewer for the same original
   # thread, so the merge happens exactly once (the reviewer pushes; the server
@@ -445,7 +453,7 @@ async def spawn_review_worker(
     return False
   review_thread = await thread_mgr.create_thread(
       session_meta,
-      f"Review: {original_thread.context or short_desc(original_thread.description)}",
+      f"Review: {original_thread.context or _short_desc(original_thread.description)}",
       review_of=original_thread.id,
   )
   review_thread.branch_name = ctx.branch_name

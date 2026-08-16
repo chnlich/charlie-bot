@@ -222,14 +222,6 @@ def _build_worker_prompt(
   return result
 
 
-def short_desc(description: str) -> str:
-  """First line of description, truncated to 120 chars."""
-  first_line = description.split('\n', 1)[0].strip()
-  if len(first_line) > 120:
-    return first_line[:120] + '...'
-  return first_line
-
-
 def _worker_summary_timestamp() -> str:
   return datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d %H:%M %Z')
 

@@ -558,6 +558,13 @@ class _WorkerRunOutcome(NamedTuple):
   quota_exhausted: bool
   error: str
 
+  @property
+  def failed(self) -> bool:
+    """A non-zero exit outside the quota branch — the FAILED outcome the liveness gate and
+    the exit-code/error backfills negotiate over; exit 0 and quota exhaustion take their
+    own recorded paths."""
+    return self.exit_code != 0 and not self.quota_exhausted
+
 
 # The quota flag, not the error text, drives the finalize chain's quota branch.
 _QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error="")
@@ -948,7 +955,7 @@ async def spawn_worker(
       outcome = await _rerun_verify_on_fresh_backend(
           session_id, description, thread, cfg, session_mgr, thread_mgr, request)
 
-    if outcome.exit_code != 0 and not outcome.quota_exhausted and not outcome.error:
+    if outcome.failed and not outcome.error:
       outcome = outcome._replace(
           exit_code=await _maybe_override_exit_code_from_result(outcome.exit_code, session_id, thread, thread_mgr))
 
@@ -1083,10 +1090,10 @@ async def resume_worker(
     log.error("resume_worker_failed", thread_id=thread_id, error=str(e), traceback=traceback.format_exc())
     outcome = outcome._replace(error=str(e))
   finally:
-    if outcome.exit_code != 0 and not outcome.quota_exhausted and not outcome.error and interrupt_reason:
+    if outcome.failed and not outcome.error and interrupt_reason:
       outcome = outcome._replace(error=interrupt_reason)
     if thread is not None:
-      if outcome.exit_code != 0 and not outcome.quota_exhausted and is_alive():
+      if outcome.failed and is_alive():
         # Alive or unverifiable death: never record FAILED on our own error.
         log.warning("resume_finalize_skipped_alive", thread_id=thread_id, error=outcome.error)
         from src.core import (

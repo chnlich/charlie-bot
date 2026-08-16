@@ -286,21 +286,6 @@ def _option_default_backend_model(option: BackendOption, *, source: str) -> tupl
   return option.id, option.model
 
 
-def _resolve_configured_backend_model(
-    cfg: CharlieBotConfig,
-    backend_id: str,
-    *,
-    source: str,
-) -> tuple[str, str | None]:
-  """Resolve a configured backend option id to its default backend+model pair."""
-  if not backend_id:
-    raise ValueError(f"{source} backend is required")
-  option = cfg.get_backend_option(backend_id)
-  if option is None:
-    raise ValueError(f"{source} backend '{backend_id}' is not in backend_options")
-  return _option_default_backend_model(option, source=source)
-
-
 def _resolve_session_default_backend_model(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
@@ -353,7 +338,12 @@ async def resolve_requested_subagent_backend_model(
   """
   session_meta = await _require_session(session_mgr, session_id)
   if requested_backend is not None:
-    return _resolve_configured_backend_model(cfg, requested_backend, source="requested")
+    if not requested_backend:
+      raise ValueError("requested backend is required")
+    option = cfg.get_backend_option(requested_backend)
+    if option is None:
+      raise ValueError(f"requested backend '{requested_backend}' is not in backend_options")
+    return _option_default_backend_model(option, source="requested")
   return _resolve_session_default_backend_model(cfg, session_meta)
 
 

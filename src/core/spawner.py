@@ -339,15 +339,6 @@ async def _require_session(session_mgr: SessionManager, session_id: str) -> Sess
   return session_meta
 
 
-async def resolve_session_subagent_backend_model(
-    session_id: str,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-) -> tuple[str, str | None]:
-  """Resolve backend+model from the session's recorded default, ignoring any caller preference."""
-  return await resolve_requested_subagent_backend_model(session_id, cfg, session_mgr)
-
-
 async def resolve_requested_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
@@ -379,7 +370,7 @@ async def select_verify_backend(
   Never None with an untried (empty) list; None only when every configured backend
   has already been tried.
   """
-  session_backend, session_model = await resolve_session_subagent_backend_model(session_id, cfg, session_mgr)
+  session_backend, session_model = await resolve_requested_subagent_backend_model(session_id, cfg, session_mgr)
   return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)
 
 

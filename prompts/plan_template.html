@@ -146,7 +146,8 @@
       Shrink rule: depth scales with complexity. Any section may shrink to a sentence. 4.2 Design Details and
                     6. Other Details may be empty and omitted entirely. Section order and numbering never change.
       Page budget: the page as it opens is the complete decision surface, so it reads in one screen: every
-                    details-layer block collapsed, content stays within 1400 px height at the 1000 px wrap.
+                    details-layer block collapsed, content stays within 1600 px height at the probe's
+                    1280 px render width.
                     Depth is welcome, folded: anything deeper belongs in a details-layer block, collapsed by
                     default.
                     Folding preserves information: over budget, content moves into collapsed blocks
@@ -157,8 +158,11 @@
                     next revision, ride outside it. The always-visible minimum is the surface approval binds to:
                     the header, section 1, 4.1 Schema, and each Trade-off's question, recommendation, and trade
                     lines. Shrink or split a plan whose minimum alone overflows. Registration enforces the
-                    budget for plans; an understanding page self-checks with a headless render (it never
-                    registers).
+                    budget for plans; both page kinds self-check with charliebot plan check --file
+                    &lt;artifact.html&gt;, which runs the exact registration gates locally and prints the
+                    measured numbers (an understanding page never registers). Over budget, fold wholesale
+                    rather than delete: the Context body, the section-3 mechanism prose, and the 4.2 content
+                    move into collapsed details-layer blocks.
       Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
                     resolution; unmentioned items accept the recommendation. Any Other Details entry the user
                     asks to control is promoted and then joins the approval object. "take off" releases the plan.

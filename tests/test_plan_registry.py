@@ -812,7 +812,7 @@ async def test_present_rejects_artifact_without_goal_section(tmp_path: Path) -> 
 
 
 # ---------------------------------------------------------------------------
-# Page budget gate: present/amend reject artifacts over the 1400 px height budget
+# Page budget gate: present/amend reject artifacts over the 1600 px height budget
 # ---------------------------------------------------------------------------
 
 
@@ -829,9 +829,9 @@ async def test_page_budget_rejects_over_budget_naming_measured_height_and_gates_
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   at_budget = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=at_budget, title="P1")
-  cfg.headless_chrome_bin = _write_stub_chrome(tmp_path, 1401)
+  cfg.headless_chrome_bin = _write_stub_chrome(tmp_path, 1601)
   over = _write_artifact(cfg, meta.id, "plan_02.html")
-  with pytest.raises(ValueError, match=r"measures 1401 px tall as it opens \(budget 1400 px\)"):
+  with pytest.raises(ValueError, match=r"measures 1601 px as it opens: 1 px over the 1600 px budget"):
     await plan_mgr.amend(meta.id, file=over)
 
 

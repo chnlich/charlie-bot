@@ -47,17 +47,22 @@ def _weighted_goal_length(text: str) -> int:
   return len(text) + sum(1 for c in text if any(lo <= ord(c) <= hi for lo, hi in _CJK_RANGES))
 
 
+def _measure_goal_weighted(artifact: Path) -> int:
+  """Weighted length of the artifact's Problem / Goal section; a missing section raises."""
+  section = _GOAL_SECTION_RE.search(artifact.read_text(encoding="utf-8"))
+  if section is None:
+    raise ValueError(f"artifact {artifact.name!r} has no 'Problem / Goal' section")
+  text = html.unescape(_TAG_RE.sub("", section.group(1)))
+  return _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
+
+
 def _check_goal_budget(artifact: Path) -> None:
   """Reject registration when the Problem / Goal section exceeds the weighted budget.
 
   Fail-loud like the other verb validations; a missing section is a defect, not a pass.
   Runs only at present/amend — registered plans are never re-checked.
   """
-  section = _GOAL_SECTION_RE.search(artifact.read_text(encoding="utf-8"))
-  if section is None:
-    raise ValueError(f"artifact {artifact.name!r} has no 'Problem / Goal' section")
-  text = html.unescape(_TAG_RE.sub("", section.group(1)))
-  weighted = _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
+  weighted = _measure_goal_weighted(artifact)
   if weighted > GOAL_WEIGHTED_BUDGET:
     raise ValueError(
         f"plan goal is {weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET}): keep the goal "
@@ -68,7 +73,7 @@ def _check_goal_budget(artifact: Path) -> None:
 # Page budget — registration-time gate on the artifact's opening rendered height
 # ---------------------------------------------------------------------------
 
-PAGE_HEIGHT_BUDGET = 1400
+PAGE_HEIGHT_BUDGET = 1600
 
 _PAGE_PROBE_WIDTH_PX = 1280
 _RENDER_TIMEOUT_S = 60
@@ -137,13 +142,8 @@ def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
     probe.unlink()
 
 
-def _check_page_height(cfg: CharlieBotConfig, artifact: Path) -> None:
-  """Reject registration when the artifact's opening page exceeds the height budget.
-
-  Fail-loud like the goal gate: a missing or unusable renderer rejects with the reason
-  instead of skipping the check. Runs only at present/amend — registered plans are
-  never re-checked.
-  """
+def _require_chrome_bin(cfg: CharlieBotConfig) -> Path:
+  """Return the configured headless renderer path; raise when unset or unusable."""
   chrome_bin = cfg.headless_chrome_bin
   if not chrome_bin:
     raise ValueError(
@@ -154,12 +154,38 @@ def _check_page_height(cfg: CharlieBotConfig, artifact: Path) -> None:
     raise ValueError(
         "headless_chrome_bin is required for plan registration but the configured path "
         f"does not exist: {chrome}")
-  height = _measure_page_height(chrome, artifact)
+  return chrome
+
+
+def _check_page_height(cfg: CharlieBotConfig, artifact: Path) -> None:
+  """Reject registration when the artifact's opening page exceeds the height budget.
+
+  Fail-loud like the goal gate: a missing or unusable renderer rejects with the reason
+  instead of skipping the check. Runs only at present/amend — registered plans are
+  never re-checked.
+  """
+  height = _measure_page_height(_require_chrome_bin(cfg), artifact)
   if height > PAGE_HEIGHT_BUDGET:
     raise ValueError(
-        f"plan page measures {height} px tall as it opens (budget {PAGE_HEIGHT_BUDGET} px): "
-        "fold depth into details-layer blocks (collapsed by default) so the opening page "
-        "reads in one screen")
+        f"plan page measures {height} px as it opens: {height - PAGE_HEIGHT_BUDGET} px over the "
+        f"{PAGE_HEIGHT_BUDGET} px budget. Recover headroom by folding, not deleting: move the "
+        "Context body, section-3 mechanism prose, and 4.2 content wholesale into collapsed "
+        "details-layer blocks. Never compress or drop the approval surface: section 1, 4.1 "
+        "Schema rows, and each fork's question/recommendation/trade lines. Measure locally "
+        "with: charliebot plan check --file <artifact.html>")
+
+
+def measure_plan_gates(cfg: CharlieBotConfig, artifact: Path) -> tuple[int, int]:
+  """Measure both registration gates on a local artifact; return (page height px, goal weighted).
+
+  The local dry run behind ``charliebot plan check``: it measures exactly what present/amend
+  gate on and returns the numbers for the caller to judge against the budgets. Raises
+  ValueError for non-budget failures (missing Problem / Goal section, missing or unusable
+  renderer) — measurement failure is a defect, not a gate outcome.
+  """
+  goal_weighted = _measure_goal_weighted(artifact)
+  page_height = _measure_page_height(_require_chrome_bin(cfg), artifact)
+  return page_height, goal_weighted
 
 
 # ---------------------------------------------------------------------------

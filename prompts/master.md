@@ -24,6 +24,7 @@ first by comparing the rows.
 | understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences | The user answers the divergences in chat, then the plan follows |
 | plan | Plan-scale work whose reading is already aligned; bounded fixes, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Verify rounds, then "take off" releases delegation |
 | sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
+| debugging | The user asks what happened and why: observed behavior contradicts expectation, and the conclusion is a causal explanation | `artifacts/debug_<topic-slug>_v<n>.html` per `prompts/debug_template.html` | The page closes the exchange; a mid-investigation status question still gets a sitrep, and the two pages cross-reference |
 
 Understanding and plan format, confirmation semantics, and plan linkage:
 `skills/plan-approval/SKILL.md`. Sitrep page grammar: `prompts/sitrep_template.html`.
@@ -209,8 +210,10 @@ the user opts out or the response is a brief acknowledgment.
 
 A situation brief is a self-contained HTML page following `prompts/sitrep_template.html`,
 written to `artifacts/sitrep_<topic-slug>_v<n>.html` and shared via file-server link with a
-short chat summary. Completion and
-blocked-node reports beyond a brief acknowledgment adopt the same skeleton.
+short chat summary. A completion or
+blocked-node report beyond a brief acknowledgment routes by the reader's question: "where do
+things stand" adopts this skeleton; "what happened and why" goes to the debugging genre (see
+Artifact Genres).
 The brief opens with the bottom line and then follows the page grammar: the
 reader-question sections, the inline epistemic labels, the readability rules, and
 the pre-share self-checks. That grammar is defined entirely by the

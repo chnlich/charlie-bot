@@ -72,3 +72,27 @@ Generated HTML artifacts (reports, plans, dashboards) must satisfy:
   trusted master-authored output.
 - Aim for well-organized, visually polished pages that present information more densely
   than markdown allows. Multiple artifacts per response are supported.
+
+### Cold-Read Gate
+
+Applied one step before delivery for sitrep and debugging pages.
+
+Cold-read gate: one zero-context model pass reads the file alone and answers (1) the problem, (2) the conclusion and its epistemic state, (3) what is asked of the reader, (4) the section where the problem first became clear, and (5) up to five re-read points. Ship when answers (1) through (3) match the author's intent, (4) names the first content section, and the epistemic state in (2) matches the page's own labels; otherwise revise and re-run. Judge on these signals alone.
+
+Probe recipe:
+
+```bash
+cat <page-file> | claude -p --model claude-sonnet-5 "<five-question prompt below>"
+```
+
+Five-question prompt template, passed as the recipe's `<five-question prompt below>`:
+
+```text
+You are reading one HTML page cold: the page source is the piped input, and you have no
+context beyond the file itself. Answer five questions, each in one or two sentences and in
+the page's own language: (1) Whose problem does this page describe, and what is the
+problem? (2) What is the page's conclusion, and what epistemic state does the page itself
+claim for it (confirmed, hypothesis, refuted, or a stated mix)? (3) What does the page ask
+of the reader, if anything? (4) In which numbered section did you first become clear on
+what the problem is? (5) Name up to five points you had to re-read to follow the page.
+```

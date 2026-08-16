@@ -118,9 +118,9 @@ async def _ignore(*args: Any, **kwargs: Any) -> None:
 def _install_worker_fakes(
     monkeypatch: pytest.MonkeyPatch,
     worker_runs: list[tuple[str, str]],
-    stream_result: tuple[int, bool, str],
+    stream_result: spawner._WorkerRunOutcome,
 ) -> None:
-  async def fake_stream_worker_events(worker: _FakeWorker, *args: Any) -> tuple[int, bool, str]:
+  async def fake_stream_worker_events(worker: _FakeWorker, *args: Any) -> spawner._WorkerRunOutcome:
     del args
     worker_runs.append((worker.thread_id, worker.backend))
     return stream_result
@@ -147,11 +147,9 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
       thread.session_id,
       thread.description,
       thread,
-      0,
+      spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
       thread_mgr,
       session_mgr,
-      quota_exhausted=False,
-      error="",
       task_type=TaskType.VERIFY,
       verify_report=report,
   )
@@ -225,7 +223,8 @@ async def test_verify_result_trailer_controls_completion_without_retry(
   thread_mgr = FakeThreadManager(thread, events_path)
   session_mgr = FakeSessionManager(thread.session_id)
   worker_runs: list[tuple[str, str]] = []
-  _install_worker_fakes(monkeypatch, worker_runs, (0, False, worker_error))
+  _install_worker_fakes(
+      monkeypatch, worker_runs, spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=worker_error))
   monkeypatch.setattr(spawner.review, "maybe_spawn_reviewer", _ignore)
 
   await spawner.spawn_worker(
@@ -270,27 +269,26 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
   session_mgr = FakeSessionManager(thread.session_id)
   worker_runs: list[tuple[str, str]] = []
   finalized: dict[str, Any] = {}
-  _install_worker_fakes(monkeypatch, worker_runs, (-1, True, ""))
+  _install_worker_fakes(
+      monkeypatch, worker_runs, spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""))
 
   async def fake_finalize_worker_safely(
       session_id: str,
       description: str,
       thread_meta: ThreadMetadata,
-      exit_code: int,
+      outcome: spawner._WorkerRunOutcome,
       manager: Any,
       sessions: Any,
       worker_cfg: CharlieBotConfig,
-      quota_exhausted: bool,
-      error: str,
       skip_notify: bool,
       task_type: TaskType = TaskType.IMPLEMENT,
   ) -> None:
     del session_id, description, manager, sessions, worker_cfg, skip_notify
     finalized.update(
         thread=thread_meta,
-        exit_code=exit_code,
-        quota_exhausted=quota_exhausted,
-        error=error,
+        exit_code=outcome.exit_code,
+        quota_exhausted=outcome.quota_exhausted,
+        error=outcome.error,
         task_type=task_type,
     )
 
@@ -325,7 +323,8 @@ async def test_implement_quota_exhaustion_does_not_retry(tmp_path: Path, monkeyp
   thread_mgr = FakeThreadManager(thread, tmp_path / "events.jsonl")
   session_mgr = FakeSessionManager(thread.session_id)
   worker_runs: list[tuple[str, str]] = []
-  _install_worker_fakes(monkeypatch, worker_runs, (-1, True, ""))
+  _install_worker_fakes(
+      monkeypatch, worker_runs, spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""))
   monkeypatch.setattr(spawner, "_finalize_worker_safely", _ignore)
 
   await spawner.spawn_worker(

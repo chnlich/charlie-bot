@@ -708,13 +708,11 @@ async def _run_finalize_effects(
     session_id: str,
     description: str,
     thread: ThreadMetadata,
-    exit_code: int,
+    outcome: _WorkerRunOutcome,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
     *,
-    quota_exhausted: bool,
-    error: str,
     skip_notify: bool,
     task_type: TaskType,
     verify_report: str | None,
@@ -724,7 +722,7 @@ async def _run_finalize_effects(
   Holds no status write: the caller owns that. Every effect behind this call is
   judgment-idempotent (src/core/finalize_effects), so repetition converges to a no-op.
   """
-  skip_cleanup = _should_skip_worktree_cleanup(thread, exit_code)
+  skip_cleanup = _should_skip_worktree_cleanup(thread, outcome.exit_code)
   cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
   if cleanup_error:
     await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
@@ -735,12 +733,10 @@ async def _run_finalize_effects(
       session_id,
       description,
       thread,
-      exit_code,
+      outcome,
       thread_mgr,
       session_mgr,
       cfg,
-      quota_exhausted=quota_exhausted,
-      error=error,
       task_type=task_type,
       verify_report=verify_report)
 
@@ -772,13 +768,11 @@ async def _finalize_worker(
     session_id: str,
     description: str,
     thread: ThreadMetadata,
-    exit_code: int,
+    outcome: _WorkerRunOutcome,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
     *,
-    quota_exhausted: bool,
-    error: str,
     skip_notify: bool,
     task_type: TaskType,
     completed_at: datetime | None,
@@ -793,37 +787,35 @@ async def _finalize_worker(
   # One read of events.jsonl per finalize pass: the trailer gate below and the
   # notify chain's summary must judge and quote the identical string.
   verify_report = await _verify_report_for_task(task_type, session_id, thread.id, thread_mgr)
-  if verify_report is not None and not cancelled and not quota_exhausted:
+  if verify_report is not None and not cancelled and not outcome.quota_exhausted:
     trailer_error = verify_result_trailer_error(verify_report)
     if trailer_error:
-      exit_code = -1
-      error = f"{error}; {trailer_error}" if error else trailer_error
+      outcome = outcome._replace(
+          exit_code=-1, error=f"{outcome.error}; {trailer_error}" if outcome.error else trailer_error)
 
   if cancelled:
     # Cancel endpoint already set the status; don't overwrite.
     log.info("worker_already_cancelled", thread_id=thread.id)
-  elif quota_exhausted:
+  elif outcome.quota_exhausted:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, completed_at=completed_at)
-  elif error:
+  elif outcome.error:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1, completed_at=completed_at)
-  elif exit_code == 0:
+  elif outcome.exit_code == 0:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0, completed_at=completed_at)
     log.info("worker_completed", thread_id=thread.id)
   else:
     await thread_mgr.update_status(
-        session_id, thread.id, ThreadStatus.FAILED, exit_code=exit_code, completed_at=completed_at)
-    log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=exit_code)
+        session_id, thread.id, ThreadStatus.FAILED, exit_code=outcome.exit_code, completed_at=completed_at)
+    log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=outcome.exit_code)
 
   await _run_finalize_effects(
       session_id,
       description,
       thread,
-      exit_code,
+      outcome,
       thread_mgr,
       session_mgr,
       cfg,
-      quota_exhausted=quota_exhausted,
-      error=error,
       skip_notify=skip_notify,
       task_type=task_type,
       verify_report=verify_report)
@@ -833,13 +825,11 @@ async def _finalize_worker_safely(
     session_id: str,
     description: str,
     thread: ThreadMetadata,
-    exit_code: int,
+    outcome: _WorkerRunOutcome,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
     *,
-    quota_exhausted: bool,
-    error: str,
     skip_notify: bool,
     task_type: TaskType,
 ) -> None:
@@ -849,12 +839,10 @@ async def _finalize_worker_safely(
         session_id,
         description,
         thread,
-        exit_code,
+        outcome,
         thread_mgr,
         session_mgr,
         cfg,
-        quota_exhausted=quota_exhausted,
-        error=error,
         skip_notify=skip_notify,
         task_type=task_type,
         completed_at=_run_completion_time(thread_mgr, session_id, thread.id))
@@ -895,12 +883,10 @@ async def recomplete_finalize_effects(
       session_id,
       description,
       thread,
-      exit_code,
+      _WorkerRunOutcome(exit_code=exit_code, quota_exhausted=False, error=""),
       thread_mgr,
       session_mgr,
       cfg,
-      quota_exhausted=False,
-      error="",
       skip_notify=False,
       task_type=task_type,
       verify_report=verify_report)
@@ -919,8 +905,9 @@ async def _rerun_verify_on_fresh_backend(
 
   When no untried checking-role backend remains (selection empty, or looped back
   to the exhausted backend), the original exhaustion outcome is returned
-  unchanged. A ``_create_repoless_process`` failure propagates: the caller has
-  already cleared ``quota_exhausted``, so it lands as a generic setup error.
+  unchanged. A ``_create_repoless_process`` failure propagates: the caller's
+  generic-``except`` rebuilds the outcome as a setup error, never quota
+  exhaustion.
   """
   current_backend, _ = require_thread_backend_model(thread, cfg)
   tried_backends = list(thread.tried_backends)
@@ -959,9 +946,7 @@ async def spawn_worker(
   """Spawn a worker for the given thread on its resolved backend. Fire-and-forget via asyncio.create_task()."""
   thread = None
   worker = None
-  exit_code = -1
-  quota_exhausted = False
-  error_msg = ""
+  outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="")
   cancelled = False
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
@@ -976,17 +961,15 @@ async def spawn_worker(
       worker = await _create_worktree_and_process(
           session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, request)
 
-    exit_code, quota_exhausted, error_msg = await _stream_worker_events(
-        worker, session_id, thread, thread_mgr, session_mgr)
+    outcome = await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
-    if request.task_type == TaskType.VERIFY and quota_exhausted:
-      # A retry's own setup failure is a generic error, not quota exhaustion.
-      quota_exhausted = False
-      exit_code, quota_exhausted, error_msg = await _rerun_verify_on_fresh_backend(
+    if request.task_type == TaskType.VERIFY and outcome.quota_exhausted:
+      outcome = await _rerun_verify_on_fresh_backend(
           session_id, description, thread, cfg, session_mgr, thread_mgr, request)
 
-    if exit_code != 0 and not quota_exhausted and not error_msg:
-      exit_code = await _maybe_override_exit_code_from_result(exit_code, session_id, thread, thread_mgr)
+    if outcome.exit_code != 0 and not outcome.quota_exhausted and not outcome.error:
+      outcome = outcome._replace(
+          exit_code=await _maybe_override_exit_code_from_result(outcome.exit_code, session_id, thread, thread_mgr))
 
   except asyncio.CancelledError:
     # Only live trigger: event-loop shutdown (graceful restart). Never write a
@@ -1016,20 +999,21 @@ async def spawn_worker(
         await worker.terminate()
     raise
   except Exception as e:
+    # Every failure landing here is a generic setup error, never quota
+    # exhaustion — a VERIFY retry's own setup failure included — so the
+    # outcome is rebuilt rather than patched in place.
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
-    error_msg = str(e)
+    outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
   finally:
     if thread is not None and not cancelled:
       await _finalize_worker_safely(
           session_id,
           description,
           thread,
-          exit_code,
+          outcome,
           thread_mgr,
           session_mgr,
           cfg,
-          quota_exhausted=quota_exhausted,
-          error=error_msg,
           skip_notify=request.skip_notify,
           task_type=request.task_type)
 
@@ -1090,9 +1074,7 @@ async def resume_worker(
   """
   thread = None
   worker = None
-  exit_code = -1
-  quota_exhausted = False
-  error_msg = ""
+  outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="")
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
     if not thread:
@@ -1109,22 +1091,23 @@ async def resume_worker(
     events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
     working_dir = Path(thread.worktree_path) if thread.worktree_path else events_log.parent
     worker = Worker(thread, working_dir, events_log, description, cfg, backend_option=backend_option)
-    exit_code = await worker.resume(is_alive=is_alive, on_silence=on_silence)
+    outcome = _WorkerRunOutcome(
+        exit_code=await worker.resume(is_alive=is_alive, on_silence=on_silence), quota_exhausted=False, error="")
   except QuotaExhaustedException:
     log.warning("resume_worker_quota_exhausted", thread_id=thread_id)
     if is_alive() and thread is not None and thread.pid is not None:
       kill_process_group(thread.pid, signal.SIGTERM)
-    quota_exhausted = True
+    outcome = outcome._replace(quota_exhausted=True)
   except Exception as e:
     log.error("resume_worker_failed", thread_id=thread_id, error=str(e), traceback=traceback.format_exc())
-    error_msg = str(e)
+    outcome = outcome._replace(error=str(e))
   finally:
-    if exit_code != 0 and not quota_exhausted and not error_msg and interrupt_reason:
-      error_msg = interrupt_reason
+    if outcome.exit_code != 0 and not outcome.quota_exhausted and not outcome.error and interrupt_reason:
+      outcome = outcome._replace(error=interrupt_reason)
     if thread is not None:
-      if exit_code != 0 and not quota_exhausted and is_alive():
+      if outcome.exit_code != 0 and not outcome.quota_exhausted and is_alive():
         # Alive or unverifiable death: never record FAILED on our own error.
-        log.warning("resume_finalize_skipped_alive", thread_id=thread_id, error=error_msg)
+        log.warning("resume_finalize_skipped_alive", thread_id=thread_id, error=outcome.error)
         from src.core import (
           init as init_module,  # lazy: init imports this module lazily too
         )
@@ -1139,12 +1122,10 @@ async def resume_worker(
             session_id,
             description,
             thread,
-            exit_code,
+            outcome,
             thread_mgr,
             session_mgr,
             cfg,
-            quota_exhausted=quota_exhausted,
-            error=error_msg,
             skip_notify=False,
             task_type=thread.task_type or TaskType.IMPLEMENT)
 
@@ -1194,12 +1175,10 @@ async def _broadcast_completion(
     session_id: str,
     description: str,
     thread: ThreadMetadata,
-    exit_code: int,
+    outcome: _WorkerRunOutcome,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     *,
-    quota_exhausted: bool,
-    error: str,
     task_type: TaskType,
     verify_report: str | None,
 ) -> tuple[str, str]:
@@ -1215,7 +1194,7 @@ async def _broadcast_completion(
 
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
 
-  status = 'cancelled' if cancelled else _exit_status_label(exit_code)
+  status = 'cancelled' if cancelled else _exit_status_label(outcome.exit_code)
   if task_type == TaskType.VERIFY:
     report = events_summary or "(no verifier final report)"
     full_summary = f"**Verifier completion: thread `{thread.id}`**\n\n{report}"
@@ -1225,15 +1204,15 @@ async def _broadcast_completion(
   suffix = ""
   if cancelled:
     suffix = "\n\n*Cancelled by user.*"
-  elif quota_exhausted:
+  elif outcome.quota_exhausted:
     suffix = "\n\n*Worker stopped: API quota exhausted.*"
-  elif error:
+  elif outcome.error:
     if task_type == TaskType.VERIFY:
-      suffix = f"\n\n*Verifier completion failed: {error}*"
+      suffix = f"\n\n*Verifier completion failed: {outcome.error}*"
     else:
-      suffix = f"\n\n*Worker error: {error}*"
-  elif exit_code != 0:
-    suffix = f"\n\n*Worker exited with code {exit_code}.*"
+      suffix = f"\n\n*Worker error: {outcome.error}*"
+  elif outcome.exit_code != 0:
+    suffix = f"\n\n*Worker exited with code {outcome.exit_code}.*"
   full_summary += suffix
 
   worker_event = _thread_worker_event(thread, status, full_content=full_summary)
@@ -1245,28 +1224,24 @@ async def _notify_completion(
     session_id: str,
     description: str,
     thread: ThreadMetadata,
-    exit_code: int,
+    outcome: _WorkerRunOutcome,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
     *,
-    quota_exhausted: bool,
-    error: str,
     task_type: TaskType,
     verify_report: str | None,
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
-    scheduled_task_name = await _record_scheduled_run_status(session_mgr, session_id, exit_code)
+    scheduled_task_name = await _record_scheduled_run_status(session_mgr, session_id, outcome.exit_code)
     events_summary, full_summary = await _broadcast_completion(
         session_id,
         description,
         thread,
-        exit_code,
+        outcome,
         thread_mgr,
         session_mgr,
-        quota_exhausted=quota_exhausted,
-        error=error,
         task_type=task_type,
         verify_report=verify_report)
 
@@ -1280,11 +1255,11 @@ async def _notify_completion(
         log.warning("telegram_notify_failed", session=session_id, error=str(tg_err))
 
     await review.maybe_spawn_reviewer(
-        session_id, thread, exit_code, events_summary, full_summary, thread_mgr, session_mgr, cfg)
+        session_id, thread, outcome.exit_code, events_summary, full_summary, thread_mgr, session_mgr, cfg)
   except Exception as e:
     log.error("notify_completion_failed", thread_id=thread.id, error=str(e))
     try:
-      status = _exit_status_label(exit_code)
+      status = _exit_status_label(outcome.exit_code)
       fallback = _worker_locator_summary(thread.id, status, _worker_summary_timestamp())
       fallback_event = _thread_worker_event(
           thread, status, full_content=f"{fallback}\n\n*(summary unavailable: {e})*", content=fallback)

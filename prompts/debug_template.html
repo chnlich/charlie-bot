@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharlieBot Debug Template</title>
+<style>
+  :root{
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --acc:#1163c0; --grn:#187f37;
+    --amb:#9a6700; --red:#cf222e; --vio:#6a3fc0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#ffffff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#ffffff;font-size:12px;font-weight:700;align-items:center;justify-content:center}
+  h2 .nb{background:var(--vio)}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#ffffff;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  h3 .sn.read{background:var(--grn)}
+  h3 .layer{font-size:11px;font-weight:600;color:var(--mut);margin-left:7px}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#24292f;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#7a4b00}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #b6d3f2;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#1c3f66}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#e6d09b;border-left-color:var(--amb);color:#6b4e00}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.n{border-color:var(--grn);color:#187f37}
+  .flow .ar{color:var(--mut)}
+  .fork{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--amb);border-radius:8px;padding:12px 15px;margin:12px 0}
+  .fork .q{display:flex;align-items:baseline;gap:9px;font-weight:600;margin:0 0 4px}
+  .fork .fn{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--amb);color:#ffffff;font-size:11.5px;font-weight:700;align-items:center;justify-content:center;flex:0 0 auto}
+  .fork .rec{margin:4px 0 0;font-size:12.5px}
+  .fork .rec b{color:var(--grn)}
+  .fork .trade{margin:3px 0 0;font-size:12.5px;color:var(--mut)}
+  .fork .resolved{margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px;font-weight:600;color:#187f37}
+  details.details-layer{background:var(--panel);border:1px solid var(--bd);border-radius:9px;margin:6px 0 0}
+  details.details-layer summary{cursor:pointer;padding:11px 15px;font-size:13px;font-weight:600;color:var(--mut)}
+  details.details-layer summary:hover{color:var(--tx)}
+  details.details-layer[open] summary{color:var(--tx);border-bottom:1px solid var(--bd)}
+  details.details-layer ul{margin:0;padding:10px 16px 13px 34px}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  .foot p{margin:0}
+  .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#7a5a00;border:1px solid #e0c97f;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#7a5a00}
+  .req{display:inline-block;background:rgba(17,99,192,.08);border:1px solid #b6d3f2;border-radius:5px;padding:1px 7px;font-weight:600;font-size:12px;color:var(--acc);white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px;margin-right:6px;vertical-align:baseline}
+  .tag.fact{background:rgba(24,127,55,.10);color:var(--grn);border:1px solid #b7dcc2}
+  .tag.hyp{background:rgba(154,103,0,.10);color:var(--amb);border:1px solid #e6d09b}
+  @media(max-width:760px){body{padding:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Why the review wall kept showing stale frames: the render cache stamped copies four minutes ahead</h1>
+    <p class="sub">Cause confirmed by replay: re-exports made within about four minutes of a sync never reached the review wall, because the render node stamped cached copies with its own clock, which ran four minutes fast, and the fetcher then judged every later re-export as not newer than the cache. Why the clock ran fast (the clock-sync service stopped after Sunday's re-image) stays a moderate-confidence hypothesis. Example debug body with invented data; replace this header and the sections below with the topic's own content.</p>
+    <div class="meta">
+      <span class="mtag">system · fictional review wall (template example)</span>
+      <span class="mtag">window · fictional, Sunday 18:00 to Tuesday 09:47</span>
+      <span class="mtag">epistemic · mechanism confirmed, trigger open</span>
+    </div>
+  </header>
+
+  <main>
+<!--
+      USAGE — build each debug page as artifacts/debug_<topic-slug>_v<n>.html in the session dir.
+      Reuse this file's <head> and <style> verbatim; replace the <main> content following the
+      grammar below. Each generated page is self-contained: a reader with no
+      prior conversation or project background understands it on its own,
+      first read. The generated page's language follows the
+      user's artifact-language preference; this template stays English.
+
+      Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
+      blockquote, pre, table, td, div.callout, div.flow, div.fork with its folded explainer, and
+      div.meta > span.mtag chips.
+
+      GRAMMAR — canonical debug page grammar and the only definition of its section semantics.
+      A debug page answers the reader's question "what happened, and why": observed behavior
+      contradicted expectation, and the page's conclusion is a causal explanation. Sections are
+      ordered by cause, so the reader meets the phenomenon before the mechanism that must exist
+      to explain it, then the causal chain, then the evidence behind the chain, then what the
+      explanation changes. The header's p.sub carries the bottom line (the causal conclusion plus
+      its epistemic state, in one or two sentences), so the reader can stop after the header. Then
+      come five sections in a fixed order and numbering; any section may shrink to one sentence.
+
+      1 "What did they hit?": the phenomenon in the reader's words, one checkable observation.
+      2 "How does this normally work?": minimal mechanism model; structure diagram for spatial claims.
+         The read-before rule for data graphics lives in the dataviz skill by name; read it
+         before drafting the diagram.
+      3 "Why did it happen?": causal chain end to end, one hand-checkable worked example.
+      4 "Evidence and boundaries": fact/hyp labels; headline epistemic state explicit; the title claims exactly the labeled state.
+         The labels are span.tag.fact and span.tag.hyp with the semantics defined in
+         prompts/sitrep_template.html's GRAMMAR, which stays their canonical home.
+      5 "What does it mean for us, and what happens next?": impact and decisions as forks; "Nothing waits on you." is valid.
+         Fork grammar: plan_template.html's block kit, section 5.
+
+      Readability rules, head and style: referenced from prompts/sitrep_template.html (single canonical home).
+
+      Pre-share: run the cold-read gate (file-server skill) one step before delivery.
+-->
+
+    <section class="plan-section">
+      <h2><span class="n">1</span> What did they hit?</h2>
+      <p>In the matte painter's words: "I saved the new version, refreshed, and the wall still showed the old one." On Tuesday morning frame 041 was re-exported at 09:41, and three refreshes over ten minutes kept showing Sunday night's version.</p>
+      <p>One checkable observation carries the whole phenomenon: the primary store's copy of frame 041 reads mtime 09:41:00 while the render cache's copy carries stamp 09:42:00, and the wall shows the 09:42:00 copy, which is the older frame. <span class="src">Sources: ~/workspace/reviewwall/frames/frame_041.exr listing, ~/workspace/reviewwall/cache/frame_041.exr listing.</span></p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">2</span> How does this normally work?</h2>
+      <p>Four pieces make up the picture. Artists save frames to the primary store, whose files carry mtimes in the primary's clock. A fetcher on the render node pulls every 60 seconds and copies a frame when its primary mtime is newer than the cache copy's stamp. Cached copies are stamped with the render node's own clock at copy time. The review wall serves straight from the cache and never touches the primary.</p>
+      <div style="background:#ffffff;border:1px solid #d9dfe6;border-radius:9px;padding:12px 14px;margin:10px 0 0">
+        <svg viewBox="0 0 930 110" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Structure: primary store, fetcher with local clock, render cache, review wall">
+          <defs>
+            <marker id="dbg-arr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#5b6774"/></marker>
+          </defs>
+          <rect x="10" y="22" width="190" height="64" rx="8" fill="#ffffff" stroke="#d9dfe6"/>
+          <text x="105" y="48" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1b2430">primary store</text>
+          <text x="105" y="66" text-anchor="middle" font-size="11" fill="#5b6774">primary-clock mtimes</text>
+          <line x1="202" y1="54" x2="250" y2="54" stroke="#5b6774" stroke-width="1.5" marker-end="url(#dbg-arr)"/>
+          <text x="226" y="14" text-anchor="middle" font-size="10.5" fill="#5b6774">pull every 60 s</text>
+          <rect x="254" y="22" width="224" height="64" rx="8" fill="#ffffff" stroke="#d9dfe6"/>
+          <text x="366" y="42" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1b2430">fetcher (render node)</text>
+          <text x="366" y="58" text-anchor="middle" font-size="11" fill="#5b6774">copies when primary mtime is</text>
+          <text x="366" y="72" text-anchor="middle" font-size="11" fill="#5b6774">newer than the cache stamp</text>
+          <line x1="480" y1="54" x2="528" y2="54" stroke="#5b6774" stroke-width="1.5" marker-end="url(#dbg-arr)"/>
+          <text x="504" y="14" text-anchor="middle" font-size="10.5" fill="#5b6774">stamp: local clock</text>
+          <rect x="532" y="22" width="180" height="64" rx="8" fill="#ffffff" stroke="#d9dfe6"/>
+          <text x="622" y="42" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1b2430">render node cache</text>
+          <text x="622" y="58" text-anchor="middle" font-size="11" fill="#cf222e">clock 4 min fast</text>
+          <text x="622" y="72" text-anchor="middle" font-size="11" fill="#5b6774">stamps run ahead</text>
+          <line x1="714" y1="54" x2="762" y2="54" stroke="#5b6774" stroke-width="1.5" marker-end="url(#dbg-arr)"/>
+          <text x="738" y="14" text-anchor="middle" font-size="10.5" fill="#5b6774">serve</text>
+          <rect x="766" y="22" width="154" height="64" rx="8" fill="#ffffff" stroke="#d9dfe6"/>
+          <text x="843" y="48" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1b2430">review wall</text>
+          <text x="843" y="66" text-anchor="middle" font-size="11" fill="#5b6774">cache only</text>
+        </svg>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">3</span> Why did it happen?</h2>
+      <p>The render node's clock ran four minutes fast, so every cache stamp ran four minutes ahead of the primary's timeline. The fetcher's update rule compares a source mtime against that forward stamp, so a re-export made less than about four minutes after the previous sync of the same frame compares as not newer and is skipped. The skip repeats on every later pull, because the comparison and both of its inputs stay unchanged: the frame sticks until an edit's primary mtime passes the stamp. Skews this size are invisible on their own clocks, so nothing surfaced until the wall disagreed with what artists had just saved.</p>
+      <div class="callout">
+        <p><b>Worked example, hand-checkable with four timestamps (frame 041):</b> v1 saved 09:37:10 (primary mtime). Next pull at 09:38:00 copies v1; the render node clock at that instant reads 09:42:00, so the cache copy carries stamp 09:42:00. v2 saved 09:41:00 (primary mtime). Next pull at 09:42:00 compares source mtime 09:41:00 against cache stamp 09:42:00: 09:41:00 &lt; 09:42:00, so "not newer," and v2 is skipped. Every later pull repeats the same comparison against the same stamp, and the stuck window equals the skew at copy time: four minutes here. <span class="src">Sources: ~/workspace/reviewwall/fetch.log, ~/workspace/reviewwall/replay_041.log.</span></p>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">4</span> Evidence and boundaries</h2>
+      <h3>The skip of frame 041 reproduces exactly</h3>
+      <p><span class="tag fact">Fact</span> A replay of the fetcher against copies of the two listings skips v2 and reports the comparison 09:41:00 vs 09:42:00, matching the production log line for frame 041; the headline claim of this page is the confirmed mechanism, and nothing more. <span class="src">Sources: ~/workspace/reviewwall/replay_041.log, ~/workspace/reviewwall/fetch.log.</span></p>
+      <h3>The render node clock runs four minutes ahead</h3>
+      <p><span class="tag fact">Fact</span> Reading both clocks at one moment showed the render node 4 minutes 3 seconds ahead of the primary. <span class="src">Source: ~/workspace/reviewwall/clocks.txt.</span></p>
+      <h3>Why the clock ran fast</h3>
+      <p><span class="tag hyp">Hypothesis</span> The clock drifted because Sunday 18:00's base-image re-image left the clock-sync service disabled. Confidence: moderate; the service currently reads disabled. The check that would decide it compares Sunday's image manifest with the previous one for the clock-sync entry. <span class="src">Source: ~/workspace/reviewwall/services.log.</span></p>
+      <h3>Boundary of the claim</h3>
+      <p><span class="tag fact">Fact</span> Only frames re-exported inside the skew window stick: every frame whose newest primary mtime already passes its cache stamp syncs normally, which is why most of Tuesday's saves appeared on time and only the fresh re-exports looked frozen.</p>
+      <details class="details-layer">
+        <summary>Full fictional chronology</summary>
+        <ul>
+          <li>Sunday 18:00: render node re-imaged; clock-sync service reads disabled afterwards.</li>
+          <li>Sunday 18:00 to Tuesday 09:47: every cache stamp runs about four minutes ahead of the primary timeline.</li>
+          <li>Tuesday 09:41 to 09:47: three fresh re-exports of frame 041 skipped; report filed.</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">5</span> What does it mean for us, and what happens next?</h2>
+      <p>Frames re-exported within about four minutes of their frame's previous sync could not reach the wall between Sunday 18:00 and Tuesday 09:47; a forced re-copy of everything cached in that window clears the backlog. Two decisions are open.</p>
+      <div class="fork">
+        <p class="q"><span class="fn">1</span>Re-enable the clock-sync service now, or after the image audit?</p>
+        <p class="rec"><b>Recommendation:</b> re-enable now. The confirmed mechanism needs true clocks regardless of how the audit resolves the trigger.</p>
+        <p class="trade">Tradeoff: none material; the image audit continues in parallel.</p>
+      </div>
+      <div class="fork">
+        <p class="q"><span class="fn">2</span>Change the fetcher to preserve primary mtimes as cache stamps?</p>
+        <p class="rec"><b>Recommendation:</b> adopt. Stamps in the primary's timeline remove the whole failure class instead of bounding its size.</p>
+        <p class="trade">Tradeoff: the "cached at" reading moves from the stamp into the fetch log.</p>
+      </div>
+    </section>
+
+    <div class="foot"><p>Template example body: every name, path, and timestamp on this page is invented, and no line of it comes from a real session. Replace the header and all five sections with the topic's own content per the GRAMMAR above.</p></div>
+  </main>
+</div>
+</body>
+</html>

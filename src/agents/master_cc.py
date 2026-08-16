@@ -680,6 +680,16 @@ def _build_fresh_translate(cfg: CharlieBotConfig, option: Optional[BackendOption
     return lambda event: [event]
 
 
+async def _kill_run_group_escalating(pid: int, is_alive: Callable[[], bool]) -> None:
+  """SIGTERM the run's process group; escalate to SIGKILL when it outlives the 5 s grace."""
+  kill_process_group(pid, signal.SIGTERM)
+  deadline = time.monotonic() + 5.0
+  while is_alive() and time.monotonic() < deadline:
+    await asyncio.sleep(0.2)
+  if is_alive():
+    kill_process_group(pid, signal.SIGKILL)
+
+
 async def _resume_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], dict]:
   """Re-attach to a recorded live master turn: follow its raw log to the end.
 
@@ -748,15 +758,13 @@ async def _resume_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str]
     # which must never authorize a kill.
     if record.pid is not None:
       host_boot = await asyncio.to_thread(runs.read_host_boot_time)
-      if runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot):
+
+      def record_alive() -> bool:
+        return runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
+
+      if record_alive():
         log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
-        kill_process_group(record.pid, signal.SIGTERM)
-        deadline = time.monotonic() + 5.0
-        while (runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
-               and time.monotonic() < deadline):
-          await asyncio.sleep(0.2)
-        if runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot):
-          kill_process_group(record.pid, signal.SIGKILL)
+        await _kill_run_group_escalating(record.pid, record_alive)
 
   except asyncio.CancelledError:
     log.warning("master_cc_resume_cancelled", session=session_meta.id)
@@ -1092,15 +1100,10 @@ async def cancel_master(
       return runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
 
     if _alive() and record.pid is not None:
-      # Detached turn still running: same SIGTERM -> 5 s -> SIGKILL escalation
-      # shape as the resume hang guard above, judged on the record.
+      # Detached turn still running: the record's own liveness proof authorized
+      # this kill.
       log.info("master_cancel_killing_detached_run", session=session_id, pid=record.pid)
-      kill_process_group(record.pid, signal.SIGTERM)
-      deadline = time.monotonic() + 5.0
-      while _alive() and time.monotonic() < deadline:
-        await asyncio.sleep(0.2)
-      if _alive():
-        kill_process_group(record.pid, signal.SIGKILL)
+      await _kill_run_group_escalating(record.pid, _alive)
       await session_mgr.persist_master_run(session_id, None)
       log.info("master_cancel_succeeded", session=session_id)
       return True

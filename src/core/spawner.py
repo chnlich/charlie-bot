@@ -536,7 +536,7 @@ class _WorkerRunOutcome(NamedTuple):
 
 
 # The quota flag, not the error text, drives the finalize chain's quota branch.
-_QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error="")
+_QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True)
 
 
 async def _stream_worker_events(

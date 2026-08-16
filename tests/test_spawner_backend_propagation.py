@@ -35,6 +35,40 @@ def _build_cfg() -> CharlieBotConfig:
   )
 
 
+def _capturing_worker(captures: dict[str, Any]) -> type:
+  """A spawner.Worker stand-in recording its constructor args into ``captures``.
+
+  The signature mirrors the production call in spawner._construct_worker, and the
+  fixed worker_dir/worker_backend/task_description key set is the shared contract
+  the spawn-driving tests assert on; thread_metadata, events_log_path, worker_cfg,
+  and on_spawned go unrecorded because no backend-propagation test reads them.
+  """
+
+  class CapturingWorker:
+
+    def __init__(
+        self,
+        thread_metadata: ThreadMetadata,
+        working_dir: Path,
+        events_log_path: Path,
+        task_description: str,
+        worker_cfg: CharlieBotConfig,
+        backend_option: Optional[BackendOption] = None,
+        on_spawned: Optional[callable] = None,
+    ) -> None:
+      captures["worker_dir"] = working_dir
+      captures["worker_backend"] = backend_option
+      captures["task_description"] = task_description
+
+    async def run(self) -> int:
+      return 0
+
+    async def terminate(self) -> None:
+      return None
+
+  return CapturingWorker
+
+
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   cfg = _build_cfg()
   opt = spawner.resolve_backend_option(cfg, "claude-opus-4.6", "claude-opus-4-6")
@@ -416,27 +450,6 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     }
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
-    ) -> None:
-      captures["worker_dir"] = working_dir
-      captures["worker_backend"] = backend_option
-
-    async def run(self) -> int:
-      return 0
-
-    async def terminate(self) -> None:
-      return None
-
   async def fake_notify_completion(
       session_id: str,
       description: str,
@@ -452,7 +465,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
 
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
   monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
 
   await spawner.spawn_worker(
@@ -805,22 +818,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       return tmp_path / "events.jsonl"
 
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
-    ) -> None:
-      captures["backend_option"] = backend_option
-      captures["task_description"] = task_description
-
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -833,8 +831,8 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
 
   assert thread.backend == "agy"
   assert thread.model is None
-  assert captures["backend_option"].id == "agy"
-  assert captures["backend_option"].model is None
+  assert captures["worker_backend"].id == "agy"
+  assert captures["worker_backend"].model is None
   assert captures["task_description"] == "Prompt task"
 
 
@@ -865,21 +863,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       return tmp_path / "events.jsonl"
 
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
-    ) -> None:
-      captures["backend_option"] = backend_option
-
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -894,7 +878,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
   assert "--session-id" in (thread.cli_command or "")
   assert thread.claude_session_id in (thread.cli_command or "")
   assert captures["saved_thread"].claude_session_id == thread.claude_session_id
-  assert captures["backend_option"].type == "cc-claude"
+  assert captures["worker_backend"].type == "cc-claude"
 
 
 @pytest.mark.asyncio
@@ -928,22 +912,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       return tmp_path / "events.jsonl"
 
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
-    ) -> None:
-      captures["worker_dir"] = working_dir
-      captures["task_description"] = task_description
-
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -1066,27 +1035,6 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
-    ) -> None:
-      captures["worker_dir"] = working_dir
-      captures["worker_backend"] = backend_option
-
-    async def run(self) -> int:
-      return 0
-
-    async def terminate(self) -> None:
-      return None
-
   async def fake_notify_completion(
       session_id: str,
       description: str,
@@ -1105,7 +1053,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
     captures["notify_branch_name"] = thread_meta.branch_name
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
   monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
 
   await spawner.spawn_worker(

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from conftest import JudgmentShim
@@ -44,7 +44,7 @@ class FakeThreadManager(JudgmentShim):
     self.thread = thread
     self.events_path = events_path
     self.saved: list[ThreadMetadata] = []
-    self.status_updates: list[tuple[ThreadStatus, Optional[int]]] = []
+    self.status_updates: list[tuple[ThreadStatus, int | None]] = []
 
   async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
     assert session_id == self.thread.session_id
@@ -64,8 +64,8 @@ class FakeThreadManager(JudgmentShim):
       session_id: str,
       thread_id: str,
       status: ThreadStatus,
-      pid: Optional[int] = None,
-      exit_code: Optional[int] = None,
+      pid: int | None = None,
+      exit_code: int | None = None,
       completed_at: Any = None,
   ) -> None:
     del pid

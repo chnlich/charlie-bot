@@ -382,27 +382,6 @@ async def select_verify_backend(
   return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)
 
 
-async def _select_verify_quota_retry_backend(
-    session_id: str,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread: ThreadMetadata,
-) -> tuple[str, str | None, list[str]] | None:
-  """Select the next untried checking-role backend after verifier quota exhaustion."""
-  current_backend, _ = require_thread_backend_model(thread, cfg)
-  tried_backends = list(thread.tried_backends)
-  retry = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
-  if retry is None or retry[0] == current_backend:
-    log.warning(
-        "verify_quota_retry_backend_unavailable",
-        thread_id=thread.id,
-        current_backend=current_backend,
-        tried=tried_backends,
-    )
-    return None
-  return retry
-
-
 def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) -> tuple[str, str | None]:
   """Return backend+model from thread metadata or raise."""
   if not thread.backend:
@@ -929,13 +908,22 @@ async def _rerun_verify_on_fresh_backend(
 ) -> tuple[int, bool, str]:
   """Re-run an exhausted VERIFY task once on the next untried checking-role backend.
 
-  Returns the retry's (exit_code, quota_exhausted, error_message). When no retry
-  backend is available, the original exhaustion state (-1, True, "") is returned
-  unchanged. A ``_create_repoless_process`` failure propagates: the caller has
-  already cleared ``quota_exhausted``, so it lands as a generic setup error.
+  Returns the retry's (exit_code, quota_exhausted, error_message). When no untried
+  checking-role backend remains (selection empty, or looped back to the exhausted
+  backend), the original exhaustion state (-1, True, "") is returned unchanged. A
+  ``_create_repoless_process`` failure propagates: the caller has already cleared
+  ``quota_exhausted``, so it lands as a generic setup error.
   """
-  retry_backend = await _select_verify_quota_retry_backend(session_id, cfg, session_mgr, thread)
-  if retry_backend is None:
+  current_backend, _ = require_thread_backend_model(thread, cfg)
+  tried_backends = list(thread.tried_backends)
+  retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
+  if retry_backend is None or retry_backend[0] == current_backend:
+    log.warning(
+        "verify_quota_retry_backend_unavailable",
+        thread_id=thread.id,
+        current_backend=current_backend,
+        tried=tried_backends,
+    )
     return -1, True, ""
   resolved_backend, resolved_model, tried_backends = retry_backend
   log.warning(

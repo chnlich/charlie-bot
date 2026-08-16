@@ -179,7 +179,21 @@ def test_helper_is_wired_into_spawn_worker_after_stream_events() -> None:
   assert finalize_idx != -1, "spawn_worker must call _finalize_worker_safely"
   assert stream_idx < override_idx < finalize_idx, (
       "override must run after _stream_worker_events and before _finalize_worker_safely")
-  # The override is gated on exit_code != 0 and not quota_exhausted and not error.
-  assert "outcome.exit_code != 0" in source
-  assert "not outcome.quota_exhausted" in source
+  # The override is gated on a failed outcome (exit_code != 0 and not quota_exhausted) with
+  # no recorded error.
+  assert "outcome.failed" in source
   assert "not outcome.error" in source
+
+
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [
+        (spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""), False),
+        (spawner._WorkerRunOutcome(exit_code=143, quota_exhausted=False, error=""), True),
+        (spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="setup boom"), True),
+        (spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""), False),
+    ],
+    ids=["clean-exit", "nonzero-exit", "setup-error", "quota-exhausted"],
+)
+def test_run_outcome_failed_excludes_clean_exits_and_quota(outcome: spawner._WorkerRunOutcome, expected: bool) -> None:
+  assert outcome.failed is expected

@@ -73,6 +73,14 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
 
 _REQUIRED_VERIFY_PROMPT_SECTIONS = ("preamble", "scope")
 
+# Every workflow section draws from the same token map (intro + branch tokens);
+# an absent key fails loud below rather than selecting a wrong workflow body.
+_WORKFLOW_PROMPT_SECTION = {
+    TaskType.IMPLEMENT: "workflow_implement",
+    TaskType.QUICK_EDIT: "workflow_quick_edit",
+    TaskType.SCRIPT_RUN: "workflow_script_run",
+}
+
 
 def _parse_prompt_sections(text: str) -> dict[str, str]:
   """Split a prompt template's raw text on its `<!-- section: <id> -->` marker lines."""
@@ -173,14 +181,10 @@ def _build_worker_prompt(
       "{{repo_path}}": str(repo_path),
   }
 
-  if task_type == TaskType.IMPLEMENT:
-    workflow_body = _substitute_tokens(sections["workflow_implement"], {"{{intro_line}}": intro_line, **branch_tokens})
-  elif task_type == TaskType.QUICK_EDIT:
-    workflow_body = _substitute_tokens(sections["workflow_quick_edit"], {"{{intro_line}}": intro_line, **branch_tokens})
-  elif task_type == TaskType.SCRIPT_RUN:
-    workflow_body = _substitute_tokens(sections["workflow_script_run"], branch_tokens)
-  else:
+  workflow_section_id = _WORKFLOW_PROMPT_SECTION.get(task_type)
+  if workflow_section_id is None:
     raise ValueError(f"unsupported task_type: {task_type!r}")
+  workflow_body = _substitute_tokens(sections[workflow_section_id], {"{{intro_line}}": intro_line, **branch_tokens})
 
   task_section = sections["task"].replace("{{description}}", description)
 

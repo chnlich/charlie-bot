@@ -59,7 +59,7 @@ _SLACK_REPLY_NOTICE = (
     "回帖约定（Slack）：你在本轮的最后一条 assistant 消息会原样作为纯文本回帖到这个线程，召唤者只读这一条。写成给人看的完整答复：先给结论，自含必要细节，不复述工作过程；不用 markdown 表格；链接写完整 URL。"
 )
 
-_ACCEPTANCE_REPLY = "已收到，正在处理…"
+_ACCEPTANCE_REACTION = "eyes"
 
 _LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
@@ -84,7 +84,7 @@ def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
 
 
 class SlackClient:
-  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink."""
+  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / add_reaction."""
 
   def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
     self._http = http
@@ -112,6 +112,17 @@ class SlackClient:
     payload = resp.json()
     if not payload.get("ok"):
       raise RuntimeError(f"chat.postMessage failed: {payload}")
+    return payload
+
+  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
+    """Add one emoji reaction to a message; returns the API payload."""
+    body: dict[str, Any] = {"channel": channel, "name": name, "timestamp": ts}
+    resp = await self._http.post(
+        "https://slack.com/api/reactions.add", headers=self._bot_headers, json=body)
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload.get("ok"):
+      raise RuntimeError(f"reactions.add failed: {payload}")
     return payload
 
   async def get_permalink(self, channel: str, ts: str) -> str:
@@ -176,8 +187,6 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
     logger.info("slack_mention_session_existing", channel=channel_id, thread_ts=thread_ts,
                 slack_user=slack_user, session=sid)
 
-  await client.post_message(channel_id, _ACCEPTANCE_REPLY, thread_ts=thread_ts)
-
   permalink = await client.get_permalink(channel_id, event["ts"])
   content = _build_summon_prompt(permalink)
 
@@ -195,6 +204,9 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
   create_logged_task(
       trigger_master(sid, content, cfg, session_mgr, user_event_id=round_event_id),
       name=f"slack-round-{sid}")
+  create_logged_task(
+      client.add_reaction(channel_id, _ACCEPTANCE_REACTION, event["ts"]),
+      name=f"slack-ack-{sid}")
   return sid
 
 

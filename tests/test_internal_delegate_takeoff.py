@@ -11,7 +11,14 @@ from fastapi import HTTPException
 from src.api import internal
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, DelegateRequest, SessionMetadata, SpawnRequest, TaskType, ThreadMetadata
+from src.core.models import (
+  BackendOption,
+  DelegateRequest,
+  SessionMetadata,
+  SpawnRequest,
+  TaskType,
+  ThreadMetadata,
+)
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
 

@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 
 from src.agents.backends.claude_code import (
-    CLAUDE_COMPACT_CONTEXT_RESERVE,
-    CLAUDE_COMPACT_OUTPUT_RESERVE,
-    HEADLESS_CLAUDE_DEFAULT_ENV,
-    headless_claude_declared_window,
+  CLAUDE_COMPACT_CONTEXT_RESERVE,
+  CLAUDE_COMPACT_OUTPUT_RESERVE,
+  HEADLESS_CLAUDE_DEFAULT_ENV,
+  headless_claude_declared_window,
 )
-from src.core.config import CharlieBotConfig
 from src.core.codex_usage import _extract_codex_rollout_usage_event
+from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
 

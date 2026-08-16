@@ -8,7 +8,12 @@ import pytest
 
 from src.api import sessions as sessions_api
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, PendingTrigger, SessionStatus, TriggerStatus
+from src.core.models import (
+  CreateSessionRequest,
+  PendingTrigger,
+  SessionStatus,
+  TriggerStatus,
+)
 from src.core.sessions import SessionManager
 
 

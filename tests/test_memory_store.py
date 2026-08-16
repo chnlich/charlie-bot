@@ -13,7 +13,14 @@ from types import SimpleNamespace
 import pytest
 
 from src.core import memory
-from src.core.memory import MemoryFormatError, assemble_master, assemble_worker, lint, load_store, parse_entry
+from src.core.memory import (
+  MemoryFormatError,
+  assemble_master,
+  assemble_worker,
+  lint,
+  load_store,
+  parse_entry,
+)
 
 _DEFAULT_TOPICS = [
     "profile resident",
@@ -28,7 +35,7 @@ _DEFAULT_TOPICS = [
 def _write_topics(memory_dir: Path, lines: list[str] | None = None) -> None:
   memory_dir.mkdir(parents=True, exist_ok=True)
   (memory_dir / "entries").mkdir(exist_ok=True)
-  (memory_dir / "topics").write_text("".join(l + "\n" for l in (lines or _DEFAULT_TOPICS)), encoding="utf-8")
+  (memory_dir / "topics").write_text("".join(line + "\n" for line in (lines or _DEFAULT_TOPICS)), encoding="utf-8")
 
 
 def _entry_text(

@@ -4,11 +4,8 @@ import sys
 
 import pytest
 
-from src.cli import delegate
-from src.cli import improve
+from src.cli import delegate, improve, remote_launch, schedule_trigger
 from src.cli import main as cli_main
-from src.cli import remote_launch
-from src.cli import schedule_trigger
 
 
 @pytest.mark.parametrize(

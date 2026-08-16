@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import io
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from fastapi import UploadFile
 
 from src.api.chat import send_message, upload_file

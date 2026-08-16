@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -336,7 +335,7 @@ async def test_plan_updated_broadcast_on_present_and_absent_from_chat_events(tmp
 @pytest.mark.asyncio
 async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.api import internal
-  from src.core.models import DelegateRequest, SpawnRequest, TaskType
+  from src.core.models import DelegateRequest
 
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)

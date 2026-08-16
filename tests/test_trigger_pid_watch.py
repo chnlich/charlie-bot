@@ -6,14 +6,18 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, LocalPid, PendingTrigger, TriggerStatus
+from src.core.models import (
+  CreateSessionRequest,
+  LocalPid,
+  PendingTrigger,
+  TriggerStatus,
+)
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager, _format_suffix
 

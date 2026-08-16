@@ -133,20 +133,6 @@ def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   return result
 
 
-def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> str:
-  """Build the full prompt for a repo-less VERIFY task (preamble + scope contract + task)."""
-  sections = _load_prompt_sections(
-      cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
-  contract = _substitute_tokens(
-      "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
-          "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
-          "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
-      })
-  if "{{" in contract:
-    raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
-  return f"{contract}\n\n{description}"
-
-
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
@@ -517,7 +503,16 @@ async def _create_repoless_process(
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
   if request.task_type == TaskType.VERIFY:
-    worker_prompt = _build_verify_repoless_prompt(description, cfg)
+    sections = _load_prompt_sections(
+        cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
+    contract = _substitute_tokens(
+        "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
+            "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
+            "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
+        })
+    if "{{" in contract:
+      raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
+    worker_prompt = f"{contract}\n\n{description}"
   elif request.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
     worker_prompt = request.prompt_override or description
   else:

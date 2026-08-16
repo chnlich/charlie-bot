@@ -7,18 +7,20 @@ via ``trigger_master`` (without awaiting it).
 Delivery path: ``deliver_done`` hangs off the round's terminal ``master_done``
 event (called from ``SessionManager.persist_and_broadcast``), not off a waiting
 coroutine — that is what makes delivery survive a server restart, since a
-re-attached round still emits its done through the same funnel.
+re-attached round still emits its done through the same funnel. The reply is
+the round's final composed assistant message, posted in full: an answer
+longer than one post's budget is split into ordered paragraph-bounded
+replies, never truncated and never sent as a link.
 ``backfill_lost_summons`` closes the remaining hole at boot: a summon that was
 still queued when the process died is answered by nothing, so it gets a notice
 rather than vanishing.
 """
 
 import asyncio
-import html
 import json
+import re
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -49,16 +51,22 @@ CITATION_BOUNDARY = (
     "引用边界：只引用这条频道／线程本身、公开仓库、公开频道；现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。"
 )
 
+# Fixed reply-format notice appended right after the citation boundary on every
+# Slack-sourced prompt: the master composes many assistant messages in a round
+# and must know its LAST one is posted verbatim as the thread reply — the only
+# message the summoner reads — so it writes that one as the finished answer.
+_SLACK_REPLY_NOTICE = (
+    "回帖约定（Slack）：你在本轮的最后一条 assistant 消息会原样作为纯文本回帖到这个线程，召唤者只读这一条。写成给人看的完整答复：先给结论，自含必要细节，不复述工作过程；不用 markdown 表格；链接写完整 URL。"
+)
+
 _ACCEPTANCE_REPLY = "已收到，正在处理…"
 
 _LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
-# Answers longer than this go to an artifact file and are posted as a link:
-# a Slack message that long is unreadable and gets truncated by the client.
+# Chunk size for over-length answers, which are split into ordered replies of
+# at most this many chars. 3500 stays far under Slack's ~40k per-message hard
+# limit and keeps each reply readable instead of a client-collapsed wall.
 _MAX_POST_CHARS = 3500
-
-# How much of an over-length answer precedes its artifact link.
-_LINK_HEAD_CHARS = 400
 
 # Waits between the retries of one Slack call; the answer stays readable in the
 # session log either way, so exhausting them logs an error rather than raising.
@@ -121,7 +129,7 @@ class SlackClient:
 
 
 def _build_summon_prompt(permalink: str) -> str:
-  """The persisted summon: the thread link plus a self-fetch hint, ending at the citation boundary.
+  """The persisted summon: the thread link plus a self-fetch hint, ending at the fixed notices.
 
   Only the permalink is stored because the master reads the thread itself via
   its slack skill when the round runs — a snapshot persisted here would go
@@ -129,7 +137,7 @@ def _build_summon_prompt(permalink: str) -> str:
   """
   return (f"Slack 线程召唤：{permalink}\n\n"
           "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
-          f"{CITATION_BOUNDARY}")
+          f"{CITATION_BOUNDARY}\n{_SLACK_REPLY_NOTICE}")
 
 
 def _local_time() -> str:
@@ -248,57 +256,64 @@ def _already_answered(events: list[dict], done_idx: int, input_event_id: str) ->
 
 
 def _round_text(events: list[dict], done_idx: int) -> str:
-  """Assistant text between the previous master_done (exclusive) and the one at *done_idx*.
+  """The window's last assistant message carrying content: the round's composed reply.
 
-  Slicing from the summon instead would sweep in a previous round's answer when
-  the summon queued behind another round.
+  Middle assistant messages are work narration ("let me look at…"); the reply
+  to the summoner is composed in the last one, per the reply-format notice in
+  the summon prompt, so only that one is posted. Empty or whitespace-only
+  messages don't qualify. The window still starts after the previous
+  master_done: slicing from the summon instead would sweep in a previous
+  round's answer when the summon queued behind another round.
   """
   start = 0
   for idx in range(done_idx - 1, -1, -1):
     if events[idx].get("type") == ET.MASTER_DONE:
       start = idx + 1
       break
-  return "".join(
-      extract_text_from_message(ev.get("message")) for ev in events[start:done_idx]
-      if ev.get("type") == ET.ASSISTANT)
+  for idx in range(done_idx - 1, start - 1, -1):
+    if events[idx].get("type") != ET.ASSISTANT:
+      continue
+    text = extract_text_from_message(events[idx].get("message"))
+    if text.strip():
+      return text
+  return ""
 
 
-def _artifact_html(text: str, session_id: str) -> str:
-  """A minimal standalone page carrying one over-length answer."""
-  return ("<!DOCTYPE html>\n"
-          "<html>\n"
-          "<head><meta charset=\"utf-8\">"
-          f"<title>CharlieBot reply · {html.escape(session_id)}</title></head>\n"
-          "<body style=\"font-family: system-ui, sans-serif; margin: 2em; max-width: 48em;\">\n"
-          f"<pre style=\"white-space: pre-wrap; word-wrap: break-word;\">{html.escape(text)}</pre>\n"
-          "</body>\n"
-          "</html>\n")
+def _chunk_text(text: str, limit: int = _MAX_POST_CHARS) -> list[str]:
+  """Split *text* into chunks of at most *limit* chars for sequential posting.
 
-
-def _write_artifact(cfg: CharlieBotConfig, session_id: str, thread_ts: str, text: str) -> Path:
-  """Write the over-length answer as a standalone page and return its absolute path."""
-  path = cfg.sessions_dir / session_id / "artifacts" / f"slack_reply_{thread_ts}.html"
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(_artifact_html(text, session_id), encoding="utf-8")
-  return path.resolve()
-
-
-async def _link_post(cfg: CharlieBotConfig, session_id: str, thread_ts: str, text: str) -> str:
-  """The post body for an over-length answer: a short head plus the artifact link.
-
-  Without ``public_base_url`` no link can be built for a Slack reader
-  (``server_base_url`` is localhost), so the path stops with a notice naming the
-  missing setting rather than silently degrading — and writes no artifact whose
-  link nobody could follow.
+  Greedy packing over paragraph units (a paragraph plus its trailing
+  blank-line separator); a unit longer than *limit* falls to newline units,
+  and a single line longer than *limit* is hard-cut. Chunks keep the input
+  order and concatenate back to the input byte-for-byte — a boundary never
+  eats content.
   """
-  if not cfg.public_base_url:
-    logger.error("slack_delivery_link_unbuildable", session=session_id, thread_ts=thread_ts,
-                 chars=len(text), missing="public_base_url")
-    return (f"回复过长（{len(text)} 字符），无法直接发到 Slack；"
-            "本机未配置 public_base_url，链接生成不了，请到会话里查看完整回复。")
-  path = await asyncio.to_thread(_write_artifact, cfg, session_id, thread_ts, text)
-  url = f"{cfg.public_base_url.rstrip('/')}/absolute_filepath/{str(path).lstrip('/')}"
-  return f"{text[:_LINK_HEAD_CHARS].rstrip()}…\n\n完整回复：{url}"
+  if len(text) <= limit:
+    return [text]
+  pieces: list[str] = []
+  paragraphs = re.split(r"(\n{2,})", text)  # alternates paragraph / separator
+  for i in range(0, len(paragraphs), 2):
+    unit = paragraphs[i] + (paragraphs[i + 1] if i + 1 < len(paragraphs) else "")
+    if len(unit) <= limit:
+      pieces.append(unit)
+      continue
+    for line in re.split(r"(?<=\n)", unit):  # a line plus its trailing newline
+      if len(line) <= limit:
+        pieces.append(line)
+      else:
+        pieces.extend(line[j:j + limit] for j in range(0, len(line), limit))
+  chunks: list[str] = []
+  current = ""
+  for piece in pieces:
+    if piece and len(current) + len(piece) > limit:
+      chunks.append(current)
+      current = ""
+    current += piece
+  if current:
+    chunks.append(current)
+  # A whitespace-only chunk (possible only from leading input whitespace) is
+  # dropped: Slack rejects text-less posts, and no content is lost by it.
+  return [c for c in chunks if c.strip()] or chunks
 
 
 async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
@@ -307,8 +322,9 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
 
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every
   ``master_done``; returns False without posting unless the round belongs to a
-  Slack injection that no earlier done already answered. Returns True when a
-  message reached Slack.
+  Slack injection that no earlier done already answered. The answer goes out
+  in full — split into ordered thread replies when it exceeds one post's
+  budget. Returns True when every reply of the round reached Slack.
   """
   meta = await session_mgr.get_session(session_id)
   if meta is None or meta.slack_origin is None:
@@ -334,17 +350,22 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
 
   thread_ts = target["thread_ts"]
   text = _round_text(events, done_idx)
-  if not text:
-    body = f"这一轮没有产生任何回复内容（exit_code={done.get('exit_code')}），请到会话里查看详情。"
-  elif len(text) > _MAX_POST_CHARS:
-    body = await _link_post(cfg, session_id, thread_ts, text)
+  if text:
+    bodies = _chunk_text(text)
   else:
-    body = text
+    bodies = [f"这一轮没有产生任何回复内容（exit_code={done.get('exit_code')}），请到会话里查看详情。"]
 
-  posted = await _post_with_retry(
-      _bot_client(cfg), target["channel_id"], thread_ts, body, session_id=session_id)
+  # A chunk that exhausts its retries is already logged by _post_with_retry;
+  # keep posting the rest: the full text lives in the session log regardless,
+  # and partial delivery beats none.
+  posted = True
+  client = _bot_client(cfg)
+  for body in bodies:
+    ok = await _post_with_retry(client, target["channel_id"], thread_ts, body, session_id=session_id)
+    posted = posted and ok
   logger.info("slack_delivery_done", session=session_id, channel=target["channel_id"],
-              thread_ts=thread_ts, input_event_id=input_event_id, chars=len(text), posted=posted)
+              thread_ts=thread_ts, input_event_id=input_event_id, chars=len(text),
+              chunks=len(bodies), posted=posted)
   return posted
 
 

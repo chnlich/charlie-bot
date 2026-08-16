@@ -14,7 +14,9 @@ from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
+  _SLACK_REPLY_NOTICE,
   CITATION_BOUNDARY,
+  _build_summon_prompt,
   handle_app_mention,
   summon_session_id,
 )
@@ -140,11 +142,19 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
       "mention_ts": _TS,
   }
   assert expected_url in agent_messages[0]["content"]
-  assert agent_messages[0]["content"].endswith(CITATION_BOUNDARY)
+  assert agent_messages[0]["content"].endswith(f"{CITATION_BOUNDARY}\n{_SLACK_REPLY_NOTICE}")
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
   assert expected_url in trigger.await_args.args[1]
+
+
+def test_build_summon_prompt_appends_the_reply_notice_after_the_citation_boundary() -> None:
+  """Every Slack prompt ends with the citation boundary followed by the reply notice."""
+  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100")
+  assert _SLACK_REPLY_NOTICE in prompt
+  assert prompt.index(_SLACK_REPLY_NOTICE) > prompt.index(CITATION_BOUNDARY)
+  assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_SLACK_REPLY_NOTICE}")
 
 
 @pytest.mark.asyncio

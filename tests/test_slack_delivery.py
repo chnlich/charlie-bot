@@ -13,7 +13,12 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, MasterRunRecord, SlackOrigin, utc_now
 from src.core.sessions import SessionManager
-from src.core.slack_listener import backfill_lost_summons, deliver_done
+from src.core.slack_listener import (
+  _MAX_POST_CHARS,
+  _chunk_text,
+  backfill_lost_summons,
+  deliver_done,
+)
 
 _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
@@ -31,10 +36,9 @@ class _FakeSlackClient:
     return {"ok": True}
 
 
-def _cfg(tmp_path: Path, public_base_url: Optional[str] = None) -> CharlieBotConfig:
+def _cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      public_base_url=public_base_url,
       slack_bot_token="test-bot-token",
       slack_app_token="test-app-token",
       slack_allowed_user_ids=["U_ALLOWED"],
@@ -206,13 +210,15 @@ async def test_round_without_assistant_text_posts_the_failure_notice(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_over_length_answer_posts_a_link_to_a_written_artifact(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path, public_base_url="https://bot.example.com/")
+async def test_over_length_answer_posts_ordered_chunks_without_any_link(tmp_path: Path) -> None:
+  """A 4000-char answer with a blank line splits there into ordered replies under the cap."""
+  cfg = _cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
 
-  long_text = "x" * 4000
+  long_text = "a" * 2499 + "\n\n" + "b" * 1499
+  assert len(long_text) == 4000
   summon = await _append(session_mgr, sid, _summon())
   await _append(session_mgr, sid, _assistant(long_text))
   done = await _append(session_mgr, sid, _done(summon["id"]))
@@ -220,38 +226,91 @@ async def test_over_length_answer_posts_a_link_to_a_written_artifact(tmp_path: P
   with patch("src.core.slack_listener._bot_client", return_value=client):
     assert await deliver_done(sid, done, cfg, session_mgr) is True
 
-  artifact = cfg.sessions_dir / sid / "artifacts" / f"slack_reply_{_THREAD}.html"
-  assert artifact.exists()
-  page = artifact.read_text(encoding="utf-8")
-  assert page.startswith("<!DOCTYPE html>")
-  assert long_text in page
-
-  assert len(client.posts) == 1
-  text = client.posts[0]["text"]
-  assert len(text) < len(long_text)
-  assert f"https://bot.example.com/absolute_filepath{artifact.resolve()}" in text
+  texts = [p["text"] for p in client.posts]
+  assert len(texts) > 1
+  assert all(len(t) <= _MAX_POST_CHARS for t in texts)
+  assert "".join(texts) == long_text
+  assert all(p["channel"] == _CHANNEL and p["thread_ts"] == _THREAD for p in client.posts)
+  assert not (cfg.sessions_dir / sid / "artifacts").exists()
+  for t in texts:
+    assert "http://" not in t and "https://" not in t and "absolute_filepath" not in t
 
 
 @pytest.mark.asyncio
-async def test_over_length_answer_without_public_base_url_posts_the_missing_setting(
-    tmp_path: Path) -> None:
+async def test_round_posts_only_the_final_composed_assistant_message(tmp_path: Path) -> None:
+  """Middle assistant messages are work narration; only the last one is the reply."""
   cfg = _cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("y" * 4000))
+  await _append(session_mgr, sid, _assistant("narration A"))
+  await _append(session_mgr, sid, _assistant("## 完成\nthe reply"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   with patch("src.core.slack_listener._bot_client", return_value=client):
     assert await deliver_done(sid, done, cfg, session_mgr) is True
 
-  assert len(client.posts) == 1
-  text = client.posts[0]["text"]
-  assert "public_base_url" in text
-  assert "absolute_filepath" not in text
-  assert not (cfg.sessions_dir / sid / "artifacts").exists()
+  assert client.posts == [{"channel": _CHANNEL, "text": "## 完成\nthe reply", "thread_ts": _THREAD}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trailing", ["", "  \n "])
+async def test_trailing_empty_assistant_message_defers_to_the_last_non_empty(
+    tmp_path: Path, trailing: str) -> None:
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant("real reply"))
+  await _append(session_mgr, sid, _assistant(trailing))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with patch("src.core.slack_listener._bot_client", return_value=client):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+
+  assert [p["text"] for p in client.posts] == ["real reply"]
+
+
+# ---------------------------------------------------------------------------
+# _chunk_text
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_text_below_the_limit_is_one_chunk() -> None:
+  assert _chunk_text("x" * 3000) == ["x" * 3000]
+
+
+def test_chunk_text_exact_limit_boundaries() -> None:
+  """A text at the cap stays whole; a unit at the cap stays packed, then splits."""
+  assert _chunk_text("y" * 3500) == ["y" * 3500]
+  assert _chunk_text("aa\n\nbb", limit=4) == ["aa\n\n", "bb"]
+
+
+def test_chunk_text_splits_between_paragraphs() -> None:
+  text = "a" * 2499 + "\n\n" + "b" * 1499
+  chunks = _chunk_text(text)
+  assert chunks == ["a" * 2499 + "\n\n", "b" * 1499]
+
+
+def test_chunk_text_paragraph_over_the_limit_falls_to_newline_splits() -> None:
+  text = "x" * 2000 + "\n" + "y" * 2000  # one paragraph, no blank line
+  assert _chunk_text(text) == ["x" * 2000 + "\n", "y" * 2000]
+
+
+def test_chunk_text_single_line_over_the_limit_hard_cuts() -> None:
+  assert _chunk_text("z" * 4000) == ["z" * 3500, "z" * 500]
+
+
+def test_chunk_text_preserves_the_content_losslessly_and_in_order() -> None:
+  text = "\n\n".join(f"para {i} " + "content " * 100 for i in range(6))
+  chunks = _chunk_text(text)
+  assert len(chunks) > 1
+  assert all(len(c) <= _MAX_POST_CHARS for c in chunks)
+  assert "".join(chunks) == text
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,9 @@ replies, never truncated and never sent as a link.
 ``backfill_lost_summons`` closes the remaining hole at boot: a summon that was
 still queued when the process died is answered by nothing, so it gets a notice
 rather than vanishing.
+The eyes ack reaction tracks the round in flight: lit at the summon, cleared
+once the round's delivery attempt (normal or backfill) ends, whatever the post
+outcome.
 """
 
 import asyncio
@@ -84,7 +87,7 @@ def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
 
 
 class SlackClient:
-  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / add_reaction."""
+  """Thin Slack Web API wrapper: connections, posts, permalinks, reactions add/remove."""
 
   def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
     self._http = http
@@ -123,6 +126,21 @@ class SlackClient:
     payload = resp.json()
     if not payload.get("ok"):
       raise RuntimeError(f"reactions.add failed: {payload}")
+    return payload
+
+  async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
+    """Remove one emoji reaction from a message; returns the API payload.
+
+    A ``no_reaction`` error already is the end state, so the clear is
+    idempotent; any other ok=false payload raises.
+    """
+    body: dict[str, Any] = {"channel": channel, "name": name, "timestamp": ts}
+    resp = await self._http.post(
+        "https://slack.com/api/reactions.remove", headers=self._bot_headers, json=body)
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload.get("ok") and payload.get("error") != "no_reaction":
+      raise RuntimeError(f"reactions.remove failed: {payload}")
     return payload
 
   async def get_permalink(self, channel: str, ts: str) -> str:
@@ -241,6 +259,21 @@ async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, te
       logger.warning("slack_post_retry", session=session_id, channel=channel, thread_ts=thread_ts,
                      attempt=attempt + 1, error=str(e))
       await asyncio.sleep(_RETRY_DELAYS[attempt])
+
+
+def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
+  """Clear the summon eye once its round's delivery attempt has ended.
+
+  Fires the remove as its own logged task — a failure there only leaves one
+  stale eye plus a background_task_failed log and never touches the delivery
+  result. Skipped when the persisted slack block carries no mention_ts.
+  """
+  mention_ts = slack_block.get("mention_ts")
+  if mention_ts is None:
+    return
+  create_logged_task(
+      client.remove_reaction(slack_block["channel_id"], _ACCEPTANCE_REACTION, mention_ts),
+      name=f"slack-ack-clear-{session_id}")
 
 
 def _slack_target(events: list[dict], input_event_id: str) -> Optional[dict]:
@@ -378,6 +411,8 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
   logger.info("slack_delivery_done", session=session_id, channel=target["channel_id"],
               thread_ts=thread_ts, input_event_id=input_event_id, chars=len(text),
               chunks=len(bodies), posted=posted)
+  # The delivery attempt ended: the eye goes out whether or not it posted.
+  _ack_clear(client, target, session_id)
   return posted
 
 
@@ -435,6 +470,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
       slack = ev["slack"]
       await _post_with_retry(
           client, slack["channel_id"], slack["thread_ts"], _LOST_SUMMON_NOTICE, session_id=meta.id)
+      _ack_clear(client, slack, meta.id)
       reported += 1
       logger.info("slack_backfill_lost_summon", session=meta.id, channel=slack["channel_id"],
                   thread_ts=slack["thread_ts"], input_event_id=ev["id"])

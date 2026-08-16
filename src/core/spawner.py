@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -569,17 +570,26 @@ async def _create_repoless_process(
   return await _construct_worker(session_id, thread, description, thread_dir, worker_prompt, cfg, thread_mgr, request)
 
 
+class _WorkerRunOutcome(NamedTuple):
+  """A worker run's terminal disposition: process exit code, quota-exhaustion flag, setup error."""
+
+  exit_code: int
+  quota_exhausted: bool
+  error: str
+
+
+# The quota flag, not the error text, drives the finalize chain's quota branch.
+_QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error="")
+
+
 async def _stream_worker_events(
     worker: Worker,
     session_id: str,
     thread: ThreadMetadata,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
-) -> tuple[int, bool, str]:
-  """Mark worker running, broadcast start event, run worker.
-
-  Returns (exit_code, quota_exhausted, error_message).
-  """
+) -> _WorkerRunOutcome:
+  """Mark worker running, broadcast start event, run worker, and report its outcome."""
   thread.status = ThreadStatus.RUNNING
   thread.started_at = datetime.now(timezone.utc)
   await thread_mgr.save_metadata(thread)
@@ -588,16 +598,15 @@ async def _stream_worker_events(
   await session_mgr.persist_and_broadcast(session_id, _thread_worker_event(thread, 'running'))
 
   try:
-    exit_code = await worker.run()
-    return exit_code, False, ""
+    return _WorkerRunOutcome(exit_code=await worker.run(), quota_exhausted=False, error="")
   except QuotaExhaustedException:
     await worker.terminate()
     log.warning("worker_quota_exhausted", thread_id=thread.id)
-    return -1, True, ""
+    return _QUOTA_EXHAUSTED_OUTCOME
   except Exception as e:
     await worker.terminate()
     log.error("worker_failed", thread_id=thread.id, error=str(e), traceback=traceback.format_exc())
-    return -1, False, str(e)
+    return _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
 
 
 async def _read_thread_events(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> list[dict]:
@@ -905,14 +914,13 @@ async def _rerun_verify_on_fresh_backend(
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
     request: SpawnRequest,
-) -> tuple[int, bool, str]:
+) -> _WorkerRunOutcome:
   """Re-run an exhausted VERIFY task once on the next untried checking-role backend.
 
-  Returns the retry's (exit_code, quota_exhausted, error_message). When no untried
-  checking-role backend remains (selection empty, or looped back to the exhausted
-  backend), the original exhaustion state (-1, True, "") is returned unchanged. A
-  ``_create_repoless_process`` failure propagates: the caller has already cleared
-  ``quota_exhausted``, so it lands as a generic setup error.
+  When no untried checking-role backend remains (selection empty, or looped back
+  to the exhausted backend), the original exhaustion outcome is returned
+  unchanged. A ``_create_repoless_process`` failure propagates: the caller has
+  already cleared ``quota_exhausted``, so it lands as a generic setup error.
   """
   current_backend, _ = require_thread_backend_model(thread, cfg)
   tried_backends = list(thread.tried_backends)
@@ -924,7 +932,7 @@ async def _rerun_verify_on_fresh_backend(
         current_backend=current_backend,
         tried=tried_backends,
     )
-    return -1, True, ""
+    return _QUOTA_EXHAUSTED_OUTCOME
   resolved_backend, resolved_model, tried_backends = retry_backend
   log.warning(
       "verify_quota_retry",

@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Optional
 
@@ -67,6 +68,31 @@ def _capturing_worker(captures: dict[str, Any]) -> type:
       return None
 
   return CapturingWorker
+
+
+def _recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
+  """A spawner._notify_completion stand-in recording the finalized outcome and thread.
+
+  The signature mirrors the production call in spawner._run_finalize_effects; each
+  monkeypatching test reads back only the captured fields it asserts on.
+  """
+
+  async def fake_notify_completion(
+      session_id: str,
+      description: str,
+      thread_meta: ThreadMetadata,
+      outcome: spawner._WorkerRunOutcome,
+      thread_mgr: Any,
+      session_mgr: Any,
+      _notify_cfg: CharlieBotConfig,
+      task_type: TaskType = TaskType.IMPLEMENT,
+      verify_report: str | None = None,
+  ) -> None:
+    captures["notified"] = True
+    captures["notify_exit_code"] = outcome.exit_code
+    captures["notify_thread"] = thread_meta
+
+  return fake_notify_completion
 
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
@@ -450,23 +476,10 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     }
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notify_exit_code"] = outcome.exit_code
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",
@@ -604,20 +617,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notified"] = True
-
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner._finalize_worker(
       session_id="session-id",
@@ -1035,26 +1035,9 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notify_exit_code"] = outcome.exit_code
-    captures["notify_require_review"] = thread_meta.require_review
-    captures["notify_repo_path"] = thread_meta.repo_path
-    captures["notify_worktree_path"] = thread_meta.worktree_path
-    captures["notify_branch_name"] = thread_meta.branch_name
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",
@@ -1074,7 +1057,8 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
   worker_dir = captures["worker_dir"]
   assert worker_dir == expected_thread_dir
   assert captures["notify_exit_code"] == 0
-  assert captures["notify_require_review"] is False
-  assert captures["notify_repo_path"] is None
-  assert captures["notify_worktree_path"] == str(worker_dir)
-  assert captures["notify_branch_name"] is None
+  notify_thread = captures["notify_thread"]
+  assert notify_thread.require_review is False
+  assert notify_thread.repo_path is None
+  assert notify_thread.worktree_path == str(worker_dir)
+  assert notify_thread.branch_name is None

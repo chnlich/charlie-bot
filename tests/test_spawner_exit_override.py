@@ -179,7 +179,7 @@ def test_helper_is_wired_into_spawn_worker_after_stream_events() -> None:
   assert finalize_idx != -1, "spawn_worker must call _finalize_worker_safely"
   assert stream_idx < override_idx < finalize_idx, (
       "override must run after _stream_worker_events and before _finalize_worker_safely")
-  # The override is gated on exit_code != 0 and not quota_exhausted and not error_msg.
-  assert "exit_code != 0" in source
-  assert "not quota_exhausted" in source
-  assert "not error_msg" in source
+  # The override is gated on exit_code != 0 and not quota_exhausted and not error.
+  assert "outcome.exit_code != 0" in source
+  assert "not outcome.quota_exhausted" in source
+  assert "not outcome.error" in source

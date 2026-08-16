@@ -397,24 +397,6 @@ def _prepare_thread_backend_metadata(
   thread.cli_command = shlex.join(backend._build_command(description) + [description])
 
 
-async def _apply_backend_option(
-    thread: ThreadMetadata,
-    description: str,
-    cfg: CharlieBotConfig,
-    thread_mgr: ThreadManager,
-    request: SpawnRequest,
-) -> BackendOption:
-  """Resolve the request's backend option onto the thread, persist it, and return the option."""
-  backend_option = resolve_backend_option(cfg, request.resolved_backend, request.resolved_model)
-  thread.backend = backend_option.id
-  thread.model = backend_option.model
-  if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
-    thread.tried_backends.append(backend_option.id)
-  _prepare_thread_backend_metadata(thread, backend_option, description)
-  await thread_mgr.save_metadata(thread)
-  return backend_option
-
-
 async def _construct_worker(
     session_id: str,
     thread: ThreadMetadata,
@@ -425,8 +407,14 @@ async def _construct_worker(
     thread_mgr: ThreadManager,
     request: SpawnRequest,
 ) -> Worker:
-  """Apply the request's backend onto the thread and build its Worker around working_dir."""
-  backend_option = await _apply_backend_option(thread, description, cfg, thread_mgr, request)
+  """Resolve the request's backend option onto the thread, persist it, and build its Worker."""
+  backend_option = resolve_backend_option(cfg, request.resolved_backend, request.resolved_model)
+  thread.backend = backend_option.id
+  thread.model = backend_option.model
+  if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
+    thread.tried_backends.append(backend_option.id)
+  _prepare_thread_backend_metadata(thread, backend_option, description)
+  await thread_mgr.save_metadata(thread)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
       thread,

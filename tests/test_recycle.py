@@ -108,10 +108,10 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
   iso = cutoff.isocalendar()
   assert archive_path.name == f"chat_events.{iso.year}-W{iso.week:02d}.jsonl"
 
-  archive_lines = [json.loads(l) for l in archive_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+  archive_lines = [json.loads(line) for line in archive_path.read_text(encoding="utf-8").splitlines() if line.strip()]
   assert [e["content"] for e in archive_lines] == [f"e{i}" for i in range(5)]
 
-  live_lines = [json.loads(l) for l in live_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+  live_lines = [json.loads(line) for line in live_path.read_text(encoding="utf-8").splitlines() if line.strip()]
   assert [e["content"] for e in live_lines] == [f"f{i}" for i in range(3)]
 
   meta = await mgr.get_session(session.id)
@@ -155,7 +155,7 @@ async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
 
   assert result["events_archived"] == 0
   assert result["archive_file"] is None
-  live_lines = [json.loads(l) for l in live_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+  live_lines = [json.loads(line) for line in live_path.read_text(encoding="utf-8").splitlines() if line.strip()]
   assert [e["content"] for e in live_lines] == ["future"]
 
   meta = await mgr.get_session(session.id)

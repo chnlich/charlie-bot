@@ -142,7 +142,7 @@ async def test_fork_normalizes_mixed_absolute_and_relative_paths(tmp_path: Path)
   first_rel = "artifacts/plan_01.html"
   second_rel = "artifacts/plan_02.html"
   first = _write_artifact(cfg, parent.id, first_rel, "<html>v1</html>")
-  second = _write_artifact(cfg, parent.id, second_rel, "<html>v2</html>")
+  _write_artifact(cfg, parent.id, second_rel, "<html>v2</html>")
   _write_plans(cfg, parent.id, {"plans": [
       _make_plan(1, [
           _make_version(1, str(first.resolve()), "clean"),

@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 from src.agents.backends.pty_common import _TMUX_SOCKET, tmux_session_name
 from src.api import threads as threads_api
 from src.api.deps import get_thread_manager
-from src.api.threads import build_attach_command, router as threads_router
+from src.api.threads import build_attach_command
+from src.api.threads import router as threads_router
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import BackendOption, ThreadMetadata
 from src.core.threads import ThreadManager

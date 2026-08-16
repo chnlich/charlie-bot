@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 import yaml
 
-from src.core.config import CharlieBotConfig, ImprovementLoopConfig, ScheduledTaskConfig
 from src.core.backlog_loop import _handle_stale
+from src.core.config import CharlieBotConfig, ImprovementLoopConfig, ScheduledTaskConfig
 from src.core.models import SessionMetadata, parse_utc_datetime
 from src.core.scheduler import Scheduler
 

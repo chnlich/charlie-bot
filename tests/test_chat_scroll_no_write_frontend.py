@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 NODE_TEST = ROOT / 'tests' / 'chat_scroll_no_write.test.js'
 

@@ -15,11 +15,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.api.message_utils import events_to_messages, events_to_view
+from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest
 from src.core.message_projection import MessageProjection
+from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 
 # ---------------------------------------------------------------------------

@@ -14,14 +14,19 @@ from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, LocalPid, RemotePid, ScheduleTriggerRequest, TriggerStatus
+from src.core.models import (
+  CreateSessionRequest,
+  LocalPid,
+  RemotePid,
+  ScheduleTriggerRequest,
+  TriggerStatus,
+)
 from src.core.sessions import SessionManager
 from src.core.triggers import (
-    RemoteVerifyError,
-    TriggerManager,
-    _migrate_legacy_watch_pids,
+  RemoteVerifyError,
+  TriggerManager,
+  _migrate_legacy_watch_pids,
 )
-
 
 # ---------------------------------------------------------------------------
 # Mock helpers

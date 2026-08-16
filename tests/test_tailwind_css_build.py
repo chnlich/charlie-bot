@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = ROOT / 'scripts' / 'build-css.sh'
 COMMITTED_CSS = ROOT / 'web' / 'static' / 'css' / 'tailwind.css'

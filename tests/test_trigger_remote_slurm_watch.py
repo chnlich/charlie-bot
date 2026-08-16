@@ -12,7 +12,6 @@ from src.core.models import CreateSessionRequest, SlurmJob, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import RemoteVerifyError, TriggerManager, _probe_sacct
 
-
 # ---------------------------------------------------------------------------
 # Mock helpers
 # ---------------------------------------------------------------------------

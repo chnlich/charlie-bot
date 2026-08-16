@@ -63,7 +63,7 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: Path) ->
   written = json.loads(diag_path.read_text(encoding="utf-8"))
   assert written == fake_diag
 
-  events_lines = [json.loads(l) for l in events_log.read_text().splitlines() if l.strip()]
+  events_lines = [json.loads(line) for line in events_log.read_text().splitlines() if line.strip()]
   diag_events = [e for e in events_lines if e.get("type") == "system" and e.get("subtype") == "hang_diagnostics"]
   assert len(diag_events) == 1
   diag_event = diag_events[0]

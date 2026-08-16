@@ -1,14 +1,14 @@
 """Tests for the improvement-loop lifecycle module."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
 
+from src.core.backlog_loop import _next_id, determine_action
 from src.core.config import ImprovementLoopConfig
-from src.core.backlog_loop import determine_action, _next_id
 
 
 def _make_cfg(**overrides) -> ImprovementLoopConfig:

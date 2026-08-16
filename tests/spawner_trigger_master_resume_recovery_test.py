@@ -10,11 +10,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.config import CharlieBotConfig
-from src.core.master_trigger import is_resume_not_found_error
-from src.core.master_trigger import trigger_master
-from src.core.models import BackendOption
-from src.core.models import SessionCallbacks
-from src.core.models import SessionMetadata
+from src.core.master_trigger import is_resume_not_found_error, trigger_master
+from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
 
 
 def _build_cfg() -> CharlieBotConfig:

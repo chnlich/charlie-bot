@@ -55,7 +55,7 @@ backlog_repos: []
 # public_base_url: ""
 
 # Slack summon entrypoint.
-# Slack app bot token (xoxb-…); requires chat:write + history scopes.
+# Slack app bot token (xoxb-…); requires chat:write + reactions:write + history scopes.
 # slack_bot_token: ""
 # Slack app-level token (xapp-…); requires connections:write, Socket Mode only.
 # slack_app_token: ""

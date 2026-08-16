@@ -51,6 +51,10 @@ class _FakeSlackClient:
     self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
     return {"ok": True}
 
+  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
+    self.calls.append(("add_reaction", {"channel": channel, "name": name, "ts": ts}))
+    return {"ok": True}
+
   async def get_permalink(self, channel: str, ts: str) -> str:
     self.calls.append(("get_permalink", {"channel": channel, "ts": ts}))
     return f"https://fake.slack.test/archives/{channel}/p{ts}"
@@ -121,13 +125,16 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   assert meta.slack_origin.channel_id == "C_TEST"
   assert meta.slack_origin.thread_ts == _TS
 
-  # The Slack traffic is exactly the acceptance signal plus one permalink
-  # lookup for the mention's own ts — no thread-content read of any kind.
+  # The Slack traffic is exactly one eyes reaction on the mention plus one
+  # permalink lookup for the mention's own ts — no thread-content read of any
+  # kind, and no posted acceptance message.
   posts = [c for name, c in client.calls if name == "post_message"]
-  assert len(posts) == 1
+  assert posts == []
+  reactions = [c for name, c in client.calls if name == "add_reaction"]
+  assert reactions == [{"channel": "C_TEST", "name": "eyes", "ts": _TS}]
   permalinks = [c for name, c in client.calls if name == "get_permalink"]
   assert permalinks == [{"channel": "C_TEST", "ts": _TS}]
-  assert len(client.calls) == len(posts) + len(permalinks)
+  assert len(client.calls) == len(reactions) + len(permalinks)
 
   # The persisted content carries exactly the URL the client produced for this
   # mention, and nothing else Slack-derived beyond the citation boundary.
@@ -210,14 +217,64 @@ async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event()  # no thread_ts, so the mention's own ts is the thread
+  tasks = _spawn_round_tasks()
 
-  with patch("src.core.slack_listener.trigger_master", new=AsyncMock()):
+  def _spawn(coro, *, name=None):
+    task = asyncio.get_running_loop().create_task(coro)
+    tasks.append(task)
+    return task
+
+  with (
+      patch("src.core.slack_listener.trigger_master", new=AsyncMock()),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawn),
+  ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
+    await asyncio.gather(*tasks)
 
   assert sid == summon_session_id("T_TEST", "C_TEST", _TS)
   posts = [c for name, c in client.calls if name == "post_message"]
-  assert len(posts) == 1
-  assert posts[0]["thread_ts"] == _TS
+  assert posts == []
+  reactions = [c for name, c in client.calls if name == "add_reaction"]
+  assert reactions == [{"channel": "C_TEST", "name": "eyes", "ts": _TS}]
+
+
+@pytest.mark.asyncio
+async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> None:
+  """A failing reactions.add costs only the eyes: the round still spawns and persists."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  event = _make_event()
+
+  class _FailingReactionClient(_FakeSlackClient):
+    async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
+      raise RuntimeError("missing_scope")
+
+  client = _FailingReactionClient()
+  tasks = _spawn_round_tasks()
+
+  def _spawn(coro, *, name=None):
+    task = asyncio.get_running_loop().create_task(coro)
+    tasks.append(task)
+    return task
+
+  with (
+      patch("src.core.slack_listener.trigger_master", new=AsyncMock()) as trigger,
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawn),
+  ):
+    sid = await handle_app_mention(event, cfg, session_mgr, client)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+  assert sid == _sid(event)
+  assert len(tasks) == 2
+  trigger.assert_awaited_once()
+  failures = [r for r in results if isinstance(r, Exception)]
+  assert len(failures) == 1
+  assert isinstance(failures[0], RuntimeError)
+  assert str(failures[0]) == "missing_scope"
+
+  events = session_mgr.load_chat_events_sync(sid)
+  agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
+  assert len(agent_messages) == 1
 
 
 @pytest.mark.asyncio

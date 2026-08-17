@@ -346,8 +346,8 @@ async def select_verify_backend(
   Never None with an untried (empty) list; None only when every configured backend
   has already been tried.
   """
-  session_backend, session_model = await resolve_requested_subagent_backend_model(
-      session_id, cfg, session_mgr, requested_backend=None)
+  session_meta = await _require_session(session_mgr, session_id)
+  session_backend, session_model = _resolve_session_default_backend_model(cfg, session_meta)
   return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)
 
 

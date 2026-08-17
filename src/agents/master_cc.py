@@ -900,7 +900,7 @@ async def _session_consumer(session_id: str) -> None:
           done_event["input_event_id"] = item.user_event_id
         if thinking_seconds is not None:
           done_event["thinking_seconds"] = thinking_seconds
-        done_event.update({k: v for k, v in finish_extras.items()})
+        done_event.update(finish_extras)
         await item.callbacks.persist_and_broadcast(session_id, done_event)
 
         # The turn is fully resolved — clear its restart-identity so the next

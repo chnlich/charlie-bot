@@ -5,8 +5,9 @@ the worktree directory must remain on disk after both _cleanup_worker_directory
 (post-worker) and finalize_review_chain (post-reviewer merge).
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from conftest import JudgmentShim
@@ -99,8 +100,8 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
@@ -250,7 +251,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
 
   class FakeThreadManager(JudgmentShim):
 
-    async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
       return thread
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
@@ -264,8 +265,8 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
@@ -283,8 +284,8 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
         events_log_path: Path,
         task_description: str,
         worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
+        backend_option: BackendOption | None = None,
+        on_spawned: Callable | None = None,
     ) -> None:
       captures["prompt"] = task_description
 

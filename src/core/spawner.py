@@ -132,6 +132,13 @@ def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   return result
 
 
+def _require_tokens_resolved(assembled: str, *, prompt: str) -> None:
+  """Guard the end of prompt assembly: a leftover `{{token}}` means the template's token set
+  and the builder's token map disagree, and a half-built prompt must never reach a worker."""
+  if "{{" in assembled:
+    raise ValueError(prompt + " prompt assembly left an unresolved {{token}} in the output")
+
+
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
@@ -197,8 +204,7 @@ def _build_worker_prompt(
       f"{sections['remote_scratch']}\n{sections['role']}"
       f"{memory_section}\n{worktree_section}{iteration_reports_section}{keep_worktree_section}")
 
-  if "{{" in result:
-    raise ValueError("worker prompt assembly left an unresolved {{token}} in the output")
+  _require_tokens_resolved(result, prompt="worker")
 
   return result
 
@@ -501,8 +507,7 @@ async def _create_repoless_process(
             "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
             "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
         })
-    if "{{" in contract:
-      raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
+    _require_tokens_resolved(contract, prompt="verify")
     worker_prompt = f"{contract}\n\n{description}"
   elif request.task_type in _WORKFLOW_PROMPT_SECTION:
     worker_prompt = request.prompt_override or description

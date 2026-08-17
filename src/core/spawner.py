@@ -503,7 +503,7 @@ async def _create_repoless_process(
     if "{{" in contract:
       raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
     worker_prompt = f"{contract}\n\n{description}"
-  elif request.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
+  elif request.task_type in _WORKFLOW_PROMPT_SECTION:
     worker_prompt = request.prompt_override or description
   else:
     raise ValueError(f"unsupported task_type: {request.task_type!r}")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Optional
 from unittest.mock import AsyncMock, patch
@@ -22,6 +23,11 @@ from src.core.slack_listener import (
 )
 
 _TS = "1700000000.000100"
+
+# The approved red-line text, read from the same prompts doc the builder reads
+# and stripped exactly like the builder, so the tail assertions pin exact bytes.
+_RED_LINE_PATH = Path(__file__).resolve().parents[1] / "prompts" / "slack_reply_redline.md"
+_RED_LINE = _RED_LINE_PATH.read_text(encoding="utf-8").strip()
 
 
 def _spawn_round_tasks() -> list[asyncio.Task]:
@@ -82,6 +88,17 @@ def _cfg(tmp_path: Path) -> CharlieBotConfig:
       slack_app_token="test-app-token",
       slack_allowed_user_ids=["U_ALLOWED"],
   )
+
+
+def _cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
+  """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
+  charlie_bot_repo is a derived property tied to the installed package location, so a plain
+  namespace stand-in is used to redirect it for these isolated fail-loud tests)."""
+
+  class _Cfg:
+    charlie_bot_repo = repo_root
+
+  return _Cfg()  # type: ignore[return-value]
 
 
 def _thread_ts(event: dict) -> str:
@@ -149,19 +166,47 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
       "mention_ts": _TS,
   }
   assert expected_url in agent_messages[0]["content"]
-  assert agent_messages[0]["content"].endswith(f"{CITATION_BOUNDARY}\n{_SLACK_REPLY_NOTICE}")
+  assert agent_messages[0]["content"].endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_SLACK_REPLY_NOTICE}")
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
   assert expected_url in trigger.await_args.args[1]
 
 
-def test_build_summon_prompt_appends_the_reply_notice_after_the_citation_boundary() -> None:
-  """Every Slack prompt ends with the citation boundary followed by the reply notice."""
-  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100")
+def test_build_summon_prompt_appends_the_reply_notice_after_the_citation_boundary(tmp_path: Path) -> None:
+  """Every Slack prompt ends citation boundary, then the red line, then the reply notice."""
+  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", _cfg(tmp_path))
   assert _SLACK_REPLY_NOTICE in prompt
-  assert prompt.index(_SLACK_REPLY_NOTICE) > prompt.index(CITATION_BOUNDARY)
-  assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_SLACK_REPLY_NOTICE}")
+  assert prompt.index(CITATION_BOUNDARY) < prompt.index(_RED_LINE) < prompt.index(_SLACK_REPLY_NOTICE)
+  assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_SLACK_REPLY_NOTICE}")
+
+
+def test_build_summon_prompt_rereads_the_red_line_doc_on_every_call(tmp_path: Path) -> None:
+  """No caching: an edit to the doc between two builds shows up in the second one."""
+  shutil.copytree(_RED_LINE_PATH.parent, tmp_path / "prompts")
+  doc = tmp_path / "prompts" / "slack_reply_redline.md"
+  cfg = _cfg_with_repo(tmp_path)
+  url = "https://fake.slack.test/archives/C_TEST/p1700000000.000100"
+
+  first = _build_summon_prompt(url, cfg)
+  doc.write_text("RED LINE VERSION TWO", encoding="utf-8")
+  second = _build_summon_prompt(url, cfg)
+
+  assert first.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_SLACK_REPLY_NOTICE}")
+  assert _RED_LINE not in second
+  assert "RED LINE VERSION TWO" in second
+
+
+def test_build_summon_prompt_missing_red_line_doc_raises_with_path_and_cause(tmp_path: Path) -> None:
+  """No embedded-text fallback: a missing doc fails the build, naming the path."""
+  cfg = _cfg_with_repo(tmp_path)  # no prompts dir under this repo root
+  missing_path = tmp_path / "prompts" / "slack_reply_redline.md"
+
+  with pytest.raises(ValueError) as excinfo:
+    _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", cfg)
+
+  assert str(missing_path) in str(excinfo.value)
+  assert "most likely predates" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

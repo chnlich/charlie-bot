@@ -139,16 +139,29 @@ class SlackClient:
     return payload["permalink"]
 
 
-def _build_summon_prompt(permalink: str) -> str:
+def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   """The persisted summon: the thread link plus a self-fetch hint, ending at the fixed notices.
 
   Only the permalink is stored because the master reads the thread itself via
   its slack skill when the round runs — a snapshot persisted here would go
   stale as the thread keeps changing after the mention.
+
+  The PII red line is read fresh from prompts/slack_reply_redline.md on every
+  call — no caching, so an edit takes effect on the next summon. A missing or
+  unreadable doc raises a ValueError naming the path and its most likely cause
+  (mirrors the worker-prompt loader in src/core/spawner.py); a prompt without
+  the red line is never built.
   """
+  red_line_path = cfg.charlie_bot_repo / "prompts" / "slack_reply_redline.md"
+  try:
+    red_line = red_line_path.read_text(encoding="utf-8").strip()
+  except OSError as e:
+    raise ValueError(
+        f"slack reply red line prompt not found at {red_line_path} — the repo checkout most "
+        f"likely predates the slack-reply-redline extraction commit") from e
   return (f"Slack 线程召唤：{permalink}\n\n"
           "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
-          f"{CITATION_BOUNDARY}\n{_SLACK_REPLY_NOTICE}")
+          f"{CITATION_BOUNDARY}\n{red_line}\n{_SLACK_REPLY_NOTICE}")
 
 
 def _local_time() -> str:
@@ -188,7 +201,7 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
                 slack_user=slack_user, session=sid)
 
   permalink = await client.get_permalink(channel_id, event["ts"])
-  content = _build_summon_prompt(permalink)
+  content = _build_summon_prompt(permalink, cfg)
 
   evt = build_agent_message_event(content, from_session=sid, from_session_name="Slack")
   evt["slack"] = {

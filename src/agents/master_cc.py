@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -50,14 +50,14 @@ NOTICE = "[模型未输出正文，以下为其思考内容]"
 class _RunTimingTracker:
   """Tracks monotonic timing milestones during a single _run_cc execution."""
 
-  def __init__(self, session_id: str, backend_type: str, model: Optional[str]) -> None:
+  def __init__(self, session_id: str, backend_type: str, model: str | None) -> None:
     self._session_id = session_id
     self._backend_type = backend_type
     self._model = model
     self._t_start = time.monotonic()
-    self._t_spawn: Optional[float] = None
-    self._t_first_event: Optional[float] = None
-    self._t_first_assistant: Optional[float] = None
+    self._t_spawn: float | None = None
+    self._t_first_event: float | None = None
+    self._t_first_assistant: float | None = None
     self._saw_first_assistant = False
     # Per-run salvage state: accumulations with the same lifecycle as the timing
     # fields above, created/destroyed with the tracker. Thinking text lands here
@@ -175,7 +175,7 @@ class _RunTimingTracker:
       log.warning("master_cc_slow_total", session=self._session_id, total_ms=total_ms)
     return extras
 
-  def _salvage_thinking_text(self) -> Optional[str]:
+  def _salvage_thinking_text(self) -> str | None:
     """Thinking to surface for a silent run, or None when nothing should emit.
 
     The visibility criterion is assistant text: only a result-settled turn with
@@ -193,7 +193,7 @@ class _RunTimingTracker:
 
 async def _salvage_silent_turn(
     tracker: _RunTimingTracker,
-    error_msg: Optional[str],
+    error_msg: str | None,
     session_id: str,
     persist_and_broadcast,
 ) -> None:
@@ -242,8 +242,8 @@ class _WorkItem:
   callbacks: SessionCallbacks
   is_voice: bool
   auto_trigger: bool
-  backend_option: Optional[BackendOption]
-  extra_claude_flags: Optional[list[str]]
+  backend_option: BackendOption | None
+  extra_claude_flags: list[str] | None
   should_check_tex: bool
   future: asyncio.Future
   # True only on the scheduled-session weekly-recycle path that deliberately
@@ -251,11 +251,11 @@ class _WorkItem:
   expect_fresh_session: bool = False
   # Chat event id of the user message this turn answers; persisted into
   # master_run so restart reconcile can exclude exactly one event from replay.
-  user_event_id: Optional[str] = None
+  user_event_id: str | None = None
   # Set for re-attach items enqueued by startup reconcile: follow a recorded
   # live turn's raw log instead of spawning a new process.
-  resume_record: Optional[MasterRunRecord] = None
-  resume_is_alive: Optional[Callable[[], bool]] = None
+  resume_record: MasterRunRecord | None = None
+  resume_is_alive: Callable[[], bool] | None = None
 
 
 # Per-session currently-processing work item. Read by queued_user_event_ids so
@@ -277,7 +277,7 @@ contract is prompts/project_manager.md in the charlie-bot repo: read it
 before acting on any message in this session, and follow it."""
 
 
-def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> Optional[str]:
+def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> str | None:
   """Build master agent instructions: base prompt + per-host override + memory store.
 
   The memory block is assembled from the labeled-entry store via
@@ -338,7 +338,7 @@ def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
   return any((config_dir / "projects").glob(f"*/{cc_session_id}.jsonl"))
 
 
-def _resolve_resume_id(option: BackendOption, session_meta: SessionMetadata) -> Optional[str]:
+def _resolve_resume_id(option: BackendOption, session_meta: SessionMetadata) -> str | None:
   """Return the cc_session_id to resume, or None when it is not reachable.
 
   Each cc-claude account has its own CLAUDE_CONFIG_DIR and cannot see another's
@@ -362,7 +362,7 @@ def _resolve_resume_id(option: BackendOption, session_meta: SessionMetadata) -> 
   return None
 
 
-def _route_resume_session(backend_type: str, cc_session_id: Optional[str]) -> tuple[list[str], Optional[str]]:
+def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple[list[str], str | None]:
   """Return CLI resume flags and native resume ID for a backend type."""
   if not cc_session_id:
     return [], None
@@ -392,9 +392,9 @@ def _build_master_env(cfg: CharlieBotConfig) -> dict[str, str]:
 async def _handle_event(
     event: dict,
     session_id: str,
-    cc_session_id: Optional[str],
+    cc_session_id: str | None,
     persist_and_broadcast,
-) -> Optional[str]:
+) -> str | None:
   """Process a single backend event: persist, broadcast, and handle compaction events.
 
   Returns the cc_session_id (possibly updated from the event).
@@ -416,7 +416,7 @@ async def _handle_event(
   return cc_session_id
 
 
-async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], dict]:
+async def _run_cc(item: _WorkItem) -> tuple[str | None, int, str | None, dict]:
   """Execute a single CC run — spawn backend, stream events.
 
   Manages _active_procs for cancel support.  Does NOT broadcast MASTER_DONE
@@ -517,9 +517,9 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
       cwd=cwd,
   )
 
-  cc_session_id: Optional[str] = session_meta.cc_session_id
+  cc_session_id: str | None = session_meta.cc_session_id
   exit_code = 1
-  error_msg: Optional[str] = None
+  error_msg: str | None = None
   # Set inside _on_spawn the moment the master_run record hits disk; the cancel
   # path lets the turn go only once a boot can find it, so this flag — not
   # backend.pid — is the let-go precondition.
@@ -529,7 +529,7 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
   let_go = False
 
   tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
-  backend: Optional[AgentBackend] = None
+  backend: AgentBackend | None = None
 
   # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
   # and read cursor here so a restarted server can re-attach to this exact
@@ -649,8 +649,8 @@ async def _run_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], d
 def _resolve_resume_option(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
-    backend_option: Optional[BackendOption],
-) -> Optional[BackendOption]:
+    backend_option: BackendOption | None,
+) -> BackendOption | None:
   """Pick the backend option a resume follows with (translate ownership only)."""
   if backend_option is not None:
     return backend_option
@@ -662,7 +662,7 @@ def _resolve_resume_option(
   return cfg.backend_options[0] if cfg.backend_options else None
 
 
-def _build_fresh_translate(cfg: CharlieBotConfig, option: Optional[BackendOption]) -> Callable[[dict], list[dict]]:
+def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) -> Callable[[dict], list[dict]]:
   """A fresh translate_event callable for one scan/stream.
 
   Stateful translates (codex text buffering, gemini) require one instance per
@@ -690,7 +690,7 @@ async def _kill_run_group_escalating(pid: int, is_alive: Callable[[], bool]) -> 
     kill_process_group(pid, signal.SIGKILL)
 
 
-async def _resume_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str], dict]:
+async def _resume_cc(item: _WorkItem) -> tuple[str | None, int, str | None, dict]:
   """Re-attach to a recorded live master turn: follow its raw log to the end.
 
   Consumer-side mirror of _run_cc with no spawn: the same per-event handling,
@@ -714,9 +714,9 @@ async def _resume_cc(item: _WorkItem) -> tuple[Optional[str], int, Optional[str]
   option = _resolve_resume_option(cfg, session_meta, item.backend_option)
   log.info("master_cc_resuming", session=session_meta.id, pid=record.pid, raw_log=record.raw_log)
 
-  cc_session_id: Optional[str] = session_meta.cc_session_id
+  cc_session_id: str | None = session_meta.cc_session_id
   exit_code = -1
-  error_msg: Optional[str] = None
+  error_msg: str | None = None
   tracker = _RunTimingTracker(
       session_meta.id, option.type if option else "unknown", option.model if option else None)
 
@@ -820,11 +820,11 @@ async def _session_consumer(session_id: str) -> None:
   queue = _session_queues[session_id]
   # Relay cc_session_id across items: queued _WorkItems may carry distinct
   # SessionMetadata instances (e.g. fork bootstrap vs. user message loaded later).
-  last_cc_session_id: Optional[str] = None
+  last_cc_session_id: str | None = None
   # Teardown context for the idle RUNNING_CHANGED broadcast, captured per item
   # so the finally never reads the loop variable — `item` is unbound when the
   # consumer exits (e.g. via cancellation) before the first queue.get() returns.
-  teardown_cfg: Optional[CharlieBotConfig] = None
+  teardown_cfg: CharlieBotConfig | None = None
   teardown_auto_trigger = False
   try:
     while True:
@@ -958,14 +958,14 @@ async def run_message(
     callbacks: SessionCallbacks,
     skip_user_event: bool = False,
     auto_trigger: bool = False,
-    backend_option: Optional[BackendOption] = None,
-    extra_claude_flags: Optional[list[str]] = None,
-    display_content: Optional[str] = None,
-    uploaded_files: Optional[list[dict]] = None,
+    backend_option: BackendOption | None = None,
+    extra_claude_flags: list[str] | None = None,
+    display_content: str | None = None,
+    uploaded_files: list[dict] | None = None,
     is_voice: bool = False,
     expect_fresh_session: bool = False,
-    user_event_id: Optional[str] = None,
-) -> Optional[str]:
+    user_event_id: str | None = None,
+) -> str | None:
   """Spawn a Claude Code process for the master agent and stream NDJSON events.
 
   Args:
@@ -1070,8 +1070,8 @@ async def run_message(
 async def cancel_master(
     session_id: str,
     *,
-    meta: Optional[SessionMetadata] = None,
-    session_mgr: Optional["SessionManager"] = None,
+    meta: SessionMetadata | None = None,
+    session_mgr: "SessionManager | None" = None,
 ) -> bool:
   """Terminate the running master CC turn for this session.
 

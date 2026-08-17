@@ -91,6 +91,10 @@ it does.
 - Mark inference as inference, and keep verified, refuted, and open visible.
 - Treat a repeated question as a missing answer, and read the source for it.
 - Correct a superseded claim in place, in one sentence, then move on.
+- A negative or exhaustive claim names the known positive its probe matched first.
+- Report an instruction to an asynchronous system as sent; its effect is claimed
+  only from the product read back.
+- A deliverable reshaping an enumerated list shows the full item-to-product mapping.
 
 #### Length
 

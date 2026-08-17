@@ -156,6 +156,9 @@ master, and leaves the receiving session's authorization state untouched. These 
 verbs are your cross-session write channels; every other reach into a group's
 sessions is a read (section 2).
 
+`send` is append-only: no retraction verb exists, and a relay landing mid-run
+enqueues behind that run, read only after it ends.
+
 ## 9. Worked example: morning check
 
 You wake to a scheduled fire whose wake message is this document's own text, ending

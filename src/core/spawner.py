@@ -743,9 +743,7 @@ async def _finalize_worker(
 ) -> None:
   """Update thread status and notify completion.
 
-  ``completed_at`` overrides the terminal-status timestamp when given — the
-  caller passes the raw log's final mtime so the recorded completion time is
-  the run's true end, not whenever finalization happened to run.
+  ``completed_at`` overrides the terminal-status timestamp when given.
   """
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
   # One read of events.jsonl per finalize pass: the trailer gate below and the
@@ -1106,8 +1104,7 @@ async def _broadcast_completion(
 ) -> tuple[str, str]:
   """Build and broadcast the worker_summary event. Returns (events_summary, full_summary).
 
-  ``verify_report`` is the finalize pass's single read of events.jsonl: the trailer
-  gate judged the same string this summary quotes. None for non-VERIFY tasks.
+  ``verify_report`` is None for non-VERIFY tasks.
   """
   if task_type == TaskType.VERIFY:
     events_summary = verify_report

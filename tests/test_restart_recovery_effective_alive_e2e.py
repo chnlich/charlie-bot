@@ -25,7 +25,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from test_restart_recovery_e2e import _await_recovery_tasks, _cfg, _kill_driver_mid_run, _launch_driver, _read_meta
+from test_restart_recovery_e2e import (
+  _await_recovery_tasks,
+  _cfg,
+  _kill_driver_mid_run,
+  _launch_driver,
+  _read_meta,
+)
 
 from src.agents.backends.base import AgentBackend
 from src.core import init as init_module

@@ -648,6 +648,20 @@ class SessionManager:
 
   async def rename_group(self, old_name: str, new_name: str) -> int:
     """Rename a group across all sessions. Returns the count of updated sessions."""
+    count = await self._rewrite_group(old_name, new_name)
+    if count:
+      log.info("group_renamed", old_name=old_name, new_name=new_name, count=count)
+    return count
+
+  async def delete_group(self, group: str) -> int:
+    """Remove a group from all sessions (set to null). Returns the count of updated sessions."""
+    count = await self._rewrite_group(group, None)
+    if count:
+      log.info("group_deleted", group=group, count=count)
+    return count
+
+  async def _rewrite_group(self, old_name: str, new_name: str | None) -> int:
+    """Set old_name's group to new_name on every matching session. Returns the count updated."""
     all_sessions = await self.list_sessions()
     count = 0
     for meta in all_sessions:
@@ -661,27 +675,6 @@ class SessionManager:
         fresh.updated_at = utc_now()
         await self._save_metadata(fresh)
       count += 1
-    if count:
-      log.info("group_renamed", old_name=old_name, new_name=new_name, count=count)
-    return count
-
-  async def delete_group(self, group: str) -> int:
-    """Remove a group from all sessions (set to null). Returns the count of updated sessions."""
-    all_sessions = await self.list_sessions()
-    count = 0
-    for meta in all_sessions:
-      if meta.group != group:
-        continue
-      async with self._lock_for(meta.id):
-        fresh = await self.get_session(meta.id)
-        if not fresh or fresh.group != group:
-          continue
-        fresh.group = None
-        fresh.updated_at = utc_now()
-        await self._save_metadata(fresh)
-      count += 1
-    if count:
-      log.info("group_deleted", group=group, count=count)
     return count
 
   async def save_metadata(self, meta: SessionMetadata) -> None:

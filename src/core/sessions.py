@@ -924,14 +924,6 @@ class SessionManager:
     """
     return self._chat_events._read_archive_offset_sync(session_id)
 
-  def _load_archive_range(self, session_id: str, start: int, end: int) -> list[dict]:
-    """Read events at global indices [start, end) from archive files.
-
-    Archives live in ``<session>/data/archives/chat_events.<YYYY>-W<WW>.jsonl``.
-    Files are walked in chronological order (filename sort happens to match).
-    """
-    return self._chat_events._load_archive_range(session_id, start, end)
-
   def _chat_events_path(self, session_id: str) -> Path:
     return self._chat_events.get_chat_events_path(session_id)
 

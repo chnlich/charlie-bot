@@ -40,7 +40,7 @@ class _StderrOnlyBackend(AgentBackend):
     self.exit_code = 1
     self.stderr_text = "claude-sub: terminated"
     if False:
-      yield {}
+      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
 
 async def _run_cc_with_stderr_backend(

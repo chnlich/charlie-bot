@@ -82,7 +82,7 @@ def test_worker_prompt_matches_pre_extraction_golden(
   cfg = _cfg(tmp_path, fixture_name, with_memory=has_memory)
   session_meta = SessionMetadata(id="fixture-session-id", name=SESSION_NAME)
 
-  kwargs = dict(
+  prompt = spawner._build_worker_prompt(
       description=DESCRIPTION,
       repo_path=REPO_PATH,
       base_branch=BASE_BRANCH,
@@ -91,15 +91,12 @@ def test_worker_prompt_matches_pre_extraction_golden(
       session_meta=session_meta,
       cfg=cfg,
       task_type=task_type,
+      loop_dir=LOOP_DIR if has_loop else None,
+      iteration_number=ITERATION_NUMBER if has_loop else None,
+      is_continuation=is_continuation,
       keep_worktree=keep_worktree,
+      start_point=None,
   )
-  if task_type != TaskType.SCRIPT_RUN:
-    kwargs["is_continuation"] = is_continuation
-  if has_loop:
-    kwargs["loop_dir"] = LOOP_DIR
-    kwargs["iteration_number"] = ITERATION_NUMBER
-
-  prompt = spawner._build_worker_prompt(**kwargs)
   golden = (FIXTURES_DIR / fixture_name).read_text(encoding="utf-8")
   assert prompt == golden
 
@@ -186,6 +183,11 @@ def test_remote_scratch_assembled_directly_after_skills_discovery() -> None:
       session_meta=SessionMetadata(id="s", name="s"),
       cfg=cfg,
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert sections["skills_discovery"] + "\n" + sections["remote_scratch"] in prompt
   assert sections["remote_scratch"] + "\n" + sections["role"] in prompt
@@ -217,6 +219,11 @@ def test_unresolved_token_in_assembled_output_raises(tmp_path: Path) -> None:
         session_meta=SessionMetadata(id="s", name="s"),
         cfg=_Cfg(),  # type: ignore[arg-type]
         task_type=TaskType.IMPLEMENT,
+        loop_dir=None,
+        iteration_number=None,
+        is_continuation=False,
+        keep_worktree=False,
+        start_point=None,
     )
 
 

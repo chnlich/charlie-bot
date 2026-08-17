@@ -53,6 +53,15 @@ log = structlog.get_logger()
 _PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
 _PROMPT_SECTION_MARKER_SUFFIX = " -->"
 
+# Every workflow section draws from the same token map (intro + branch tokens);
+# an absent key fails loud below rather than selecting a wrong workflow body.
+# The id set lives only here: _REQUIRED_WORKER_PROMPT_SECTIONS derives it.
+_WORKFLOW_PROMPT_SECTION = {
+    TaskType.IMPLEMENT: "workflow_implement",
+    TaskType.QUICK_EDIT: "workflow_quick_edit",
+    TaskType.SCRIPT_RUN: "workflow_script_run",
+}
+
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "session_info",
     "coding_principles",
@@ -62,9 +71,7 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "intro_new",
     "intro_continuation",
     "worktree_workflow_header",
-    "workflow_implement",
-    "workflow_quick_edit",
-    "workflow_script_run",
+    *_WORKFLOW_PROMPT_SECTION.values(),
     "task_spec_source_files",
     "task",
     "iteration_reports",
@@ -73,14 +80,6 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
 )
 
 _REQUIRED_VERIFY_PROMPT_SECTIONS = ("preamble", "scope")
-
-# Every workflow section draws from the same token map (intro + branch tokens);
-# an absent key fails loud below rather than selecting a wrong workflow body.
-_WORKFLOW_PROMPT_SECTION = {
-    TaskType.IMPLEMENT: "workflow_implement",
-    TaskType.QUICK_EDIT: "workflow_quick_edit",
-    TaskType.SCRIPT_RUN: "workflow_script_run",
-}
 
 
 def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:

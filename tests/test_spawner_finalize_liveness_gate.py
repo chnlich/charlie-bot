@@ -97,7 +97,15 @@ async def test_generic_exception_with_live_probe_reports_and_skips_finalize(
   monkeypatch.setattr(Worker, "resume", _boom_resume)
 
   await spawner.resume_worker(
-      session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: True)
+      session_meta.id,
+      "gate task",
+      thread.id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      is_alive=lambda: True,
+      interrupt_reason="",
+      on_silence=None)
 
   assert _thread_status(home, session_meta.id, thread.id) == "running"
   reports = _recovery_reports(home, session_meta.id)
@@ -116,7 +124,15 @@ async def test_generic_exception_with_dead_probe_finalizes_failed(
   monkeypatch.setattr(Worker, "resume", _boom_resume)
 
   await spawner.resume_worker(
-      session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: False)
+      session_meta.id,
+      "gate task",
+      thread.id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      is_alive=lambda: False,
+      interrupt_reason="",
+      on_silence=None)
 
   assert _thread_status(home, session_meta.id, thread.id) == "failed"
   assert _recovery_reports(home, session_meta.id) == []
@@ -136,7 +152,15 @@ async def test_cancellation_with_live_probe_reports_and_skips_finalize(
 
   task = asyncio.create_task(
       spawner.resume_worker(
-          session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: True))
+          session_meta.id,
+          "gate task",
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          is_alive=lambda: True,
+          interrupt_reason="",
+          on_silence=None))
   await asyncio.wait_for(resume_entered.wait(), timeout=10.0)
   task.cancel()
   with contextlib.suppress(asyncio.CancelledError):
@@ -163,7 +187,15 @@ async def test_cancellation_with_dead_probe_finalizes_failed(
 
   task = asyncio.create_task(
       spawner.resume_worker(
-          session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: False))
+          session_meta.id,
+          "gate task",
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          is_alive=lambda: False,
+          interrupt_reason="",
+          on_silence=None))
   await asyncio.wait_for(resume_entered.wait(), timeout=10.0)
   task.cancel()
   with contextlib.suppress(asyncio.CancelledError):

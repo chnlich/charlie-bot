@@ -13,21 +13,25 @@ Plan "boot recovery 误杀判定保守化", acceptance legs (a), (e), (f-mount):
 
 Same two-process A/B protocol as test_restart_recovery_e2e.py: a driver
 subprocess spawns a worker with a fake `claude` shim and is SIGKILLed; this
-test process then runs startup crash recovery against the truth on disk.
+test process then runs startup crash recovery against the truth on disk. The
+protocol's scaffolding (shim, driver template, launcher, killer, waits) is
+shared by import from that module — edit it there.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import subprocess
-import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from test_restart_recovery_e2e import (
+  _await_recovery_tasks,
+  _cfg,
+  _kill_driver_mid_run,
+  _launch_driver,
+  _read_meta,
+)
 
 from src.agents.backends.base import AgentBackend
 from src.core import init as init_module
@@ -37,135 +41,6 @@ from src.core.models import BackendOption, CreateSessionRequest, ThreadStatus, u
 from src.core.sessions import SessionManager
 from src.core.spawner import resume_worker as _real_resume_worker
 from src.core.threads import ThreadManager
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-FAKE_SHIM = """#!/bin/sh
-echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"E2E-ASSISTANT-MARKER"}]}}'
-sleep "$FAKE_RESULT_DELAY"
-echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
-exit 0
-"""
-
-DRIVER = """import asyncio
-import json
-import sys
-from pathlib import Path
-
-from src.core import spawner
-from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, SpawnRequest
-from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
-
-
-async def main() -> None:
-  home = Path(sys.argv[1])
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
-  )
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="e2e"))
-  thread = await thread_mgr.create_thread(meta, "e2e task")
-  # Sync handshake for the test harness (stdout is structlog's, not ours).
-  (home / "driver_ids.json").write_text(json.dumps({"session": meta.id, "thread": thread.id}))
-  await spawner.spawn_worker(
-      meta.id,
-      "e2e task",
-      thread.id,
-      cfg,
-      session_mgr,
-      thread_mgr,
-      request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="do the thing"))
-
-
-asyncio.run(main())
-"""
-
-
-def _cfg(home: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
-  )
-
-
-def _wait_for(predicate, timeout: float, what: str) -> None:
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    if predicate():
-      return
-    time.sleep(0.05)
-  raise TimeoutError(what)
-
-
-def _read_meta(home: Path, session_id: str, thread_id: str) -> dict:
-  meta_path = home / "sessions" / session_id / "threads" / thread_id / "metadata.json"
-  return json.loads(meta_path.read_text(encoding="utf-8"))
-
-
-async def _await_recovery_tasks() -> None:
-  current = asyncio.current_task()
-  pending = [
-      t for t in asyncio.all_tasks()
-      if t is not current and not t.done()
-      and t.get_name().startswith(("resume-", "respawn-", "recomplete-"))
-  ]
-  if pending:
-    await asyncio.gather(*pending)
-
-
-def _install_shim(tmp_path: Path) -> Path:
-  shim_dir = tmp_path / "shim"
-  shim_dir.mkdir()
-  shim = shim_dir / "claude"
-  shim.write_text(FAKE_SHIM, encoding="utf-8")
-  shim.chmod(0o755)
-  return shim_dir
-
-
-def _launch_driver(tmp_path: Path, home: Path, result_delay: float) -> tuple[subprocess.Popen, dict]:
-  shim_dir = _install_shim(tmp_path)
-  driver = tmp_path / "driver.py"
-  driver.write_text(DRIVER, encoding="utf-8")
-  env = dict(os.environ)
-  env["PYTHONPATH"] = str(REPO_ROOT)
-  env["PATH"] = f"{shim_dir}:{env['PATH']}"
-  env["FAKE_RESULT_DELAY"] = str(result_delay)
-  proc = subprocess.Popen(
-      [sys.executable, str(driver), str(home)],
-      stdout=subprocess.DEVNULL,
-      stderr=subprocess.DEVNULL,
-      env=env,
-  )
-  ids_file = home / "driver_ids.json"
-  _wait_for(ids_file.exists, timeout=20.0, what="driver did not create session/thread")
-  return proc, json.loads(ids_file.read_text(encoding="utf-8"))
-
-
-def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
-  """SIGKILL the driver once the run's identity is persisted and output is flowing."""
-  thread_dir = home / "sessions" / ids["session"] / "threads" / ids["thread"]
-  raw = thread_dir / "data" / runs.RAW_LOG_NAME
-
-  def run_started() -> bool:
-    if not raw.exists() or "E2E-ASSISTANT-MARKER" not in raw.read_text(encoding="utf-8", errors="replace"):
-      return False
-    try:
-      meta = _read_meta(home, ids["session"], ids["thread"])
-    except json.JSONDecodeError:
-      # metadata.json is a plain (non-atomic) "w"-mode write; the driver may be
-      # mid-write when this polls, which is exactly "not ready yet".
-      return False
-    return meta.get("pid") is not None and meta.get("pid_start") is not None and meta.get("status") == "running"
-
-  _wait_for(run_started, timeout=20.0, what="worker run did not start/persist identity")
-  proc.kill()
-  proc.wait(timeout=10)
 
 
 async def _recover(

@@ -217,9 +217,9 @@ def _worker_locator_summary(thread_id: str, status: str, timestamp: str) -> str:
 def _thread_worker_event(
     thread: ThreadMetadata,
     status: str,
-    full_content: str = '',
+    full_content: str,
     *,
-    content: str | None = None,
+    content: str | None,
 ) -> dict:
   """Build a worker_summary event whose chat content is the thread's locator summary.
 
@@ -308,7 +308,7 @@ async def resolve_requested_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-    requested_backend: str | None = None,
+    requested_backend: str | None,
 ) -> tuple[str, str | None]:
   """Resolve backend+model from an explicit configured backend or the session default.
 
@@ -340,7 +340,8 @@ async def select_verify_backend(
   Never None with an untried (empty) list; None only when every configured backend
   has already been tried.
   """
-  session_backend, session_model = await resolve_requested_subagent_backend_model(session_id, cfg, session_mgr)
+  session_backend, session_model = await resolve_requested_subagent_backend_model(
+      session_id, cfg, session_mgr, requested_backend=None)
   return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)
 
 
@@ -551,7 +552,7 @@ async def _stream_worker_events(
   await thread_mgr.save_metadata(thread)
   log.info("worker_running", thread_id=thread.id, session=session_id)
 
-  await session_mgr.persist_and_broadcast(session_id, _thread_worker_event(thread, 'running'))
+  await session_mgr.persist_and_broadcast(session_id, _thread_worker_event(thread, 'running', '', content=None))
 
   try:
     return _WorkerRunOutcome(exit_code=await worker.run())
@@ -979,8 +980,8 @@ async def resume_worker(
     thread_mgr: ThreadManager,
     *,
     is_alive: Callable[[], bool],
-    interrupt_reason: str = "",
-    on_silence: Callable[[], Awaitable[None]] | None = None,
+    interrupt_reason: str,
+    on_silence: Callable[[], Awaitable[None]] | None,
 ) -> None:
   """Re-attach to an interrupted run's raw stream, then run the finalize chain.
 
@@ -1070,7 +1071,7 @@ async def _persist_worker_summary_once(
     event: dict,
     session_mgr: SessionManager,
     *,
-    fallback: bool = False,
+    fallback: bool,
 ) -> None:
   """Persist and broadcast a worker_summary event unless the session already carries one.
 
@@ -1130,8 +1131,8 @@ async def _broadcast_completion(
     suffix = f"\n\n*Worker exited with code {outcome.exit_code}.*"
   full_summary += suffix
 
-  worker_event = _thread_worker_event(thread, status, full_content=full_summary)
-  await _persist_worker_summary_once(session_id, thread.id, worker_event, session_mgr)
+  worker_event = _thread_worker_event(thread, status, full_content=full_summary, content=None)
+  await _persist_worker_summary_once(session_id, thread.id, worker_event, session_mgr, fallback=False)
   return events_summary, full_summary
 
 

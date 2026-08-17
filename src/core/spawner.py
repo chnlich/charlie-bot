@@ -1038,10 +1038,10 @@ async def resume_worker(
     log.warning("resume_worker_quota_exhausted", thread_id=thread_id)
     if is_alive() and thread is not None and thread.pid is not None:
       kill_process_group(thread.pid, signal.SIGTERM)
-    outcome = outcome._replace(quota_exhausted=True)
+    outcome = _QUOTA_EXHAUSTED_OUTCOME
   except Exception as e:
     log.error("resume_worker_failed", thread_id=thread_id, error=str(e), traceback=traceback.format_exc())
-    outcome = outcome._replace(error=str(e))
+    outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
   finally:
     if outcome.failed and not outcome.error and interrupt_reason:
       outcome = outcome._replace(error=interrupt_reason)

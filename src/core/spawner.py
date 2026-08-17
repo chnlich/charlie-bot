@@ -618,26 +618,28 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, 
   if skip_cleanup:
     return None
 
-  if thread.worktree_path and thread.repo_path:
-    wt = Path(thread.worktree_path)
-    if wt.exists():
-      if not thread.branch_name:
-        raise RuntimeError(f"thread {thread.id} has worktree_path but no branch_name")
-      try:
-        removed = await git_worktree_remove(
-            thread.repo_path,
-            wt,
-            thread.id,
-            allowed_parent=worktree_parent,
-            expected_residue_name=git_worktree_dir_name(thread.branch_name),
-        )
-      except Exception as wt_err:
-        log.error("worktree_cleanup_error", thread_id=thread.id, worktree=str(wt), error=str(wt_err), exc_info=True)
-        return f"Worktree cleanup failed for {wt}: {wt_err}"
-      if not removed:
-        log.error("worktree_cleanup_remove_failed", thread_id=thread.id, worktree=str(wt))
-        return f"Worktree cleanup failed for {wt}: git worktree remove reported failure"
-      await git_worktree_prune(thread.repo_path, thread.id)
+  if not thread.worktree_path or not thread.repo_path:
+    return None
+  wt = Path(thread.worktree_path)
+  if not wt.exists():
+    return None
+  if not thread.branch_name:
+    raise RuntimeError(f"thread {thread.id} has worktree_path but no branch_name")
+  try:
+    removed = await git_worktree_remove(
+        thread.repo_path,
+        wt,
+        thread.id,
+        allowed_parent=worktree_parent,
+        expected_residue_name=git_worktree_dir_name(thread.branch_name),
+    )
+  except Exception as wt_err:
+    log.error("worktree_cleanup_error", thread_id=thread.id, worktree=str(wt), error=str(wt_err), exc_info=True)
+    return f"Worktree cleanup failed for {wt}: {wt_err}"
+  if not removed:
+    log.error("worktree_cleanup_remove_failed", thread_id=thread.id, worktree=str(wt))
+    return f"Worktree cleanup failed for {wt}: git worktree remove reported failure"
+  await git_worktree_prune(thread.repo_path, thread.id)
   return None
 
 

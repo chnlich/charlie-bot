@@ -45,7 +45,11 @@ def test_build_worker_prompt_includes_keep_worktree_note(tmp_path: Path) -> None
       session_meta=SessionMetadata(id="session-id", name="bench"),
       cfg=_build_cfg(tmp_path),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
       keep_worktree=True,
+      start_point=None,
   )
   assert "This worktree will persist after the reviewer merges." in prompt
   assert "SLURM" in prompt
@@ -61,6 +65,11 @@ def test_build_worker_prompt_omits_keep_worktree_note_by_default(tmp_path: Path)
       session_meta=SessionMetadata(id="session-id", name="bench"),
       cfg=_build_cfg(tmp_path),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "This worktree will persist after the reviewer merges." not in prompt
 

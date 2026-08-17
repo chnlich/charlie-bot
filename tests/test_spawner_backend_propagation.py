@@ -155,6 +155,9 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
       task_type=TaskType.IMPLEMENT,
       loop_dir="/tmp/loops/2",
       iteration_number=2,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
 
   assert "Treat them as advisory evidence and hints only." in prompt
@@ -175,6 +178,11 @@ def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None
       session_meta=SessionMetadata(id="session-id", name="impl"),
       cfg=_build_cfg(),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "Commit your changes with descriptive messages." in prompt
   assert "A reviewer will handle that." in prompt
@@ -192,6 +200,11 @@ def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
       session_meta=SessionMetadata(id="session-id", name="impl"),
       cfg=_build_cfg(),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
 
   assert "contains a `## Source Files` section" in prompt
@@ -210,6 +223,11 @@ def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> No
       session_meta=SessionMetadata(id="session-id", name="quick"),
       cfg=_build_cfg(),
       task_type=TaskType.QUICK_EDIT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "Commit your changes with descriptive messages." in prompt
   assert "No reviewer will run" in prompt
@@ -226,6 +244,11 @@ def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() ->
       session_meta=SessionMetadata(id="session-id", name="script"),
       cfg=_build_cfg(),
       task_type=TaskType.SCRIPT_RUN,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "Do NOT modify tracked files" in prompt
   assert "Do NOT commit" in prompt
@@ -244,6 +267,11 @@ def test_build_worker_prompt_rejects_verify_task_type() -> None:
         session_meta=SessionMetadata(id="session-id", name="verify"),
         cfg=_build_cfg(),
         task_type=TaskType.VERIFY,
+        loop_dir=None,
+        iteration_number=None,
+        is_continuation=False,
+        keep_worktree=False,
+        start_point=None,
     )
 
 

@@ -84,12 +84,15 @@ def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
 
 
 class SlackClient:
-  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / add_reaction."""
+  """Thin Slack Web API wrapper: open_connection / post_message / get_permalink / add_reaction /
+  get_channel_name."""
 
   def __init__(self, http: httpx.AsyncClient, *, bot_token: str, app_token: str) -> None:
     self._http = http
     self._bot_headers = {"Authorization": f"Bearer {bot_token}"}
     self._app_headers = {"Authorization": f"Bearer {app_token}"}
+    # In-process channel-name cache, keyed by channel id; failures cache as None.
+    self._channel_name_cache: dict[str, str | None] = {}
 
   async def open_connection(self) -> str:
     """POST apps.connections.open and return the wss: socket url."""
@@ -138,6 +141,35 @@ class SlackClient:
       raise RuntimeError(f"chat.getPermalink failed: {payload}")
     return payload["permalink"]
 
+  async def get_channel_name(self, channel_id: str) -> str | None:
+    """Resolve a channel id to its display name via conversations.info.
+
+    Cached in-process per channel id: cache hits return immediately and
+    failures cache as None for the process lifetime. On any failure —
+    missing_scope, channel_not_found, HTTP error, exception — logs one
+    warning and returns None; never raises.
+    """
+    if channel_id in self._channel_name_cache:
+      return self._channel_name_cache[channel_id]
+    name: str | None = None
+    try:
+      resp = await self._http.get(
+          "https://slack.com/api/conversations.info",
+          headers=self._bot_headers,
+          params={"channel": channel_id},
+      )
+      resp.raise_for_status()
+      payload = resp.json()
+      if payload.get("ok"):
+        name = payload["channel"]["name"]
+      else:
+        logger.warning("slack_channel_name_unresolved", channel=channel_id,
+                       error=payload.get("error"))
+    except Exception as e:
+      logger.warning("slack_channel_name_resolve_failed", channel=channel_id, error=str(e))
+    self._channel_name_cache[channel_id] = name
+    return name
+
 
 def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   """The persisted summon: the thread link plus a self-fetch hint, ending at the fixed notices.
@@ -167,6 +199,26 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
 def _local_time() -> str:
   """Local wall-clock stamp for a session display name."""
   return datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+async def ensure_slack_group(session_mgr: SessionManager, sid: str, channel_id: str,
+                             client: SlackClient) -> None:
+  """Group a Slack-summon session under its channel, unless it already has a group.
+
+  Writes ``Slack #<channel_name>``, falling back to ``Slack #<channel_id>`` when
+  the name cannot be resolved, and only writes when the session has a
+  slack_origin and an empty group (None or '') — an existing group is never
+  overwritten. Best-effort: any failure logs a warning and is swallowed, so
+  summon, round, and reply behavior are unaffected.
+  """
+  try:
+    meta = await session_mgr.get_session(sid)
+    if meta is None or meta.slack_origin is None or meta.group:
+      return
+    name = await client.get_channel_name(channel_id)
+    await session_mgr.set_group(sid, f"Slack #{name or channel_id}")
+  except Exception as e:
+    logger.warning("slack_group_assignment_failed", session=sid, channel=channel_id, error=str(e))
 
 
 async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient) -> Optional[str]:
@@ -199,6 +251,8 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
   else:
     logger.info("slack_mention_session_existing", channel=channel_id, thread_ts=thread_ts,
                 slack_user=slack_user, session=sid)
+
+  await ensure_slack_group(session_mgr, sid, channel_id, client)
 
   permalink = await client.get_permalink(channel_id, event["ts"])
   content = _build_summon_prompt(permalink, cfg)

@@ -414,7 +414,8 @@ async def test_resolve_requested_subagent_backend_model_defaults_to_session_back
       assert session_id == "session-id"
       return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
 
-  backend, model = await spawner.resolve_requested_subagent_backend_model("session-id", cfg, FakeSessionManager())
+  backend, model = await spawner.resolve_requested_subagent_backend_model(
+      "session-id", cfg, FakeSessionManager(), requested_backend=None)
 
   assert backend == "claude-opus-4.6"
   assert model == "claude-opus-4-6"
@@ -436,7 +437,8 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
       assert session_id == "session-id"
       return SessionMetadata(id=session_id, name="Test", backend="agy")
 
-  backend, model = await spawner.resolve_requested_subagent_backend_model("session-id", cfg, FakeSessionManager())
+  backend, model = await spawner.resolve_requested_subagent_backend_model(
+      "session-id", cfg, FakeSessionManager(), requested_backend=None)
 
   assert backend == "agy"
   assert model is None

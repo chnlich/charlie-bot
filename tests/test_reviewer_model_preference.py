@@ -1,7 +1,7 @@
 """Tests for cross-backend reviewer selection via model_preference and retry logic."""
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from conftest import JudgmentShim
@@ -45,7 +45,7 @@ def _build_cfg(**overrides: Any) -> CharlieBotConfig:
 
 def _make_original_thread(
     backend: str = "codex-o3",
-    model: Optional[str] = "o3",
+    model: str | None = "o3",
 ) -> ThreadMetadata:
   return ThreadMetadata(
       id="origin-thread-id",
@@ -62,7 +62,7 @@ def _make_original_thread(
 
 class FakeSessionManager(JudgmentShim):
 
-  async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def get_session(self, session_id: str) -> SessionMetadata | None:
     return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
 
 
@@ -75,8 +75,8 @@ class FakeThreadManager(JudgmentShim):
       self,
       session_meta: SessionMetadata,
       description: str,
-      branch_name: Optional[str] = None,
-      review_of: Optional[str] = None,
+      branch_name: str | None = None,
+      review_of: str | None = None,
       require_review: bool = True,
   ) -> ThreadMetadata:
     return ThreadMetadata(
@@ -102,7 +102,7 @@ async def _fake_spawn_worker(
     cfg: CharlieBotConfig,
     session_mgr: Any,
     thread_mgr: Any,
-    request: Optional[SpawnRequest] = None,
+    request: SpawnRequest | None = None,
 ) -> None:
   return None
 
@@ -110,7 +110,7 @@ async def _fake_spawn_worker(
 def _capture_create_logged_task(captured: dict[str, Any]):
   """Return a fake create_logged_task that captures spawn_worker kwargs."""
 
-  def fake_create_logged_task(coro: Any, *, name: Optional[str] = None) -> Any:
+  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
     if coro.cr_frame is not None:
       captured.update(coro.cr_frame.f_locals)
     coro.close()
@@ -362,7 +362,7 @@ async def test_spawn_review_worker_returns_false_when_session_missing(monkeypatc
 
   class MissingSessionManager(FakeSessionManager):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return None
 
   class ThreadMgrNoCreate(FakeThreadManager):
@@ -482,7 +482,7 @@ async def _fake_read_events_summary(
   return "(test events)"
 
 
-def _make_review_thread(tried_backends: Optional[list[str]] = None,) -> ThreadMetadata:
+def _make_review_thread(tried_backends: list[str] | None = None,) -> ThreadMetadata:
   return ThreadMetadata(
       id="review-thread-id",
       session_id="session-id",
@@ -499,7 +499,7 @@ def _make_review_thread(tried_backends: Optional[list[str]] = None,) -> ThreadMe
 
 class NotifyFakeSessionManager(JudgmentShim):
 
-  async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def get_session(self, session_id: str) -> SessionMetadata | None:
     return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
 
   async def save_metadata(self, meta: Any) -> None:
@@ -520,7 +520,7 @@ class NotifyFakeThreadManager(JudgmentShim):
   def __init__(self, threads: dict[str, ThreadMetadata]) -> None:
     self._threads = threads
 
-  async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+  async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
     return self._threads.get(thread_id)
 
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:

@@ -49,7 +49,7 @@ class _PromptCapturingBackend:
   async def run(self, prompt: str, cwd: str, env: dict):
     self.prompt = prompt
     if False:
-      yield {}
+      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
 
 def test_build_prompt_prepends_disclaimer_for_voice() -> None:

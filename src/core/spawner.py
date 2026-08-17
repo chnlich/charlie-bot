@@ -524,8 +524,8 @@ class _WorkerRunOutcome(NamedTuple):
   """A worker run's terminal disposition: process exit code, quota-exhaustion flag, setup error."""
 
   exit_code: int
-  quota_exhausted: bool = False
-  error: str = ""
+  quota_exhausted: bool
+  error: str
 
   @property
   def failed(self) -> bool:
@@ -536,7 +536,7 @@ class _WorkerRunOutcome(NamedTuple):
 
 
 # The quota flag, not the error text, drives the finalize chain's quota branch.
-_QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True)
+_QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error="")
 
 
 async def _stream_worker_events(
@@ -555,7 +555,7 @@ async def _stream_worker_events(
   await session_mgr.persist_and_broadcast(session_id, _thread_worker_event(thread, 'running', '', content=None))
 
   try:
-    return _WorkerRunOutcome(exit_code=await worker.run())
+    return _WorkerRunOutcome(exit_code=await worker.run(), quota_exhausted=False, error="")
   except QuotaExhaustedException:
     await worker.terminate()
     log.warning("worker_quota_exhausted", thread_id=thread.id)
@@ -563,7 +563,7 @@ async def _stream_worker_events(
   except Exception as e:
     await worker.terminate()
     log.error("worker_failed", thread_id=thread.id, error=str(e), traceback=traceback.format_exc())
-    return _WorkerRunOutcome(exit_code=-1, error=str(e))
+    return _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
 
 
 async def _read_thread_events(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> list[dict]:
@@ -847,7 +847,7 @@ async def recomplete_finalize_effects(
       session_id,
       description,
       thread,
-      _WorkerRunOutcome(exit_code=exit_code),
+      _WorkerRunOutcome(exit_code=exit_code, quota_exhausted=False, error=""),
       thread_mgr,
       session_mgr,
       cfg,
@@ -868,7 +868,7 @@ async def spawn_worker(
   """Spawn a worker for the given thread on its resolved backend. Fire-and-forget via asyncio.create_task()."""
   thread = None
   worker = None
-  outcome = _WorkerRunOutcome(exit_code=-1)
+  outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="")
   cancelled = False
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
@@ -950,7 +950,7 @@ async def spawn_worker(
     # exhaustion — a VERIFY retry's own setup failure included — so the
     # outcome is rebuilt rather than patched in place.
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
-    outcome = _WorkerRunOutcome(exit_code=-1, error=str(e))
+    outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
   finally:
     if thread is not None and not cancelled:
       await _finalize_worker_safely(
@@ -1010,7 +1010,7 @@ async def resume_worker(
   """
   thread = None
   worker = None
-  outcome = _WorkerRunOutcome(exit_code=-1)
+  outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="")
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
     if not thread:
@@ -1027,7 +1027,8 @@ async def resume_worker(
     events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
     working_dir = Path(thread.worktree_path) if thread.worktree_path else events_log.parent
     worker = Worker(thread, working_dir, events_log, description, cfg, backend_option=backend_option)
-    outcome = _WorkerRunOutcome(exit_code=await worker.resume(is_alive=is_alive, on_silence=on_silence))
+    outcome = _WorkerRunOutcome(
+        exit_code=await worker.resume(is_alive=is_alive, on_silence=on_silence), quota_exhausted=False, error="")
   except QuotaExhaustedException:
     log.warning("resume_worker_quota_exhausted", thread_id=thread_id)
     if is_alive() and thread is not None and thread.pid is not None:

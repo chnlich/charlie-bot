@@ -141,11 +141,11 @@ def _build_worker_prompt(
     session_meta: SessionMetadata,
     cfg: CharlieBotConfig,
     task_type: TaskType,
-    loop_dir: str | None = None,
-    iteration_number: int | None = None,
-    is_continuation: bool = False,
-    keep_worktree: bool = False,
-    start_point: str | None = None,
+    loop_dir: str | None,
+    iteration_number: int | None,
+    is_continuation: bool,
+    keep_worktree: bool,
+    start_point: str | None,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   sections = load_worker_prompt_sections(cfg)

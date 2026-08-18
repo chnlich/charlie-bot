@@ -12,15 +12,33 @@ List open pull requests whose head branch matches `code-health/*`. If any exists
 PR. If that PR has no bot reminder comment in the last 7 days, leave a one-line reminder comment,
 then exit. Read this decision entirely from the PR's comment history; keep no state anywhere else.
 
-Step 1: select a target, one topic per run.
-Among topics not previously rejected, pick the one with the highest hotspot score, where
-hotspot score = (commits touching the file in the last 90 days) x (file line count). Compute the
-churn half verbatim with this command and multiply the per-file commit counts by the file's
-`wc -l`:
+Step 1: select the mode and the target, one per run.
+Selection reads the working tree, never the commit history: a rank derived from commit history
+counts this cron's own merged pull requests and feeds the selection back into itself.
 
-    git log --since='90 days ago' --name-only --pretty=format: -- src | grep '\.py$' | sort | uniq -c | sort -rn
+List the candidate files by line count, descending; both modes rank from this one listing:
 
-Confirm your chosen file's line count multiplies the top commit count to the highest score.
+    find src -name '*.py' | xargs wc -l | sort -rn | grep -v ' total$'
+
+Measure a file's largest top-level symbol — its longest `def`, `async def`, or `class` span — with
+ast:
+
+    python3 -c 'import ast, sys
+    print(max((n.end_lineno - n.lineno + 1, n.name) for n in ast.parse(open(sys.argv[1]).read()).body
+    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))))' <file>
+
+Split mode fires when a `.py` file under `src/` satisfies all of:
+- more than 1000 lines;
+- largest top-level symbol at most 1000 lines;
+- no open pull request whose head branch is `code-health/split-<stem>` for the file's stem;
+- no `code-health-abandoned:` record naming it (the rejected-topic listing below).
+
+Pick the largest qualifying file; Step 5 defines the split contract. A file whose largest
+top-level symbol exceeds 1000 lines is exempt — a pure move cannot split one oversized symbol —
+and is skipped silently: recompute the exemption from the tree each run and keep no record of it.
+
+When no file qualifies, the run falls back to deletion mode: the target is the largest file whose
+topic was not previously rejected.
 
 A rejected topic is a closed `code-health/*` pull request carrying a comment that starts
 `code-health-abandoned:`, which is the entire record of that rejection. List the rejected branches
@@ -31,10 +49,10 @@ and skip the topics they name, reporting which ones you skipped:
        | select(any(.comments[].body; startswith("code-health-abandoned:"))) | .headRefName'
 
 Step 2: respect the diff budget.
-Keep the PR diff at 300 lines or fewer. A file-split series whose parts will not fit a single
-300-line diff must instead be organized as micro-tasks, each individually cleanly compiling and
-committing; exceeding the budget then requires a human-applied `split-series` label. When you hit
-that budget in one PR, stop adding to it and hand off the remainder as micro-tasks.
+Keep a deletion-mode PR diff at 300 lines or fewer. When you hit that budget in one PR, stop
+adding to it and leave the remainder to a later run. Split pull requests are exempt from the
+budget: a pure move touches every moved line by definition, and the whole split lands in one pull
+request.
 
 Step 3: delete only with full evidence.
 Before deleting any symbol, produce three pieces of evidence, all three quoted verbatim in the PR
@@ -158,9 +176,38 @@ Known-alive symbols:
   delete.
 
 Step 5: open the PR.
-Create at most one PR per run, on a branch named `code-health/<slug>` where the slug
-self-describes the cleanup topic. Include every deleted symbol and its `## Evidence` in the body.
-Report the PR URL when done.
+Create at most one PR per run and report the PR URL when done.
+
+In deletion mode, the branch is `code-health/<slug>`, where the slug self-describes the cleanup
+topic. Include every deleted symbol and its `## Evidence` in the body.
+
+In split mode, the branch is `code-health/split-<stem>` for the chosen file `<stem>.py`. One file
+per pull request, and the whole split lands in that one pull request, under this contract:
+- Pure move: top-level symbols move verbatim into new sibling modules named `<stem>_<content>.py`,
+  each under 1000 lines, with zero behavior change and zero signature change anywhere in `src/`.
+- The original file stays at its path as a facade that re-exports every pre-split top-level symbol
+  through an explicit import list — no star import — so grep and vulture keep behaving and every
+  string-reachable path from Step 4 stays alive.
+- Parts import from parts; a part never imports the facade. The facade imports every part, so a
+  part importing it back closes an import cycle.
+- Tests may receive monkeypatch-target and import updates pointing at a symbol's new home, with
+  zero assertion changes.
+- A moved-out part that still exceeds 1000 lines needs no handling here: the Step 1 predicate
+  fires on it in a later run.
+
+The split PR body's `## Evidence` section quotes two lists side by side, each as command plus
+output, and they must be equal; add the full test suite green. The pre-split top-level symbol
+list, read from `main` rather than the worktree:
+
+    git show origin/main:<file> | python3 -c 'import ast, sys
+    print(sorted(n.name for n in ast.parse(sys.stdin.read()).body
+    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))))'
+
+and the facade's exported list, read from its import list:
+
+    python3 -c 'import ast, sys
+    print(sorted(a.asname or a.name for n in ast.parse(open(sys.argv[1]).read()).body
+    if isinstance(n, ast.ImportFrom) for a in n.names))' <file>
 
 Step 6: review the diff on the pull request.
 Run the `code-review` skill against the pull request with `--comment`, so its findings land as

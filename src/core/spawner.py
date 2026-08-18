@@ -890,7 +890,7 @@ async def spawn_worker(
     # stands as-is.
     if request.task_type == TaskType.VERIFY and outcome.quota_exhausted:
       current_backend, _ = require_thread_backend_model(thread, cfg)
-      tried_backends = list(thread.tried_backends)
+      tried_backends = thread.tried_backends
       retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
       if retry_backend is None or retry_backend[0] == current_backend:
         log.warning(

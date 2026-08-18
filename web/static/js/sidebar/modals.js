@@ -97,6 +97,34 @@ function initSidebarResize() {
 let cronEditMode = null; // 'edit' or 'add'
 let cronOriginalName = null;
 
+// Fields (besides the always-readonly name) that a broken task locks down: a
+// broken file's truth is the raw yaml on disk, never an edit form.
+const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt', 'cron-repo', 'cron-project', 'cron-timezone'];
+
+// Switch the modal between the broken read-only error view (task.broken) and
+// today's editable form. Broken: every field read-only, Enabled disabled and
+// rendering the file's raw value (indeterminate when the file was
+// unparseable), the full load error + path in the error box, Save hidden,
+// Delete kept. Normal/add: byte-identical behavior to the pre-broken form.
+function applyCronBrokenView(task) {
+  const isBroken = !!(task && task.broken);
+  CRON_EDITABLE_FIELD_IDS.forEach(id => { document.getElementById(id).readOnly = isBroken; });
+  document.getElementById('cron-backend').disabled = isBroken;
+  const enabledEl = document.getElementById('cron-enabled');
+  enabledEl.disabled = isBroken;
+  enabledEl.indeterminate = isBroken && task.enabled === null;
+  if (isBroken) enabledEl.checked = task.enabled === true;
+  document.getElementById('cron-save-btn').classList.toggle('hidden', isBroken);
+  const errorBox = document.getElementById('cron-error-box');
+  if (isBroken) {
+    errorBox.textContent = `加载失败：${task.error}\n文件路径：${task.path}`;
+    errorBox.classList.remove('hidden');
+  } else {
+    errorBox.textContent = '';
+    errorBox.classList.add('hidden');
+  }
+}
+
 async function openCronEditor(taskName) {
   let task;
   try {
@@ -125,6 +153,7 @@ async function openCronEditor(taskName) {
   document.getElementById('cron-project').value = task.project || '';
   document.getElementById('cron-timezone').value = task.timezone || 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = task.enabled !== false;
+  applyCronBrokenView(task);
   document.getElementById('cron-delete-btn').classList.remove('hidden');
   document.getElementById('cron-modal').classList.remove('hidden');
 }
@@ -142,6 +171,7 @@ function openCronAdder() {
   document.getElementById('cron-project').value = '';
   document.getElementById('cron-timezone').value = 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = true;
+  applyCronBrokenView(null);
   document.getElementById('cron-delete-btn').classList.add('hidden');
   document.getElementById('cron-modal').classList.remove('hidden');
 }
@@ -323,6 +353,7 @@ Object.assign(Sidebar, {
   closeCronModal,
   saveCronTask,
   deleteCronTask,
+  applyCronBrokenView,
   populateSessionActionBackendSelect,
   openSessionActionModal,
   closeSessionActionModal,

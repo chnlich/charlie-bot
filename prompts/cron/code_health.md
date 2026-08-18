@@ -125,7 +125,7 @@ Known-alive symbols:
   is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS, Jinja templates), so
   the Step 3 grep already protects them and they get no entries. Production-scope vulture
   likewise flags the `cli_command` attribute write in `src/core/spawner.py`
-  (`_prepare_thread_backend_metadata`; the tests-inclusive scope clears it): the name resolves
+  (`_construct_worker`; the tests-inclusive scope clears it): the name resolves
   to the `ThreadMetadata.cli_command` field in `src/core/models.py` plus two assertions in
   `tests/test_spawner_backend_propagation.py`, so the Step 3 grep protects it too; no entry.
   `cli_command` rides the same implicit whole-model dump as the response-model fields above —
@@ -133,6 +133,29 @@ Known-alive symbols:
   and nothing web-side or production-side reads it back (whole-repo grep finds only the field,
   the write site, and the two test assertions); the write + field + assertions form one
   deletion candidate for a later phase that permits name matches.
+- `pytestmark` (`tests/test_voice_sherpa_streaming.py`) — module-level
+  `pytest.mark.local_only` assignment that pytest's collection reads by attribute name (the
+  marker is registered in `pyproject.toml`). Exactly one whole-repo match (the assignment
+  itself), so vulture flags it as an unused variable.
+- `do_GET`, `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
+  `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
+  string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
+  exactly one whole-repo match (its definition), so vulture flags them as unused methods.
+- `_content` (two writes in `tests/test_cli_restart_contract.py`) — attribute writes on stdlib
+  `requests.Response` stand-ins; `Response.json()` reads `self._content` when the fake
+  response is consumed. Nothing in the repo reads the name back, so vulture flags the writes
+  as unused attributes.
+- `art` (four sites in `tests/core/test_plan_gates.py`) — second parameter of the
+  lambda/`measure` stubs installed for `plans._measure_page_height(chrome_bin, artifact)` via
+  `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting the parameter
+  makes the stub raise TypeError when the gate calls it. Vulture flags each unused parameter
+  at 100% confidence as an unused variable.
+- The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
+  `tests/test_master_cc_voice.py`, and `tests/test_worker_diagnostics.py` are flagged as
+  100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake
+  backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
+  coroutine), as each site's inline comment states. The condition is the point; nothing to
+  delete.
 
 Step 5: open the PR.
 Create at most one PR per run, on a branch named `code-health/<slug>` where the slug

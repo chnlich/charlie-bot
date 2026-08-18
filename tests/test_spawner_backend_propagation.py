@@ -1,5 +1,6 @@
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from conftest import JudgmentShim
@@ -35,6 +36,14 @@ def _build_cfg() -> CharlieBotConfig:
   )
 
 
+def _build_tmp_cfg(tmp_path: Path, backend_option: BackendOption) -> CharlieBotConfig:
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[backend_option],
+  )
+
+
 def _capturing_worker(captures: dict[str, Any]) -> type:
   """A spawner.Worker stand-in recording its constructor args into ``captures``.
 
@@ -53,8 +62,8 @@ def _capturing_worker(captures: dict[str, Any]) -> type:
         events_log_path: Path,
         task_description: str,
         worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
+        backend_option: BackendOption | None = None,
+        on_spawned: Callable | None = None,
     ) -> None:
       captures["worker_dir"] = working_dir
       captures["worker_backend"] = backend_option
@@ -67,6 +76,30 @@ def _capturing_worker(captures: dict[str, Any]) -> type:
       return None
 
   return CapturingWorker
+
+
+def _recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
+  """A spawner._notify_completion stand-in recording the finalized outcome and thread.
+
+  The signature mirrors the production call in spawner._run_finalize_effects; each
+  monkeypatching test reads back only the captured fields it asserts on.
+  """
+
+  async def fake_notify_completion(
+      session_id: str,
+      description: str,
+      thread_meta: ThreadMetadata,
+      outcome: spawner._WorkerRunOutcome,
+      thread_mgr: Any,
+      session_mgr: Any,
+      _notify_cfg: CharlieBotConfig,
+      verify_report: str | None = None,
+  ) -> None:
+    captures["notified"] = True
+    captures["notify_exit_code"] = outcome.exit_code
+    captures["notify_thread"] = thread_meta
+
+  return fake_notify_completion
 
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
@@ -129,6 +162,9 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
       task_type=TaskType.IMPLEMENT,
       loop_dir="/tmp/loops/2",
       iteration_number=2,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
 
   assert "Treat them as advisory evidence and hints only." in prompt
@@ -149,6 +185,11 @@ def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None
       session_meta=SessionMetadata(id="session-id", name="impl"),
       cfg=_build_cfg(),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "Commit your changes with descriptive messages." in prompt
   assert "A reviewer will handle that." in prompt
@@ -166,6 +207,11 @@ def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
       session_meta=SessionMetadata(id="session-id", name="impl"),
       cfg=_build_cfg(),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
 
   assert "contains a `## Source Files` section" in prompt
@@ -184,6 +230,11 @@ def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> No
       session_meta=SessionMetadata(id="session-id", name="quick"),
       cfg=_build_cfg(),
       task_type=TaskType.QUICK_EDIT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "Commit your changes with descriptive messages." in prompt
   assert "No reviewer will run" in prompt
@@ -200,6 +251,11 @@ def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() ->
       session_meta=SessionMetadata(id="session-id", name="script"),
       cfg=_build_cfg(),
       task_type=TaskType.SCRIPT_RUN,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "Do NOT modify tracked files" in prompt
   assert "Do NOT commit" in prompt
@@ -218,6 +274,11 @@ def test_build_worker_prompt_rejects_verify_task_type() -> None:
         session_meta=SessionMetadata(id="session-id", name="verify"),
         cfg=_build_cfg(),
         task_type=TaskType.VERIFY,
+        loop_dir=None,
+        iteration_number=None,
+        is_continuation=False,
+        keep_worktree=False,
+        start_point=None,
     )
 
 
@@ -316,7 +377,6 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
       spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
       FakeThreadManager(),
       FakeSessionManager(),
-      task_type=TaskType.IMPLEMENT,
       verify_report=None,
   )
 
@@ -360,7 +420,8 @@ async def test_resolve_requested_subagent_backend_model_defaults_to_session_back
       assert session_id == "session-id"
       return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
 
-  backend, model = await spawner.resolve_requested_subagent_backend_model("session-id", cfg, FakeSessionManager())
+  backend, model = await spawner.resolve_requested_subagent_backend_model(
+      "session-id", cfg, FakeSessionManager(), requested_backend=None)
 
   assert backend == "claude-opus-4.6"
   assert model == "claude-opus-4-6"
@@ -382,7 +443,8 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
       assert session_id == "session-id"
       return SessionMetadata(id=session_id, name="Test", backend="agy")
 
-  backend, model = await spawner.resolve_requested_subagent_backend_model("session-id", cfg, FakeSessionManager())
+  backend, model = await spawner.resolve_requested_subagent_backend_model(
+      "session-id", cfg, FakeSessionManager(), requested_backend=None)
 
   assert backend == "agy"
   assert model is None
@@ -390,13 +452,8 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
 
 @pytest.mark.asyncio
 async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   events_log = tmp_path / "events.jsonl"
@@ -420,7 +477,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
 
   class FakeThreadManager(JudgmentShim):
 
-    async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
       return thread
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
@@ -434,8 +491,8 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
@@ -450,23 +507,10 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     }
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notify_exit_code"] = outcome.exit_code
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",
@@ -504,7 +548,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_worktr
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return None
 
   with pytest.raises(ValueError, match="session 'session-id' not found"):
@@ -529,13 +573,8 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   thread = ThreadMetadata(
@@ -546,7 +585,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return None
 
   async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
@@ -597,27 +636,14 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notified"] = True
-
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner._finalize_worker(
       session_id="session-id",
@@ -650,7 +676,7 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
   class FakeThreadManager(JudgmentShim):
@@ -659,8 +685,8 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
         self,
         session_meta: SessionMetadata,
         description: str,
-        branch_name: Optional[str] = None,
-        review_of: Optional[str] = None,
+        branch_name: str | None = None,
+        review_of: str | None = None,
     ) -> ThreadMetadata:
       return ThreadMetadata(
           id="review-thread-id",
@@ -683,11 +709,11 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
       cfg: CharlieBotConfig,
       session_mgr: Any,
       thread_mgr: Any,
-      request: Optional[SpawnRequest] = None,
+      request: SpawnRequest | None = None,
   ) -> None:
     return None
 
-  def fake_create_logged_task(coro: Any, *, name: Optional[str] = None) -> Any:
+  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
     if coro.cr_frame is not None:
       captured.update(coro.cr_frame.f_locals)
     coro.close()
@@ -740,7 +766,7 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
 
   class FakeSessionManager(JudgmentShim):
 
-    async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+    async def get_session(self, session_id: str) -> SessionMetadata | None:
       return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
 
   class FakeThreadManager(JudgmentShim):
@@ -749,8 +775,8 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
         self,
         session_meta: SessionMetadata,
         description: str,
-        branch_name: Optional[str] = None,
-        review_of: Optional[str] = None,
+        branch_name: str | None = None,
+        review_of: str | None = None,
     ) -> ThreadMetadata:
       return ThreadMetadata(
           id="review-thread-id",
@@ -796,13 +822,8 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
     monkeypatch: pytest.MonkeyPatch,
     task_type: TaskType,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="agy", label="Antigravity", type="antigravity"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="agy", label="Antigravity", type="antigravity"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -841,13 +862,8 @@ async def test_create_repoless_worker_assigns_claude_session_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -886,13 +902,8 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -982,13 +993,8 @@ async def test_create_repoless_worker_prepends_verify_preamble(
 
 @pytest.mark.asyncio
 async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   events_log = tmp_path / "events.jsonl"
   thread = ThreadMetadata(
       id="thread-1",
@@ -1014,7 +1020,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
     def thread_dir(self, session_id: str, thread_id: str) -> Path:
       return cfg.sessions_dir / session_id / "threads" / thread_id
 
-    async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
       return thread
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
@@ -1028,33 +1034,16 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notify_exit_code"] = outcome.exit_code
-    captures["notify_require_review"] = thread_meta.require_review
-    captures["notify_repo_path"] = thread_meta.repo_path
-    captures["notify_worktree_path"] = thread_meta.worktree_path
-    captures["notify_branch_name"] = thread_meta.branch_name
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",
@@ -1074,7 +1063,8 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
   worker_dir = captures["worker_dir"]
   assert worker_dir == expected_thread_dir
   assert captures["notify_exit_code"] == 0
-  assert captures["notify_require_review"] is False
-  assert captures["notify_repo_path"] is None
-  assert captures["notify_worktree_path"] == str(worker_dir)
-  assert captures["notify_branch_name"] is None
+  notify_thread = captures["notify_thread"]
+  assert notify_thread.require_review is False
+  assert notify_thread.repo_path is None
+  assert notify_thread.worktree_path == str(worker_dir)
+  assert notify_thread.branch_name is None

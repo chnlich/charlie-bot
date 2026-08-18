@@ -722,7 +722,7 @@ async def _reconcile_one(
     # (loop continuation is a non-goal): drain-finalize them as failed.
     create_logged_task(
         spawner.resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr,
-                              is_alive=lambda: False),
+                              is_alive=lambda: False, interrupt_reason="", on_silence=None),
         name=f"resume-drain-{thread_id[:8]}")
     return True
 
@@ -759,6 +759,7 @@ async def _reconcile_one(
             session_mgr,
             thread_mgr,
             is_alive=_liveness_probe(meta.get("pid"), meta.get("pid_start"), _parse_started_at(meta), host_boot),
+            interrupt_reason="",
             on_silence=lambda: _follow_silence_recheck(session_mgr, session_id, thread_id),
         ),
         name=f"resume-follow-{thread_id[:8]}")
@@ -770,7 +771,7 @@ async def _reconcile_one(
   # failed instead of a bare exit -1; COMPLETED has no reason and is unaffected.
   create_logged_task(
       spawner.resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr,
-                            is_alive=lambda: False, interrupt_reason=resolution.reason),
+                            is_alive=lambda: False, interrupt_reason=resolution.reason, on_silence=None),
       name=f"resume-drain-{thread_id[:8]}")
 
   # Row 5: descendants that outlived the run while holding its raw-log fd are

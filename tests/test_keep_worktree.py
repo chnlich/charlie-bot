@@ -5,8 +5,9 @@ the worktree directory must remain on disk after both _cleanup_worker_directory
 (post-worker) and finalize_review_chain (post-reviewer merge).
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 from conftest import JudgmentShim
@@ -44,7 +45,11 @@ def test_build_worker_prompt_includes_keep_worktree_note(tmp_path: Path) -> None
       session_meta=SessionMetadata(id="session-id", name="bench"),
       cfg=_build_cfg(tmp_path),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
       keep_worktree=True,
+      start_point=None,
   )
   assert "This worktree will persist after the reviewer merges." in prompt
   assert "SLURM" in prompt
@@ -60,6 +65,11 @@ def test_build_worker_prompt_omits_keep_worktree_note_by_default(tmp_path: Path)
       session_meta=SessionMetadata(id="session-id", name="bench"),
       cfg=_build_cfg(tmp_path),
       task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
   )
   assert "This worktree will persist after the reviewer merges." not in prompt
 
@@ -99,8 +109,8 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
@@ -114,7 +124,6 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
       thread_mgr: Any,
       session_mgr: Any,
       _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
       verify_report: str | None = None,
   ) -> None:
     captures["notified"] = True
@@ -250,7 +259,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
 
   class FakeThreadManager(JudgmentShim):
 
-    async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
       return thread
 
     async def save_metadata(self, meta: ThreadMetadata) -> None:
@@ -264,8 +273,8 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
         session_id: str,
         thread_id: str,
         status: Any,
-        pid: Optional[int] = None,
-        exit_code: Optional[int] = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
         completed_at: Any = None,
     ) -> None:
       captures["status"] = status
@@ -283,8 +292,8 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
         events_log_path: Path,
         task_description: str,
         worker_cfg: CharlieBotConfig,
-        backend_option: Optional[BackendOption] = None,
-        on_spawned: Optional[callable] = None,
+        backend_option: BackendOption | None = None,
+        on_spawned: Callable | None = None,
     ) -> None:
       captures["prompt"] = task_description
 
@@ -302,7 +311,6 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
       thread_mgr: Any,
       session_mgr: Any,
       _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
       verify_report: str | None = None,
   ) -> None:
     captures["notify_thread_keep_worktree"] = thread_meta.keep_worktree

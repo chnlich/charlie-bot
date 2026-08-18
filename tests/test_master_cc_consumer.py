@@ -475,7 +475,7 @@ class _NoopBackend:
 
   async def run(self, prompt: str, cwd: str, env: dict):
     if False:
-      yield {}
+      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
 
 @pytest.mark.asyncio

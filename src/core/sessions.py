@@ -9,7 +9,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiofiles
 import structlog
@@ -146,11 +146,11 @@ class SessionManager:
       self,
       task_name: str,
       backend: str,
-      session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
+      session_cache: dict[str, list[SessionMetadata]] | None = None,
       skip_if_busy: bool = False,
-      role: Optional[str] = None,
-      group: Optional[str] = None,
-  ) -> Optional[SessionMetadata]:
+      role: str | None = None,
+      group: str | None = None,
+  ) -> SessionMetadata | None:
     """Return the active scheduled session for task_name/backend, rotating history if needed.
 
     Backend changes are generation changes: the old active session is archived and a new
@@ -178,7 +178,7 @@ class SessionManager:
       log.exception("backend_create_hook_failed", session_id=meta.id, backend=meta.backend)
       raise
 
-  async def _backend_destroy_hook(self, session_id: str, meta: Optional[SessionMetadata]) -> None:
+  async def _backend_destroy_hook(self, session_id: str, meta: SessionMetadata | None) -> None:
     """Run backend-specific teardown (e.g. kill tmux for tui-cli)."""
     # Only called on permanent delete. Archive is a status-only flag and must
     # NOT kill the underlying tmux/claude process for tui-cli sessions.
@@ -190,7 +190,7 @@ class SessionManager:
     from src.agents.backends.tui import kill_tmux_session
     await kill_tmux_session(session_id)
 
-  async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def get_session(self, session_id: str) -> SessionMetadata | None:
     """Load session metadata, using in-memory cache when available."""
     cached = self._metadata_cache.get(session_id)
     if cached is not None:
@@ -217,9 +217,9 @@ class SessionManager:
 
   async def list_sessions(
       self,
-      status: Optional[SessionStatus] = None,
-      starred: Optional[bool] = None,
-      scheduled: Optional[bool] = None,
+      status: SessionStatus | None = None,
+      starred: bool | None = None,
+      scheduled: bool | None = None,
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
       include_pending_plan_approval: bool = False,
@@ -258,7 +258,7 @@ class SessionManager:
       # Collect non-name-matched sessions for parallel content scan
       content_candidates.append((meta, self._chat_events_path(meta.id)))
 
-    async def _check_content(meta: SessionMetadata, path: Path) -> Optional[SessionMetadata]:
+    async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
       """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
 
       def _read_and_check() -> bool:
@@ -458,7 +458,7 @@ class SessionManager:
     """Return the absolute path to a session's chat_events.jsonl."""
     return self._chat_events.get_chat_events_path(session_id)
 
-  async def rename_session(self, session_id: str, new_name: str) -> Optional[SessionMetadata]:
+  async def rename_session(self, session_id: str, new_name: str) -> SessionMetadata | None:
     """Rename a session and return the updated metadata."""
     async with self._lock_for(session_id):
       meta = await self.get_session(session_id)
@@ -470,7 +470,7 @@ class SessionManager:
     log.info("session_renamed", session_id=session_id, new_name=new_name)
     return meta
 
-  async def switch_backend(self, session_id: str, backend: str) -> Optional[SessionMetadata]:
+  async def switch_backend(self, session_id: str, backend: str) -> SessionMetadata | None:
     """Set the session's backend and return the updated metadata.
 
     Performs only the metadata write — the caller (API layer) is responsible
@@ -494,7 +494,7 @@ class SessionManager:
     log.info("session_backend_switched", session_id=session_id, backend=backend)
     return meta
 
-  async def mark_read(self, session_id: str) -> Optional[SessionMetadata]:
+  async def mark_read(self, session_id: str) -> SessionMetadata | None:
     """Clear the unread flag for a session."""
     async with self._lock_for(session_id):
       meta = await self.get_session(session_id)
@@ -525,7 +525,7 @@ class SessionManager:
             "has_unread": True,
         })
 
-  async def archive_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def archive_session(self, session_id: str) -> SessionMetadata | None:
     """Mark a session as archived (does not delete files)."""
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
     self._chat_events.clear_cache(session_id)
@@ -549,7 +549,7 @@ class SessionManager:
     log.info("session_deleted_permanently", session_id=session_id)
     return True
 
-  async def unarchive_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def unarchive_session(self, session_id: str) -> SessionMetadata | None:
     """Restore an archived session back to active."""
     return await self._update_field(session_id, "status", SessionStatus.ACTIVE, "session_unarchived")
 
@@ -626,15 +626,15 @@ class SessionManager:
     """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive."""
     return self._chat_events._archive_old_chat_events_sync(session_id, cutoff_utc)
 
-  async def star_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def star_session(self, session_id: str) -> SessionMetadata | None:
     """Star a session."""
     return await self._update_field(session_id, "starred", True, "session_starred")
 
-  async def unstar_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def unstar_session(self, session_id: str) -> SessionMetadata | None:
     """Unstar a session."""
     return await self._update_field(session_id, "starred", False, "session_unstarred")
 
-  async def set_group(self, session_id: str, group: Optional[str]) -> Optional[SessionMetadata]:
+  async def set_group(self, session_id: str, group: str | None) -> SessionMetadata | None:
     """Set or clear the group for a session."""
     meta = await self._update_field(session_id, "group", group, "session_group_set")
     if meta:
@@ -648,6 +648,20 @@ class SessionManager:
 
   async def rename_group(self, old_name: str, new_name: str) -> int:
     """Rename a group across all sessions. Returns the count of updated sessions."""
+    count = await self._rewrite_group(old_name, new_name)
+    if count:
+      log.info("group_renamed", old_name=old_name, new_name=new_name, count=count)
+    return count
+
+  async def delete_group(self, group: str) -> int:
+    """Remove a group from all sessions (set to null). Returns the count of updated sessions."""
+    count = await self._rewrite_group(group, None)
+    if count:
+      log.info("group_deleted", group=group, count=count)
+    return count
+
+  async def _rewrite_group(self, old_name: str, new_name: str | None) -> int:
+    """Set old_name's group to new_name on every matching session. Returns the count updated."""
     all_sessions = await self.list_sessions()
     count = 0
     for meta in all_sessions:
@@ -661,34 +675,13 @@ class SessionManager:
         fresh.updated_at = utc_now()
         await self._save_metadata(fresh)
       count += 1
-    if count:
-      log.info("group_renamed", old_name=old_name, new_name=new_name, count=count)
-    return count
-
-  async def delete_group(self, group: str) -> int:
-    """Remove a group from all sessions (set to null). Returns the count of updated sessions."""
-    all_sessions = await self.list_sessions()
-    count = 0
-    for meta in all_sessions:
-      if meta.group != group:
-        continue
-      async with self._lock_for(meta.id):
-        fresh = await self.get_session(meta.id)
-        if not fresh or fresh.group != group:
-          continue
-        fresh.group = None
-        fresh.updated_at = utc_now()
-        await self._save_metadata(fresh)
-      count += 1
-    if count:
-      log.info("group_deleted", group=group, count=count)
     return count
 
   async def save_metadata(self, meta: SessionMetadata) -> None:
     """Public wrapper for _save_metadata."""
     await self._save_metadata(meta)
 
-  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> Optional[str]:
+  async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> str | None:
     """Persist a cc_session_id without clobbering unrelated metadata fields.
 
     Re-reads fresh metadata from disk under the per-session lock, mutates only
@@ -720,7 +713,7 @@ class SessionManager:
     events = self.load_chat_events_sync(session_id)
     return any(ev.get("type") == ET.MASTER_DONE for ev in events)
 
-  async def persist_master_run(self, session_id: str, record: Optional[MasterRunRecord]) -> None:
+  async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
     """Set or clear the session's in-flight master-turn record.
 
     Same read-modify-write-under-lock pattern as ``persist_cc_session_id``: a
@@ -924,14 +917,6 @@ class SessionManager:
     """
     return self._chat_events._read_archive_offset_sync(session_id)
 
-  def _load_archive_range(self, session_id: str, start: int, end: int) -> list[dict]:
-    """Read events at global indices [start, end) from archive files.
-
-    Archives live in ``<session>/data/archives/chat_events.<YYYY>-W<WW>.jsonl``.
-    Files are walked in chronological order (filename sort happens to match).
-    """
-    return self._chat_events._load_archive_range(session_id, start, end)
-
   def _chat_events_path(self, session_id: str) -> Path:
     return self._chat_events.get_chat_events_path(session_id)
 
@@ -1060,7 +1045,7 @@ class SessionManager:
       self._metadata_locks[session_id] = lock
     return lock
 
-  async def _update_field(self, session_id: str, field: str, value: Any, log_event: str) -> Optional[SessionMetadata]:
+  async def _update_field(self, session_id: str, field: str, value: Any, log_event: str) -> SessionMetadata | None:
     """Get a session, set one field, save, and log. Returns None if session not found."""
     async with self._lock_for(session_id):
       meta = await self.get_session(session_id)
@@ -1093,16 +1078,16 @@ class SessionManager:
 
     return await asyncio.to_thread(_check)
 
-  async def _get_pending_trigger_state(self, session_id: str) -> tuple[int, Optional[datetime]]:
+  async def _get_pending_trigger_state(self, session_id: str) -> tuple[int, datetime | None]:
     """Return the number of pending delayed triggers and the earliest fire time."""
 
-    def _check() -> tuple[int, Optional[datetime]]:
+    def _check() -> tuple[int, datetime | None]:
       triggers_dir = self._session_dir(session_id) / "triggers"
       if not triggers_dir.exists():
         return 0, None
 
       pending_count = 0
-      next_trigger_at: Optional[datetime] = None
+      next_trigger_at: datetime | None = None
       for trigger_path in triggers_dir.glob("*.json"):
         trigger = load_json_meta(
             trigger_path,

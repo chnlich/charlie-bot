@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,21 @@ async def _make_running_thread(home: Path):
   return cfg, session_mgr, thread_mgr, session_meta, thread
 
 
+async def _boom_resume(self, *, is_alive, on_silence=None) -> int:
+  raise RuntimeError("resume exploded")
+
+
+def _hang_resume(entered: asyncio.Event) -> Callable[..., Awaitable[int]]:
+  """A Worker.resume stand-in that signals entry through ``entered``, then hangs."""
+
+  async def hang(self, *, is_alive, on_silence=None) -> int:
+    entered.set()
+    await asyncio.Event().wait()  # never returns; only cancellation gets out
+    return -1
+
+  return hang
+
+
 def _thread_status(home: Path, session_id: str, thread_id: str) -> str:
   meta_path = home / "sessions" / session_id / "threads" / thread_id / "metadata.json"
   return json.loads(meta_path.read_text(encoding="utf-8"))["status"]
@@ -78,13 +94,18 @@ async def test_generic_exception_with_live_probe_reports_and_skips_finalize(
   home = tmp_path / "home"
   cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
 
-  async def boom(self, *, is_alive, on_silence=None) -> int:
-    raise RuntimeError("resume exploded")
-
-  monkeypatch.setattr(Worker, "resume", boom)
+  monkeypatch.setattr(Worker, "resume", _boom_resume)
 
   await spawner.resume_worker(
-      session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: True)
+      session_meta.id,
+      "gate task",
+      thread.id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      is_alive=lambda: True,
+      interrupt_reason="",
+      on_silence=None)
 
   assert _thread_status(home, session_meta.id, thread.id) == "running"
   reports = _recovery_reports(home, session_meta.id)
@@ -100,13 +121,18 @@ async def test_generic_exception_with_dead_probe_finalizes_failed(
   home = tmp_path / "home"
   cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
 
-  async def boom(self, *, is_alive, on_silence=None) -> int:
-    raise RuntimeError("resume exploded")
-
-  monkeypatch.setattr(Worker, "resume", boom)
+  monkeypatch.setattr(Worker, "resume", _boom_resume)
 
   await spawner.resume_worker(
-      session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: False)
+      session_meta.id,
+      "gate task",
+      thread.id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      is_alive=lambda: False,
+      interrupt_reason="",
+      on_silence=None)
 
   assert _thread_status(home, session_meta.id, thread.id) == "failed"
   assert _recovery_reports(home, session_meta.id) == []
@@ -122,16 +148,19 @@ async def test_cancellation_with_live_probe_reports_and_skips_finalize(
   cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
   resume_entered = asyncio.Event()
 
-  async def hang(self, *, is_alive, on_silence=None) -> int:
-    resume_entered.set()
-    await asyncio.Event().wait()  # never returns; only cancellation gets out
-    return -1
-
-  monkeypatch.setattr(Worker, "resume", hang)
+  monkeypatch.setattr(Worker, "resume", _hang_resume(resume_entered))
 
   task = asyncio.create_task(
       spawner.resume_worker(
-          session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: True))
+          session_meta.id,
+          "gate task",
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          is_alive=lambda: True,
+          interrupt_reason="",
+          on_silence=None))
   await asyncio.wait_for(resume_entered.wait(), timeout=10.0)
   task.cancel()
   with contextlib.suppress(asyncio.CancelledError):
@@ -154,16 +183,19 @@ async def test_cancellation_with_dead_probe_finalizes_failed(
   cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
   resume_entered = asyncio.Event()
 
-  async def hang(self, *, is_alive, on_silence=None) -> int:
-    resume_entered.set()
-    await asyncio.Event().wait()
-    return -1
-
-  monkeypatch.setattr(Worker, "resume", hang)
+  monkeypatch.setattr(Worker, "resume", _hang_resume(resume_entered))
 
   task = asyncio.create_task(
       spawner.resume_worker(
-          session_meta.id, "gate task", thread.id, cfg, session_mgr, thread_mgr, is_alive=lambda: False))
+          session_meta.id,
+          "gate task",
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          is_alive=lambda: False,
+          interrupt_reason="",
+          on_silence=None))
   await asyncio.wait_for(resume_entered.wait(), timeout=10.0)
   task.cancel()
   with contextlib.suppress(asyncio.CancelledError):

@@ -53,34 +53,33 @@ log = structlog.get_logger()
 _PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
 _PROMPT_SECTION_MARKER_SUFFIX = " -->"
 
+# Every workflow section draws from the same token map (intro + branch tokens);
+# an absent key fails loud below rather than selecting a wrong workflow body.
+# The id set lives only here: _REQUIRED_WORKER_PROMPT_SECTIONS derives it.
+_WORKFLOW_PROMPT_SECTION = {
+  TaskType.IMPLEMENT: "workflow_implement",
+  TaskType.QUICK_EDIT: "workflow_quick_edit",
+  TaskType.SCRIPT_RUN: "workflow_script_run",
+}
+
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
-    "session_info",
-    "coding_principles",
-    "skills_discovery",
-    "remote_scratch",
-    "role",
-    "intro_new",
-    "intro_continuation",
-    "worktree_workflow_header",
-    "workflow_implement",
-    "workflow_quick_edit",
-    "workflow_script_run",
-    "task_spec_source_files",
-    "task",
-    "iteration_reports",
-    "worktree_persistence",
-    "memory",
+  "session_info",
+  "coding_principles",
+  "skills_discovery",
+  "remote_scratch",
+  "role",
+  "intro_new",
+  "intro_continuation",
+  "worktree_workflow_header",
+  *_WORKFLOW_PROMPT_SECTION.values(),
+  "task_spec_source_files",
+  "task",
+  "iteration_reports",
+  "worktree_persistence",
+  "memory",
 )
 
 _REQUIRED_VERIFY_PROMPT_SECTIONS = ("preamble", "scope")
-
-# Every workflow section draws from the same token map (intro + branch tokens);
-# an absent key fails loud below rather than selecting a wrong workflow body.
-_WORKFLOW_PROMPT_SECTION = {
-    TaskType.IMPLEMENT: "workflow_implement",
-    TaskType.QUICK_EDIT: "workflow_quick_edit",
-    TaskType.SCRIPT_RUN: "workflow_script_run",
-}
 
 
 def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
@@ -133,18 +132,11 @@ def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   return result
 
 
-def _build_verify_repoless_prompt(description: str, cfg: CharlieBotConfig) -> str:
-  """Build the full prompt for a repo-less VERIFY task (preamble + scope contract + task)."""
-  sections = _load_prompt_sections(
-      cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
-  contract = _substitute_tokens(
-      "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
-          "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
-          "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
-      })
-  if "{{" in contract:
-    raise ValueError("verify prompt assembly left an unresolved {{token}} in the output")
-  return f"{contract}\n\n{description}"
+def _require_tokens_resolved(assembled: str, *, prompt: str) -> None:
+  """Guard the end of prompt assembly: a leftover `{{token}}` means the template's token set
+  and the builder's token map disagree, and a half-built prompt must never reach a worker."""
+  if "{{" in assembled:
+    raise ValueError(prompt + " prompt assembly left an unresolved {{token}} in the output")
 
 
 def _build_worker_prompt(
@@ -156,11 +148,11 @@ def _build_worker_prompt(
     session_meta: SessionMetadata,
     cfg: CharlieBotConfig,
     task_type: TaskType,
-    loop_dir: str | None = None,
-    iteration_number: int | None = None,
-    is_continuation: bool = False,
-    keep_worktree: bool = False,
-    start_point: str | None = None,
+    loop_dir: str | None,
+    iteration_number: int | None,
+    is_continuation: bool,
+    keep_worktree: bool,
+    start_point: str | None,
 ) -> str:
   """Build the task-specific worker prompt (session info + worktree workflow + task)."""
   sections = load_worker_prompt_sections(cfg)
@@ -212,8 +204,7 @@ def _build_worker_prompt(
       f"{sections['remote_scratch']}\n{sections['role']}"
       f"{memory_section}\n{worktree_section}{iteration_reports_section}{keep_worktree_section}")
 
-  if "{{" in result:
-    raise ValueError("worker prompt assembly left an unresolved {{token}} in the output")
+  _require_tokens_resolved(result, prompt="worker")
 
   return result
 
@@ -232,9 +223,9 @@ def _worker_locator_summary(thread_id: str, status: str, timestamp: str) -> str:
 def _thread_worker_event(
     thread: ThreadMetadata,
     status: str,
-    full_content: str = '',
+    full_content: str,
     *,
-    content: str | None = None,
+    content: str | None,
 ) -> dict:
   """Build a worker_summary event whose chat content is the thread's locator summary.
 
@@ -323,7 +314,7 @@ async def resolve_requested_subagent_backend_model(
     session_id: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-    requested_backend: str | None = None,
+    requested_backend: str | None,
 ) -> tuple[str, str | None]:
   """Resolve backend+model from an explicit configured backend or the session default.
 
@@ -355,7 +346,8 @@ async def select_verify_backend(
   Never None with an untried (empty) list; None only when every configured backend
   has already been tried.
   """
-  session_backend, session_model = await resolve_requested_subagent_backend_model(session_id, cfg, session_mgr)
+  session_meta = await _require_session(session_mgr, session_id)
+  session_backend, session_model = _resolve_session_default_backend_model(cfg, session_meta)
   return review.select_reviewer_backend(cfg, session_backend, session_model, tried_backends)
 
 
@@ -371,25 +363,6 @@ def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) 
   if backend_type_allows_missing_model(option.type):
     return thread.backend, None
   raise ValueError(f"thread '{thread.id}' missing model metadata")
-
-
-def _prepare_thread_backend_metadata(
-    thread: ThreadMetadata,
-    backend_option: BackendOption,
-    description: str,
-) -> None:
-  if backend_option.type != "cc-claude":
-    return
-  if thread.claude_session_id is None:
-    thread.claude_session_id = str(uuid.uuid4())
-  backend = ClaudeCodeBackend(
-      model=backend_option.model,
-      effort=backend_option.effort,
-      cli_binary=backend_option.cli_binary,
-      fast_mode=backend_option.fast_mode,
-      claude_session_id=thread.claude_session_id,
-  )
-  thread.cli_command = shlex.join(backend._build_command(description) + [description])
 
 
 async def _construct_worker(
@@ -408,7 +381,17 @@ async def _construct_worker(
   thread.model = backend_option.model
   if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
     thread.tried_backends.append(backend_option.id)
-  _prepare_thread_backend_metadata(thread, backend_option, description)
+  if backend_option.type == "cc-claude":
+    if thread.claude_session_id is None:
+      thread.claude_session_id = str(uuid.uuid4())
+    backend = ClaudeCodeBackend(
+        model=backend_option.model,
+        effort=backend_option.effort,
+        cli_binary=backend_option.cli_binary,
+        fast_mode=backend_option.fast_mode,
+        claude_session_id=thread.claude_session_id,
+    )
+    thread.cli_command = shlex.join(backend._build_command(description) + [description])
   await thread_mgr.save_metadata(thread)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
@@ -461,7 +444,7 @@ async def _create_worktree_and_process(
       wt_path = Path(request.worktree_path_override)
       thread.skip_cleanup = request.skip_cleanup
     else:
-      wt_path = Path(cfg.worktree_dir) / branch_name.replace("/", "-")
+      wt_path = Path(cfg.worktree_dir) / git_worktree_dir_name(branch_name)
 
       Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
       resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
@@ -517,8 +500,16 @@ async def _create_repoless_process(
 ) -> Worker:
   """Create a repo-less worker for prompt-only tasks (no worktree, no git)."""
   if request.task_type == TaskType.VERIFY:
-    worker_prompt = _build_verify_repoless_prompt(description, cfg)
-  elif request.task_type in (TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN):
+    sections = _load_prompt_sections(
+        cfg.charlie_bot_repo / "prompts" / "verify.md", _REQUIRED_VERIFY_PROMPT_SECTIONS, extraction="verify-prompt")
+    contract = _substitute_tokens(
+        "\n".join(sections[section_id].strip("\n") for section_id in _REQUIRED_VERIFY_PROMPT_SECTIONS), {
+            "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
+            "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
+        })
+    _require_tokens_resolved(contract, prompt="verify")
+    worker_prompt = f"{contract}\n\n{description}"
+  elif request.task_type in _WORKFLOW_PROMPT_SECTION:
     worker_prompt = request.prompt_override or description
   else:
     raise ValueError(f"unsupported task_type: {request.task_type!r}")
@@ -538,8 +529,8 @@ class _WorkerRunOutcome(NamedTuple):
   """A worker run's terminal disposition: process exit code, quota-exhaustion flag, setup error."""
 
   exit_code: int
-  quota_exhausted: bool = False
-  error: str = ""
+  quota_exhausted: bool
+  error: str
 
   @property
   def failed(self) -> bool:
@@ -566,10 +557,10 @@ async def _stream_worker_events(
   await thread_mgr.save_metadata(thread)
   log.info("worker_running", thread_id=thread.id, session=session_id)
 
-  await session_mgr.persist_and_broadcast(session_id, _thread_worker_event(thread, 'running'))
+  await session_mgr.persist_and_broadcast(session_id, _thread_worker_event(thread, 'running', '', content=None))
 
   try:
-    return _WorkerRunOutcome(exit_code=await worker.run())
+    return _WorkerRunOutcome(exit_code=await worker.run(), quota_exhausted=False, error="")
   except QuotaExhaustedException:
     await worker.terminate()
     log.warning("worker_quota_exhausted", thread_id=thread.id)
@@ -577,7 +568,7 @@ async def _stream_worker_events(
   except Exception as e:
     await worker.terminate()
     log.error("worker_failed", thread_id=thread.id, error=str(e), traceback=traceback.format_exc())
-    return _WorkerRunOutcome(exit_code=-1, error=str(e))
+    return _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
 
 
 async def _read_thread_events(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> list[dict]:
@@ -633,26 +624,28 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, 
   if skip_cleanup:
     return None
 
-  if thread.worktree_path and thread.repo_path:
-    wt = Path(thread.worktree_path)
-    if wt.exists():
-      if not thread.branch_name:
-        raise RuntimeError(f"thread {thread.id} has worktree_path but no branch_name")
-      try:
-        removed = await git_worktree_remove(
-            thread.repo_path,
-            wt,
-            thread.id,
-            allowed_parent=worktree_parent,
-            expected_residue_name=git_worktree_dir_name(thread.branch_name),
-        )
-      except Exception as wt_err:
-        log.error("worktree_cleanup_error", thread_id=thread.id, worktree=str(wt), error=str(wt_err), exc_info=True)
-        return f"Worktree cleanup failed for {wt}: {wt_err}"
-      if not removed:
-        log.error("worktree_cleanup_remove_failed", thread_id=thread.id, worktree=str(wt))
-        return f"Worktree cleanup failed for {wt}: git worktree remove reported failure"
-      await git_worktree_prune(thread.repo_path, thread.id)
+  if not thread.worktree_path or not thread.repo_path:
+    return None
+  wt = Path(thread.worktree_path)
+  if not wt.exists():
+    return None
+  if not thread.branch_name:
+    raise RuntimeError(f"thread {thread.id} has worktree_path but no branch_name")
+  try:
+    removed = await git_worktree_remove(
+        thread.repo_path,
+        wt,
+        thread.id,
+        allowed_parent=worktree_parent,
+        expected_residue_name=git_worktree_dir_name(thread.branch_name),
+    )
+  except Exception as wt_err:
+    log.error("worktree_cleanup_error", thread_id=thread.id, worktree=str(wt), error=str(wt_err), exc_info=True)
+    return f"Worktree cleanup failed for {wt}: {wt_err}"
+  if not removed:
+    log.error("worktree_cleanup_remove_failed", thread_id=thread.id, worktree=str(wt))
+    return f"Worktree cleanup failed for {wt}: git worktree remove reported failure"
+  await git_worktree_prune(thread.repo_path, thread.id)
   return None
 
 
@@ -685,7 +678,6 @@ async def _run_finalize_effects(
     cfg: CharlieBotConfig,
     *,
     skip_notify: bool,
-    task_type: TaskType,
     verify_report: str | None,
 ) -> None:
   """Run a finalized thread's side effects — worktree cleanup, then the notify chain.
@@ -708,7 +700,6 @@ async def _run_finalize_effects(
       thread_mgr,
       session_mgr,
       cfg,
-      task_type=task_type,
       verify_report=verify_report)
 
 
@@ -750,9 +741,7 @@ async def _finalize_worker(
 ) -> None:
   """Update thread status and notify completion.
 
-  ``completed_at`` overrides the terminal-status timestamp when given — the
-  caller passes the raw log's final mtime so the recorded completion time is
-  the run's true end, not whenever finalization happened to run.
+  ``completed_at`` overrides the terminal-status timestamp when given.
   """
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
   # One read of events.jsonl per finalize pass: the trailer gate below and the
@@ -772,7 +761,8 @@ async def _finalize_worker(
   elif outcome.error:
     await thread_mgr.update_status(session_id, thread.id, ThreadStatus.FAILED, exit_code=-1, completed_at=completed_at)
   elif outcome.exit_code == 0:
-    await thread_mgr.update_status(session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0, completed_at=completed_at)
+    await thread_mgr.update_status(
+        session_id, thread.id, ThreadStatus.COMPLETED, exit_code=0, completed_at=completed_at)
     log.info("worker_completed", thread_id=thread.id)
   else:
     await thread_mgr.update_status(
@@ -788,7 +778,6 @@ async def _finalize_worker(
       session_mgr,
       cfg,
       skip_notify=skip_notify,
-      task_type=task_type,
       verify_report=verify_report)
 
 
@@ -806,6 +795,10 @@ async def _finalize_worker_safely(
 ) -> None:
   """Finalize a worker thread; on failure, log and best-effort-broadcast a session ERROR event."""
   try:
+    # completed_at is the run's true end — its raw log's final mtime — so server
+    # downtime before finalization never shifts the recorded end.
+    thread_dir = thread_mgr.thread_dir(session_id, thread.id)
+    completed_at = runs.raw_completion_time(runs.raw_log_path(thread_dir))
     await _finalize_worker(
         session_id,
         description,
@@ -816,7 +809,7 @@ async def _finalize_worker_safely(
         cfg,
         skip_notify=skip_notify,
         task_type=task_type,
-        completed_at=_run_completion_time(thread_mgr, session_id, thread.id))
+        completed_at=completed_at)
   except Exception as e:
     log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
     try:
@@ -854,55 +847,12 @@ async def recomplete_finalize_effects(
       session_id,
       description,
       thread,
-      _WorkerRunOutcome(exit_code=exit_code),
+      _WorkerRunOutcome(exit_code=exit_code, quota_exhausted=False, error=""),
       thread_mgr,
       session_mgr,
       cfg,
       skip_notify=False,
-      task_type=task_type,
       verify_report=verify_report)
-
-
-async def _rerun_verify_on_fresh_backend(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    thread_mgr: ThreadManager,
-    request: SpawnRequest,
-) -> _WorkerRunOutcome:
-  """Re-run an exhausted VERIFY task once on the next untried checking-role backend.
-
-  When no untried checking-role backend remains (selection empty, or looped back
-  to the exhausted backend), the original exhaustion outcome is returned
-  unchanged. A ``_create_repoless_process`` failure propagates: the caller's
-  generic-``except`` rebuilds the outcome as a setup error, never quota
-  exhaustion.
-  """
-  current_backend, _ = require_thread_backend_model(thread, cfg)
-  tried_backends = list(thread.tried_backends)
-  retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
-  if retry_backend is None or retry_backend[0] == current_backend:
-    log.warning(
-        "verify_quota_retry_backend_unavailable",
-        thread_id=thread.id,
-        current_backend=current_backend,
-        tried=tried_backends,
-    )
-    return _QUOTA_EXHAUSTED_OUTCOME
-  resolved_backend, resolved_model, tried_backends = retry_backend
-  log.warning(
-      "verify_quota_retry",
-      thread_id=thread.id,
-      exhausted_backend=thread.backend,
-      retry_backend=resolved_backend,
-  )
-  request.resolved_backend = resolved_backend
-  request.resolved_model = resolved_model
-  thread.tried_backends = tried_backends
-  worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
-  return await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
 
 async def spawn_worker(
@@ -917,7 +867,7 @@ async def spawn_worker(
   """Spawn a worker for the given thread on its resolved backend. Fire-and-forget via asyncio.create_task()."""
   thread = None
   worker = None
-  outcome = _WorkerRunOutcome(exit_code=-1)
+  outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="")
   cancelled = False
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
@@ -934,9 +884,34 @@ async def spawn_worker(
 
     outcome = await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
+    # Re-run an exhausted VERIFY once on the next untried checking-role backend;
+    # with none remaining (selection empty, or looped back to the exhausted
+    # backend) the existing outcome is already _QUOTA_EXHAUSTED_OUTCOME and
+    # stands as-is.
     if request.task_type == TaskType.VERIFY and outcome.quota_exhausted:
-      outcome = await _rerun_verify_on_fresh_backend(
-          session_id, description, thread, cfg, session_mgr, thread_mgr, request)
+      current_backend, _ = require_thread_backend_model(thread, cfg)
+      tried_backends = list(thread.tried_backends)
+      retry_backend = await select_verify_backend(session_id, cfg, session_mgr, tried_backends)
+      if retry_backend is None or retry_backend[0] == current_backend:
+        log.warning(
+            "verify_quota_retry_backend_unavailable",
+            thread_id=thread.id,
+            current_backend=current_backend,
+            tried=tried_backends,
+        )
+      else:
+        resolved_backend, resolved_model, tried_backends = retry_backend
+        log.warning(
+            "verify_quota_retry",
+            thread_id=thread.id,
+            exhausted_backend=thread.backend,
+            retry_backend=resolved_backend,
+        )
+        request.resolved_backend = resolved_backend
+        request.resolved_model = resolved_model
+        thread.tried_backends = tried_backends
+        worker = await _create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
+        outcome = await _stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
     if outcome.failed and not outcome.error:
       outcome = outcome._replace(
@@ -974,7 +949,7 @@ async def spawn_worker(
     # exhaustion — a VERIFY retry's own setup failure included — so the
     # outcome is rebuilt rather than patched in place.
     log.error("spawn_worker_setup_failed", session=session_id, error=str(e), traceback=traceback.format_exc())
-    outcome = _WorkerRunOutcome(exit_code=-1, error=str(e))
+    outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
   finally:
     if thread is not None and not cancelled:
       await _finalize_worker_safely(
@@ -987,17 +962,6 @@ async def spawn_worker(
           cfg,
           skip_notify=request.skip_notify,
           task_type=request.task_type)
-
-
-def _run_completion_time(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> datetime | None:
-  """The run's true completion time: its raw log's final mtime, when one exists.
-
-  Independent of backend, event content, and how long the server was down; the
-  finalize chain writes it into completed_at so downtime never shifts a run's
-  recorded end.
-  """
-  thread_dir = thread_mgr.thread_dir(session_id, thread_id)
-  return runs.raw_completion_time(runs.raw_log_path(thread_dir))
 
 
 # Recovery-event reason recorded when the finalize liveness gate keeps a run
@@ -1015,8 +979,8 @@ async def resume_worker(
     thread_mgr: ThreadManager,
     *,
     is_alive: Callable[[], bool],
-    interrupt_reason: str = "",
-    on_silence: Callable[[], Awaitable[None]] | None = None,
+    interrupt_reason: str,
+    on_silence: Callable[[], Awaitable[None]] | None,
 ) -> None:
   """Re-attach to an interrupted run's raw stream, then run the finalize chain.
 
@@ -1045,7 +1009,7 @@ async def resume_worker(
   """
   thread = None
   worker = None
-  outcome = _WorkerRunOutcome(exit_code=-1)
+  outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="")
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
     if not thread:
@@ -1062,15 +1026,16 @@ async def resume_worker(
     events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
     working_dir = Path(thread.worktree_path) if thread.worktree_path else events_log.parent
     worker = Worker(thread, working_dir, events_log, description, cfg, backend_option=backend_option)
-    outcome = _WorkerRunOutcome(exit_code=await worker.resume(is_alive=is_alive, on_silence=on_silence))
+    outcome = _WorkerRunOutcome(
+        exit_code=await worker.resume(is_alive=is_alive, on_silence=on_silence), quota_exhausted=False, error="")
   except QuotaExhaustedException:
     log.warning("resume_worker_quota_exhausted", thread_id=thread_id)
     if is_alive() and thread is not None and thread.pid is not None:
       kill_process_group(thread.pid, signal.SIGTERM)
-    outcome = outcome._replace(quota_exhausted=True)
+    outcome = _QUOTA_EXHAUSTED_OUTCOME
   except Exception as e:
     log.error("resume_worker_failed", thread_id=thread_id, error=str(e), traceback=traceback.format_exc())
-    outcome = outcome._replace(error=str(e))
+    outcome = _WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error=str(e))
   finally:
     if outcome.failed and not outcome.error and interrupt_reason:
       outcome = outcome._replace(error=interrupt_reason)
@@ -1106,7 +1071,7 @@ async def _persist_worker_summary_once(
     event: dict,
     session_mgr: SessionManager,
     *,
-    fallback: bool = False,
+    fallback: bool,
 ) -> None:
   """Persist and broadcast a worker_summary event unless the session already carries one.
 
@@ -1122,25 +1087,6 @@ async def _persist_worker_summary_once(
   log.info("worker_summary_sent", session=session_id, thread=thread_id, fallback=fallback)
 
 
-async def _record_scheduled_run_status(
-    session_mgr: SessionManager,
-    session_id: str,
-    exit_code: int,
-) -> str | None:
-  """Record the run's outcome on a scheduled session and return its scheduled task name.
-
-  Fetches the session metadata exactly once for the whole notify chain; None means the
-  session is unscheduled, which the Telegram notify reads as "nothing to look up".
-  """
-  session_meta = await session_mgr.get_session(session_id)
-  if session_meta is None or not session_meta.scheduled_task:
-    return None
-  session_meta.last_run_status = "success" if exit_code == 0 else "failed"
-  session_meta.updated_at = datetime.now(timezone.utc)
-  await session_mgr.save_metadata(session_meta)
-  return session_meta.scheduled_task
-
-
 async def _broadcast_completion(
     session_id: str,
     description: str,
@@ -1149,15 +1095,14 @@ async def _broadcast_completion(
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     *,
-    task_type: TaskType,
     verify_report: str | None,
 ) -> tuple[str, str]:
   """Build and broadcast the worker_summary event. Returns (events_summary, full_summary).
 
-  ``verify_report`` is the finalize pass's single read of events.jsonl: the trailer
-  gate judged the same string this summary quotes. None for non-VERIFY tasks.
+  A non-None ``verify_report`` marks the run as VERIFY: _verify_report_for_task returns
+  None for every other task type.
   """
-  if task_type == TaskType.VERIFY:
+  if verify_report is not None:
     events_summary = verify_report
   else:
     events_summary = await read_events_summary(session_id, thread.id, thread_mgr)
@@ -1165,7 +1110,7 @@ async def _broadcast_completion(
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
 
   status = 'cancelled' if cancelled else _exit_status_label(outcome.exit_code)
-  if task_type == TaskType.VERIFY:
+  if verify_report is not None:
     report = events_summary or "(no verifier final report)"
     full_summary = f"**Verifier completion: thread `{thread.id}`**\n\n{report}"
   else:
@@ -1177,7 +1122,7 @@ async def _broadcast_completion(
   elif outcome.quota_exhausted:
     suffix = "\n\n*Worker stopped: API quota exhausted.*"
   elif outcome.error:
-    if task_type == TaskType.VERIFY:
+    if verify_report is not None:
       suffix = f"\n\n*Verifier completion failed: {outcome.error}*"
     else:
       suffix = f"\n\n*Worker error: {outcome.error}*"
@@ -1185,8 +1130,8 @@ async def _broadcast_completion(
     suffix = f"\n\n*Worker exited with code {outcome.exit_code}.*"
   full_summary += suffix
 
-  worker_event = _thread_worker_event(thread, status, full_content=full_summary)
-  await _persist_worker_summary_once(session_id, thread.id, worker_event, session_mgr)
+  worker_event = _thread_worker_event(thread, status, full_content=full_summary, content=None)
+  await _persist_worker_summary_once(session_id, thread.id, worker_event, session_mgr, fallback=False)
   return events_summary, full_summary
 
 
@@ -1199,12 +1144,19 @@ async def _notify_completion(
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
     *,
-    task_type: TaskType,
     verify_report: str | None,
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
   try:
-    scheduled_task_name = await _record_scheduled_run_status(session_mgr, session_id, outcome.exit_code)
+    # Fetch session metadata exactly once for the whole notify chain; an
+    # unscheduled session gives the Telegram notify nothing to look up.
+    scheduled_task_name = None
+    session_meta = await session_mgr.get_session(session_id)
+    if session_meta is not None and session_meta.scheduled_task:
+      session_meta.last_run_status = "success" if outcome.exit_code == 0 else "failed"
+      session_meta.updated_at = datetime.now(timezone.utc)
+      await session_mgr.save_metadata(session_meta)
+      scheduled_task_name = session_meta.scheduled_task
     events_summary, full_summary = await _broadcast_completion(
         session_id,
         description,
@@ -1212,7 +1164,6 @@ async def _notify_completion(
         outcome,
         thread_mgr,
         session_mgr,
-        task_type=task_type,
         verify_report=verify_report)
 
     if scheduled_task_name:
@@ -1243,9 +1194,8 @@ async def read_events_summary(session_id: str, thread_id: str, thread_mgr: Threa
   events = await _read_thread_events(session_id, thread_id, thread_mgr)
   if not events:
     return "(no events recorded)"
-  tail = events[-80:]
   parts = []
-  for ev in tail:
+  for ev in events[-80:]:
     ev_type = ev.get("type", "unknown")
     content = _extract_event_content(ev, ev_type)
     if content:
@@ -1259,7 +1209,8 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     return str(ev.get("result", ""))[:500]
 
   if ev_type == ET.ASSISTANT:
-    msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+    raw_message = ev.get("message")
+    msg = raw_message if isinstance(raw_message, dict) else {}
     text = extract_text_from_message(msg)
     blocks = msg.get("content") or []
     tool_parts = [
@@ -1267,7 +1218,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
         if isinstance(b, dict) and b.get("type") == ET.TOOL_USE
     ]
     parts = ([text] if text else []) + tool_parts
-    return " ".join(parts)[:300] if parts else ""
+    return " ".join(parts)[:300]
 
   if ev_type == ET.RATE_LIMIT_EVENT:
     rli = ev.get("rate_limit_info", {})
@@ -1279,7 +1230,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     content = ev.get("content", ev.get("message", ""))
     if isinstance(content, list):
       text = extract_text_from_message({"content": content})
-      return text[:200] if text else ""
+      return text[:200]
     return str(content)[:200]
 
   return ""

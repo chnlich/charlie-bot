@@ -1371,6 +1371,8 @@ test('saveCronTask sends backend selector value and null inherit value', async (
     ['cron-timezone', createElement()],
     ['cron-enabled', createElement({checked: true})],
     ['cron-delete-btn', createElement({className: 'hidden'})],
+    ['cron-save-btn', createElement()],
+    ['cron-error-box', createElement({className: 'hidden'})],
     ['cron-modal', cronModal],
   ]);
   const {context} = buildContext({elements});

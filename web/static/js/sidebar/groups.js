@@ -197,6 +197,17 @@ async function setSessionGroup(sessionId, group) {
 // ---------------------------------------------------------------------------
 // Grouped scheduled task rendering
 // ---------------------------------------------------------------------------
+// Global cron load-failure badge, derived from the sidebar's existing
+// /api/cron/tasks fetch (pmStateCache.brokenTasks, name order); clicking opens
+// the cron editor on the first broken task. Empty when nothing is broken.
+function renderCronErrorBadge() {
+  const broken = (pmStateCache && pmStateCache.brokenTasks) || [];
+  if (!broken.length) return '';
+  return `<div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs cursor-pointer"
+       role="button" title="查看第一个加载失败的任务"
+       onclick="openCronEditor('${escapeHtml(broken[0].name)}')">⚠ ${broken.length} 个定时任务加载失败</div>`;
+}
+
 function renderScheduledSessionItem(s, options = {}) {
   const isActive = SESSION_ID === s.id;
   const indicatorState = getSessionIndicatorState(s);
@@ -247,10 +258,15 @@ function renderScheduledSessionItem(s, options = {}) {
   </a>`;
 }
 
-function renderGroupedScheduledList(sessions) {
+function renderGroupedScheduledList(sessions, options = {}) {
   const nav = document.getElementById('session-list');
+  lastScheduledRenderArgs = sessions;
+  // The badge's task fetch piggybacks on the PM refresh (same /api/cron/tasks
+  // pull); the repaint guard below routes it back here for the scheduled tab.
+  if (!options.skipRefresh) scheduleProjectManagerRefresh();
+  const badgeHtml = renderCronErrorBadge();
   if (!sessions.length) {
-    nav.innerHTML = '<p class="text-slate-500 text-sm px-3 py-2">No scheduled sessions</p>';
+    nav.innerHTML = badgeHtml + '<p class="text-slate-500 text-sm px-3 py-2">No scheduled sessions</p>';
     return;
   }
   // Group by project
@@ -300,7 +316,7 @@ function renderGroupedScheduledList(sessions) {
       </div>
     </div>`;
   }
-  nav.innerHTML = html;
+  nav.innerHTML = badgeHtml + html;
   // Resync sessionUnread dict from fresh DOM data
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();
@@ -334,6 +350,8 @@ function projectManagerSlug(group) {
 
 // Live role=project sessions keyed by group, and mode:master cron tasks keyed
 // by project. At most one each per group (server-enforced); first match wins.
+// brokenTasks carries the cron load-failure entries in the API's name order;
+// the scheduled tab derives its global error badge from them.
 async function fetchProjectManagerState() {
   const [scheduledRes, tasksRes] = await Promise.all([
     fetch('/api/sessions/scheduled'),
@@ -351,7 +369,8 @@ async function fetchProjectManagerState() {
   tasks.forEach(t => {
     if (!t.broken && t.mode === 'master' && t.project && !taskByGroup[t.project]) taskByGroup[t.project] = t;
   });
-  return {pmByGroup, taskByGroup};
+  const brokenTasks = tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
+  return {pmByGroup, taskByGroup, brokenTasks};
 }
 
 const PM_BADGE_CLASS = 'px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide flex-shrink-0';
@@ -439,6 +458,7 @@ async function openPmSlotEditor(group) {
 let pmStateCache = null;
 let pmRefreshPending = false;
 let lastGroupedRenderArgs = null;
+let lastScheduledRenderArgs = null;
 
 function scheduleProjectManagerRefresh() {
   if (pmRefreshPending) return;
@@ -454,7 +474,12 @@ function scheduleProjectManagerRefresh() {
       return;
     }
     pmStateCache = fresh;
-    if (lastGroupedRenderArgs) {
+    // Repaint only the list currently rendered into #session-list: both
+    // renderers write the same element, so repainting a stale sibling would
+    // clobber the visible tab.
+    if (currentFilter === 'scheduled' && lastScheduledRenderArgs) {
+      renderGroupedScheduledList(lastScheduledRenderArgs, {skipRefresh: true});
+    } else if (lastGroupedRenderArgs) {
       renderGroupedSessionList(lastGroupedRenderArgs.sessions, lastGroupedRenderArgs.filter, {skipRefresh: true});
     }
   }, 0);
@@ -750,6 +775,7 @@ Object.assign(Sidebar, {
   toggleCronGroupLimit,
   showGroupSelector,
   setSessionGroup,
+  renderCronErrorBadge,
   renderScheduledSessionItem,
   renderGroupedScheduledList,
   toggleCronGroup,

@@ -569,6 +569,7 @@
       </div>
       <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
         <form id="cron-form" class="flex flex-col gap-3 h-full">
+          <div id="cron-error-box" class="hidden whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
           <div>
             <label class="block text-xs text-slate-400 mb-1">Name</label>
             <input id="cron-name" type="text" class="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200" />
@@ -612,7 +613,7 @@
         <button onclick="deleteCronTask()" id="cron-delete-btn" class="px-4 py-1.5 text-sm rounded-lg bg-red-800 hover:bg-red-700 text-slate-200 font-medium hidden">Delete</button>
         <div class="flex-1"></div>
         <button onclick="closeCronModal()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 text-slate-200 font-medium">Cancel</button>
-        <button onclick="saveCronTask()" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-slate-200 font-medium">Save</button>
+        <button onclick="saveCronTask()" id="cron-save-btn" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-slate-200 font-medium">Save</button>
       </div>
     </div>
   </div>

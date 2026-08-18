@@ -124,7 +124,6 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
       thread_mgr: Any,
       session_mgr: Any,
       _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
       verify_report: str | None = None,
   ) -> None:
     captures["notified"] = True
@@ -312,7 +311,6 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
       thread_mgr: Any,
       session_mgr: Any,
       _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
       verify_report: str | None = None,
   ) -> None:
     captures["notify_thread_keep_worktree"] = thread_meta.keep_worktree

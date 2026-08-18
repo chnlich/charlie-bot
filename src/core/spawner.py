@@ -1194,9 +1194,8 @@ async def read_events_summary(session_id: str, thread_id: str, thread_mgr: Threa
   events = await _read_thread_events(session_id, thread_id, thread_mgr)
   if not events:
     return "(no events recorded)"
-  tail = events[-80:]
   parts = []
-  for ev in tail:
+  for ev in events[-80:]:
     ev_type = ev.get("type", "unknown")
     content = _extract_event_content(ev, ev_type)
     if content:
@@ -1210,7 +1209,8 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     return str(ev.get("result", ""))[:500]
 
   if ev_type == ET.ASSISTANT:
-    msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+    raw_message = ev.get("message")
+    msg = raw_message if isinstance(raw_message, dict) else {}
     text = extract_text_from_message(msg)
     blocks = msg.get("content") or []
     tool_parts = [
@@ -1218,7 +1218,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
         if isinstance(b, dict) and b.get("type") == ET.TOOL_USE
     ]
     parts = ([text] if text else []) + tool_parts
-    return " ".join(parts)[:300] if parts else ""
+    return " ".join(parts)[:300]
 
   if ev_type == ET.RATE_LIMIT_EVENT:
     rli = ev.get("rate_limit_info", {})
@@ -1230,7 +1230,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     content = ev.get("content", ev.get("message", ""))
     if isinstance(content, list):
       text = extract_text_from_message({"content": content})
-      return text[:200] if text else ""
+      return text[:200]
     return str(content)[:200]
 
   return ""

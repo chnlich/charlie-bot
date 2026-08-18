@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from conftest import JudgmentShim
 
-from src.core import review, spawner
+from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.git import BaseResolution
 from src.core.models import (
@@ -45,7 +45,7 @@ def _build_tmp_cfg(tmp_path: Path, backend_option: BackendOption) -> CharlieBotC
 
 
 def _capturing_worker(captures: dict[str, Any]) -> type:
-  """A spawner.Worker stand-in recording its constructor args into ``captures``.
+  """A spawner_launch.Worker stand-in recording its constructor args into ``captures``.
 
   The signature mirrors the production call in spawner._construct_worker, and the
   fixed worker_dir/worker_backend/task_description key set is the shared contract
@@ -312,7 +312,7 @@ async def test_worker_start_summary_is_locator_without_task_description(monkeypa
       captured["session_id"] = session_id
       captured["event"] = event
 
-  monkeypatch.setattr(spawner, "_worker_summary_timestamp", lambda: "2026-07-01 12:34 PDT")
+  monkeypatch.setattr(spawner_events, "_worker_summary_timestamp", lambda: "2026-07-01 12:34 PDT")
 
   exit_code, quota_exhausted, error = await spawner._stream_worker_events(
       FakeWorker(),
@@ -367,8 +367,8 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
     del session_id, thread_id, thread_mgr
     return "Worker output body"
 
-  monkeypatch.setattr(spawner, "read_events_summary", fake_read_events_summary)
-  monkeypatch.setattr(spawner, "_worker_summary_timestamp", lambda: "2026-07-01 12:35 PDT")
+  monkeypatch.setattr(spawner_events, "read_events_summary", fake_read_events_summary)
+  monkeypatch.setattr(spawner_events, "_worker_summary_timestamp", lambda: "2026-07-01 12:35 PDT")
 
   events_summary, full_summary = await spawner._broadcast_completion(
       "session-id",
@@ -508,9 +508,9 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
-  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
+  monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",
@@ -591,7 +591,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
   async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
-  monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
 
   with pytest.raises(ValueError, match="session 'session-id' not found"):
     await spawner._create_worktree_and_process(
@@ -643,7 +643,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner._finalize_worker(
       session_id="session-id",
@@ -839,7 +839,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       return tmp_path / "events.jsonl"
 
-  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -879,7 +879,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       return tmp_path / "events.jsonl"
 
-  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -923,7 +923,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       return tmp_path / "events.jsonl"
 
-  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -1042,8 +1042,8 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       captures["exit_code"] = exit_code
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner, "_notify_completion", _recording_notify_completion(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", _recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",

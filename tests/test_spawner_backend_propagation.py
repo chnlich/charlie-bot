@@ -36,6 +36,14 @@ def _build_cfg() -> CharlieBotConfig:
   )
 
 
+def _build_tmp_cfg(tmp_path: Path, backend_option: BackendOption) -> CharlieBotConfig:
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[backend_option],
+  )
+
+
 def _capturing_worker(captures: dict[str, Any]) -> type:
   """A spawner.Worker stand-in recording its constructor args into ``captures``.
 
@@ -444,13 +452,8 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
 
 @pytest.mark.asyncio
 async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   events_log = tmp_path / "events.jsonl"
@@ -570,13 +573,8 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   thread = ThreadMetadata(
@@ -824,13 +822,8 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
     monkeypatch: pytest.MonkeyPatch,
     task_type: TaskType,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="agy", label="Antigravity", type="antigravity"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="agy", label="Antigravity", type="antigravity"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -869,13 +862,8 @@ async def test_create_repoless_worker_assigns_claude_session_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -914,13 +902,8 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -1010,13 +993,8 @@ async def test_create_repoless_worker_prepends_verify_preamble(
 
 @pytest.mark.asyncio
 async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-      ],
-  )
+  cfg = _build_tmp_cfg(
+      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
   events_log = tmp_path / "events.jsonl"
   thread = ThreadMetadata(
       id="thread-1",

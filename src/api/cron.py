@@ -147,12 +147,14 @@ async def list_cron_tasks():
   """Return all scheduled tasks plus one error entry per broken file, never 500.
 
   Valid jobs are sorted by name, followed by one entry per error record shaped
-  ``{"name", "error", "broken": True}``. A broken or legacy file must never cause
-  this route to fail.
+  ``{"name", "error", "broken": True, "path": str, "enabled": bool | None}`` —
+  ``path`` is the failing file's absolute path and ``enabled`` its raw value
+  (None when the body could not be parsed). A broken or legacy file must never
+  cause this route to fail.
   """
   valid = [t.model_dump() for t in get_scheduled_tasks()]
   broken = [
-      {'name': e.name, 'error': e.error, 'broken': True}
+      {'name': e.name, 'error': e.error, 'broken': True, 'path': e.path, 'enabled': e.enabled}
       for e in get_scheduled_task_errors()]
   return valid + broken
 
@@ -169,9 +171,9 @@ async def apply_task_yaml_update(
   the candidate task body (the PUT response) and the rotated/ensured
   ``SessionMetadata`` (None when the request carries no backend change or the
   session already matches). Raises HTTPException with the cron editor's exact
-  contract: 404 when the task file is missing, 400 on a non-recognized backend
-  or a guarded prompt edit, and 409 when the loader fails or the dedicated
-  session is busy (busy 409 surfaces before any yaml write).
+  contract: 404 when the task file is missing, 400 on a non-recognized
+  backend, and 409 when the loader fails or the dedicated session is busy
+  (busy 409 surfaces before any yaml write).
   """
   path = cron_path(name)
   if not path.exists():
@@ -184,23 +186,10 @@ async def apply_task_yaml_update(
   # the loader's own catch-all: any failure in _load_cron_file becomes this
   # job's error, never an unhandled exception.
   try:
-    current, _ = await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
+    await asyncio.to_thread(_load_cron_file, cron_path(name), cfg.charlie_bot_repo, name)
     raw = await asyncio.to_thread(_read_cron_yaml, name)
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
-
-  # prompt_file jobs manage `prompt` from the referenced file; the UI modal
-  # echoes the resolved text back on save trimmed of edge whitespace, so an
-  # unchanged echo (compared edge-whitespace-tolerantly, None as empty) must
-  # not be persisted (that would leave the file with two prompt sources — see
-  # _resolve_prompt_file), while a genuinely changed value must be rejected
-  # before any write happens.
-  if raw.get('prompt_file') and 'prompt' in req.model_fields_set:
-    if (req.prompt or '').strip() != (current.prompt or '').strip():
-      raise HTTPException(
-          status_code=400,
-          detail=f"prompt is managed by prompt_file '{raw['prompt_file']}'; edit that file instead")
-    req = req.model_copy(update={'prompt': None})
 
   candidate = _apply_task_update(raw, req)
   # Validate the candidate through the exact same body-processing code the
@@ -253,14 +242,16 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
     payload.pop('backend', None)
   body = {k: v for k, v in payload.items()
           if k != 'name' and (v is not None or k in ('cron', 'enabled'))}
-  # Validate the assembled body through the exact same body-processing code the
-  # production loader uses, on a deep copy (that code mutates the body in place
-  # — see _validate_cron_body), exactly as the update route does: an unreadable
-  # prompt_file or a master task without a prompt source becomes a 409 with the
-  # loader's error text, and nothing is written to disk.
+  # Validate the assembled body through the exact same body-processing code
+  # the production loader uses, directly on the persisted body (that code
+  # mutates it in place — see _validate_cron_body): a supplied prompt_file is
+  # resolved and written back as an inline prompt, so the host file never
+  # keeps a live repo reference. An unreadable prompt_file or a master task
+  # without a prompt source becomes a 409 with the loader's error text, and
+  # nothing is written to disk.
   try:
     await asyncio.to_thread(
-        _validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
+        _validate_cron_body, body, cfg.charlie_bot_repo, req.name)
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
   cron_dir().mkdir(parents=True, exist_ok=True)

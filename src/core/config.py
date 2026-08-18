@@ -84,7 +84,8 @@ class ScheduledTaskConfig(BaseModel):
   project: Optional[str] = None
   # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);
   # 'master' wakes the dedicated session's master with the task's prompt
-  # (typically supplied via prompt_file) plus an appended Group line.
+  # (prompt_file-style bodies are inlined to `prompt` at seed/create time) plus
+  # an appended Group line.
   mode: Optional[Literal['worker', 'master']] = None
   allow_failure: bool = False
   notify: Optional[str] = None  # 'telegram' or None
@@ -94,9 +95,10 @@ class ScheduledTaskConfig(BaseModel):
     sources = sum([bool(self.prompt), bool(self.handler), bool(self.loop)])
     if sources != 1:
       raise ValueError("task must have exactly one of 'prompt', 'handler', or 'loop'")
-    # prompt_file is resolved into prompt before model validation, so an empty
-    # prompt here means master woke up with no message at all — including the
-    # master+handler and master+loop combinations the exactly-one rule allows.
+    # A prompt_file-style entry is resolved into prompt before model
+    # validation, so an empty prompt here means master woke up with no message
+    # at all — including the master+handler and master+loop combinations the
+    # exactly-one rule allows.
     if self.mode == 'master' and not self.prompt:
       raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
     if self.notify and self.notify != 'telegram':
@@ -107,11 +109,18 @@ class ScheduledTaskConfig(BaseModel):
 
 
 class ScheduledTaskError(BaseModel):
-  """A per-file cron load failure surfaced through the API without raising."""
+  """A per-file cron load failure surfaced through the API without raising.
+
+  ``enabled`` is the failing file's own raw ``enabled`` value, read best-effort
+  at load-failure time — ``None`` when the body cannot be parsed at all (a
+  syntax-error yaml gives no truthful answer, and guessing "on" would
+  misstate the file).
+  """
 
   name: str
   path: str
   error: str
+  enabled: Optional[bool] = None
 
 
 class _CronSnapshot:
@@ -568,10 +577,12 @@ def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTas
   Mutates *body* in place — resolves ``prompt_file`` (removing the key and
   setting ``prompt``), rewrites a literal ``timezone: local`` to the host IANA
   zone, and expands ``~`` in ``repo`` — matching the :func:`_resolve_prompt_file`
-  mutate-in-place convention. This is the exact body-processing step
-  :func:`_load_cron_file` uses for the production loader; any other caller
-  (e.g. the cron API's update path) that validates a candidate through this
-  function is guaranteed a result the loader can reload unchanged.
+  mutate-in-place convention. The ``prompt_file`` resolution serves the write
+  paths (seeder, cron create route) that inline the body before persisting it;
+  the production loader (:func:`_load_cron_file`) rejects a persisted
+  ``prompt_file`` before reaching this function, and any other caller (e.g.
+  the cron API's update path) that validates a candidate through this function
+  is guaranteed a result the loader can reload unchanged.
 
   Returns the model plus the mtime map for any ``prompt_file`` it read (for the
   hot-reload fingerprint). Raises :class:`ValueError` (or a pydantic validation
@@ -599,10 +610,12 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
   The file body is a top-level mapping of :class:`ScheduledTaskConfig` fields
   *without* ``name``; the job name is *stem* (the file stem) and is injected
   here. A body that carries a ``name`` key is an error (the file name is the
-  single source of the name). Resolution follows the existing order:
-  ``prompt_file`` against *repo* (``~``-prefixed or absolute taken literally),
-  ``timezone: local`` to the host IANA zone, and ``repo`` to ``expanduser`` —
-  see :func:`_validate_cron_body`.
+  single source of the name). A body that carries ``prompt_file`` is an error
+  too: host files are sealed against repository drift — the prompt must be
+  inlined (the seeder and the create route resolve ``prompt_file`` before
+  writing). Resolution follows the existing order: ``timezone: local`` to the
+  host IANA zone and ``repo`` to ``expanduser`` — see
+  :func:`_validate_cron_body`.
 
   Returns the model plus the mtime map for any ``prompt_file`` it read (for the
   hot-reload fingerprint). Raises :class:`ValueError` on any failure; the caller
@@ -613,7 +626,29 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
     raise ValueError("cron config must be a mapping")
   if "name" in body:
     raise ValueError("the body must not carry a 'name' key; the file name is the job name")
+  if "prompt_file" in body:
+    raise ValueError(
+        "prompt_file is not allowed in a cron.d host file; inline the prompt "
+        "instead — copy the referenced file's content into this file under "
+        "'prompt' and remove the 'prompt_file' key")
   return _validate_cron_body(body, repo, stem)
+
+
+def _read_cron_file_enabled(path: Path) -> Optional[bool]:
+  """Best-effort raw ``enabled`` read of a cron file the loader failed on.
+
+  Returns the file's own ``enabled`` when the body parses as a mapping with a
+  boolean value; ``None`` on any read/parse failure — an unparseable file has
+  no truthful raw value, and inventing a default would misstate it.
+  """
+  try:
+    body = load_yaml(path)
+  except Exception as e:
+    log.debug("cron_file_enabled_unreadable", path=str(path), error=str(e))
+    return None
+  if isinstance(body, dict) and isinstance(body.get("enabled"), bool):
+    return body["enabled"]
+  return None
 
 
 def _reload_cron_snapshot() -> _CronSnapshot:
@@ -637,12 +672,14 @@ def _reload_cron_snapshot() -> _CronSnapshot:
         errors.append(ScheduledTaskError(
             name=stem,
             path=str(path),
-            error="file name is not a valid cron task name"))
+            error="file name is not a valid cron task name",
+            enabled=_read_cron_file_enabled(path)))
         continue
       try:
         task, file_prompt_mtimes = _load_cron_file(path, repo, stem)
       except Exception as e:
-        errors.append(ScheduledTaskError(name=stem, path=str(path), error=str(e)))
+        errors.append(ScheduledTaskError(
+            name=stem, path=str(path), error=str(e), enabled=_read_cron_file_enabled(path)))
         log.error("cron_task_load_failed", name=stem, path=str(path), error=str(e))
         continue
       tasks.append(task)

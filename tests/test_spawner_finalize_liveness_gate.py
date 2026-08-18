@@ -27,7 +27,7 @@ from src.core import spawner
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager
-from src.core.spawner import RESUME_EXCEPTION_ALIVE_REASON
+from src.core.spawner_lifecycle import RESUME_EXCEPTION_ALIVE_REASON
 from src.core.threads import ThreadManager
 
 

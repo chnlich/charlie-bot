@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core import git as git_module
-from src.core import improve_command, review, spawner
+from src.core import improve_command, review, spawner, spawner_finalize
 from src.core.git import BaseResolution
 from src.core.improve_command import load_loop_state
 from src.core.models import ThreadMetadata
@@ -75,7 +75,7 @@ async def test_cleanup_worker_directory_returns_error_when_remove_fails(
   async def fake_remove(*args: Any, **kwargs: Any) -> bool:
     return False
 
-  monkeypatch.setattr(spawner, "git_worktree_remove", fake_remove)
+  monkeypatch.setattr(spawner_finalize, "git_worktree_remove", fake_remove)
   error = await spawner._cleanup_worker_directory(thread, skip_cleanup=False, worktree_parent=tmp_path / "worktrees")
   assert error is not None and "cleanup failed" in error.lower()
   assert wt.exists()
@@ -91,7 +91,7 @@ async def test_cleanup_worker_directory_returns_error_when_remove_raises(
   async def boom(*args: Any, **kwargs: Any) -> bool:
     raise PermissionError("root-owned file")
 
-  monkeypatch.setattr(spawner, "git_worktree_remove", boom)
+  monkeypatch.setattr(spawner_finalize, "git_worktree_remove", boom)
   error = await spawner._cleanup_worker_directory(thread, skip_cleanup=False, worktree_parent=tmp_path / "worktrees")
   assert error is not None and "root-owned file" in error
 

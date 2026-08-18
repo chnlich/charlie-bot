@@ -28,7 +28,7 @@ from typing import Any, Iterator
 
 import pytest
 
-from src.core import spawner
+from src.core import spawner, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.git import (
     BaseBranchResolutionError,
@@ -419,7 +419,7 @@ async def _run_spawn_request(
 
   # raising=False: the launch path does not import the symbol at all today, and a
   # regression that re-adds the call re-adds the binding this tripwire then catches.
-  monkeypatch.setattr(spawner, "git_current_branch", _forbidden_current_branch, raising=False)
+  monkeypatch.setattr(spawner_launch, "git_current_branch", _forbidden_current_branch, raising=False)
 
   thread = ThreadMetadata(id=thread_id, session_id="session-id", description="Do work")
   await spawner._create_worktree_and_process(

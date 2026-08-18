@@ -803,7 +803,7 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
     setup_entered.set()
     await asyncio.Event().wait()
 
-  monkeypatch.setattr("src.core.spawner._create_repoless_process", hang_in_setup)
+  monkeypatch.setattr("src.core.spawner_launch._create_repoless_process", hang_in_setup)
   task = asyncio.create_task(
       spawner_module.spawn_worker(
           session_meta.id, "e2e setup-phase task", thread.id, cfg, session_mgr, thread_mgr,

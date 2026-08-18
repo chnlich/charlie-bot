@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from conftest import JudgmentShim
 
-from src.core import review, spawner
+from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.git import BaseResolution
 from src.core.models import (
@@ -131,8 +131,8 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
   async def fail_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
     raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
 
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
-  monkeypatch.setattr(spawner, "git_worktree_remove", fail_git_worktree_remove)
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner_finalize, "git_worktree_remove", fail_git_worktree_remove)
 
   await spawner._finalize_worker(
       session_id="session-id",
@@ -317,9 +317,9 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     captures["notify_thread_worktree_path"] = thread_meta.worktree_path
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner, "git_create_worktree", fake_git_create_worktree)
-  monkeypatch.setattr(spawner, "Worker", FakeWorker)
-  monkeypatch.setattr(spawner, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(spawner_launch, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", fake_notify_completion)
 
   await spawner.spawn_worker(
       session_id="session-id",

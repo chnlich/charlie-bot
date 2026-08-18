@@ -150,7 +150,6 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
       spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
       thread_mgr,
       session_mgr,
-      task_type=TaskType.VERIFY,
       verify_report=report,
   )
 

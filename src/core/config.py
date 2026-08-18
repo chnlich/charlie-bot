@@ -1,5 +1,7 @@
 """Configuration loading for CharlieBot."""
 
+import asyncio
+import json
 import os
 import re
 from pathlib import Path
@@ -10,6 +12,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.core.models import BackendOption
+from src.core.tasks import create_logged_task
 from src.core.yaml_utils import load_yaml
 
 log = structlog.get_logger()
@@ -697,6 +700,7 @@ def _reload_cron_snapshot() -> _CronSnapshot:
 
   tasks.sort(key=lambda t: t.name)
   errors.sort(key=lambda e: e.name)
+  _fire_cron_error_alert([e.name for e in errors])
   snapshot = _CronSnapshot()
   snapshot.tasks = tasks
   snapshot.errors = errors
@@ -704,6 +708,83 @@ def _reload_cron_snapshot() -> _CronSnapshot:
   snapshot.fingerprint = _cron_fingerprint(prompt_mtimes)
   _cron_snapshot = snapshot
   return snapshot
+
+
+def _cron_alert_state_path() -> Path:
+  """Path of the persisted last-alerted cron error fingerprint. Resolved per call."""
+  return charliebot_home_dir() / "state" / "cron_alert_fingerprint.json"
+
+
+def _read_cron_alert_state() -> frozenset[str]:
+  """The last-alerted set of broken cron task names persisted on disk.
+
+  A missing file reads as the empty set: on first deployment any currently
+  broken task counts as a fresh non-empty transition and alerts once. A
+  corrupt or unreadable file also reads as empty (alerting again beats never
+  alerting), with a warning.
+  """
+  try:
+    raw = _cron_alert_state_path().read_text(encoding="utf-8")
+  except FileNotFoundError:
+    return frozenset()
+  except OSError as e:
+    log.warning("cron_alert_state_unreadable", error=str(e))
+    return frozenset()
+  try:
+    data = json.loads(raw)
+  except ValueError as e:
+    log.warning("cron_alert_state_unparseable", error=str(e))
+    return frozenset()
+  if not isinstance(data, list):
+    log.warning("cron_alert_state_unparseable", error="state file is not a JSON list")
+    return frozenset()
+  return frozenset(str(name) for name in data)
+
+
+def _fire_cron_error_alert(error_names: list[str]) -> None:
+  """Alert over Telegram on every transition of the broken-cron-task name set.
+
+  Compares the fresh set against the last-alerted set persisted at
+  :func:`_cron_alert_state_path`; on any difference it records the new set and
+  fires one notification — ``"⚠️ cron 任务加载失败: <names>"`` when the new set
+  is non-empty, ``"✅ cron 加载失败已全部解除"`` when it turned empty (recovery
+  fires only on the full transition, not on every shrink); an identical set
+  stays silent.
+
+  The send is fire-and-forget through
+  :func:`src.core.tasks.create_logged_task`, so a Telegram failure is a logged
+  background-task failure and can never raise back into the config loader or
+  the scheduler tick. With no running event loop (a synchronous CLI path) the
+  send is skipped and the new set left unpersisted, so the next looped
+  evaluation — the scheduler's unconditional 60s tick through
+  :func:`get_scheduled_tasks` — transitions again and fires.
+  """
+  new_set = frozenset(error_names)
+  if new_set == _read_cron_alert_state():
+    return
+  try:
+    asyncio.get_running_loop()
+  except RuntimeError:
+    log.info("cron_alert_skipped_no_event_loop", names=sorted(new_set))
+    return
+  names = sorted(new_set)
+  if names:
+    message = "⚠️ cron 任务加载失败: " + ", ".join(names)
+  else:
+    message = "✅ cron 加载失败已全部解除"
+  try:
+    # Lazy: notifications imports this module.
+    from src.core.notifications import send_telegram
+
+    create_logged_task(send_telegram(message, get_config()), name="cron-load-alert")
+  except Exception:
+    log.exception("cron_alert_dispatch_failed", names=names)
+  try:
+    state_path = _cron_alert_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(names, ensure_ascii=False) + "\n", encoding="utf-8")
+  except OSError:
+    log.exception("cron_alert_state_write_failed")
 
 
 def _cron_fingerprint(prompt_mtimes: dict[Path, float]):

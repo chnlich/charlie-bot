@@ -41,8 +41,8 @@ from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 
 # The task's resolved prompt — in production the body of
-# prompts/project_manager.md supplied via prompt_file and resolved into
-# `prompt` by the loader. The wake message appends the task's Group line.
+# prompts/project_manager.md supplied via prompt_file at create time and
+# inlined into `prompt` on disk. The wake message appends the task's Group line.
 PM_TASK_PROMPT = "# Project Manager\n\nDo the PM things."
 PM_WAKE_PROMPT = f"{PM_TASK_PROMPT}\n\nGroup: bp-eval"
 
@@ -279,7 +279,7 @@ def test_cron_create_master_task_without_project_is_400(cron_dir: Path, tmp_path
   assert not (cron_dir / "pm_orphan.yaml").exists()
 
 
-def test_cron_create_master_task_with_prompt_file_writes_prompt_file_key(
+def test_cron_create_master_task_with_prompt_file_inlines_prompt(
     cron_dir: Path,
     tmp_path: Path,
 ) -> None:
@@ -295,8 +295,8 @@ def test_cron_create_master_task_with_prompt_file_writes_prompt_file_key(
 
   assert resp.status_code == 200
   on_disk = yaml.safe_load((cron_dir / "pm_bp_eval.yaml").read_text(encoding="utf-8"))
-  assert on_disk["prompt_file"] == str(md_path)
-  assert "prompt" not in on_disk
+  assert on_disk["prompt"] == PM_TASK_PROMPT + "\n"
+  assert "prompt_file" not in on_disk
 
 
 def test_cron_create_master_task_with_unreadable_prompt_file_is_409(

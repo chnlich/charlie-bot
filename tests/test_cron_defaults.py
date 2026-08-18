@@ -1,8 +1,10 @@
 """Acceptance tests for repo-owned default cron tasks and the per-job loader.
 
-Covers the seed mechanism in ``src/core/init.py::seed_default_cron_tasks``, the
-loader-level ``prompt_file`` / ``timezone: local`` resolution and hot-reload in
-``src/core/config.py::get_scheduled_tasks`` / ``get_scheduled_task_errors``, the
+Covers the seed mechanism in ``src/core/init.py::seed_default_cron_tasks`` (with
+``prompt_file`` inlined into ``prompt`` at write time), the loader's rejection
+of a persisted ``prompt_file`` key and ``timezone: local`` resolution plus
+hot-reload in ``src/core/config.py::get_scheduled_tasks`` /
+``get_scheduled_task_errors``, broken-entry ``path``/``enabled`` carrying, the
 per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
 ``configs/cron.default.yaml`` + ``prompts/cron/memory_curator/memory_curator.md``.
 """
@@ -88,8 +90,12 @@ def test_seed_idempotence(temp_home: Path) -> None:
   assert body1 == {
       "cron": "27 6 * * *",
       "timezone": "local",
-      "prompt_file": "prompts/cron/memory_curator/memory_curator.md",
+      # prompt_file is inlined at seed time: the host file owns the prompt body
+      # and carries no live reference into the repo.
+      "prompt": (REPO_ROOT / "prompts" / "cron" / "memory_curator" / "memory_curator.md")
+      .read_text(encoding="utf-8"),
   }
+  assert "prompt_file" not in body1
   assert "backend" not in body1
   assert "name" not in body1
 
@@ -139,24 +145,40 @@ def test_get_scheduled_tasks_readonly(temp_home: Path) -> None:
   assert path.read_bytes() == before
 
 
-# --- 5. prompt body tracks the repo (hot reload without restart) -------------
+# --- 5. prompt_file in host files is a per-file load error --------------------
+#
+# Drift closure: a cron.d/* file that still carries prompt_file (hand-authored
+# or seeded by a pre-inline build) must not load, and the error text points the
+# author at the fix — inlining the prompt. configs/cron.default.yaml keeps its
+# prompt_file as repo-side authoring convenience; only the seeder resolves it.
 
 
-def test_body_tracks_repo(temp_home: Path) -> None:
+def test_loader_rejects_prompt_file(temp_home: Path) -> None:
   prompt_path = temp_home / "cron-prompts" / "my-task.md"
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text("body v1", encoding="utf-8")
-  m1 = prompt_path.stat().st_mtime
   _write_task_text(temp_home, "t", _dump({"cron": "* * * * *", "prompt_file": str(prompt_path)}))
 
-  tasks = get_scheduled_tasks()
-  assert tasks[0].prompt == "body v1"
+  assert get_scheduled_tasks() == []
+  errors = get_scheduled_task_errors()
+  assert len(errors) == 1 and errors[0].name == "t"
+  assert "prompt_file" in errors[0].error
+  assert "inline" in errors[0].error
 
-  prompt_path.write_text("body v2", encoding="utf-8")
-  os.utime(prompt_path, (m1 + 5.0, m1 + 5.0))
 
-  tasks2 = get_scheduled_tasks()
-  assert tasks2[0].prompt == "body v2"
+def test_prompt_file_rejection_clears_when_inlined(temp_home: Path) -> None:
+  prompt_path = temp_home / "prompt.md"
+  prompt_path.write_text("v1", encoding="utf-8")
+  _write_task_text(temp_home, "task-a", _dump({"cron": "0 0 * * *", "prompt_file": str(prompt_path)}))
+  assert [e.name for e in get_scheduled_task_errors()] == ["task-a"]
+
+  # Inlining the prompt (the documented fix) flips the file back to healthy on
+  # the next load, without a restart.
+  fixed = _write_task_text(temp_home, "task-a", _dump({"cron": "0 0 * * *", "prompt": "v1"}))
+  m = fixed.stat().st_mtime
+  os.utime(fixed, (m + 5.0, m + 5.0))
+  assert get_scheduled_task_errors() == []
+  assert get_scheduled_tasks()[0].prompt == "v1"
 
 
 # --- 6. shipped default is loadable and seeds per-job files ------------------
@@ -181,6 +203,10 @@ def test_shipped_default_loadable(temp_home: Path) -> None:
   report = seed_default_cron_tasks(cfg)
   assert any(it["status"] == "created" for it in report)
   assert [t.name for t in get_scheduled_tasks()] == [e["name"] for e in entries]
+  for entry in entries:
+    seeded = load_yaml(cfg.config_d_dir / "cron.d" / f"{entry['name']}.yaml", default={})
+    assert "prompt_file" not in seeded, "seeded host files inline their prompt"
+    assert seeded["prompt"]
 
 
 def test_seed_fails_loud_on_legacy_cron(temp_home: Path) -> None:
@@ -323,30 +349,49 @@ def test_hot_reload_edit_existing_file(temp_home: Path) -> None:
   assert tasks[0].cron == "0 9 * * *" and tasks[0].prompt == "changed"
 
 
-def test_hot_reload_prompt_file_edited(temp_home: Path) -> None:
-  prompt_path = temp_home / "shared.md"
-  prompt_path.write_text("v1", encoding="utf-8")
-  m1 = prompt_path.stat().st_mtime
-  _write_task_text(temp_home, "task-a", _dump({"cron": "0 0 * * *", "prompt_file": str(prompt_path)}))
-  assert get_scheduled_tasks()[0].prompt == "v1"
-
-  prompt_path.write_text("v2", encoding="utf-8")
-  os.utime(prompt_path, (m1 + 9.0, m1 + 9.0))
-  assert get_scheduled_tasks()[0].prompt == "v2"
+# --- broken entries carry the failing file's path and raw enabled value ------
+#
+# The UI modal renders a broken task from {"name", "error", "path", "enabled"}:
+# `path` lets the maintainer locate the file, `enabled` renders the file's own
+# raw value (None — a greyed box — when the body cannot be parsed at all).
 
 
-def test_missing_prompt_file_after_load_becomes_error(temp_home: Path) -> None:
-  prompt_path = temp_home / "gone.md"
-  prompt_path.write_text("v1", encoding="utf-8")
-  _write_task_text(temp_home, "task-a", _dump({"cron": "0 0 * * *", "prompt_file": str(prompt_path)}))
-  assert get_scheduled_tasks()[0].prompt == "v1"
+def test_broken_entry_carries_absolute_path_and_enabled(temp_home: Path) -> None:
+  injected = _write_task_text(temp_home, "broken", _dump(
+      {"cron": "0 0 * * *", "prompt": "p", "promt_file": "typo.md", "enabled": False}))
+  errors = get_scheduled_task_errors()
+  assert len(errors) == 1
+  assert errors[0].path == str(injected)
+  assert Path(errors[0].path).is_absolute()
+  assert errors[0].enabled is False
 
-  # Deleting a referenced prompt_file must surface as an error for that job,
-  # not keep serving the cached body.
-  prompt_path.unlink()
+
+def test_broken_entry_enabled_null_on_unparseable_yaml(temp_home: Path) -> None:
+  _write_task_text(temp_home, "broken", "cron: [unbalanced\n")
+  errors = get_scheduled_task_errors()
+  assert len(errors) == 1
+  assert errors[0].enabled is None
+
+
+# --- the incident shape: prompt_file pointing at a path that no longer exists -
+#
+# The fixed regression fixture for the silent-death incident: a seeded
+# memory-curator.yaml whose prompt_file outlived a repo-side move.
+
+
+def test_incident_prompt_file_missing_path(temp_home: Path) -> None:
+  missing = temp_home / "prompts" / "cron" / "memory_curator" / "memory_curator.md"
+  injected = _write_task_text(temp_home, "memory-curator", _dump(
+      {"cron": "27 6 * * *", "timezone": "local", "prompt_file": str(missing), "enabled": True}))
+
   assert get_scheduled_tasks() == []
   errors = get_scheduled_task_errors()
-  assert len(errors) == 1 and errors[0].name == "task-a"
+  assert len(errors) == 1
+  err = errors[0]
+  assert err.name == "memory-curator"
+  assert err.path == str(injected)
+  assert err.enabled is True
+  assert "prompt_file" in err.error and "inline" in err.error
 
 
 # --- API: GET /tasks is total and includes broken entries --------------------
@@ -400,6 +445,29 @@ def test_list_tasks_never_500_with_broken(temp_home: Path, inject, expected_name
   broken = next(d for d in data if d.get("broken") is True)
   assert broken["name"] == expected_name
   assert broken["error"]
+  # The modal's broken error view consumes exactly these keys.
+  assert set(broken) == {"name", "error", "broken", "path", "enabled"}
+  assert Path(broken["path"]).is_absolute()
+
+
+def test_api_create_inlines_prompt_file(temp_home: Path) -> None:
+  """POST /tasks with prompt_file persists an inline prompt, never the key."""
+  prompt_path = temp_home / "prompts" / "nightly.md"
+  prompt_path.parent.mkdir(parents=True, exist_ok=True)
+  body = "Rebase omni main and report status.\n"
+  prompt_path.write_text(body, encoding="utf-8")
+  cfg = get_config()
+  with _client(cfg) as client:
+    response = client.post(
+        "/api/cron/tasks",
+        json={"name": "nightly", "cron": "0 2 * * *", "prompt_file": str(prompt_path)})
+    assert response.status_code == 200
+    assert response.json()["prompt"] == body
+  stored = load_yaml(_cron_d_dir(temp_home) / "nightly.yaml", default={})
+  assert "prompt_file" not in stored
+  assert stored["prompt"] == body
+  # The persisted file loads as a healthy task.
+  assert [t.name for t in get_scheduled_tasks()] == ["nightly"]
 
 
 # --- API: CRUD writes single files -------------------------------------------

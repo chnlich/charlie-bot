@@ -85,7 +85,6 @@ def _recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awai
       thread_mgr: Any,
       session_mgr: Any,
       _notify_cfg: CharlieBotConfig,
-      task_type: TaskType = TaskType.IMPLEMENT,
       verify_report: str | None = None,
   ) -> None:
     captures["notified"] = True
@@ -370,7 +369,6 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
       spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
       FakeThreadManager(),
       FakeSessionManager(),
-      task_type=TaskType.IMPLEMENT,
       verify_report=None,
   )
 

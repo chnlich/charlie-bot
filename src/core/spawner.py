@@ -678,7 +678,6 @@ async def _run_finalize_effects(
     cfg: CharlieBotConfig,
     *,
     skip_notify: bool,
-    task_type: TaskType,
     verify_report: str | None,
 ) -> None:
   """Run a finalized thread's side effects — worktree cleanup, then the notify chain.
@@ -701,7 +700,6 @@ async def _run_finalize_effects(
       thread_mgr,
       session_mgr,
       cfg,
-      task_type=task_type,
       verify_report=verify_report)
 
 
@@ -780,7 +778,6 @@ async def _finalize_worker(
       session_mgr,
       cfg,
       skip_notify=skip_notify,
-      task_type=task_type,
       verify_report=verify_report)
 
 
@@ -855,7 +852,6 @@ async def recomplete_finalize_effects(
       session_mgr,
       cfg,
       skip_notify=False,
-      task_type=task_type,
       verify_report=verify_report)
 
 
@@ -1099,14 +1095,14 @@ async def _broadcast_completion(
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     *,
-    task_type: TaskType,
     verify_report: str | None,
 ) -> tuple[str, str]:
   """Build and broadcast the worker_summary event. Returns (events_summary, full_summary).
 
-  ``verify_report`` is None for non-VERIFY tasks.
+  A non-None ``verify_report`` marks the run as VERIFY: _verify_report_for_task returns
+  None for every other task type.
   """
-  if task_type == TaskType.VERIFY:
+  if verify_report is not None:
     events_summary = verify_report
   else:
     events_summary = await read_events_summary(session_id, thread.id, thread_mgr)
@@ -1114,7 +1110,7 @@ async def _broadcast_completion(
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
 
   status = 'cancelled' if cancelled else _exit_status_label(outcome.exit_code)
-  if task_type == TaskType.VERIFY:
+  if verify_report is not None:
     report = events_summary or "(no verifier final report)"
     full_summary = f"**Verifier completion: thread `{thread.id}`**\n\n{report}"
   else:
@@ -1126,7 +1122,7 @@ async def _broadcast_completion(
   elif outcome.quota_exhausted:
     suffix = "\n\n*Worker stopped: API quota exhausted.*"
   elif outcome.error:
-    if task_type == TaskType.VERIFY:
+    if verify_report is not None:
       suffix = f"\n\n*Verifier completion failed: {outcome.error}*"
     else:
       suffix = f"\n\n*Worker error: {outcome.error}*"
@@ -1148,7 +1144,6 @@ async def _notify_completion(
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,
     *,
-    task_type: TaskType,
     verify_report: str | None,
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
@@ -1169,7 +1164,6 @@ async def _notify_completion(
         outcome,
         thread_mgr,
         session_mgr,
-        task_type=task_type,
         verify_report=verify_report)
 
     if scheduled_task_name:

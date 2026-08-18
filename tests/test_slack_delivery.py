@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from unittest.mock import patch
 
 import pytest
+from structlog.testing import capture_logs
 
 from src.core import event_types as ET
+from src.core import tasks as tasks_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, MasterRunRecord, SlackOrigin, utc_now
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
   _MAX_POST_CHARS,
+  SlackClient,
   _chunk_text,
   backfill_lost_summons,
   deliver_done,
@@ -26,13 +29,38 @@ _TEAM = "T_TEST"
 
 
 class _FakeSlackClient:
-  """Records posts; never touches the network."""
+  """Records posts and models each message's live reaction set; never touches the network.
 
-  def __init__(self) -> None:
+  ``reactions`` maps a message ts to the names currently on it — the Slack-side
+  end state the ack-clear tests assert against.
+  """
+
+  def __init__(self, *, fail_posts: bool = False, fail_remove: bool = False) -> None:
     self.posts: list[dict] = []
+    self.remove_calls: list[dict] = []
+    self.reactions: dict[str, set[str]] = {}
+    self._fail_posts = fail_posts
+    self._fail_remove = fail_remove
 
   async def post_message(self, channel: str, text: str, thread_ts: Optional[str] = None) -> dict:
+    if self._fail_posts:
+      raise RuntimeError("chat.postMessage failed")
     self.posts.append({"channel": channel, "text": text, "thread_ts": thread_ts})
+    return {"ok": True}
+
+  async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
+    self.reactions.setdefault(ts, set()).add(name)
+    return {"ok": True}
+
+  async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
+    """Mirror SlackClient's contract: no_reaction is a payload, other failures raise."""
+    self.remove_calls.append({"channel": channel, "name": name, "ts": ts})
+    if self._fail_remove:
+      raise RuntimeError("reactions.remove failed: missing_scope")
+    names = self.reactions.setdefault(ts, set())
+    if name not in names:
+      return {"ok": False, "error": "no_reaction"}
+    names.discard(name)
     return {"ok": True}
 
 
@@ -438,3 +466,198 @@ async def test_backfill_reports_an_archived_session_thread(tmp_path: Path) -> No
     assert await backfill_lost_summons(cfg, session_mgr) == 1
 
   assert len(client.posts) == 1
+
+
+# ---------------------------------------------------------------------------
+# Ack reaction lifecycle
+# ---------------------------------------------------------------------------
+
+
+def _spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
+  """A create_logged_task substitute that spawns eagerly and captures every task."""
+
+  def _spawn(coro, *, name=None):
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    tasks.append(task)
+    return task
+
+  return _spawn
+
+
+class _StubSlackResponse:
+  """A Slack Web API HTTP response carrying one fixed payload."""
+
+  def __init__(self, payload: dict) -> None:
+    self._payload = payload
+
+  def raise_for_status(self) -> None:
+    return None
+
+  def json(self) -> dict:
+    return self._payload
+
+
+class _StubSlackHttp:
+  """Answers every POST with one fixed Slack API payload."""
+
+  def __init__(self, payload: dict) -> None:
+    self._payload = payload
+
+  async def post(self, url: str, **kwargs: object) -> _StubSlackResponse:
+    return _StubSlackResponse(self._payload)
+
+
+@pytest.mark.asyncio
+async def test_delivered_round_clears_the_summons_eye(tmp_path: Path) -> None:
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}  # lit at the summon
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant("the answer"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  ack_tasks: list[asyncio.Task] = []
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(ack_tasks)),
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+    await asyncio.gather(*ack_tasks)
+
+  assert [t.get_name() for t in ack_tasks] == [f"slack-ack-clear-{sid}"]
+  assert client.remove_calls == [{"channel": _CHANNEL, "name": "eyes", "ts": _THREAD}]
+  assert client.reactions[_THREAD] == set()
+
+
+@pytest.mark.asyncio
+async def test_failed_post_still_clears_the_eye_and_still_logs_the_delivery(tmp_path: Path) -> None:
+  """A chunk that gave up leaves posted=False on the log, not a lingering eye."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient(fail_posts=True)
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant("never arrives"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  ack_tasks: list[asyncio.Task] = []
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(ack_tasks)),
+      patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
+      capture_logs() as logs,
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is False
+    await asyncio.gather(*ack_tasks)
+
+  assert client.reactions[_THREAD] == set()
+  outcomes = [ev for ev in logs if ev["event"] == "slack_delivery_done"]
+  assert len(outcomes) == 1
+  assert outcomes[0]["posted"] is False
+  assert any(ev["event"] == "slack_post_gave_up" for ev in logs)
+
+
+@pytest.mark.asyncio
+async def test_summon_without_mention_ts_posts_normally_and_clears_nothing(tmp_path: Path) -> None:
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon_event = _summon()
+  del summon_event["slack"]["mention_ts"]
+  summon = await _append(session_mgr, sid, summon_event)
+  await _append(session_mgr, sid, _assistant("the answer"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  ack_tasks: list[asyncio.Task] = []
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(ack_tasks)),
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+    await asyncio.gather(*ack_tasks)
+
+  assert ack_tasks == []
+  assert client.remove_calls == []
+  assert client.reactions[_THREAD] == {"eyes"}
+  assert [p["text"] for p in client.posts] == ["the answer"]
+
+
+@pytest.mark.asyncio
+async def test_remove_reaction_treats_no_reaction_as_the_end_state() -> None:
+  """ok=false with error=no_reaction returns normally (idempotent); other errors raise."""
+  client = SlackClient(
+      _StubSlackHttp({"ok": False, "error": "no_reaction"}), bot_token="b", app_token="a")
+
+  assert await client.remove_reaction("C_TEST", "eyes", _THREAD) == {
+      "ok": False,
+      "error": "no_reaction",
+  }
+
+  raising = SlackClient(
+      _StubSlackHttp({"ok": False, "error": "missing_scope"}), bot_token="b", app_token="a")
+  with pytest.raises(RuntimeError, match="reactions.remove failed"):
+    await raising.remove_reaction("C_TEST", "eyes", _THREAD)
+
+
+@pytest.mark.asyncio
+async def test_backfill_posting_a_lost_summon_clears_its_eye(tmp_path: Path) -> None:
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+  await _append(session_mgr, sid, _summon())
+
+  ack_tasks: list[asyncio.Task] = []
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(ack_tasks)),
+  ):
+    assert await backfill_lost_summons(cfg, session_mgr) == 1
+    await asyncio.gather(*ack_tasks)
+
+  assert [t.get_name() for t in ack_tasks] == [f"slack-ack-clear-{sid}"]
+  assert client.reactions[_THREAD] == set()
+  assert len(client.posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_remove_failure_leaves_a_stale_eye_and_stays_in_the_ack_task(tmp_path: Path) -> None:
+  """missing_scope on the remove: delivery result and its log are unaffected."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient(fail_remove=True)
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant("the answer"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      capture_logs() as logs,
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+    ack = next(
+        t for t in tasks_module._background_tasks
+        if t.get_name() == f"slack-ack-clear-{sid}")
+    await asyncio.gather(ack, return_exceptions=True)
+    await asyncio.sleep(0)  # the task's logging done callback runs one tick later
+
+  assert client.reactions[_THREAD] == {"eyes"}
+  outcomes = [ev for ev in logs if ev["event"] == "slack_delivery_done"]
+  assert len(outcomes) == 1
+  assert outcomes[0]["posted"] is True
+  failures = [ev for ev in logs if ev["event"] == "background_task_failed"]
+  assert len(failures) == 1
+  assert failures[0]["task_name"] == f"slack-ack-clear-{sid}"
+  assert failures[0]["log_level"] == "error"

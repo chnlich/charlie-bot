@@ -81,6 +81,15 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   return meta
 
 
+class SuccessionRefused(ValueError):
+  """An elone was refused because the parent cannot take a new successor.
+
+  Carries one of the two elone rejections (scheduler-owned session, or a
+  successor already set) so the API can answer 409 while other ValueErrors
+  keep answering 400.
+  """
+
+
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
@@ -215,6 +224,51 @@ class SessionManager:
       self._metadata_cache[session_id] = (meta, time.monotonic())
     return _stamp_thinking_since(meta.model_copy())
 
+  async def read_metadata_fresh(self, session_id: str) -> SessionMetadata | None:
+    """Read metadata.json directly from disk, bypassing ``_metadata_cache``.
+
+    The cache is TTL-based and can be stale relative to a concurrent elone, so
+    succession resolution always reads fresh. Returns None when the file is
+    absent or blank. Does not populate the cache from the read.
+    """
+    path = self._metadata_path(session_id)
+    if not path.exists():
+      return None
+    async with aiofiles.open(path, "r") as f:
+      raw = await f.read()
+    if not raw.strip():
+      log.warning("session_metadata_empty", session_id=session_id, path=str(path))
+      return None
+    return SessionMetadata.model_validate_json(raw)
+
+  async def resolve_successor_chain(self, session_id: str) -> SessionMetadata | None:
+    """Walk ``successor_session_id`` from *session_id* to the chain end.
+
+    Uses ``read_metadata_fresh`` at every hop (never the TTL cache, which may
+    be stale relative to a concurrent elone). Returns the chain-end metadata, or
+    None when *session_id* itself has no metadata on disk. When a hop's
+    successor id has no metadata (that session was permanently deleted), stops
+    and returns the last session that does exist, logging one structured error.
+    Raises RuntimeError if the chain exceeds 100 hops (a cycle must never spin).
+    """
+    current = await self.read_metadata_fresh(session_id)
+    if current is None:
+      return None
+    for _ in range(100):
+      successor_id = current.successor_session_id
+      if not successor_id:
+        return current
+      successor = await self.read_metadata_fresh(successor_id)
+      if successor is None:
+        log.error(
+            "successor_chain_broken",
+            session_id=session_id,
+            missing_session_id=successor_id,
+        )
+        return current
+      current = successor
+    raise RuntimeError(f"successor chain from {session_id} exceeds 100 hops; aborting to avoid a cycle")
+
   async def list_sessions(
       self,
       status: SessionStatus | None = None,
@@ -304,16 +358,34 @@ class SessionManager:
       event_index: int,
       backend: str | None = None,
   ) -> SessionMetadata:
-    """Create an Elon-e session: reference handoff, archive + thumbs-down parent."""
+    """Create an Elon-e session: reference handoff, archive + thumbs-down parent.
+
+    Runs the two succession rejections BEFORE any child session is created, so
+    a refused call mutates nothing on disk.
+    """
+    fresh_parent = await self.read_metadata_fresh(parent_id)
+    if fresh_parent is None:
+      raise FileNotFoundError(f"parent session not found: {parent_id}")
+    if fresh_parent.scheduled_task is not None:
+      raise SuccessionRefused(
+          f"session {parent_id} is scheduler-owned and cannot be eloned; "
+          "scheduler rotation is its succession path")
+    if fresh_parent.successor_session_id is not None:
+      raise SuccessionRefused(
+          f"session {parent_id} already has a successor "
+          f"({fresh_parent.successor_session_id}); elone that successor or fork for a separate branch")
+
     meta = await self._spawn_with_reference(parent_id, event_index, backend, "E")
 
-    # Auto-archive and thumbs-down the parent (re-read under lock so concurrent
-    # mutations to the parent aren't clobbered).
+    # Auto-archive and thumbs-down the parent, and record the elone successor
+    # pointer (re-read under lock so concurrent mutations to the parent aren't
+    # clobbered). Write-once is enforced by the succession check above.
     async with self._lock_for(parent_id):
       fresh_parent = await self.get_session(parent_id)
       if fresh_parent:
         fresh_parent.status = SessionStatus.ARCHIVED
         fresh_parent.rating = 'thumbs_down'
+        fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
         await self._save_metadata(fresh_parent)
     self._chat_events.clear_cache(parent_id)
@@ -535,17 +607,20 @@ class SessionManager:
 
   async def delete_session_permanently(self, session_id: str) -> bool:
     """Permanently delete a session and all its data from disk."""
-    session_dir = self._session_dir(session_id)
-    if not session_dir.exists():
-      return False
-    meta = await self.get_session(session_id)
-    await self._backend_destroy_hook(session_id, meta)
-    await asyncio.to_thread(shutil.rmtree, session_dir)
-    self._chat_events.clear_cache(session_id)
-    self._aggregators.pop(session_id, None)
-    self._clear_projection(session_id)
-    self._invalidate_cache(session_id)
-    self._metadata_locks.pop(session_id, None)
+    async with self._lock_for(session_id):
+      session_dir = self._session_dir(session_id)
+      if not session_dir.exists():
+        return False
+      meta = await self.get_session(session_id)
+      await self._backend_destroy_hook(session_id, meta)
+      await asyncio.to_thread(shutil.rmtree, session_dir)
+      self._chat_events.clear_cache(session_id)
+      self._aggregators.pop(session_id, None)
+      self._clear_projection(session_id)
+      self._invalidate_cache(session_id)
+      # Popping the lock from the dict while holding it is safe: the popped lock
+      # object stays valid for this holder until the ``async with`` exits.
+      self._metadata_locks.pop(session_id, None)
     log.info("session_deleted_permanently", session_id=session_id)
     return True
 

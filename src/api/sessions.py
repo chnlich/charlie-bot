@@ -45,7 +45,7 @@ from src.core.models import (
   SwitchBackendRequest,
   ThreadMetadata,
 )
-from src.core.sessions import SessionManager
+from src.core.sessions import SessionManager, SuccessionRefused
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
@@ -599,6 +599,8 @@ async def elone_session(
     meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
   except FileNotFoundError:
     raise HTTPException(status_code=404, detail="Session not found")
+  except SuccessionRefused as e:
+    raise HTTPException(status_code=409, detail=str(e))
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e))
 

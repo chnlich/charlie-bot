@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_run
 from src.agents.backends.base import AgentBackend, make_text_event
 from src.api.chat import cancel_master_agent
 from src.core import config as core_config
@@ -67,7 +67,7 @@ async def _run_cc_with_stderr_backend(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -190,7 +190,7 @@ async def _run_cc_with_scripted_events(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -219,7 +219,7 @@ def _synthesized_notice_events(callbacks) -> list[str]:
     for block in blocks:
       if isinstance(block, dict) and block.get("type") == "text":
         text = block.get("text", "")
-        if text.startswith(master_cc.NOTICE):
+        if text.startswith(master_cc_run.NOTICE):
           texts.append(text)
   return texts
 
@@ -238,8 +238,8 @@ async def test_silent_turn_salvaged(tmp_path, monkeypatch) -> None:
   )
   texts = _synthesized_notice_events(callbacks)
   assert len(texts) == 1
-  assert texts[0].startswith(master_cc.NOTICE)
-  body = texts[0][len(master_cc.NOTICE) + len("\n\n"):]
+  assert texts[0].startswith(master_cc_run.NOTICE)
+  body = texts[0][len(master_cc_run.NOTICE) + len("\n\n"):]
   assert body == "".join(deltas)
 
 
@@ -283,7 +283,7 @@ async def test_claude_family_thinking_block_salvaged(tmp_path, monkeypatch) -> N
   texts = _synthesized_notice_events(callbacks)
   assert len(texts) == 1
   assert texts[0].endswith(thinking)
-  assert thinking in texts[0][len(master_cc.NOTICE) + len("\n\n"):]
+  assert thinking in texts[0][len(master_cc_run.NOTICE) + len("\n\n"):]
 
 
 @pytest.mark.asyncio
@@ -298,7 +298,7 @@ async def test_salvage_helper_emits_thinking() -> None:
   event = broadcast.await_args.args[1]
   assert event.get("type") == ET.ASSISTANT
   text = event["message"]["content"][0]["text"]
-  assert text.startswith(master_cc.NOTICE)
+  assert text.startswith(master_cc_run.NOTICE)
   assert text.endswith("thinking part one thinking part two")
 
 

@@ -13,7 +13,6 @@ log-only and never escape into the loader.
 
 import asyncio
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -145,9 +144,6 @@ def test_alert_fires_through_loader_refresh(
   # the job back to healthy on the next refresh, and the recovery notification
   # goes out once.
   target.write_text("curate memory now", encoding="utf-8")
-  fixed = _cron_d_dir(temp_home) / "memory-curator.yaml"
-  m = fixed.stat().st_mtime
-  os.utime(fixed, (m + 5.0, m + 5.0))
 
   async def refresh_again() -> None:
     assert [t.name for t in cm.get_scheduled_tasks()] == ["memory-curator"]

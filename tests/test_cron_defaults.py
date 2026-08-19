@@ -209,9 +209,6 @@ def test_missing_pointer_target_recovers_when_restored(temp_home: Path) -> None:
   assert [e.name for e in get_scheduled_task_errors()] == ["task-a"]
 
   prompt_path.write_text("v1", encoding="utf-8")
-  fixed = _cron_d_dir(temp_home) / "task-a.yaml"
-  m = fixed.stat().st_mtime
-  os.utime(fixed, (m + 5.0, m + 5.0))
   assert get_scheduled_task_errors() == []
   assert get_scheduled_tasks()[0].prompt == "v1"
 

@@ -532,34 +532,26 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
 
   thread_ts = target["thread_ts"]
   text = _round_text(events, done_idx)
-  if text:
+  if not text:
+    bodies = [f"这一轮没有产生任何回复内容（exit_code={done.get('exit_code')}），请到会话里查看详情。"]
+    measured = text  # the empty-round notice reports the empty round text itself
+  else:
     reply, marker_count = _extract_marker_reply(text)
     if marker_count is None:
+      if not reply.strip():
+        logger.error("slack_reply_marker_empty", session=session_id,
+                     input_event_id=input_event_id)
+        return False
       bodies = _chunk_text(reply)
-      # A chunk that exhausts its retries is already logged by _post_with_retry;
-      # keep posting the rest: the full text lives in the session log regardless,
-      # and partial delivery beats none.
-      posted = True
-      client = _bot_client(cfg)
-      for body in bodies:
-        ok = await _post_with_retry(
-            client, target["channel_id"], thread_ts, body, session_id=session_id)
-        posted = posted and ok
-      logger.info("slack_delivery_done", session=session_id, channel=target["channel_id"],
-                  thread_ts=thread_ts, input_event_id=input_event_id, chars=len(reply),
-                  chunks=len(bodies), posted=posted, over_budget=len(reply) > _REPLY_BUDGET_CHARS,
-                  budget=_REPLY_BUDGET_CHARS)
-      # The delivery attempt ended: the eye goes out whether or not it posted.
-      _ack_clear(client, target, session_id)
-      return posted
-    if marker_count == 0:
+      measured = reply
+    elif marker_count == 0:
       logger.error("slack_reply_marker_missing", session=session_id,
                    input_event_id=input_event_id)
+      return False
     else:
       logger.error("slack_reply_marker_ambiguous", session=session_id,
                    input_event_id=input_event_id, marker_count=marker_count)
-    return False
-  bodies = [f"这一轮没有产生任何回复内容（exit_code={done.get('exit_code')}），请到会话里查看详情。"]
+      return False
 
   # A chunk that exhausts its retries is already logged by _post_with_retry;
   # keep posting the rest: the full text lives in the session log regardless,
@@ -570,8 +562,8 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
     ok = await _post_with_retry(client, target["channel_id"], thread_ts, body, session_id=session_id)
     posted = posted and ok
   logger.info("slack_delivery_done", session=session_id, channel=target["channel_id"],
-              thread_ts=thread_ts, input_event_id=input_event_id, chars=len(text),
-              chunks=len(bodies), posted=posted, over_budget=len(text) > _REPLY_BUDGET_CHARS,
+              thread_ts=thread_ts, input_event_id=input_event_id, chars=len(measured),
+              chunks=len(bodies), posted=posted, over_budget=len(measured) > _REPLY_BUDGET_CHARS,
               budget=_REPLY_BUDGET_CHARS)
   # The delivery attempt ended: the eye goes out whether or not it posted.
   _ack_clear(client, target, session_id)

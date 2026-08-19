@@ -132,6 +132,26 @@ async def test_resolve_successor_chain_walks_across_three_generations(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_resolve_successor_chain_allows_exactly_100_hops(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  sessions = [
+      await mgr.create_session(CreateSessionRequest(name=f"Generation {i}"), backend="claude-opus-4.6")
+      for i in range(101)
+  ]
+
+  for current, successor in zip(sessions, sessions[1:]):
+    meta = await mgr.read_metadata_fresh(current.id)
+    assert meta is not None
+    meta.successor_session_id = successor.id
+    await mgr.save_metadata(meta)
+
+  resolved = await mgr.resolve_successor_chain(sessions[0].id)
+  assert resolved is not None
+  assert resolved.id == sessions[-1].id
+
+
+@pytest.mark.asyncio
 async def test_resolve_successor_chain_stops_at_last_existing_when_mid_chain_deleted(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
@@ -187,10 +207,11 @@ async def test_read_metadata_fresh_sees_successor_written_after_get_session_cach
   # directly, bypassing this manager's cache.
   other = SessionManager(cfg)
   child = await other.elone_session(parent_id, event_index=0)
-  mgr._invalidate_cache(parent_id)
 
-  # get_session now reflects the on-disk successor because the cache was
-  # invalidated by the concurrent write; read_metadata_fresh always reflects it.
+  # The normal read remains stale, while the fresh read reflects the disk write.
+  stale = await mgr.get_session(parent_id)
+  assert stale is not None
+  assert stale.successor_session_id is None
   fresh = await mgr.read_metadata_fresh(parent_id)
   assert fresh is not None
   assert fresh.successor_session_id == child.id

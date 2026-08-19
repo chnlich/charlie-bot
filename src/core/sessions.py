@@ -254,10 +254,11 @@ class SessionManager:
     current = await self.read_metadata_fresh(session_id)
     if current is None:
       return None
-    for _ in range(100):
+    hops = 0
+    while current.successor_session_id is not None:
+      if hops >= 100:
+        raise RuntimeError(f"successor chain from {session_id} exceeds 100 hops; aborting to avoid a cycle")
       successor_id = current.successor_session_id
-      if not successor_id:
-        return current
       successor = await self.read_metadata_fresh(successor_id)
       if successor is None:
         log.error(
@@ -267,7 +268,8 @@ class SessionManager:
         )
         return current
       current = successor
-    raise RuntimeError(f"successor chain from {session_id} exceeds 100 hops; aborting to avoid a cycle")
+      hops += 1
+    return current
 
   async def list_sessions(
       self,

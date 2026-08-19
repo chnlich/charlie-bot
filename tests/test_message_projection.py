@@ -768,3 +768,76 @@ async def test_lru_eviction_cannot_serve_stale_after_dirty_mark(tmp_path: Path) 
   assert rebuilt is not None
   assert rebuilt.pending_draft is None, "stale projection served after dirty mark + eviction"
   assert len(rebuilt.committed) == 3  # user + assistant + separator
+
+
+# ---------------------------------------------------------------------------
+# 6. Worker summary projection: thread_id and origin_session_id
+# ---------------------------------------------------------------------------
+
+
+def _worker_summary_event(origin_session_id: str | None = None, thread_id: str = "th-1") -> dict:
+  """A worker_summary event with all fields the projection today carries."""
+  ev = {
+      "type": ET.WORKER_SUMMARY,
+      "thread_id": thread_id,
+      "content": "locator",
+      "full_content": "full",
+      "status": "completed",
+  }
+  if origin_session_id is not None:
+    ev["origin_session_id"] = origin_session_id
+  return ev
+
+
+def test_worker_summary_with_origin_projects_both_extra_fields() -> None:
+  """A redirected worker_summary carries origin_session_id AND thread_id."""
+  events = [_worker_summary_event(origin_session_id="origin-1")]
+  messages = events_to_messages(events)
+  summary = messages[0]
+  assert summary["role"] == "worker_summary"
+  assert summary["origin_session_id"] == "origin-1"
+  assert summary["thread_id"] == "th-1"
+
+
+def test_worker_summary_without_origin_keeps_fields_unchanged() -> None:
+  """A non-redirected worker_summary must be indistinguishable from today.
+
+  Its projected key set matches the pre-change shape exactly (no
+  origin_session_id key at all), and the carried content fields are unchanged.
+  """
+  event = _worker_summary_event()
+  event["timestamp"] = "t-ws"
+  messages = events_to_messages([event])
+  summary = messages[0]
+  assert summary["role"] == "worker_summary"
+  assert summary["content"] == "locator"
+  assert summary["full_content"] == "full"
+  assert summary["timestamp"] == "t-ws"
+  # The event has no origin_session_id, so the projected message must not
+  # present the key at all -- indistinguishable from today's projection.
+  assert "origin_session_id" not in summary
+  assert summary["thread_id"] == "th-1"
+
+
+@pytest.mark.asyncio
+async def test_worker_summary_delivered_to_successor_projects_origin_and_thread(tmp_path: Path) -> None:
+  """End-to-end: a worker_summary delivered through deliver_to_successor into an
+  eloned session projects with the origin session id and thread id."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await mgr.create_session(CreateSessionRequest(name="parent"), backend="claude-opus-4.6")
+  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    await mgr.persist_and_broadcast(parent.id, {"type": "user", "content": "q", "timestamp": "t0"})
+  child = await mgr.elone_session(parent.id, event_index=0)
+
+  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    delivered = await mgr.deliver_to_successor(
+        parent.id, _worker_summary_event(thread_id="th-e2e"))
+
+  assert delivered == child.id
+
+  projection = mgr.get_message_projection(child.id)
+  assert projection is not None
+  summary = next(m for m in projection.committed if m["role"] == "worker_summary")
+  assert summary["origin_session_id"] == parent.id
+  assert summary["thread_id"] == "th-e2e"

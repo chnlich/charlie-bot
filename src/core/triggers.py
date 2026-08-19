@@ -583,7 +583,7 @@ class TriggerManager:
       return
 
     session_meta = await self._session_mgr.get_session(fresh.session_id)
-    if session_meta is None or session_meta.status == SessionStatus.ARCHIVED:
+    if session_meta is None:
       fresh.status = TriggerStatus.CANCELLED
       await self._save_trigger(fresh)
       self._tasks.pop(trigger.id, None)
@@ -591,7 +591,7 @@ class TriggerManager:
           "trigger_cancelled_archived_session",
           trigger_id=fresh.id,
           session=fresh.session_id,
-          reason="metadata_unavailable" if session_meta is None else "archived",
+          reason="metadata_unavailable",
       )
       return
 
@@ -601,10 +601,52 @@ class TriggerManager:
     else:
       trigger_message = f"[Scheduled trigger fired] {fresh.message}"
 
-    await self._session_mgr.persist_and_broadcast(
+    # Resolve the succession chain end first so we can decide whether to cancel
+    # or redirect delivery. An archived session with no successor is the user's
+    # explicit "no more wakes" signal and cancels, as today.
+    resolved_tail = await self._session_mgr.resolve_successor_chain(fresh.session_id)
+    if resolved_tail is None:
+      fresh.status = TriggerStatus.CANCELLED
+      await self._save_trigger(fresh)
+      self._tasks.pop(trigger.id, None)
+      log.info(
+          "trigger_cancelled_archived_session",
+          trigger_id=fresh.id,
+          session=fresh.session_id,
+          reason="metadata_unavailable",
+      )
+      return
+
+    if resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None:
+      fresh.status = TriggerStatus.CANCELLED
+      await self._save_trigger(fresh)
+      self._tasks.pop(trigger.id, None)
+      log.info(
+          "trigger_cancelled_archived_session",
+          trigger_id=fresh.id,
+          session=fresh.session_id,
+          reason="archived",
+      )
+      return
+
+    # Deliver the scheduled-trigger event through the succession-aware primitive:
+    # it persists into the chain end (stamping origin_session_id when redirected)
+    # and returns None only when the chain end no longer exists.
+    delivered = await self._session_mgr.deliver_to_successor(
         fresh.session_id,
         build_scheduled_trigger_event(trigger_message),
     )
+    if delivered is None:
+      fresh.status = TriggerStatus.CANCELLED
+      await self._save_trigger(fresh)
+      self._tasks.pop(trigger.id, None)
+      log.info(
+          "trigger_cancelled_archived_session",
+          trigger_id=fresh.id,
+          session=fresh.session_id,
+          reason="chain_end_missing",
+      )
+      return
 
     # Wake the master CC. Re-read the config here rather than using the snapshot
     # captured at construction: backends added to or renamed in config.yaml after

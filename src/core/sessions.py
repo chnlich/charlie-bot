@@ -271,6 +271,50 @@ class SessionManager:
       hops += 1
     return current
 
+  async def deliver_to_successor(self, session_id: str, event: dict) -> str | None:
+    """Persist *event* into the session currently ending *session_id*'s succession chain.
+
+    Resolves the chain end via ``resolve_successor_chain``, then holds that tail's
+    lock while re-resolving (an elone may have landed while we waited), confirming the
+    tail's directory still exists, and persisting. Returns the id of the session
+    actually written to, or None when nothing could be written (chain end's metadata
+    was permanently deleted). Redirected events (chain end differs from *session_id*)
+    are stamped with ``event['origin_session_id'] = session_id``.
+    """
+    # Bound the retries to the same 100-hop notion used by chain resolution, and
+    # fail loud rather than looping forever on a steady stream of landing elones.
+    for _ in range(101):
+      tail = await self.resolve_successor_chain(session_id)
+      if tail is None:
+        log.error("deliver_to_successor_origin_missing", session_id=session_id)
+        return None
+
+      async with self._lock_for(tail.id):
+        # Re-resolve from the tail with a fresh read: an elone may have landed
+        # while we waited for the lock. If so, release and repeat from the top.
+        fresh_tail = await self.read_metadata_fresh(tail.id)
+        if fresh_tail is None:
+          log.error("deliver_to_successor_tail_missing", session_id=session_id, tail_id=tail.id)
+          return None
+        if fresh_tail.successor_session_id is not None:
+          continue
+        # The tail's metadata.json exists (confirmed above), so append_ndjson will
+        # never recreate a directory for a permanently deleted session.
+        if not self._metadata_path(fresh_tail.id).exists():
+          log.error(
+              "deliver_to_successor_metadata_missing",
+              session_id=session_id,
+              tail_id=fresh_tail.id,
+          )
+          return None
+
+        if fresh_tail.id != session_id:
+          event['origin_session_id'] = session_id
+        await self.persist_and_broadcast(fresh_tail.id, event)
+        return fresh_tail.id
+
+    raise RuntimeError(f"deliver_to_successor from {session_id} retried 100 times; aborting to avoid a loop")
+
   async def list_sessions(
       self,
       status: SessionStatus | None = None,

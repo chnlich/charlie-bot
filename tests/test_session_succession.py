@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -241,3 +242,90 @@ async def test_api_succession_refused_maps_to_409_and_bad_event_index_to_400(tmp
     resp = client.post(f"/api/sessions/{other_parent}/elone", json={"event_index": 99})
     assert resp.status_code == 400
     assert "out of range" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_to_successor_writes_into_chain_end_and_stamps_origin(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  gen0 = await _make_parent(mgr, name="G0")
+  gen1 = await mgr.elone_session(gen0, event_index=0)
+  gen2 = await mgr.elone_session(gen1.id, event_index=0)
+
+  event = {"type": "user", "content": "delivered"}
+  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    delivered = await mgr.deliver_to_successor(gen0, event)
+
+  assert delivered == gen2.id
+  assert event.get("origin_session_id") == gen0
+  assert any(ev.get("content") == "delivered" for ev in mgr.load_chat_events_sync(gen2.id))
+
+
+@pytest.mark.asyncio
+async def test_deliver_to_successor_leaves_origin_absent_for_no_successor(tmp_path: Path) -> None:
+  mgr = SessionManager(CharlieBotConfig(charliebot_home=tmp_path / "home"))
+  gen0 = await _make_parent(mgr)
+
+  event = {"type": "user", "content": "no redirect"}
+  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    delivered = await mgr.deliver_to_successor(gen0, event)
+
+  assert delivered == gen0
+  assert "origin_session_id" not in event
+  assert any(ev.get("content") == "no redirect" for ev in mgr.load_chat_events_sync(gen0))
+
+
+@pytest.mark.asyncio
+async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_end_dir_removed(
+    tmp_path: Path,
+) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(CreateSessionRequest(name="Gone"), backend="claude-opus-4.6")
+
+  # Remove the whole session directory, including metadata.json, exactly as a
+  # permanent delete does. append_ndjson would recreate the dir — assert it does not.
+  await mgr.delete_session_permanently(session.id)
+  assert not mgr._session_dir(session.id).exists()
+
+  event = {"type": "user", "content": "must not land"}
+  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    delivered = await mgr.deliver_to_successor(session.id, event)
+
+  assert delivered is None
+  assert not (cfg.sessions_dir / session.id).exists()
+
+
+@pytest.mark.asyncio
+async def test_deliver_to_successor_reresolves_when_successor_appears_between_resolve_and_lock(
+    tmp_path: Path,
+) -> None:
+  mgr = SessionManager(CharlieBotConfig(charliebot_home=tmp_path / "home"))
+  gen0 = await _make_parent(mgr)
+  gen1 = await mgr.create_session(CreateSessionRequest(name="Late successor"), backend="claude-opus-4.6")
+
+  real_read = mgr.read_metadata_fresh
+  calls = {"n": 0}
+
+  async def flaky_read(session_id: str):
+    if session_id == gen0:
+      calls["n"] += 1
+      meta = await real_read(session_id)
+      # The first read (chain resolution) sees no successor; the second read
+      # (under the lock) sees one — as if an elone landed while we waited.
+      if calls["n"] >= 2:
+        meta.successor_session_id = gen1.id
+        await mgr.save_metadata(meta)
+      return meta
+    return await real_read(session_id)
+
+  event = {"type": "user", "content": "lands in newest tail"}
+  with (
+      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
+      patch.object(mgr, "read_metadata_fresh", side_effect=flaky_read),
+  ):
+    delivered = await mgr.deliver_to_successor(gen0, event)
+
+  assert delivered == gen1.id
+  assert event.get("origin_session_id") == gen0
+  assert any(ev.get("content") == "lands in newest tail" for ev in mgr.load_chat_events_sync(gen1.id))

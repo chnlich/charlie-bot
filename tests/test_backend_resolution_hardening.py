@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_run
 from src.agents.backends import base as backend_base
 from src.agents.backends import registry
 from src.core import config as core_config
@@ -225,7 +225,7 @@ async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: 
   spawned: list[object] = []
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
                       lambda *a, **k: spawned.append(1) or _FakeBackend())
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = _item(cfg, session_meta, None)
   cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
@@ -250,7 +250,7 @@ async def test_run_cc_still_defaults_when_session_pins_no_backend(tmp_path: Path
   captures: dict[str, object] = {}
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
                       lambda option, cfg, **k: captures.update(option=option) or _FakeBackend())
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   _cc, exit_code, error_msg, _extras = await master_cc._run_cc(_item(cfg, session_meta, None))
 
@@ -318,7 +318,7 @@ async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
   captures: dict[str, object] = {}
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
                       lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = _item(cfg, session_meta, cfg.backend_options[0])
   _cc, exit_code, error_msg, _extras = await master_cc._run_cc(item)
@@ -345,7 +345,7 @@ async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, mo
   captures: dict[str, object] = {}
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
                       lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = _item(cfg, session_meta, cfg.backend_options[0])
   await master_cc._run_cc(item)

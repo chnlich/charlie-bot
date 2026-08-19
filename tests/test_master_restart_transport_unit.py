@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import init as init_module
 from src.core.config import CharlieBotConfig
 from src.core.models import (
@@ -183,19 +183,19 @@ async def test_consumer_clears_master_run_after_master_done(monkeypatch: pytest.
       should_check_tex=False,
       future=asyncio.get_running_loop().create_future(),
   )
-  master_cc._session_queues.pop(session_meta.id, None)
-  master_cc._session_queues[session_meta.id] = asyncio.Queue()
-  master_cc._session_queues[session_meta.id].put_nowait(item)
+  master_cc_state._session_queues.pop(session_meta.id, None)
+  master_cc_state._session_queues[session_meta.id] = asyncio.Queue()
+  master_cc_state._session_queues[session_meta.id].put_nowait(item)
   try:
     with (
-        patch.object(master_cc, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc.streaming_manager, "broadcast", new=AsyncMock()),
+        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
+        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
         patch("src.core.sessions.SessionManager", return_value=workers_mock),
     ):
       await asyncio.wait_for(master_cc._session_consumer(session_meta.id), timeout=5)
   finally:
-    master_cc._session_queues.pop(session_meta.id, None)
-    master_cc._session_consumers.pop(session_meta.id, None)
+    master_cc_state._session_queues.pop(session_meta.id, None)
+    master_cc_state._session_consumers.pop(session_meta.id, None)
 
   assert persist_order == ["master_done", "master_run_cleared"], (
       "the restart identity must outlive the result boundary: clearing it first "
@@ -241,7 +241,7 @@ def _install_backend(monkeypatch: pytest.MonkeyPatch, backend: _HungBackend) -> 
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", _build)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
 
 def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread=None) -> SessionCallbacks:
@@ -355,8 +355,8 @@ async def test_let_go_writes_no_terminal_state(tmp_path: Path, monkeypatch: pyte
   mark_unread = AsyncMock()
   check_tex = MagicMock(return_value=None)
   clear_snapshot = MagicMock()
-  monkeypatch.setattr(master_cc, "check_tex_changed", check_tex)
-  monkeypatch.setattr(master_cc, "clear_snapshot", clear_snapshot)
+  monkeypatch.setattr(master_cc_run, "check_tex_changed", check_tex)
+  monkeypatch.setattr(master_cc_run, "clear_snapshot", clear_snapshot)
 
   # should_check_tex=True so a non-let-go cancel WOULD run the tex row.
   await _cancel_run(
@@ -370,7 +370,7 @@ async def test_let_go_writes_no_terminal_state(tmp_path: Path, monkeypatch: pyte
   check_tex.assert_not_called()
   clear_snapshot.assert_not_called()
   assert cfg.sessions_dir.joinpath(meta.id).exists()  # sanity: the session dir is the tmp home's
-  assert meta.id not in master_cc._active_procs
+  assert meta.id not in master_cc_state._active_procs
 
 
 # --- cancel_master falls back to the on-disk master_run record ---------------
@@ -394,9 +394,9 @@ async def test_cancel_master_kills_a_live_detached_record(monkeypatch: pytest.Mo
   kill = MagicMock()
   # Alive at the judgment, gone after the SIGTERM: the SIGKILL never goes out.
   alive = iter([True, False, False])
-  monkeypatch.setattr(master_cc.runs, "is_run_alive", lambda *args: next(alive))
-  monkeypatch.setattr(master_cc, "kill_process_group", kill)
-  master_cc._active_procs.pop(session_id, None)
+  monkeypatch.setattr(master_cc_queue.runs, "is_run_alive", lambda *args: next(alive))
+  monkeypatch.setattr(master_cc_run, "kill_process_group", kill)
+  master_cc_state._active_procs.pop(session_id, None)
 
   result = await master_cc.cancel_master(session_id, meta=meta, session_mgr=session_mgr)
 
@@ -423,7 +423,7 @@ async def test_cancel_master_never_signals_an_unprovable_record(monkeypatch: pyt
   meta = SessionMetadata(id=session_id, name="t", master_run=record)
   session_mgr = AsyncMock()
   kill = MagicMock()
-  monkeypatch.setattr(master_cc, "kill_process_group", kill)
+  monkeypatch.setattr(master_cc_run, "kill_process_group", kill)
 
   result = await master_cc.cancel_master(session_id, meta=meta, session_mgr=session_mgr)
 
@@ -584,20 +584,20 @@ async def test_queued_user_event_ids_covers_running_and_queued_items() -> None:
   workers_mock._has_running_tasks = AsyncMock(return_value=False)
   try:
     with (
-        patch.object(master_cc, "_run_cc", side_effect=blocked_run_cc),
-        patch.object(master_cc.streaming_manager, "broadcast", new=AsyncMock()),
+        patch.object(master_cc_run, "_run_cc", side_effect=blocked_run_cc),
+        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
         patch("src.core.sessions.SessionManager", return_value=workers_mock),
     ):
       master_cc._enqueue_work_item(session_meta.id, running)
       master_cc._enqueue_work_item(session_meta.id, queued)
       # Let the consumer pick up the first item.
       deadline = time.monotonic() + 2.0
-      while session_meta.id not in master_cc._current_items and time.monotonic() < deadline:
+      while session_meta.id not in master_cc_state._current_items and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
       ids = master_cc.queued_user_event_ids(session_meta.id)
       assert ids == {"evt-running", "evt-queued"}
   finally:
     gate.set()
     await asyncio.gather(*(i.future for i in (running, queued)), return_exceptions=True)
-    master_cc._session_queues.pop(session_meta.id, None)
-    master_cc._session_consumers.pop(session_meta.id, None)
+    master_cc_state._session_queues.pop(session_meta.id, None)
+    master_cc_state._session_consumers.pop(session_meta.id, None)

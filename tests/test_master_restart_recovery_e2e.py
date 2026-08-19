@@ -52,7 +52,7 @@ from pathlib import Path
 import pytest
 from structlog.testing import capture_logs
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_queue, master_cc_run
 from src.core import init as init_module
 from src.core import runs
 from src.core.config import CharlieBotConfig
@@ -100,7 +100,7 @@ import json
 import sys
 from pathlib import Path
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_run
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, CreateSessionRequest, TaskType, ThreadStatus
 from src.core.sessions import SessionManager
@@ -118,7 +118,7 @@ async def main() -> None:
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=shim)],
   )
   # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
-  master_cc._build_instructions_content = lambda session_meta, cfg: "instructions"
+  master_cc_run._build_instructions_content = lambda session_meta, cfg: "instructions"
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="master-e2e"))
@@ -175,7 +175,7 @@ import json
 import sys
 from pathlib import Path
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_run, master_cc_state
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, CreateSessionRequest
 from src.core.sessions import SessionManager
@@ -191,7 +191,7 @@ async def main() -> None:
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=shim)],
   )
   # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
-  master_cc._build_instructions_content = lambda session_meta, cfg: "instructions"
+  master_cc_run._build_instructions_content = lambda session_meta, cfg: "instructions"
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="master-graceful"))
   (home / "driver_ids.json").write_text(json.dumps({"session": meta.id}))
@@ -211,7 +211,7 @@ async def main() -> None:
 
   # Graceful shutdown: exactly what the closing event loop does to the
   # consumer task that owns the turn.
-  consumer = master_cc._session_consumers[meta.id]
+  consumer = master_cc_state._session_consumers[meta.id]
   consumer.cancel()
   with contextlib.suppress(asyncio.CancelledError):
     await consumer
@@ -494,7 +494,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   monkeypatch.setattr(init_module.runs, "read_host_boot_time",
                       lambda: backdated - timedelta(hours=1))
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -537,7 +537,7 @@ async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monk
   proc.wait(timeout=10)
   _kill_agent_only(home, session_id)
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -547,7 +547,7 @@ async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monk
   # original content, and the original user event was not rewritten.
   assert (state / "inv-2.argv").exists(), "replayed turn never spawned"
   replayed_prompt = _shim_prompt(state, 2)
-  assert replayed_prompt.startswith(master_cc._REPLAY_MARKER)
+  assert replayed_prompt.startswith(master_cc_queue._REPLAY_MARKER)
   assert "message A" in replayed_prompt
   events = _chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
@@ -570,7 +570,7 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
   proc.kill()
   proc.wait(timeout=10)
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -578,10 +578,10 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
 
   # A: re-attached, prompt unmarked. B: one new spawn, marked, only after A.
   assert "message A" in _shim_prompt(state, 1)
-  assert not _shim_prompt(state, 1).startswith(master_cc._REPLAY_MARKER)
+  assert not _shim_prompt(state, 1).startswith(master_cc_queue._REPLAY_MARKER)
   assert (state / "inv-2.argv").exists(), "queued message B was never replayed"
   replayed_prompt = _shim_prompt(state, 2)
-  assert replayed_prompt.startswith(master_cc._REPLAY_MARKER)
+  assert replayed_prompt.startswith(master_cc_queue._REPLAY_MARKER)
   assert "message B" in replayed_prompt
 
   events = _chat_events(home, session_id)
@@ -625,7 +625,7 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Pat
   try:
     (home / "config.yaml").write_text(f"server_port: {black_hole.port}\n", encoding="utf-8")
 
-    monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+    monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
     monkeypatch.setenv("SHIM_MODE", "delegate")
     monkeypatch.setenv("SHIM_STATE", str(state))
     monkeypatch.setenv("SHIM_DELEGATE_SESSION", session_id)
@@ -640,7 +640,7 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Pat
 
   # The replayed turn carried the marker and completed.
   assert (state / "inv-2.argv").exists(), "replayed turn never spawned"
-  assert _shim_prompt(state, 2).startswith(master_cc._REPLAY_MARKER)
+  assert _shim_prompt(state, 2).startswith(master_cc_queue._REPLAY_MARKER)
   assert (state / "delegate.rc").read_text(encoding="utf-8").strip() == "0", (
       f"delegate CLI failed: {(state / 'delegate.stderr').read_text(encoding='utf-8', errors='replace')}")
 
@@ -679,7 +679,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
       timeout=20.0,
       what="agent did not finish during the server-down window")
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   cfg = _cfg(home, shim)
@@ -745,7 +745,7 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Pat
   record["pid_start"] = None
   meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   # With a constant-true probe the follow ends on the post-result timeout;
@@ -764,7 +764,7 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Pat
   # The turn's real result event closed the round: exactly one answer, the
   # original user event unreplayed, the record cleared by the normal path.
   assert not (state / "inv-2.argv").exists(), "a second master process was spawned"
-  assert not _shim_prompt(state, 1).startswith(master_cc._REPLAY_MARKER)
+  assert not _shim_prompt(state, 1).startswith(master_cc_queue._REPLAY_MARKER)
   events = _chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
   master_done = [e for e in events if e.get("type") == "master_done"]
@@ -794,7 +794,7 @@ async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
       timeout=20.0,
       what="agent did not finish during the server-down window")
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   cfg = _cfg(home, shim)
@@ -843,7 +843,7 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
   silent_since = time.time() - (NO_OUTPUT_REPORT_THRESHOLD + 60)
   os.utime(raw, (silent_since, silent_since))
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -887,7 +887,7 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
   proc.wait(timeout=10)
   _kill_agent_only(home, session_id)
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -948,8 +948,8 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
   async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
     replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
 
-  monkeypatch.setattr(master_cc, "run_message", _capture_run_message)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   with capture_logs() as logs:
     await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
@@ -968,7 +968,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
   assert not any(e.get("type") == "master_done" for e in events)
   if with_user_message:
     assert len(replays) == 1
-    assert replays[0]["content"].startswith(master_cc._REPLAY_MARKER)
+    assert replays[0]["content"].startswith(master_cc_queue._REPLAY_MARKER)
     assert "message A" in replays[0]["content"]
     assert replays[0]["user_event_id"] == user_event_id
   else:
@@ -1018,8 +1018,8 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
     async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
       replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
 
-    monkeypatch.setattr(master_cc, "run_message", _capture_run_message)
-    monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+    monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
+    monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
     await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
     await _await_recovery_tasks()
@@ -1063,7 +1063,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkey
   )
   await session_mgr.persist_master_run(meta.id, record)
 
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
@@ -1074,7 +1074,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkey
   assert (state / "inv-1.argv").exists(), "replayed turn never spawned"
   assert not (state / "inv-2.argv").exists()
   replayed_prompt = _shim_prompt(state, 1)
-  assert replayed_prompt.startswith(master_cc._REPLAY_MARKER)
+  assert replayed_prompt.startswith(master_cc_queue._REPLAY_MARKER)
   assert "message A" in replayed_prompt
   events = _chat_events(home, meta.id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
@@ -1106,7 +1106,7 @@ async def test_graceful_teardown_detached_turn_reattached_and_answered_once(
   assert not _session_meta(home, session_id).get("has_unread"), "teardown wrote terminal state"
 
   # Next boot: re-attach and finish — the round is answered exactly once.
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))

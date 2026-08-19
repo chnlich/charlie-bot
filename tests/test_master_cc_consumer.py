@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.agents.backends.base import make_result_event, make_text_event
 from src.api import sessions as sessions_api
 from src.api.deps import get_session_manager
@@ -78,10 +78,10 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
   item_bootstrap = _make_item(meta_bootstrap, cb)
   item_user = _make_item(meta_user_message, cb)
 
-  master_cc._session_queues.pop(session_id, None)
-  master_cc._session_queues[session_id] = asyncio.Queue()
-  master_cc._session_queues[session_id].put_nowait(item_bootstrap)
-  master_cc._session_queues[session_id].put_nowait(item_user)
+  master_cc_state._session_queues.pop(session_id, None)
+  master_cc_state._session_queues[session_id] = asyncio.Queue()
+  master_cc_state._session_queues[session_id].put_nowait(item_bootstrap)
+  master_cc_state._session_queues[session_id].put_nowait(item_user)
 
   observed_cc_session_ids: list = []
 
@@ -94,14 +94,14 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 
   try:
     with (
-        patch.object(master_cc, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc.streaming_manager, "broadcast", new=AsyncMock()),
+        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
+        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
         patch("src.core.sessions.SessionManager", return_value=workers_mock),
     ):
       await asyncio.wait_for(master_cc._session_consumer(session_id), timeout=5)
   finally:
-    master_cc._session_queues.pop(session_id, None)
-    master_cc._session_consumers.pop(session_id, None)
+    master_cc_state._session_queues.pop(session_id, None)
+    master_cc_state._session_consumers.pop(session_id, None)
 
   assert observed_cc_session_ids == [None, "cc-id-from-bootstrap"], (
       "second _run_cc must observe cc_session_id relayed from bootstrap meta")
@@ -123,8 +123,8 @@ def _make_consumer_cfg(tmp_path: Path) -> CharlieBotConfig:
 
 
 def _reset_master_state(session_id: str) -> None:
-  master_cc._session_queues.pop(session_id, None)
-  master_cc._session_consumers.pop(session_id, None)
+  master_cc_state._session_queues.pop(session_id, None)
+  master_cc_state._session_consumers.pop(session_id, None)
   thinking_state.clear_busy(session_id)
 
 
@@ -145,7 +145,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   """
   session_id = f"t1-{inject_at}"
   cfg = _make_consumer_cfg(tmp_path)
-  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
 
   entries: list[Optional[datetime]] = []
   injected = False
@@ -202,8 +202,8 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
       persist_master_run=AsyncMock(),
   )
 
-  monkeypatch.setattr(master_cc, "_run_cc", fake_run_cc)
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", broadcast_hook)
+  monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast_hook)
   monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
 
   _reset_master_state(session_id)
@@ -222,7 +222,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
     assert await asyncio.wait_for(injected_task, timeout=5) == "cc-1"
 
     # Let the (possibly second) consumer task finish its teardown.
-    remaining = master_cc._session_consumers.get(session_id)
+    remaining = master_cc_state._session_consumers.get(session_id)
     if remaining is not None:
       await asyncio.wait_for(remaining, timeout=5)
 
@@ -270,7 +270,7 @@ async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pyte
   """T3a: exception in _run_cc still converges — busy state clears at teardown."""
   session_id = "t3-raise"
   cfg = _make_consumer_cfg(tmp_path)
-  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
 
   async def exploding_run_cc(item: master_cc._WorkItem) -> tuple:
     raise RuntimeError("boom")
@@ -279,8 +279,8 @@ async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pyte
   workers_mock._has_running_tasks = AsyncMock(return_value=False)
   callbacks = _make_callbacks()
 
-  monkeypatch.setattr(master_cc, "_run_cc", exploding_run_cc)
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(master_cc_run, "_run_cc", exploding_run_cc)
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
 
   _reset_master_state(session_id)
@@ -289,7 +289,7 @@ async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pyte
         master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "hi", callbacks, skip_user_event=True))
     with pytest.raises(RuntimeError, match="boom"):
       await asyncio.wait_for(run_task, timeout=5)
-    consumer = master_cc._session_consumers.get(session_id)
+    consumer = master_cc_state._session_consumers.get(session_id)
     if consumer is not None:
       await asyncio.wait_for(consumer, timeout=5)
     assert thinking_state.busy_since(session_id) is None
@@ -306,9 +306,9 @@ async def test_consumer_cancelled_before_first_item_finally_does_not_raise() -> 
   """
   session_id = "t3-cancel"
   _reset_master_state(session_id)
-  master_cc._session_queues[session_id] = asyncio.Queue()
+  master_cc_state._session_queues[session_id] = asyncio.Queue()
   task = asyncio.create_task(master_cc._session_consumer(session_id))
-  master_cc._session_consumers[session_id] = task
+  master_cc_state._session_consumers[session_id] = task
   try:
     await asyncio.sleep(0)  # consumer is now suspended at queue.get()
     task.cancel()
@@ -495,16 +495,16 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   async def fake_run_cc(item: master_cc._WorkItem) -> tuple:
     return (backend_returned_id, 0, None, {})
 
-  monkeypatch.setattr(master_cc, "_run_cc", fake_run_cc)
-  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
+  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
   _reset_master_state(session.id)
   try:
     result = await master_cc.run_message(
         cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
     assert result == backend_returned_id
-    consumer = master_cc._session_consumers.get(session.id)
+    consumer = master_cc_state._session_consumers.get(session.id)
     if consumer and not consumer.done():
       await asyncio.wait_for(consumer, timeout=5)
   finally:
@@ -537,9 +537,9 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
                       lambda *a, **k: _NoopBackend())
-  monkeypatch.setattr(master_cc, "_build_instructions_content",
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content",
                       lambda session_meta, cfg: "instructions")
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -616,8 +616,8 @@ async def test_resume_reattach_uses_persisted_interval_start(
   workers_mock = MagicMock()
   workers_mock._has_running_tasks = AsyncMock(return_value=False)
 
-  monkeypatch.setattr(master_cc, "_resume_cc", fake_resume_cc)
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", broadcast)
+  monkeypatch.setattr(master_cc_run, "_resume_cc", fake_resume_cc)
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast)
   monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
 
   cfg = _make_consumer_cfg(tmp_path)
@@ -641,7 +641,7 @@ async def test_resume_reattach_uses_persisted_interval_start(
         "the sidebar-indicator start must equal the persisted record start")
 
     release.set()
-    consumer = master_cc._session_consumers.get(session_id)
+    consumer = master_cc_state._session_consumers.get(session_id)
     if consumer is not None:
       await asyncio.wait_for(consumer, timeout=5)
     await asyncio.wait_for(future, timeout=5)
@@ -701,14 +701,14 @@ async def _run_stream_consumer(
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **k: backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda *a, **k: "instructions")
-  monkeypatch.setattr(master_cc, "get_tex_path", lambda: tmp_path / "missing.tex")
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda *a, **k: "instructions")
+  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
   _reset_master_state(session_id)
   try:
     await master_cc.run_message(cfg, meta, "hi", cb, skip_user_event=True)
-    consumer = master_cc._session_consumers.get(session_id)
+    consumer = master_cc_state._session_consumers.get(session_id)
     if consumer is not None:
       await asyncio.wait_for(consumer, timeout=5)
   finally:
@@ -780,8 +780,8 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
   async def fake_resume_cc(item: master_cc._WorkItem) -> tuple:
     return "cc-resumed-id", 0, None, {"zero_output": True}
 
-  monkeypatch.setattr(master_cc, "_resume_cc", fake_resume_cc)
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(master_cc_run, "_resume_cc", fake_resume_cc)
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: MagicMock(
       _has_running_tasks=AsyncMock(return_value=False)))
 
@@ -790,7 +790,7 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
     future = await master_cc.enqueue_master_resume(
         cfg, meta, record, cb, is_alive=lambda: True)
     await asyncio.wait_for(future, timeout=5)
-    consumer = master_cc._session_consumers.get(session_id)
+    consumer = master_cc_state._session_consumers.get(session_id)
     if consumer is not None:
       await asyncio.wait_for(consumer, timeout=5)
   finally:
@@ -888,8 +888,8 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
   meta = _make_meta(session_id)
   cb = _make_callbacks()
 
-  monkeypatch.setattr(master_cc, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
-  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: MagicMock(
       _has_running_tasks=AsyncMock(return_value=False)))
 
@@ -898,7 +898,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
     future = await master_cc.enqueue_master_resume(
         cfg, meta, record, cb, is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
-    consumer = master_cc._session_consumers.get(session_id)
+    consumer = master_cc_state._session_consumers.get(session_id)
     if consumer is not None:
       await asyncio.wait_for(consumer, timeout=5)
   finally:

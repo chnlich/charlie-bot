@@ -601,8 +601,16 @@ function renderMessage(msg, sessionId) {
       + renderDelegateMetadata(msg) + timeDiv() + "</div></div>";
   }
   if (msg.role === "worker_summary") {
+    var originFooter = "";
+    if (msg.origin_session_id && msg.thread_id && msg.origin_session_id !== sessionId) {
+      originFooter = "<div class=\"mt-2 pt-2 border-t border-emerald-700/30 text-xs text-emerald-400/50\">"
+        + "Ran in session <a href=\"/?session=" + encodeURIComponent(msg.origin_session_id)
+        + "\" class=\"text-emerald-400/50 underline\">"
+        + escapeHtml(msg.origin_session_id) + "</a> &middot; thread " + escapeHtml(msg.thread_id)
+        + "</div>";
+    }
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
-      + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + "</div></div>";
+      + mdDiv(msg.content) + timeDiv("text-emerald-400/50") + originFooter + "</div></div>";
   }
   if (msg.role === "plan") {
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"

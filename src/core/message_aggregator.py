@@ -153,6 +153,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             'role': 'worker_summary',
             'content': ev.get('content', ''),
             'full_content': ev.get('full_content', ''),
+            'thread_id': ev.get('thread_id'),
+            **({'origin_session_id': ev['origin_session_id']} if ev.get('origin_session_id') is not None else {}),
         },
     ET.HANDLER_RESULT:
         _handler_result_msg,

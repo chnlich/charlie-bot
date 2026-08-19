@@ -9,6 +9,26 @@ from starlette.responses import HTMLResponse, Response
 
 from src.core.config import get_config
 
+
+def request_has_access_key(request: Request, key: str) -> bool:
+  """True when *request* carries a valid access key, or when *key* is empty.
+
+  An empty configured key means the middleware passes every request through,
+  so every reader counts as authenticated. Otherwise the key is accepted from
+  either an ``Authorization: Bearer`` header or a ``charliebot_access_key``
+  cookie, compared with ``hmac.compare_digest`` — the one place that owns the
+  credential comparison.
+  """
+  if not key:
+    return True
+  auth_header = request.headers.get("authorization", "")
+  bearer = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+  cookie = request.cookies.get("charliebot_access_key", "")
+  if (bearer and hmac.compare_digest(bearer, key)) or (cookie and hmac.compare_digest(cookie, key)):
+    return True
+  return False
+
+
 # Paths that are always public (no auth required). The viewer routes only render
 # or re-serve data already public via "/files/", so exposing them leaks nothing
 # new and makes trace/report links shareable.
@@ -94,10 +114,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     # Accept the access key from either the Authorization: Bearer header (used by
     # the SPA fetch wrapper) or the charliebot_access_key cookie (the only
     # credential a browser auto-sends on a top-level navigation).
-    auth_header = request.headers.get("authorization", "")
-    bearer = auth_header[7:] if auth_header.startswith("Bearer ") else ""
-    cookie = request.cookies.get("charliebot_access_key", "")
-    if (bearer and hmac.compare_digest(bearer, key)) or (cookie and hmac.compare_digest(cookie, key)):
+    if request_has_access_key(request, key):
       return await call_next(request)
 
     # Unauthenticated. Serve the HTML login page to browser navigations so the

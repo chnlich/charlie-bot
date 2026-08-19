@@ -14,11 +14,15 @@ SCRIPT = "<script src=/static/js/artifact-comments.js></script>"
 
 @pytest.fixture
 def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-  """Point the configured sessions root at tmp_path.
+  """Point the configured sessions root and access key at test values.
 
   files.py imports ``get_config`` by name, so the patch lands on the module.
+  A real app carries the auth middleware and routes /files/ as public; these
+  tests cover the file server alone, so the fixture must supply the access key
+  the middleware would otherwise own.
   """
-  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path))
+  monkeypatch.setattr(
+      files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path, charliebot_access_key="secret"))
   return tmp_path
 
 
@@ -76,7 +80,7 @@ def test_inject_appends_when_no_body() -> None:
 def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page))
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 200
   assert resp.headers["content-type"].startswith("text/html")
   body = resp.text
@@ -93,7 +97,7 @@ def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
 def test_serve_file_injects_thread_artifact_with_session_id_not_thread_id(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "threads" / "T" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page))
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 200
   assert 'window.__cbcServerSessionId="S";' in resp.text
   assert '"T"' not in resp.text
@@ -104,6 +108,47 @@ def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
   # page sits under <session>/... with an `artifacts` parent, not how deep.
   page = _write(sessions_root / "S" / "threads" / "T" / "sub" / "artifacts" / "x.html")
 
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 200
+  assert 'window.__cbcServerSessionId="S";' in resp.text
+
+
+def test_serve_file_injects_via_bearer_header(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+
+  resp = _build_client().get("/files" + str(page), headers={"Authorization": "Bearer secret"})
+  assert resp.status_code == 200
+  assert "artifact-comments.js" in resp.text
+  assert 'window.__cbcServerSessionId="S";' in resp.text
+
+
+def test_serve_file_no_credential_returns_original_bytes(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  original = page.read_text(encoding="utf-8")
+
+  resp = _build_client().get("/files" + str(page))
+  assert resp.status_code == 200
+  assert resp.text == original
+  assert "artifact-comments.js" not in resp.text
+  assert 'window.__cbcServerSessionId="S";' not in resp.text
+
+
+def test_serve_file_wrong_credential_returns_original_bytes(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  original = page.read_text(encoding="utf-8")
+
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "wrong"})
+  assert resp.status_code == 200
+  assert resp.text == original
+  assert "artifact-comments.js" not in resp.text
+
+
+def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """No configured key = every reader authenticates, so injection stays on."""
+  monkeypatch.setattr(
+      files_api, "get_config", lambda: SimpleNamespace(sessions_dir=sessions_root, charliebot_access_key=""))
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+
   resp = _build_client().get("/files" + str(page))
   assert resp.status_code == 200
   assert 'window.__cbcServerSessionId="S";' in resp.text
@@ -112,7 +157,7 @@ def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
 def test_serve_file_session_html_outside_artifacts_not_injected(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "notes" / "x.html")
 
-  resp = _build_client().get("/files" + str(page))
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   # Kept as a FileResponse: served from disk with a last-modified validator.
@@ -123,7 +168,7 @@ def test_serve_file_root_level_artifacts_dir_not_injected(sessions_root: Path) -
   # <root>/artifacts/x.html belongs to no session — there is no session component.
   page = _write(sessions_root / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page))
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
@@ -138,7 +183,7 @@ def test_serve_file_artifact_shape_outside_sessions_root_not_injected(
   outside = tmp_path_factory.mktemp("outside")
   page = _write(outside / "a" / "sessions" / "S" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page))
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers

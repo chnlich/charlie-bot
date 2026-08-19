@@ -106,17 +106,20 @@ def test_artifact_injection_decides_the_same_way_under_both_prefixes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   # Injection is anchored on the configured sessions root, which the test owns here —
-  # the prefix spelling plays no part in the decision.
+  # the prefix spelling plays no part in the decision. The client carries the access key
+  # cookie so the injected-credential branch is the one under test.
   monkeypatch.setattr(
-      files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+      files_api, "get_config",
+      lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions", charliebot_access_key="secret"))
   client = _client()
+  creds = {"cookies": {"charliebot_access_key": "secret"}}
   for label, target in targets.items():
-    injected = {ARTIFACT_SCRIPT in client.get(f"{prefix}{target}").text for prefix in PREFIXES}
+    injected = {ARTIFACT_SCRIPT in client.get(f"{prefix}{target}", **creds).text for prefix in PREFIXES}
     assert len(injected) == 1, f"{label}: injection differs between prefixes"
   # The predicate itself is unchanged: the artifact page gets the review UI, a plain page does not.
   for prefix in PREFIXES:
-    assert ARTIFACT_SCRIPT in client.get(f"{prefix}{targets['artifact page']}").text
-    assert ARTIFACT_SCRIPT not in client.get(f"{prefix}{targets['plain HTML file']}").text
+    assert ARTIFACT_SCRIPT in client.get(f"{prefix}{targets['artifact page']}", **creds).text
+    assert ARTIFACT_SCRIPT not in client.get(f"{prefix}{targets['plain HTML file']}", **creds).text
 
 
 def test_head_answers_the_same_status_as_get_under_both_prefixes(targets: dict[str, Path]) -> None:

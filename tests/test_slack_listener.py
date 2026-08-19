@@ -15,7 +15,6 @@ from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  _SLACK_REPLY_NOTICE,
   CITATION_BOUNDARY,
   SlackClient,
   _build_summon_prompt,
@@ -26,10 +25,13 @@ from src.core.slack_listener import (
 
 _TS = "1700000000.000100"
 
-# The approved red-line text, read from the same prompts doc the builder reads
-# and stripped exactly like the builder, so the tail assertions pin exact bytes.
+# The approved red-line and reply-format texts, read from the same prompts docs
+# the builder reads and stripped exactly like the builder, so the tail
+# assertions pin exact bytes.
 _RED_LINE_PATH = Path(__file__).resolve().parents[1] / "prompts" / "slack_reply_redline.md"
 _RED_LINE = _RED_LINE_PATH.read_text(encoding="utf-8").strip()
+_FORMAT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "slack_reply_format.md"
+_REPLY_FORMAT = _FORMAT_PATH.read_text(encoding="utf-8").strip()
 
 
 def _spawn_round_tasks() -> list[asyncio.Task]:
@@ -175,41 +177,58 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
       "mention_ts": _TS,
   }
   assert expected_url in agent_messages[0]["content"]
-  assert agent_messages[0]["content"].endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_SLACK_REPLY_NOTICE}")
+  assert agent_messages[0]["content"].endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
   assert expected_url in trigger.await_args.args[1]
 
 
-def test_build_summon_prompt_appends_the_reply_notice_after_the_citation_boundary(tmp_path: Path) -> None:
-  """Every Slack prompt ends citation boundary, then the red line, then the reply notice."""
+def test_build_summon_prompt_appends_both_notices_after_the_citation_boundary(tmp_path: Path) -> None:
+  """Every Slack prompt ends citation boundary, then the red line, then the reply format."""
   prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", _cfg(tmp_path))
-  assert _SLACK_REPLY_NOTICE in prompt
-  assert prompt.index(CITATION_BOUNDARY) < prompt.index(_RED_LINE) < prompt.index(_SLACK_REPLY_NOTICE)
-  assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_SLACK_REPLY_NOTICE}")
+  assert _REPLY_FORMAT in prompt
+  assert prompt.index(CITATION_BOUNDARY) < prompt.index(_RED_LINE) < prompt.index(_REPLY_FORMAT)
+  assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
 
 
-def test_build_summon_prompt_rereads_the_red_line_doc_on_every_call(tmp_path: Path) -> None:
-  """No caching: an edit to the doc between two builds shows up in the second one."""
+def test_build_summon_prompt_rereads_the_docs_on_every_call(tmp_path: Path) -> None:
+  """No caching: an edit to a doc between two builds shows up in the second one."""
   shutil.copytree(_RED_LINE_PATH.parent, tmp_path / "prompts")
-  doc = tmp_path / "prompts" / "slack_reply_redline.md"
+  red_doc = tmp_path / "prompts" / "slack_reply_redline.md"
+  format_doc = tmp_path / "prompts" / "slack_reply_format.md"
   cfg = _cfg_with_repo(tmp_path)
   url = "https://fake.slack.test/archives/C_TEST/p1700000000.000100"
 
   first = _build_summon_prompt(url, cfg)
-  doc.write_text("RED LINE VERSION TWO", encoding="utf-8")
+  red_doc.write_text("RED LINE VERSION TWO", encoding="utf-8")
+  format_doc.write_text("REPLY FORMAT VERSION TWO", encoding="utf-8")
   second = _build_summon_prompt(url, cfg)
 
-  assert first.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_SLACK_REPLY_NOTICE}")
-  assert _RED_LINE not in second
+  assert first.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
+  assert _RED_LINE not in second and _REPLY_FORMAT not in second
   assert "RED LINE VERSION TWO" in second
+  assert "REPLY FORMAT VERSION TWO" in second
 
 
 def test_build_summon_prompt_missing_red_line_doc_raises_with_path_and_cause(tmp_path: Path) -> None:
   """No embedded-text fallback: a missing doc fails the build, naming the path."""
   cfg = _cfg_with_repo(tmp_path)  # no prompts dir under this repo root
   missing_path = tmp_path / "prompts" / "slack_reply_redline.md"
+
+  with pytest.raises(ValueError) as excinfo:
+    _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", cfg)
+
+  assert str(missing_path) in str(excinfo.value)
+  assert "most likely predates" in str(excinfo.value)
+
+
+def test_build_summon_prompt_missing_reply_format_doc_raises_with_path_and_cause(tmp_path: Path) -> None:
+  """A prompt is never assembled without the reply-format contract either."""
+  shutil.copytree(_RED_LINE_PATH.parent, tmp_path / "prompts")
+  (tmp_path / "prompts" / "slack_reply_format.md").unlink()
+  cfg = _cfg_with_repo(tmp_path)
+  missing_path = tmp_path / "prompts" / "slack_reply_format.md"
 
   with pytest.raises(ValueError) as excinfo:
     _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", cfg)

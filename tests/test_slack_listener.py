@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -16,7 +17,6 @@ from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
   CITATION_BOUNDARY,
-  SLACK_REPLY_MARKER,
   SlackClient,
   _build_summon_prompt,
   _extract_marker_reply,
@@ -203,9 +203,11 @@ def test_marker_round_trip_between_prompt_and_parser(tmp_path: Path) -> None:
   """
   prompt = _build_summon_prompt(
       "https://fake.slack.test/archives/C_TEST/p1700000000.000100", _cfg(tmp_path))
-  assert SLACK_REPLY_MARKER in prompt
+  marker_match = re.search(r"line that reads exactly `([^`]+)`", prompt)
+  assert marker_match is not None
+  marker_line = marker_match.group(1)
   known_reply = "the known reply body"
-  extracted, marker_count = _extract_marker_reply(f"{SLACK_REPLY_MARKER}\n{known_reply}")
+  extracted, marker_count = _extract_marker_reply(f"{marker_line}\n{known_reply}")
   assert marker_count is None
   assert extracted == known_reply
 

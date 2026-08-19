@@ -417,11 +417,11 @@ def _round_text(events: list[dict], done_idx: int) -> str:
   return ""
 
 
+# Mirrors verify_trailer._normalize_line; keep this private instead of importing its private helper.
 def _normalize_marker_line(line: str) -> str:
   """Strip whitespace and repeated markdown wrappers (backticks, asterisks) to a fixed point.
 
-  Mirrors verify_trailer._normalize_line, the sibling that normalizes the verify
-  RESULT trailer the same way. Dashes are left in place.
+  Dashes are left in place.
   """
   normalized = line.strip()
   while True:
@@ -434,7 +434,7 @@ def _normalize_marker_line(line: str) -> str:
 def _extract_marker_reply(text: str) -> tuple[str, int | None]:
   """The text after the marker line, or a failure count when it is not unique.
 
-  Returns ``(reply, None)`` for exactly one marker line, ``(None, n)`` for n !=
+  Returns ``(reply, None)`` for exactly one marker line, ``("", n)`` for n !=
   1 marker lines. A marker line is a whole normalized line equal to
   ``SLACK_REPLY_MARKER``; an occurrence inside a sentence is not one. The reply
   keeps the text after the marker verbatim, minus leading blank lines. Zero and
@@ -450,7 +450,13 @@ def _extract_marker_reply(text: str) -> tuple[str, int | None]:
     offset += len(raw_line)
   if count != 1:
     return "", count
-  return text[marker_end:].lstrip("\n"), None
+  reply = text[marker_end:]
+  leading = 0
+  for line in reply.splitlines(keepends=True):
+    if line.strip():
+      break
+    leading += len(line)
+  return reply[leading:], None
 
 
 def _chunk_text(text: str, limit: int = _MAX_POST_CHARS) -> list[str]:

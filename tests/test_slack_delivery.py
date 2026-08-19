@@ -506,6 +506,7 @@ async def test_inline_marker_mention_is_not_a_marker_line(tmp_path: Path) -> Non
 
 def test_extract_marker_reply_keeps_the_text_after_leading_blank_lines() -> None:
   assert _extract_marker_reply(f"above\n{SLACK_REPLY_MARKER}\n\n\nbody") == ("body", None)
+  assert _extract_marker_reply(f"above\r\n{SLACK_REPLY_MARKER}\r\n \t\r\nbody") == ("body", None)
 
 
 def test_extract_marker_reply_reports_zero_and_many_apart() -> None:

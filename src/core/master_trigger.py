@@ -10,7 +10,7 @@ import structlog
 from src.agents.master_cc import run_message
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata
+from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
 log = structlog.get_logger()
@@ -92,10 +92,40 @@ async def trigger_master(
     user_event_id: Optional[str] = None,
 ) -> None:
   """Best-effort trigger of the master agent to process a worker result."""
+  target_session_id = session_id
   try:
-    session_meta = await session_mgr.get_session(session_id)
-    if not session_meta:
+    # Resolve through the succession chain: an elone may have landed since this
+    # wake was scheduled, so the run targets the chain end rather than the
+    # originally-requested session.
+    resolved = await session_mgr.resolve_successor_chain(session_id)
+    if resolved is None:
       log.error("trigger_master_session_not_found", session=session_id)
+      return
+
+    # The resolved target is what the wake falls back to for the error write.
+    target_session_id = resolved.id
+
+    if resolved.id != session_id:
+      log.info(
+          "trigger_master_redirected_to_successor",
+          session=session_id,
+          resolved_session=resolved.id,
+      )
+
+    # An archived session with no successor is the user's explicit "no more
+    # wakes" signal: skip entirely (no run, no event). An archived session WITH
+    # a successor has already been eloned and redirects above instead.
+    if resolved.status == SessionStatus.ARCHIVED and resolved.successor_session_id is None:
+      log.info(
+          "wake_skipped_archived",
+          session=session_id,
+          resolved_session=resolved.id,
+      )
+      return
+
+    session_meta = await session_mgr.get_session(resolved.id)
+    if not session_meta:
+      log.error("trigger_master_session_not_found", session=resolved.id)
       return
 
     # expect_fresh_session is True only on the weekly-recycle path that
@@ -111,7 +141,7 @@ async def trigger_master(
       last_sat_1am_pt = now_pt.replace(hour=1, minute=0, second=0, microsecond=0) - timedelta(days=days_since_sat)
       last_sat_1am_utc = last_sat_1am_pt.astimezone(timezone.utc)
       if session_meta.cc_session_started_at < last_sat_1am_utc < datetime.now(timezone.utc):
-        log.info('scheduled_cc_session_expired', session=session_id, started_at=str(session_meta.cc_session_started_at))
+        log.info('scheduled_cc_session_expired', session=resolved.id, started_at=str(session_meta.cc_session_started_at))
         session_meta.cc_session_id = None
         session_meta.cc_session_started_at = None
         await session_mgr.save_metadata(session_meta)
@@ -119,10 +149,10 @@ async def trigger_master(
         # intentional fresh start, so suppress the resume-anchor-missing alarm.
         expect_fresh_session = True
         try:
-          result = await session_mgr.recycle_scheduled_session(session_id, last_sat_1am_utc)
-          log.info('scheduled_session_recycled', session=session_id, **result)
+          result = await session_mgr.recycle_scheduled_session(resolved.id, last_sat_1am_utc)
+          log.info('scheduled_session_recycled', session=resolved.id, **result)
         except Exception:
-          log.exception('scheduled_session_recycle_failed', session=session_id)
+          log.exception('scheduled_session_recycle_failed', session=resolved.id)
 
     master_summary = summary
     if not session_meta.cc_session_id and session_meta.scheduled_task:
@@ -144,7 +174,7 @@ async def trigger_master(
           'message': f'Failed to notify master agent: {e}',
           'source': 'trigger_master',
       }
-      await session_mgr.persist_and_broadcast(session_id, error_payload)
+      await session_mgr.persist_and_broadcast(target_session_id, error_payload)
     except Exception:
       pass  # Last resort — nothing more we can do
 

@@ -32,6 +32,9 @@ class FakeSessionManager:
   async def get_session(self, session_id: str) -> SessionMetadata | None:
     return self._meta
 
+  async def resolve_successor_chain(self, session_id: str) -> SessionMetadata | None:
+    return self._meta
+
   async def save_metadata(self, meta: SessionMetadata) -> None:
     self._meta = meta
     self.saved_metas.append(meta.model_copy(deep=True))

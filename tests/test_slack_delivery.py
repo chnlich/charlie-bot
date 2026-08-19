@@ -18,8 +18,10 @@ from src.core.sessions import SessionManager
 from src.core.slack_listener import (
   _MAX_POST_CHARS,
   _REPLY_BUDGET_CHARS,
+  SLACK_REPLY_MARKER,
   SlackClient,
   _chunk_text,
+  _extract_marker_reply,
   backfill_lost_summons,
   deliver_done,
 )
@@ -124,7 +126,7 @@ async def test_slack_round_posts_its_answer_to_the_paired_thread(tmp_path: Path)
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("git status is clean"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\ngit status is clean"))
 
   spawned: list[asyncio.Task] = []
 
@@ -188,7 +190,7 @@ async def test_duplicate_done_for_one_summon_posts_once(tmp_path: Path, exit_cod
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("the answer"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nthe answer"))
   first = await _append(session_mgr, sid, _done(summon["id"], exit_code=exit_code))
   second = await _append(session_mgr, sid, _done(summon["id"], exit_code=exit_code))
 
@@ -209,9 +211,9 @@ async def test_summon_queued_behind_another_round_posts_only_its_own_text(tmp_pa
 
   typed = await _append(session_mgr, sid, {"type": ET.USER, "content": "earlier round"})
   summon = await _append(session_mgr, sid, _summon())  # arrives while the first round runs
-  await _append(session_mgr, sid, _assistant("first round answer"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nfirst round answer"))
   await _append(session_mgr, sid, _done(typed["id"]))
-  await _append(session_mgr, sid, _assistant("second round answer"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nsecond round answer"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   with patch("src.core.slack_listener._bot_client", return_value=client):
@@ -249,7 +251,7 @@ async def test_over_length_answer_posts_ordered_chunks_without_any_link(tmp_path
   long_text = "a" * 25000 + "\n\n" + "b" * 14999
   assert len(long_text) == 40001
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant(long_text))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\n\n{long_text}"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   with patch("src.core.slack_listener._bot_client", return_value=client):
@@ -275,7 +277,7 @@ async def test_longest_observed_reply_is_one_chunk_and_one_post(tmp_path: Path) 
 
   long_text = "x" * 4929
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant(long_text))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\n{long_text}"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   with patch("src.core.slack_listener._bot_client", return_value=client):
@@ -300,7 +302,7 @@ async def test_delivery_log_carries_over_budget_and_budget(
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant(text))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\n{text}"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   with (
@@ -327,7 +329,7 @@ async def test_round_posts_only_the_final_composed_assistant_message(tmp_path: P
 
   summon = await _append(session_mgr, sid, _summon())
   await _append(session_mgr, sid, _assistant("narration A"))
-  await _append(session_mgr, sid, _assistant("## 完成\nthe reply"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\n## 完成\nthe reply"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   with patch("src.core.slack_listener._bot_client", return_value=client):
@@ -346,7 +348,7 @@ async def test_trailing_empty_assistant_message_defers_to_the_last_non_empty(
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("real reply"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nreal reply"))
   await _append(session_mgr, sid, _assistant(trailing))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
@@ -354,6 +356,195 @@ async def test_trailing_empty_assistant_message_defers_to_the_last_non_empty(
     assert await deliver_done(sid, done, cfg, session_mgr) is True
 
   assert [p["text"] for p in client.posts] == ["real reply"]
+
+
+# ---------------------------------------------------------------------------
+# Marker reply delivery
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_marked_reply_posts_only_the_reply_and_clears_the_eye(tmp_path: Path) -> None:
+  """Operator text above the marker stays in the session; only the reply goes out."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}  # lit at the summon
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(
+      f"status note for the operator\n\n{SLACK_REPLY_MARKER}\n\nthe actual reply"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  ack_tasks: list[asyncio.Task] = []
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(ack_tasks)),
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+    await asyncio.gather(*ack_tasks)
+
+  assert [p["text"] for p in client.posts] == ["the actual reply"]
+  assert client.reactions[_THREAD] == set()
+
+
+@pytest.mark.asyncio
+async def test_round_without_a_marker_posts_nothing_and_keeps_the_eye(tmp_path: Path) -> None:
+  """Zero marker lines: no post, no ack clear, and a distinct missing log."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant("a plain answer with no marker"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner([])),
+      capture_logs() as logs,
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is False
+
+  assert client.posts == []
+  assert client.remove_calls == []
+  assert client.reactions[_THREAD] == {"eyes"}
+  missing = [ev for ev in logs if ev["event"] == "slack_reply_marker_missing"]
+  assert len(missing) == 1
+  assert missing[0]["session"] == sid
+  assert missing[0]["input_event_id"] == summon["id"]
+
+
+@pytest.mark.asyncio
+async def test_two_markers_post_nothing_and_log_ambiguous_with_count(tmp_path: Path) -> None:
+  """Two marker lines are ambiguity, not a guess at the reply boundary."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(
+      f"{SLACK_REPLY_MARKER}\nfirst block\n{SLACK_REPLY_MARKER}\nsecond block"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner([])),
+      capture_logs() as logs,
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is False
+
+  assert client.posts == []
+  assert client.remove_calls == []
+  assert client.reactions[_THREAD] == {"eyes"}
+  ambiguous = [ev for ev in logs if ev["event"] == "slack_reply_marker_ambiguous"]
+  assert len(ambiguous) == 1
+  assert ambiguous[0]["session"] == sid
+  assert ambiguous[0]["input_event_id"] == summon["id"]
+  assert ambiguous[0]["marker_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_long_reply_after_the_marker_posts_ordered_chunks(tmp_path: Path) -> None:
+  """The extracted reply, not the whole message, is what splits past the post cap."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  sid = await _slack_session(session_mgr)
+
+  reply = "a" * 25000 + "\n\n" + "b" * 14999
+  assert len(reply) == 40001
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(
+      f"operator preamble\n\n{SLACK_REPLY_MARKER}\n\n{reply}"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with patch("src.core.slack_listener._bot_client", return_value=client):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+
+  texts = [p["text"] for p in client.posts]
+  assert len(texts) > 1
+  assert all(len(t) <= _MAX_POST_CHARS for t in texts)
+  assert "".join(texts) == reply
+  assert all(p["channel"] == _CHANNEL and p["thread_ts"] == _THREAD for p in client.posts)
+
+
+@pytest.mark.asyncio
+async def test_inline_marker_mention_is_not_a_marker_line(tmp_path: Path) -> None:
+  """A mention of the marker inside a sentence is zero marker lines, not one."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(
+      f"I explain {SLACK_REPLY_MARKER} right here, inline, so it is not a line."))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      capture_logs() as logs,
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is False
+
+  assert client.posts == []
+  assert client.reactions[_THREAD] == {"eyes"}
+  assert [ev for ev in logs if ev["event"] == "slack_reply_marker_missing"]
+
+
+# ---------------------------------------------------------------------------
+# _extract_marker_reply
+# ---------------------------------------------------------------------------
+
+
+def test_extract_marker_reply_keeps_the_text_after_leading_blank_lines() -> None:
+  assert _extract_marker_reply(f"above\n{SLACK_REPLY_MARKER}\n\n\nbody") == ("body", None)
+
+
+def test_extract_marker_reply_reports_zero_and_many_apart() -> None:
+  assert _extract_marker_reply("no marker here") == ("", 0)
+  assert _extract_marker_reply(f"{SLACK_REPLY_MARKER}\na\n{SLACK_REPLY_MARKER}\nb") == ("", 2)
+
+
+def test_extract_marker_reply_normalizes_wrapped_marker_lines() -> None:
+  assert _extract_marker_reply(f"**`{SLACK_REPLY_MARKER}`**\nreply") == ("reply", None)
+
+
+# ---------------------------------------------------------------------------
+# Unchanged paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_round_notice_still_posts_and_clears_the_eye(tmp_path: Path) -> None:
+  """The empty-round notice path is untouched by the marker contract."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  done = await _append(session_mgr, sid, _done(summon["id"], exit_code=143))
+
+  ack_tasks: list[asyncio.Task] = []
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(ack_tasks)),
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+    await asyncio.gather(*ack_tasks)
+
+  assert len(client.posts) == 1
+  assert "exit_code=143" in client.posts[0]["text"]
+  assert client.reactions[_THREAD] == set()
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +762,7 @@ async def test_delivered_round_clears_the_summons_eye(tmp_path: Path) -> None:
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("the answer"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nthe answer"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   ack_tasks: list[asyncio.Task] = []
@@ -597,7 +788,7 @@ async def test_failed_post_still_clears_the_eye_and_still_logs_the_delivery(tmp_
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("never arrives"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nnever arrives"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   ack_tasks: list[asyncio.Task] = []
@@ -628,7 +819,7 @@ async def test_summon_without_mention_ts_posts_normally_and_clears_nothing(tmp_p
   summon_event = _summon()
   del summon_event["slack"]["mention_ts"]
   summon = await _append(session_mgr, sid, summon_event)
-  await _append(session_mgr, sid, _assistant("the answer"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nthe answer"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   ack_tasks: list[asyncio.Task] = []
@@ -694,7 +885,7 @@ async def test_remove_failure_leaves_a_stale_eye_and_stays_in_the_ack_task(tmp_p
   sid = await _slack_session(session_mgr)
 
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("the answer"))
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\nthe answer"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
 
   with (

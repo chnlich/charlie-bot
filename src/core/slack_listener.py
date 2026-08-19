@@ -8,7 +8,8 @@ Delivery path: ``deliver_done`` hangs off the round's terminal ``master_done``
 event (called from ``SessionManager.persist_and_broadcast``), not off a waiting
 coroutine — that is what makes delivery survive a server restart, since a
 re-attached round still emits its done through the same funnel. The reply is
-the round's final composed assistant message, posted in full: one round posts
+the marked reply block of the round's final composed assistant message: the
+text after a lone ``SLACK REPLY:`` marker line, posted in full — one round posts
 one message for any reply within Slack's per-message limit, and only a reply
 past that hard limit is split into ordered paragraph-bounded replies.
 ``backfill_lost_summons`` closes the remaining hole at boot: a summon that was
@@ -68,6 +69,12 @@ _MAX_POST_CHARS = 40000
 # replies should stay under this many chars, with the depth going to a page.
 # This is the single measurement point for that budget.
 _REPLY_BUDGET_CHARS = 500
+
+# The single authority for the marker line that starts a round's reply: the
+# reply-format contract (prompts/slack_reply_format.md) states the same string,
+# and the parser below treats a line as the marker only when its normalized form
+# equals this exactly.
+SLACK_REPLY_MARKER = "SLACK REPLY:"
 
 # Waits between the retries of one Slack call; the answer stays readable in the
 # session log either way, so exhausting them logs an error rather than raising.
@@ -410,6 +417,42 @@ def _round_text(events: list[dict], done_idx: int) -> str:
   return ""
 
 
+def _normalize_marker_line(line: str) -> str:
+  """Strip whitespace and repeated markdown wrappers (backticks, asterisks) to a fixed point.
+
+  Mirrors verify_trailer._normalize_line, the sibling that normalizes the verify
+  RESULT trailer the same way. Dashes are left in place.
+  """
+  normalized = line.strip()
+  while True:
+    stripped = normalized.strip("`*").strip()
+    if stripped == normalized:
+      return normalized
+    normalized = stripped
+
+
+def _extract_marker_reply(text: str) -> tuple[str, int | None]:
+  """The text after the marker line, or a failure count when it is not unique.
+
+  Returns ``(reply, None)`` for exactly one marker line, ``(None, n)`` for n !=
+  1 marker lines. A marker line is a whole normalized line equal to
+  ``SLACK_REPLY_MARKER``; an occurrence inside a sentence is not one. The reply
+  keeps the text after the marker verbatim, minus leading blank lines. Zero and
+  many marker lines are reported apart so the caller can log them differently.
+  """
+  count = 0
+  marker_end = 0
+  offset = 0
+  for raw_line in text.splitlines(keepends=True):
+    if _normalize_marker_line(raw_line) == SLACK_REPLY_MARKER:
+      count += 1
+      marker_end = offset + len(raw_line)
+    offset += len(raw_line)
+  if count != 1:
+    return "", count
+  return text[marker_end:].lstrip("\n"), None
+
+
 def _chunk_text(text: str, limit: int = _MAX_POST_CHARS) -> list[str]:
   """Split *text* into chunks of at most *limit* chars for sequential posting.
 
@@ -453,9 +496,11 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
 
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every
   ``master_done``; returns False without posting unless the round belongs to a
-  Slack injection that no earlier done already answered. The answer goes out
-  in full — split into ordered thread replies when it exceeds one post's
-  budget. Returns True when every reply of the round reached Slack.
+  Slack injection that no earlier done already answered. When the round's last
+  message carries exactly one marker line, only the marked reply block is
+  posted, split into ordered thread replies when it exceeds one post's budget;
+  a missing or ambiguous marker posts nothing and keeps the ack reaction.
+  Returns True when every reply of the round reached Slack.
   """
   meta = await session_mgr.get_session(session_id)
   if meta is None or meta.slack_origin is None:
@@ -482,9 +527,33 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
   thread_ts = target["thread_ts"]
   text = _round_text(events, done_idx)
   if text:
-    bodies = _chunk_text(text)
-  else:
-    bodies = [f"这一轮没有产生任何回复内容（exit_code={done.get('exit_code')}），请到会话里查看详情。"]
+    reply, marker_count = _extract_marker_reply(text)
+    if marker_count is None:
+      bodies = _chunk_text(reply)
+      # A chunk that exhausts its retries is already logged by _post_with_retry;
+      # keep posting the rest: the full text lives in the session log regardless,
+      # and partial delivery beats none.
+      posted = True
+      client = _bot_client(cfg)
+      for body in bodies:
+        ok = await _post_with_retry(
+            client, target["channel_id"], thread_ts, body, session_id=session_id)
+        posted = posted and ok
+      logger.info("slack_delivery_done", session=session_id, channel=target["channel_id"],
+                  thread_ts=thread_ts, input_event_id=input_event_id, chars=len(reply),
+                  chunks=len(bodies), posted=posted, over_budget=len(reply) > _REPLY_BUDGET_CHARS,
+                  budget=_REPLY_BUDGET_CHARS)
+      # The delivery attempt ended: the eye goes out whether or not it posted.
+      _ack_clear(client, target, session_id)
+      return posted
+    if marker_count == 0:
+      logger.error("slack_reply_marker_missing", session=session_id,
+                   input_event_id=input_event_id)
+    else:
+      logger.error("slack_reply_marker_ambiguous", session=session_id,
+                   input_event_id=input_event_id, marker_count=marker_count)
+    return False
+  bodies = [f"这一轮没有产生任何回复内容（exit_code={done.get('exit_code')}），请到会话里查看详情。"]
 
   # A chunk that exhausts its retries is already logged by _post_with_retry;
   # keep posting the rest: the full text lives in the session log regardless,

@@ -176,7 +176,7 @@ See `charliebot delegate --help` for flags, task-type profiles, and `--keep-work
 
 ## External System Writes
 
-Any mutation to external systems (Feishu / Slack / Linear) requires showing the full content draft first and waiting for the user to say "take off" before executing. Applies to create, update, delete equally. Corrections and re-posts also require approval.
+Any mutation to external systems (Feishu / Slack / Linear) requires showing the full content draft first and waiting for the user to say "take off" before executing. Applies to create, update, delete equally. Corrections and re-posts also require approval. A Slack summon round's reply is the exception: the summon path posts the marked reply block of the round's last assistant message automatically (contract: prompts/slack_reply_format.md), so present the draft above the marker if useful and do not wait for a take off.
 
 ## Improve Loop
 

@@ -23,6 +23,7 @@ from src.agents.backends.base import (
 from src.core import event_types as ET
 from src.core import runs
 from src.core.process import kill_process_group
+from src.core.timeouts import OPENCODE_SSE_PROGRESS_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -40,6 +41,10 @@ _IGNORED_SSE_EVENT_TYPES = {
 # `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`).
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 _LOCAL_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
+
+
+class OpenCodeSseSilenceError(RuntimeError):
+  """The SSE stream carried no session-id-bearing event within OPENCODE_SSE_PROGRESS_TIMEOUT."""
 
 
 class OpenCodeBackend(AgentBackend):
@@ -172,7 +177,7 @@ class OpenCodeBackend(AgentBackend):
 
         async with client.stream("GET", "/event", timeout=None) as response:
           response.raise_for_status()
-          sse_events = self._iter_sse_events(response)
+          sse_events = self._with_sse_progress_watchdog(self._iter_sse_events(response))
           await self._wait_for_server_connected(sse_events)
           await self._send_prompt(client, self._session_id, prompt)
 
@@ -422,6 +427,53 @@ class OpenCodeBackend(AgentBackend):
       log.debug("opencode_sse_line_ignored", line=line)
     if data_lines:
       yield json.loads("\n".join(data_lines))
+
+  async def _with_sse_progress_watchdog(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
+    """Fail the turn when no session progress arrives within OPENCODE_SSE_PROGRESS_TIMEOUT.
+
+    Every upstream event is awaited under ``asyncio.wait_for`` with a monotonic
+    deadline. An event carrying a session id (top-level ``properties.sessionID``
+    or nested ``info.sessionID``; a subagent child's id counts) resets the
+    deadline; server-level events (``server.heartbeat``, ``server.connected``)
+    pass through without resetting it. Heartbeats since the last progress event
+    are counted so the expiry error can distinguish "stream dead" (no events at
+    all) from "session stalled" (heartbeats but no progress). This single
+    wrapper sits upstream of both consumers, so coverage spans stream-open
+    (including the ``server.connected`` wait) through turn end.
+    """
+    loop = asyncio.get_running_loop()
+    last_progress_at = loop.time()
+    deadline = last_progress_at + OPENCODE_SSE_PROGRESS_TIMEOUT
+    silent_heartbeats = 0
+    events_iter = aiter(sse_events)
+    while True:
+      try:
+        event = await asyncio.wait_for(anext(events_iter), timeout=deadline - loop.time())
+      except StopAsyncIteration:
+        return
+      except asyncio.TimeoutError:
+        silent_seconds = loop.time() - last_progress_at
+        log.error(
+            "opencode_sse_silence_timeout",
+            silent_seconds=round(silent_seconds, 3),
+            session_id=self._session_id,
+            heartbeat_count=silent_heartbeats)
+        raise OpenCodeSseSilenceError(
+            f"OpenCode SSE stream carried no session progress for {silent_seconds:.1f} s "
+            f"(heartbeats during silence: {silent_heartbeats})")
+      if event.get("type") == "server.heartbeat":
+        silent_heartbeats += 1
+      if self._event_carries_session_id(event):
+        last_progress_at = loop.time()
+        deadline = last_progress_at + OPENCODE_SSE_PROGRESS_TIMEOUT
+        silent_heartbeats = 0
+      yield event
+
+  @staticmethod
+  def _event_carries_session_id(event: dict) -> bool:
+    """Progress predicate: the event carries a session id, top-level or nested under ``info``."""
+    properties = event.get("properties", {})
+    return bool(properties.get("sessionID") or properties.get("info", {}).get("sessionID"))
 
   def _translate_sse_event(self, ev: dict) -> list[dict]:
     ev_type = ev.get("type", "")

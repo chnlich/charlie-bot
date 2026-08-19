@@ -1,11 +1,13 @@
+import asyncio
 import json
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from src.agents.backends.opencode import OpenCodeBackend
+from src.agents.backends.opencode import OpenCodeBackend, OpenCodeSseSilenceError
 from src.core import event_types as ET
 from src.core.streaming import handle_compaction_events
 
@@ -972,3 +974,187 @@ async def test_compaction_boundary_event_wires_into_handle_compaction_events(mon
   assert persisted[0]["type"] == ET.CONTEXT_COMPACTED
   assert persisted[0]["trigger"] == boundary_event["compact_metadata"]["trigger"]
   assert persisted[0]["pre_tokens"] == boundary_event["compact_metadata"]["pre_tokens"]
+
+
+# ---------------------------------------------------------------------------
+# SSE silence watchdog: session progress resets the deadline; heartbeats,
+# server.connected and idle time do not. Timeout is monkeypatched far below
+# OPENCODE_SSE_PROGRESS_TIMEOUT so tests never wait real seconds.
+# ---------------------------------------------------------------------------
+
+_WATCHDOG_TEST_TIMEOUT = 0.2  # seconds
+
+
+def _patch_watchdog_timeout(monkeypatch) -> None:
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
+
+
+async def _timed_event_stream(schedule: list[tuple[float, dict]]):
+  """Yield each event after its delay, simulating SSE arrival timing."""
+  for delay, event in schedule:
+    await asyncio.sleep(delay)
+    yield event
+
+
+def _heartbeat_schedule(count: int, interval: float) -> list[tuple[float, dict]]:
+  return [(interval, {"type": "server.heartbeat", "properties": {}}) for _ in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_sse_watchdog_heartbeat_is_not_progress(monkeypatch, capsys) -> None:
+  """Acceptance 1: a stream of only server.heartbeat events fails at timeout expiry —
+  the watchdog tracks session progress, not bytes on the wire."""
+  _patch_watchdog_timeout(monkeypatch)
+  backend = _build_backend(monkeypatch)
+  backend._session_id = "session-1"
+  interval = 0.02  # far below the timeout: heartbeats flow the whole silent window
+
+  with pytest.raises(OpenCodeSseSilenceError) as excinfo:
+    await _drain(
+        backend._with_sse_progress_watchdog(
+            _timed_event_stream(_heartbeat_schedule(count=50, interval=interval))))
+
+  message = str(excinfo.value)
+  assert "no session progress" in message
+  silent_seconds = float(re.search(r"for ([\d.]+) s", message).group(1))
+  heartbeat_count = int(re.search(r"heartbeats during silence: (\d+)", message).group(1))
+  assert silent_seconds == pytest.approx(_WATCHDOG_TEST_TIMEOUT, abs=0.1)
+  assert heartbeat_count >= 1
+  out = capsys.readouterr().out
+  assert "opencode_sse_silence_timeout" in out
+  assert "session-1" in out
+  assert "heartbeat_count" in out
+
+
+@pytest.mark.asyncio
+async def test_sse_watchdog_resets_per_event_not_total_duration(monkeypatch) -> None:
+  """Acceptance 2: session events arriving below the timeout interval keep the turn
+  alive even when total stream duration exceeds the timeout — per-event reset,
+  not a total-duration cap."""
+  _patch_watchdog_timeout(monkeypatch)
+  backend = _build_backend(monkeypatch)
+  backend._session_id = "parent-session"
+  interval = 0.1  # below the 0.2 s timeout; 6 events -> ~0.6 s total, far above it
+  events = [
+      {"type": "session.updated", "properties": {"sessionID": "parent-session"}}
+      for _ in range(6)
+  ]
+
+  received = await _drain(
+      backend._with_sse_progress_watchdog(
+          _timed_event_stream([(interval, event) for event in events])))
+
+  assert received == events
+
+
+@pytest.mark.asyncio
+async def test_sse_watchdog_child_session_event_is_progress(monkeypatch) -> None:
+  """Acceptance 3: events carrying a child (subagent) session id reset the timer —
+  no false kill of a parent turn waiting on subagent work. Covers both the
+  top-level and the info-nested session-id shapes."""
+  _patch_watchdog_timeout(monkeypatch)
+  backend = _build_backend(monkeypatch)
+  backend._session_id = "parent-session"
+  interval = 0.1  # below the 0.2 s timeout; sequence totals ~0.4 s, above it
+  events = [
+      {"type": "session.updated", "properties": {"sessionID": "child-session"}},
+      {"type": "message.updated",
+       "properties": {"info": {"id": "m1", "role": "assistant", "sessionID": "child-session"}}},
+      {"type": "session.updated", "properties": {"sessionID": "child-session"}},
+      {"type": "message.updated",
+       "properties": {"info": {"id": "m1", "role": "assistant", "sessionID": "child-session"}}},
+  ]
+
+  received = await _drain(
+      backend._with_sse_progress_watchdog(
+          _timed_event_stream([(interval, event) for event in events])))
+
+  assert received == events
+
+
+class _FakeDelayedStreamResponse:
+  """SSE response whose lines arrive with per-line delays, driving the watchdog."""
+
+  def __init__(self, lines_with_delays: list[tuple[float, str]]) -> None:
+    self._lines_with_delays = lines_with_delays
+
+  def raise_for_status(self) -> None:
+    pass
+
+  async def aiter_lines(self):
+    for delay, line in self._lines_with_delays:
+      await asyncio.sleep(delay)
+      yield line
+
+
+class _FakeStreamContextManager:
+
+  def __init__(self, response: _FakeDelayedStreamResponse) -> None:
+    self._response = response
+
+  async def __aenter__(self) -> _FakeDelayedStreamResponse:
+    return self._response
+
+  async def __aexit__(self, *exc) -> bool:
+    return False
+
+
+class _FakeRunHttpClient:
+  """Stand-in for httpx.AsyncClient in run(): only the /event stream is real."""
+
+  def __init__(self, response: _FakeDelayedStreamResponse) -> None:
+    self._response = response
+
+  async def __aenter__(self) -> "_FakeRunHttpClient":
+    return self
+
+  async def __aexit__(self, *exc) -> bool:
+    return False
+
+  def stream(self, method: str, path: str, timeout=None) -> _FakeStreamContextManager:
+    assert path == "/event"
+    return _FakeStreamContextManager(self._response)
+
+
+@pytest.mark.asyncio
+async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Acceptance 4: silence after server.connected yields an error event, a non-zero
+  exit_code, and serve cleanup through the existing failure path."""
+  _patch_watchdog_timeout(monkeypatch)
+  backend = _build_backend(monkeypatch, model="provider/model")
+  process = MagicMock()
+  process.pid = 4321
+  process.returncode = 0
+  process.wait = AsyncMock(return_value=0)
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
+  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
+  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
+  monkeypatch.setattr(backend, "_check_health", AsyncMock())
+  monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
+  monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
+  monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
+  abort_session = AsyncMock()
+  monkeypatch.setattr(backend, "_abort_session", abort_session)
+
+  heartbeat_line = 'data: {"type": "server.heartbeat", "properties": {}}'
+  lines = [(0.0, 'data: {"type": "server.connected", "properties": {}}'), (0.0, "")]
+  for _ in range(50):
+    lines.extend([(0.02, heartbeat_line), (0.0, "")])
+  stream_response = _FakeDelayedStreamResponse(lines)
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.httpx.AsyncClient",
+      lambda **kwargs: _FakeRunHttpClient(stream_response))
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  error_events = [event for event in events if event.get("type") == ET.ERROR]
+  assert len(error_events) == 1
+  assert "no session progress" in error_events[0]["message"]
+  assert "heartbeats during silence" in error_events[0]["message"]
+  assert backend.exit_code == 1
+  abort_session.assert_awaited_once()
+  process.wait.assert_awaited()
+  assert "opencode_sse_silence_timeout" in capsys.readouterr().out

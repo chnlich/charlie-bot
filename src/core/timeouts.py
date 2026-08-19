@@ -94,6 +94,19 @@ NO_OUTPUT_REPORT_THRESHOLD = 2 * 3600  # seconds
 CLI_CONNECT_TOTAL_TIMEOUT = 60  # seconds
 
 # ---------------------------------------------------------------------------
+# OpenCode backend SSE progress watchdog
+# ---------------------------------------------------------------------------
+
+# An opencode /event SSE stream carrying no session-id-bearing event for longer
+# than this is declared dead: the turn fails loudly through the normal backend
+# failure path. Server-level events (server.heartbeat every ~10 s,
+# server.connected) pass through but do not reset the timer. Basis, measured on
+# opencode-backend runs: p99 inter-event gap 131 s, longest legitimate gap on a
+# completed turn 29.3 min; observed hangs run 25-497 min, so 60 min covers
+# every observed hang.
+OPENCODE_SSE_PROGRESS_TIMEOUT = 3600.0  # seconds
+
+# ---------------------------------------------------------------------------
 # Master-run identity barrier (boot)
 # ---------------------------------------------------------------------------
 

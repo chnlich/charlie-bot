@@ -374,7 +374,8 @@ async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> None:
-  """A fresh summon session (slack_origin set, group empty) lands in `Slack #<name>`."""
+  """A fresh summon session (slack_origin set, group empty) lands in `Slack #<name>`,
+  and its session name carries the same resolved label."""
   cfg = _cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
@@ -387,6 +388,7 @@ async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> 
   meta = await session_mgr.get_session(sid)
   assert meta is not None
   assert meta.group == "Slack #name-of-C_TEST"
+  assert meta.name.startswith("Slack #name-of-C_TEST ")
 
 
 @pytest.mark.asyncio
@@ -421,6 +423,7 @@ async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) ->
   meta = await session_mgr.get_session(sid)
   assert meta is not None
   assert meta.group == "Slack #C_TEST"
+  assert meta.name.startswith("Slack #C_TEST ")
   trigger.assert_awaited_once()
   events = session_mgr.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
@@ -496,16 +499,15 @@ async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_ensure_slack_group_skips_sessions_without_slack_origin(tmp_path: Path) -> None:
+  """The label form of ensure_slack_group writes nothing when the session has no slack_origin."""
   cfg = _cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="web-session"))
 
-  client = _FakeSlackClient()
   with patch.object(session_mgr, "set_group", new=AsyncMock()) as set_group:
-    await ensure_slack_group(session_mgr, meta.id, "C_TEST", client)
+    await ensure_slack_group(session_mgr, meta.id, "Slack #name-of-C_TEST")
 
   set_group.assert_not_awaited()
-  assert client.calls == []
 
 
 class _StubHttp:

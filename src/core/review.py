@@ -565,7 +565,7 @@ async def maybe_spawn_reviewer(
     if exit_code == 0 and original_thread:
       cleanup_error = await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
       if cleanup_error:
-        await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
+        await session_mgr.deliver_to_successor(session_id, {"type": ET.ERROR, "content": cleanup_error})
     return
 
   # Failed/cancelled worker -> trigger master immediately

@@ -60,7 +60,7 @@ async def _stream_worker_events(
   await thread_mgr.save_metadata(thread)
   log.info("worker_running", thread_id=thread.id, session=session_id)
 
-  await session_mgr.persist_and_broadcast(
+  await session_mgr.deliver_to_successor(
       session_id, spawner_events._thread_worker_event(thread, 'running', '', content=None))
 
   try:
@@ -182,7 +182,7 @@ async def _run_finalize_effects(
   skip_cleanup = _should_skip_worktree_cleanup(thread, outcome.exit_code)
   cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
   if cleanup_error:
-    await session_mgr.persist_and_broadcast(session_id, {"type": ET.ERROR, "content": cleanup_error})
+    await session_mgr.deliver_to_successor(session_id, {"type": ET.ERROR, "content": cleanup_error})
 
   if skip_notify:
     return
@@ -307,7 +307,7 @@ async def _finalize_worker_safely(
   except Exception as e:
     log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
     try:
-      await session_mgr.persist_and_broadcast(
+      await session_mgr.deliver_to_successor(
           session_id, {
               "type": ET.ERROR,
               "content": f"Worker finalization failed: {e}"
@@ -367,7 +367,7 @@ async def _persist_worker_summary_once(
     log.info("worker_summary_skip_duplicate", session=session_id, thread=thread_id, fallback=fallback)
     return
   await session_mgr.mark_unread(session_id)
-  await session_mgr.persist_and_broadcast(session_id, event)
+  await session_mgr.deliver_to_successor(session_id, event)
   log.info("worker_summary_sent", session=session_id, thread=thread_id, fallback=fallback)
 
 

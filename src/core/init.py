@@ -809,7 +809,7 @@ def _parse_started_at(meta: dict) -> Optional[datetime]:
 async def _report_recovery_event(session_mgr, session_id: str, content: str) -> None:
   """Persist a user-visible recovery report to the session chat stream."""
   try:
-    await session_mgr.persist_and_broadcast(
+    await session_mgr.deliver_to_successor(
         session_id, {
             "type": "error",
             "content": content,

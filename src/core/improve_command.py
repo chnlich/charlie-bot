@@ -621,7 +621,7 @@ async def _run_single_iteration(
 
   # Broadcast progress event, sourced from the report head/placeholder like the
   # master wake payload.
-  await session_mgr.persist_and_broadcast(
+  await session_mgr.deliver_to_successor(
       session_id, {
           "type": ET.IMPROVE_ITERATION_COMPLETED,
           "iteration": i,
@@ -815,7 +815,7 @@ async def run_improve_loop(
     log.error("improve_loop_worktree_failed", session=session_id, error=str(e))
     failure_payload = _build_summary_payload(ET.IMPROVE_FAILED, goal, [])
     failure_payload['error'] = f"Failed to create worktree: {e}"
-    await session_mgr.persist_and_broadcast(session_id, failure_payload)
+    await session_mgr.deliver_to_successor(session_id, failure_payload)
     await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     return
 
@@ -894,7 +894,7 @@ async def run_improve_loop(
       if merge_result is not None:
         payload['merge_result'] = merge_result
 
-    await session_mgr.persist_and_broadcast(session_id, payload)
+    await session_mgr.deliver_to_successor(session_id, payload)
     if blocked_error:
       instructions = (
           "Report that the improve loop is blocked by provider quota/token/rate-limit rejection. "
@@ -915,7 +915,7 @@ async def run_improve_loop(
 
   except asyncio.CancelledError:
     log.warning("improve_loop_cancelled", session=session_id)
-    await session_mgr.persist_and_broadcast(session_id, {"type": ET.IMPROVE_CANCELLED, "goal": goal})
+    await session_mgr.deliver_to_successor(session_id, {"type": ET.IMPROVE_CANCELLED, "goal": goal})
     raise
   except Exception as exc:
     log.error("improve_loop_failed", session=session_id, exc_info=True)
@@ -932,7 +932,7 @@ async def run_improve_loop(
           "Report the improve loop failure to the user. Do not spawn another "
           "iteration worker or relaunch the loop automatically; ask the user to decide next steps.")
       try:
-        await session_mgr.persist_and_broadcast(session_id, failure_payload)
+        await session_mgr.deliver_to_successor(session_id, failure_payload)
         final_payload = {**failure_payload, 'instructions': instructions}
         await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr)
       except Exception as notify_error:
@@ -960,7 +960,7 @@ async def run_improve_loop(
         )
       except Exception as e:
         log.error("improve_loop_cleanup_failed", session=session_id, worktree=str(wt_path), error=str(e), exc_info=True)
-        await session_mgr.persist_and_broadcast(
+        await session_mgr.deliver_to_successor(
             session_id, {
                 "type": ET.ERROR,
                 "content": f"Improve-loop worktree cleanup failed for {wt_path}: {e}"
@@ -970,7 +970,7 @@ async def run_improve_loop(
           await git_worktree_prune(str(resolved_repo), session_id)
         else:
           log.error("improve_loop_cleanup_remove_failed", session=session_id, worktree=str(wt_path))
-          await session_mgr.persist_and_broadcast(
+          await session_mgr.deliver_to_successor(
               session_id, {
                   "type": ET.ERROR,
                   "content": f"Improve-loop worktree cleanup failed for {wt_path}: git worktree remove reported failure"

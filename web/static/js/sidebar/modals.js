@@ -99,7 +99,7 @@ let cronOriginalName = null;
 
 // Fields (besides the always-readonly name) that a broken task locks down: a
 // broken file's truth is the raw yaml on disk, never an edit form.
-const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt', 'cron-repo', 'cron-project', 'cron-timezone'];
+const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone'];
 
 // Switch the modal between the broken read-only error view (task.broken) and
 // today's editable form. Broken: every field read-only, Enabled disabled and
@@ -147,7 +147,7 @@ async function openCronEditor(taskName) {
   document.getElementById('cron-name').value = task.name;
   document.getElementById('cron-name').readOnly = true;
   document.getElementById('cron-expr').value = task.cron || '';
-  document.getElementById('cron-prompt').value = task.prompt || '';
+  document.getElementById('cron-prompt-file').value = task.prompt_file || '';
   document.getElementById('cron-repo').value = task.repo || '';
   document.getElementById('cron-backend').value = task.backend || '';
   document.getElementById('cron-project').value = task.project || '';
@@ -165,7 +165,7 @@ function openCronAdder() {
   document.getElementById('cron-name').value = '';
   document.getElementById('cron-name').readOnly = false;
   document.getElementById('cron-expr').value = '';
-  document.getElementById('cron-prompt').value = '';
+  document.getElementById('cron-prompt-file').value = '';
   document.getElementById('cron-repo').value = '';
   document.getElementById('cron-backend').value = '';
   document.getElementById('cron-project').value = '';
@@ -183,7 +183,7 @@ function closeCronModal() {
 async function saveCronTask() {
   const name = document.getElementById('cron-name').value.trim();
   const cron = document.getElementById('cron-expr').value.trim();
-  const prompt = document.getElementById('cron-prompt').value.trim();
+  const prompt_file = document.getElementById('cron-prompt-file').value.trim() || null;
   const repo = document.getElementById('cron-repo').value.trim() || null;
   const backend = document.getElementById('cron-backend').value || null;
   const project = document.getElementById('cron-project').value.trim() || null;
@@ -196,13 +196,13 @@ async function saveCronTask() {
       res = await fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({cron, prompt, repo, backend, project, timezone, enabled}),
+        body: JSON.stringify({cron, prompt_file, repo, backend, project, timezone, enabled}),
       });
     } else {
       res = await fetch('/api/cron/tasks', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name, cron, prompt, repo, backend, project, timezone, enabled}),
+        body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled}),
       });
     }
   } catch (err) {

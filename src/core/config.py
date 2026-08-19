@@ -78,6 +78,9 @@ class ScheduledTaskConfig(BaseModel):
   name: str
   cron: str
   prompt: Optional[str] = None
+  # Pre-resolution path string a host cron.d file declared. It is an in-process
+  # field for transport to the API and UI only; no write path persists it.
+  prompt_file: Optional[str] = None
   handler: Optional[str] = None
   loop: Optional[ImprovementLoopConfig] = None
   repo: Optional[str] = None
@@ -86,9 +89,10 @@ class ScheduledTaskConfig(BaseModel):
   enabled: bool = True
   project: Optional[str] = None
   # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);
-  # 'master' wakes the dedicated session's master with the task's prompt
-  # (prompt_file-style bodies are inlined to `prompt` at seed/create time) plus
-  # an appended Group line.
+  # 'master' wakes the dedicated session's master with the task's prompt: the
+  # pointed file owns the body, the host cron file carries only its path, and
+  # the loader reads the file on every load. An appended Group line follows the
+  # prompt.
   mode: Optional[Literal['worker', 'master']] = None
   allow_failure: bool = False
   notify: Optional[str] = None  # 'telegram' or None
@@ -97,7 +101,8 @@ class ScheduledTaskConfig(BaseModel):
   def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
     sources = sum([bool(self.prompt), bool(self.handler), bool(self.loop)])
     if sources != 1:
-      raise ValueError("task must have exactly one of 'prompt', 'handler', or 'loop'")
+      raise ValueError(
+          "task must have exactly one of 'prompt', 'prompt_file', 'handler', or 'loop'")
     # A prompt_file-style entry is resolved into prompt before model
     # validation, so an empty prompt here means master woke up with no message
     # at all — including the master+handler and master+loop combinations the
@@ -577,15 +582,14 @@ def _valid_cron_name(name: str) -> bool:
 def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTaskConfig, dict[Path, float]]:
   """Resolve and validate one cron job body into a ``ScheduledTaskConfig``.
 
-  Mutates *body* in place — resolves ``prompt_file`` (removing the key and
-  setting ``prompt``), rewrites a literal ``timezone: local`` to the host IANA
-  zone, and expands ``~`` in ``repo`` — matching the :func:`_resolve_prompt_file`
-  mutate-in-place convention. The ``prompt_file`` resolution serves the write
-  paths (seeder, cron create route) that inline the body before persisting it;
-  the production loader (:func:`_load_cron_file`) rejects a persisted
-  ``prompt_file`` before reaching this function, and any other caller (e.g.
-  the cron API's update path) that validates a candidate through this function
-  is guaranteed a result the loader can reload unchanged.
+  Mutates *body* in place — resolves ``prompt_file`` (setting ``prompt`` to the
+  referenced file's body and preserving the raw pointer on the model), rewrites
+  a literal ``timezone: local`` to the host IANA zone, and expands ``~`` in
+  ``repo`` — matching the :func:`_resolve_prompt_file` mutate-in-place
+  convention. The pointer owns the prompt body; the body carries only the path
+  to it, and the loader reads that file on every load. Any caller that needs
+  the pre-write file format (e.g. the cron API's create/update paths, which
+  validate a deep copy) is guaranteed a result the loader can reload unchanged.
 
   Returns the model plus the mtime map for any ``prompt_file`` it read (for the
   hot-reload fingerprint). Raises :class:`ValueError` (or a pydantic validation
@@ -595,6 +599,7 @@ def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTas
   prompt_file = body.get("prompt_file")
   if prompt_file:
     resolved = _resolve_prompt_file(body, repo)
+    body["prompt_file"] = prompt_file  # preserve the raw pointer for the API/UI
     try:
       prompt_mtimes[resolved] = resolved.stat().st_mtime
     except OSError:
@@ -613,12 +618,13 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
   The file body is a top-level mapping of :class:`ScheduledTaskConfig` fields
   *without* ``name``; the job name is *stem* (the file stem) and is injected
   here. A body that carries a ``name`` key is an error (the file name is the
-  single source of the name). A body that carries ``prompt_file`` is an error
-  too: host files are sealed against repository drift — the prompt must be
-  inlined (the seeder and the create route resolve ``prompt_file`` before
-  writing). Resolution follows the existing order: ``timezone: local`` to the
-  host IANA zone and ``repo`` to ``expanduser`` — see
-  :func:`_validate_cron_body`.
+  single source of the name). A host file carries the path to its prompt source
+  under ``prompt_file``; the pointed file owns the body, and this loader reads
+  it on every load. A body that instead carries the body itself under ``prompt``
+  holds a second source, so it is a load error. Resolution follows the existing
+  order: ``prompt_file`` against *repo* (``~``-prefixed or absolute taken
+  literally), ``timezone: local`` to the host IANA zone, and ``repo`` to
+  ``expanduser`` — see :func:`_validate_cron_body`.
 
   Returns the model plus the mtime map for any ``prompt_file`` it read (for the
   hot-reload fingerprint). Raises :class:`ValueError` on any failure; the caller
@@ -629,11 +635,11 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
     raise ValueError("cron config must be a mapping")
   if "name" in body:
     raise ValueError("the body must not carry a 'name' key; the file name is the job name")
-  if "prompt_file" in body:
+  if "prompt" in body:
     raise ValueError(
-        "prompt_file is not allowed in a cron.d host file; inline the prompt "
-        "instead — copy the referenced file's content into this file under "
-        "'prompt' and remove the 'prompt_file' key")
+        "a cron.d host file must not carry an inline 'prompt'; it holds the "
+        "path to the prompt source under 'prompt_file', and the loader reads "
+        "that file on every load")
   return _validate_cron_body(body, repo, stem)
 
 

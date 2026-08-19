@@ -66,6 +66,14 @@ An understanding page precedes the plan when the master must first align the rea
 
 - Research the codebase first; present the plan as a decision surface following the
   template block kit, with numbered Trade-offs for the choices the user must judge.
+- Contract text (rule sentences the plan lands verbatim in prompt docs, skills, or task
+  specs) is drafted to the standing-reality form and checked block by block before
+  `charliebot plan present`: each sentence opens with what stands or works ("one post
+  carries the whole reply up to the limit", over "in one post unless it exceeds the
+  limit"), a bare prohibition is recast as the working practice it protects ("each rule
+  keeps one home; other files reference it", in place of the ban it replaces), the
+  exception arrives as a bounded case rather than the sentence's spine, and dashes give
+  way to commas, colons, semicolons, or a restructure (code excepted).
 - Render the artifact per the USAGE note atop the BLOCK KIT comment in `prompts/plan_template.html`.
 - Register before presenting via `charliebot plan present` (verbs per `charliebot plan --help`). The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth. Record the code baseline when the plan pins one.
 - An improve-loop takeoff plan follows this same contract; its approval object covers
@@ -78,6 +86,8 @@ An understanding page precedes the plan when the master must first align the rea
 - Replies that touch the plan are feedback, not approval: Trade-off resolutions by
   number, added constraints, questions, changed terms. Fold each into the plan and
   re-present what changed, then wait.
+- A style finding on one passage stands for its pattern: sweep the whole artifact for that
+  pattern and fold every fix into the same revision.
 - Only the user changes the goal. Versions answer feedback within the standing goal; a changed
   goal is a new plan — `charliebot plan present` opens the new lineage and the old one closes
   as superseded.

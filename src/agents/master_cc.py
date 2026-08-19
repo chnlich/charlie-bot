@@ -2,8 +2,12 @@
 
 Facade over the ``master_cc_<part>`` modules: every pre-split top-level def/class
 keeps resolving at its original ``src.agents.master_cc.<name>`` path, so existing
-import sites and monkeypatch targets on this module stay valid. The parts hold
-the implementation and must never import this module — that would close an
+import sites and direct calls stay valid. A monkeypatch target must name the
+module whose body looks the name up — a part's own bare-name references resolve
+in that part (patch ``master_cc_run._run_cc``, not ``master_cc._run_cc``);
+only callers that read this module's attribute at call time (e.g. init.py's
+``master_cc.queued_user_event_ids``) stay patchable here. The parts hold the
+implementation and must never import this module — that would close an
 import cycle.
 """
 

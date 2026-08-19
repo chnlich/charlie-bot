@@ -458,8 +458,9 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
   """Resolve a cron entry's ``prompt_file`` into ``prompt`` in place.
 
   Reads the referenced file, sets ``entry['prompt']`` to its contents, and
-  removes the ``prompt_file`` key so the model never sees it. Returns the
-  resolved :class:`Path` (for mtime tracking) or ``None`` if the entry had no
+  removes the ``prompt_file`` key while resolving. Callers that expose the
+  runtime model restore the raw pointer after this step. Returns the resolved
+  :class:`Path` (for mtime tracking) or ``None`` if the entry had no
   ``prompt_file``.
 
   Path resolution has no search order and no shadowing: a relative path is
@@ -687,6 +688,26 @@ def _reload_cron_snapshot() -> _CronSnapshot:
       try:
         task, file_prompt_mtimes = _load_cron_file(path, repo, stem)
       except Exception as e:
+        # Keep a failed pointer in the fingerprint too. If its target is
+        # restored without touching the host yaml, the next call must retry
+        # the file and clear the error instead of serving a cached failure.
+        try:
+          failed_body = load_yaml(path)
+        except Exception as read_error:
+          log.debug("cron_failed_file_prompt_path_unreadable", path=str(path), error=str(read_error))
+        else:
+          failed_prompt_file = failed_body.get("prompt_file") if isinstance(failed_body, dict) else None
+          if isinstance(failed_prompt_file, str) and failed_prompt_file:
+            if failed_prompt_file.startswith("~") or Path(failed_prompt_file).is_absolute():
+              failed_prompt_path = Path(os.path.expanduser(failed_prompt_file))
+            else:
+              failed_prompt_path = repo / failed_prompt_file
+            try:
+              prompt_mtimes[failed_prompt_path] = failed_prompt_path.stat().st_mtime
+            except OSError:
+              prompt_mtimes[failed_prompt_path] = 0.0
+            except ValueError as stat_error:
+              log.debug("cron_failed_prompt_path_unstatable", path=str(failed_prompt_path), error=str(stat_error))
         errors.append(ScheduledTaskError(
             name=stem, path=str(path), error=str(e), enabled=_read_cron_file_enabled(path)))
         log.error("cron_task_load_failed", name=stem, path=str(path), error=str(e))

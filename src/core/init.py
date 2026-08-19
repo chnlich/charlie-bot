@@ -258,6 +258,8 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
       report.append({"name": name, "status": "exists"})
       continue
     body = {k: v for k, v in copy.deepcopy(entry).items() if k != "name"}
+    # Persist the pointer unchanged: the pointed file owns the prompt body,
+    # and this host file carries only its path.
     save_yaml(path, body)
     report.append({"name": name, "status": "created"})
   return report

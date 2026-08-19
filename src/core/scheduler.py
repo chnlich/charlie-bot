@@ -247,8 +247,8 @@ class Scheduler:
     The wake message is the task's resolved prompt: a PM task's host cron file
     carries the path to prompts/project_manager.md under ``prompt_file``, the
     pointed file owns the body, and the loader reads it on every load; a
-    `Group: <project>` line is appended — the yaml is the single control point
-    for the wake text. No worker thread and no
+    `Group: <project>` line is appended, and the yaml is the single control
+    point for the wake text. No worker thread and no
     TASK_DELEGATED event: the fire is a single master turn in the task's
     dedicated session, delivered through the shared trigger_master primitive
     (fire-and-forget so the scheduler loop never stalls behind a master turn).

@@ -450,6 +450,62 @@ async def test_two_markers_post_nothing_and_log_ambiguous_with_count(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_marker_with_only_blank_lines_posts_nothing_and_logs_empty(tmp_path: Path) -> None:
+  """Operator text plus a marker plus blank lines is a contract failure, not an empty post."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(
+      f"status note for the operator\n\n{SLACK_REPLY_MARKER}\n\n   \n"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner([])),
+      capture_logs() as logs,
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is False
+
+  assert client.posts == []
+  assert client.remove_calls == []
+  assert client.reactions[_THREAD] == {"eyes"}
+  empty = [ev for ev in logs if ev["event"] == "slack_reply_marker_empty"]
+  assert len(empty) == 1
+  assert empty[0]["session"] == sid
+  assert empty[0]["input_event_id"] == summon["id"]
+
+
+@pytest.mark.asyncio
+async def test_single_character_marked_reply_still_posts_once_and_clears_the_eye(
+    tmp_path: Path) -> None:
+  """The empty check does not swallow a short (single-char) reply."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(f"{SLACK_REPLY_MARKER}\na"))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  ack_tasks: list[asyncio.Task] = []
+  with (
+    patch("src.core.slack_listener._bot_client", return_value=client),
+    patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(ack_tasks)),
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+    await asyncio.gather(*ack_tasks)
+
+  assert [p["text"] for p in client.posts] == ["a"]
+  assert client.reactions[_THREAD] == set()
+
+
+@pytest.mark.asyncio
 async def test_long_reply_after_the_marker_posts_ordered_chunks(tmp_path: Path) -> None:
   """The extracted reply, not the whole message, is what splits past the post cap."""
   cfg = _cfg(tmp_path)

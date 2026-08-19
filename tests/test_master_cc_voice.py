@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core import models
 from src.core.models import SendMessageRequest
 
-DISCLAIMER = master_cc._VOICE_DISCLAIMER
+DISCLAIMER = master_cc_run._VOICE_DISCLAIMER
 
 
 def _make_callbacks() -> models.SessionCallbacks:
@@ -74,7 +74,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
   meta = models.SessionMetadata(id="voice-cc", name="Voice")
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -103,7 +103,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
   meta = models.SessionMetadata(id="plain-cc", name="Plain")
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -135,24 +135,24 @@ async def _run_message_with_capturing_backend(
   callbacks = _make_callbacks()
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
-  master_cc._session_queues.pop(meta.id, None)
-  master_cc._session_consumers.pop(meta.id, None)
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  master_cc_state._session_queues.pop(meta.id, None)
+  master_cc_state._session_consumers.pop(meta.id, None)
   try:
     with (
-        patch.object(master_cc.streaming_manager, "broadcast", new=AsyncMock()),
+        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
         patch("src.core.sessions.SessionManager") as session_mgr_cls,
     ):
       session_mgr_inst = MagicMock()
       session_mgr_inst._has_running_tasks = AsyncMock(return_value=False)
       session_mgr_cls.return_value = session_mgr_inst
       await master_cc.run_message(cfg, meta, user_content, callbacks, is_voice=is_voice_arg)
-      consumer = master_cc._session_consumers.get(meta.id)
+      consumer = master_cc_state._session_consumers.get(meta.id)
       if consumer and not consumer.done():
         await asyncio.wait_for(consumer, timeout=5)
   finally:
-    master_cc._session_queues.pop(meta.id, None)
-    master_cc._session_consumers.pop(meta.id, None)
+    master_cc_state._session_queues.pop(meta.id, None)
+    master_cc_state._session_consumers.pop(meta.id, None)
 
   user_events = [
       call.args[1]

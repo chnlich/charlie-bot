@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from structlog.testing import capture_logs
 
-from src.agents import master_cc
+from src.agents import master_cc, master_cc_run
 from src.agents.backends import base as backend_base
 from src.core import config as core_config
 from src.core import models
@@ -87,7 +87,7 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
     return _FakeBackend()
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -135,7 +135,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
     return _FakeBackend()
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -185,7 +185,7 @@ async def _run_cc_starting_entry(
       "src.agents.backends.registry.build_backend",
       lambda option, cfg, **kw: _FakeBackend())
   monkeypatch.setattr(
-      master_cc, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+      master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
   item = master_cc._WorkItem(
       cfg=cfg,
       session_meta=session_meta,

@@ -295,6 +295,9 @@ def test_cron_api_persists_and_clears_backend(
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   nightly_path = cron_dir / "nightly.yaml"
+  prompt_path = tmp_path / "prompts" / "nightly.md"
+  prompt_path.parent.mkdir(parents=True, exist_ok=True)
+  prompt_path.write_text("run nightly", encoding="utf-8")
 
   def _read_backend() -> str:
     return yaml.safe_load(nightly_path.read_text(encoding="utf-8")).get("backend")
@@ -305,7 +308,7 @@ def test_cron_api_persists_and_clears_backend(
         json={
             "name": "nightly",
             "cron": "0 2 * * *",
-            "prompt": "run nightly",
+            "prompt_file": str(prompt_path),
             "backend": "codex-o3",
         },
     )
@@ -336,6 +339,9 @@ def test_cron_api_rejects_invalid_backend_on_create(
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
+  prompt_path = tmp_path / "prompts" / "nightly.md"
+  prompt_path.parent.mkdir(parents=True, exist_ok=True)
+  prompt_path.write_text("run nightly", encoding="utf-8")
 
   with _build_cron_client(cfg, session_mgr) as client:
     response = client.post(
@@ -343,7 +349,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
         json={
             "name": "nightly",
             "cron": "0 2 * * *",
-            "prompt": "run nightly",
+            "prompt_file": str(prompt_path),
             "backend": "missing-backend",
         },
     )
@@ -359,8 +365,11 @@ def test_cron_api_rejects_invalid_backend_on_update(
 ) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
+  prompt_path = tmp_path / "prompts" / "nightly.md"
+  prompt_path.parent.mkdir(parents=True, exist_ok=True)
+  prompt_path.write_text("run nightly", encoding="utf-8")
   (cron_dir / "nightly.yaml").write_text(
-      yaml.safe_dump({"cron": "0 2 * * *", "prompt": "run nightly", "backend": "codex-o3"}),
+      yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "codex-o3"}),
       encoding="utf-8")
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
@@ -383,8 +392,11 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
 ) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
+  prompt_path = tmp_path / "prompts" / "nightly.md"
+  prompt_path.parent.mkdir(parents=True, exist_ok=True)
+  prompt_path.write_text("run nightly", encoding="utf-8")
   (cron_dir / "nightly.yaml").write_text(
-      yaml.safe_dump({"cron": "0 2 * * *", "prompt": "run nightly", "backend": "claude-opus-4.6"}),
+      yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "claude-opus-4.6"}),
       encoding="utf-8")
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
@@ -409,10 +421,10 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
 
 
 def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path) -> tuple[Path, Path, str]:
-  """Write a drift-era prompt_file-backed 'nightly' job.
+  """Write a prompt_file-backed 'nightly' job; returns (yaml_path, md_path, md_content).
 
-  Such a file is broken under the loader's inline-only contract — returns
-  (yaml_path, md_path, md_content) so tests can assert on the rejection.
+  The host file carries the path to its prompt source under ``prompt_file`` and
+  the pointed file owns the body, exactly as production host files look.
   """
   md_path = tmp_path / "prompts" / "nightly.md"
   md_path.parent.mkdir(parents=True, exist_ok=True)
@@ -432,37 +444,42 @@ def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path) -> tuple[Path, Path, 
   return yaml_path, md_path, md_content
 
 
-def test_load_cron_file_rejects_prompt_file(
+def test_load_cron_file_loads_prompt_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   cfg = _build_cfg(tmp_path)
-  yaml_path, _md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)
+  yaml_path, md_path, md_content = _seed_prompt_file_task(cron_dir, tmp_path)
 
-  with pytest.raises(ValueError, match="prompt_file.*inline"):
-    _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
+  task, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
+  assert task.prompt == md_content
+  assert task.prompt_file == str(md_path)
 
 
-def test_cron_api_put_409_on_prompt_file_host_file(
+def test_cron_api_put_updates_backend_on_prompt_file_host_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  """A prompt_file-carrying file is broken: any PUT surfaces the loader error
-  (409, inline directive) and touches nothing on disk."""
+  """A prompt_file-carrying host file is valid: a backend PUT succeeds, adds
+  exactly the backend key/value, and the persisted file still reloads."""
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   yaml_path, _md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)
-  before = yaml_path.read_bytes()
+  original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
 
   with _build_cron_client(cfg, session_mgr) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
-  assert response.status_code == 409
-  assert "prompt_file" in response.json()["detail"]
-  assert "inline" in response.json()["detail"]
-  assert yaml_path.read_bytes() == before
+  assert response.status_code == 200
+  persisted = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+  assert set(persisted.items()) - set(original.items()) == {("backend", "codex-o3")}
+  assert set(original.items()) - set(persisted.items()) == set()
+
+  loaded, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
+  assert loaded.backend == "codex-o3"
+  assert loaded.prompt == _md_content

@@ -128,8 +128,10 @@ def test_alert_fires_through_loader_refresh(
     sent: list[str],
 ) -> None:
   """The scheduler tick path: get_scheduled_tasks → snapshot refresh → alert."""
+  target = temp_home / "prompts" / "memory_curator.md"
+  target.parent.mkdir(parents=True, exist_ok=True)
   _write_task_text(temp_home, "memory-curator", _dump(
-      {"cron": "27 6 * * *", "prompt_file": str(temp_home / "gone.md")}))
+      {"cron": "27 6 * * *", "prompt_file": str(target)}))
 
   async def refresh() -> None:
     assert cm.get_scheduled_tasks() == []
@@ -139,9 +141,11 @@ def test_alert_fires_through_loader_refresh(
   asyncio.run(refresh())
   assert sent == ["⚠️ cron 任务加载失败: memory-curator"]
 
-  # Inlining the prompt (the local fix) flips the file back to healthy on the
-  # next refresh, and the recovery notification goes out once.
-  fixed = _write_task_text(temp_home, "memory-curator", _dump({"cron": "27 6 * * *", "prompt": "inline now"}))
+  # Restoring the pointed file (the host file only carries the path to it) flips
+  # the job back to healthy on the next refresh, and the recovery notification
+  # goes out once.
+  target.write_text("curate memory now", encoding="utf-8")
+  fixed = _cron_d_dir(temp_home) / "memory-curator.yaml"
   m = fixed.stat().st_mtime
   os.utime(fixed, (m + 5.0, m + 5.0))
 

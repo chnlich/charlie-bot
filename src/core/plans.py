@@ -168,11 +168,9 @@ def _check_page_height(cfg: CharlieBotConfig, artifact: Path) -> None:
   if height > PAGE_HEIGHT_BUDGET:
     raise ValueError(
         f"plan page measures {height} px as it opens: {height - PAGE_HEIGHT_BUDGET} px over the "
-        f"{PAGE_HEIGHT_BUDGET} px budget. Recover headroom by folding, not deleting: move the "
-        "Context body, section-3 mechanism prose, and 4.2 content wholesale into collapsed "
-        "details-layer blocks. Never compress or drop the approval surface: section 1, 4.1 "
-        "Schema rows, and each fork's question/recommendation/trade lines. Measure locally "
-        "with: charliebot plan check --file <artifact.html>")
+        f"{PAGE_HEIGHT_BUDGET} px budget. Recover headroom by folding, per the page-budget rules "
+        "in the BLOCK KIT comment of prompts/plan_template.html. Measure locally with: "
+        "charliebot plan check --file <artifact.html>")
 
 
 def measure_plan_gates(cfg: CharlieBotConfig, artifact: Path) -> tuple[int, int]:

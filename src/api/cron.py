@@ -59,8 +59,8 @@ def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:
   updated = dict(task)
   if req.cron is not None:
     updated['cron'] = req.cron
-  if req.prompt is not None:
-    updated['prompt'] = req.prompt
+  if req.prompt_file is not None:
+    updated['prompt_file'] = req.prompt_file
   if req.repo is not None:
     updated['repo'] = req.repo or None
   if 'backend' in req.model_fields_set:
@@ -119,7 +119,7 @@ def _check_master_project_unique(name: str, mode: Optional[str], project: Option
 
 class TaskUpdate(BaseModel):
   cron: Optional[str] = None
-  prompt: Optional[str] = None
+  prompt_file: Optional[str] = None
   repo: Optional[str] = None
   backend: Optional[str] = None
   timezone: Optional[str] = None
@@ -131,7 +131,6 @@ class TaskUpdate(BaseModel):
 class TaskCreate(BaseModel):
   name: str
   cron: str
-  prompt: Optional[str] = None
   prompt_file: Optional[str] = None
   repo: Optional[str] = None
   backend: Optional[str] = None
@@ -243,15 +242,15 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   body = {k: v for k, v in payload.items()
           if k != 'name' and (v is not None or k in ('cron', 'enabled'))}
   # Validate the assembled body through the exact same body-processing code
-  # the production loader uses, directly on the persisted body (that code
-  # mutates it in place — see _validate_cron_body): a supplied prompt_file is
-  # resolved and written back as an inline prompt, so the host file never
-  # keeps a live repo reference. An unreadable prompt_file or a master task
-  # without a prompt source becomes a 409 with the loader's error text, and
-  # nothing is written to disk.
+  # the production loader uses, on a deep copy (that code mutates its argument
+  # in place — see _validate_cron_body), exactly as the update route does, so
+  # the persisted file keeps the submitted prompt_file pointer: the pointed
+  # file owns the prompt body and this file carries only the path to it. An
+  # unreadable prompt_file or a master task without a prompt source becomes a
+  # 409 with the loader's error text, and nothing is written to disk.
   try:
     await asyncio.to_thread(
-        _validate_cron_body, body, cfg.charlie_bot_repo, req.name)
+        _validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
   cron_dir().mkdir(parents=True, exist_ok=True)

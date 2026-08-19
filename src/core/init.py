@@ -204,8 +204,8 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
   Reads ``configs/cron.default.yaml`` from the repo and the host
   ``~/.charliebot/config.d/cron.d/`` directory. For each default entry: if no
   host file ``cron.d/<name>.yaml`` exists, create it with the entry body minus
-  ``name`` and with ``prompt_file`` resolved into an inline ``prompt`` (host
-  files never keep a live reference into the repo — the loader rejects one);
+  ``name``, keeping the entry's ``prompt_file`` pointer intact (the pointed
+  file owns the prompt body and the host file carries only the path to it);
   if one exists, change nothing about it. Never rewrites or drops host-only
   files.
 
@@ -258,11 +258,6 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
       report.append({"name": name, "status": "exists"})
       continue
     body = {k: v for k, v in copy.deepcopy(entry).items() if k != "name"}
-    # Inline the prompt before writing: the host file owns its prompt body and
-    # stays valid through repo-side moves of the referenced file. Already
-    # validated above; a second resolution can only race a concurrent repo
-    # edit, which fails loudly like every other validation error.
-    _resolve_prompt_file(body, repo_root)
     save_yaml(path, body)
     report.append({"name": name, "status": "created"})
   return report

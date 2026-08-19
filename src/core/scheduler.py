@@ -244,10 +244,10 @@ class Scheduler:
   async def _execute_master_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Wake the dedicated session's master with the task prompt plus its group.
 
-    The wake message is the task's resolved prompt (a PM task supplies
-    prompts/project_manager.md itself via prompt_file at create time, inlined
-    into `prompt` on disk — the loader rejects a persisted prompt_file) with a
-    `Group: <project>` line appended — the yaml is the single control point
+    The wake message is the task's resolved prompt: a PM task's host cron file
+    carries the path to prompts/project_manager.md under ``prompt_file``, the
+    pointed file owns the body, and the loader reads it on every load; a
+    `Group: <project>` line is appended — the yaml is the single control point
     for the wake text. No worker thread and no
     TASK_DELEGATED event: the fire is a single master turn in the task's
     dedicated session, delivered through the shared trigger_master primitive

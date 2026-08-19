@@ -363,6 +363,10 @@ class _FakeImproveSessionManager:
     del session
     self.persisted_events.append(event)
 
+  async def deliver_to_successor(self, session: str, event: dict) -> str:
+    await self.persist_and_broadcast(session, event)
+    return session
+
 
 class _FakeImproveThreadManager:
 
@@ -654,6 +658,10 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
     async def persist_and_broadcast(self, session: str, event: dict) -> None:
       del session
       persisted_events.append(event)
+
+    async def deliver_to_successor(self, session: str, event: dict) -> str:
+      await self.persist_and_broadcast(session, event)
+      return session
 
   class FakeThreadManager:
 

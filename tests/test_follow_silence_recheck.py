@@ -36,6 +36,10 @@ class _FakeSessionMgr:
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     self.events.append(event)
 
+  async def deliver_to_successor(self, session_id: str, event: dict) -> str:
+    await self.persist_and_broadcast(session_id, event)
+    return session_id
+
   async def mark_unread(self, session_id: str) -> None:
     pass
 

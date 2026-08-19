@@ -230,28 +230,33 @@ def _local_time() -> str:
   return datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
-async def ensure_slack_group(session_mgr: SessionManager, sid: str, channel_id: str,
-                             client: SlackClient) -> None:
-  """Group a Slack-summon session under its channel, unless it already has a group.
+async def ensure_slack_group(session_mgr: SessionManager, sid: str, label: str) -> None:
+  """Group a Slack-summon session under its label, unless it already has a group.
 
-  Writes ``Slack #<channel_name>``, falling back to ``Slack #<channel_id>`` when
-  the name cannot be resolved, and only writes when the session has a
-  slack_origin and an empty group (None or '') — an existing group is never
-  overwritten. Best-effort: any failure logs a warning and is swallowed, so
-  summon, round, and reply behavior are unaffected.
+  The label is resolved once by ``handle_app_mention`` (the single resolution
+  point) and passed through — this function resolves nothing. It only writes
+  when the session has a slack_origin and an empty group (None or '') — an
+  existing group is never overwritten. Best-effort: any failure logs a warning
+  and is swallowed, so summon, round, and reply behavior are unaffected.
   """
   try:
     meta = await session_mgr.get_session(sid)
     if meta is None or meta.slack_origin is None or meta.group:
       return
-    name = await client.get_channel_name(channel_id)
-    await session_mgr.set_group(sid, f"Slack #{name or channel_id}")
+    await session_mgr.set_group(sid, label)
   except Exception as e:
-    logger.warning("slack_group_assignment_failed", session=sid, channel=channel_id, error=str(e))
+    logger.warning("slack_group_assignment_failed", session=sid, label=label, error=str(e))
 
 
 async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient) -> Optional[str]:
-  """Accept or drop one app_mention. Returns the session id when accepted, else None."""
+  """Accept or drop one app_mention. Returns the session id when accepted, else None.
+
+  The summon's channel label is resolved exactly once here, before
+  create_session, and reused for both the session name and the group: a single
+  ``Slack #<channel_name>`` label keeps the two display fields in lockstep and
+  the resolution count to one lookup per accepted mention. A name that cannot
+  be resolved falls back to the channel id.
+  """
   channel_id = event.get("channel")
   thread_ts = event.get("thread_ts") or event.get("ts")
   slack_user = event.get("user")
@@ -263,9 +268,12 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
   team_id = event.get("team") or event.get("team_id")
   sid = summon_session_id(team_id, channel_id, thread_ts)
 
+  name = await client.get_channel_name(channel_id)
+  label = f"Slack #{name or channel_id}"
+
   session_meta = await session_mgr.get_session(sid)
   if session_meta is None:
-    session_name = f"Slack #{channel_id} {_local_time()}"
+    session_name = f"{label} {_local_time()}"
     await session_mgr.create_session(
         CreateSessionRequest(
             session_id=sid,
@@ -281,7 +289,7 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
     logger.info("slack_mention_session_existing", channel=channel_id, thread_ts=thread_ts,
                 slack_user=slack_user, session=sid)
 
-  await ensure_slack_group(session_mgr, sid, channel_id, client)
+  await ensure_slack_group(session_mgr, sid, label)
 
   permalink = await client.get_permalink(channel_id, event["ts"])
   content = _build_summon_prompt(permalink, cfg)

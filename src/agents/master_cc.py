@@ -47,6 +47,20 @@ log = structlog.get_logger()
 NOTICE = "[模型未输出正文，以下为其思考内容]"
 
 
+def _is_manual_compact_boundary(event: dict) -> bool:
+  """True for a compact_boundary system event whose trigger is exactly "manual".
+
+  Exact-string match only: an "auto" boundary is followed by mandatory model
+  output (silence there is the zero-output guard's own failure class), and
+  unknown/absent triggers fail loud — neither may exempt the turn.
+  """
+  return (
+      event.get("type") == "system"
+      and event.get("subtype") == "compact_boundary"
+      and (event.get("compact_metadata") or {}).get("trigger") == "manual"
+  )
+
+
 class _RunTimingTracker:
   """Tracks monotonic timing milestones during a single _run_cc execution."""
 
@@ -66,13 +80,16 @@ class _RunTimingTracker:
     self._thinking_text: list[str] = []
     self._saw_result = False
     # Zero-output guard state (same lifecycle as the timing fields): whether a
-    # terminal result settled with all-zero usage, and whether the turn ever
-    # produced thinking content or a tool_use event. Used by the guard at
-    # teardown so a genuinely-empty master run fails loudly instead of
-    # silently consuming its trigger.
+    # terminal result settled with all-zero usage, whether the turn ever
+    # produced thinking content or a tool_use event, and whether the turn
+    # observed a manual-compaction boundary. Used by the guard at teardown so
+    # a genuinely-empty master run fails loudly instead of silently consuming
+    # its trigger — while a manual /compact turn, whose healthy completion IS
+    # the compaction itself, stays exempt.
     self._saw_zero_usage = False
     self._saw_thinking = False
     self._saw_tool_use = False
+    self._saw_manual_compact = False
 
   async def on_spawn(self, pid: int) -> None:
     self._t_spawn = time.monotonic()
@@ -104,6 +121,11 @@ class _RunTimingTracker:
           for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
       ):
         self._saw_zero_usage = True
+
+    # Fresh-path evidence channel for the manual-compaction observation (the
+    # re-attach path's whole-file projection is the other one).
+    if _is_manual_compact_boundary(event):
+      self._saw_manual_compact = True
 
     # Standalone tool_use events (codex/gemini flat format).
     if event.get("type") == ET.TOOL_USE:
@@ -140,14 +162,27 @@ class _RunTimingTracker:
             )
             break
 
+  def note_manual_compact(self) -> None:
+    """Latch the manual-compaction observation from a whole-file projection.
+
+    Re-attach counterpart of the live-stream latch in on_event: the persisted
+    read cursor may already sit past the boundary line (a pre-restart process
+    consumed it), so the cursor-forward tail cannot be its only source.
+    """
+    self._saw_manual_compact = True
+
   def _zero_output_guard(self) -> bool:
     """True when this run settled with zero model output and must fail loudly.
 
-    Four-part conjunction, mirroring the salvage rule's shape: a terminal
+    Five-part conjunction, mirroring the salvage rule's shape: a terminal
     result event was received, its usage is all-zero, and the turn produced no
-    assistant text, no thinking content, and no tool_use events. The result
-    check is the same single guard for cancellation / let-go / mid-run death
-    — none of those reach a result event, so the guard stays quiet for them.
+    assistant text, no thinking content, no tool_use events, and no manual
+    compaction boundary. The result check is the same single guard for
+    cancellation / let-go / mid-run death — none of those reach a result
+    event, so the guard stays quiet for them. The manual-compaction clause
+    exempts the /compact turn, whose output is the compaction itself; an
+    auto-compact boundary must be followed by model output, so it never
+    exempts a silent turn.
     """
     return (
         self._saw_result
@@ -155,6 +190,7 @@ class _RunTimingTracker:
         and not self._saw_first_assistant
         and not self._saw_thinking
         and not self._saw_tool_use
+        and not self._saw_manual_compact
     )
 
   def build_finish_extras(self) -> dict:
@@ -741,6 +777,12 @@ async def _resume_cc(item: _WorkItem) -> tuple[str | None, int, str | None, dict
           runs.parse_raw_lines(raw_path.read_bytes()), _build_fresh_translate(cfg, option))
     else:
       events = []
+    # Recover the manual-compaction observation from the same whole-file
+    # projection the result summary uses (zero new I/O): the persisted cursor
+    # may already sit past the boundary line, so the cursor-forward tail above
+    # cannot be the observation's only evidence channel.
+    if any(_is_manual_compact_boundary(event) for event in events):
+      tracker.note_manual_compact()
     result = runs.summarize_result(events)
     exit_code = 0 if (result is not None and runs.result_success(result)) else -1
 
@@ -841,21 +883,24 @@ async def _session_consumer(session_id: str) -> None:
         cc_session_id, exit_code, _error_msg, finish_extras = result
 
         # Zero-output guard: a run that settled with a result event of all-zero
-        # usage and no assistant text/thinking/tool_use must fail loudly — the
-        # backend reported it as done but produced nothing, so the triggering
-        # message would otherwise be consumed silently. Lives on the single
-        # MASTER_DONE path, so both the fresh-run and resume outcomes are
-        # covered by construction. If an error event was already emitted this
-        # turn (error_msg set), skip a second contradicting ERROR but still
-        # exit nonzero — mirrors the salvage rule's error_msg gate. mark_unread
-        # is already invoked by both run paths' teardown.
+        # usage, no assistant text/thinking/tool_use, and no manual compaction
+        # must fail loudly — the backend reported it as done but produced
+        # nothing, so the triggering message would otherwise be consumed
+        # silently. Lives on the single MASTER_DONE path, so both the
+        # fresh-run and resume outcomes are covered by construction. If an
+        # error event was already emitted this turn (error_msg set), skip a
+        # second contradicting ERROR but still exit nonzero — mirrors the
+        # salvage rule's error_msg gate. mark_unread is already invoked by
+        # both run paths' teardown.
         if finish_extras.get("zero_output"):
           if not _error_msg:
             resume_ref = cc_session_id if cc_session_id else "fresh session"
             zero_err = make_error_event(
-                f"Master run produced zero model output (cc_session_id={resume_ref}) "
-                f"and the triggering message was left unread. "
-                f"See LESSONS.md: opencode message-ID wraparound, 2026-08-14.")
+                f"Master run produced zero model output (cc_session_id={resume_ref}): "
+                f"the turn settled with an all-zero usage result and no assistant text, "
+                f"thinking, tool use, or manual compaction. "
+                f"The triggering message was left unread. "
+                f"One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14).")
             await item.callbacks.persist_and_broadcast(session_id, zero_err)
           exit_code = 1
 

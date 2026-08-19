@@ -18,6 +18,7 @@ from src.agents.backends.base import make_result_event, make_text_event
 from src.api import sessions as sessions_api
 from src.api.deps import get_session_manager
 from src.core import event_types as ET
+from src.core import runs
 from src.core import sessions as sessions_module
 from src.core import thinking_state
 from src.core.config import CharlieBotConfig
@@ -654,14 +655,14 @@ async def test_resume_reattach_uses_persisted_interval_start(
 
 
 class _EventsBackend:
-  """Backend double that yields a fixed event stream, then exits cleanly."""
+  """Backend double that yields a fixed event stream, then exits with the given code."""
 
-  exit_code = 0
-  stderr_text = ""
   terminated = False
 
-  def __init__(self, events: list[dict]) -> None:
+  def __init__(self, events: list[dict], *, exit_code: int = 0, stderr_text: str = "") -> None:
     self.events = events
+    self.exit_code = exit_code
+    self.stderr_text = stderr_text
 
   async def terminate(self) -> None:
     self.terminated = True
@@ -689,12 +690,15 @@ async def _run_stream_consumer(
     monkeypatch: pytest.MonkeyPatch,
     session_id: str,
     events: list[dict],
+    *,
+    exit_code: int = 0,
+    stderr_text: str = "",
 ) -> SessionCallbacks:
   """Run a simulated event stream through the production consumer path."""
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)
   cb = _make_callbacks()
-  backend = _EventsBackend(events)
+  backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **k: backend)
   monkeypatch.setattr(master_cc, "_build_instructions_content", lambda *a, **k: "instructions")
@@ -796,3 +800,141 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
   assert len(errors) == 1
   assert "cc-resumed" in errors[0].get("message", "")
   assert dones and dones[0]["exit_code"] == 1
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_exempts_manual_compact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Negative: a manual /compact turn settles zero-output by design — exempt.
+
+  The compaction itself is the turn's output, so the guard must not fire: no
+  zero-output ERROR, MASTER_DONE keeps the backend's own exit code, and the
+  finish extras carry no zero_output flag.
+  """
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "zero-neg-compact-manual",
+      [
+          {"type": "system", "subtype": "compact_boundary",
+           "compact_metadata": {"trigger": "manual", "pre_tokens": 10, "post_tokens": 2}},
+          make_result_event(),
+      ])
+
+  errors, dones = _guard_events(cb)
+  assert errors == []
+  assert dones and dones[0]["exit_code"] == 0, "exempt turn keeps the backend's own exit code"
+  assert dones[0].get("zero_output") is not True, "master_done must carry no zero_output flag"
+  cb.mark_unread.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_fires_on_auto_compact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Positive: an auto-compact boundary must be followed by model output — a
+  silent turn after it is exactly the failure the guard exists for."""
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "zero-pos-compact-auto",
+      [
+          {"type": "system", "subtype": "compact_boundary",
+           "compact_metadata": {"trigger": "auto", "pre_tokens": 10, "post_tokens": 2}},
+          make_result_event(),
+      ])
+
+  errors, dones = _guard_events(cb)
+  assert len(errors) == 1
+  assert errors[0].get("message", "") == (
+      "Master run produced zero model output (cc_session_id=fresh session): "
+      "the turn settled with an all-zero usage result and no assistant text, "
+      "thinking, tool use, or manual compaction. "
+      "The triggering message was left unread. "
+      "One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14).")
+  assert dones and dones[0]["exit_code"] == 1, "MASTER_DONE must exit nonzero"
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_resume_exempts_manual_compact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Re-attach: a manual boundary seen only in the raw log's pre-cursor region
+  still exempts the turn (the restart scenario: the pre-restart process
+  consumed the boundary line and crashed before consuming the result).
+
+  Drives the REAL _resume_cc against a real raw NDJSON log and cursor file.
+  The cursor sits past the boundary line, so the cursor-forward tail never
+  sees the boundary: this test fails if the resume path reads only from the
+  cursor.
+  """
+  session_id = "zero-resume-compact-manual"
+  log_dir = tmp_path / "run"
+  log_dir.mkdir(parents=True)
+  raw_path = log_dir / runs.RAW_LOG_NAME
+  boundary_line = json.dumps(
+      {"type": "system", "subtype": "compact_boundary",
+       "compact_metadata": {"trigger": "manual", "pre_tokens": 10, "post_tokens": 2}}
+  ) + "\n"
+  result_line = json.dumps(make_result_event()) + "\n"
+  raw_path.write_text(boundary_line + result_line, encoding="utf-8")
+  cursor_path = log_dir / runs.CURSOR_NAME
+  runs.write_raw_cursor(cursor_path, len(boundary_line.encode("utf-8")))
+
+  # pid=None: no liveness probe and no kill path; is_alive=False makes the
+  # follower drain the file and stop instead of waiting out the post-result
+  # timeout.
+  record = MasterRunRecord(
+      pid=None,
+      pid_start=None,
+      started_at=datetime.now(timezone.utc) - timedelta(seconds=60),
+      raw_log=str(raw_path),
+  )
+
+  cfg = _make_consumer_cfg(tmp_path)
+  meta = _make_meta(session_id)
+  cb = _make_callbacks()
+
+  monkeypatch.setattr(master_cc, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
+  monkeypatch.setattr(master_cc.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: MagicMock(
+      _has_running_tasks=AsyncMock(return_value=False)))
+
+  _reset_master_state(session_id)
+  try:
+    future = await master_cc.enqueue_master_resume(
+        cfg, meta, record, cb, is_alive=lambda: False)
+    await asyncio.wait_for(future, timeout=5)
+    consumer = master_cc._session_consumers.get(session_id)
+    if consumer is not None:
+      await asyncio.wait_for(consumer, timeout=5)
+  finally:
+    _reset_master_state(session_id)
+
+  errors, dones = _guard_events(cb)
+  assert errors == []
+  assert dones and dones[0]["exit_code"] == 0, "exempt turn keeps the backend's own exit code"
+  assert dones[0].get("zero_output") is not True, "master_done must carry no zero_output flag"
+  cb.mark_unread.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_zero_output_guard_passes_through_independent_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Exemption is purely subtractive: a manual-boundary turn whose backend
+  independently failed keeps exactly its own error and nonzero exit code — the
+  guard adds nothing and rewrites nothing."""
+  cb = await _run_stream_consumer(
+      tmp_path, monkeypatch, "zero-passthrough",
+      [
+          {"type": "system", "subtype": "compact_boundary",
+           "compact_metadata": {"trigger": "manual", "pre_tokens": 10, "post_tokens": 2}},
+          make_result_event(),
+      ],
+      exit_code=2,
+      stderr_text="boom",
+  )
+
+  errors, dones = _guard_events(cb)
+  assert errors == [], "no zero-output ERROR may be synthesized on top of the backend's own"
+  assist_errors = [
+      c.args[1] for c in cb.persist_and_broadcast.await_args_list
+      if c.args[1].get("type") == ET.ASSISTANT_ERROR
+  ]
+  assert [e.get("content") for e in assist_errors] == ["Agent error: boom"], (
+      "exactly the backend's own error event passes through")
+  assert dones and dones[0]["exit_code"] == 2, "the backend's nonzero exit code passes through"

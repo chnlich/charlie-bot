@@ -10,7 +10,8 @@ import pytest
 from src.core import git as git_module
 from src.core import init as init_module
 from src.core.config import CharlieBotConfig
-from src.core.models import utc_now
+from src.core.models import CreateSessionRequest, utc_now
+from src.core.sessions import SessionManager
 
 
 def _cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -18,6 +19,15 @@ def _cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / "home",
       worktree_dir=str(tmp_path / "worktrees"),
   )
+
+
+async def _make_session(cfg: CharlieBotConfig, session_id: str) -> None:
+  """Create a real session with metadata so crash recovery's deliver_to_successor
+  can resolve it; without a successor the report is written into the session itself."""
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(
+      CreateSessionRequest(name=session_id, session_id=session_id), backend="claude-opus-4.6")
+  assert session.id == session_id
 
 
 def _make_worktree(parent: Path, name: str) -> Path:
@@ -577,6 +587,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_kept_alive_when_death_unve
   killed: list[int] = []
   monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
   boot_time = utc_now()
+  await _make_session(cfg, "s1")
   meta_path = _write_thread_meta(
       cfg, "s1", {
           "id": "pre-boot",
@@ -651,6 +662,8 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
 
   cfg = _cfg(tmp_path)
   boot_time = utc_now() + timedelta(hours=1)  # forces the fresh thread to be treated pre-boot
+
+  await _make_session(cfg, "s1")
 
   monkeypatch.setattr(runs, "NO_OUTPUT_REPORT_THRESHOLD", 1)
   monkeypatch.setattr(init_module, "NO_OUTPUT_REPORT_THRESHOLD", 1)

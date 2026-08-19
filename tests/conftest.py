@@ -21,6 +21,17 @@ class JudgmentShim:
   def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
     return []
 
+  async def deliver_to_successor(self, session_id: str, event: dict[str, Any]) -> str:
+    """Default succession-aware delivery for test fakes: no successor, write into itself.
+
+    The stage-C migrated producers call ``deliver_to_successor`` instead of
+    ``persist_and_broadcast``. Fakes that never elone their sessions inherit this
+    no-successor behavior: the event is persisted into the owning session and the
+    id is returned, so those tests keep exercising the unchanged no-redirect path.
+    """
+    await self.persist_and_broadcast(session_id, event)
+    return session_id
+
   async def list_threads(self, session_id: str) -> list[Any]:
     return []
 

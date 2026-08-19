@@ -40,9 +40,10 @@ from src.core.models import (
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 
-# The task's resolved prompt — in production the body of
-# prompts/project_manager.md supplied via prompt_file at create time and
-# inlined into `prompt` on disk. The wake message appends the task's Group line.
+# The task's resolved prompt — the body of prompts/project_manager.md, which
+# the host cron file names under prompt_file: the pointed file owns the body
+# and the loader reads it on every load. The wake message appends the task's
+# Group line.
 PM_TASK_PROMPT = "# Project Manager\n\nDo the PM things."
 PM_WAKE_PROMPT = f"{PM_TASK_PROMPT}\n\nGroup: bp-eval"
 
@@ -128,6 +129,8 @@ def test_master_task_with_prompt_file_loads(tmp_path: Path) -> None:
   assert task.mode == "master"
   assert task.project == "bp-eval"
   assert task.prompt == "# Project Manager\n\nThe contract.\n"
+  # the raw pointer is preserved on the runtime model
+  assert task.prompt_file == str(md_path)
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +251,6 @@ def _master_task_payload(name: str, project: str = "bp-eval", **overrides: Any) 
   payload: dict[str, Any] = {
       "name": name,
       "cron": "30 8 * * *",
-      "prompt": PM_TASK_PROMPT,
       "mode": "master",
       "project": project,
   }
@@ -279,7 +281,7 @@ def test_cron_create_master_task_without_project_is_400(cron_dir: Path, tmp_path
   assert not (cron_dir / "pm_orphan.yaml").exists()
 
 
-def test_cron_create_master_task_with_prompt_file_inlines_prompt(
+def test_cron_create_master_task_with_prompt_file_persists_pointer(
     cron_dir: Path,
     tmp_path: Path,
 ) -> None:
@@ -288,15 +290,13 @@ def test_cron_create_master_task_with_prompt_file_inlines_prompt(
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with _build_cron_client(cfg, session_mgr) as client:
-    payload = _master_task_payload("pm_bp_eval")
-    payload.pop("prompt")
-    payload["prompt_file"] = str(md_path)
+    payload = _master_task_payload("pm_bp_eval", prompt_file=str(md_path))
     resp = client.post("/api/cron/tasks", json=payload)
 
   assert resp.status_code == 200
   on_disk = yaml.safe_load((cron_dir / "pm_bp_eval.yaml").read_text(encoding="utf-8"))
-  assert on_disk["prompt"] == PM_TASK_PROMPT + "\n"
-  assert "prompt_file" not in on_disk
+  assert on_disk["prompt_file"] == str(md_path)
+  assert "prompt" not in on_disk
 
 
 def test_cron_create_master_task_with_unreadable_prompt_file_is_409(
@@ -307,9 +307,7 @@ def test_cron_create_master_task_with_unreadable_prompt_file_is_409(
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with _build_cron_client(cfg, session_mgr) as client:
-    payload = _master_task_payload("pm_bp_eval")
-    payload.pop("prompt")
-    payload["prompt_file"] = str(missing)
+    payload = _master_task_payload("pm_bp_eval", prompt_file=str(missing))
     resp = client.post("/api/cron/tasks", json=payload)
 
   assert resp.status_code == 409
@@ -320,17 +318,21 @@ def test_cron_create_master_task_with_unreadable_prompt_file_is_409(
 def test_cron_create_second_master_task_for_project_is_409(cron_dir: Path, tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
+  prompt_path = tmp_path / "pm_contract.md"
+  prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
   with _build_cron_client(cfg, session_mgr) as client:
-    first = client.post("/api/cron/tasks", json=_master_task_payload("pm_bp_eval"))
+    first = client.post(
+        "/api/cron/tasks", json=_master_task_payload("pm_bp_eval", prompt_file=str(prompt_path)))
     assert first.status_code == 200
-    conflict = client.post("/api/cron/tasks", json=_master_task_payload("pm_bp_eval_2"))
+    conflict = client.post(
+        "/api/cron/tasks", json=_master_task_payload("pm_bp_eval_2", prompt_file=str(prompt_path)))
     # A worker-mode task may share the project; only master tasks are exclusive.
     worker = client.post(
         "/api/cron/tasks",
         json={
             "name": "bp_eval_nightly",
             "cron": "0 2 * * *",
-            "prompt": "run nightly",
+            "prompt_file": str(prompt_path),
             "mode": "worker",
             "project": "bp-eval",
         })
@@ -344,13 +346,15 @@ def test_cron_create_second_master_task_for_project_is_409(cron_dir: Path, tmp_p
 
 def test_cron_update_enabling_conflicting_master_task_is_409(cron_dir: Path, tmp_path: Path) -> None:
   """Hand-edited yamls can bypass create-time dedup; the enable path must still catch it."""
+  prompt_path = tmp_path / "pm_contract.md"
+  prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
   (cron_dir / "pm_a.yaml").write_text(
-      yaml.safe_dump({"cron": "30 8 * * *", "prompt": "wake", "mode": "master", "project": "bp-eval"}),
+      yaml.safe_dump({"cron": "30 8 * * *", "prompt_file": str(prompt_path), "mode": "master", "project": "bp-eval"}),
       encoding="utf-8")
   (cron_dir / "pm_b.yaml").write_text(
       yaml.safe_dump({
           "cron": "30 9 * * *",
-          "prompt": "wake",
+          "prompt_file": str(prompt_path),
           "mode": "master",
           "project": "bp-eval",
           "enabled": False,
@@ -389,10 +393,12 @@ async def test_role_bound_scheduled_session_backend_switch_writes_through_and_ro
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   yaml_path = cron_dir / "pm_bp_eval.yaml"
+  prompt_path = tmp_path / "pm_contract.md"
+  prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
   yaml_path.write_text(
       yaml.safe_dump({
           "cron": "30 8 * * *",
-          "prompt": PM_TASK_PROMPT,
+          "prompt_file": str(prompt_path),
           "mode": "master",
           "project": "bp-eval",
           "enabled": True,

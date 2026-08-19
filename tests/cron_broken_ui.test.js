@@ -126,7 +126,7 @@ test('applyCronBrokenView locks the form and shows the full error for a broken t
     broken: true, error: 'yaml exploded', path: '/home/u/.charliebot/config.d/cron.d/x.yaml', enabled: false,
   });
 
-  for (const id of ['cron-expr', 'cron-prompt', 'cron-repo', 'cron-project', 'cron-timezone']) {
+  for (const id of ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone']) {
     assert.equal(elements[id].readOnly, true, id);
   }
   assert.equal(elements['cron-backend'].disabled, true);
@@ -153,7 +153,7 @@ test('applyCronBrokenView(null) restores the editable form for normal tasks', ()
   context.Sidebar.applyCronBrokenView({broken: true, error: 'boom', path: '/x.yaml', enabled: true});
   context.Sidebar.applyCronBrokenView(null);
 
-  for (const id of ['cron-expr', 'cron-prompt', 'cron-repo', 'cron-project', 'cron-timezone']) {
+  for (const id of ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone']) {
     assert.equal(elements[id].readOnly, false, id);
   }
   assert.equal(elements['cron-backend'].disabled, false);

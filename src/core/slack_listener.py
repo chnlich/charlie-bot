@@ -8,9 +8,9 @@ Delivery path: ``deliver_done`` hangs off the round's terminal ``master_done``
 event (called from ``SessionManager.persist_and_broadcast``), not off a waiting
 coroutine — that is what makes delivery survive a server restart, since a
 re-attached round still emits its done through the same funnel. The reply is
-the round's final composed assistant message, posted in full: an answer
-longer than one post's budget is split into ordered paragraph-bounded
-replies, never truncated and never sent as a link.
+the round's final composed assistant message, posted in full: one round posts
+one message for any reply within Slack's per-message limit, and only a reply
+past that hard limit is split into ordered paragraph-bounded replies.
 ``backfill_lost_summons`` closes the remaining hole at boot: a summon that was
 still queued when the process died is answered by nothing, so it gets a notice
 rather than vanishing.
@@ -24,6 +24,7 @@ import json
 import re
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -54,22 +55,19 @@ CITATION_BOUNDARY = (
     "引用边界：只引用这条频道／线程本身、公开仓库、公开频道；现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。"
 )
 
-# Fixed reply-format notice appended right after the citation boundary on every
-# Slack-sourced prompt: the master composes many assistant messages in a round
-# and must know its LAST one is posted verbatim as the thread reply — the only
-# message the summoner reads — so it writes that one as the finished answer.
-_SLACK_REPLY_NOTICE = (
-    "回帖约定（Slack）：你在本轮的最后一条 assistant 消息会原样作为纯文本回帖到这个线程，召唤者只读这一条。写成给人看的完整答复：先给结论，自含必要细节，不复述工作过程；不用 markdown 表格；链接写完整 URL。"
-)
-
 _ACCEPTANCE_REACTION = "eyes"
 
 _LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
-# Chunk size for over-length answers, which are split into ordered replies of
-# at most this many chars. 3500 stays far under Slack's ~40k per-message hard
-# limit and keeps each reply readable instead of a client-collapsed wall.
-_MAX_POST_CHARS = 3500
+# Slack's hard per-message text limit. 40000 is the ceiling, so a long single
+# message is left for the client to collapse; splitting is the above-limit
+# fallback only.
+_MAX_POST_CHARS = 40000
+
+# The reply budget the format contract states (prompts/slack_reply_format.md):
+# replies should stay under this many chars, with the depth going to a page.
+# This is the single measurement point for that budget.
+_REPLY_BUDGET_CHARS = 500
 
 # Waits between the retries of one Slack call; the answer stays readable in the
 # session log either way, so exhausting them logs an error rather than raising.
@@ -189,6 +187,21 @@ class SlackClient:
     return name
 
 
+def _load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
+  """Read one prompts doc fresh from disk, raising a ValueError naming the path when missing.
+
+  No caching, so an edit takes effect on the next summon. A missing or
+  unreadable doc raises a ValueError naming the path and its most likely cause
+  (mirrors the worker-prompt loader in src/core/spawner.py); a prompt without
+  the doc is never built.
+  """
+  path = repo_root / "prompts" / name
+  try:
+    return path.read_text(encoding="utf-8").strip()
+  except OSError as e:
+    raise ValueError(f"{name} prompt not found at {path} — {likely_cause}") from e
+
+
 def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   """The persisted summon: the thread link plus a self-fetch hint, ending at the fixed notices.
 
@@ -196,22 +209,20 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   its slack skill when the round runs — a snapshot persisted here would go
   stale as the thread keeps changing after the mention.
 
-  The PII red line is read fresh from prompts/slack_reply_redline.md on every
-  call — no caching, so an edit takes effect on the next summon. A missing or
-  unreadable doc raises a ValueError naming the path and its most likely cause
-  (mirrors the worker-prompt loader in src/core/spawner.py); a prompt without
-  the red line is never built.
+  Both the PII red line and the reply-format contract are read fresh from
+  prompts/ on every call — no caching, so an edit takes effect on the next
+  summon. A missing or unreadable doc raises a ValueError naming the path; a
+  prompt without both docs is never built.
   """
-  red_line_path = cfg.charlie_bot_repo / "prompts" / "slack_reply_redline.md"
-  try:
-    red_line = red_line_path.read_text(encoding="utf-8").strip()
-  except OSError as e:
-    raise ValueError(
-        f"slack reply red line prompt not found at {red_line_path} — the repo checkout most "
-        f"likely predates the slack-reply-redline extraction commit") from e
+  red_line = _load_prompt_doc(
+      cfg.charlie_bot_repo, "slack_reply_redline.md",
+      likely_cause="the repo checkout most likely predates the slack-reply-redline extraction commit")
+  reply_format = _load_prompt_doc(
+      cfg.charlie_bot_repo, "slack_reply_format.md",
+      likely_cause="the repo checkout most likely predates the slack-reply-format extraction commit")
   return (f"Slack 线程召唤：{permalink}\n\n"
           "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
-          f"{CITATION_BOUNDARY}\n{red_line}\n{_SLACK_REPLY_NOTICE}")
+          f"{CITATION_BOUNDARY}\n{red_line}\n{reply_format}")
 
 
 def _local_time() -> str:
@@ -477,7 +488,8 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
     posted = posted and ok
   logger.info("slack_delivery_done", session=session_id, channel=target["channel_id"],
               thread_ts=thread_ts, input_event_id=input_event_id, chars=len(text),
-              chunks=len(bodies), posted=posted)
+              chunks=len(bodies), posted=posted, over_budget=len(text) > _REPLY_BUDGET_CHARS,
+              budget=_REPLY_BUDGET_CHARS)
   # The delivery attempt ended: the eye goes out whether or not it posted.
   _ack_clear(client, target, session_id)
   return posted

@@ -17,6 +17,7 @@ from src.core.models import CreateSessionRequest, MasterRunRecord, SlackOrigin, 
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
   _MAX_POST_CHARS,
+  _REPLY_BUDGET_CHARS,
   SlackClient,
   _chunk_text,
   backfill_lost_summons,
@@ -239,14 +240,14 @@ async def test_round_without_assistant_text_posts_the_failure_notice(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_over_length_answer_posts_ordered_chunks_without_any_link(tmp_path: Path) -> None:
-  """A 4000-char answer with a blank line splits there into ordered replies under the cap."""
+  """A reply past Slack's hard limit splits at a blank line into ordered replies under the cap."""
   cfg = _cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
 
-  long_text = "a" * 2499 + "\n\n" + "b" * 1499
-  assert len(long_text) == 4000
+  long_text = "a" * 25000 + "\n\n" + "b" * 14999
+  assert len(long_text) == 40001
   summon = await _append(session_mgr, sid, _summon())
   await _append(session_mgr, sid, _assistant(long_text))
   done = await _append(session_mgr, sid, _done(summon["id"]))
@@ -262,6 +263,58 @@ async def test_over_length_answer_posts_ordered_chunks_without_any_link(tmp_path
   assert not (cfg.sessions_dir / sid / "artifacts").exists()
   for t in texts:
     assert "http://" not in t and "https://" not in t and "absolute_filepath" not in t
+
+
+@pytest.mark.asyncio
+async def test_longest_observed_reply_is_one_chunk_and_one_post(tmp_path: Path) -> None:
+  """The 4929-char reply — the longest seen in real sessions — is one message, not two."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  sid = await _slack_session(session_mgr)
+
+  long_text = "x" * 4929
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(long_text))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with patch("src.core.slack_listener._bot_client", return_value=client):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+
+  assert _chunk_text(long_text) == [long_text]
+  assert len(client.posts) == 1
+  assert client.posts[0]["text"] == long_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text,expect_over_budget",
+    [("a short reply", False), ("z" * 600, True)],
+)
+async def test_delivery_log_carries_over_budget_and_budget(
+    tmp_path: Path, text: str, expect_over_budget: bool) -> None:
+  """slack_delivery_done records the reply against the 500-char budget."""
+  cfg = _cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  client = _FakeSlackClient()
+  sid = await _slack_session(session_mgr)
+
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _assistant(text))
+  done = await _append(session_mgr, sid, _done(summon["id"]))
+
+  with (
+      patch("src.core.slack_listener._bot_client", return_value=client),
+      capture_logs() as logs,
+  ):
+    assert await deliver_done(sid, done, cfg, session_mgr) is True
+
+  outcome = [ev for ev in logs if ev["event"] == "slack_delivery_done"]
+  assert len(outcome) == 1
+  assert outcome[0]["chars"] == len(text)
+  assert outcome[0]["chunks"] == 1
+  assert outcome[0]["over_budget"] is expect_over_budget
+  assert outcome[0]["budget"] == _REPLY_BUDGET_CHARS
 
 
 @pytest.mark.asyncio
@@ -314,27 +367,29 @@ def test_chunk_text_below_the_limit_is_one_chunk() -> None:
 
 def test_chunk_text_exact_limit_boundaries() -> None:
   """A text at the cap stays whole; a unit at the cap stays packed, then splits."""
-  assert _chunk_text("y" * 3500) == ["y" * 3500]
+  assert _chunk_text("y" * 40000) == ["y" * 40000]
   assert _chunk_text("aa\n\nbb", limit=4) == ["aa\n\n", "bb"]
 
 
 def test_chunk_text_splits_between_paragraphs() -> None:
-  text = "a" * 2499 + "\n\n" + "b" * 1499
+  text = "a" * 24999 + "\n\n" + "b" * 15001
+  assert len(text) > _MAX_POST_CHARS
   chunks = _chunk_text(text)
-  assert chunks == ["a" * 2499 + "\n\n", "b" * 1499]
+  assert chunks == ["a" * 24999 + "\n\n", "b" * 15001]
 
 
 def test_chunk_text_paragraph_over_the_limit_falls_to_newline_splits() -> None:
-  text = "x" * 2000 + "\n" + "y" * 2000  # one paragraph, no blank line
-  assert _chunk_text(text) == ["x" * 2000 + "\n", "y" * 2000]
+  text = "x" * 20000 + "\n" + "y" * 20000  # one paragraph, no blank line
+  assert _chunk_text(text) == ["x" * 20000 + "\n", "y" * 20000]
 
 
 def test_chunk_text_single_line_over_the_limit_hard_cuts() -> None:
-  assert _chunk_text("z" * 4000) == ["z" * 3500, "z" * 500]
+  assert _chunk_text("z" * 40000) == ["z" * 40000]
+  assert _chunk_text("z" * 45000) == ["z" * 40000, "z" * 5000]
 
 
 def test_chunk_text_preserves_the_content_losslessly_and_in_order() -> None:
-  text = "\n\n".join(f"para {i} " + "content " * 100 for i in range(6))
+  text = "\n\n".join(f"para {i} " + "content " * 2000 for i in range(6))
   chunks = _chunk_text(text)
   assert len(chunks) > 1
   assert all(len(c) <= _MAX_POST_CHARS for c in chunks)

@@ -109,27 +109,30 @@
       2. Context — establish the minimum complete mental model before the design: how the relevant system
                     currently works, why the problem occurs, its impact, and the relationships among the
                     components involved. Every current-reality claim carries a checkable source anchor.
-      3. High Level Solution — the overall mechanism, component relationships, data flow, and state ownership.
-                    Describe the design, not implementation detail.
+      3. High Level Solution: the overall mechanism, component relationships, data flow, state ownership,
+                    and the high-level observable contract behavior the user judges the design by. Keep it
+                    short: describe the design; concrete detail belongs in 4.2.
       4. Detailed Design — two read layers:
-         4.1 Schema — the precision-read layer, minimal approval surface, and generalized contract. It contains only
-                    terms whose change would invalidate an issued "take off"; a detail that can change during
-                    implementation without renegotiating approval belongs in 4.2. Examples, when they satisfy that
-                    criterion, include commands, interfaces, types, persisted formats, and externally observable
-                    contract behavior for state transitions, errors, and boundaries. It is expected to be the
-                    shortest and densest of the three layers, with one line or one table row per term.
-                    Present each term as its concrete definition, not a description of it: the actual type,
-                    dataclass, or message fields, the persisted format, or the command or API signature with its
-                    parameters, rendered as a pre block, a field table (name, type, meaning), or an inline signature.
-                    Prose only locates a definition and never substitutes for it; a term that is pure behavior
-                    contract stays a single line.
+         4.1 Schema: the precision-read layer, the plan's true schema. It admits exactly two kinds of
+                    definition: persisted data structures (the fields, types, and meaning of files,
+                    records, and other persisted formats), and the request/response of externally
+                    consumed APIs and CLI commands (the signature and what it returns). Externally
+                    consumed means the service boundary facing consumers outside the system (users and
+                    external systems); endpoints consumed only by other processes of the same system,
+                    and in-process function signatures, belong in 4.2. Present each definition as the
+                    concrete artifact itself: a pre block, a field table (name, type, meaning), or an
+                    inline signature. A definition of a few lines stays visible; a longer definition
+                    block folds into a details-layer collapsed by default whose summary line names the
+                    thing defined. A plan with no persisted structures and no API change keeps 4.1 as a
+                    one-line declaration saying so.
          4.2 Design Details — the optional-read bulk layer: implementation mechanisms, algorithms, concurrency,
-                    compatibility, and verification approach, organized by subsystem or data flow. The mechanics of
-                    state transitions, internal failure paths, and the implementation side of boundary handling
-                    default here.
-         Misplacement in either direction is a defect: Schema or Trade-offs content hidden in 4.2 or 6,
-                    and implementation mechanisms that can change during implementation without renegotiating
-                    approval padding 4.1, are both violations.
+                    compatibility, acceptance criteria, and verification approach, organized by subsystem or
+                    data flow. Behavior detail, internal contracts, the mechanics of state transitions,
+                    internal failure paths, and the implementation side of boundary handling default here.
+         Misplacement in either direction is a defect: schema or Trade-offs content hidden in 4.2 or 6,
+                    and non-schema terms padding 4.1, are both violations. A displaced term returns to its
+                    semantic home: high-level observable behavior to section 3, behavior detail and
+                    acceptance to 4.2, and choices the user must judge to Trade-offs.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
                     (p.trade). An open item whose whole story runs deeper than its question, recommendation, and
@@ -156,12 +159,13 @@
                     headroom comes from folding content.
                     The budget counts standing content: revision badges and revnotes, cleared by the
                     next revision, ride outside it. The always-visible minimum is the surface approval binds to:
-                    the header, section 1, 4.1 Schema, and each Trade-off's question, recommendation, and trade
-                    lines. Shrink or split a plan whose minimum alone overflows. Registration enforces the
+                    the header, sections 1 and 3, 4.1's short definitions and folded-block summary lines,
+                    and each Trade-off's question, recommendation, and trade lines. Shrink or split a plan
+                    whose minimum alone overflows. Registration enforces the
                     budget for plans; both page kinds self-check with charliebot plan check --file
                     &lt;artifact.html&gt;, which runs the exact registration gates locally and prints the
                     measured numbers (an understanding page never registers). Over budget, fold wholesale
-                    rather than delete: the Context body, the section-3 mechanism prose, and the 4.2 content
+                    rather than delete: the Context body, the 4.2 content, and long 4.1 definition blocks
                     move into collapsed details-layer blocks.
       Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
                     resolution; unmentioned items accept the recommendation. Any Other Details entry the user
@@ -198,7 +202,7 @@
 
     <section class="plan-section">
       <h2><span class="n nb">3</span> High Level Solution</h2>
-      <p>Add a read-only <code>charliebot triggers list</code> command that resolves the current session, loads its trigger records through the existing manager, and formats them for inspection. Trigger files remain the single source of truth; the command owns no state.</p>
+      <p>Add a read-only <code>charliebot triggers list</code> command that resolves the current session, loads its trigger records through the existing manager, and formats them for inspection. Trigger files remain the single source of truth in their existing persisted format; the command owns no state.</p>
       <div class="flow">
         <span class="b">sessions/{id}/triggers/*.json</span><span class="ar">→</span>
         <span class="b n">triggers list</span><span class="ar">→</span>
@@ -210,21 +214,23 @@
       <h2><span class="n">4</span> Detailed Design</h2>
 
       <h3><span class="sn read">4.1</span>Schema<span class="layer">precision-read layer</span></h3>
-      <p><code>charliebot triggers list</code> is read-only, resolves the session from the current working directory, and exits 0 after printing a table or <code>no triggers</code>.</p>
-      <table>
-        <tr><th>Column</th><th>Content</th></tr>
-        <tr><td class="f">id</td><td>Trigger id (the JSON file stem).</td></tr>
-        <tr><td class="f">state</td><td><code>pending</code> / <code>fired</code> / <code>expired</code>.</td></tr>
-        <tr><td class="f">watch</td><td>Watch targets, or <code>-</code> for a pure delay.</td></tr>
-        <tr><td class="f">fires-in</td><td>Time remaining until <code>--max-wait</code> elapses.</td></tr>
-        <tr><td class="f">message</td><td>The wake-up message.</td></tr>
-      </table>
-      <div class="callout"><p><b>Boundaries:</b> the persisted trigger JSON format is unchanged. A malformed record surfaces the loader error instead of being skipped.</p></div>
+      <p>Request: <code>charliebot triggers list</code>, no arguments, session resolved from the current working directory. Response: exit 0 with one row per trigger in the columns below, or the literal <code>no triggers</code>.</p>
+      <details class="details-layer">
+        <summary>Response columns of triggers list</summary>
+        <table style="margin:10px 15px 13px;width:calc(100% - 30px)">
+          <tr><th>Column</th><th>Content</th></tr>
+          <tr><td class="f">id</td><td>Trigger id (the JSON file stem).</td></tr>
+          <tr><td class="f">state</td><td><code>pending</code> / <code>fired</code> / <code>expired</code>.</td></tr>
+          <tr><td class="f">watch</td><td>Watch targets, or <code>-</code> for a pure delay.</td></tr>
+          <tr><td class="f">fires-in</td><td>Time remaining until <code>--max-wait</code> elapses.</td></tr>
+          <tr><td class="f">message</td><td>The wake-up message.</td></tr>
+        </table>
+      </details>
 
       <h3><span class="sn">4.2</span>Design Details<span class="layer">optional-read layer</span></h3>
       <ul>
         <li><b>CLI integration:</b> register <code>triggers list</code> in the unified command map and reuse cwd-based session resolution.</li>
-        <li><b>Read path:</b> ask <code>TriggerManager</code> for records, derive display-only fields, then render aligned plain-text columns.</li>
+        <li><b>Read path:</b> ask <code>TriggerManager</code> for records, derive display-only fields, then render aligned plain-text columns; a malformed record surfaces the loader error instead of being skipped.</li>
         <li><b>Verification:</b> cover populated, empty, and malformed-record cases with command-level tests, then run the existing CLI suite.</li>
       </ul>
     </section>

@@ -29,8 +29,8 @@ Everything else the user can still correct after the fact, so it belongs to
 execution — done autonomously, logged, and surfaced in the completion report,
 which is where after-the-fact judgment happens.
 
-**approval object = 4.1 Schema + resolved Trade-offs + entries promoted from Other
-Details.** These are the exact terms a "take off" approves. The `BLOCK KIT` comment
+**approval object = sections 1 and 3 + 4.1 Schema + resolved Trade-offs + entries
+promoted from Other Details.** These are the exact terms a "take off" approves. The `BLOCK KIT` comment
 in `prompts/plan_template.html` is the canonical grammar for the plan surface; do
 not restate it here.
 
@@ -107,7 +107,7 @@ An understanding page precedes the plan when the master must first align the rea
 - Verify checks fidelity — claims against evidence — and adequacy: whether the design,
   assumed accurate and implemented, entails what section 1 claims. Adequacy reads
   section 1 as the goal statement only; scope boundaries, thresholds, and exemptions
-  stated in Context, 4.1, or Trade-offs bind adequacy equally, so section 1 never
+  stated in Context, section 3, 4.1, or Trade-offs bind adequacy equally, so section 1 never
   restates them. Quote the confirmed understanding's file path in the spec as the
   adequacy reference when one exists; otherwise quote the originating request. Without
   one of these, adequacy cannot judge section 1 against what was asked.

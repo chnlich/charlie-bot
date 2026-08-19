@@ -16,8 +16,10 @@ from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
   CITATION_BOUNDARY,
+  SLACK_REPLY_MARKER,
   SlackClient,
   _build_summon_prompt,
+  _extract_marker_reply,
   ensure_slack_group,
   handle_app_mention,
   summon_session_id,
@@ -190,6 +192,22 @@ def test_build_summon_prompt_appends_both_notices_after_the_citation_boundary(tm
   assert _REPLY_FORMAT in prompt
   assert prompt.index(CITATION_BOUNDARY) < prompt.index(_RED_LINE) < prompt.index(_REPLY_FORMAT)
   assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
+
+
+def test_marker_round_trip_between_prompt_and_parser(tmp_path: Path) -> None:
+  """The marker line the contract states is the line the parser recognizes.
+
+  The round trip breaks when the contract document and the parser ever disagree
+  on the marker: a contract edit drops the token the parser expects, and a
+  parser edit stops recognizing the token the contract states.
+  """
+  prompt = _build_summon_prompt(
+      "https://fake.slack.test/archives/C_TEST/p1700000000.000100", _cfg(tmp_path))
+  assert SLACK_REPLY_MARKER in prompt
+  known_reply = "the known reply body"
+  extracted, marker_count = _extract_marker_reply(f"{SLACK_REPLY_MARKER}\n{known_reply}")
+  assert marker_count is None
+  assert extracted == known_reply
 
 
 def test_build_summon_prompt_rereads_the_docs_on_every_call(tmp_path: Path) -> None:

@@ -265,12 +265,17 @@ contract is prompts/project_manager.md in the charlie-bot repo: read it
 before acting on any message in this session, and follow it."""
 
 
-def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig) -> str | None:
+def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig, model: str | None = None) -> str | None:
   """Build master agent instructions: base prompt + per-host override + memory store.
 
   The memory block is assembled from the labeled-entry store via
   :func:`src.core.memory.assemble_master` (resident topics full text + index
   lines for the rest); it replaces the former three-file concatenation.
+
+  When *model* is set and the repo holds an overlay at
+  ``prompts/model_overlays/<model with each "/" replaced by "__">.md``, that
+  file's full text is appended as the final part. A present-but-unreadable
+  overlay raises (the read is never guarded); a missing overlay appends nothing.
   """
   parts: list[str] = []
 
@@ -300,6 +305,15 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
   # 4. Ambient Project Manager identity (role=project sessions bound to a group)
   if session_meta.role == PROJECT_ROLE and session_meta.group:
     parts.append(_PM_IDENTITY_PART.format(group=session_meta.group))
+
+  # 5. Per-model overlay (prompts/model_overlays/<model with "/" -> "__">.md).
+  # Appended only when the resolved model names a file that exists; a missing
+  # overlay appends nothing (byte-identical to a no-model assembly), and a
+  # present-but-unreadable overlay fails loud rather than silently dropping it.
+  if model is not None:
+    overlay_file = cfg.charlie_bot_repo / "prompts" / "model_overlays" / f"{model.replace('/', '__')}.md"
+    if overlay_file.exists():
+      parts.append(overlay_file.read_text(encoding="utf-8"))
 
   return "\n\n".join(parts)
 
@@ -418,8 +432,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   session_dir.mkdir(parents=True, exist_ok=True)
   cwd = str(session_dir)
 
-  instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg)
-
   from src.agents.backends.registry import build_backend
   option = item.backend_option
   # A caller that passed no option must not silently inherit backend_options[0]:
@@ -450,6 +462,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     option = cfg.backend_options[0]
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
+
+  instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, option.model)
 
   resume_id = _resolve_resume_id(option, session_meta)
   # Pre-flight: a resume-capable backend about to run with no resolved resume

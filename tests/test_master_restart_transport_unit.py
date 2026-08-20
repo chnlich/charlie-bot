@@ -241,7 +241,7 @@ def _install_backend(monkeypatch: pytest.MonkeyPatch, backend: _HungBackend) -> 
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", _build)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
 
 
 def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread=None) -> SessionCallbacks:

@@ -118,7 +118,7 @@ async def main() -> None:
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=shim)],
   )
   # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
-  master_cc_run._build_instructions_content = lambda session_meta, cfg: "instructions"
+  master_cc_run._build_instructions_content = lambda session_meta, cfg, model=None: "instructions"
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="master-e2e"))
@@ -191,7 +191,7 @@ async def main() -> None:
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=shim)],
   )
   # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
-  master_cc_run._build_instructions_content = lambda session_meta, cfg: "instructions"
+  master_cc_run._build_instructions_content = lambda session_meta, cfg, model=None: "instructions"
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="master-graceful"))
   (home / "driver_ids.json").write_text(json.dumps({"session": meta.id}))
@@ -494,7 +494,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   monkeypatch.setattr(init_module.runs, "read_host_boot_time",
                       lambda: backdated - timedelta(hours=1))
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -537,7 +537,7 @@ async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monk
   proc.wait(timeout=10)
   _kill_agent_only(home, session_id)
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -570,7 +570,7 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
   proc.kill()
   proc.wait(timeout=10)
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -625,7 +625,7 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Pat
   try:
     (home / "config.yaml").write_text(f"server_port: {black_hole.port}\n", encoding="utf-8")
 
-    monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+    monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
     monkeypatch.setenv("SHIM_MODE", "delegate")
     monkeypatch.setenv("SHIM_STATE", str(state))
     monkeypatch.setenv("SHIM_DELEGATE_SESSION", session_id)
@@ -679,7 +679,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
       timeout=20.0,
       what="agent did not finish during the server-down window")
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   cfg = _cfg(home, shim)
@@ -745,7 +745,7 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Pat
   record["pid_start"] = None
   meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   # With a constant-true probe the follow ends on the post-result timeout;
@@ -794,7 +794,7 @@ async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
       timeout=20.0,
       what="agent did not finish during the server-down window")
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   cfg = _cfg(home, shim)
@@ -843,7 +843,7 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
   silent_since = time.time() - (NO_OUTPUT_REPORT_THRESHOLD + 60)
   os.utime(raw, (silent_since, silent_since))
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -887,7 +887,7 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
   proc.wait(timeout=10)
   _kill_agent_only(home, session_id)
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
@@ -949,7 +949,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
     replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
 
   monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
 
   with capture_logs() as logs:
     await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
@@ -1019,7 +1019,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
       replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
 
     monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
-    monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+    monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
 
     await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
     await _await_recovery_tasks()
@@ -1063,7 +1063,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkey
   )
   await session_mgr.persist_master_run(meta.id, record)
 
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
@@ -1106,7 +1106,7 @@ async def test_graceful_teardown_detached_turn_reattached_and_answered_once(
   assert not _session_meta(home, session_id).get("has_unread"), "teardown wrote terminal state"
 
   # Next boot: re-attach and finish — the round is answered exactly once.
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))

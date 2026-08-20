@@ -67,7 +67,7 @@ async def _run_cc_with_stderr_backend(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -190,7 +190,7 @@ async def _run_cc_with_scripted_events(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,

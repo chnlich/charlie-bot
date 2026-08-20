@@ -62,7 +62,7 @@ An understanding page precedes the plan when the master must first align the rea
   project follows the closest candidate's project and is named in the draft so the user
   can change it. The write waits for take off per the master prompt's External System
   Writes rule, and the authorization may ride in the same message that answers the
-  divergences. After the user files it, read the identifier back from the API and carry
+  divergences. After the ticket is created, read its identifier back from the API and carry
   it as a header meta chip on the understanding page and on the plan that follows.
 - Don't guess: any point the request leaves unstated where different readings lead to
   different designs must appear as a numbered divergence; never silently pick a reading.
@@ -71,9 +71,10 @@ An understanding page precedes the plan when the master must first align the rea
 - Facts before design: when the fix follows from why something happened, settle the
   root cause before drafting and state the case for it in one block between goal and
   deliverable, each claim carrying its evidence anchor.
-- Not registered in the plan registry, no verify worker, and take off does not apply. The
-  user confirms by answering the numbered divergences in chat; unmentioned items take
-  their recommendation. Confirmation is ordinary feedback and introduces no new approval token.
+- Not registered in the plan registry, no verify worker, and the understanding confirmation does
+  not use take off. The user confirms by answering the numbered divergences in chat; unmentioned
+  items take their recommendation. Confirmation is ordinary feedback and introduces no new
+  approval token. External system writes follow the master prompt's External System Writes rule.
 - The subsequent plan carries the confirmed understanding's file path as a header
   meta chip; section 1 states the goal in its own words.
 - The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in

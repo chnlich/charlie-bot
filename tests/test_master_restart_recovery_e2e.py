@@ -491,7 +491,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   # Keep the run "live": is_run_alive requires started_at to postdate the most
   # recent host boot (nothing survives a reboot), and _reconcile_master_runs
   # funnels this same value into the liveness closure it hands the re-attach.
-  monkeypatch.setattr(init_module.runs, "read_host_boot_time",
+  monkeypatch.setattr(runs, "read_host_boot_time",
                       lambda: backdated - timedelta(hours=1))
 
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")

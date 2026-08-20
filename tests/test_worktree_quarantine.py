@@ -9,6 +9,7 @@ import pytest
 
 from src.core import git as git_module
 from src.core import init as init_module
+from src.core import init_worker_recovery as worker_recovery_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, utc_now
 from src.core.sessions import SessionManager
@@ -220,7 +221,7 @@ def _install_recording_quarantine(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     shutil.move(str(wt_path), str(dest))
     return dest
 
-  monkeypatch.setattr(init_module, "git_quarantine_worktree", fake_quarantine)
+  monkeypatch.setattr(worker_recovery_module, "git_quarantine_worktree", fake_quarantine)
   return quarantined
 
 
@@ -406,7 +407,7 @@ async def test_sweep_never_raises_when_helper_fails(tmp_path: Path, monkeypatch:
   async def boom(*args: Any, **kwargs: Any) -> Path:
     raise RuntimeError("simulated quarantine failure")
 
-  monkeypatch.setattr(init_module, "git_quarantine_worktree", boom)
+  monkeypatch.setattr(worker_recovery_module, "git_quarantine_worktree", boom)
 
   # Must not propagate out of startup.
   await init_module._quarantine_stale_failed_worktrees(
@@ -585,7 +586,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_kept_alive_when_death_unve
 
   cfg = _cfg(tmp_path)
   killed: list[int] = []
-  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+  monkeypatch.setattr(worker_recovery_module, "kill_process_group", lambda pid, sig: killed.append(pid))
   boot_time = utc_now()
   await _make_session(cfg, "s1")
   meta_path = _write_thread_meta(
@@ -625,7 +626,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_and_verifiable_death_drain
 
   cfg = _cfg(tmp_path)
   killed: list[int] = []
-  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+  monkeypatch.setattr(worker_recovery_module, "kill_process_group", lambda pid, sig: killed.append(pid))
   boot_time = utc_now()
   meta_path = _write_thread_meta(
       cfg, "s1", {
@@ -666,10 +667,10 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
   await _make_session(cfg, "s1")
 
   monkeypatch.setattr(runs, "NO_OUTPUT_REPORT_THRESHOLD", 1)
-  monkeypatch.setattr(init_module, "NO_OUTPUT_REPORT_THRESHOLD", 1)
+  monkeypatch.setattr(worker_recovery_module, "NO_OUTPUT_REPORT_THRESHOLD", 1)
 
   killed: list[int] = []
-  monkeypatch.setattr(init_module, "kill_process_group", lambda pid, sig: killed.append(pid))
+  monkeypatch.setattr(worker_recovery_module, "kill_process_group", lambda pid, sig: killed.append(pid))
 
   resume_calls: list[bool] = []
 
@@ -740,13 +741,13 @@ def test_scan_missing_started_at_falls_back_to_ctime(tmp_path: Path) -> None:
 def _spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
   """Record every path init.iter_recent_thread_metas actually reads+parses."""
   read_paths: list[Path] = []
-  real_load = init_module.load_json_meta
+  real_load = worker_recovery_module.load_json_meta
 
   def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
     read_paths.append(Path(path))
     return real_load(path, log_event, **kwargs)
 
-  monkeypatch.setattr(init_module, "load_json_meta", spy)
+  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
   return read_paths
 
 

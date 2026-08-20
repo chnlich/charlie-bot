@@ -84,9 +84,8 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
 class SuccessionRefused(ValueError):
   """An elone was refused because the parent cannot take a new successor.
 
-  Carries one of the two elone rejections (scheduler-owned session, or a
-  successor already set) so the API can answer 409 while other ValueErrors
-  keep answering 400.
+  Carries the successor-already-set rejection so the API can answer 409 while
+  other ValueErrors keep answering 400.
   """
 
 
@@ -406,22 +405,23 @@ class SessionManager:
   ) -> SessionMetadata:
     """Create an Elon-e session: reference handoff, archive + thumbs-down parent.
 
-    Runs the two succession rejections BEFORE any child session is created, so
-    a refused call mutates nothing on disk.
+    Runs the succession rejection BEFORE any child session is created, so a
+    refused call mutates nothing on disk. A scheduler-owned parent takes an
+    inheriting succession: the child carries the scheduling identity and
+    bookkeeping, and the task yaml's backend is written back before the parent
+    is archived, so the alignment scan never has rotation work to do.
     """
     fresh_parent = await self.read_metadata_fresh(parent_id)
     if fresh_parent is None:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
-    if fresh_parent.scheduled_task is not None:
-      raise SuccessionRefused(
-          f"session {parent_id} is scheduler-owned and cannot be eloned; "
-          "scheduler rotation is its succession path")
     if fresh_parent.successor_session_id is not None:
       raise SuccessionRefused(
           f"session {parent_id} already has a successor "
           f"({fresh_parent.successor_session_id}); elone that successor or fork for a separate branch")
-
-    meta = await self._spawn_with_reference(parent_id, event_index, backend, "E")
+    if fresh_parent.scheduled_task is not None:
+      meta = await self._elone_scheduled_successor(fresh_parent, event_index, backend)
+    else:
+      meta = await self._spawn_with_reference(parent_id, event_index, backend, "E")
 
     # Auto-archive and thumbs-down the parent, and record the elone successor
     # pointer (re-read under lock so concurrent mutations to the parent aren't
@@ -447,14 +447,53 @@ class SessionManager:
     )
     return meta
 
+  async def _elone_scheduled_successor(
+      self,
+      parent: SessionMetadata,
+      event_index: int,
+      backend: str | None,
+  ) -> SessionMetadata:
+    """Spawn the inheriting successor for a scheduler-owned elone parent.
+
+    Step order keeps one active session matching the task yaml at every
+    instant, so a scheduler alignment scan landing mid-succession has no
+    rotation work to do: busy check -> inheriting spawn -> backend write-back;
+    the parent is archived afterwards by the shared elone flow. A busy parent
+    refuses with the same exception type the rotation path raises. A failed
+    write-back archives the successor just created, leaves the parent
+    untouched, and re-raises the original error, returning to pre-succession
+    state.
+    """
+    # read_metadata_fresh carries no thinking_since (a derived runtime fact);
+    # stamp it so the shared busy predicate sees the live busy state, exactly
+    # as the stamped metas the rotation path consults do.
+    if await self._scheduled_sessions._scheduled_session_busy(_stamp_thinking_since(parent)):
+      raise ScheduledSessionBusyError(
+          f"scheduled task '{parent.scheduled_task}' elone is blocked because session "
+          f"'{parent.id}' has running work; retry when it is idle")
+    meta = await self._spawn_with_reference(parent.id, event_index, backend, "E", inherit_scheduling=True)
+    try:
+      await self._scheduled_sessions.write_scheduled_task_backend(parent.scheduled_task, meta.backend)
+    except Exception:
+      await self.archive_session(meta.id)
+      raise
+    return meta
+
   async def _spawn_with_reference(
       self,
       parent_id: str,
       event_index: int | None,
       backend: str | None,
       name_prefix: str,
+      inherit_scheduling: bool = False,
   ) -> SessionMetadata:
-    """Create a child session whose parent history lives in data/parent_reference.jsonl."""
+    """Create a child session whose parent history lives in data/parent_reference.jsonl.
+
+    ``inherit_scheduling`` marks an inheriting scheduler succession: the child
+    keeps the parent name verbatim (name_prefix goes unused), takes over
+    scheduled_task and role, and receives the scheduler bookkeeping so the
+    next cron tick sees an unbroken cadence.
+    """
     parent = await self.get_session(parent_id)
     if not parent:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
@@ -472,11 +511,15 @@ class SessionManager:
       raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
 
     meta = SessionMetadata(
-        name=f'{name_prefix}{parent.name}',
+        name=parent.name if inherit_scheduling else f'{name_prefix}{parent.name}',
         parent_session_id=parent_id,
         backend=backend or parent.backend,
         group=parent.group,
     )
+    if inherit_scheduling:
+      meta.scheduled_task = parent.scheduled_task
+      meta.role = parent.role
+      self._scheduled_sessions.migrate_scheduler_bookkeeping(parent, meta)
     session_dir = self._session_dir(meta.id)
     for subdir in ['data', 'threads']:
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)

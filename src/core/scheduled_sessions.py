@@ -1,15 +1,18 @@
-"""Scheduled-session backend rotation."""
+"""Scheduled-session backend rotation, succession bookkeeping, and task-yaml backend persistence."""
 
+import asyncio
 from typing import Any, Optional
 
 import structlog
 
+from src.core.config import cron_path
 from src.core.models import (
   CreateSessionRequest,
   SessionMetadata,
   SessionStatus,
   utc_now,
 )
+from src.core.yaml_utils import load_yaml, save_yaml
 
 log = structlog.get_logger()
 
@@ -93,9 +96,7 @@ class ScheduledSessionStore:
     meta = await self.create_session(
         CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role),
         backend=backend)
-    meta.last_scheduled_run = old_session.last_scheduled_run
-    meta.last_scheduled_cron = old_session.last_scheduled_cron
-    meta.last_run_status = old_session.last_run_status
+    self.migrate_scheduler_bookkeeping(old_session, meta)
     if group is not None:
       meta.group = group
     meta.updated_at = utc_now()
@@ -136,3 +137,33 @@ class ScheduledSessionStore:
   async def _scheduled_session_busy(self, session: SessionMetadata) -> bool:
     """Return whether a scheduled session has active master thinking or worker threads."""
     return bool(session.thinking_since) or await self._has_running_tasks(session.id)
+
+  def migrate_scheduler_bookkeeping(self, old_session: SessionMetadata, new_session: SessionMetadata) -> None:
+    """Carry scheduler bookkeeping fields onto the task's next generation.
+
+    The single home of the migration field list: both the rotation body above
+    and the elone succession branch (src/core/sessions.py) call it, so what
+    migrates on a generation change is defined exactly once.
+    """
+    new_session.last_scheduled_run = old_session.last_scheduled_run
+    new_session.last_scheduled_cron = old_session.last_scheduled_cron
+    new_session.last_run_status = old_session.last_run_status
+
+  async def write_scheduled_task_backend(self, task_name: str, backend: str) -> None:
+    """Write only the ``backend`` key of *task_name*'s cron yaml, preserving every other key.
+
+    Full-file rewrite via save_yaml — the same persistence form as the cron
+    editor's whole-record update. Path resolution comes from the canonical
+    helper (src.core.config.cron_path); a missing, empty, or non-mapping task
+    file fails loud instead of silently recreating one.
+    """
+    await asyncio.to_thread(self._write_scheduled_task_backend_sync, task_name, backend)
+
+  @staticmethod
+  def _write_scheduled_task_backend_sync(task_name: str, backend: str) -> None:
+    path = cron_path(task_name)
+    data = load_yaml(path)
+    if not isinstance(data, dict):
+      raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
+    data["backend"] = backend
+    save_yaml(path, data)

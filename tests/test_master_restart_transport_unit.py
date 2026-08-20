@@ -31,6 +31,7 @@ import pytest
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import init as init_module
+from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     BackendOption,
@@ -471,7 +472,7 @@ async def test_identity_unresolved_option_keeps_live_record_clears_dead_one(
       ))
   # Liveness is judged on the record triple; pin it on the live one only.
   monkeypatch.setattr(
-      init_module.runs, "is_run_alive",
+      runs, "is_run_alive",
       lambda pid, pid_start, started_at, host_boot: (pid, pid_start) == (1111, "9.0"))
 
   excluded = await init_module.reconcile_master_identity(cfg, session_mgr, datetime.now(timezone.utc))

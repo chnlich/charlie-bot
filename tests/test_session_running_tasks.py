@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from src.core import init as init_module
+from src.core import init_worker_recovery as worker_recovery_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, utc_now
 from src.core.sessions import SessionManager
@@ -51,13 +52,13 @@ async def test_has_running_tasks_false_for_stale_running_thread_without_reading_
   os.utime(stale, (old_ts, old_ts))
 
   read_paths: list[Path] = []
-  real_load = init_module.load_json_meta
+  real_load = worker_recovery_module.load_json_meta
 
   def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
     read_paths.append(Path(path))
     return real_load(path, log_event, **kwargs)
 
-  monkeypatch.setattr(init_module, "load_json_meta", spy)
+  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
 
   assert await mgr._has_running_tasks(session.id) is False
   # scandir+stat only — the stale metadata content is never read.

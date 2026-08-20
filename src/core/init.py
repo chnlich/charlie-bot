@@ -15,9 +15,9 @@ is bound by reference: the code and the tests must mutate one shared set.
 
 import src.core.init_worker_recovery as _init_worker_recovery
 from src.core.init_master_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  _MasterScanFailed,
   _await_reattach,
   _master_alive_unfollowable_message,
+  _MasterScanFailed,
   _reconcile_master_runs,
   _replay_unanswered_user_messages,
   reconcile_master_identity,
@@ -32,10 +32,10 @@ from src.core.init_seed import (  # noqa: F401  # re-export: facade import list 
   seed_default_cron_tasks,
 )
 from src.core.init_worker_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  _InterruptedRun,
   _complete_finalize_effects,
   _effects_maybe_missing,
   _follow_silence_recheck,
+  _InterruptedRun,
   _liveness_probe,
   _maybe_respawn,
   _parse_started_at,

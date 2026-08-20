@@ -559,9 +559,19 @@ def _stat_prompt_files(paths: dict[Path, float]) -> Optional[dict[Path, float]]:
   return current
 
 
-def _cron_d_dir() -> Path:
-  """Path of this profile's per-job cron directory. Resolved per call."""
+def cron_dir() -> Path:
+  """Path of this profile's per-job cron config directory. Resolved per call."""
   return charliebot_home_dir() / "config.d" / "cron.d"
+
+
+def cron_path(name: str) -> Path:
+  """Path of one job's cron config file. Resolved per call, never at import."""
+  return cron_dir() / f"{name}.yaml"
+
+
+def _cron_d_dir() -> Path:
+  """Alias for the canonical cron_dir, kept for the loader's existing call sites."""
+  return cron_dir()
 
 
 def _legacy_cron_file() -> Path:

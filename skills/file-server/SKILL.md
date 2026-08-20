@@ -58,6 +58,8 @@ on), generate the URL instead of dumping file contents into chat. This is especi
 4. Write a raw filesystem path as plain text, `path:line`, since the CharlieBot UI renders a markdown
    link around a raw local path as a dead link. The form to wrap in `[descriptive text](url)` is a
    file-server URL.
+5. An artifact shared beyond Chao (a Slack post, a group report) ships comment-disabled: the
+   comment tray belongs to Chao's own review flow.
 
 ## HTML Artifacts
 

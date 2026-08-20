@@ -14,8 +14,8 @@ from pydantic import ValidationError
 from src.cli import schedule_trigger as cli_module
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
   MAX_TRIGGER_MESSAGE_CHARS,
+  CreateSessionRequest,
   ScheduleTriggerRequest,
   TriggerStatus,
 )
@@ -39,7 +39,8 @@ def _fake_cli_cfg(monkeypatch, triggers_dir: Path | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cli_rejects_201_char_message(monkeypatch, tmp_path: Path) -> None:
+def test_cli_rejects_201_char_message(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   triggers_dir = tmp_path / "s1" / "triggers"
   triggers_dir.mkdir(parents=True)
   argv = [
@@ -57,6 +58,9 @@ def test_cli_rejects_201_char_message(monkeypatch, tmp_path: Path) -> None:
 
   assert excinfo.value.code == 2
   mock_post.assert_not_called()
+  stderr = capsys.readouterr().err
+  assert str(MAX_TRIGGER_MESSAGE_CHARS) in stderr
+  assert "short label" in stderr
   # Zero new trigger JSON files were written under the session's triggers dir.
   assert list(triggers_dir.glob("*.json")) == []
 
@@ -114,7 +118,7 @@ async def test_persisted_over_limit_message_fires_verbatim(tmp_path: Path) -> No
   trigger_mgr = TriggerManager(cfg, session_mgr)
 
   trigger_id = "over-limit-1"
-  fire_at = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+  fire_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
   now = datetime.now(timezone.utc).isoformat()
   long_message = "y" * 201
   triggers_dir = cfg.sessions_dir / session.id / "triggers"

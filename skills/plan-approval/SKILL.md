@@ -40,12 +40,30 @@ An understanding page precedes the plan when the master must first align the rea
 (the trigger and its exemptions live in the master prompt).
 
 - The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
-  `prompts/plan_template.html`. Five blocks: goal in one sentence carrying the why one level up; the
+  `prompts/plan_template.html`. Six blocks: goal in one sentence carrying the why one level up; the
   deliverable through two or three concrete examples; acceptance criteria, each a trigger
   condition plus an observable behavior (EARS phrasing, "WHEN <condition> THE SYSTEM
   SHALL <behavior>", is an example shape, not a requirement); non-goals; numbered
   divergences rendered as `div.fork` blocks, each carrying the fork grammar's
-  folded explainer (block kit section 5, `prompts/plan_template.html`).
+  folded explainer (block kit section 5, `prompts/plan_template.html`); Linear.
+- The Linear block carries the whitelist gate, the two-path recall, the candidate or
+  draft choice, the take off gate, and the identifier readback. It appears only for
+  repos marked Linear-tracked on the memory entry `charliebot/workspace-repos`, read
+  with `charliebot memory query --topic charliebot` while drafting; a repo not tracked
+  carries no Linear block and no explanation. When the marker list is absent altogether
+  the block states in one line that the whitelist is not configured, because an absent
+  list and an all-untracked list are otherwise indistinguishable and the mechanism
+  would fail silently. Two-path recall per the `linear` skill is presented as either a
+  candidate list (identifier, title, state, project, each with a one-line relevance
+  judgement) or a conclusion that nothing matches plus a ready-to-file draft; never pick
+  a match silently, the user decides. The draft's fields are an English title and body
+  (goal, deliverables, acceptance), team, project, assignee, and priority, resolved from
+  the Linear defaults held in memory with priority defaulting to medium; a new ticket's
+  project follows the closest candidate's project and is named in the draft so the user
+  can change it. The write waits for take off per the master prompt's External System
+  Writes rule, and the authorization may ride in the same message that answers the
+  divergences. After the user files it, read the identifier back from the API and carry
+  it as a header meta chip on the understanding page and on the plan that follows.
 - Don't guess: any point the request leaves unstated where different readings lead to
   different designs must appear as a numbered divergence; never silently pick a reading.
 - No how: an understanding contains no implementation mechanisms or technology choices;
@@ -107,6 +125,11 @@ An understanding page precedes the plan when the master must first align the rea
   plan registry. `approve` records a takeoff unconditionally; the runtime delegation gate reads the chat
   log, not the registry, so approve bookkeeping does not gate execution.
 - After the user says take off, record it via `charliebot plan approve`.
+- After `charliebot plan approve` and before delegation, post one English comment on
+  the plan's ticket carrying the design conclusion and the choices the user judged. One
+  comment per plan lineage. The plan stage never creates a ticket; a plan whose work has
+  no ticket posts nothing. Design changes after take off are reported to the user as
+  deviations and are not written back to Linear.
 
 ## Verify
 

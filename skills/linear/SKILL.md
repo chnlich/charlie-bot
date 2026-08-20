@@ -103,8 +103,8 @@ query($term: String!) {
 
 ### Two-path recall
 
-Neither search path alone establishes whether a matching issue exists, so run
-both and deduplicate before presenting. The semantic path `searchIssues(term:)`
+The two paths answer different questions, so run both and deduplicate before
+presenting. The semantic path `searchIssues(term:)`
 returns hits for unrelated terms, so it answers "does anything look like this"
 but cannot prove that no matching issue exists. The structured path
 `issues(filter:{or:[{title:{containsIgnoreCase:K}},{description:{containsIgnoreCase:K}}]})`

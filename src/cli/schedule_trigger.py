@@ -31,9 +31,10 @@ import json
 
 from src.cli.common import post_internal_api, resolve_session_id
 from src.core.config import get_config
-from src.core.models import WatchKind
+from src.core.models import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
 
-# Exit code returned when remote-PID verify-on-create rejects the trigger.
+# Exit code returned when trigger creation is rejected: remote-PID verify-on-create
+# or --message length validation. Mirrors argparse's usage-error exit code.
 EXIT_VERIFY_REJECTED = 2
 
 
@@ -73,6 +74,20 @@ def _parse_watch_target(raw: str) -> dict:
   return {"kind": WatchKind.LOCAL_PID.value, "pid": _positive_int(raw, raw, "pid")}
 
 
+def _validate_message(value: str) -> str:
+  """Reject a --message longer than the short-label limit at argparse time.
+
+  The wake lands back in the same session with full history, so the message is
+  only a short label naming which watch fired. This runs before any network
+  call, so an over-limit message never reaches the internal API.
+  """
+  if len(value) > MAX_TRIGGER_MESSAGE_CHARS:
+    raise argparse.ArgumentTypeError(
+        f"--message must be a short label at most {MAX_TRIGGER_MESSAGE_CHARS} characters "
+        f"(got {len(value)})")
+  return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description="Schedule a delayed trigger for a CharlieBot session")
   parser.add_argument(
@@ -87,7 +102,16 @@ def _build_parser() -> argparse.ArgumentParser:
       help="Max wait in seconds before the trigger fires. When --watch is set, "
       "this is the upper bound; the trigger fires earlier when all watched targets finish.",
   )
-  parser.add_argument("--message", required=True, help="Message to send to the master CC when the trigger fires")
+  parser.add_argument(
+      "--message",
+      required=True,
+      type=_validate_message,
+      help=(
+          "Short label naming which watch fired, at most "
+          f"{MAX_TRIGGER_MESSAGE_CHARS} characters. The wake keeps the session's "
+          "full history; runbook steps and readback commands live in session "
+          "artifacts."),
+  )
   parser.add_argument(
       "--watch",
       nargs="+",

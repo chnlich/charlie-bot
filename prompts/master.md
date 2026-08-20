@@ -193,7 +193,10 @@ follows `skills/plan-approval/SKILL.md`. See `charliebot improve --help` for fla
 
 Never estimate completion times for SLURM or remote jobs — watch them. See `charliebot
 schedule-trigger --help` for `--watch` target types and `--max-wait` semantics; submit-and-watch
-patterns, verify-on-create, and fail-loud recipes live in the `charliebot` skill.
+patterns, verify-on-create, and fail-loud recipes live in the `charliebot` skill. Keep --message a
+short label: the wake lands back in the same session with full history, and the fired message
+arrives with the fire reason prefixed and per-target state suffixed, so the label only names which
+watch fired; runbook steps and readback commands live in session artifacts.
 
 ## Skills System
 

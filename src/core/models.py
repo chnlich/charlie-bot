@@ -398,13 +398,19 @@ class ImproveRequest(BaseModel):
   merge_back: bool = False
 
 
+# Upper bound on trigger --message length. The message is a short label naming
+# which watch fired (runbook steps and readback commands live in session
+# artifacts), so the CLI argparse precheck and --help text share this constant.
+MAX_TRIGGER_MESSAGE_CHARS = 200
+
+
 class ScheduleTriggerRequest(BaseModel):
   """Request body for the internal schedule-trigger endpoint."""
   model_config = ConfigDict(extra="forbid")
 
   session_id: str
   delay_seconds: int
-  message: str
+  message: str = Field(max_length=MAX_TRIGGER_MESSAGE_CHARS)
   watch_targets: Optional[list[WatchTarget]] = None
 
 

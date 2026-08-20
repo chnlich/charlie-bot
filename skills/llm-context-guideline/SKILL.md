@@ -46,8 +46,7 @@ entry belongs in the store at all, and such a candidate is rejected:
 
 - **"When will this be used again, and what will it change?"** (the Action line): the concrete
   future action this entry changes, named as work that recurs or is already planned in a named
-  project or stack; a constructed possibility fails the line, and a version- or build-specific
-  fact is scoped to the stack that pins it.
+  project or stack; a constructed possibility fails the line.
 - **"Why is the store the cheapest home?"** (the Home line): answered by checking the others:
   repo-scoped knowledge lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives
   in the master prompt, a skill, config, or the source; incidents and event history live in
@@ -61,8 +60,8 @@ entry belongs in the store at all, and such a candidate is rejected:
   fix the obstruction or take another tracked path inside that home; the store does not absorb
   another home's content.
 
-A candidate's text is a claim: verify version, build, and account figures against the live
-system before presenting them.
+A candidate's text is a claim: verify its figures against the live system before presenting
+them. A revise re-verifies the surviving claims of the entry it edits.
 
 A trap claim about shared infrastructure enters only with its root cause named and reproduced
 outside the originating session; a fixable obstruction is fixed instead of recorded.
@@ -124,6 +123,9 @@ bullet to about three lines and an entry body to about a dozen; a merge that wou
 re-trims the whole entry by the same test.
 A measured figure lives in its canonical source (run dir, canon table, ticket); an entry states
 the rule and points there.
+Environment composition and version facts (package pins, toolchain and interpreter versions,
+build and model numbers) never enter an entry: the manifest or config that pins them is the
+home, and the entry states the rule and points there.
 Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
 moves. When context changes, revise the entry in place (a capture whose body states the change
 stages the proposed new text).

@@ -226,4 +226,4 @@ the Writing Style section above, as memory entries do (the `llm-context-guidelin
 sitrep is an ordinary session artifact; plan registration and approval semantics
 stay with plans.
 
-Reload the plan-approval skill in full before drafting any plan, and follow it.
+Reload the plan-approval skill in full before drafting any plan or understanding page, and follow it.

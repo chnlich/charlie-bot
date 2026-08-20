@@ -326,7 +326,7 @@ Extract tokens from Feishu URLs:
 
 ### Linking with Linear
 - **Title format:** `{identifier} {title}` — e.g. `ABC-123 Example Linear issue title`
-- Each Linear issue maps to **one** Feishu doc — subsequent updates append to the same doc, never a new one
+- When a doc exists, each Linear issue maps to at most **one** Feishu doc — subsequent updates append to the same doc, never a new one
 - After creating the doc and getting explicit user approval for the permission write, set its public permission with `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` and `{"link_share_entity":"tenant_readable"}`, then update the Linear issue description to include the Feishu doc URL
 - **Organize by date:** Feishu docs linked from Linear issues are living documents with ongoing updates. Structure content with **H1 date headers** (e.g. `# 2026-03-26`) as top-level sections. Each day's work goes under its date. New updates append a new date section — never overwrite previous dates.
 - **Use Pacific Time (PT) for dates** — all date headers use `America/Los_Angeles` timezone, not UTC. Run `TZ=America/Los_Angeles date +%Y-%m-%d` to get the correct date.

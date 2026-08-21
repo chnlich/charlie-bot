@@ -102,6 +102,13 @@ def _backend_switched_msg(ev: dict) -> dict:
   }
 
 
+def _backend_overlay_undeclared_msg(ev: dict) -> dict:
+  return {
+      "role": "system",
+      "content": f"Backend {ev.get('backend', '')} declares no prompt_overlay — running without a fence",
+  }
+
+
 def _scheduled_run_skipped_msg(ev: dict) -> dict:
   task = ev.get('task', '')
   skipped_at = ev.get('skipped_at', '')
@@ -186,6 +193,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
+    ET.BACKEND_OVERLAY_UNDECLARED:
+        _backend_overlay_undeclared_msg,
     ET.SCHEDULED_RUN_SKIPPED:
         _scheduled_run_skipped_msg,
 }

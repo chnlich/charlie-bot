@@ -52,7 +52,7 @@ async def _run_cc_with_stderr_backend(
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          models.BackendOption(id="fake", label="Fake", type="codex"),
+          models.BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="none"),
       ],
   )
   session_meta = models.SessionMetadata(
@@ -67,7 +67,7 @@ async def _run_cc_with_stderr_backend(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -179,7 +179,7 @@ async def _run_cc_with_scripted_events(
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          models.BackendOption(id="fake", label="Fake", type="codex"),
+          models.BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="none"),
       ],
   )
   session_meta = models.SessionMetadata(id="session-salvage", name="Salvage", backend="fake")
@@ -190,7 +190,7 @@ async def _run_cc_with_scripted_events(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,

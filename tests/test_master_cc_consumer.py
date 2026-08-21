@@ -538,7 +538,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
                       lambda *a, **k: _NoopBackend())
   monkeypatch.setattr(master_cc_run, "_build_instructions_content",
-                      lambda session_meta, cfg, model=None: "instructions")
+                      lambda session_meta, cfg, prompt_overlay: "instructions")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
   item = master_cc._WorkItem(

@@ -38,7 +38,7 @@ async def test_session_default_returns_configured_backend() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_default_raises_for_stale_backend(caplog: pytest.LogCaptureFixture) -> None:
+async def test_session_default_raises_for_stale_backend() -> None:
   """A session pinned to an id config no longer defines must fail loudly, never substitute."""
   cfg = _build_cfg([
       BackendOption(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),

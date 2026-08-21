@@ -25,9 +25,20 @@ first by comparing the rows.
 | plan | Plan-scale work whose reading is already aligned; bounded fixes, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Verify rounds, then "take off" releases delegation |
 | sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
 | debugging | The user asks what happened and why: observed behavior contradicts expectation, and the conclusion is a causal explanation | `artifacts/debug_<topic-slug>_v<n>.html` per `prompts/debug_template.html` | The page closes the exchange; a mid-investigation status question still gets a sitrep, and the two pages cross-reference |
+| explainer | The user asks to be walked to understanding: their stated mental model contradicts what they observe, and the conclusion is the reader confirming the contradiction dissolved; a mid-thread miss signal routes here via the re-aim rule | `artifacts/explain_<topic-slug>_v<n>.html` per `prompts/explain_template.html` | The reader's confirmation closes the exchange; a renewed miss signal re-enters the re-aim rule and the revision overwrites the page in place; a new anomalous observation routes back to debugging, the two pages cross-referencing |
 
 Understanding and plan format, confirmation semantics, and plan linkage:
 `skills/plan-approval/SKILL.md`. Sitrep page grammar: `prompts/sitrep_template.html`.
+
+## Mid-Thread Re-Aim
+
+A mid-thread reply that re-poses the question signals that the last turn answered beside
+it. Before producing any new artifact, restate in chat, in at most two sentences, the
+question now being asked and the contradiction the reader is holding; the reader's
+confirmation or correction picks the genre for what follows: a teaching need routes to
+explainer, a new anomaly to debugging. A revision answering this signal overwrites the
+same artifact in place: version numbers are reserved for legs meant to be compared side
+by side.
 
 ## Concise Expression
 
@@ -84,8 +95,9 @@ it does.
 #### Evidence
 
 - Compute the failing case and show the numbers.
-- Carry one worked example small enough to check by hand, with the column that
-  lets the reader verify it.
+- Carry one worked example small enough to check by hand, with the column that lets the
+  reader verify it; it enumerates every variable dimension the question names, each
+  entering with what it is, why it varies, and a real sampled value.
 - Anchor on measured values, derive the rest from them, label the derived ones,
   and recompute anything a figure shows.
 - Mark inference as inference, and keep verified, refuted, and open visible.

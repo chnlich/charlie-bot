@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharlieBot Explain Template</title>
+<style>
+  :root{
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --acc:#1163c0; --grn:#187f37;
+    --amb:#9a6700; --red:#cf222e; --vio:#6a3fc0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--vio);color:#ffffff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#ffffff;font-size:12px;font-weight:700;align-items:center;justify-content:center}
+  h2 .slot{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--mut);font-family:var(--mono);letter-spacing:.4px}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#ffffff;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#24292f;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#7a4b00}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #b6d3f2;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#1c3f66}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#e6d09b;border-left-color:var(--amb);color:#6b4e00}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.hit{border-color:var(--grn);color:#187f37}
+  .flow .b.miss{border-color:var(--red);color:#cf222e}
+  .flow .ar{color:var(--mut)}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:5px;padding:1px 7px;margin-right:6px;vertical-align:baseline}
+  .tag.fact{background:rgba(24,127,55,.10);color:var(--grn);border:1px solid #b7dcc2}
+  .tag.hyp{background:rgba(154,103,0,.10);color:var(--amb);border:1px solid #e6d09b}
+  .triad{background:var(--panel);border:1px solid var(--bd);border-radius:10px;margin:0 0 6px;overflow:hidden}
+  .triad .row{display:flex;gap:12px;padding:10px 14px;border-bottom:1px solid var(--bd)}
+  .triad .row:last-child{border-bottom:none;background:rgba(207,34,46,.04)}
+  .triad .k{flex:0 0 84px;font-weight:700;font-size:12.5px;color:var(--acc)}
+  .triad .row:last-child .k{color:var(--red)}
+  .varb{background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:11px 15px;margin:10px 0}
+  .varb .vh{display:flex;align-items:baseline;gap:8px;margin:0 0 4px}
+  .varb .vh .vc{margin-left:auto;font-size:11px;color:var(--mut);font-family:var(--mono);white-space:nowrap}
+  .varb p{font-size:12.8px;margin:5px 0}
+  .varb pre{margin-top:8px}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  .foot p{margin:0}
+  @media(max-width:760px){body{padding:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Why the tint ramp still took 47 minutes to build<span class="status">EXPLAIN · example</span></h1>
+    <p class="sub">Example explain body with invented data; replace this header and the sections below with the topic's own content.</p>
+    <div class="meta">
+      <span class="mtag">system · fictional photon farm (template example)</span>
+      <span class="mtag">trigger · "we bucket the tone radius into sixteen bins, so why did the ramp compile for 47 minutes?"</span>
+    </div>
+  </header>
+
+  <main>
+<!--
+      USAGE — build each explain page as artifacts/explain_<topic-slug>_v<n>.html in the session dir.
+      Copy this file, replace the example body, write artifacts/explain_<topic-slug>_v<n>.html.
+      Reuse this file's <head> and <style> verbatim; replace the <main> content following the
+      grammar below. Each generated page is self-contained: a reader with no
+      prior conversation or project background understands it on its own,
+      first read. The generated page's language follows the
+      exchange it joins; this template stays English.
+
+      Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
+      blockquote, pre, table, td, div.callout, div.flow, div.triad, div.varb, and div.meta > span.mtag chips.
+
+      GRAMMAR: section semantics. Headings are content names: each states what its section
+      does before the body is read.
+
+      Opening triad (unnumbered, first screen): "You know X" (the reader's stated model, in
+      their words) / "You observe Y" (the contradicting observation, labeled) / "The missing
+      link is Z" (one sentence). The contradiction is on screen before anything else.
+
+      1 affirm: where the reader's model is right and the exact step where it stops. Affirm
+        with evidence, and teaching begins at that step. When the reader points out a
+        contradiction, the first sentence rules who is right.
+      2 mechanism: the missing mechanism, why before what. Every mechanism claim seats three
+        things together, the reader's own premises included: the real code (path and line),
+        its position in the larger call chain, and a hand-checkable example.
+      3 worked example: every variable dimension the question names, enumerated. Each opens
+        with what pipeline part it is and why it varies, then its real sampled value; each
+        name is introduced before its first use in a table.
+      4 reconcile: recompute the reader's own number inside the corrected model, so the
+        contradiction dissolves inside the reader's own arithmetic.
+      5 boundaries: epistemic labels (fact / inference / open) ride inline at each claim's
+        first occurrence; this section carries what stays open and where a new anomaly routes
+        (back to debugging, the pages cross-referencing).
+      Foot: the exchange closes when the reader confirms the contradiction dissolved. A
+        renewed miss signal triggers the mid-thread re-aim rule (master.md): restate in chat,
+        then revise this page in place.
+
+      Self-checks before sharing: the cold-read gate (skills/file-server/SKILL.md) with the
+      triggering chat message quoted in the probe; the PII scan (paths in workspace form,
+      people by role).
+-->
+
+    <section class="plan-section">
+      <div class="triad">
+        <div class="row"><span class="k">You know</span>The farm buckets the tone radius into sixteen bins before the shader compiles, so the 47-minute run should have built at most sixteen compiled variants.</div>
+        <div class="row"><span class="k">You observe</span>The ramp job drew ~47 minutes of wall time, 68% of it in a compile stall, and recompiles never converged. <span class="tag fact">Fact</span></div>
+        <div class="row"><span class="k">Missing link</span>The compile cache keys on the joint value of every host quantity the frame depends on, not on the radius bin alone; binning collapses each dimension, not the product of dimensions.</div>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">1</span> Where your model is right, and where it stops<span class="slot">affirm</span></h2>
+      <p><b>Binning solves a real problem.</b> The glow renderer builds a compiled shader per shape profile and caches by that profile's length. Every frame's radius differs, so unbinned radii would force a fresh compile each step; the sixteen bins cap the shader-side cache. That is the design's whole job, and it lives shader-side.</p>
+      <p><b>Where the model stops:</b> the step "each dimension now has at most sixteen values, so the variant total is small" holds only while the cache key is one dimension. The frame cache key is not one dimension, so the inference breaks. <span class="src">Source: ~/workspace/photonfarm/shader_cache.py</span></p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">2</span> The missing mechanism: the frame cache keys on the joint state, not the bin<span class="slot">mechanism</span></h2>
+      <p>When the compiler builds one frame, it records every int, shape, and branch result it touched as a guard. The next call re-checks each guard against the raw values that step actually carried; if any guard fails, the whole frame recompiles. The check happens before binning, so it compares not "is the bin the same" but "is the raw value still in the recorded band".</p>
+      <p><b>The real code, its place in the chain, and a hand-checkable case:</b></p>
+      <pre># ~/workspace/photonfarm/shade_ops.py:141-155, the binner the reader names
+_BINS = (16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
+         32768, 65536, 131072, 262144, 524288)   # sixteen bins
+
+def bin_radius(r: int) -> int:
+    """Round the radius up to the nearest bin boundary."""
+    for b in _BINS:
+        if r &lt;= b:
+            return b
+    return _BINS[-1]
+
+# call site :204-205, inside the glow pass
+S_bucket = bin_radius(max_radius)   # returns a python constant
+# S_bucket enters the shader cache key</pre>
+      <p>For a hand check, <code>max_radius = 300</code> maps to <code>S_bucket = 512</code>; <code>max_radius = 400</code> maps to the same shader bin, while a changed row count can still fail the frame guard before the bin is used.</p>
+      <div class="flow">
+        <span class="b">packer emits max_radius</span><span class="ar">→</span><span class="b miss">frame entry: dynamo checks guards (raw value)</span><span class="ar">→</span><span class="b">block forward (compiled frame)</span><span class="ar">→</span><span class="b">glow pass bins the radius</span><span class="ar">→</span><span class="b hit">shader cache (16 bins)</span><span class="ar">→</span><span class="b">kernel</span>
+      </div>
+      <p class="muted">Binning sits after the frame guard and before the shader: it protects the shader cache, not the frame cache.</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">3</span> Beyond the radius: each varying quantity, introduced in a table<span class="slot">worked example</span></h2>
+      <p>Each quantity below is introduced as a table row first (what it is), then told why it varies and given a real sampled value. Row counts are the printed guard lines, not recompile events.</p>
+      <table>
+        <tr><th>Quantity</th><th>What it is</th><th>Why it varies</th><th>Sampled</th></tr>
+        <tr><td class="f">row-count</td><td>samples packed into one frame</td><td>radius per sample differs</td><td class="f">9 to 23 rows across 4 bands</td></tr>
+        <tr><td class="f">tone-band</td><td>radius bin, the shader-side key</td><td>radii cross band edges</td><td class="f">7 bands</td></tr>
+        <tr><td class="f">offset-set</td><td>storage offset of the glow view</td><td>view split layout changes</td><td class="f">3 groups, 2,412 lines</td></tr>
+      </table>
+      <div class="varb">
+        <p class="vh"><b>row-count → cuSamples size</b><span class="vc">27 lines · fact</span></p>
+        <p><b>What it is:</b> each sample's radial segments are concatenated into one fixed-token frame; <code>cuSamples</code> (cumulative segment lengths) is the boundary table the kernel reads. Its length equals row-count plus one, and the frame guard pins that length.</p>
+        <p><b>Why it varies:</b> <span class="tag fact">Fact</span> how many samples fit the budget drifts with the shot; row-count moves across the band, and each new length misses the guard once.</p>
+        <pre>cu_segments size mismatch at index 0. expected 24, actual 14</pre>
+      </div>
+      <div class="varb">
+        <p class="vh"><b>tensor-band values</b><span class="vc">3,716 lines · fact, attribution inferred</span></p>
+        <p><b>What it is:</b> the shader's bin membership for the frame's glow view. It is the number the reader expects to bound everything.</p>
+        <p><b>Why it varies:</b> the raw radius crosses a bin edge, so the compiled constant changes and the guard recompiles the frame, even though the shader bin itself is shared.</p>
+        <pre>_shade.radius_band in {16..524288}  # the guard records the raw edge, not the bin</pre>
+      </div>
+      <div class="varb">
+        <p class="vh"><b>offset-set</b><span class="vc">2,412 lines · fact, attribution open</span></p>
+        <p><b>What it is:</b> a tensor is a buffer plus a read offset; a split or slice view changes only the offset. <span class="tag hyp">Hypothesis</span> the offset shifts when the packing layout of the frame changes each step.</p>
+        <p><b>Why it varies:</b> layout per step changes which buffer position the glow view begins at; offset zero needs a constant-specialized frame that the range guard cannot serve.</p>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">4</span> Recomposing the reader's arithmetic<span class="slot">reconcile</span></h2>
+      <p>The "sixteen variants" account holds under a one-dimensional key; under the joint key the first three quantities alone are 4 × 7 × 3 = 84 slots, each paid with a full frame recompile. <span class="tag fact">Fact</span> The farm's run confirms it: ~76 recompile frames per node across the ramp, about 29 minutes of serial compilation per node, which is where "68% of the stall" lives.</p>
+      <div class="callout"><p>The sixteen bins cap the shader-side variant count; the frame-side variant count is set by the guard product and the frame cache limit, and the two caps do not bound each other.</p></div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">5</span> What stays open, and where a new anomaly goes<span class="slot">boundaries</span></h2>
+      <p class="muted">Epistemic labels ride inline at each claim's first occurrence; only what stays open is listed here.</p>
+      <ul>
+        <li><span class="tag hyp">Open</span> The offset-set driver's exact split line is unlocated; it needs a debug capture, routing back to the debugging genre.</li>
+        <li><span class="tag hyp">Open</span> Attribution for the tensor-band variance is inferred, not confirmed.</li>
+        <li><span class="tag fact">Fact</span> The recompile totals come from the guard log; they are the count of failed guard comparisons, not of recompile events.</li>
+      </ul>
+    </section>
+
+    <div class="foot"><p><b>Closing:</b> this page closes when you confirm the "16 bins vs 47 minutes" contradiction is gone. If it is not, reply "still lost" with the step that stuck; the mid-thread re-aim rule restates your question in chat, then this page is revised in place, no new version number.</p></div>
+  </main>
+</div>
+</body>
+</html>

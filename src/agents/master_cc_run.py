@@ -439,7 +439,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if option is None and session_meta.backend:
     option = cfg.get_backend_option(session_meta.backend)
   if option is None:
-    if session_meta.backend and cfg.get_backend_option(session_meta.backend) is None:
+    if session_meta.backend:
       # The session pins a backend id config.yaml no longer defines. Substituting a
       # different backend would silently run on another model and another account.
       fallback_id = cfg.backend_options[0].id if cfg.backend_options else "(none)"
@@ -452,14 +452,26 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           requested=session_meta.backend,
           fallback=fallback_id,
       )
-      await item.callbacks.persist_and_broadcast(
-          session_meta.id, {
-              "type": ET.ASSISTANT_ERROR,
-              "content": f"Agent error: {msg}"
-          })
-      await item.callbacks.mark_unread(session_meta.id)
-      return None, 1, msg, {}
-    option = cfg.backend_options[0]
+    else:
+      # Neither an explicit per-run option nor a session pin. Refusing the
+      # backend_options[0] fallback avoids silently running on an arbitrary
+      # backend; error and exit 1. (The sibling fallback inside
+      # _resolve_resume_option stays, deliberately out of scope.)
+      msg = (
+          "no backend option was given and this session pins none — refusing to "
+          "fall back to backend_options[0]; this run did not execute.")
+      log.error(
+          "master_cc_backend_unresolved",
+          session=session_meta.id,
+          requested="(none)",
+      )
+    await item.callbacks.persist_and_broadcast(
+        session_meta.id, {
+            "type": ET.ASSISTANT_ERROR,
+            "content": f"Agent error: {msg}"
+        })
+    await item.callbacks.mark_unread(session_meta.id)
+    return None, 1, msg, {}
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
 

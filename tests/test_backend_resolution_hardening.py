@@ -240,23 +240,29 @@ async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_run_cc_still_defaults_when_session_pins_no_backend(tmp_path: Path, monkeypatch) -> None:
-  """An empty session backend is the documented default, not a substitution."""
+async def test_run_cc_refuses_no_option_and_no_pin(tmp_path: Path, monkeypatch) -> None:
+  """Neither an explicit per-run option nor a session pin is a documented rejection:
+  exit code 1, no backend started, an assistant error written."""
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")],
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="")
-  captures: dict[str, object] = {}
+  spawned: list[object] = []
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda option, cfg, **k: captures.update(option=option) or _FakeBackend())
+                      lambda *a, **k: spawned.append(1) or _FakeBackend())
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
 
-  _cc, exit_code, error_msg, _extras = await master_cc._run_cc(_item(cfg, session_meta, None))
+  item = _item(cfg, session_meta, None)
+  cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
 
-  assert exit_code == 0
-  assert error_msg is None
-  assert captures["option"].id == "cc"
+  assert spawned == []
+  assert cc_session_id is None
+  assert exit_code == 1
+  assert "no backend option" in error_msg and "backend_options[0]" in error_msg
+  assert extras == {}
+  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
+  assert any(e["type"] == ET.ASSISTANT_ERROR and "no backend option" in e["content"] for e in events)
 
 
 def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:

@@ -180,8 +180,9 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_empty_pin_still_runs_on_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
-  """The one case backend_options[0] IS the right outcome: no pin at all."""
+async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
+  """No pin at all and no explicit option must hard-fail, not fall back to
+  backend_options[0] (the wake-path fallback was removed)."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
@@ -193,12 +194,15 @@ async def test_empty_pin_still_runs_on_backend_options_zero(tmp_path: Path, monk
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"))
   session.backend = ""
 
-  captured: dict[str, object] = {}
+  spawned: list[object] = []
   monkeypatch.setattr(
       "src.agents.backends.registry.build_backend",
-      lambda option, cfg, **k: captured.update(option=option) or _FakeBackend())
+      lambda *a, **k: spawned.append(1) or _FakeBackend())
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
 
-  assert captured["option"].id == cfg.backend_options[0].id
+  assert spawned == []
+  errors = _assistant_errors(session_mgr, session.id)
+  assert errors
+  assert any("no backend option" in e["content"] for e in errors)

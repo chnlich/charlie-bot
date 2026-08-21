@@ -33,7 +33,7 @@ from src.core.sessions import SessionManager
 
 
 def _make_meta(session_id: str) -> SessionMetadata:
-  return SessionMetadata(id=session_id, name="t", cc_session_id=None)
+  return SessionMetadata(id=session_id, name="t", backend="fake", cc_session_id=None)
 
 
 def _make_callbacks() -> SessionCallbacks:

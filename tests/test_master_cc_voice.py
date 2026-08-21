@@ -131,7 +131,7 @@ async def _run_message_with_capturing_backend(
     is_voice_arg: bool,
 ):
   cfg = _make_cfg(tmp_path)
-  meta = models.SessionMetadata(id="voice-msg-session", name="Voice")
+  meta = models.SessionMetadata(id="voice-msg-session", name="Voice", backend="fake")
   callbacks = _make_callbacks()
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)

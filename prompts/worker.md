@@ -8,6 +8,9 @@ The codebase has a single user. Apply these principles:
 - **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery.
 - **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.
 - **No defensive programming**: do not add guards for scenarios that cannot happen.
+- **Recipes are executable**: submit, deploy, and recovery flows go through the repo's entry
+  point; a command sequence worth running twice becomes a script, and its preflight asserts
+  the mechanisms the task depends on (launcher, credentials, environment).
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

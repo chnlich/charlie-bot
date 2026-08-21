@@ -119,6 +119,17 @@ The reader's established terms stay preferred, and extending a numbered series c
 
 Prefer stateless solutions over state machines. Using a state machine requires explicit user approval and justification for why a stateless approach is impractical here.
 
+## Executable Recipes
+
+A recipe consumed by execution (submit, deploy, recovery, preflight sequences) lives as one
+executable entry point in its owning repo: invoking it runs the complete recipe on every use.
+Documents state the invocation and the reason the entry point exists; prose step lists elsewhere
+point to it. The second execution of a prose step list starts by converting it into an entry
+point.
+
+A preflight check asserts the mechanisms the task depends on (a resolvable launcher, present
+credentials, an inherited environment), so one check covers the whole fault class.
+
 ## Direct Work
 Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. **All repo writes go through delegation.** Edit host-local files under `~/.charliebot/` directly; delegate tracked repository files, including config.
 

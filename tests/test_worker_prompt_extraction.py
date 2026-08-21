@@ -5,9 +5,10 @@ The worker prompt used to be assembled entirely from Python string literals in
 src/core/spawner.py. It is now read fresh from prompts/worker.md on every
 _build_worker_prompt call (see spawner.load_worker_prompt_sections), split on
 `<!-- section: <id> -->` marker lines, and injected with `{{token}}` sequential
-str.replace substitution. These tests pin the assembled output to golden fixtures
-captured from the pre-extraction code (base commit b3407b6) and exercise the
-fail-loud loader contract (no caching, no embedded-text fallback).
+str.replace substitution. The golden fixtures track prompts/worker.md
+byte-for-byte: a deliberate prompt edit re-captures every fixture in the same
+change. The tests also exercise the fail-loud loader contract (no caching, no
+embedded-text fallback).
 """
 
 from pathlib import Path

@@ -9,7 +9,7 @@ from src.api.anthropic_proxy import (
 
 def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() -> None:
   payload = {
-      "model": "meshy-sglang/deepseek-ai/DeepSeek-V4-Pro",
+      "model": "synthetic-provider/synthetic-vendor/Synthetic-Pro",
       "system": [{
           "type": "text",
           "text": "Use tools carefully."

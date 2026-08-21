@@ -720,14 +720,14 @@ async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeyp
   proc.pid = 7777
 
   with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
-    backend = OpenCodeBackend(model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+    backend = OpenCodeBackend(model="synthetic-provider/nvidia/Synthetic-Model")
     result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
 
   assert result == "OK title"
   args = mock_exec.await_args.args
   assert args[0] == "/usr/bin/opencode"
   assert "run" in args and "--format" in args and "json" in args
-  assert args[args.index("-m") + 1] == "meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4"
+  assert args[args.index("-m") + 1] == "synthetic-provider/nvidia/Synthetic-Model"
   # opencode run has no system-prompt flag: it is framed into the final (post "--") prompt arg.
   assert args[-1] == "<system-instructions>\nsys prompt\n</system-instructions>\n\nhello prompt"
   proc.wait.assert_awaited()
@@ -753,7 +753,7 @@ async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatc
   proc.pid = 7776
 
   with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
-    backend = OpenCodeBackend(model="meshy-sglang-glm52/nvidia/GLM-5.2-NVFP4")
+    backend = OpenCodeBackend(model="synthetic-provider/nvidia/Synthetic-Model")
     result = await backend.one_shot_text("hi", "sys", timeout=5.0)
 
   assert result == ""

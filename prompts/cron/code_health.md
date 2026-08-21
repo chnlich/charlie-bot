@@ -174,6 +174,16 @@ Known-alive symbols:
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete.
+- `speedup` (class attribute on `_Speedup` in `tests/test_ncu_page.py`,
+  `test_extract_rules_reads_swig_attribute_objects`) — read by string: `_extract_rules` passes
+  the literal `"speedup"` to `_object_field` in `src/core/ncu_parsing.py`
+  (`entry["speedup_pct"] = _clean_number(float(_object_field(rule_result.speedup_estimation(),
+  "speedup")))`), which does `getattr(obj, name)` on the SWIG stand-in; the dict variant in
+  `test_extract_rules_reads_dict_objects` carries the same name as a dict key, read by
+  `_object_field`'s `obj[name]` branch. The attribute name never appears as `.speedup` in source,
+  so vulture flags the class-body write as an unused variable; the read is string-only, so the
+  Step 3 grep does surface the reader — entry kept anyway because the re-triage (vulture flag →
+  grep → getattr reasoning) is what Step 4 exists to skip.
 
 Step 5: open the PR.
 Create at most one PR per run and report the PR URL when done.

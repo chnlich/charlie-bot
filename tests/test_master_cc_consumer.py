@@ -18,16 +18,15 @@ from src.agents.backends.base import make_result_event, make_text_event
 from src.api import sessions as sessions_api
 from src.api.deps import get_session_manager
 from src.core import event_types as ET
-from src.core import runs
+from src.core import runs, thinking_state
 from src.core import sessions as sessions_module
-from src.core import thinking_state
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    BackendOption,
-    CreateSessionRequest,
-    MasterRunRecord,
-    SessionCallbacks,
-    SessionMetadata,
+  BackendOption,
+  CreateSessionRequest,
+  MasterRunRecord,
+  SessionCallbacks,
+  SessionMetadata,
 )
 from src.core.sessions import SessionManager
 

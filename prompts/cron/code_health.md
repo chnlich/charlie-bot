@@ -122,7 +122,7 @@ Known-alive symbols:
   `ScheduledTaskConfig`/`CharlieBotConfig` in `src/core/config.py`, registered with pydantic at
   class-definition time and invoked during model validation. The method names have exactly zero
   whole-repo matches outside their definitions, so vulture flags them as unused methods.
-- `seed_default_cron_tasks` (`src/core/init.py`) — production-scope vulture (`src/ server.py`)
+- `seed_default_cron_tasks` (`src/core/init_seed.py`) — production-scope vulture (`src/ server.py`)
   flags it as an unused function because its only production caller is the Python heredoc embedded
   in `scripts/setup.sh` (a shell script, invisible to Python dead-code tools). The absence from the
   server-start path is deliberate: seeding belongs to the explicitly invoked setup command, and
@@ -142,7 +142,7 @@ Known-alive symbols:
   `fired_at` on `PendingTrigger`) as unused variables/attributes, but every one of those names
   is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS, Jinja templates), so
   the Step 3 grep already protects them and they get no entries. Production-scope vulture
-  likewise flags the `cli_command` attribute write in `src/core/spawner.py`
+  likewise flags the `cli_command` attribute write in `src/core/spawner_launch.py`
   (`_construct_worker`; the tests-inclusive scope clears it): the name resolves
   to the `ThreadMetadata.cli_command` field in `src/core/models.py` plus two assertions in
   `tests/test_spawner_backend_propagation.py`, so the Step 3 grep protects it too; no entry.

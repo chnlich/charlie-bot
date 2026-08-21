@@ -734,7 +734,8 @@ test('renderSessionList limits each grouped session section to five visible sess
   assert.match(nav.innerHTML, /deleteGroup\(this\.dataset\.groupName\)/);
 });
 
-test('toggleSessionGroupLimit persists and updates only the selected group', () => {
+test('toggleSessionGroupLimit expansion is ephemeral and resets on the public filter-switch path', async () => {
+  const nav = createElement();
   const workExtra = createElement({
     className: 'session-group-limit-extra hidden',
     dataset: {sessionGroupLimitExtra: 'Work'},
@@ -753,10 +754,13 @@ test('toggleSessionGroupLimit persists and updates only the selected group', () 
     dataset: {sgroupLimitToggleKey: 'Personal'},
     textContent: 'Show all',
   });
-  const {context, localStorageData} = buildContext({
-    localStorageItems: {
-      'session-group-list-expanded': JSON.stringify({Personal: false}),
-    },
+  const workSessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const personalSessions = Array.from({length: 6}, (_, idx) =>
+    makeSession(`personal-${idx + 1}`, `Personal ${idx + 1}`, {group: 'Personal'}));
+  const sessions = [...workSessions, ...personalSessions];
+  const {context} = buildContext({
+    elements: new Map([['session-list', nav]]),
     querySelectorAll: (selector) => {
       if (selector === '.session-group-limit-extra') return [workExtra, personalExtra];
       if (selector === '.session-group-limit-toggle') return [workToggle, personalToggle];
@@ -766,25 +770,71 @@ test('toggleSessionGroupLimit persists and updates only the selected group', () 
 
   context.toggleSessionGroupLimit('Work');
 
-  assert.deepEqual(JSON.parse(localStorageData.get('session-group-list-expanded')), {
-    Personal: false,
-    Work: true,
-  });
   assert.equal(workExtra.classList.contains('hidden'), false);
   assert.equal(personalExtra.classList.contains('hidden'), true);
   assert.equal(workToggle.textContent, 'Show less');
   assert.equal(workToggle.getAttribute('aria-expanded'), 'true');
   assert.equal(personalToggle.textContent, 'Show all');
 
-  context.toggleSessionGroupLimit('Work');
+  // Re-render through the public filter-switch path: expansion state lives in
+  // module memory only, so the reset wipes it and both groups fall back to
+  // the five-session preview.
+  context.fetch = async (url) => {
+    assert.equal(url, '/api/sessions/');
+    return {ok: true, json: async () => sessions};
+  };
+  context.switchSidebarFilter('all');
+  await new Promise(setImmediate);
 
-  assert.deepEqual(JSON.parse(localStorageData.get('session-group-list-expanded')), {
-    Personal: false,
-    Work: false,
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
+});
+
+test('stale session-group-list-expanded localStorage seed stays inert', () => {
+  const nav = createElement();
+  const {context} = buildContext({
+    elements: new Map([['session-list', nav]]),
+    localStorageItems: {
+      'session-group-list-expanded': '{"Work": true}',
+    },
   });
-  assert.equal(workExtra.classList.contains('hidden'), true);
-  assert.equal(workToggle.textContent, 'Show all');
-  assert.equal(workToggle.getAttribute('aria-expanded'), 'false');
+  const sessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+
+  context.renderSessionList(sessions, 'archived');
+
+  assert.match(nav.innerHTML, /session-group-limit-toggle/);
+  assert.match(nav.innerHTML, />Show all<\/button>/);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
+});
+
+test('group limit toggles and filter switches never write the expansion keys to localStorage', async () => {
+  const nav = createElement();
+  const {context, localStorageData} = buildContext({
+    elements: new Map([['session-list', nav]]),
+    localStorageItems: {
+      'session-group-list-expanded': '{"Work": true}',
+      'cron-group-list-expanded': '{"Nightly": true}',
+    },
+  });
+
+  // Expand, collapse, expand the cron bucket, then a public filter-switch
+  // round-trip; none of it may touch the seeded storage values.
+  context.toggleSessionGroupLimit('Work');
+  context.toggleSessionGroupLimit('Work');
+  context.toggleCronGroupLimit('Nightly');
+  context.fetch = async () => ({ok: true, json: async () => []});
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  context.switchSidebarFilter('all');
+  await new Promise(setImmediate);
+
+  assert.equal(localStorageData.get('session-group-list-expanded'), '{"Work": true}');
+  assert.equal(localStorageData.get('cron-group-list-expanded'), '{"Nightly": true}');
 });
 
 test('renderSessionList keeps active grouped session visible outside the first five', () => {

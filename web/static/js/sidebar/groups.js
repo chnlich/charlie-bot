@@ -14,10 +14,6 @@ function escapeHtmlAttr(str) {
 }
 
 function loadGroupLimitState(storageKey) {
-  if (!Object.keys(groupLimitState[storageKey]).length) {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) groupLimitState[storageKey] = JSON.parse(saved);
-  }
   return groupLimitState[storageKey];
 }
 
@@ -28,7 +24,6 @@ function isGroupLimitExpanded(storageKey, key) {
 function setGroupLimitExpanded(storageKey, key, expanded) {
   const state = loadGroupLimitState(storageKey);
   state[key] = expanded;
-  localStorage.setItem(storageKey, JSON.stringify(state));
 }
 
 function resetGroupLimitState() {

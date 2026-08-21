@@ -477,7 +477,7 @@ def test_pm_identity_part_appended_for_project_session_with_group(tmp_path: Path
   cfg = _instructions_cfg(tmp_path)
   meta = SimpleNamespace(id="s1", role=PROJECT_ROLE, group="bp-eval")
 
-  out = master_cc._build_instructions_content(meta, cfg)
+  out = master_cc._build_instructions_content(meta, cfg, None)
 
   assert out is not None
   # Pointer semantics: identity + group + contract path, not contract clauses.
@@ -498,6 +498,6 @@ def test_pm_identity_part_absent_without_role_or_group(tmp_path: Path) -> None:
   ]
 
   for meta in metas:
-    out = master_cc._build_instructions_content(meta, cfg)
+    out = master_cc._build_instructions_content(meta, cfg, None)
     assert out is not None
     assert "# Project Manager session" not in out

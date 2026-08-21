@@ -87,7 +87,7 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
     return _FakeBackend()
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -135,7 +135,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
     return _FakeBackend()
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -185,7 +185,7 @@ async def _run_cc_starting_entry(
       "src.agents.backends.registry.build_backend",
       lambda option, cfg, **kw: _FakeBackend())
   monkeypatch.setattr(
-      master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+      master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
   item = master_cc._WorkItem(
       cfg=cfg,
       session_meta=session_meta,

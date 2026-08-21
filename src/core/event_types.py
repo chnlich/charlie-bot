@@ -75,3 +75,8 @@ RATE_LIMIT_EVENT = "rate_limit_event"
 
 # -- Session backend switching ----------------------------------------------
 BACKEND_SWITCHED = "backend_switched"
+
+# -- Overlay declaration -----------------------------------------------------
+# A backend_option that declares no prompt_overlay runs without a fence; the
+# alert renders as a system-role chat message naming the offending backend.
+BACKEND_OVERLAY_UNDECLARED = "backend_overlay_undeclared"

@@ -74,7 +74,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
   meta = models.SessionMetadata(id="voice-cc", name="Voice")
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -103,7 +103,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
   meta = models.SessionMetadata(id="plain-cc", name="Plain")
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -135,7 +135,7 @@ async def _run_message_with_capturing_backend(
   callbacks = _make_callbacks()
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, model=None: "instructions")
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
   master_cc_state._session_queues.pop(meta.id, None)
   master_cc_state._session_consumers.pop(meta.id, None)
   try:

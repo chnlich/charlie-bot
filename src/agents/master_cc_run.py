@@ -265,17 +265,18 @@ contract is prompts/project_manager.md in the charlie-bot repo: read it
 before acting on any message in this session, and follow it."""
 
 
-def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig, model: str | None = None) -> str | None:
+def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
   """Build master agent instructions: base prompt + per-host override + memory store.
 
   The memory block is assembled from the labeled-entry store via
   :func:`src.core.memory.assemble_master` (resident topics full text + index
   lines for the rest); it replaces the former three-file concatenation.
 
-  When *model* is set and the repo holds an overlay at
-  ``prompts/model_overlays/<model with each "/" replaced by "__">.md``, that
-  file's full text is appended as the final part. A present-but-unreadable
-  overlay raises (the read is never guarded); a missing overlay appends nothing.
+  *prompt_overlay* names a file under ``prompts/model_overlays/`` (without the
+  ``.md`` suffix) whose full text is appended as the final part. The backend
+  declares it explicitly; a declared-but-missing or unreadable file raises (the
+  read is never guarded). ``None`` appends nothing. The ``model`` string never
+  enters this function — the overlay binding is wholly driven by the declaration.
   """
   parts: list[str] = []
 
@@ -306,14 +307,12 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
   if session_meta.role == PROJECT_ROLE and session_meta.group:
     parts.append(_PM_IDENTITY_PART.format(group=session_meta.group))
 
-  # 5. Per-model overlay (prompts/model_overlays/<model with "/" -> "__">.md).
-  # Appended only when the resolved model names a file that exists; a missing
-  # overlay appends nothing (byte-identical to a no-model assembly), and a
-  # present-but-unreadable overlay fails loud rather than silently dropping it.
-  if model is not None:
-    overlay_file = cfg.charlie_bot_repo / "prompts" / "model_overlays" / f"{model.replace('/', '__')}.md"
-    if overlay_file.exists():
-      parts.append(overlay_file.read_text(encoding="utf-8"))
+  # 5. Declared overlay (prompts/model_overlays/<prompt_overlay>.md). The file
+  # must exist when declared; a missing/unreadable file raises (fail loud). No
+  # exists() pre-check: the declaration is the guarantee the file is present.
+  if prompt_overlay is not None:
+    overlay_file = cfg.charlie_bot_repo / "prompts" / "model_overlays" / f"{prompt_overlay}.md"
+    parts.append(overlay_file.read_text(encoding="utf-8"))
 
   return "\n\n".join(parts)
 
@@ -475,7 +474,25 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
 
-  instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, option.model)
+  # Three-state overlay judgment on the wake path, never at config-load time
+  # (a hot reload would swallow a load-time exception as a warning and keep the
+  # old config). None (absent key or explicit YAML null) = undeclared: pass None
+  # and emit a one-shot alert; the literal string "none" = explicitly no
+  # overlay: pass None, no alert; any other string names the overlay file
+  # (without ".md") under prompts/model_overlays/, read by the builder.
+  prompt_overlay = option.prompt_overlay
+  if prompt_overlay is None:
+    log.warning("master_cc_overlay_undeclared", session=session_meta.id, backend=option.id)
+    await item.callbacks.persist_and_broadcast(
+        session_meta.id, {
+            "type": ET.BACKEND_OVERLAY_UNDECLARED,
+            "backend": option.id,
+        })
+  elif prompt_overlay == "none":
+    prompt_overlay = None
+  # Any other string is the overlay filename (sans ".md"); pass it through.
+
+  instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, prompt_overlay)
 
   resume_id = _resolve_resume_id(option, session_meta)
   # Pre-flight: a resume-capable backend about to run with no resolved resume

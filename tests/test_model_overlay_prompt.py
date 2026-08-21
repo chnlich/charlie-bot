@@ -1,119 +1,180 @@
-"""Per-model overlay segment in the master instruction assembly.
+"""Overlay declared by the backend_option, judged on the wake path.
 
-``_build_instructions_content`` appends ``prompts/model_overlays/<model with
-each "/" replaced by "__">.md`` as its final part when the resolved ``model``
-names a file that exists; a missing overlay appends nothing (byte-identical
-to a no-model assembly), and a present-but-unreadable overlay raises rather
-than silently dropping the segment. These tests assert the mechanism, not any
-shipped overlay's literal content.
+``BackendOption.prompt_overlay`` names the fence file under
+``prompts/model_overlays/`` (sans ``.md``); the literal ``none`` means
+explicitly no overlay; a missing key means undeclared (alert, empty overlay).
+These tests assert the mechanism at the wake-path layer with synthetic
+``BackendOption``s and synthetic overlay files — never the real overlay or any
+deployment name.
 """
 
+from __future__ import annotations
+
+import asyncio
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.agents import master_cc
+from src.agents.backends import base as backend_base
+from src.agents.backends import registry
+from src.core import config as core_config
+from src.core import event_types as ET
+from src.core.message_aggregator import MessageAggregator
+from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
 
 
-def _build_cfg(tmp_path: Path) -> SimpleNamespace:
-  """A cfg stand-in whose ``charlie_bot_repo`` points at *tmp_path*.
+class _FakeBackend:
+  exit_code = 0
+  stderr_text = ""
+  terminated = False
 
-  ``CharlieBotConfig.charlie_bot_repo`` is a derived property tied to the
-  installed package location, so the tests redirect it through a namespace
-  (same convention as test_worker_prompt_extraction / test_slack_listener) and
-  never depend on the real repo contents.
-  """
+  async def terminate(self) -> None:
+    self.terminated = True
+
+  async def run(self, prompt: str, cwd: str, env: dict):
+    yield backend_base.make_result_event()
+
+
+def _callbacks() -> SessionCallbacks:
+  return SessionCallbacks(
+      persist_and_broadcast=AsyncMock(),
+      update_thinking_state=AsyncMock(),
+      mark_unread=AsyncMock(),
+      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
+      has_completed_round=AsyncMock(return_value=False),
+      persist_master_run=AsyncMock(),
+  )
+
+
+def _wake_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> core_config.CharlieBotConfig:
+  """A config whose ``charlie_bot_repo`` points at a synthetic tmp repo dir."""
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)
   (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
   home = tmp_path / "home"
-  home.mkdir()
-  memory_dir = home / "memory"
-  (memory_dir / "entries").mkdir(parents=True)
-  (memory_dir / "topics").write_text("profile resident\n", encoding="utf-8")
-  return SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=memory_dir,
+  (home / "memory" / "entries").mkdir(parents=True)
+  (home / "memory" / "topics").write_text("profile resident\n", encoding="utf-8")
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=home,
+      backend_options=[BackendOption(id="fake", label="Fake", type="codex")],
+  )
+  monkeypatch.setattr(core_config.CharlieBotConfig, "charlie_bot_repo", property(lambda self: repo))
+  return cfg
+
+
+def _overlay_dir(cfg: core_config.CharlieBotConfig) -> Path:
+  return cfg.charlie_bot_repo / "prompts" / "model_overlays"
+
+
+def _item(cfg, session_meta: SessionMetadata, backend_option: BackendOption) -> master_cc._WorkItem:
+  return master_cc._WorkItem(
+      cfg=cfg,
+      session_meta=session_meta,
+      user_content="hello",
+      callbacks=_callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=backend_option,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
   )
 
 
-def _session() -> SimpleNamespace:
-  return SimpleNamespace(id="session-1", role=None, group=None)
+def _rendered_overlay_alert(event: dict) -> list[dict]:
+  """Feed a persisted event through the aggregator; return visible message deltas."""
+  return [
+      delta["message"] for delta in MessageAggregator().feed_all([event])
+      if delta.get("type") == "message" and delta.get("message", {}).get("role") == "system"
+  ]
 
 
-def _build_base(cfg: SimpleNamespace) -> str:
-  """The assembly with no model: the byte-for-byte baseline every case diff vs."""
-  out = master_cc._build_instructions_content(_session(), cfg, model=None)
-  assert out is not None
-  return out
-
-
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model",
+    "prompt_overlay, file_exists, expected_product, expects_alert",
     [
-        "fpt-kimi-k3/moonshotai/Kimi-K3",
-        "vendor__single",
-        "a/b/c",
+        ("synthetic_overlay", True, "BASE PROMPT\n\nOVERLAY BODY", False),
+        ("none", False, "BASE PROMPT", False),
+        (None, False, "BASE PROMPT", True),
     ],
 )
-def test_overlay_present_iff_file_exists(tmp_path: Path, model: str) -> None:
-  cfg = _build_cfg(tmp_path)
-  base = _build_base(cfg)
-  overlay_dir = cfg.charlie_bot_repo / "prompts" / "model_overlays"
-  overlay_dir.mkdir(parents=True)
-  sanitized = model.replace("/", "__")
-  overlay_text = f"OVERLAY BODY for {model}\n"
-  (overlay_dir / f"{sanitized}.md").write_text(overlay_text, encoding="utf-8")
+async def test_wake_path_overlay_four_states(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt_overlay: str | None,
+    file_exists: bool,
+    expected_product: str,
+    expects_alert: bool,
+) -> None:
+  """Acceptance A: the overlay product and alert are decided on the wake path."""
+  cfg = _wake_cfg(tmp_path, monkeypatch)
+  if file_exists:
+    overlay_dir = _overlay_dir(cfg)
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    (overlay_dir / "synthetic_overlay.md").write_text("OVERLAY BODY", encoding="utf-8")
 
-  with_overlay = master_cc._build_instructions_content(_session(), cfg, model=model)
-  assert with_overlay is not None
-  assert with_overlay == f"{base}\n\n{overlay_text}"
-  # Absent file -> byte-identical to the no-model product.
-  without_overlay = master_cc._build_instructions_content(_session(), cfg, model="no-such-model")
-  assert without_overlay == base
+  option = BackendOption(id="fake", label="Fake", type="codex", model="ignored/model", prompt_overlay=prompt_overlay)
+  captured: dict[str, object] = {}
+  monkeypatch.setattr(
+      registry, "build_backend",
+      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or _FakeBackend())
+
+  item = _item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
+  cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
+
+  assert cc_session_id is None
+  assert exit_code == 0
+  assert error_msg is None
+  assert captured["instructions_content"] == expected_product
+
+  if expects_alert:
+    alert_events = [
+        c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
+        if c.args[1].get("type") == ET.BACKEND_OVERLAY_UNDECLARED
+    ]
+    assert len(alert_events) == 1
+    assert alert_events[0]["backend"] == "fake"
+    # Assert at the aggregated/rendered message level, not event persistence.
+    rendered = _rendered_overlay_alert(alert_events[0])
+    assert len(rendered) == 1
+    assert "fake" in rendered[0]["content"]
+    assert "prompt_overlay" in rendered[0]["content"]
+  else:
+    assert not [
+        c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
+        if c.args[1].get("type") == ET.BACKEND_OVERLAY_UNDECLARED
+    ]
 
 
-def test_model_with_slash_resolves_to_sanitized_filename_only(tmp_path: Path) -> None:
-  """A model containing "/" picks up the file with "__" in place of "/", not the raw string."""
-  cfg = _build_cfg(tmp_path)
-  overlay_dir = cfg.charlie_bot_repo / "prompts" / "model_overlays"
-  overlay_dir.mkdir(parents=True)
-  (overlay_dir / "a__b.md").write_text("SANITIZED", encoding="utf-8")
-  (overlay_dir / "a").mkdir()
-  (overlay_dir / "a" / "b.md").write_text("RAW", encoding="utf-8")
+@pytest.mark.asyncio
+async def test_declared_overlay_missing_file_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A declared overlay whose file is missing fails loud on the wake path."""
+  cfg = _wake_cfg(tmp_path, monkeypatch)
+  option = BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="missing_overlay")
+  monkeypatch.setattr(registry, "build_backend", lambda *a, **kw: _FakeBackend())
 
-  out = master_cc._build_instructions_content(_session(), cfg, model="a/b")
-  assert out is not None
-  assert "SANITIZED" in out
-  assert "RAW" not in out
+  with pytest.raises(FileNotFoundError):
+    await master_cc._run_cc(_item(cfg, SessionMetadata(id="s", name="S"), option))
 
 
-def test_only_model_differs_diff_is_exactly_the_two_overlays(tmp_path: Path) -> None:
-  """Two assemblies differing only in model differ exactly by their overlays."""
-  cfg = _build_cfg(tmp_path)
-  overlay_dir = cfg.charlie_bot_repo / "prompts" / "model_overlays"
-  overlay_dir.mkdir(parents=True)
-  (overlay_dir / "model__one.md").write_text("OVERLAY ONE", encoding="utf-8")
-  (overlay_dir / "model__two.md").write_text("OVERLAY TWO", encoding="utf-8")
+@pytest.mark.asyncio
+async def test_model_string_has_zero_impact_on_wake_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Acceptance B: two options differing only in model share a byte-identical product."""
+  cfg = _wake_cfg(tmp_path, monkeypatch)
+  overlay_dir = _overlay_dir(cfg)
+  overlay_dir.mkdir(parents=True, exist_ok=True)
+  (overlay_dir / "shared.md").write_text("OVERLAY BODY", encoding="utf-8")
 
-  one = master_cc._build_instructions_content(_session(), cfg, model="model/one")
-  two = master_cc._build_instructions_content(_session(), cfg, model="model/two")
-  assert one is not None and two is not None
-  base = _build_base(cfg)
-  assert one == f"{base}\n\nOVERLAY ONE"
-  assert two == f"{base}\n\nOVERLAY TWO"
+  products: list[str | None] = []
+  monkeypatch.setattr(
+      registry, "build_backend",
+      lambda *a, **kw: products.append(kw.get("instructions_content")) or _FakeBackend())
 
+  for model in ("vendor/one", "vendor/two"):
+    option = BackendOption(id="opt", label="Opt", type="codex", model=model, prompt_overlay="shared")
+    await master_cc._run_cc(_item(cfg, SessionMetadata(id="s", name="S"), option))
 
-def test_unreadable_overlay_raises(tmp_path: Path) -> None:
-  """A present-but-unreadable overlay fails loud instead of returning a product
-  without the overlay."""
-  cfg = _build_cfg(tmp_path)
-  overlay_dir = cfg.charlie_bot_repo / "prompts" / "model_overlays"
-  overlay_dir.mkdir(parents=True)
-  # A directory at the overlay path is "present" but not readable as a file.
-  (overlay_dir / "model__x.md").mkdir()
-
-  with pytest.raises(OSError):
-    master_cc._build_instructions_content(_session(), cfg, model="model/x")
+  assert products[0] is not None
+  assert products[0] == products[1] == "BASE PROMPT\n\nOVERLAY BODY"

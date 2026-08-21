@@ -40,13 +40,12 @@ class _FakeProc:
     self._stdout = stdout
     self._stderr = stderr
     self.returncode = returncode
-    self.kill_called = False
 
   async def communicate(self) -> tuple[bytes, bytes]:
     return self._stdout, self._stderr
 
   def kill(self) -> None:
-    self.kill_called = True
+    pass
 
   async def wait(self) -> int:
     return self.returncode

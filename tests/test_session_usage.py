@@ -30,12 +30,12 @@ def _build_cfg(tmp_path: Path, **codex_kwargs) -> CharlieBotConfig:
 
 
 def _write_session(session_mgr: SessionManager, meta: SessionMetadata, events: list[dict]) -> None:
-  session_dir = session_mgr._chat_events_path(meta.id).parent
+  session_dir = session_mgr.get_chat_events_path(meta.id).parent
   session_dir.mkdir(parents=True, exist_ok=True)
   (session_dir.parent / "threads").mkdir(parents=True, exist_ok=True)
   session_mgr._metadata_path(meta.id).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
   lines = "\n".join(json.dumps(event) for event in events)
-  session_mgr._chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
+  session_mgr.get_chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
 
 
 def _write_codex_rollout(codex_home: Path, native_thread_id: str, lines: list[dict]) -> None:

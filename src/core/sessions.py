@@ -116,9 +116,9 @@ class SessionManager:
     # in memory across calls so consecutive assistant chunks accumulate into
     # a single bubble and tool-only events attach to the prior text bubble.
     self._aggregators: dict[str, MessageAggregator] = {}
-    # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT).
-    # Lazy-built from events_to_view; dirty-marked on master_done, cleared at
-    # the same four sites as _aggregators. Only applies when archive_offset == 0.
+    # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT). A
+    # hit requires the cached event_count to equal the live event count
+    # (get_message_projection), so a stale projection is never served.
     self._projection_cache: OrderedDict[str, MessageProjection] = OrderedDict()
 
   # ---------------------------------------------------------------------------
@@ -434,9 +434,7 @@ class SessionManager:
         fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
         await self._save_metadata(fresh_parent)
-    self._chat_events.clear_cache(parent_id)
-    self._aggregators.pop(parent_id, None)
-    self._clear_projection(parent_id)
+    self._drop_session_runtime_state(parent_id)
 
     log.info(
         'session_eloned',
@@ -689,9 +687,7 @@ class SessionManager:
   async def archive_session(self, session_id: str) -> SessionMetadata | None:
     """Mark a session as archived (does not delete files)."""
     meta = await self._update_field(session_id, "status", SessionStatus.ARCHIVED, "session_archived")
-    self._chat_events.clear_cache(session_id)
-    self._aggregators.pop(session_id, None)
-    self._clear_projection(session_id)
+    self._drop_session_runtime_state(session_id)
     return meta
 
   async def delete_session_permanently(self, session_id: str) -> bool:
@@ -703,9 +699,7 @@ class SessionManager:
       meta = await self.get_session(session_id)
       await self._backend_destroy_hook(session_id, meta)
       await asyncio.to_thread(shutil.rmtree, session_dir)
-      self._chat_events.clear_cache(session_id)
-      self._aggregators.pop(session_id, None)
-      self._clear_projection(session_id)
+      self._drop_session_runtime_state(session_id)
       self._invalidate_cache(session_id)
       # Popping the lock from the dict while holding it is safe: the popped lock
       # object stays valid for this holder until the ``async with`` exits.
@@ -737,9 +731,7 @@ class SessionManager:
         if fresh is not None:
           fresh.archive_offset += events_archived
           await self._save_metadata(fresh)
-      self._chat_events.clear_cache(session_id)
-      self._aggregators.pop(session_id, None)
-      self._clear_projection(session_id)
+      self._drop_session_runtime_state(session_id)
 
     log.info(
         "scheduled_session_recycle_done",
@@ -1068,8 +1060,14 @@ class SessionManager:
       self._projection_cache.popitem(last=False)
     return projection
 
+  def _drop_session_runtime_state(self, session_id: str) -> None:
+    """Drop a session's live runtime state: chat-event cache, aggregator, projection."""
+    self._chat_events.clear_cache(session_id)
+    self._aggregators.pop(session_id, None)
+    self._clear_projection(session_id)
+
   def _clear_projection(self, session_id: str) -> None:
-    """Drop the cached projection and any pending dirty mark for *session_id*."""
+    """Drop the cached projection for *session_id*."""
     self._projection_cache.pop(session_id, None)
 
   def _read_archive_offset_sync(self, session_id: str) -> int:

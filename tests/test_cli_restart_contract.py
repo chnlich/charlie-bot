@@ -421,7 +421,7 @@ class _StubPlanListener:
 
     class Handler(http.server.BaseHTTPRequestHandler):
 
-      def do_GET(self) -> None:  # noqa: N802 (http.server naming)
+      def do_GET(self) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -429,12 +429,12 @@ class _StubPlanListener:
         self.end_headers()
         self.wfile.write(body)
 
-      def do_POST(self) -> None:  # noqa: N802
+      def do_POST(self) -> None:
         # Black hole: accept, then RST without reading or responding.
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         self.connection.close()
 
-      def log_message(self, format: str, *args) -> None:  # noqa: A002
+      def log_message(self, format: str, *args) -> None:
         pass
 
     self._httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)

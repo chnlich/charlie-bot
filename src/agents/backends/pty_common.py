@@ -125,7 +125,7 @@ class PtyAttachment:
       # Child process — exec tmux attach.
       try:
         os.execve(tmux, [tmux, "-L", _TMUX_SOCKET, "attach", "-t", name], _tmux_pty_env())
-      except Exception as e:  # noqa: BLE001 — last-ditch report before _exit
+      except Exception as e:  # last-ditch report before _exit
         os.write(2, f"tmux exec failed: {e}\n".encode())
         os._exit(1)
     self.pid = pid
@@ -204,15 +204,15 @@ async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> No
             "type": PTY_OUTPUT,
             "data": base64.b64encode(item).decode("ascii"),
         })
-      except Exception as e:  # noqa: BLE001 — WS already closed/broken
+      except Exception as e:  # WS already closed/broken
         log.debug("tui_pty_ws_send_failed", session_id=attachment.session_id, error=str(e))
         return
   finally:
     try:
       loop.remove_reader(fd)
-    except Exception as e:  # noqa: BLE001 — fd already closed
+    except Exception as e:  # fd already closed
       log.debug("tui_pty_remove_reader_failed", session_id=attachment.session_id, error=str(e))
   try:
     await websocket.send_json({"type": PTY_EXIT})
-  except Exception as e:  # noqa: BLE001
+  except Exception as e:
     log.debug("tui_pty_exit_send_failed", session_id=attachment.session_id, error=str(e))

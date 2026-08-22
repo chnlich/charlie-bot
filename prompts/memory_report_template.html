@@ -1,7 +1,7 @@
 <!--
 USAGE: The daily memory curator renders its Step 4 report from this skeleton. Copy the file,
 replace every {{...}} placeholder, and delete the BLOCK comments. One <section> per admit or
-revise: the two proof lines sit directly above that entry's diff, each headed by the question
+revise: the three proof lines sit directly above that entry's diff, each headed by the question
 it answers as the llm-context-guideline skill words it. A canon deletion or a vocabulary (`topics`) change
 reuses the same section shape with a one-line justification in place of the proof lines.
 Rejected candidates form one table, each row naming the question it could not answer. Filled
@@ -53,6 +53,7 @@ meta | ctx by the line's first character.
 <ul class="proof">
 <li><b>{{the first question, as the guideline words it}}</b>: {{full-sentence answer}}</li>
 <li><b>{{the second question, as the guideline words it}}</b>: {{full-sentence answer}}</li>
+<li><b>{{the third question, as the guideline words it}}</b>: {{full-sentence answer}}</li>
 </ul>
 <pre class="diff">{{the file's git diff}}</pre>
 </section>

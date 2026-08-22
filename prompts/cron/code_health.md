@@ -174,6 +174,24 @@ Known-alive symbols:
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete.
+- `model_config` (nine pydantic `BaseModel` classes: `ScheduledTaskConfig` in
+  `src/core/config.py`, and `DelegateInvocationMetadata`, `ImproveRequest`,
+  `ScheduleTriggerRequest`, `SessionMessageRequest`, `PlanPresentRequest`, `PlanAmendRequest`,
+  `PlanApproveRequest`, `PlanCloseRequest` in `src/core/models.py`) — the pydantic v2
+  `ConfigDict` class attribute, which `ModelMetaclass` consumes by attribute name at
+  class-definition time; `extra='forbid'` is what turns an unknown config or request key into a
+  validation error. Nothing in the repo reads the name (whole-repo grep finds only the nine
+  assignments — the `model_config` substring in `src/agents/backends/codex.py` is the unrelated
+  `_model_config_args` method), so vulture flags each assignment as an unused variable.
+- `return_value`, `side_effect` attribute writes across `tests/` (e.g.
+  `session_mgr.get_session.return_value = ...` in `tests/test_autonamer.py`,
+  `resp_mock.json.return_value = ...` in `tests/test_cli_improve.py`) — `unittest.mock`
+  configuration attributes the library reads when the configured mock is called
+  (`return_value` supplies the call result, `side_effect` overrides it with an iterable,
+  callable, or exception). Nothing in the repo reads the names back, so vulture flags the
+  writes as unused attributes. The same two names also appear as
+  `AsyncMock(return_value=...)`/`patch(..., side_effect=...)` keyword arguments, which vulture
+  does not flag.
 
 Step 5: open the PR.
 Create at most one PR per run and report the PR URL when done.

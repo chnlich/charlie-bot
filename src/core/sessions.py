@@ -197,14 +197,11 @@ class SessionManager:
 
   async def get_session(self, session_id: str) -> SessionMetadata | None:
     """Load session metadata, using in-memory cache when available."""
-    cached = self._metadata_cache.get(session_id)
-    if cached is not None:
-      meta, ts = cached
-      if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
-        if self._migrate_round_rating_keys(meta):
-          await self._save_metadata(meta)
-        return _stamp_thinking_since(meta.model_copy())
-      del self._metadata_cache[session_id]
+    meta = self._fresh_cached_meta(session_id)
+    if meta is not None:
+      if self._migrate_round_rating_keys(meta):
+        await self._save_metadata(meta)
+      return _stamp_thinking_since(meta.model_copy())
     raw = await self._read_metadata_raw(session_id)
     if raw is None:
       return None
@@ -1108,6 +1105,22 @@ class SessionManager:
     """Remove a session from the metadata cache."""
     self._metadata_cache.pop(session_id, None)
 
+  def _fresh_cached_meta(self, session_id: str) -> SessionMetadata | None:
+    """Return the cached metadata for *session_id* when fresh under ``_METADATA_CACHE_TTL``.
+
+    Both ``SessionManager`` metadata readers (``get_session`` and
+    ``_iter_session_metas``) route through this one TTL check, and a stale entry
+    is evicted here, so the two cannot drift on freshness semantics.
+    """
+    cached = self._metadata_cache.get(session_id)
+    if cached is None:
+      return None
+    meta, ts = cached
+    if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
+      return meta
+    del self._metadata_cache[session_id]
+    return None
+
   @staticmethod
   def _migrate_round_rating_keys(meta: SessionMetadata) -> bool:
     """Rewrite pre-UUID rating keys from event_index strings to legacy ids."""
@@ -1141,16 +1154,11 @@ class SessionManager:
     cached_metas: dict[str, SessionMetadata] = {}
     missing_ids: list[str] = []
     for d in dirs:
-      cached = self._metadata_cache.get(d.name)
-      if cached is None:
+      meta = self._fresh_cached_meta(d.name)
+      if meta is None:
         missing_ids.append(d.name)
-        continue
-      meta, ts = cached
-      if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
-        cached_metas[d.name] = meta
       else:
-        del self._metadata_cache[d.name]
-        missing_ids.append(d.name)
+        cached_metas[d.name] = meta
 
     raw_by_id: dict[str, str] = {}
     read_failures: dict[str, Exception] = {}

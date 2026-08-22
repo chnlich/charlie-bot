@@ -1351,16 +1351,14 @@ class SessionManager:
     active_sessions = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
     archived_sessions = [m for m in sessions if m.status == SessionStatus.ARCHIVED]
 
-    if include_running_status:
-      for meta in archived_sessions:
+    for meta in archived_sessions:
+      if include_running_status:
         meta.has_running_tasks = False
-    if include_pending_trigger_status:
-      for meta in archived_sessions:
+      if include_pending_trigger_status:
         meta.has_pending_trigger = False
         meta.pending_trigger_count = 0
         meta.next_trigger_at = None
-    if include_pending_plan_approval:
-      for meta in archived_sessions:
+      if include_pending_plan_approval:
         meta.has_pending_plan_approval = False
 
     if not active_sessions:

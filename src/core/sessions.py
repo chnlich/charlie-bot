@@ -139,10 +139,7 @@ class SessionManager:
         slack_origin=req.slack_origin,
         **overrides)
 
-    session_dir = self._session_dir(meta.id)
-    # Create directory structure
-    for subdir in ["data", "threads"]:
-      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+    self._create_session_dirs(self._session_dir(meta.id))
 
     await self._save_metadata(meta)
     await self._backend_create_hook(meta)
@@ -208,13 +205,8 @@ class SessionManager:
           await self._save_metadata(meta)
         return _stamp_thinking_since(meta.model_copy())
       del self._metadata_cache[session_id]
-    path = self._metadata_path(session_id)
-    if not path.exists():
-      return None
-    async with aiofiles.open(path, "r") as f:
-      raw = await f.read()
-    if not raw.strip():
-      log.warning("session_metadata_empty", session_id=session_id, path=str(path))
+    raw = await self._read_metadata_raw(session_id)
+    if raw is None:
       return None
     meta = SessionMetadata.model_validate_json(raw)
     if self._migrate_round_rating_keys(meta):
@@ -230,6 +222,19 @@ class SessionManager:
     succession resolution always reads fresh. Returns None when the file is
     absent or blank. Does not populate the cache from the read.
     """
+    raw = await self._read_metadata_raw(session_id)
+    if raw is None:
+      return None
+    return SessionMetadata.model_validate_json(raw)
+
+  async def _read_metadata_raw(self, session_id: str) -> str | None:
+    """Return the raw metadata.json text, or None when the file is missing or blank.
+
+    Single read tail for both metadata readers (cached ``get_session`` and
+    bypassing ``read_metadata_fresh``): a blank file must warn exactly once per
+    read through the same ``session_metadata_empty`` event, so no reader
+    open-codes its own absent/blank variant.
+    """
     path = self._metadata_path(session_id)
     if not path.exists():
       return None
@@ -238,7 +243,7 @@ class SessionManager:
     if not raw.strip():
       log.warning("session_metadata_empty", session_id=session_id, path=str(path))
       return None
-    return SessionMetadata.model_validate_json(raw)
+    return raw
 
   async def resolve_successor_chain(self, session_id: str) -> SessionMetadata | None:
     """Walk ``successor_session_id`` from *session_id* to the chain end.
@@ -519,8 +524,7 @@ class SessionManager:
       meta.role = parent.role
       self._scheduled_sessions.migrate_scheduler_bookkeeping(parent, meta)
     session_dir = self._session_dir(meta.id)
-    for subdir in ['data', 'threads']:
-      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+    self._create_session_dirs(session_dir)
 
     reference_path = session_dir / 'data' / 'parent_reference.jsonl'
     await asyncio.to_thread(self._write_reference_events_sync, reference_path, events)
@@ -612,6 +616,13 @@ class SessionManager:
       for event in events:
         f.write(json.dumps(event) + "\n")
     os.replace(tmp_path, path)
+
+  @staticmethod
+  def _create_session_dirs(session_dir: Path) -> None:
+    # Every session-creation path (create_session, _spawn_with_reference) lays
+    # down the identical skeleton; the single helper is what keeps them agreeing.
+    for subdir in ("data", "threads"):
+      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
 
   def get_chat_events_path(self, session_id: str) -> Path:
     """Return the absolute path to a session's chat_events.jsonl."""

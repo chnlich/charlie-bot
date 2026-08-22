@@ -1064,10 +1064,6 @@ class SessionManager:
     """Drop a session's live runtime state: chat-event cache, aggregator, projection."""
     self._chat_events.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
-    self._clear_projection(session_id)
-
-  def _clear_projection(self, session_id: str) -> None:
-    """Drop the cached projection for *session_id*."""
     self._projection_cache.pop(session_id, None)
 
   def _read_archive_offset_sync(self, session_id: str) -> int:

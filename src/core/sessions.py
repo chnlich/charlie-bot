@@ -958,10 +958,11 @@ class SessionManager:
   async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
     """Persist event, run it through the session's aggregator, broadcast deltas + raw event.
 
-    Raw `assistant` and `user` events are no longer broadcast on the wire; the
-    aggregator emits ``message``/``stream`` deltas in their place. All other
-    event types still flow as before because clients use them for state
-    side-effects (e.g. ``master_done`` → stopThinking).
+    Raw events whose type is in ``_RAW_EVENTS_REPLACED_BY_DELTAS`` are no
+    longer broadcast on the wire; the aggregator emits ``message``/``stream``
+    deltas in their place. All other event types still flow as before because
+    clients use them for state side-effects (e.g. ``master_done`` →
+    stopThinking).
     """
     # Prime the events cache + aggregator before persisting so event_index
     # injection works on the very first call after server start (and so the

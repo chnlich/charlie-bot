@@ -109,7 +109,7 @@ class SessionManager:
     self._session_usage = SessionUsageResolver(
         cfg,
         self._chat_events.events_cache,
-        self._chat_events_path,
+        self.get_chat_events_path,
         self.load_chat_events_sync,
     )
     self._scheduled_sessions = ScheduledSessionStore(self)
@@ -365,7 +365,7 @@ class SessionManager:
         results.append(meta)
         continue
       # Collect non-name-matched sessions for parallel content scan
-      content_candidates.append((meta, self._chat_events_path(meta.id)))
+      content_candidates.append((meta, self.get_chat_events_path(meta.id)))
 
     async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
       """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
@@ -534,7 +534,7 @@ class SessionManager:
     reference_path = session_dir / 'data' / 'parent_reference.jsonl'
     await asyncio.to_thread(self._write_reference_events_sync, reference_path, events)
 
-    events_path = self._chat_events_path(meta.id)
+    events_path = self.get_chat_events_path(meta.id)
     await asyncio.to_thread(events_path.write_text, '', encoding='utf-8')
     clone_event = {
         "type": ET.CLONE_START,
@@ -1090,9 +1090,6 @@ class SessionManager:
     the metadata file is missing or unreadable.
     """
     return self._chat_events._read_archive_offset_sync(session_id)
-
-  def _chat_events_path(self, session_id: str) -> Path:
-    return self._chat_events.get_chat_events_path(session_id)
 
   async def resolve_session_usage(
       self,

@@ -30,7 +30,7 @@ async def _seed_parent(
   """Create and persist a parent session with chat events."""
   parent = SessionMetadata(name="Parent", group=group, backend=backend)
   await mgr._save_metadata(parent)
-  events_path = mgr._chat_events_path(parent.id)
+  events_path = mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(json.dumps({"type": "user", "content": "hello"}) + "\n")
   return parent

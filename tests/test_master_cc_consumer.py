@@ -392,7 +392,7 @@ async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monke
   assert [s.thinking_since for s in found if s.id == created.id] == [sentinel]
 
   # One chat event so fork/elone have history to reference.
-  events_path = mgr._chat_events_path(created.id)
+  events_path = mgr.get_chat_events_path(created.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(json.dumps({"type": "user", "content": "hi"}) + "\n", encoding="utf-8")
 

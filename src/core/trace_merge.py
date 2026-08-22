@@ -6,6 +6,11 @@ import re
 from pathlib import Path
 from typing import TextIO
 
+# Compression level for the merged gzip output. Measured on a 497.1 MB /
+# 1,358,409-event input: level 6 is 10.0 s / 31.1 MB against level 9's 12.2 s /
+# 28.6 MB. Level 6 matches the direct-pass path and the transport gzip middleware.
+_MERGE_COMPRESSLEVEL = 6
+
 
 def _rank_label(path: Path) -> str:
   match = re.search(r"rank(\d+)", path.name, flags=re.IGNORECASE)
@@ -17,7 +22,10 @@ def _rank_label(path: Path) -> str:
 def _write_event(output: TextIO, event: dict, first_event: bool) -> bool:
   if not first_event:
     output.write(",")
-  json.dump(event, output, ensure_ascii=False, separators=(",", ":"))
+  # json.dump iterates with _one_shot false, taking the pure-Python _make_iterencode
+  # path; json.dumps goes through encode() and the C encoder. 28.4 s -> 12.2 s on a
+  # 497.1 MB / 1,358,409-event input, byte size unchanged.
+  output.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
   return False
 
 
@@ -135,7 +143,7 @@ def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   first_event = True
   next_tid = 1
   next_flow_id = 1
-  with gzip.open(out_path, "wt", encoding="utf-8") as output:
+  with gzip.open(out_path, "wt", encoding="utf-8", compresslevel=_MERGE_COMPRESSLEVEL) as output:
     output.write('{"traceEvents":[')
     for file_index, path in enumerate(paths):
       first_event, next_tid, next_flow_id = _merge_one_trace(

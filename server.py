@@ -216,6 +216,7 @@ async def lifespan(app: FastAPI):
   await close_http_client()
   await scheduler.stop()
   await streaming_manager.close_all()
+  pages.shutdown_merge_executor()
   log.info("charliebot_shutdown")
 
 

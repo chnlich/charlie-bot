@@ -1,18 +1,19 @@
 """Server-rendered pages — single Jinja2 template for the entire UI."""
 
 import asyncio
+import concurrent.futures
 import datetime as dt
 import fnmatch
 import gzip
 import hashlib
 import json
+import multiprocessing
 import os
 import shutil
 import socket
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
 
@@ -38,7 +39,7 @@ log = structlog.get_logger()
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _PT_TZ = ZoneInfo("America/Los_Angeles")
-_PERFETTO_MERGE_CACHE_LIMIT = 8
+_PERFETTO_MERGE_CACHE_LIMIT = 24
 # Prefixes the file server answers on (server.py mounts one router under both). A trace= input
 # names an absolute path under either of them.
 _FILE_SERVER_PREFIXES = ("/files", "/absolute_filepath")
@@ -84,6 +85,15 @@ def _probe_home_service(url: str) -> bool:
 # await the same task and share one scan; it is cleared on completion so the next request scans
 # afresh rather than re-servicing a stale snapshot.
 _token_usage_task: asyncio.Task | None = None
+
+# Single-flight registry for in-flight Perfetto cache builds, keyed by cache key. Concurrent
+# requests for the same key share one build; the task removes itself on completion, success or
+# failure, so a later request retries rather than inheriting a stale failure.
+_merge_tasks: dict[str, asyncio.Task] = {}
+# Bounded process pool for the CPU-bound merge body, created lazily on first use and shut down
+# from the server lifespan's shutdown half.
+_merge_executor_instance: concurrent.futures.ProcessPoolExecutor | None = None
+_MERGE_POOL_WORKERS = 2
 
 
 def _perfetto_merge_cache_dir() -> Path:
@@ -166,7 +176,7 @@ async def perfetto_viewer(
     dir: str | None = None,
     pattern: str = "*.json",
     title: str | None = None,
-    slim: Literal[0, 1] | None = None,
+    slim: bool | None = None,
 ):
   """Render the Perfetto trace viewer page.
 
@@ -202,6 +212,8 @@ async def perfetto_viewer(
           "trace_url": trace_url,
           "title": display_title,
           "warn": warn,
+          "merge_count": len(inputs),
+          "is_merge": trace_url.startswith("/perfetto/merged"),
       })
 
 
@@ -258,24 +270,63 @@ def _prune_perfetto_merge_cache(fresh_path: Path) -> None:
     stale_path.unlink()
 
 
-def _cached_merge(paths: list[Path], slim: bool) -> Path:
+def _merge_executor() -> concurrent.futures.ProcessPoolExecutor | None:
+  """Return the shared merge process pool, building it on first use."""
+  global _merge_executor_instance
+  if _merge_executor_instance is None:
+    _merge_executor_instance = concurrent.futures.ProcessPoolExecutor(
+        max_workers=_MERGE_POOL_WORKERS, mp_context=multiprocessing.get_context("spawn"))
+  return _merge_executor_instance
+
+
+def shutdown_merge_executor() -> None:
+  """Shut down the shared merge process pool. Called from the server lifespan."""
+  global _merge_executor_instance
+  instance = _merge_executor_instance
+  _merge_executor_instance = None
+  if instance is not None:
+    instance.shutdown(wait=False, cancel_futures=True)
+
+
+async def _await_shared_merge(cache_key: str, build_fn) -> Path:
+  """Return the cached product for *cache_key*, sharing any in-flight build for it.
+
+  The shared build is awaited through ``asyncio.shield`` so a client that disconnects
+  mid-build cancels only its own wait, never the shared task; the abandoned build
+  completes and lands in the cache (cache-warming). A failed build propagates to every
+  waiter, and the registry entry is removed so a later request retries.
+  """
+  existing = _merge_tasks.get(cache_key)
+  if existing is None:
+    existing = _merge_tasks[cache_key] = asyncio.create_task(build_fn())
+    existing.add_done_callback(lambda _task: _merge_tasks.pop(cache_key, None))
+  return await asyncio.shield(existing)
+
+
+async def _cached_merge(paths: list[Path], slim: bool) -> Path:
   cache_dir = _perfetto_merge_cache_dir()
   cache_dir.mkdir(parents=True, exist_ok=True)
-  cache_path = cache_dir / f"{_merge_cache_key(paths, slim, 'merge')}.json.gz"
+  cache_key = _merge_cache_key(paths, slim, "merge")
+  cache_path = cache_dir / f"{cache_key}.json.gz"
   if cache_path.is_file():
+    os.utime(cache_path, None)
     return cache_path
 
-  descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
-  os.close(descriptor)
-  temp_path = Path(temp_name)
-  try:
-    merge_traces(paths, temp_path, slim)
-  except Exception:
-    temp_path.unlink()
-    raise
-  os.replace(temp_path, cache_path)
-  _prune_perfetto_merge_cache(cache_path)
-  return cache_path
+  async def run_build() -> Path:
+    descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+    os.close(descriptor)
+    temp_path = Path(temp_name)
+    try:
+      executor = _merge_executor()
+      await asyncio.get_running_loop().run_in_executor(executor, merge_traces, paths, temp_path, slim)
+    except Exception:
+      temp_path.unlink()
+      raise
+    os.replace(temp_path, cache_path)
+    _prune_perfetto_merge_cache(cache_path)
+    return cache_path
+
+  return await _await_shared_merge(cache_key, run_build)
 
 
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
@@ -291,24 +342,29 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
       shutil.copyfileobj(source_file, gzip_output, length=65536)
 
 
-def _cached_direct_pass(path: Path) -> Path:
+async def _cached_direct_pass(path: Path) -> Path:
   cache_dir = _perfetto_merge_cache_dir()
   cache_dir.mkdir(parents=True, exist_ok=True)
-  cache_path = cache_dir / f"{_merge_cache_key([path], False, 'gzip')}.json.gz"
+  cache_key = _merge_cache_key([path], False, "gzip")
+  cache_path = cache_dir / f"{cache_key}.json.gz"
   if cache_path.is_file():
+    os.utime(cache_path, None)
     return cache_path
 
-  descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
-  os.close(descriptor)
-  temp_path = Path(temp_name)
-  try:
-    _build_direct_pass_gzip(path, temp_path)
-  except Exception:
-    temp_path.unlink()
-    raise
-  os.replace(temp_path, cache_path)
-  _prune_perfetto_merge_cache(cache_path)
-  return cache_path
+  async def run_build() -> Path:
+    descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+    os.close(descriptor)
+    temp_path = Path(temp_name)
+    try:
+      await asyncio.get_running_loop().run_in_executor(None, _build_direct_pass_gzip, path, temp_path)
+    except Exception:
+      temp_path.unlink()
+      raise
+    os.replace(temp_path, cache_path)
+    _prune_perfetto_merge_cache(cache_path)
+    return cache_path
+
+  return await _await_shared_merge(cache_key, run_build)
 
 
 @router.get("/perfetto/merged")
@@ -316,7 +372,7 @@ async def perfetto_merged(
     trace: list[str] = Query(default=[]),
     dir: str | None = None,
     pattern: str = "*.json",
-    slim: Literal[0, 1] = 0,
+    slim: bool = 0,
 ) -> FileResponse:
   """Merge local Chrome JSON traces and serve the cached gzip output."""
   if not trace and dir is None:
@@ -342,9 +398,9 @@ async def perfetto_merged(
 
   try:
     if len(resolved_paths) == 1 and not slim:
-      cache_path = await asyncio.to_thread(_cached_direct_pass, resolved_paths[0])
+      cache_path = await _cached_direct_pass(resolved_paths[0])
     else:
-      cache_path = await asyncio.to_thread(_cached_merge, resolved_paths, bool(slim))
+      cache_path = await _cached_merge(resolved_paths, bool(slim))
   except Exception as error:
     log.exception("perfetto_merge_failed", paths=[str(path) for path in resolved_paths], slim=slim)
     raise HTTPException(status_code=500, detail=str(error)) from error

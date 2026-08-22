@@ -100,22 +100,22 @@ async def run_terminal_attachment(websocket: WebSocket) -> None:
   """Attach this WebSocket to this profile's terminal tmux session."""
   try:
     await ensure_terminal_session()
-  except Exception as e:  # noqa: BLE001 — surface to client
+  except Exception as e:  # surface to client
     log.exception("terminal_ensure_session_failed")
     try:
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
-    except Exception as send_error:  # noqa: BLE001
+    except Exception as send_error:
       log.debug("terminal_ensure_error_send_failed", error=str(send_error))
     return
 
   attachment = PtyAttachment(terminal_session_id())
   try:
     attachment.spawn()
-  except Exception as e:  # noqa: BLE001
+  except Exception as e:
     log.exception("terminal_pty_spawn_failed")
     try:
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
-    except Exception as send_error:  # noqa: BLE001
+    except Exception as send_error:
       log.debug("terminal_spawn_error_send_failed", error=str(send_error))
     return
 
@@ -130,7 +130,7 @@ async def run_terminal_attachment(websocket: WebSocket) -> None:
       except asyncio.TimeoutError:
         try:
           await websocket.send_json({"type": "ping"})
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
           log.debug("terminal_ping_send_failed", error=str(e))
           break
         continue
@@ -146,7 +146,7 @@ async def run_terminal_attachment(websocket: WebSocket) -> None:
         payload = msg.get("data") or ""
         try:
           chunk = base64.b64decode(payload, validate=False)
-        except Exception as e:  # noqa: BLE001 — malformed input from client
+        except Exception as e:  # malformed input from client
           log.debug("terminal_pty_input_decode_failed", error=str(e))
           continue
         attachment.write(chunk)
@@ -164,6 +164,6 @@ async def run_terminal_attachment(websocket: WebSocket) -> None:
       await pump_task
     except asyncio.CancelledError:
       pass
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
       log.debug("terminal_pump_task_exit", error=str(e))
     attachment.close()

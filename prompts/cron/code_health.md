@@ -67,7 +67,7 @@ to CI.
 
 Step 4: consult the known-alive list.
 Some symbols look dead to static tools but are reached by string reference or kept deliberately.
-The seed entry, uncovered while standing up the CI gate, is the two documented `# noqa`
+The seed entry, uncovered while standing up the CI gate, is the two documented
 re-exports: `kill_tmux_session` and `ScheduledSessionBusyError`. Any symbol reached from
 `prompts/ skills/ configs/ web/` by string belongs here rather than in a deletion. Keep this list
 in this file, in the "Known-alive symbols" list below; edit it whenever you confirm a symbol is
@@ -75,7 +75,9 @@ reached by string. Do not delete a symbol on this list.
 
 Known-alive symbols:
 - `kill_tmux_session` — documented `# noqa` re-export, reached by string reference.
-- `ScheduledSessionBusyError` — documented `# noqa` re-export, kept deliberately.
+- `ScheduledSessionBusyError` — documented re-export (src/api/cron.py imports it from
+  src/core/sessions), kept deliberately. Used in-file by `_elone_scheduled_successor`'s
+  raise, so the import line carries no `# noqa`.
 - `_no_master_wake` — pytest fixture in `tests/test_spawner_finalize_liveness_gate.py`, reached by
   string via `@pytest.mark.usefixtures("_no_master_wake")`; invisible to static dead-code tools.
 - `_handle_agent_message`, `_handle_reasoning`, `_handle_command_execution`, `_handle_file_change`,

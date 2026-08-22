@@ -671,24 +671,27 @@ class SessionManager:
 
   async def mark_read(self, session_id: str) -> SessionMetadata | None:
     """Clear the unread flag for a session."""
-    async with self._lock_for(session_id):
-      meta = await self.get_session(session_id)
-      if not meta or not meta.has_unread:
-        return meta
-      meta.has_unread = False
-      await self._save_metadata(meta)
-    await self._broadcast_unread_changed(session_id, False)
-    return meta
+    return await self._set_unread_flag(session_id, False)
 
   async def mark_unread(self, session_id: str) -> None:
     """Set the unread flag for a session (called when master/workers produce output)."""
+    await self._set_unread_flag(session_id, True)
+
+  async def _set_unread_flag(self, session_id: str, has_unread: bool) -> SessionMetadata | None:
+    """Write the unread flag and broadcast only when it actually flips.
+
+    Unlike ``_update_field`` this must not bump ``updated_at``: the sidebar
+    sorts newest-first on that field, and a read/unread flip is not user
+    activity worth reordering the list over.
+    """
     async with self._lock_for(session_id):
       meta = await self.get_session(session_id)
-      if not meta or meta.has_unread:
-        return
-      meta.has_unread = True
+      if not meta or meta.has_unread == has_unread:
+        return meta
+      meta.has_unread = has_unread
       await self._save_metadata(meta)
-    await self._broadcast_unread_changed(session_id, True)
+    await self._broadcast_unread_changed(session_id, has_unread)
+    return meta
 
   async def _broadcast_unread_changed(self, session_id: str, has_unread: bool) -> None:
     """Broadcast the session's new unread flag on the sidebar channel."""

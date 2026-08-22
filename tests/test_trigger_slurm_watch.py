@@ -46,7 +46,7 @@ def _mk_sacct_mock(outputs: list[str]) -> AsyncMock:
   """
   queue = list(outputs)
 
-  async def _factory(*args, **kwargs):  # noqa: ARG001
+  async def _factory(*args, **kwargs):
     out = queue[0] if len(queue) == 1 else queue.pop(0)
     return _FakeProc(stdout=out.encode())
 

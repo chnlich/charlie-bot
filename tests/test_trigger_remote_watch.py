@@ -58,7 +58,7 @@ def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock
   call pops the next entry; the last entry is repeated indefinitely.
   """
 
-  async def _factory(*args, **kwargs):  # noqa: ARG001
+  async def _factory(*args, **kwargs):
     # Extract host and `kill -0 PID 2>&1 ...` payload from cmd.
     # Layout: ssh -o BatchMode=yes -o ConnectTimeout=10 HOST "kill -0 PID ..."
     host = args[5]
@@ -450,7 +450,7 @@ def _fake_200_post(captured: dict):
     def json(self) -> dict:
       return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
 
-  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):  # noqa: A002, ARG001
+  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):
     captured["url"] = url
     captured["payload"] = json
     return _FakeResp()
@@ -546,7 +546,7 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
     def json(self) -> dict:
       return {"detail": "verify-on-create failed for remote watch target(s): neptune:5678 -> DEAD ('DEAD\\n')"}
 
-  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):  # noqa: A002, ARG001
+  def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):
     return _FakeResp()
 
   def _offline_get(url, **kwargs):  # best-effort version hint must not reach a real server

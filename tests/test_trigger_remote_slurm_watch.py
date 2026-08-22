@@ -46,7 +46,7 @@ def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMo
   """
   queues: dict[tuple[str | None, int], list[str]] = {k: list(v) for k, v in scripted.items()}
 
-  async def _factory(*args, **kwargs):  # noqa: ARG001
+  async def _factory(*args, **kwargs):
     if args[0] == "ssh":
       # Layout: ssh -o BatchMode=yes -o ConnectTimeout=10 HOST "sacct -j ID ..."
       host = args[5]
@@ -158,7 +158,7 @@ async def test_probe_sacct_skips_array_task_rows() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _failing_sacct_factory(*args, **kwargs):  # noqa: ARG001
+async def _failing_sacct_factory(*args, **kwargs):
   """Always return a failed remote sacct probe (ssh non-zero exit)."""
   return _FakeProc(
       stdout=b"",
@@ -247,7 +247,7 @@ async def test_unreachable_host_fires_early_with_note(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   calls = [0]
 
-  async def _factory(*args, **kwargs):  # noqa: ARG001
+  async def _factory(*args, **kwargs):
     calls[0] += 1
     if calls[0] == 1:
       # verify-on-create succeeds so the trigger is persisted and the wait task starts

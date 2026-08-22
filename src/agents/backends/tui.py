@@ -190,22 +190,22 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
   """
   try:
     await ensure_tmux_session(session_id, sessions_dir / session_id)
-  except Exception as e:  # noqa: BLE001 — surface to client
+  except Exception as e:  # surface to client
     log.exception("tui_ensure_session_failed", session_id=session_id)
     try:
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
-    except Exception:  # noqa: BLE001
+    except Exception:
       pass
     return
 
   attachment = PtyAttachment(session_id)
   try:
     attachment.spawn()
-  except Exception as e:  # noqa: BLE001
+  except Exception as e:
     log.exception("tui_pty_spawn_failed", session_id=session_id)
     try:
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
-    except Exception:  # noqa: BLE001
+    except Exception:
       pass
     return
 
@@ -220,7 +220,7 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
       except asyncio.TimeoutError:
         try:
           await websocket.send_json({"type": "ping"})
-        except Exception:  # noqa: BLE001
+        except Exception:
           break
         continue
       except WebSocketDisconnect:
@@ -234,7 +234,7 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
         payload = msg.get("data") or ""
         try:
           chunk = base64.b64decode(payload, validate=False)
-        except Exception as e:  # noqa: BLE001 — malformed input from client
+        except Exception as e:  # malformed input from client
           log.debug("tui_pty_input_decode_failed", session_id=session_id, error=str(e))
           continue
         attachment.write(chunk)
@@ -252,7 +252,7 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
       await pump_task
     except asyncio.CancelledError:
       pass
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
       log.debug("tui_pump_task_exit", session_id=session_id, error=str(e))
     attachment.close()
     try:
@@ -265,5 +265,5 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
         log.warning("tui_autoname_session_missing", session_id=session_id)
       else:
         await maybe_auto_name_from_claude_ai_title(meta, session_mgr)
-    except Exception as e:  # noqa: BLE001 — autonaming must not break PTY cleanup
+    except Exception as e:  # autonaming must not break PTY cleanup
       log.warning("tui_autoname_failed", session_id=session_id, error=str(e), exc_info=True)

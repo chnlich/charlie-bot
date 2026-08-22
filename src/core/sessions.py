@@ -75,10 +75,15 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
 
   thinking_since is a derived runtime fact owned by
   :mod:`src.core.thinking_state`; it is never persisted (see
-  ``_TRANSIENT_METADATA_FIELDS``). Every return path that hands a
-  SessionMetadata to a caller applies this stamp unconditionally — the field
-  stays declared on the model, so a stale value parsed from an old metadata.json
-  or restored into the cache by a post-save rebuild must not leak out.
+  ``_TRANSIENT_METADATA_FIELDS``). Every API- and listing-bound return path
+  (``get_session``, ``_iter_session_metas``, the spawn returns) applies this
+  stamp on the way out; the succession-internal readers
+  (``read_metadata_fresh``, ``resolve_successor_chain``) deliberately return
+  the disk value unstamped, and a reader that needs live busy state stamps
+  the meta itself (see ``_elone_scheduled_successor``). The field stays
+  declared on the model, so a stale value parsed from an old metadata.json
+  or restored into the cache by a post-save rebuild must not leak out
+  through an unstamped API path.
   """
   meta.thinking_since = busy_since(meta.id)
   return meta

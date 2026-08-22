@@ -26,7 +26,15 @@
     <a href="#" id="open-new-tab">Open in new tab</a>
   </div>
 
-  <div id="status">Loading trace...</div>
+  <div id="status">
+    {% if is_merge %}
+      Merging {{ merge_count }} {{ "trace" if merge_count == 1 else "traces" }} on the server… 0s
+    {% elif is_direct_pass %}
+      Preparing a single trace on the server… 0s
+    {% else %}
+      Downloading trace…
+    {% endif %}
+  </div>
   <iframe id="perfetto-iframe" allow="cross-origin-isolated"></iframe>
 
   <script>
@@ -35,6 +43,7 @@
     const traceTitle = {{ title | tojson }};
     const mergeCount = {{ merge_count | tojson }};
     const isMerge = {{ is_merge | tojson }};
+    const isDirectPass = {{ is_direct_pass | tojson }};
 
     const statusEl = document.getElementById('status');
     const iframeEl = document.getElementById('perfetto-iframe');
@@ -55,12 +64,13 @@
     }
 
     async function fetchTrace() {
-      if (isMerge) {
+      if (isMerge || isDirectPass) {
         const traceLabel = mergeCount === 1 ? 'trace' : `${mergeCount} traces`;
+        const phase = isMerge ? `Merging ${traceLabel} on the server` : 'Preparing a single trace on the server';
         const started = Date.now();
-        updateStatus(`Merging ${traceLabel} on the server… 0s`);
+        updateStatus(`${phase}… 0s`);
         const tick = setInterval(() => {
-          updateStatus(`Merging ${traceLabel} on the server… ${Math.floor((Date.now() - started) / 1000)}s`);
+          updateStatus(`${phase}… ${Math.floor((Date.now() - started) / 1000)}s`);
         }, 1000);
         try {
           const buffer = await downloadTrace();
@@ -69,7 +79,7 @@
           clearInterval(tick);
         }
       }
-      updateStatus('Preparing trace on the server…');
+      updateStatus('Downloading trace…');
       return downloadTrace();
     }
 
@@ -78,19 +88,23 @@
       if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${traceTitle}`);
 
       const total = Number(resp.headers.get('Content-Length') || 0);
-      const reader = resp.body.getReader();
-      const chunks = [];
       let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        received += value.byteLength;
+      const updateDownloadStatus = () => {
         if (total > 0) {
           updateStatus(`Downloading ${formatMB(received)} / ${formatMB(total)} MB`);
         } else {
           updateStatus(`Downloading ${formatMB(received)} MB`);
         }
+      };
+      const reader = resp.body.getReader();
+      const chunks = [];
+      updateDownloadStatus();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.byteLength;
+        updateDownloadStatus();
       }
       const body = new Uint8Array(received);
       let offset = 0;

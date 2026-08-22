@@ -204,6 +204,7 @@ async def perfetto_viewer(
       warn = "⚠ Remote or non-JSON traces cannot be merged, showing first trace only"
 
   display_title = title or dir or inputs[0][0].rsplit("/", 1)[-1]
+  is_merge = trace_url.startswith("/perfetto/merged") and (len(inputs) > 1 or bool(slim))
 
   return templates.TemplateResponse(
       request,
@@ -213,7 +214,8 @@ async def perfetto_viewer(
           "title": display_title,
           "warn": warn,
           "merge_count": len(inputs),
-          "is_merge": trace_url.startswith("/perfetto/merged"),
+          "is_merge": is_merge,
+          "is_direct_pass": trace_url.startswith("/perfetto/merged") and not is_merge,
       })
 
 
@@ -372,7 +374,7 @@ async def perfetto_merged(
     trace: list[str] = Query(default=[]),
     dir: str | None = None,
     pattern: str = "*.json",
-    slim: bool = 0,
+    slim: bool = False,
 ) -> FileResponse:
   """Merge local Chrome JSON traces and serve the cached gzip output."""
   if not trace and dir is None:

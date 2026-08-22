@@ -128,7 +128,7 @@ class SessionManager:
   async def create_session(self, req: CreateSessionRequest, backend: str | None = None) -> SessionMetadata:
     """Create a new session."""
     name = req.name or await self._next_session_name()
-    overrides: dict = {}
+    overrides: dict[str, str] = {}
     if req.session_id:
       overrides["id"] = req.session_id
     meta = SessionMetadata(
@@ -672,12 +672,7 @@ class SessionManager:
         return meta
       meta.has_unread = False
       await self._save_metadata(meta)
-    await streaming_manager.broadcast(
-        "sidebar", {
-            "type": ET.UNREAD_CHANGED,
-            "session_id": session_id,
-            "has_unread": False,
-        })
+    await self._broadcast_unread_changed(session_id, False)
     return meta
 
   async def mark_unread(self, session_id: str) -> None:
@@ -688,11 +683,15 @@ class SessionManager:
         return
       meta.has_unread = True
       await self._save_metadata(meta)
+    await self._broadcast_unread_changed(session_id, True)
+
+  async def _broadcast_unread_changed(self, session_id: str, has_unread: bool) -> None:
+    """Broadcast the session's new unread flag on the sidebar channel."""
     await streaming_manager.broadcast(
         "sidebar", {
             "type": ET.UNREAD_CHANGED,
             "session_id": session_id,
-            "has_unread": True,
+            "has_unread": has_unread,
         })
 
   async def archive_session(self, session_id: str) -> SessionMetadata | None:
@@ -1352,16 +1351,14 @@ class SessionManager:
     active_sessions = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
     archived_sessions = [m for m in sessions if m.status == SessionStatus.ARCHIVED]
 
-    if include_running_status:
-      for meta in archived_sessions:
+    for meta in archived_sessions:
+      if include_running_status:
         meta.has_running_tasks = False
-    if include_pending_trigger_status:
-      for meta in archived_sessions:
+      if include_pending_trigger_status:
         meta.has_pending_trigger = False
         meta.pending_trigger_count = 0
         meta.next_trigger_at = None
-    if include_pending_plan_approval:
-      for meta in archived_sessions:
+      if include_pending_plan_approval:
         meta.has_pending_plan_approval = False
 
     if not active_sessions:

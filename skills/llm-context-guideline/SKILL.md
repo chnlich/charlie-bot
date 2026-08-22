@@ -1,9 +1,9 @@
 ---
 name: llm-context-guideline
 description: Placement and admission policy for content that enters LLM context;
-  its chapters currently govern the memory store (admission whitelist, the two
-  proof questions, entry form and labeling, canon change rules). Reload in full
-  before touching memory content.
+  its chapters currently govern the memory store (admission whitelist, the
+  three proof questions, entry form and labeling, canon change rules). Reload
+  in full before touching memory content.
 user-invocable: false
 ---
 
@@ -40,7 +40,7 @@ kinds of entry, and only these:
 Everything else stays out by default; when in doubt, reject and name the candidate in the
 report.
 
-Every admit and every revise carries two proof lines in the report, each headed by the
+Every admit and every revise carries three proof lines in the report, each headed by the
 question it answers; a question that finds no answer is the signal to rethink whether the
 entry belongs in the store at all, and such a candidate is rejected:
 
@@ -59,6 +59,10 @@ entry belongs in the store at all, and such a candidate is rejected:
   session hold it; domain conventions live with their domain. When the natural home is obstructed,
   fix the obstruction or take another tracked path inside that home; the store does not absorb
   another home's content.
+- **"Is this the most concise expression?"** (the Brevity line): the curator trims the
+  presented text (the new body, or the whole entry after a merge) to the Entry form brevity
+  bar before presenting, and the answer names what the trim removed, or states the body's
+  line count when the draft already sat at the bar.
 
 A candidate's text is a claim: verify its figures against the live system before presenting
 them. A revise re-verifies the surviving claims of the entry it edits.

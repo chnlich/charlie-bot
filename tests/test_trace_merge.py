@@ -111,3 +111,36 @@ def test_slim_reduces_args_and_drops_cpu_instants(tmp_path: Path) -> None:
   assert full_by_name["keep"]["args"] == {"stream": 4, "detail": "drop"}
   assert full_by_name["empty"]["args"] == {"detail": "drop"}
   assert full_by_name["memory"]["args"] == {"stream": 9}
+
+
+def test_serializer_emits_unchanged_event_sequence(tmp_path: Path) -> None:
+  rank0 = tmp_path / "trace_rank0.json"
+  rank1 = tmp_path / "trace_rank1.json"
+  output = tmp_path / "merged.json.gz"
+  _write_trace(rank0, _rank_events(0))
+  _write_trace(rank1, _rank_events(1))
+
+  merge_traces([rank0, rank1], output, slim=False)
+  events = _read_merged(output)
+
+  # The C-encoder serializer must reproduce the exact event sequence the pure-Python
+  # json.dump path produced before: every event the fixtures contribute, in order,
+  # with thread_name/process_ metadata interleaved exactly as before.
+  names = [event.get("name") for event in events if event.get("name")]
+  assert "cpu-0" in names and "cpu-1" in names
+  assert "gpu-0" in names and "gpu-1" in names
+  assert "flow-start-0" in names and "flow-end-0" in names
+  assert "flow-start-1" in names and "flow-end-1" in names
+  assert names.index("cpu-0") < names.index("cpu-1")
+
+  cpu0 = next(e for e in events if e.get("name") == "cpu-0")
+  assert cpu0 == {
+      "ph": "X", "pid": "rank0", "ts": 1, "args": {"value": 0},
+      "name": "cpu-0",
+      "tid": next(e["tid"] for e in events if e.get("name") == "thread_name"
+                  and e["args"]["name"] == "rank0/7"),
+  }
+  # Serializing twice is deterministic: the decompressed payloads are identical.
+  second = tmp_path / "merged2.json.gz"
+  merge_traces([rank0, rank1], second, slim=False)
+  assert gzip.decompress(output.read_bytes()) == gzip.decompress(second.read_bytes())

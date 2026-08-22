@@ -33,6 +33,8 @@
     const PERFETTO_UI = 'https://ui.perfetto.dev';
     const traceUrl = {{ trace_url | tojson }};
     const traceTitle = {{ title | tojson }};
+    const mergeCount = {{ merge_count | tojson }};
+    const isMerge = {{ is_merge | tojson }};
 
     const statusEl = document.getElementById('status');
     const iframeEl = document.getElementById('perfetto-iframe');
@@ -48,11 +50,55 @@
       statusEl.textContent = msg;
     }
 
+    function formatMB(bytes) {
+      return (bytes / (1024 * 1024)).toFixed(1);
+    }
+
     async function fetchTrace() {
-      updateStatus('Loading trace...');
+      if (isMerge) {
+        const traceLabel = mergeCount === 1 ? 'trace' : `${mergeCount} traces`;
+        const started = Date.now();
+        updateStatus(`Merging ${traceLabel} on the server… 0s`);
+        const tick = setInterval(() => {
+          updateStatus(`Merging ${traceLabel} on the server… ${Math.floor((Date.now() - started) / 1000)}s`);
+        }, 1000);
+        try {
+          const buffer = await downloadTrace();
+          return buffer;
+        } finally {
+          clearInterval(tick);
+        }
+      }
+      updateStatus('Preparing trace on the server…');
+      return downloadTrace();
+    }
+
+    async function downloadTrace() {
       const resp = await fetch(traceUrl);
       if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${traceTitle}`);
-      return resp.arrayBuffer();
+
+      const total = Number(resp.headers.get('Content-Length') || 0);
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.byteLength;
+        if (total > 0) {
+          updateStatus(`Downloading ${formatMB(received)} / ${formatMB(total)} MB`);
+        } else {
+          updateStatus(`Downloading ${formatMB(received)} MB`);
+        }
+      }
+      const body = new Uint8Array(received);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return body.buffer;
     }
 
     async function loadTrace() {

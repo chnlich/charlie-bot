@@ -39,6 +39,10 @@ and is skipped silently: recompute the exemption from the tree each run and keep
 
 When no file qualifies, the run falls back to deletion mode: the target is the largest file whose
 topic was not previously rejected.
+When no symbol in the target meets the Step 3 evidence bar, the run may instead land a
+behavior-preserving cleanup in the target file (deduplication, stale comment or annotation
+hygiene) within the same 300-line budget, labeled refactor or style rather than deletion.
+Open no PR only when the run finds neither.
 
 A rejected topic is a closed `code-health/*` pull request carrying a comment that starts
 `code-health-abandoned:`, which is the entire record of that rejection. List the rejected branches

@@ -1395,23 +1395,11 @@ class SessionManager:
       plan_approval_future = asyncio.gather(
           *(asyncio.to_thread(self._has_pending_plan_approval, meta.id) for meta in active_sessions))
 
-    pending_futures = [f for f in (running_future, trigger_future, plan_approval_future) if f is not None]
-    if not pending_futures:
-      return
-    gathered = await asyncio.gather(*pending_futures)
-    idx = 0
-    running_flags = None
-    trigger_states = None
-    plan_approval_flags = None
-    if running_future is not None:
-      running_flags = gathered[idx]
-      idx += 1
-    if trigger_future is not None:
-      trigger_states = gathered[idx]
-      idx += 1
-    if plan_approval_future is not None:
-      plan_approval_flags = gathered[idx]
-      idx += 1
+    # The gathers start above; awaiting each in turn keeps them concurrent, so
+    # there is no shared gather to demux results out of.
+    running_flags = await running_future if running_future is not None else None
+    trigger_states = await trigger_future if trigger_future is not None else None
+    plan_approval_flags = await plan_approval_future if plan_approval_future is not None else None
 
     if running_flags is not None:
       for meta, running in zip(active_sessions, running_flags):

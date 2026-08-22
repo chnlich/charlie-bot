@@ -739,7 +739,8 @@ class SessionManager:
     and per-event-line: a single bad file is logged and skipped, not raised.
     """
     threads_deleted = await asyncio.to_thread(self._gc_old_threads_sync, session_id, cutoff_utc)
-    archive_result = await asyncio.to_thread(self._archive_old_chat_events_sync, session_id, cutoff_utc)
+    archive_result = await asyncio.to_thread(
+        self._chat_events._archive_old_chat_events_sync, session_id, cutoff_utc)
     events_archived = archive_result["events_archived"]
     archive_file = archive_result["archive_file"]
 
@@ -795,10 +796,6 @@ class SessionManager:
       except Exception:
         log.exception("thread_gc_failed", thread=str(thread_dir))
     return deleted
-
-  def _archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime) -> dict:
-    """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive."""
-    return self._chat_events._archive_old_chat_events_sync(session_id, cutoff_utc)
 
   async def star_session(self, session_id: str) -> SessionMetadata | None:
     """Star a session."""

@@ -672,12 +672,7 @@ class SessionManager:
         return meta
       meta.has_unread = False
       await self._save_metadata(meta)
-    await streaming_manager.broadcast(
-        "sidebar", {
-            "type": ET.UNREAD_CHANGED,
-            "session_id": session_id,
-            "has_unread": False,
-        })
+    await self._broadcast_unread_changed(session_id, False)
     return meta
 
   async def mark_unread(self, session_id: str) -> None:
@@ -688,11 +683,15 @@ class SessionManager:
         return
       meta.has_unread = True
       await self._save_metadata(meta)
+    await self._broadcast_unread_changed(session_id, True)
+
+  async def _broadcast_unread_changed(self, session_id: str, has_unread: bool) -> None:
+    """Broadcast the session's new unread flag on the sidebar channel."""
     await streaming_manager.broadcast(
         "sidebar", {
             "type": ET.UNREAD_CHANGED,
             "session_id": session_id,
-            "has_unread": True,
+            "has_unread": has_unread,
         })
 
   async def archive_session(self, session_id: str) -> SessionMetadata | None:

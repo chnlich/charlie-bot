@@ -50,6 +50,9 @@ log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 30.0  # seconds
 _PROJECTION_LRU_LIMIT = 8
+# Bounds both the successor-chain walk (a cycle must never spin) and the
+# delivery retry loop that re-resolves racing elones, keeping the two in agreement.
+_SUCCESSOR_CHAIN_HOP_LIMIT = 100
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
@@ -250,15 +253,18 @@ class SessionManager:
     None when *session_id* itself has no metadata on disk. When a hop's
     successor id has no metadata (that session was permanently deleted), stops
     and returns the last session that does exist, logging one structured error.
-    Raises RuntimeError if the chain exceeds 100 hops (a cycle must never spin).
+    Raises RuntimeError if the chain exceeds ``_SUCCESSOR_CHAIN_HOP_LIMIT``
+    hops (a cycle must never spin).
     """
     current = await self.read_metadata_fresh(session_id)
     if current is None:
       return None
     hops = 0
     while current.successor_session_id is not None:
-      if hops >= 100:
-        raise RuntimeError(f"successor chain from {session_id} exceeds 100 hops; aborting to avoid a cycle")
+      if hops >= _SUCCESSOR_CHAIN_HOP_LIMIT:
+        raise RuntimeError(
+            f"successor chain from {session_id} exceeds {_SUCCESSOR_CHAIN_HOP_LIMIT} hops;"
+            " aborting to avoid a cycle")
       successor_id = current.successor_session_id
       successor = await self.read_metadata_fresh(successor_id)
       if successor is None:
@@ -282,9 +288,9 @@ class SessionManager:
     was permanently deleted). Redirected events (chain end differs from *session_id*)
     are stamped with ``event['origin_session_id'] = session_id``.
     """
-    # Bound the retries to the same 100-hop notion used by chain resolution, and
+    # One opening attempt plus up to _SUCCESSOR_CHAIN_HOP_LIMIT tail-chases;
     # fail loud rather than looping forever on a steady stream of landing elones.
-    for _ in range(101):
+    for _ in range(_SUCCESSOR_CHAIN_HOP_LIMIT + 1):
       tail = await self.resolve_successor_chain(session_id)
       if tail is None:
         log.error("deliver_to_successor_origin_missing", session_id=session_id)
@@ -314,7 +320,9 @@ class SessionManager:
         await self.persist_and_broadcast(fresh_tail.id, event)
         return fresh_tail.id
 
-    raise RuntimeError(f"deliver_to_successor from {session_id} retried 100 times; aborting to avoid a loop")
+    raise RuntimeError(
+        f"deliver_to_successor from {session_id} retried {_SUCCESSOR_CHAIN_HOP_LIMIT}"
+        " times; aborting to avoid a loop")
 
   async def list_sessions(
       self,
@@ -974,7 +982,8 @@ class SessionManager:
     # Slack thread is waiting for.
     if event.get('type') == ET.MASTER_DONE:
       from src.core.slack_listener import (
-        deliver_done,  # lazy: cycle guard, as in src/core/init.py
+        # lazy: slack_listener imports SessionManager from this module at top level
+        deliver_done,
       )
 
       create_logged_task(

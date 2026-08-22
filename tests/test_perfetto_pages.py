@@ -178,6 +178,8 @@ async def test_perfetto_page_single_local_trace_uses_merged_url(tmp_path: Path) 
   assert urlsplit(merged_url).path == "/perfetto/merged"
   assert parse_qs(urlsplit(merged_url).query)["trace"] == [str(trace)]
   assert response.context["warn"] is None
+  assert response.context["is_merge"] is False
+  assert response.context["is_direct_pass"] is True
 
 
 @pytest.mark.asyncio
@@ -219,6 +221,8 @@ async def test_perfetto_page_multiple_local_json_uses_one_merged_url(tmp_path: P
   assert urlsplit(merged_url).path == "/perfetto/merged"
   assert query["trace"] == [str(path) for path in traces]
   assert query["slim"] == ["1"]
+  assert response.context["is_merge"] is True
+  assert response.context["is_direct_pass"] is False
   assert "traceUrls" not in response.body.decode("utf-8")
 
 
@@ -325,10 +329,11 @@ def test_cache_eviction_follows_last_use(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 @pytest.mark.asyncio
 async def test_two_phase_status_strings_are_present(tmp_path: Path) -> None:
-  trace = tmp_path / "rank0.json"
-  _write_trace(trace)
+  traces = [tmp_path / "rank0.json", tmp_path / "rank1.json"]
+  for trace in traces:
+    _write_trace(trace)
   response = await pages.perfetto_viewer(
-      _request(), trace=[str(trace)], dir=None, pattern="*.json", title=None, slim=None)
+      _request(), trace=[str(trace) for trace in traces], dir=None, pattern="*.json", title=None, slim=None)
   body = response.body.decode("utf-8")
   # Merge phase: a seconds counter is ticking while the server merges.
   assert "Merging" in body and "on the server" in body

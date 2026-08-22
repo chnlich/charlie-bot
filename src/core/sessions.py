@@ -32,7 +32,7 @@ from src.core.models import (
   utc_now,
 )
 from src.core.ndjson import append_ndjson
-from src.core.scheduled_sessions import (  # noqa: F401  # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
+from src.core.scheduled_sessions import (  # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
   ScheduledSessionBusyError,
   ScheduledSessionStore,
 )

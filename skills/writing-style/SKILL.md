@@ -1,10 +1,10 @@
 ---
 name: writing-style
-description: Genre style packs for code, READMEs, commits and PRs, article
-  shares, and coordination messages. Load the matching genre file at its
-  writing moment. General prose rules live in the master prompt's Writing
-  Style section.
-version: 2.0.0
+description: Genre style packs for code, READMEs, commits and PRs,
+  bug reports, article shares, and coordination messages. Load the matching
+  genre file at its writing moment. General prose rules live in the master
+  prompt's Writing Style section.
+version: 2.1.0
 ---
 
 # Writing Style
@@ -22,6 +22,10 @@ See [genres/readme.md](genres/readme.md).
 ## Commits and PRs
 
 See [genres/commits-and-prs.md](genres/commits-and-prs.md).
+
+## Bug reports
+
+See [genres/bug-report.md](genres/bug-report.md).
 
 ## Sharing articles
 

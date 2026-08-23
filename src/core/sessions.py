@@ -149,7 +149,7 @@ class SessionManager:
 
     self._create_session_dirs(self._session_dir(meta.id))
 
-    await self._save_metadata(meta)
+    await self.save_metadata(meta)
     await self._backend_create_hook(meta)
 
     log.info("session_created", session_id=meta.id, name=meta.name)
@@ -208,14 +208,14 @@ class SessionManager:
     meta = self._fresh_cached_meta(session_id)
     if meta is not None:
       if self._migrate_round_rating_keys(meta):
-        await self._save_metadata(meta)
+        await self.save_metadata(meta)
       return _stamp_thinking_since(meta.model_copy())
     raw = await self._read_metadata_raw(session_id)
     if raw is None:
       return None
     meta = SessionMetadata.model_validate_json(raw)
     if self._migrate_round_rating_keys(meta):
-      await self._save_metadata(meta)
+      await self.save_metadata(meta)
     else:
       self._metadata_cache[session_id] = (meta, time.monotonic())
     return _stamp_thinking_since(meta.model_copy())
@@ -448,7 +448,7 @@ class SessionManager:
         fresh_parent.rating = 'thumbs_down'
         fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
-        await self._save_metadata(fresh_parent)
+        await self.save_metadata(fresh_parent)
     self._drop_session_runtime_state(parent_id)
 
     log.info(
@@ -548,7 +548,7 @@ class SessionManager:
         "timestamp": utc_now().isoformat(),
     }
     await append_ndjson(events_path, clone_event)
-    await self._save_metadata(meta)
+    await self.save_metadata(meta)
     await self._copy_plans_to_child(parent_id, session_dir)
     return _stamp_thinking_since(meta)
 
@@ -646,7 +646,7 @@ class SessionManager:
         return None
       meta.name = new_name
       meta.updated_at = utc_now()
-      await self._save_metadata(meta)
+      await self.save_metadata(meta)
     log.info("session_renamed", session_id=session_id, new_name=new_name)
     return meta
 
@@ -664,7 +664,7 @@ class SessionManager:
         return None
       meta.backend = backend
       meta.updated_at = utc_now()
-      await self._save_metadata(meta)
+      await self.save_metadata(meta)
     await streaming_manager.broadcast(
         "sidebar", {
             "type": ET.BACKEND_SWITCHED,
@@ -694,7 +694,7 @@ class SessionManager:
       if not meta or meta.has_unread == has_unread:
         return meta
       meta.has_unread = has_unread
-      await self._save_metadata(meta)
+      await self.save_metadata(meta)
     await self._broadcast_unread_changed(session_id, has_unread)
     return meta
 
@@ -754,7 +754,7 @@ class SessionManager:
         fresh = await self.get_session(session_id)
         if fresh is not None:
           fresh.archive_offset += events_archived
-          await self._save_metadata(fresh)
+          await self.save_metadata(fresh)
       self._drop_session_runtime_state(session_id)
 
     log.info(
@@ -849,13 +849,9 @@ class SessionManager:
           continue
         fresh.group = new_name
         fresh.updated_at = utc_now()
-        await self._save_metadata(fresh)
+        await self.save_metadata(fresh)
       count += 1
     return count
-
-  async def save_metadata(self, meta: SessionMetadata) -> None:
-    """Public wrapper for _save_metadata."""
-    await self._save_metadata(meta)
 
   async def persist_cc_session_id(self, session_id: str, cc_session_id: str) -> str | None:
     """Persist a cc_session_id without clobbering unrelated metadata fields.
@@ -875,7 +871,7 @@ class SessionManager:
       if fresh.cc_session_id != cc_session_id:
         fresh.cc_session_id = cc_session_id
         fresh.cc_session_started_at = utc_now()
-      await self._save_metadata(fresh)
+      await self.save_metadata(fresh)
       self._invalidate_cache(session_id)
       read_back = await self.get_session(session_id)
     return read_back.cc_session_id if read_back is not None else None
@@ -901,7 +897,7 @@ class SessionManager:
       if fresh is None:
         return
       fresh.master_run = record
-      await self._save_metadata(fresh)
+      await self.save_metadata(fresh)
       self._invalidate_cache(session_id)
 
   async def update_thinking_state(
@@ -919,7 +915,7 @@ class SessionManager:
       fresh = await self.get_session(session_id)
       if fresh:
         fresh.updated_at = updated_at
-        await self._save_metadata(fresh)
+        await self.save_metadata(fresh)
 
   def list_active_session_ids(self) -> list[SessionMetadata]:
     """Return metadata for active sessions by reading metadata.json files.
@@ -1018,7 +1014,7 @@ class SessionManager:
     # Live file only holds events from index archive_offset onward; seed the
     # aggregator's offset so the deltas it emits carry the same GLOBAL
     # event_index that persist_and_broadcast stamps on the raw event.
-    aggregator = MessageAggregator(event_index_offset=self._read_archive_offset_sync(session_id))
+    aggregator = MessageAggregator(event_index_offset=self._chat_events._read_archive_offset_sync(session_id))
     for ev in self.load_chat_events_sync(session_id):
       for _ in aggregator.feed(ev):
         pass
@@ -1068,7 +1064,7 @@ class SessionManager:
     when ``archive_offset != 0`` — those sessions fall back entirely to the
     event-index cursor path and never mix the two cursor domains.
     """
-    if self._read_archive_offset_sync(session_id) != 0:
+    if self._chat_events._read_archive_offset_sync(session_id) != 0:
       return None
     live = self.load_chat_events_sync(session_id)
     snapshot = list(live)
@@ -1087,15 +1083,6 @@ class SessionManager:
     self._chat_events.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     self._projection_cache.pop(session_id, None)
-
-  def _read_archive_offset_sync(self, session_id: str) -> int:
-    """Synchronously read the archive_offset from metadata.json.
-
-    Used by sync read paths (e.g. ``load_chat_events_range``) so they don't
-    have to go async just to learn the live/archive split. Falls back to 0 if
-    the metadata file is missing or unreadable.
-    """
-    return self._chat_events._read_archive_offset_sync(session_id)
 
   async def resolve_session_usage(
       self,
@@ -1215,7 +1202,7 @@ class SessionManager:
       try:
         migrated = self._migrate_round_rating_keys(meta)
         if migrated:
-          await self._save_metadata(meta)
+          await self.save_metadata(meta)
       except Exception as exc:
         log.warning('session_load_failed', session_id=session_id, error=str(exc))
         continue
@@ -1241,7 +1228,7 @@ class SessionManager:
         return None
       setattr(meta, field, value)
       meta.updated_at = utc_now()
-      await self._save_metadata(meta)
+      await self.save_metadata(meta)
     log.info(log_event, session_id=session_id)
     return meta
 
@@ -1331,7 +1318,7 @@ class SessionManager:
       include_pending_plan_approval: bool = False,
   ) -> list[SessionMetadata]:
     """Populate sidebar state and sort newest first."""
-    await self._populate_sidebar_state(
+    await self.populate_sidebar_state(
         sessions,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
@@ -1341,21 +1328,6 @@ class SessionManager:
     return sessions
 
   async def populate_sidebar_state(
-      self,
-      sessions: list[SessionMetadata],
-      include_running_status: bool = False,
-      include_pending_trigger_status: bool = False,
-      include_pending_plan_approval: bool = False,
-  ) -> None:
-    """Public wrapper for _populate_sidebar_state."""
-    await self._populate_sidebar_state(
-        sessions,
-        include_running_status=include_running_status,
-        include_pending_trigger_status=include_pending_trigger_status,
-        include_pending_plan_approval=include_pending_plan_approval,
-    )
-
-  async def _populate_sidebar_state(
       self,
       sessions: list[SessionMetadata],
       include_running_status: bool = False,
@@ -1456,7 +1428,7 @@ class SessionManager:
       return 0
     return sum(1 for d in self._cfg.sessions_dir.iterdir() if d.is_dir())
 
-  async def _save_metadata(self, meta: SessionMetadata) -> None:
+  async def save_metadata(self, meta: SessionMetadata) -> None:
     path = self._metadata_path(meta.id)
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)

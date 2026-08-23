@@ -29,7 +29,7 @@ async def _seed_parent(
 ) -> SessionMetadata:
   """Create and persist a parent session with chat events."""
   parent = SessionMetadata(name="Parent", group=group, backend=backend)
-  await mgr._save_metadata(parent)
+  await mgr.save_metadata(parent)
   events_path = mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(json.dumps({"type": "user", "content": "hello"}) + "\n")
@@ -142,7 +142,7 @@ async def test_update_thinking_state_preserves_newer_group_from_disk(tmp_path: P
   concurrent_mgr = SessionManager(cfg)
   verify_mgr = SessionManager(cfg)
   meta = SessionMetadata(name="Session 1")
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
 
   # Populate mgr's metadata cache with a stale pre-group snapshot.
   await mgr.get_session(meta.id)
@@ -170,19 +170,19 @@ async def test_mark_unread_and_update_thinking_state_do_not_clobber(tmp_path: Pa
   """
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(name="Session 1", has_unread=False)
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
 
-  # Force interleaving by injecting a yield point inside _save_metadata. The
+  # Force interleaving by injecting a yield point inside save_metadata. The
   # per-session lock must serialize the two RMW sequences so both mutations
   # end up on disk.
-  real_save = mgr._save_metadata
+  real_save = mgr.save_metadata
 
   async def yielding_save(m: SessionMetadata) -> None:
     await asyncio.sleep(0)
     await real_save(m)
 
   updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
-  with patch.object(mgr, "_save_metadata", side_effect=yielding_save):
+  with patch.object(mgr, "save_metadata", side_effect=yielding_save):
     with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
       await asyncio.gather(
           mgr.mark_unread(meta.id),

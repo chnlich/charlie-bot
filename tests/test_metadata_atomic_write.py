@@ -1,6 +1,6 @@
 """Deterministic tests for atomic metadata.json writes.
 
-``_save_metadata`` must make each update to a session's ``metadata.json``
+``save_metadata`` must make each update to a session's ``metadata.json``
 atomically visible to concurrent readers: a reader always observes one complete
 document, the old one or the new one, never an empty or partial file. Each write
 uses an exclusive temp file in the target directory followed by ``os.replace``.
@@ -43,7 +43,7 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   """
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(name="seed", backend="claude-opus-4.6")
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
   replaced_targets: list[str] = []
@@ -55,7 +55,7 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   with patch("src.core.sessions.os.replace", side_effect=_capture_replace):
     updated = meta.model_copy()
     updated.name = "changed"
-    await mgr._save_metadata(updated)
+    await mgr.save_metadata(updated)
 
   assert str(target) in replaced_targets
 
@@ -70,7 +70,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
   """
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(name="before", backend="claude-opus-4.6")
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
   read_at_swap: list[str] = []
@@ -82,7 +82,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
   with patch("src.core.sessions.os.replace", side_effect=_read_then_replace):
     updated = meta.model_copy()
     updated.name = "after"
-    await mgr._save_metadata(updated)
+    await mgr.save_metadata(updated)
 
   assert len(read_at_swap) == 1
   raw = read_at_swap[0]
@@ -92,7 +92,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
 
 
 class _InterleaveController:
-  """Coordinate two concurrent _save_metadata writes into the defect window.
+  """Coordinate two concurrent save_metadata writes into the defect window.
 
   The first write's replace is held until the second write has fully completed,
   forcing the second write to run entirely between the first write's temp-file
@@ -127,7 +127,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   """
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(name="seed", backend="claude-opus-4.6")
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
   first = meta.model_copy()
@@ -142,8 +142,8 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
 
   with patch("src.core.sessions.os.replace", side_effect=_coordinated_replace):
     results = await asyncio.gather(
-        mgr._save_metadata(first),
-        mgr._save_metadata(second),
+        mgr.save_metadata(first),
+        mgr.save_metadata(second),
         return_exceptions=True,
     )
 

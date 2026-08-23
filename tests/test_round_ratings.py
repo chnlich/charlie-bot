@@ -27,7 +27,7 @@ def _make_session_mgr(tmp_path: Path) -> SessionManager:
 async def test_save_chat_event_assigns_unique_uuid_ids(tmp_path: Path) -> None:
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(name="UUID events")
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
 
   first = {"type": "master_done"}
   second = {"type": "master_done"}
@@ -52,10 +52,10 @@ async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path) -> 
           "event-uuid": "thumbs_down",
       },
   )
-  await seed_mgr._save_metadata(meta)
+  await seed_mgr.save_metadata(meta)
 
   load_mgr = SessionManager(seed_mgr._cfg)
-  real_save = load_mgr._save_metadata
+  real_save = load_mgr.save_metadata
   save_calls = 0
 
   async def counting_save(updated: SessionMetadata) -> None:
@@ -63,7 +63,7 @@ async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path) -> 
     save_calls += 1
     await real_save(updated)
 
-  with patch.object(load_mgr, "_save_metadata", side_effect=counting_save):
+  with patch.object(load_mgr, "save_metadata", side_effect=counting_save):
     first = await load_mgr.get_session(meta.id)
     second = await load_mgr.get_session(meta.id)
 
@@ -84,7 +84,7 @@ async def test_round_rating_metadata_migration_is_idempotent(tmp_path: Path) -> 
 async def test_rate_round_uses_string_round_id_path_key(tmp_path: Path) -> None:
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(name="API ratings")
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
 
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")

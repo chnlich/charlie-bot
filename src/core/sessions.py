@@ -751,7 +751,7 @@ class SessionManager:
     """
     threads_deleted = await asyncio.to_thread(self._gc_old_threads_sync, session_id, cutoff_utc)
     archive_result = await asyncio.to_thread(
-        self._chat_events._archive_old_chat_events_sync, session_id, cutoff_utc)
+        self._chat_events.archive_old_chat_events_sync, session_id, cutoff_utc)
     events_archived = archive_result["events_archived"]
     archive_file = archive_result["archive_file"]
 
@@ -1014,7 +1014,7 @@ class SessionManager:
     # Live file only holds events from index archive_offset onward; seed the
     # aggregator's offset so the deltas it emits carry the same GLOBAL
     # event_index that persist_and_broadcast stamps on the raw event.
-    aggregator = MessageAggregator(event_index_offset=self._chat_events._read_archive_offset_sync(session_id))
+    aggregator = MessageAggregator(event_index_offset=self._chat_events.read_archive_offset_sync(session_id))
     for ev in self.load_chat_events_sync(session_id):
       for _ in aggregator.feed(ev):
         pass
@@ -1064,7 +1064,7 @@ class SessionManager:
     when ``archive_offset != 0`` — those sessions fall back entirely to the
     event-index cursor path and never mix the two cursor domains.
     """
-    if self._chat_events._read_archive_offset_sync(session_id) != 0:
+    if self._chat_events.read_archive_offset_sync(session_id) != 0:
       return None
     live = self.load_chat_events_sync(session_id)
     snapshot = list(live)

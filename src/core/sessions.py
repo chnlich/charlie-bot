@@ -1376,9 +1376,12 @@ class SessionManager:
       plan_approval_future = asyncio.gather(
           *(asyncio.to_thread(self._has_pending_plan_approval, meta.id) for meta in active_sessions))
 
-    # The gathers above schedule their probes at creation; awaiting only after
-    # all three futures exist keeps the groups concurrent. Sinking a gather
-    # into its await below would serialize that group behind the earlier ones.
+    # One collective wait first: cancelling or failing here takes every probe
+    # group down together. The named awaits below then collect from already-
+    # done futures, so the groups stay concurrent regardless of await order.
+    requested = [f for f in (running_future, trigger_future, plan_approval_future) if f is not None]
+    if requested:
+      await asyncio.gather(*requested)
     running_flags = None
     trigger_states = None
     plan_approval_flags = None

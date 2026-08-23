@@ -895,7 +895,7 @@ class SessionManager:
         fresh.updated_at = updated_at
         await self.save_metadata(fresh)
 
-  def list_active_session_ids(self) -> list[SessionMetadata]:
+  def list_active_session_metas(self) -> list[SessionMetadata]:
     """Return metadata for active sessions by reading metadata.json files.
 
     Sync method — returns full SessionMetadata objects so callers avoid

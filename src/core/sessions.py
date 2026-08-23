@@ -71,8 +71,8 @@ _TRANSIENT_METADATA_FIELDS = {
 
 
 def _session_channel(session_id: str) -> str:
-  # The session websocket subscribes under this same topic string
-  # (server.py session_websocket); every publisher must build it identically.
+  # Topic string must match the one session_websocket subscribes to in
+  # server.py; this helper keeps this module's two publishers agreeing.
   return f"session:{session_id}"
 
 

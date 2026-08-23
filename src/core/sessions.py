@@ -24,6 +24,7 @@ from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
   TERMINAL_THREAD_STATUSES,
+  BackendOption,
   CreateSessionRequest,
   MasterRunRecord,
   SessionCallbacks,
@@ -208,10 +209,15 @@ class SessionManager:
         group,
     )
 
+  def _tui_cli_option(self, backend_id: str) -> BackendOption | None:
+    # Only tui-cli backends carry tmux lifecycle state, and the create and
+    # destroy hooks must agree on which sessions that covers.
+    option = self._cfg.get_backend_option(backend_id)
+    return option if option is not None and option.type == "tui-cli" else None
+
   async def _backend_create_hook(self, meta: SessionMetadata) -> None:
     """Run backend-specific session-create work (e.g. spawn tmux for tui-cli)."""
-    option = self._cfg.get_backend_option(meta.backend)
-    if option is None or option.type != "tui-cli":
+    if self._tui_cli_option(meta.backend) is None:
       return
     from src.agents.backends.tui import ensure_tmux_session
     try:
@@ -226,8 +232,7 @@ class SessionManager:
     # NOT kill the underlying tmux/claude process for tui-cli sessions.
     if meta is None:
       return
-    option = self._cfg.get_backend_option(meta.backend)
-    if option is None or option.type != "tui-cli":
+    if self._tui_cli_option(meta.backend) is None:
       return
     from src.agents.backends.tui import kill_tmux_session
     await kill_tmux_session(session_id)

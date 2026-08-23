@@ -571,7 +571,6 @@ class SessionManager:
     await asyncio.to_thread(self._write_reference_events_sync, reference_path, events)
 
     events_path = self.get_chat_events_path(meta.id)
-    await asyncio.to_thread(events_path.write_text, '', encoding='utf-8')
     clone_event = {
         "type": ET.CLONE_START,
         "parent_session_id": parent_id,

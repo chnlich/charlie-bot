@@ -895,7 +895,7 @@ class SessionManager:
         fresh.updated_at = updated_at
         await self.save_metadata(fresh)
 
-  def list_active_session_ids(self) -> list[SessionMetadata]:
+  def list_active_session_metas(self) -> list[SessionMetadata]:
     """Return metadata for active sessions by reading metadata.json files.
 
     Sync method — returns full SessionMetadata objects so callers avoid
@@ -1410,6 +1410,16 @@ class SessionManager:
     return sum(1 for d in self._cfg.sessions_dir.iterdir() if d.is_dir())
 
   async def save_metadata(self, meta: SessionMetadata) -> None:
+    """Persist *meta* to metadata.json and refresh the TTL cache from the serialized form.
+
+    The write is atomic — a unique-per-call tmp file swapped in by ``os.replace``
+    — and excludes ``_TRANSIENT_METADATA_FIELDS``. The cache entry stores the meta
+    re-validated from that serialized form, so a cached read sees exactly what a
+    disk read parses; that is what lets save-callers skip a manual cache populate
+    (see ``get_session``'s migrate branch). ``updated_at`` is written as given:
+    bumping or preserving it is the caller's decision (``_update_field`` bumps,
+    ``_set_unread_flag`` does not).
+    """
     path = self._metadata_path(meta.id)
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)

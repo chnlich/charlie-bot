@@ -1418,12 +1418,12 @@ class SessionManager:
 
     def _read_and_increment() -> int:
       self._cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-      if counter_path.exists():
-        try:
-          n = int(counter_path.read_text().strip())
-        except (ValueError, OSError):
-          n = self._count_session_dirs()
-      else:
+      # FileNotFoundError is an OSError, so a missing counter takes the same
+      # count-dirs fallback as an unreadable or unparsable one; an exists()
+      # pre-check would only open a check-then-read race.
+      try:
+        n = int(counter_path.read_text().strip())
+      except (ValueError, OSError):
         n = self._count_session_dirs()
       counter_path.write_text(str(n + 1))
       return n

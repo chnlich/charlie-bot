@@ -206,17 +206,18 @@ class SessionManager:
   async def get_session(self, session_id: str) -> SessionMetadata | None:
     """Load session metadata, using in-memory cache when available."""
     meta = self._fresh_cached_meta(session_id)
-    if meta is not None:
-      if self._migrate_round_rating_keys(meta):
-        await self.save_metadata(meta)
-      return _stamp_thinking_since(meta.model_copy())
-    raw = await self._read_metadata_raw(session_id)
-    if raw is None:
-      return None
-    meta = SessionMetadata.model_validate_json(raw)
+    cache_hit = meta is not None
+    if meta is None:
+      raw = await self._read_metadata_raw(session_id)
+      if raw is None:
+        return None
+      meta = SessionMetadata.model_validate_json(raw)
+    # The migrate branch's save_metadata re-populates the cache, so the manual
+    # populate below covers disk loads only; re-stamping a hit's timestamp
+    # would wrongly extend its TTL.
     if self._migrate_round_rating_keys(meta):
       await self.save_metadata(meta)
-    else:
+    elif not cache_hit:
       self._metadata_cache[session_id] = (meta, time.monotonic())
     return _stamp_thinking_since(meta.model_copy())
 
@@ -665,12 +666,7 @@ class SessionManager:
       meta.backend = backend
       meta.updated_at = utc_now()
       await self.save_metadata(meta)
-    await streaming_manager.broadcast(
-        "sidebar", {
-            "type": ET.BACKEND_SWITCHED,
-            "session_id": session_id,
-            "backend": backend,
-        })
+    await self._broadcast_sidebar(session_id, ET.BACKEND_SWITCHED, backend=backend)
     log.info("session_backend_switched", session_id=session_id, backend=backend)
     return meta
 
@@ -695,17 +691,17 @@ class SessionManager:
         return meta
       meta.has_unread = has_unread
       await self.save_metadata(meta)
-    await self._broadcast_unread_changed(session_id, has_unread)
+    await self._broadcast_sidebar(session_id, ET.UNREAD_CHANGED, has_unread=has_unread)
     return meta
 
-  async def _broadcast_unread_changed(self, session_id: str, has_unread: bool) -> None:
-    """Broadcast the session's new unread flag on the sidebar channel."""
-    await streaming_manager.broadcast(
-        "sidebar", {
-            "type": ET.UNREAD_CHANGED,
-            "session_id": session_id,
-            "has_unread": has_unread,
-        })
+  async def _broadcast_sidebar(self, session_id: str, event_type: str, **fields: Any) -> None:
+    """Broadcast one session-scoped sidebar event.
+
+    Every session-scoped sidebar event carries the same channel and
+    ``session_id`` key; the helper is what keeps the senders agreeing on that
+    payload shape.
+    """
+    await streaming_manager.broadcast("sidebar", {"type": event_type, "session_id": session_id, **fields})
 
   async def archive_session(self, session_id: str) -> SessionMetadata | None:
     """Mark a session as archived (does not delete files)."""
@@ -814,12 +810,7 @@ class SessionManager:
     """Set or clear the group for a session."""
     meta = await self._update_field(session_id, "group", group, "session_group_set")
     if meta:
-      await streaming_manager.broadcast(
-          "sidebar", {
-              "type": ET.SESSION_GROUP_CHANGED,
-              "session_id": session_id,
-              "group": group,
-          })
+      await self._broadcast_sidebar(session_id, ET.SESSION_GROUP_CHANGED, group=group)
     return meta
 
   async def rename_group(self, old_name: str, new_name: str) -> int:

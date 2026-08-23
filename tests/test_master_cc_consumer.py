@@ -437,7 +437,7 @@ async def test_stamp_recovers_after_unrelated_save_resets_cached_object(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  """T5c: an unrelated _save_metadata rebuilds the cached object from
+  """T5c: an unrelated save_metadata rebuilds the cached object from
   transient-excluded JSON; a cache-hit read within the TTL must still return
   the live busy value (no 30s bounded None window)."""
   cfg = _make_consumer_cfg(tmp_path)

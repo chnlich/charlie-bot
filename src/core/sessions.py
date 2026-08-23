@@ -789,15 +789,9 @@ class SessionManager:
           continue
         if meta.get("status") not in TERMINAL_THREAD_STATUSES:
           continue
-        completed_at_raw = meta.get("completed_at")
-        if not completed_at_raw:
-          continue
-        try:
-          completed_at = parse_utc_datetime(completed_at_raw)
-        except ValueError as e:
-          log.debug("thread_completed_at_parse_failed", thread=str(thread_dir), error=str(e))
-          continue
-        if completed_at >= cutoff_utc:
+        completed_at = self._parse_optional_utc(
+            meta.get("completed_at"), "thread_completed_at_parse_failed", thread=str(thread_dir))
+        if completed_at is None or completed_at >= cutoff_utc:
           continue
         shutil.rmtree(thread_dir)
         deleted += 1
@@ -1122,6 +1116,22 @@ class SessionManager:
     return None
 
   @staticmethod
+  def _parse_optional_utc(raw: Any, log_event: str, **log_ctx: Any) -> datetime | None:
+    """Parse a stored timestamp tolerantly: absent or unparseable becomes None.
+
+    Both scans that route through here (``_gc_old_threads_sync`` and
+    ``_get_pending_trigger_state``) treat a bad timestamp as skip-and-continue,
+    never as a hard failure, so one corrupt file must not abort the scan.
+    """
+    if not raw:
+      return None
+    try:
+      return parse_utc_datetime(raw)
+    except ValueError as e:
+      log.debug(log_event, **log_ctx, error=str(e))
+      return None
+
+  @staticmethod
   def _migrate_round_rating_keys(meta: SessionMetadata) -> bool:
     """Rewrite pre-UUID rating keys from event_index strings to legacy ids."""
     if not meta.round_ratings:
@@ -1281,13 +1291,9 @@ class SessionManager:
           continue
 
         pending_count += 1
-        fire_at_raw = trigger.get("fire_at")
-        if not fire_at_raw:
-          continue
-        try:
-          fire_at = parse_utc_datetime(fire_at_raw)
-        except ValueError as e:
-          log.debug("trigger_fire_at_parse_failed", trigger_path=str(trigger_path), error=str(e))
+        fire_at = self._parse_optional_utc(
+            trigger.get("fire_at"), "trigger_fire_at_parse_failed", trigger_path=str(trigger_path))
+        if fire_at is None:
           continue
         if next_trigger_at is None or fire_at < next_trigger_at:
           next_trigger_at = fire_at

@@ -83,7 +83,7 @@ class ChatEventStore:
     if session_meta is not None:
       archive_offset = session_meta.archive_offset
     else:
-      archive_offset = self._read_archive_offset_sync(session_id)
+      archive_offset = self.read_archive_offset_sync(session_id)
     if session_id in self._events_cache:
       return archive_offset + len(self._events_cache[session_id])
     return archive_offset + count_ndjson_lines(self._chat_events_path(session_id))
@@ -97,7 +97,7 @@ class ChatEventStore:
     """
     if end <= start:
       return [], start > 0
-    archive_offset = self._read_archive_offset_sync(session_id)
+    archive_offset = self.read_archive_offset_sync(session_id)
     live_path = self._chat_events_path(session_id)
     if end <= archive_offset:
       return self._load_archive_range(session_id, start, end), start > 0
@@ -111,12 +111,13 @@ class ChatEventStore:
     live_events, _ = parse_ndjson_range(live_path, 0, live_end)
     return archive_events + live_events, start > 0
 
-  def _read_archive_offset_sync(self, session_id: str) -> int:
+  def read_archive_offset_sync(self, session_id: str) -> int:
     """Synchronously read the archive_offset from metadata.json.
 
-    Used by sync read paths (e.g. ``load_chat_events_range``) so they don't
-    have to go async just to learn the live/archive split. Falls back to 0 if
-    the metadata file is missing or unreadable.
+    Used by sync read paths (``load_chat_events_range`` and SessionManager's
+    aggregator seed / projection guard) so they don't have to go async just to
+    learn the live/archive split. Falls back to 0 if the metadata file is
+    missing or unreadable.
     """
     cached = self._metadata_cache.get(session_id)
     if cached is not None:
@@ -170,7 +171,7 @@ class ChatEventStore:
   def _chat_events_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "data" / "chat_events.jsonl"
 
-  def _archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime) -> dict:
+  def archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime) -> dict:
     """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive."""
     live_path = self._chat_events_path(session_id)
     if not live_path.exists():

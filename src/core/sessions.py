@@ -369,11 +369,9 @@ class SessionManager:
     for meta in all_meta:
       if meta.status != SessionStatus.ACTIVE:
         continue
-      # Check session name first
-      if query_lower in (meta.name or '').lower():
+      if query_lower in meta.name.lower():
         results.append(meta)
         continue
-      # Collect non-name-matched sessions for parallel content scan
       content_candidates.append((meta, self.get_chat_events_path(meta.id)))
 
     async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:

@@ -359,7 +359,7 @@ class SessionManager:
           return None
 
         if fresh_tail.id != session_id:
-          event['origin_session_id'] = session_id
+          event["origin_session_id"] = session_id
         await self.persist_and_broadcast(fresh_tail.id, event)
         return fresh_tail.id
 
@@ -415,9 +415,9 @@ class SessionManager:
         if not path.exists():
           return False
         try:
-          return query_lower in path.read_text(encoding='utf-8').lower()
+          return query_lower in path.read_text(encoding="utf-8").lower()
         except OSError as e:
-          log.debug('search_read_failed', session_id=meta.id, error=str(e))
+          log.debug("search_read_failed", session_id=meta.id, error=str(e))
           return False
 
       return meta if await asyncio.to_thread(_read_and_check) else None
@@ -438,7 +438,7 @@ class SessionManager:
   ) -> SessionMetadata:
     """Create a new session with parent events stored as a reference file."""
     meta = await self._spawn_with_reference(parent_id, event_index, backend, "C")
-    self._log_spawn('session_cloned', meta, parent_id, event_index)
+    self._log_spawn("session_cloned", meta, parent_id, event_index)
     return meta
 
   async def elone_session(
@@ -474,13 +474,13 @@ class SessionManager:
       fresh_parent = await self.get_session(parent_id)
       if fresh_parent:
         fresh_parent.status = SessionStatus.ARCHIVED
-        fresh_parent.rating = 'thumbs_down'
+        fresh_parent.rating = "thumbs_down"
         fresh_parent.successor_session_id = meta.id
         fresh_parent.updated_at = utc_now()
         await self.save_metadata(fresh_parent)
     self._drop_session_runtime_state(parent_id)
 
-    self._log_spawn('session_eloned', meta, parent_id, event_index)
+    self._log_spawn("session_eloned", meta, parent_id, event_index)
     return meta
 
   async def _elone_scheduled_successor(
@@ -547,7 +547,7 @@ class SessionManager:
       raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
 
     meta = SessionMetadata(
-        name=parent.name if inherit_scheduling else f'{name_prefix}{parent.name}',
+        name=parent.name if inherit_scheduling else f"{name_prefix}{parent.name}",
         parent_session_id=parent_id,
         backend=backend or parent.backend,
         group=parent.group,
@@ -559,7 +559,7 @@ class SessionManager:
     session_dir = self._session_dir(meta.id)
     self._create_session_dirs(session_dir)
 
-    reference_path = session_dir / 'data' / 'parent_reference.jsonl'
+    reference_path = session_dir / "data" / "parent_reference.jsonl"
     await asyncio.to_thread(self._write_reference_events_sync, reference_path, events)
 
     events_path = self.get_chat_events_path(meta.id)
@@ -960,13 +960,13 @@ class SessionManager:
     meta = await self.get_session(session_id)
     archive_offset = meta.archive_offset if meta else 0
     await self.save_chat_event(session_id, event)
-    event['event_index'] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
+    event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
 
     channel = _session_channel(session_id)
     deltas = list(aggregator.feed(event))
     for delta in deltas:
       await streaming_manager.broadcast(channel, delta)
-    if event.get('type') not in _RAW_EVENTS_REPLACED_BY_DELTAS:
+    if event.get("type") not in _RAW_EVENTS_REPLACED_BY_DELTAS:
       await streaming_manager.broadcast(channel, event)
 
     # Slack delivery hangs off the round's terminal event, after the broadcast
@@ -974,7 +974,7 @@ class SessionManager:
     # post fails, and a round re-attached after a restart delivers through this
     # same point. deliver_done decides for itself whether the round is one a
     # Slack thread is waiting for.
-    if event.get('type') == ET.MASTER_DONE:
+    if event.get("type") == ET.MASTER_DONE:
       from src.core.slack_listener import (
         # lazy: slack_listener imports SessionManager from this module at top level
         deliver_done,
@@ -1199,7 +1199,7 @@ class SessionManager:
         meta = cached_metas[session_id]
       else:
         if session_id in read_failures:
-          log.warning('session_load_failed', session_id=session_id, error=str(read_failures[session_id]))
+          log.warning("session_load_failed", session_id=session_id, error=str(read_failures[session_id]))
           continue
         if session_id not in raw_by_id:
           continue
@@ -1210,7 +1210,7 @@ class SessionManager:
         try:
           meta = SessionMetadata.model_validate_json(raw)
         except Exception as exc:
-          log.warning('session_load_failed', session_id=session_id, error=str(exc))
+          log.warning("session_load_failed", session_id=session_id, error=str(exc))
           continue
 
       try:
@@ -1218,7 +1218,7 @@ class SessionManager:
         if migrated:
           await self.save_metadata(meta)
       except Exception as exc:
-        log.warning('session_load_failed', session_id=session_id, error=str(exc))
+        log.warning("session_load_failed", session_id=session_id, error=str(exc))
         continue
 
       if not loaded_from_cache and not migrated:

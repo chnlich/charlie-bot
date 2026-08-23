@@ -1278,6 +1278,7 @@ class SessionManager:
     approval. The probe must never raise — a corrupt single-session file cannot 5xx the
     sidebar poll for all sessions.
     """
+    # lazy: plans imports SessionManager from this module at top level
     from src.core.plans import read_plans_tolerant
 
     plans_path = self._session_dir(session_id) / "plans.json"

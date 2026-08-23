@@ -14,7 +14,13 @@ import structlog
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
-from src.core.models import TaskType, ThreadMetadata, parse_utc_datetime, utc_now
+from src.core.models import (
+  TERMINAL_THREAD_STATUSES,
+  TaskType,
+  ThreadMetadata,
+  parse_utc_datetime,
+  utc_now,
+)
 from src.core.process import kill_process_group
 from src.core.tasks import create_logged_task
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
@@ -25,9 +31,6 @@ log = structlog.get_logger()
 # Failed worktrees older than this are swept into <worktree_dir>/.trash/ on startup.
 # Kept (not hard-deleted) so recent failures stay available for debugging.
 FAILED_WORKTREE_QUARANTINE_DAYS = 7
-
-# Thread statuses that mean the worker is done; anything else still owns its worktree.
-_TERMINAL_THREAD_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 # Only threads whose metadata.json was modified within this window are read+parsed
 # by the orphan-recovery scan and the live "has running task" badge. A running
@@ -213,7 +216,7 @@ async def _reconcile_one(
   session_id = item.session_id
   description = meta.get("description", "")
 
-  if meta.get("status") in _TERMINAL_THREAD_STATUSES:
+  if meta.get("status") in TERMINAL_THREAD_STATUSES:
     await _complete_finalize_effects(
         cfg, session_mgr, thread_mgr, spawner, item,
         chat_events=chat_events, session_threads=session_threads)
@@ -527,7 +530,7 @@ async def _quarantine_stale_failed_worktrees(cfg, threads: list[dict]) -> None:
   active_worktrees = {
       meta.get("worktree_path")
       for meta in threads
-      if meta.get("worktree_path") and meta.get("status") not in _TERMINAL_THREAD_STATUSES
+      if meta.get("worktree_path") and meta.get("status") not in TERMINAL_THREAD_STATUSES
   }
 
   now = utc_now()

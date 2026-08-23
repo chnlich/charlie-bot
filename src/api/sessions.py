@@ -574,7 +574,7 @@ async def fork_session(
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e))
 
-  reference_path = session_mgr.get_chat_events_path(meta.id).parent / "parent_reference.jsonl"
+  reference_path = session_mgr.parent_reference_path(meta.id)
   bootstrap_prompt = (
       "This session continues a prior conversation.\n\n"
       f"The full prior conversation up to the takeover point is in {reference_path}. "
@@ -610,7 +610,7 @@ async def elone_session(
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e))
 
-  reference_path = session_mgr.get_chat_events_path(meta.id).parent / "parent_reference.jsonl"
+  reference_path = session_mgr.parent_reference_path(meta.id)
   bootstrap_prompt = (
       "You're taking over because the user wasn't satisfied with the previous session. "
       "The dissatisfaction is usually with the most recent exchange before the takeover point.\n\n"

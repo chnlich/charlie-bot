@@ -560,7 +560,7 @@ class SessionManager:
     session_dir = self._session_dir(meta.id)
     self._create_session_dirs(session_dir)
 
-    reference_path = session_dir / "data" / "parent_reference.jsonl"
+    reference_path = self.parent_reference_path(meta.id)
     await asyncio.to_thread(self._write_reference_events_sync, reference_path, events)
 
     events_path = self.get_chat_events_path(meta.id)
@@ -661,6 +661,10 @@ class SessionManager:
   def get_chat_events_path(self, session_id: str) -> Path:
     """Return the absolute path to a session's chat_events.jsonl."""
     return self._chat_events.get_chat_events_path(session_id)
+
+  def parent_reference_path(self, session_id: str) -> Path:
+    """Return the absolute path to a session's parent_reference.jsonl."""
+    return self._session_dir(session_id) / "data" / "parent_reference.jsonl"
 
   async def rename_session(self, session_id: str, new_name: str) -> SessionMetadata | None:
     """Rename a session and return the updated metadata."""

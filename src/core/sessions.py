@@ -1107,9 +1107,12 @@ class SessionManager:
   def _fresh_cached_meta(self, session_id: str) -> SessionMetadata | None:
     """Return the cached metadata for *session_id* when fresh under ``_METADATA_CACHE_TTL``.
 
-    Both ``SessionManager`` metadata readers (``get_session`` and
+    The two TTL-checked metadata readers (``get_session`` and
     ``_iter_session_metas``) route through this one TTL check, and a stale entry
     is evicted here, so the two cannot drift on freshness semantics.
+    ``list_active_session_metas`` reads metadata.json unconditionally and
+    repopulates the cache from its own scan instead — a third reader this
+    check does not govern.
     """
     cached = self._metadata_cache.get(session_id)
     if cached is None:

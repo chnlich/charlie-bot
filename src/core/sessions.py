@@ -369,11 +369,9 @@ class SessionManager:
     for meta in all_meta:
       if meta.status != SessionStatus.ACTIVE:
         continue
-      # Check session name first
-      if query_lower in (meta.name or '').lower():
+      if query_lower in meta.name.lower():
         results.append(meta)
         continue
-      # Collect non-name-matched sessions for parallel content scan
       content_candidates.append((meta, self.get_chat_events_path(meta.id)))
 
     async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
@@ -1280,6 +1278,7 @@ class SessionManager:
     approval. The probe must never raise — a corrupt single-session file cannot 5xx the
     sidebar poll for all sessions.
     """
+    # lazy: plans imports SessionManager from this module at top level
     from src.core.plans import read_plans_tolerant
 
     plans_path = self._session_dir(session_id) / "plans.json"

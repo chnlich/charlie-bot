@@ -41,9 +41,9 @@ from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import busy_since
 
-# Raw event types whose render content is now produced by the per-session
+# Raw event types whose render content is produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
-# do not broadcast them raw -- the deltas are the wire-format replacement.
+# do not broadcast them raw -- the deltas are the wire format.
 _RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER, ET.SCHEDULED_TRIGGER})
 
 log = structlog.get_logger()
@@ -850,8 +850,8 @@ class SessionManager:
     Re-reads fresh metadata from disk under the per-session lock, mutates only
     ``cc_session_id`` (and ``cc_session_started_at`` when the on-disk id actually
     changes), saves, then re-reads and returns the ``cc_session_id`` now on
-    disk. Never falls back to a whole-object save — that is the 2026-03-30
-    defect that clobbered ``has_unread``. ``update_thinking_state`` is the
+    disk. Never falls back to a whole-object save — that clobbers concurrent
+    single-field writes like ``has_unread``. ``update_thinking_state`` is the
     reference pattern.
     """
     async with self._lock_for(session_id):

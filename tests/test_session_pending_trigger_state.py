@@ -97,7 +97,7 @@ async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Pat
   meta = await session_mgr.get_session(session.id)
   assert meta is not None
   meta.has_unread = True
-  await session_mgr._save_metadata(meta)
+  await session_mgr.save_metadata(meta)
 
   now = datetime.now(timezone.utc)
   trigger = PendingTrigger(
@@ -125,7 +125,7 @@ async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) ->
   meta = await session_mgr.get_session(session.id)
   assert meta is not None
   meta.status = SessionStatus.ARCHIVED
-  await session_mgr._save_metadata(meta)
+  await session_mgr.save_metadata(meta)
 
   trigger = PendingTrigger(
       id="pending-archived",
@@ -157,7 +157,7 @@ async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) ->
   archived_meta = await session_mgr.get_session(archived.id)
   assert archived_meta is not None
   archived_meta.status = SessionStatus.ARCHIVED
-  await session_mgr._save_metadata(archived_meta)
+  await session_mgr.save_metadata(archived_meta)
 
   now = datetime.now(timezone.utc)
   _write_trigger(
@@ -180,7 +180,7 @@ async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) ->
   )
 
   # Refuse to load archived trigger state from disk. If
-  # _populate_sidebar_state inspects archived sessions, the test fails.
+  # populate_sidebar_state inspects archived sessions, the test fails.
   original_get_pending = session_mgr._get_pending_trigger_state
   original_has_running = session_mgr._has_running_tasks
 

@@ -394,7 +394,7 @@ async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -
   meta = await mgr.get_session(session.id)
   assert meta is not None
   meta.status = SessionStatus.ARCHIVED
-  await mgr._save_metadata(meta)
+  await mgr.save_metadata(meta)
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
   assert status[session.id]["has_pending_plan_approval"] is False

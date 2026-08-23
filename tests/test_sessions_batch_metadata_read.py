@@ -62,7 +62,7 @@ async def test_batch_skips_metadata_reads_when_cache_is_fresh(
 ) -> None:
     mgr = _make_session_mgr(tmp_path)
     meta = SessionMetadata(name="cached")
-    await mgr._save_metadata(meta)
+    await mgr.save_metadata(meta)
     real_read_text = Path.read_text
     metadata_reads: list[Path] = []
 
@@ -136,14 +136,14 @@ async def test_batch_isolates_migration_save_failures_per_session(
     bad = SessionMetadata(name="bad", round_ratings={"5": "thumbs_up"})
     _write_metadata(mgr, good)
     _write_metadata(mgr, bad)
-    real_save = mgr._save_metadata
+    real_save = mgr.save_metadata
 
     async def fail_bad_save(meta: SessionMetadata) -> None:
         if meta.id == bad.id:
             raise OSError("save failed")
         await real_save(meta)
 
-    monkeypatch.setattr(mgr, "_save_metadata", fail_bad_save)
+    monkeypatch.setattr(mgr, "save_metadata", fail_bad_save)
 
     with capture_logs() as logs:
         result = await mgr._iter_session_metas()
@@ -197,8 +197,8 @@ async def test_batch_migrates_legacy_round_ratings_on_cache_hit(
 ) -> None:
     mgr = _make_session_mgr(tmp_path)
     legacy = SessionMetadata(name="legacy cache hit", round_ratings={"7": "thumbs_up"})
-    await mgr._save_metadata(legacy)
-    real_save = mgr._save_metadata
+    await mgr.save_metadata(legacy)
+    real_save = mgr.save_metadata
     save_calls = 0
 
     async def counting_save(meta: SessionMetadata) -> None:
@@ -206,7 +206,7 @@ async def test_batch_migrates_legacy_round_ratings_on_cache_hit(
         save_calls += 1
         await real_save(meta)
 
-    monkeypatch.setattr(mgr, "_save_metadata", counting_save)
+    monkeypatch.setattr(mgr, "save_metadata", counting_save)
 
     result = await mgr._iter_session_metas()
 
@@ -224,7 +224,7 @@ async def test_batch_migrates_legacy_round_ratings_on_missing_path(
     mgr = _make_session_mgr(tmp_path)
     legacy = SessionMetadata(name="legacy missing", round_ratings={"8": "thumbs_down"})
     _write_metadata(mgr, legacy)
-    real_save = mgr._save_metadata
+    real_save = mgr.save_metadata
     save_calls = 0
 
     async def counting_save(meta: SessionMetadata) -> None:
@@ -232,7 +232,7 @@ async def test_batch_migrates_legacy_round_ratings_on_missing_path(
         save_calls += 1
         await real_save(meta)
 
-    monkeypatch.setattr(mgr, "_save_metadata", counting_save)
+    monkeypatch.setattr(mgr, "save_metadata", counting_save)
 
     result = await mgr._iter_session_metas()
 

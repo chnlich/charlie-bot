@@ -641,15 +641,7 @@ class SessionManager:
 
   async def rename_session(self, session_id: str, new_name: str) -> SessionMetadata | None:
     """Rename a session and return the updated metadata."""
-    async with self._lock_for(session_id):
-      meta = await self.get_session(session_id)
-      if not meta:
-        return None
-      meta.name = new_name
-      meta.updated_at = utc_now()
-      await self.save_metadata(meta)
-    log.info("session_renamed", session_id=session_id, new_name=new_name)
-    return meta
+    return await self._update_field(session_id, "name", new_name, "session_renamed", new_name=new_name)
 
   async def switch_backend(self, session_id: str, backend: str) -> SessionMetadata | None:
     """Set the session's backend and return the updated metadata.
@@ -659,15 +651,9 @@ class SessionManager:
     ``None`` when the session is missing. Broadcasts a sidebar update so other
     open tabs refresh their header.
     """
-    async with self._lock_for(session_id):
-      meta = await self.get_session(session_id)
-      if not meta:
-        return None
-      meta.backend = backend
-      meta.updated_at = utc_now()
-      await self.save_metadata(meta)
-    await self._broadcast_sidebar(session_id, ET.BACKEND_SWITCHED, backend=backend)
-    log.info("session_backend_switched", session_id=session_id, backend=backend)
+    meta = await self._update_field(session_id, "backend", backend, "session_backend_switched", backend=backend)
+    if meta:
+      await self._broadcast_sidebar(session_id, ET.BACKEND_SWITCHED, backend=backend)
     return meta
 
   async def mark_read(self, session_id: str) -> SessionMetadata | None:
@@ -1211,7 +1197,9 @@ class SessionManager:
       self._metadata_locks[session_id] = lock
     return lock
 
-  async def _update_field(self, session_id: str, field: str, value: Any, log_event: str) -> SessionMetadata | None:
+  async def _update_field(
+      self, session_id: str, field: str, value: Any, log_event: str, **log_fields: Any
+  ) -> SessionMetadata | None:
     """Get a session, set one field, save, and log. Returns None if session not found."""
     async with self._lock_for(session_id):
       meta = await self.get_session(session_id)
@@ -1220,7 +1208,7 @@ class SessionManager:
       setattr(meta, field, value)
       meta.updated_at = utc_now()
       await self.save_metadata(meta)
-    log.info(log_event, session_id=session_id)
+    log.info(log_event, session_id=session_id, **log_fields)
     return meta
 
   async def _has_running_tasks(self, session_id: str) -> bool:

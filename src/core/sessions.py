@@ -1412,7 +1412,8 @@ class SessionManager:
     """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.
 
     Reads the next number from sessions_dir/.counter (O(1) instead of listing
-    all sessions). Falls back to counting directories if the file is missing.
+    all sessions). Falls back to counting directories when the counter is
+    missing, unreadable, or unparsable.
     """
     counter_path = self._cfg.sessions_dir / ".counter"
 

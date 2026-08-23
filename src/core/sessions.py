@@ -236,10 +236,13 @@ class SessionManager:
   async def _read_metadata_raw(self, session_id: str) -> str | None:
     """Return the raw metadata.json text, or None when the file is missing or blank.
 
-    Single read tail for both metadata readers (cached ``get_session`` and
-    bypassing ``read_metadata_fresh``): a blank file must warn exactly once per
-    read through the same ``session_metadata_empty`` event, so no reader
-    open-codes its own absent/blank variant.
+    Single read tail for the one-session-at-a-time metadata readers (cached
+    ``get_session`` and bypassing ``read_metadata_fresh``): a blank file must
+    warn exactly once per read through the same ``session_metadata_empty``
+    event. The listing path (``_iter_session_metas``) cannot route through
+    here — it batches all missing metadata reads synchronously in one
+    ``asyncio.to_thread`` call — and keeps its own absent/blank handling with
+    the same warning event.
     """
     path = self._metadata_path(session_id)
     if not path.exists():

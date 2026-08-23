@@ -433,14 +433,7 @@ class SessionManager:
   ) -> SessionMetadata:
     """Create a new session with parent events stored as a reference file."""
     meta = await self._spawn_with_reference(parent_id, event_index, backend, "C")
-
-    log.info(
-        'session_cloned',
-        new_session=meta.id,
-        parent=parent_id,
-        event_index=event_index,
-        backend=meta.backend,
-    )
+    self._log_spawn('session_cloned', meta, parent_id, event_index)
     return meta
 
   async def elone_session(
@@ -482,13 +475,7 @@ class SessionManager:
         await self.save_metadata(fresh_parent)
     self._drop_session_runtime_state(parent_id)
 
-    log.info(
-        'session_eloned',
-        new_session=meta.id,
-        parent=parent_id,
-        event_index=event_index,
-        backend=meta.backend,
-    )
+    self._log_spawn('session_eloned', meta, parent_id, event_index)
     return meta
 
   async def _elone_scheduled_successor(
@@ -657,6 +644,13 @@ class SessionManager:
     # down the identical skeleton; the single helper is what keeps them agreeing.
     for subdir in ("data", "threads"):
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+  @staticmethod
+  def _log_spawn(event: str, meta: SessionMetadata, parent_id: str, event_index: int | None) -> None:
+    # fork_session and elone_session emit the identical payload shape,
+    # distinguished only by event name, so one log-query shape covers both
+    # spawn flows; the single helper is what keeps them agreeing.
+    log.info(event, new_session=meta.id, parent=parent_id, event_index=event_index, backend=meta.backend)
 
   def get_chat_events_path(self, session_id: str) -> Path:
     """Return the absolute path to a session's chat_events.jsonl."""

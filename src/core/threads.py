@@ -10,6 +10,7 @@ import structlog
 
 from src.core.config import CharlieBotConfig
 from src.core.models import (
+  TERMINAL_THREAD_STATUSES,
   SessionMetadata,
   TaskType,
   ThreadMetadata,
@@ -90,7 +91,7 @@ class ThreadManager:
       meta.exit_code = exit_code
     if status == ThreadStatus.RUNNING and not meta.started_at:
       meta.started_at = utc_now()
-    if status in (ThreadStatus.COMPLETED, ThreadStatus.FAILED, ThreadStatus.CANCELLED):
+    if status in TERMINAL_THREAD_STATUSES:
       # An explicit completion time (e.g. the raw log's final mtime, which is
       # independent of when finalization happens to run) wins over "now".
       meta.completed_at = completed_at or utc_now()

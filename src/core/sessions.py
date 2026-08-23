@@ -130,7 +130,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
-  def __init__(self, cfg: CharlieBotConfig):
+  def __init__(self, cfg: CharlieBotConfig) -> None:
     self._cfg = cfg
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp).
     # TTL-based to avoid repeated disk reads within the same poll cycle.

@@ -103,6 +103,28 @@ class SuccessionRefused(ValueError):
   """
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+  """Write *text* to *path* atomically: unique-per-call tmp file swapped in by ``os.replace``.
+
+  The tmp name carries pid plus a uuid because two writers may target the same
+  *path* concurrently (concurrent ``save_metadata`` calls race on one
+  metadata.json); a deterministic ``<path>.tmp`` would interleave their writes.
+  Patched as ``src.core.sessions.os.replace`` by tests/test_metadata_atomic_write.py,
+  so the swap must stay an attribute lookup on this module's ``os``.
+  """
+  tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+  try:
+    with open(tmp, "w", encoding="utf-8") as f:
+      f.write(text)
+    os.replace(tmp, path)
+  except BaseException:
+    try:
+      tmp.unlink()
+    except OSError:
+      pass
+    raise
+
+
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
@@ -622,18 +644,12 @@ class SessionManager:
       shutil.copy2(src, dst)
     child_plans_path = child_dir / "plans.json"
     child_plans_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = child_plans_path.with_suffix(child_plans_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.replace(tmp, child_plans_path)
+    _atomic_write_text(child_plans_path, json.dumps(data, indent=2))
 
   @staticmethod
   def _write_reference_events_sync(path: Path, events: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-      for event in events:
-        f.write(json.dumps(event) + "\n")
-    os.replace(tmp_path, path)
+    _atomic_write_text(path, "".join(json.dumps(event) + "\n" for event in events))
 
   @staticmethod
   def _create_session_dirs(session_dir: Path) -> None:
@@ -1430,20 +1446,7 @@ class SessionManager:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
 
-    def _atomic_write() -> None:
-      tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-      try:
-        with open(tmp, "w", encoding="utf-8") as f:
-          f.write(serialized)
-        os.replace(tmp, path)
-      except BaseException:
-        try:
-          tmp.unlink()
-        except OSError:
-          pass
-        raise
-
-    await asyncio.to_thread(_atomic_write)
+    await asyncio.to_thread(_atomic_write_text, path, serialized)
     self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic())
 
   def _session_dir(self, session_id: str) -> Path:

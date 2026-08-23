@@ -82,10 +82,10 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   thinking_since is a derived runtime fact owned by
   :mod:`src.core.thinking_state`; it is never persisted (see
   ``_TRANSIENT_METADATA_FIELDS``). Every API- and listing-bound return path
-  (``get_session``, ``_iter_session_metas``, the spawn returns) applies this
-  stamp on the way out; the succession-internal readers
-  (``read_metadata_fresh``, ``resolve_successor_chain``) deliberately return
-  the disk value unstamped, and a reader that needs live busy state stamps
+  (``get_session``, ``_iter_session_metas``, ``list_active_session_metas``,
+  the spawn returns) applies this stamp on the way out; the succession-internal
+  readers (``read_metadata_fresh``, ``resolve_successor_chain``) deliberately
+  return the disk value unstamped, and a reader that needs live busy state stamps
   the meta itself (see ``_elone_scheduled_successor``). The field stays
   declared on the model, so a stale value parsed from an old metadata.json
   or restored into the cache by a post-save rebuild must not leak out
@@ -1107,9 +1107,12 @@ class SessionManager:
   def _fresh_cached_meta(self, session_id: str) -> SessionMetadata | None:
     """Return the cached metadata for *session_id* when fresh under ``_METADATA_CACHE_TTL``.
 
-    Both ``SessionManager`` metadata readers (``get_session`` and
+    The two TTL-checked metadata readers (``get_session`` and
     ``_iter_session_metas``) route through this one TTL check, and a stale entry
     is evicted here, so the two cannot drift on freshness semantics.
+    ``list_active_session_metas`` reads metadata.json unconditionally and
+    repopulates the cache from its own scan instead — a third reader this
+    check does not govern.
     """
     cached = self._metadata_cache.get(session_id)
     if cached is None:
@@ -1140,11 +1143,14 @@ class SessionManager:
   async def _iter_session_metas(self) -> list[SessionMetadata]:
     """Load all session metadata, batching disk reads for cache misses.
 
-    Performs the standard three-step preamble shared by every listing entry point:
-    (1) return [] if sessions_dir does not exist, (2) list session directories under
-    asyncio.to_thread to avoid blocking the event loop, (3) use fresh cache entries
-    directly and load all missing metadata files serially in one asyncio.to_thread
-    call, logging and dropping any session that fails to load.
+    Performs the listing preamble for the two entry points routed through here
+    (``list_sessions`` and ``search_sessions``): (1) return [] if sessions_dir
+    does not exist, (2) list session directories under asyncio.to_thread to
+    avoid blocking the event loop, (3) use fresh cache entries directly and
+    load all missing metadata files serially in one asyncio.to_thread call,
+    logging and dropping any session that fails to load. The sync active-only
+    scan ``list_active_session_metas`` keeps its own per-file sync reads and
+    does not route through here.
     """
     if not self._cfg.sessions_dir.exists():
       return []

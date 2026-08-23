@@ -936,7 +936,7 @@ class SessionManager:
         if meta.status == SessionStatus.ACTIVE:
           self._metadata_cache[d.name] = (meta, now)
           results.append(_stamp_thinking_since(meta.model_copy()))
-      except (json.JSONDecodeError, OSError, ValueError) as e:
+      except (OSError, ValueError) as e:
         log.debug("list_active_ids_skip", dir=d.name, error=str(e))
     return results
 
@@ -1288,7 +1288,7 @@ class SessionManager:
         trigger = load_json_meta(
             trigger_path,
             "trigger_meta_read_failed",
-            catch=(json.JSONDecodeError, OSError, ValueError),
+            catch=(OSError, ValueError),
         )
         if trigger is None:
           continue

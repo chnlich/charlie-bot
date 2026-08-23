@@ -23,6 +23,7 @@ from src.core.json_utils import load_json_meta
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
+  TERMINAL_THREAD_STATUSES,
   CreateSessionRequest,
   MasterRunRecord,
   SessionCallbacks,
@@ -780,7 +781,6 @@ class SessionManager:
     threads_dir = self._session_dir(session_id) / "threads"
     if not threads_dir.exists():
       return 0
-    gc_statuses = {"completed", "failed", "cancelled"}
     deleted = 0
     for thread_dir in threads_dir.iterdir():
       try:
@@ -789,7 +789,7 @@ class SessionManager:
         meta = load_json_meta(thread_dir / "metadata.json", "thread_meta_read_failed_during_recycle")
         if meta is None:
           continue
-        if meta.get("status") not in gc_statuses:
+        if meta.get("status") not in TERMINAL_THREAD_STATUSES:
           continue
         completed_at_raw = meta.get("completed_at")
         if not completed_at_raw:

@@ -70,6 +70,12 @@ _TRANSIENT_METADATA_FIELDS = {
 }
 
 
+def _session_channel(session_id: str) -> str:
+  # Topic string must match the one session_websocket subscribes to in
+  # server.py; this helper keeps this module's two publishers agreeing.
+  return f"session:{session_id}"
+
+
 def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   """Overwrite thinking_since with the live value before *meta* reaches a caller.
 
@@ -948,7 +954,7 @@ class SessionManager:
     await self.save_chat_event(session_id, event)
     event['event_index'] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
 
-    channel = f"session:{session_id}"
+    channel = _session_channel(session_id)
     deltas = list(aggregator.feed(event))
     for delta in deltas:
       await streaming_manager.broadcast(channel, delta)
@@ -975,7 +981,7 @@ class SessionManager:
     Used for state-change notifications (e.g. ``plan_updated``) that must not
     pollute the chat history or replay on reconnect.
     """
-    channel = f"session:{session_id}"
+    channel = _session_channel(session_id)
     await streaming_manager.broadcast(channel, event)
 
   def _get_or_init_aggregator(self, session_id: str) -> MessageAggregator:

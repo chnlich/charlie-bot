@@ -1376,23 +1376,18 @@ class SessionManager:
       plan_approval_future = asyncio.gather(
           *(asyncio.to_thread(self._has_pending_plan_approval, meta.id) for meta in active_sessions))
 
-    pending_futures = [f for f in (running_future, trigger_future, plan_approval_future) if f is not None]
-    if not pending_futures:
-      return
-    gathered = await asyncio.gather(*pending_futures)
-    idx = 0
+    # The gathers above schedule their probes at creation; awaiting only after
+    # all three futures exist keeps the groups concurrent. Sinking a gather
+    # into its await below would serialize that group behind the earlier ones.
     running_flags = None
     trigger_states = None
     plan_approval_flags = None
     if running_future is not None:
-      running_flags = gathered[idx]
-      idx += 1
+      running_flags = await running_future
     if trigger_future is not None:
-      trigger_states = gathered[idx]
-      idx += 1
+      trigger_states = await trigger_future
     if plan_approval_future is not None:
-      plan_approval_flags = gathered[idx]
-      idx += 1
+      plan_approval_flags = await plan_approval_future
 
     if running_flags is not None:
       for meta, running in zip(active_sessions, running_flags):

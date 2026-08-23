@@ -170,7 +170,7 @@ async def reconcile_master_identity(cfg, session_mgr, boot_time: datetime) -> di
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
 
   try:
-    sessions = session_mgr.list_active_session_ids()
+    sessions = session_mgr.list_active_session_metas()
   except Exception as e:
     log.exception("master_reconcile_scan_failed")
     raise _MasterScanFailed(str(e)) from e
@@ -294,7 +294,7 @@ async def _replay_unanswered_user_messages(cfg, session_mgr, excluded: dict[str,
   """
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
 
-  for meta in session_mgr.list_active_session_ids():
+  for meta in session_mgr.list_active_session_metas():
     try:
       events = session_mgr.load_chat_events_sync(meta.id)
       skip = excluded.get(meta.id, set()) | master_cc.queued_user_event_ids(meta.id)

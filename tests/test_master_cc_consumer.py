@@ -362,7 +362,7 @@ async def test_busy_session_value_returned_on_all_read_paths(tmp_path: Path) -> 
     assert [s.thinking_since for s in listed if s.id == session.id] == [started_at]
     searched = await reader.search_sessions("t5-reads")
     assert [s.thinking_since for s in searched if s.id == session.id] == [started_at]
-    active = reader.list_active_session_ids()
+    active = reader.list_active_session_metas()
     assert [s.thinking_since for s in active if s.id == session.id] == [started_at]
   finally:
     thinking_state.clear_busy(session.id)
@@ -428,7 +428,7 @@ async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monke
   eloned = await mgr.elone_session(created.id, event_index=0)
   assert eloned.thinking_since == sentinel
 
-  active = mgr.list_active_session_ids()
+  active = mgr.list_active_session_metas()
   assert all(m.thinking_since == sentinel for m in active)
 
 

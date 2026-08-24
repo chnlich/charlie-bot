@@ -38,10 +38,15 @@ top-level symbol exceeds 1000 lines is exempt — a pure move cannot split one o
 and is skipped silently: recompute the exemption from the tree each run and keep no record of it.
 
 When no file qualifies, the run falls back to deletion mode: the target is the largest file whose
-topic was not previously rejected.
+topic was not previously rejected. When the largest file has produced no PR for two consecutive
+runs, the target rotates to the next-largest qualifying file for that run; the run states which
+file rotation picked and why. This is recomputed from PR history each run; keep no state.
 When no symbol in the target meets the Step 3 evidence bar, the run may instead land a
 behavior-preserving cleanup in the target file (deduplication, stale comment or annotation
 hygiene) within the same 300-line budget, labeled refactor or style rather than deletion.
+For a deduplicated literal or cloned fragment, the shared definition may live outside the target file
+(e.g. models.py, threads.py) when that module is the natural owner, provided the target file's own
+copy is the anchor being merged into it and the diff stays focused on that one unification.
 Open no PR only when the run finds neither.
 
 A rejected topic is a closed `code-health/*` pull request carrying a comment that starts
@@ -51,6 +56,13 @@ and skip the topics they name, reporting which ones you skipped:
     gh pr list --state closed --limit 50 --json headRefName,comments --jq \
       '.[] | select(.headRefName | startswith("code-health/"))
        | select(any(.comments[].body; startswith("code-health-abandoned:"))) | .headRefName'
+
+Golden-test disposal (one-time directive, user-approved 2026-08-23, rescindable):
+`tests/fixtures/worker_prompts/` and `tests/test_worker_prompt_extraction.py` goldens that assert
+byte-identity may be deleted in a deletion-mode PR; keep the five goldens that assert fail-loud
+contracts and the hash-check one. These deletions do not count against the 300-line budget. Land
+as its own PR (not mixed with src/ edits); recompute the keep-list from the file contents each
+run.
 
 Step 2: respect the diff budget.
 Keep a deletion-mode PR diff at 300 lines or fewer. When you hit that budget in one PR, stop
@@ -65,6 +77,11 @@ body's `## Evidence` section (each as command plus output):
 2. A whole-repo grep including `prompts/ skills/ configs/ web/` finds no reference.
 3. The full test suite is green after removal.
 In this first phase, delete only when the symbol name has exactly zero whole-repo matches.
+
+Second phase (user-approved 2026-08-23): a symbol whose name still has matches may be deleted when
+every remaining match is itself dead — unused-import leftovers, orphaned fixtures, comment-only
+references. Quote every such match in the PR body's `## Evidence` with the reason it is itself
+dead. When any match cannot be shown dead, the phase-1 zero-match bar stands.
 
 `vulture` is a probe you may run to surface candidates. It is never a gate and must not be added
 to CI.
@@ -237,8 +254,9 @@ Step 6: review the diff on the pull request.
 Run the `code-review` skill against the pull request with `--comment`, so its findings land as
 inline PR comments, then act on them on the same branch before merging. The skill catches naming,
 leftover references, and out-of-scope edits; judging the design direction stays with the human
-reading the PR. The skill ships with the Claude CLI, so a backend that lacks it reports the review
-step as unavailable and continues.
+reading the PR. The skill ships with the Claude CLI. A skipped review (plugin missing, run cut
+short, or any other cause) MUST be reported explicitly with the reason in the run's final
+summary; a silent skip is a contract violation.
 
 Step 7: land it, or abandon it.
 Wait for the checks in this run:

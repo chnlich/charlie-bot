@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import append_events as _append_events
+from conftest import archive_cutoff_events as _archive_cutoff_events
 
 from src.api.message_utils import build_session_bootstrap_data, build_session_view_data
 from src.api.sessions import get_session_events_page
@@ -75,22 +76,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
-  cutoff = base + timedelta(days=3)
-  events = [
-      {
-          "type": "user",
-          "content": f"e{i}",
-          "timestamp": (base + timedelta(hours=i)).isoformat()
-      } for i in range(5)
-  ]
-  events += [
-      {
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
-      } for i in range(3)
-  ]
+  cutoff, events = _archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session.id)
   _append_events(live_path, events)
 
@@ -163,22 +149,7 @@ async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> 
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
-  cutoff = base + timedelta(days=3)
-  events = [
-      {
-          "type": "user",
-          "content": f"e{i}",
-          "timestamp": (base + timedelta(hours=i)).isoformat()
-      } for i in range(5)
-  ]
-  events += [
-      {
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
-      } for i in range(3)
-  ]
+  cutoff, events = _archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session.id)
   _append_events(live_path, events)
   await mgr.recycle_scheduled_session(session.id, cutoff)
@@ -205,22 +176,7 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
-  cutoff = base + timedelta(days=3)
-  events = [
-      {
-          "type": "user",
-          "content": f"e{i}",
-          "timestamp": (base + timedelta(hours=i)).isoformat()
-      } for i in range(5)
-  ]
-  events += [
-      {
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
-      } for i in range(3)
-  ]
+  cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(session.id), events)
   await mgr.recycle_scheduled_session(session.id, cutoff)
 

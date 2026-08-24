@@ -9,12 +9,12 @@ from __future__ import annotations
 import bisect
 import json
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import append_events as _append_events
+from conftest import archive_cutoff_events as _archive_cutoff_events
 
 from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
@@ -593,22 +593,7 @@ async def test_archive_offset_returns_none_from_projection(tmp_path: Path) -> No
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
-  cutoff = base + timedelta(days=3)
-  events = [
-      {
-          "type": "user",
-          "content": f"e{i}",
-          "timestamp": (base + timedelta(hours=i)).isoformat()
-      } for i in range(5)
-  ]
-  events += [
-      {
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
-      } for i in range(3)
-  ]
+  cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(session.id), events)
   await mgr.recycle_scheduled_session(session.id, cutoff)
 
@@ -627,22 +612,7 @@ async def test_archive_fallback_serves_from_old_path(tmp_path: Path) -> None:
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
-  cutoff = base + timedelta(days=3)
-  events = [
-      {
-          "type": "user",
-          "content": f"e{i}",
-          "timestamp": (base + timedelta(hours=i)).isoformat()
-      } for i in range(5)
-  ]
-  events += [
-      {
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
-      } for i in range(3)
-  ]
+  cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(session.id), events)
   await mgr.recycle_scheduled_session(session.id, cutoff)
 

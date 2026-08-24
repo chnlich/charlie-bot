@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from conftest import append_events as _append_events
+from conftest import archive_cutoff_events as _archive_cutoff_events
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -91,22 +91,7 @@ async def test_reference_handoff_uses_global_event_index_with_archive_offset(tmp
   mgr = SessionManager(cfg)
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
 
-  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
-  cutoff = base + timedelta(days=3)
-  events = [
-      {
-          "type": "user",
-          "content": f"e{i}",
-          "timestamp": (base + timedelta(hours=i)).isoformat()
-      } for i in range(5)
-  ]
-  events += [
-      {
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
-      } for i in range(3)
-  ]
+  cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(parent.id), events)
   await mgr.recycle_scheduled_session(parent.id, cutoff)
 

@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
@@ -37,6 +38,28 @@ def append_events(path: Path, events: list[dict]) -> None:
   with open(path, "a", encoding="utf-8") as f:
     for event in events:
       f.write(json.dumps(event) + "\n")
+
+
+def archive_cutoff_events() -> tuple[datetime, list[dict]]:
+  """(cutoff, events) where five `e{i}` events predate and three `f{i}` events follow the cutoff; the 5/3
+  split is what recycle tests assert on (events_archived == 5, archive_offset == 5, live f0..f2)."""
+  base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
+  cutoff = base + timedelta(days=3)
+  events = [
+      {
+          "type": "user",
+          "content": f"e{i}",
+          "timestamp": (base + timedelta(hours=i)).isoformat()
+      } for i in range(5)
+  ]
+  events += [
+      {
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
+      } for i in range(3)
+  ]
+  return cutoff, events
 
 
 async def make_parent(mgr: "SessionManager", *, name: str = "Parent") -> str:

@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import mock_session_callbacks
 from fastapi import HTTPException
 
 from src.agents import master_cc, master_cc_run
@@ -12,17 +13,6 @@ from src.api.chat import cancel_master_agent
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core import models
-
-
-def _make_callbacks() -> models.SessionCallbacks:
-  return models.SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
-      persist_master_run=AsyncMock(),
-  )
 
 
 class _StderrOnlyBackend(AgentBackend):
@@ -60,7 +50,7 @@ async def _run_cc_with_stderr_backend(
       name="Cancel",
       backend="fake",
   )
-  callbacks = _make_callbacks()
+  callbacks = mock_session_callbacks()
   backend = _StderrOnlyBackend(terminate_before_stderr=terminate_before_stderr)
 
   def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
@@ -183,7 +173,7 @@ async def _run_cc_with_scripted_events(
       ],
   )
   session_meta = models.SessionMetadata(id="session-salvage", name="Salvage", backend="fake")
-  callbacks = _make_callbacks()
+  callbacks = mock_session_callbacks()
   backend = _ScriptedBackend(events)
 
   def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):

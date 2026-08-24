@@ -9,15 +9,15 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import mock_session_callbacks
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    CreateSessionRequest,
-    SessionCallbacks,
-    SessionMetadata,
-    SlackOrigin,
+  CreateSessionRequest,
+  SessionMetadata,
+  SlackOrigin,
 )
 from src.core.sessions import SessionManager
 
@@ -67,14 +67,7 @@ async def test_create_session_defaults_still_generate_uuid4_and_no_origin(tmp_pa
 async def _run_one_round(user_event_id: Optional[str]) -> dict:
   """Run one synthetic work item through _session_consumer; return its MASTER_DONE payload."""
   session_id = f"slack-plumbing-{user_event_id or 'none'}"
-  callbacks = SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
-      persist_master_run=AsyncMock(),
-  )
+  callbacks = mock_session_callbacks()
   item = master_cc._WorkItem(
       cfg=MagicMock(),
       session_meta=SessionMetadata(id=session_id, name="t"),

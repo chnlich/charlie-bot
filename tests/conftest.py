@@ -1,10 +1,26 @@
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
+
+# Imports must follow the sys.path bootstrap above.
+from src.core import models  # noqa: E402,I001
+
+
+def mock_session_callbacks() -> models.SessionCallbacks:
+  """SessionCallbacks with every field mocked; a test needing one real field constructs its own."""
+  return models.SessionCallbacks(
+      persist_and_broadcast=AsyncMock(),
+      update_thinking_state=AsyncMock(),
+      mark_unread=AsyncMock(),
+      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
+      has_completed_round=AsyncMock(return_value=False),
+      persist_master_run=AsyncMock(),
+  )
 
 
 class JudgmentShim:

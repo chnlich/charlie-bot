@@ -2,26 +2,15 @@ import asyncio
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
+from conftest import mock_session_callbacks
 from structlog.testing import capture_logs
 
 from src.agents import master_cc, master_cc_run
 from src.agents.backends import base as backend_base
 from src.core import config as core_config
 from src.core import models
-
-
-def _make_callbacks() -> models.SessionCallbacks:
-  return models.SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
-      persist_master_run=AsyncMock(),
-  )
 
 
 class _FakeBackend:
@@ -93,7 +82,7 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
       cfg=cfg,
       session_meta=session_meta,
       user_content="hello",
-      callbacks=_make_callbacks(),
+      callbacks=mock_session_callbacks(),
       is_voice=False,
       auto_trigger=False,
       backend_option=backend_option,
@@ -141,7 +130,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
       cfg=cfg,
       session_meta=session_meta,
       user_content="hello",
-      callbacks=_make_callbacks(),
+      callbacks=mock_session_callbacks(),
       is_voice=False,
       auto_trigger=False,
       backend_option=backend_option,
@@ -190,7 +179,7 @@ async def _run_cc_starting_entry(
       cfg=cfg,
       session_meta=session_meta,
       user_content="hello",
-      callbacks=_make_callbacks(),
+      callbacks=mock_session_callbacks(),
       is_voice=False,
       auto_trigger=False,
       backend_option=backend_option,

@@ -38,7 +38,9 @@ top-level symbol exceeds 1000 lines is exempt — a pure move cannot split one o
 and is skipped silently: recompute the exemption from the tree each run and keep no record of it.
 
 When no file qualifies, the run falls back to deletion mode: the target is the largest file whose
-topic was not previously rejected.
+topic was not previously rejected. When the largest file has produced no PR for two consecutive
+runs, the target rotates to the next-largest qualifying file for that run; the run states which
+file rotation picked and why. This is recomputed from PR history each run; keep no state.
 When no symbol in the target meets the Step 3 evidence bar, the run may instead land a
 behavior-preserving cleanup in the target file (deduplication, stale comment or annotation
 hygiene) within the same 300-line budget, labeled refactor or style rather than deletion.

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import append_events as _append_events
 
 from src.api.message_utils import build_session_bootstrap_data, build_session_view_data
 from src.api.sessions import get_session_events_page
@@ -30,13 +31,6 @@ def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, compl
   (thread_dir / "metadata.json").write_text(meta.model_dump_json(indent=2), encoding="utf-8")
   # Add a sentinel file so we can verify rmtree actually removed the dir.
   (thread_dir / "sentinel.txt").write_text("x", encoding="utf-8")
-
-
-def _append_events(path: Path, events: list[dict]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with open(path, "a", encoding="utf-8") as f:
-    for ev in events:
-      f.write(json.dumps(ev) + "\n")
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
+import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +10,9 @@ if str(ROOT) not in sys.path:
 
 # Imports must follow the sys.path bootstrap above.
 from src.core import models  # noqa: E402,I001
+
+if TYPE_CHECKING:
+  from src.core.sessions import SessionManager
 
 
 def mock_session_callbacks() -> models.SessionCallbacks:
@@ -21,6 +25,27 @@ def mock_session_callbacks() -> models.SessionCallbacks:
       has_completed_round=AsyncMock(return_value=False),
       persist_master_run=AsyncMock(),
   )
+
+
+def append_events(path: Path, events: list[dict]) -> None:
+  """Append seed chat events as JSONL; append (not truncate) is what lets a test stage history first."""
+  path.parent.mkdir(parents=True, exist_ok=True)
+  with open(path, "a", encoding="utf-8") as f:
+    for event in events:
+      f.write(json.dumps(event) + "\n")
+
+
+async def make_parent(mgr: "SessionManager", *, name: str = "Parent") -> str:
+  """A session ready to elone: the two seed events give succession tests a cut point to reference."""
+  parent = await mgr.create_session(models.CreateSessionRequest(name=name), backend="claude-opus-4.6")
+  append_events(
+      mgr.get_chat_events_path(parent.id),
+      [
+          {"type": "user", "content": "e0"},
+          {"type": "assistant", "content": "e1"},
+      ],
+  )
+  return parent.id
 
 
 class JudgmentShim:

@@ -3,36 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import make_parent as _make_parent
 
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
 from src.core.models import CreateSessionRequest, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
-
-
-def _append_events(path: Path, events: list[dict]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with open(path, "a", encoding="utf-8") as f:
-    for event in events:
-      f.write(json.dumps(event) + "\n")
-
-
-async def _make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
-  parent = await mgr.create_session(CreateSessionRequest(name=name), backend="claude-opus-4.6")
-  _append_events(
-      mgr.get_chat_events_path(parent.id),
-      [
-          {"type": "user", "content": "e0"},
-          {"type": "assistant", "content": "e1"},
-      ],
-  )
-  return parent.id
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
@@ -305,10 +306,15 @@ async def _await_shared_merge(cache_key: str, build_fn) -> Path:
   return await asyncio.shield(existing)
 
 
-async def _cached_merge(paths: list[Path], slim: bool) -> Path:
+async def _cached_gzip_build(cache_key: str, build: Callable[[Path], Awaitable[None]]) -> Path:
+  """Serve the cached ``<cache_key>.json.gz``; on a miss, run *build* and cache its product.
+
+  The build writes a temp file that ``os.replace`` moves into place only on success —
+  a failed or interrupted build must leave no partial cache entry. The temp file sits
+  in the cache dir itself because ``os.replace`` cannot cross filesystems.
+  """
   cache_dir = _perfetto_merge_cache_dir()
   cache_dir.mkdir(parents=True, exist_ok=True)
-  cache_key = _merge_cache_key(paths, slim, "merge")
   cache_path = cache_dir / f"{cache_key}.json.gz"
   if cache_path.is_file():
     os.utime(cache_path, None)
@@ -319,8 +325,7 @@ async def _cached_merge(paths: list[Path], slim: bool) -> Path:
     os.close(descriptor)
     temp_path = Path(temp_name)
     try:
-      executor = _merge_executor()
-      await asyncio.get_running_loop().run_in_executor(executor, merge_traces, paths, temp_path, slim)
+      await build(temp_path)
     except Exception:
       temp_path.unlink()
       raise
@@ -329,6 +334,14 @@ async def _cached_merge(paths: list[Path], slim: bool) -> Path:
     return cache_path
 
   return await _await_shared_merge(cache_key, run_build)
+
+
+async def _cached_merge(paths: list[Path], slim: bool) -> Path:
+
+  async def build(temp_path: Path) -> None:
+    await asyncio.get_running_loop().run_in_executor(_merge_executor(), merge_traces, paths, temp_path, slim)
+
+  return await _cached_gzip_build(_merge_cache_key(paths, slim, "merge"), build)
 
 
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
@@ -345,28 +358,11 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
 
 
 async def _cached_direct_pass(path: Path) -> Path:
-  cache_dir = _perfetto_merge_cache_dir()
-  cache_dir.mkdir(parents=True, exist_ok=True)
-  cache_key = _merge_cache_key([path], False, "gzip")
-  cache_path = cache_dir / f"{cache_key}.json.gz"
-  if cache_path.is_file():
-    os.utime(cache_path, None)
-    return cache_path
 
-  async def run_build() -> Path:
-    descriptor, temp_name = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
-    os.close(descriptor)
-    temp_path = Path(temp_name)
-    try:
-      await asyncio.get_running_loop().run_in_executor(None, _build_direct_pass_gzip, path, temp_path)
-    except Exception:
-      temp_path.unlink()
-      raise
-    os.replace(temp_path, cache_path)
-    _prune_perfetto_merge_cache(cache_path)
-    return cache_path
+  async def build(temp_path: Path) -> None:
+    await asyncio.get_running_loop().run_in_executor(None, _build_direct_pass_gzip, path, temp_path)
 
-  return await _await_shared_merge(cache_key, run_build)
+  return await _cached_gzip_build(_merge_cache_key([path], False, "gzip"), build)
 
 
 @router.get("/perfetto/merged")

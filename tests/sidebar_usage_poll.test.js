@@ -734,7 +734,7 @@ test('renderSessionList limits each grouped session section to five visible sess
   assert.match(nav.innerHTML, /deleteGroup\(this\.dataset\.groupName\)/);
 });
 
-test('toggleSessionGroupLimit expansion is ephemeral and resets on the public filter-switch path', async () => {
+test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pill enter path', async () => {
   const nav = createElement();
   const workExtra = createElement({
     className: 'session-group-limit-extra hidden',
@@ -776,20 +776,182 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the public fi
   assert.equal(workToggle.getAttribute('aria-expanded'), 'true');
   assert.equal(personalToggle.textContent, 'Show all');
 
-  // Re-render through the public filter-switch path: expansion state lives in
-  // module memory only, so the reset wipes it and both groups fall back to
-  // the five-session preview.
+  // Re-render by entering a different filter through the pill entry point:
+  // expansion state lives in module memory only, so the enter path wipes it
+  // and both groups fall back to the five-session preview.
   context.fetch = async (url) => {
-    assert.equal(url, '/api/sessions/');
+    assert.equal(url, '/api/sessions/archived');
     return {ok: true, json: async () => sessions};
   };
-  context.switchSidebarFilter('all');
+  context.enterSidebarFilter('archived');
   await new Promise(setImmediate);
 
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
+});
+
+test('switchSidebarFilter owns no expansion reset and preserves expansion across filters', async () => {
+  const nav = createElement();
+  const {context} = buildContext({
+    elements: new Map([['session-list', nav]]),
+  });
+  const sessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  context.fetch = async () => ({ok: true, json: async () => sessions});
+
+  // The render entry point must never reset the expansion table, not even when
+  // the filter value differs from the current one; only the pill-enter path may.
+  context.toggleSessionGroupLimit('Work');
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+
+  assert.equal(context.currentFilter, 'archived');
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), false);
+  assert.match(nav.innerHTML, />Show less<\/button>/);
+});
+
+test('enterSidebarFilter collapses expansions on a tab change and keeps them on the active pill', async () => {
+  // Entering a different filter clears the expansion table.
+  {
+    const nav = createElement();
+    const {context} = buildContext({
+      elements: new Map([['session-list', nav]]),
+    });
+    const sessions = Array.from({length: 7}, (_, idx) =>
+      makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+    context.fetch = async () => ({ok: true, json: async () => sessions});
+
+    context.toggleSessionGroupLimit('Work');
+    context.enterSidebarFilter('archived');
+    await new Promise(setImmediate);
+
+    assert.equal(context.currentFilter, 'archived');
+    assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+    assert.match(nav.innerHTML, />Show all<\/button>/);
+    assert.doesNotMatch(nav.innerHTML, />Show less<\/button>/);
+  }
+
+  // Re-clicking the pill for the filter already shown keeps the expansion.
+  {
+    const nav = createElement();
+    const {context} = buildContext({
+      elements: new Map([['session-list', nav]]),
+    });
+    const sessions = Array.from({length: 7}, (_, idx) =>
+      makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+    context.fetch = async () => ({ok: true, json: async () => sessions});
+
+    context.toggleSessionGroupLimit('Work');
+    context.enterSidebarFilter('all');
+    await new Promise(setImmediate);
+
+    assert.equal(context.currentFilter, 'all');
+    assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), false);
+    assert.match(nav.innerHTML, />Show less<\/button>/);
+  }
+});
+
+test('in-place refresh paths preserve group expansion', async () => {
+  const makeWorkSessions = () => Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const paths = [
+    {
+      name: 'websocket session_group_changed event',
+      setup(context) {
+        vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+      },
+      drive(context) {
+        context.handleWSEvent({type: 'session_group_changed', session_id: 'session-a', group: 'Work'}, 'session-a', 0);
+      },
+    },
+    {
+      name: 'setSessionGroup',
+      async drive(context) {
+        await context.setSessionGroup('work-1', 'Personal');
+      },
+    },
+    {
+      name: 'unarchiveSession',
+      async drive(context) {
+        await context.unarchiveSession('work-1');
+      },
+    },
+    {
+      name: 'toggleSessionStar unstarring on the starred filter',
+      setup(context) {
+        context.currentFilter = 'starred';
+      },
+      async drive(context) {
+        await context.toggleSessionStar('work-1', true);
+      },
+    },
+    {
+      name: 'renameGroup',
+      setup(context) {
+        context.prompt = () => 'Renamed';
+      },
+      async drive(context) {
+        await context.renameGroup('Work');
+      },
+    },
+    {
+      name: 'deleteGroup',
+      async drive(context) {
+        await context.deleteGroup('Work');
+      },
+    },
+    {
+      name: 'handleSidebarSearch exit',
+      drive(context) {
+        context.handleSidebarSearch('');
+      },
+    },
+  ];
+
+  for (const path of paths) {
+    const nav = createElement();
+    const {context} = buildContext({
+      elements: new Map([['session-list', nav]]),
+    });
+    const sessions = makeWorkSessions();
+    context.fetch = async (url, opts = {}) => {
+      if (opts.method && opts.method !== 'GET') return {ok: true, async json() { return {}; }};
+      return {ok: true, async json() { return sessions; }};
+    };
+    if (path.setup) path.setup(context);
+
+    context.toggleSessionGroupLimit('Work');
+    await path.drive(context);
+    await new Promise(setImmediate);
+
+    assert.equal(
+      sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'),
+      false,
+      `${path.name}: the refreshed group must stay expanded`
+    );
+    assert.match(nav.innerHTML, />Show less<\/button>/, `${path.name}: the toggle must read Show less`);
+  }
+});
+
+test('page load renders every group collapsed with the five-row preview and a Show all toggle', () => {
+  const nav = createElement();
+  const {context} = buildContext({
+    elements: new Map([['session-list', nav]]),
+  });
+  // A fresh page load starts with an empty expansion table; nothing has been
+  // expanded yet, so every group renders at its preview length.
+  const sessions = Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+
+  context.renderSessionList(sessions, 'all');
+
+  assert.match(nav.innerHTML, />Show all<\/button>/);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
 });
 
 test('stale session-group-list-expanded localStorage seed stays inert', () => {

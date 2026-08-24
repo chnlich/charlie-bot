@@ -42,7 +42,7 @@ function renderSidebarFilterPills() {
     const cls = active
       ? 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300'
       : 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200';
-    return `<button onclick="switchSidebarFilter('${filter.name}')" id="filter-${filter.name}" class="${cls}">${filter.label}</button>`;
+    return `<button onclick="enterSidebarFilter('${filter.name}')" id="filter-${filter.name}" class="${cls}">${filter.label}</button>`;
   }).join('');
   container.innerHTML = buttons;
   if (addBtn) container.appendChild(addBtn);
@@ -219,7 +219,6 @@ function setSidebarFilterPill(filter) {
 }
 
 function switchSidebarFilter(filter) {
-  resetGroupLimitState();
   setSidebarFilterPill(filter);
   // Fetch sessions for this filter
   const registeredFilter = getSidebarFilter(filter);
@@ -231,6 +230,13 @@ function switchSidebarFilter(filter) {
     })
     .then(sessions => renderSessionList(sessions, filter))
     .catch(err => console.error('Filter fetch failed:', err));
+}
+
+// Pill-click entry point: only entering a different filter collapses group
+// expansions; re-clicking the active pill and every in-place refresh keep them.
+function enterSidebarFilter(filter) {
+  if (filter !== currentFilter) resetGroupLimitState();
+  switchSidebarFilter(filter);
 }
 
 function renderSidebarLoadErrors(errors) {
@@ -333,6 +339,7 @@ Object.assign(Sidebar, {
   confirmDeletePermanently,
   setSidebarFilterPill,
   switchSidebarFilter,
+  enterSidebarFilter,
   renderSidebarLoadErrors,
   restoreSidebarFromUrl,
   handleSidebarSearch,
@@ -358,6 +365,7 @@ Sidebar.expose([
   'confirmDeletePermanently',
   'setSidebarFilterPill',
   'switchSidebarFilter',
+  'enterSidebarFilter',
   'renderSidebarLoadErrors',
   'restoreSidebarFromUrl',
   'handleSidebarSearch',

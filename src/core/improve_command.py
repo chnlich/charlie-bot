@@ -385,7 +385,6 @@ def _build_summary_payload(payload_type: str, goal: str, summaries: list[str]) -
 async def reserve_loop_state(
     session_id: str,
     goal: str,
-    iterations: int,
     work_branch: str,
     repo_path: str,
     cfg: CharlieBotConfig,
@@ -756,7 +755,6 @@ async def run_improve_loop(
     state = await reserve_loop_state(
         session_id,
         goal,
-        iterations,
         work_branch,
         str(resolved_repo),
         cfg,

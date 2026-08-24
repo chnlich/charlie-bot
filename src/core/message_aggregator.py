@@ -102,7 +102,21 @@ def _backend_switched_msg(ev: dict) -> dict:
   }
 
 
-def _backend_overlay_undeclared_msg(ev: dict) -> dict:
+def _backend_overlay_inactive_msg(ev: dict) -> dict:
+  """Render the unified fenceless-run alert for both the unified and legacy types.
+
+  reason="unreadable" names the declared overlay and the exception class of the
+  read failure; anything else (reason="undeclared", or a legacy
+  backend_overlay_undeclared event that carries no reason field at all) renders
+  the undeclared message.
+  """
+  if ev.get("reason") == "unreadable":
+    return {
+        "role": "system",
+        "content": (
+            f"Backend {ev.get('backend', '')}: prompt_overlay '{ev.get('overlay', '')}' "
+            f"could not be loaded ({ev.get('error', '')}) — running without a fence"),
+    }
   return {
       "role": "system",
       "content": f"Backend {ev.get('backend', '')} declares no prompt_overlay — running without a fence",
@@ -193,8 +207,12 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
+    ET.BACKEND_OVERLAY_INACTIVE:
+        _backend_overlay_inactive_msg,
+    # Legacy render alias: persisted history events of this type render through
+    # the same handler (they carry no reason field, so they fall to undeclared).
     ET.BACKEND_OVERLAY_UNDECLARED:
-        _backend_overlay_undeclared_msg,
+        _backend_overlay_inactive_msg,
     ET.SCHEDULED_RUN_SKIPPED:
         _scheduled_run_skipped_msg,
 }

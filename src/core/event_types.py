@@ -77,6 +77,12 @@ RATE_LIMIT_EVENT = "rate_limit_event"
 BACKEND_SWITCHED = "backend_switched"
 
 # -- Overlay declaration -----------------------------------------------------
-# A backend_option that declares no prompt_overlay runs without a fence; the
-# alert renders as a system-role chat message naming the offending backend.
+# One alert for every fenceless run: undeclared prompt_overlay and
+# declared-but-unreadable emit the same backend_overlay_inactive event, told
+# apart by its reason field ("undeclared" | "unreadable"). An unreadable
+# overlay degrades to a fenceless run — the read failure does NOT raise and
+# never kills the wake.
+BACKEND_OVERLAY_INACTIVE = "backend_overlay_inactive"
+# Legacy render-only constant: history events carry no reason field and render
+# as undeclared. New code never emits it.
 BACKEND_OVERLAY_UNDECLARED = "backend_overlay_undeclared"

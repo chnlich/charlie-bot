@@ -36,7 +36,7 @@ def append_events(path: Path, events: list[dict]) -> None:
 
 
 async def make_parent(mgr: "SessionManager", *, name: str = "Parent") -> str:
-  """A session pre-elone: two seed events so succession tests have a cut point to reference."""
+  """A session ready to elone: the two seed events give succession tests a cut point to reference."""
   parent = await mgr.create_session(models.CreateSessionRequest(name=name), backend="claude-opus-4.6")
   append_events(
       mgr.get_chat_events_path(parent.id),

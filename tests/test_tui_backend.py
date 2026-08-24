@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.agents.backends import tui
+from src.agents.backends import pty_common, tui
 
 
 def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
@@ -58,7 +58,10 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
       return 1, ""
     return 0, ""
 
+  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
+  # an unpatched pty_common global would reach the real tmux binary.
   monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session("session-id", working_dir)
 
@@ -97,7 +100,10 @@ async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
       return 1, ""
     return 0, ""
 
+  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
+  # an unpatched pty_common global would reach the real tmux binary.
   monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session("session-id", working_dir)
 
@@ -125,7 +131,10 @@ async def test_ensure_tmux_session_passes_optional_claude_args(
       return 1, ""
     return 0, ""
 
+  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
+  # an unpatched pty_common global would reach the real tmux binary.
   monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session(
       "session-id",
@@ -164,7 +173,10 @@ async def test_ensure_tmux_session_injects_new_session_env(
       return 1, ""
     return 0, ""
 
+  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
+  # an unpatched pty_common global would reach the real tmux binary.
   monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session(
       "session-id",

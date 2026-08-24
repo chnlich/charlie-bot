@@ -42,7 +42,6 @@ def _make_state(loop_id: int, **overrides: object) -> ImproveState:
   payload = {
       "loop_id": loop_id,
       "goal": "optimize performance",
-      "max_iterations": 3,
       "status": "running",
       "work_branch": "improve/test",
       "base_branch": "main",
@@ -105,7 +104,6 @@ async def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
   assert set(loaded.model_dump().keys()) == {
       "loop_id",
       "goal",
-      "max_iterations",
       "status",
       "work_branch",
       "base_branch",

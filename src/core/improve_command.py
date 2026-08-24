@@ -69,7 +69,6 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
 class ImproveState(BaseModel):
   loop_id: int
   goal: str
-  max_iterations: int = 5
   status: str = "running"  # running | stopped | completed | failed
   work_branch: str
   base_branch: Optional[str] = None
@@ -418,7 +417,6 @@ async def reserve_loop_state(
     state = ImproveState(
         loop_id=loop_id,
         goal=goal,
-        max_iterations=iterations,
         status="running",
         work_branch=work_branch,
         base_branch=base_branch,

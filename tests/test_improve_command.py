@@ -42,7 +42,6 @@ def _make_state(loop_id: int, **overrides: object) -> ImproveState:
   payload = {
       "loop_id": loop_id,
       "goal": "optimize performance",
-      "max_iterations": 3,
       "status": "running",
       "work_branch": "improve/test",
       "base_branch": "main",
@@ -105,7 +104,6 @@ async def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
   assert set(loaded.model_dump().keys()) == {
       "loop_id",
       "goal",
-      "max_iterations",
       "status",
       "work_branch",
       "base_branch",
@@ -145,7 +143,6 @@ async def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_pat
   state = await reserve_loop_state(
       "reserved-session",
       "optimize",
-      4,
       "improve/test",
       "/tmp/repo",
       cfg,
@@ -165,10 +162,10 @@ async def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_pat
 async def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_path: Path):
   """Concurrent loop starts fail before they can schedule background work."""
   cfg = _make_cfg(tmp_path)
-  first = await reserve_loop_state("reserved-session", "optimize", 2, "improve/test", "/tmp/repo", cfg)
+  first = await reserve_loop_state("reserved-session", "optimize", "improve/test", "/tmp/repo", cfg)
 
   with pytest.raises(ImproveLoopAlreadyRunningError, match=f"Loop {first.loop_id} is already running"):
-    await reserve_loop_state("reserved-session", "optimize", 2, "improve/other", "/tmp/repo", cfg)
+    await reserve_loop_state("reserved-session", "optimize", "improve/other", "/tmp/repo", cfg)
 
 
 @pytest.mark.asyncio
@@ -178,12 +175,12 @@ async def test_second_loop_starts_after_first_completes(tmp_path: Path):
   session_id = "sequential-session"
 
   # Loop 1 reserves
-  first = await reserve_loop_state(session_id, "goal-1", 3, "improve/first", "/tmp/repo", cfg)
+  first = await reserve_loop_state(session_id, "goal-1", "improve/first", "/tmp/repo", cfg)
   assert first.loop_id == 1
 
   # Concurrent attempt blocked
   with pytest.raises(ImproveLoopAlreadyRunningError):
-    await reserve_loop_state(session_id, "goal-2", 3, "improve/second", "/tmp/repo", cfg)
+    await reserve_loop_state(session_id, "goal-2", "improve/second", "/tmp/repo", cfg)
 
   # Simulate loop 1 completing: mark completed + clear lock
   first.status = "completed"
@@ -192,7 +189,7 @@ async def test_second_loop_starts_after_first_completes(tmp_path: Path):
   await clear_active_loop_lock(session_id, cfg)
 
   # Loop 2 now succeeds
-  second = await reserve_loop_state(session_id, "goal-2", 5, "improve/second", "/tmp/repo", cfg)
+  second = await reserve_loop_state(session_id, "goal-2", "improve/second", "/tmp/repo", cfg)
   assert second.loop_id == 2
   assert second.status == "running"
 
@@ -771,7 +768,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
 async def test_reserve_loop_state_writes_goal_file(tmp_path: Path) -> None:
   """The live goal is written to loops/{id}/goal.md exactly once at reservation."""
   cfg = _make_cfg(tmp_path)
-  state = await reserve_loop_state("goal-session", "make it faster", 3, "improve/test", "/tmp/repo", cfg)
+  state = await reserve_loop_state("goal-session", "make it faster", "improve/test", "/tmp/repo", cfg)
 
   goal_path = loop_goal_path("goal-session", state.loop_id, cfg)
   assert goal_path == cfg.sessions_dir / "goal-session" / "loops" / str(state.loop_id) / "goal.md"
@@ -788,7 +785,6 @@ async def test_reserve_loop_state_writes_optional_plan_file(tmp_path: Path) -> N
   state = await reserve_loop_state(
       "plan-session",
       "make it faster",
-      3,
       "improve/test",
       "/tmp/repo",
       cfg,

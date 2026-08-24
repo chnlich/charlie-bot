@@ -481,18 +481,6 @@ def _quota_blocker_reason(events: list[dict]) -> Optional[str]:
   return None
 
 
-async def is_quota_failure(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> bool:
-  """Check if a failed thread was due to provider quota/token/rate-limit rejection."""
-  from src.core.ndjson import parse_ndjson_file
-
-  thread = await thread_mgr.get_thread(session_id, thread_id)
-  if not thread or thread.status != ThreadStatus.FAILED:
-    return False
-  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  events = await asyncio.to_thread(parse_ndjson_file, events_path)
-  return _quota_blocker_reason(events) is not None
-
-
 # ---------------------------------------------------------------------------
 # Single-iteration helper
 # ---------------------------------------------------------------------------

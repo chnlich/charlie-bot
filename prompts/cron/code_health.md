@@ -57,6 +57,13 @@ and skip the topics they name, reporting which ones you skipped:
       '.[] | select(.headRefName | startswith("code-health/"))
        | select(any(.comments[].body; startswith("code-health-abandoned:"))) | .headRefName'
 
+Golden-test disposal (one-time directive, user-approved 2026-08-23, rescindable):
+`tests/fixtures/worker_prompts/` and `tests/test_worker_prompt_extraction.py` goldens that assert
+byte-identity may be deleted in a deletion-mode PR; keep the five goldens that assert fail-loud
+contracts and the hash-check one. These deletions do not count against the 300-line budget. Land
+as its own PR (not mixed with src/ edits); recompute the keep-list from the file contents each
+run.
+
 Step 2: respect the diff budget.
 Keep a deletion-mode PR diff at 300 lines or fewer. When you hit that budget in one PR, stop
 adding to it and leave the remainder to a later run. Split pull requests are exempt from the

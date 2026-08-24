@@ -12,45 +12,11 @@ Covers acceptance legs (b), (d-new), (f-resolver), (g).
 from __future__ import annotations
 
 import os
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
+from test_runs import ASSISTANT_LINE, NOW, _resolve, _write_raw
+
 from src.core import runs
-
-HOST_BOOT = runs.read_host_boot_time()
-NOW = datetime.now(timezone.utc)
-
-
-def _identity(event: dict) -> list[dict]:
-  return [event]
-
-
-def _write_raw(thread_dir: Path, lines: list[str], age_seconds: float = 0.0) -> Path:
-  raw = thread_dir / "data" / runs.RAW_LOG_NAME
-  raw.parent.mkdir(parents=True, exist_ok=True)
-  raw.write_text("\n".join(lines) + "\n", encoding="utf-8")
-  if age_seconds:
-    ts = time.time() - age_seconds
-    os.utime(raw, (ts, ts))
-  return raw
-
-
-def _resolve(thread_dir: Path, **overrides) -> runs.RunResolution:
-  kwargs = {
-      "raw_path": runs.raw_log_path(thread_dir),
-      "pid": None,
-      "pid_start": None,
-      "started_at": NOW,
-      "backend_type": None,
-      "translate": _identity,
-      "host_boot_time": HOST_BOOT,
-  }
-  kwargs.update(overrides)
-  return runs.resolve_run(**kwargs)
-
-
-ASSISTANT_LINE = '{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}}'
 
 
 def _live_identity() -> tuple[int, str]:

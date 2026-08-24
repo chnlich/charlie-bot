@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 from src.api.code_server import is_code_server_available
 from src.api.deps import get_session_manager, get_thread_manager
 from src.api.message_utils import build_session_bootstrap_data
-from src.api.sessions import _active_backend_payload
+from src.api.sessions import _bootstrap_payload
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -668,17 +668,7 @@ async def index(
         for sidebar_session in sessions:
           if sidebar_session.id == session:
             sidebar_session.has_unread = False
-        active_backend = active_session.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
-        active_backend_opt = cfg.get_backend_option(active_backend)
-        session_bootstrap = {
-            "session": active_session.model_dump(mode="json"),
-            "messages": bootstrap.messages,
-            "pending_draft": bootstrap.pending_draft,
-            "event_count": bootstrap.total_event_count,
-            "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
-            "has_more": bootstrap.has_more,
-        }
-        session_bootstrap.update(_active_backend_payload(active_session, cfg))
+        session_bootstrap = _bootstrap_payload(bootstrap, cfg)
       except Exception:
         log.exception("load_session_data_failed", session_id=session)
         load_errors.append("Failed to load session data. Check server logs for details.")

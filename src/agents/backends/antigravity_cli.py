@@ -13,6 +13,7 @@ from src.agents.backends.base import (
   make_error_event,
   make_result_event,
   make_text_event,
+  prepend_path_dir,
   resolve_binary,
 )
 from src.core import runs
@@ -45,10 +46,7 @@ class AntigravityCliBackend(AgentBackend):
     antigravity_env = {**env}
     antigravity_env.pop("GEMINI_API_KEY", None)
     antigravity_env.pop("GOOGLE_API_KEY", None)
-    local_bin = str(Path.home() / ".local" / "bin")
-    current_path = antigravity_env.get("PATH", "")
-    if local_bin not in current_path.split(":"):
-      antigravity_env["PATH"] = f"{local_bin}:{current_path}"
+    prepend_path_dir(antigravity_env, str(Path.home() / ".local" / "bin"))
     return antigravity_env
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:

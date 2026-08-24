@@ -108,6 +108,10 @@ Known-alive symbols:
   validation error. Nothing in the repo reads the name (whole-repo grep finds only the nine
   assignments — the `model_config` substring in `src/agents/backends/codex.py` is the unrelated
   `_model_config_args` method), so vulture flags each assignment as an unused variable.
+- `backlog_label` (`src/core/config.py`, `CharlieBotConfig`) — deprecated migration field,
+  read by string in the same file's `migrate_and_expand` validator: `values.pop("backlog_label",
+  "Backlog")` (its twin `backlog_repo` is reached the same way via `values.get("backlog_repo")`).
+  Vulture flags the field as an unused variable because nothing in the repo attribute-reads it.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
   `session_mgr.get_session.return_value = ...` in `tests/test_autonamer.py`,
   `resp_mock.json.return_value = ...` in `tests/test_cli_improve.py`) — `unittest.mock`

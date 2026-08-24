@@ -11,6 +11,7 @@ from src.agents.backends.base import (
   make_text_event,
   make_tool_result_event,
   make_tool_use_event,
+  prepend_path_dir,
   resolve_binary,
 )
 
@@ -29,10 +30,7 @@ class CharlieCodeBackend(AgentBackend):
 
   def _prepare_env(self, env: dict) -> dict:
     charlie_code_env = {**env}
-    local_bin = str(Path.home() / ".local" / "bin")
-    current_path = charlie_code_env.get("PATH", "")
-    if local_bin not in current_path.split(":"):
-      charlie_code_env["PATH"] = f"{local_bin}:{current_path}"
+    prepend_path_dir(charlie_code_env, str(Path.home() / ".local" / "bin"))
     return charlie_code_env
 
   def _build_command(self, prompt: str) -> list[str]:

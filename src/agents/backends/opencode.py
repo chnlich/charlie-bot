@@ -18,6 +18,7 @@ from src.agents.backends.base import (
   make_error_event,
   make_result_event,
   make_text_event,
+  prepend_path_dir,
   resolve_binary,
 )
 from src.core import event_types as ET
@@ -109,10 +110,7 @@ class OpenCodeBackend(AgentBackend):
 
   def _prepare_env(self, env: dict, *, opencode_config: dict | None = None) -> dict:
     oc_env = {**env}
-    opencode_bin_dir = str(Path.home() / ".opencode" / "bin")
-    current_path = oc_env.get("PATH", "")
-    if opencode_bin_dir not in current_path.split(":"):
-      oc_env["PATH"] = f"{opencode_bin_dir}:{current_path}"
+    prepend_path_dir(oc_env, str(Path.home() / ".opencode" / "bin"))
     oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
         self._headless_config() if opencode_config is None else opencode_config)
     if self._opencode_proxy_url is not None:

@@ -16,6 +16,7 @@ from src.agents.backends.base import (
   make_text_event,
   make_tool_result_event,
   make_tool_use_event,
+  prepend_path_dir,
   resolve_binary,
 )
 from src.core import event_types as ET
@@ -99,10 +100,7 @@ class CodexBackend(AgentBackend):
 
   def _prepare_env(self, env: dict) -> dict:
     codex_env = {**env}
-    local_bin = str(Path.home() / ".local" / "bin")
-    current_path = codex_env.get("PATH", "")
-    if local_bin not in current_path.split(":"):
-      codex_env["PATH"] = f"{local_bin}:{current_path}"
+    prepend_path_dir(codex_env, str(Path.home() / ".local" / "bin"))
     if self._codex_home:
       codex_env['CODEX_HOME'] = self._codex_home
     return codex_env

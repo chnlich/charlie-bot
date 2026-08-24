@@ -361,6 +361,11 @@ def find_local_thread(
   return best
 
 
+def add_session_arg(parser: argparse.ArgumentParser) -> None:
+  """Add the optional ``--session`` flag; ``resolve_session_id`` resolves its value."""
+  parser.add_argument("--session", default=None, help="Session ID (optional; auto-derived from cwd)")
+
+
 def resolve_session_id(arg_session: str | None) -> str:
   """Resolve the session id to use for a CLI invocation.
 

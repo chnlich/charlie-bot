@@ -22,7 +22,12 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from src.cli.common import get_api, post_internal_api, resolve_session_id
+from src.cli.common import (
+  add_session_arg,
+  get_api,
+  post_internal_api,
+  resolve_session_id,
+)
 from src.core import plans
 from src.core.config import get_config
 
@@ -125,7 +130,7 @@ def _add_check(parser: argparse.ArgumentParser) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
   parent = argparse.ArgumentParser(add_help=False)
-  parent.add_argument("--session", default=None, help="Session ID (optional; auto-derived from cwd)")
+  add_session_arg(parent)
   parser = argparse.ArgumentParser(prog="charliebot plan", description="Plan registry verbs")
   sub = parser.add_subparsers(dest="verb", required=True)
   _add_present(sub.add_parser("present", parents=[parent], help="Register a new plan lineage"))

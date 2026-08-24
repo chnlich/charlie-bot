@@ -22,7 +22,7 @@ import shlex
 import subprocess
 import sys
 
-from src.cli.common import resolve_session_id
+from src.cli.common import add_session_arg, resolve_session_id
 from src.core.config import get_config
 from src.core.models import utc_now
 
@@ -68,11 +68,7 @@ def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
 
 def main() -> None:
   parser = argparse.ArgumentParser(description="Launch a long-running command on a remote host via ssh+setsid")
-  parser.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Session ID (optional; auto-derived from cwd)")
+  add_session_arg(parser)
   parser.add_argument("--host", required=True, help="Remote host (ssh target)")
   parser.add_argument("--cwd", required=True, help="Working directory on the remote host")
   parser.add_argument("--cmd", required=True, help="Command to execute on the remote host")

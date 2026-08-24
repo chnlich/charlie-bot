@@ -21,6 +21,7 @@ import argparse
 import json
 
 from src.cli.common import (
+    add_session_arg,
     find_local_thread,
     post_internal_api,
     read_required_text_file,
@@ -60,7 +61,7 @@ def main() -> None:
       epilog=IMPROVE_EPILOG,
       formatter_class=argparse.RawDescriptionHelpFormatter,
   )
-  parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
+  add_session_arg(parser)
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument(

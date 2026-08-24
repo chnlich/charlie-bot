@@ -2,8 +2,11 @@
 
 ``BackendOption.prompt_overlay`` names the fence file under
 ``prompts/model_overlays/`` (sans ``.md``); the literal ``none`` means
-explicitly no overlay; a missing key means undeclared (alert, empty overlay).
-These tests assert the mechanism at the wake-path layer with synthetic
+explicitly no overlay; a missing key means undeclared. Both undeclared and a
+declared-but-unreadable overlay degrade to a fenceless wake plus one unified
+``backend_overlay_inactive`` alert event, told apart by its ``reason`` field —
+an ``OSError``/``UnicodeDecodeError`` read failure never raises through the
+wake. These tests assert the mechanism at the wake-path layer with synthetic
 ``BackendOption``s and synthetic overlay files — never the real overlay or any
 deployment name.
 """
@@ -121,10 +124,11 @@ async def test_wake_path_overlay_four_states(
   if expects_alert:
     alert_events = [
         c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
-        if c.args[1].get("type") == ET.BACKEND_OVERLAY_UNDECLARED
+        if c.args[1].get("type") == ET.BACKEND_OVERLAY_INACTIVE
     ]
     assert len(alert_events) == 1
     assert alert_events[0]["backend"] == "fake"
+    assert alert_events[0]["reason"] == "undeclared"
     # Assert at the aggregated/rendered message level, not event persistence.
     rendered = _rendered_overlay_alert(alert_events[0])
     assert len(rendered) == 1
@@ -133,19 +137,58 @@ async def test_wake_path_overlay_four_states(
   else:
     assert not [
         c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
-        if c.args[1].get("type") == ET.BACKEND_OVERLAY_UNDECLARED
+        if c.args[1].get("type") == ET.BACKEND_OVERLAY_INACTIVE
     ]
 
 
 @pytest.mark.asyncio
-async def test_declared_overlay_missing_file_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A declared overlay whose file is missing fails loud on the wake path."""
+async def test_declared_overlay_missing_file_degrades(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A declared overlay whose file is missing degrades to a fenceless wake.
+
+  The wake succeeds (no raise), the instructions are the base prompt only, and
+  exactly one unified backend_overlay_inactive event lands with
+  reason=unreadable plus the overlay name and the exception class name.
+  """
   cfg = _wake_cfg(tmp_path, monkeypatch)
   option = BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="missing_overlay")
-  monkeypatch.setattr(registry, "build_backend", lambda *a, **kw: _FakeBackend())
+  captured: dict[str, object] = {}
+  monkeypatch.setattr(
+      registry, "build_backend",
+      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or _FakeBackend())
 
-  with pytest.raises(FileNotFoundError):
-    await master_cc._run_cc(_item(cfg, SessionMetadata(id="s", name="S"), option))
+  item = _item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
+  _cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
+
+  assert exit_code == 0
+  assert error_msg is None
+  assert captured["instructions_content"] == "BASE PROMPT"
+
+  alert_events = [
+      c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
+      if c.args[1].get("type") == ET.BACKEND_OVERLAY_INACTIVE
+  ]
+  assert len(alert_events) == 1
+  event = alert_events[0]
+  assert event["backend"] == "fake"
+  assert event["reason"] == "unreadable"
+  assert event["overlay"] == "missing_overlay"
+  assert event["error"] == "FileNotFoundError"
+
+  # Assert at the aggregated/rendered message level, not event persistence.
+  rendered = _rendered_overlay_alert(event)
+  assert len(rendered) == 1
+  assert rendered[0]["content"] == (
+      "Backend fake: prompt_overlay 'missing_overlay' could not be loaded "
+      "(FileNotFoundError) — running without a fence")
+
+
+def test_legacy_overlay_undeclared_event_renders_as_undeclared() -> None:
+  """A persisted legacy backend_overlay_undeclared event feeds through the
+  aggregator and renders byte-identically to the undeclared message."""
+  legacy_event = {"type": "backend_overlay_undeclared", "backend": "legacy-fake"}
+  rendered = _rendered_overlay_alert(legacy_event)
+  assert len(rendered) == 1
+  assert rendered[0]["content"] == "Backend legacy-fake declares no prompt_overlay — running without a fence"
 
 
 @pytest.mark.asyncio

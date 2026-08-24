@@ -265,6 +265,18 @@ contract is prompts/project_manager.md in the charlie-bot repo: read it
 before acting on any message in this session, and follow it."""
 
 
+class _Instructions(str):
+  """Instructions string carrying the overlay read failure, when one occurred.
+
+  The builder's return must stay a plain ``str`` for every consumer, so a
+  declared overlay's read failure rides upward as this attribute instead of a
+  changed return shape. The wake path reads it to log and emit the unified
+  ``backend_overlay_inactive`` alert; it is ``None`` on every other path.
+  """
+
+  overlay_error: OSError | UnicodeDecodeError | None = None
+
+
 def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
   """Build master agent instructions: base prompt + per-host override + memory store.
 
@@ -274,9 +286,14 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
 
   *prompt_overlay* names a file under ``prompts/model_overlays/`` (without the
   ``.md`` suffix) whose full text is appended as the final part. The backend
-  declares it explicitly; a declared-but-missing or unreadable file raises (the
-  read is never guarded). ``None`` appends nothing. The ``model`` string never
-  enters this function — the overlay binding is wholly driven by the declaration.
+  declares it explicitly. A declared-but-unreadable file (``OSError`` /
+  ``UnicodeDecodeError``) does not raise: the overlay segment is skipped and
+  the failure rides upward on the returned string's ``overlay_error``
+  attribute — this function stays a pure builder and emits no events; the
+  caller (the wake path) owns logging and the ``backend_overlay_inactive``
+  alert. Any other exception type still propagates. ``None`` appends nothing.
+  The ``model`` string never enters this function — the overlay binding is
+  wholly driven by the declaration.
   """
   parts: list[str] = []
 
@@ -307,14 +324,23 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
   if session_meta.role == PROJECT_ROLE and session_meta.group:
     parts.append(_PM_IDENTITY_PART.format(group=session_meta.group))
 
-  # 5. Declared overlay (prompts/model_overlays/<prompt_overlay>.md). The file
-  # must exist when declared; a missing/unreadable file raises (fail loud). No
-  # exists() pre-check: the declaration is the guarantee the file is present.
+  # 5. Declared overlay (prompts/model_overlays/<prompt_overlay>.md). The read
+  # degrades, never raises for missing/unreadable files: OSError and
+  # UnicodeDecodeError skip the overlay segment and ride upward on the
+  # result's overlay_error attribute — the wake continues without a fence and
+  # _run_cc logs and emits the unified backend_overlay_inactive alert with
+  # reason="unreadable". Any other exception type still propagates.
+  overlay_error: OSError | UnicodeDecodeError | None = None
   if prompt_overlay is not None:
     overlay_file = cfg.charlie_bot_repo / "prompts" / "model_overlays" / f"{prompt_overlay}.md"
-    parts.append(overlay_file.read_text(encoding="utf-8"))
+    try:
+      parts.append(overlay_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+      overlay_error = exc
 
-  return "\n\n".join(parts)
+  content = _Instructions("\n\n".join(parts))
+  content.overlay_error = overlay_error
+  return content
 
 
 _VOICE_DISCLAIMER = (
@@ -476,23 +502,45 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
   # Three-state overlay judgment on the wake path, never at config-load time
   # (a hot reload would swallow a load-time exception as a warning and keep the
-  # old config). None (absent key or explicit YAML null) = undeclared: pass None
-  # and emit a one-shot alert; the literal string "none" = explicitly no
-  # overlay: pass None, no alert; any other string names the overlay file
-  # (without ".md") under prompts/model_overlays/, read by the builder.
+  # old config). None (absent key or explicit YAML null) = undeclared: run
+  # without a fence and emit the unified overlay-inactive alert with
+  # reason="undeclared"; the literal string "none" = explicitly no overlay:
+  # pass None, silent, no alert; any other string names the overlay file
+  # (without ".md") under prompts/model_overlays/, read by the builder — a
+  # read failure degrades the same way as undeclared: fenceless run plus the
+  # same unified alert with reason="unreadable", never a raise.
   prompt_overlay = option.prompt_overlay
   if prompt_overlay is None:
     log.warning("master_cc_overlay_undeclared", session=session_meta.id, backend=option.id)
     await item.callbacks.persist_and_broadcast(
         session_meta.id, {
-            "type": ET.BACKEND_OVERLAY_UNDECLARED,
+            "type": ET.BACKEND_OVERLAY_INACTIVE,
             "backend": option.id,
+            "reason": "undeclared",
         })
   elif prompt_overlay == "none":
     prompt_overlay = None
   # Any other string is the overlay filename (sans ".md"); pass it through.
 
   instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, prompt_overlay)
+  overlay_error = getattr(instructions_content, "overlay_error", None)
+  if overlay_error is not None:
+    log.warning(
+        "master_cc_overlay_unreadable",
+        session=session_meta.id,
+        backend=option.id,
+        overlay=prompt_overlay,
+        error=type(overlay_error).__name__,
+        detail=str(overlay_error),
+    )
+    await item.callbacks.persist_and_broadcast(
+        session_meta.id, {
+            "type": ET.BACKEND_OVERLAY_INACTIVE,
+            "backend": option.id,
+            "reason": "unreadable",
+            "overlay": prompt_overlay,
+            "error": type(overlay_error).__name__,
+        })
 
   resume_id = _resolve_resume_id(option, session_meta)
   # Pre-flight: a resume-capable backend about to run with no resolved resume

@@ -33,6 +33,7 @@ from src.agents.backends.pty_common import (
   _run_tmux,
   _tmux_binary,
   kill_tmux_session,  # noqa: F401  # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py and monkeypatched here by tests
+  tmux_session_exists,
   tmux_session_name,
 )
 
@@ -84,12 +85,6 @@ def _build_claude_argv(
   if disallowed_tools:
     argv.extend(["--disallowed-tools", ",".join(disallowed_tools)])
   return argv
-
-
-async def tmux_session_exists(session_id: str) -> bool:
-  """Return True if the tmux session for *session_id* exists on the charliebot socket."""
-  rc, _ = await _run_tmux("has-session", "-t", tmux_session_name(session_id))
-  return rc == 0
 
 
 def _claude_config_path() -> Path:

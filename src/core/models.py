@@ -100,7 +100,6 @@ class ThreadMetadata(BaseModel):
   # older builds — such threads can never be judged alive.
   pid_start: Optional[str] = None
   exit_code: Optional[int] = None
-  cli_command: Optional[str] = None
   claude_session_id: Optional[str] = None
   branch_name: Optional[str] = None
   base_branch: Optional[str] = None

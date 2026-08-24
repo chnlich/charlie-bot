@@ -1,13 +1,11 @@
 """Worker construction — worktree creation, prompt build, backend resolution, Worker setup."""
 
-import shlex
 import time
 import uuid
 from pathlib import Path
 
 import structlog
 
-from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.worker import Worker
 from src.core import spawner_backends, spawner_prompt
 from src.core.config import CharlieBotConfig
@@ -31,7 +29,6 @@ log = structlog.get_logger()
 async def _construct_worker(
     session_id: str,
     thread: ThreadMetadata,
-    description: str,
     working_dir: Path,
     worker_prompt: str,
     cfg: CharlieBotConfig,
@@ -44,17 +41,8 @@ async def _construct_worker(
   thread.model = backend_option.model
   if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
     thread.tried_backends.append(backend_option.id)
-  if backend_option.type == "cc-claude":
-    if thread.claude_session_id is None:
-      thread.claude_session_id = str(uuid.uuid4())
-    backend = ClaudeCodeBackend(
-        model=backend_option.model,
-        effort=backend_option.effort,
-        cli_binary=backend_option.cli_binary,
-        fast_mode=backend_option.fast_mode,
-        claude_session_id=thread.claude_session_id,
-    )
-    thread.cli_command = shlex.join(backend._build_command(description) + [description])
+  if backend_option.type == "cc-claude" and thread.claude_session_id is None:
+    thread.claude_session_id = str(uuid.uuid4())
   await thread_mgr.save_metadata(thread)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
@@ -150,7 +138,7 @@ async def _create_worktree_and_process(
     raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
   return await _construct_worker(
-      session_id, thread, description, worktree_path, worker_prompt, cfg, thread_mgr, request)
+      session_id, thread, worktree_path, worker_prompt, cfg, thread_mgr, request)
 
 
 async def _create_repoless_process(
@@ -187,4 +175,4 @@ async def _create_repoless_process(
   thread.require_review = False
   thread.context = request.context
 
-  return await _construct_worker(session_id, thread, description, thread_dir, worker_prompt, cfg, thread_mgr, request)
+  return await _construct_worker(session_id, thread, thread_dir, worker_prompt, cfg, thread_mgr, request)

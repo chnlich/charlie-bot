@@ -164,16 +164,7 @@ Known-alive symbols:
   `attach_available` on `ThreadMetadataResponse`, `placeholder` on `SlashCommandParam`,
   `fired_at` on `PendingTrigger`) as unused variables/attributes, but every one of those names
   is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS, Jinja templates), so
-  the Step 3 grep already protects them and they get no entries. Production-scope vulture
-  likewise flags the `cli_command` attribute write in `src/core/spawner_launch.py`
-  (`_construct_worker`; the tests-inclusive scope clears it): the name resolves
-  to the `ThreadMetadata.cli_command` field in `src/core/models.py` plus two assertions in
-  `tests/test_spawner_backend_propagation.py`, so the Step 3 grep protects it too; no entry.
-  `cli_command` rides the same implicit whole-model dump as the response-model fields above —
-  `get_session_view` serves every `ThreadMetadata` field verbatim in its `threads` payload —
-  and nothing web-side or production-side reads it back (whole-repo grep finds only the field,
-  the write site, and the two test assertions); the write + field + assertions form one
-  deletion candidate for a later phase that permits name matches.
+  the Step 3 grep already protects them and they get no entries.
 - `pytestmark` (`tests/test_voice_sherpa_streaming.py`) — module-level
   `pytest.mark.local_only` assignment that pytest's collection reads by attribute name (the
   marker is registered in `pyproject.toml`). Exactly one whole-repo match (the assignment

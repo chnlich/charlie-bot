@@ -13,9 +13,9 @@ from src.core.git import BaseResolution
 from src.core.improve_command import (
     ImproveLoopAlreadyRunningError,
     ImproveState,
+    _quota_blocker_reason,
     clear_active_loop_lock,
     find_running_loop,
-    is_quota_failure,
     load_loop_state,
     loop_goal_path,
     loop_plan_path,
@@ -261,91 +261,45 @@ async def test_stop_completed_loop_returns_false(tmp_path: Path):
   assert await stop_improve_loop(session_id, cfg) is False
 
 
-def _make_failed_thread_mgr(tmp_path: Path, events: list[dict]):
-  """Build a thread manager whose thread is FAILED and whose events log contains the given events."""
-  events_path = tmp_path / "events.jsonl"
-  events_path.write_text("\n".join(json.dumps(ev) for ev in events) + "\n")
-
-  class FakeThreadManager:
-
-    async def get_thread(self, session: str, thread_id: str):
-      del session, thread_id
-      return MagicMock(status=ThreadStatus.FAILED)
-
-    async def get_events_log_path(self, session: str, thread_id: str) -> Path:
-      del session, thread_id
-      return events_path
-
-  return FakeThreadManager()
-
-
-@pytest.mark.asyncio
-async def test_is_quota_failure_detects_overage_rejected(tmp_path: Path):
+def test_quota_blocker_reason_detects_overage_rejected():
   """overageStatus == 'rejected' is treated as quota exhaustion (legacy shape)."""
-  thread_mgr = _make_failed_thread_mgr(
-      tmp_path,
-      [{
-          "type": "rate_limit_event",
-          "rate_limit_info": {
-              "status": "allowed",
-              "overageStatus": "rejected"
-          }
-      }],
-  )
-  assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
+  events = [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "rejected"}}]
+  assert _quota_blocker_reason(events) is not None
 
 
-@pytest.mark.asyncio
-async def test_is_quota_failure_detects_top_level_status_rejected(tmp_path: Path):
+def test_quota_blocker_reason_detects_top_level_status_rejected():
   """Top-level status == 'rejected' counts even when overageStatus is 'allowed'."""
-  thread_mgr = _make_failed_thread_mgr(
-      tmp_path,
-      [
-          {
-              "type": "rate_limit_event",
-              "rate_limit_info":
-                  {
-                      "status": "rejected",
-                      "resetsAt": 1781119800,
-                      "rateLimitType": "five_hour",
-                      "overageStatus": "allowed",
-                      "overageResetsAt": 1782864000,
-                      "isUsingOverage": True,
-                      "overageInUse": True,
-                  },
-          }
-      ],
-  )
-  assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
-
-
-@pytest.mark.asyncio
-async def test_is_quota_failure_detects_out_of_tokens_error(tmp_path: Path):
-  """Provider token exhaustion text on a failed worker stops improve loops."""
-  thread_mgr = _make_failed_thread_mgr(
-      tmp_path,
-      [{
-          "type": "error",
-          "content": "Provider rejected the request: out of tokens for this model.",
-      }],
-  )
-  assert await is_quota_failure("sess", "thread-1", thread_mgr) is True
-
-
-@pytest.mark.asyncio
-async def test_is_quota_failure_ignores_allowed_rate_limit_event(tmp_path: Path):
-  """A fully allowed rate_limit_event is not a quota failure."""
-  thread_mgr = _make_failed_thread_mgr(
-      tmp_path,
-      [{
+  events = [
+      {
           "type": "rate_limit_event",
-          "rate_limit_info": {
-              "status": "allowed",
-              "overageStatus": "allowed"
-          }
-      }],
-  )
-  assert await is_quota_failure("sess", "thread-1", thread_mgr) is False
+          "rate_limit_info":
+              {
+                  "status": "rejected",
+                  "resetsAt": 1781119800,
+                  "rateLimitType": "five_hour",
+                  "overageStatus": "allowed",
+                  "overageResetsAt": 1782864000,
+                  "isUsingOverage": True,
+                  "overageInUse": True,
+              },
+      }
+  ]
+  assert _quota_blocker_reason(events) is not None
+
+
+def test_quota_blocker_reason_detects_out_of_tokens_error():
+  """'out of tokens' error text is treated as provider token exhaustion."""
+  events = [{
+      "type": "error",
+      "content": "Provider rejected the request: out of tokens for this model.",
+  }]
+  assert _quota_blocker_reason(events) is not None
+
+
+def test_quota_blocker_reason_ignores_allowed_rate_limit_event():
+  """A fully allowed rate_limit_event yields no blocker reason."""
+  events = [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "allowed"}}]
+  assert _quota_blocker_reason(events) is None
 
 
 class _FakeImproveSessionManager:

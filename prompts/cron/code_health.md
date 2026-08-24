@@ -237,8 +237,9 @@ Step 6: review the diff on the pull request.
 Run the `code-review` skill against the pull request with `--comment`, so its findings land as
 inline PR comments, then act on them on the same branch before merging. The skill catches naming,
 leftover references, and out-of-scope edits; judging the design direction stays with the human
-reading the PR. The skill ships with the Claude CLI, so a backend that lacks it reports the review
-step as unavailable and continues.
+reading the PR. The skill ships with the Claude CLI. A skipped review (plugin missing, run cut
+short, or any other cause) MUST be reported explicitly with the reason in the run's final
+summary; a silent skip is a contract violation.
 
 Step 7: land it, or abandon it.
 Wait for the checks in this run:

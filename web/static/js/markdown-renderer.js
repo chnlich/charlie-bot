@@ -122,7 +122,19 @@ function fixNestedFences(md) {
     const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
     return `<img src="${src}" alt="${alt}"${title}>`;
   };
-  marked.use({ renderer });
+  // Models write a bare ~ for "approximately"; marked's inline del rule is
+  // /^(~~?)/ so two lone tildes cross-pair into one <del>. Only let ~~ enter
+  // the default del tokenizer; a lone ~ is plain text. Returning undefined for
+  // a source that does not start with ~ lets the normal text tokenizer consume
+  // the rest of the prose unchanged. Registered in the same use() as the
+  // renderer so a single marked.use drives every chat surface.
+  marked.use({ renderer, tokenizer: {
+    del(src) {
+      if (typeof src === 'string' && src.startsWith('~~')) return false;
+      if (typeof src === 'string' && src.startsWith('~')) return { type: 'text', raw: '~', text: '~' };
+      return undefined;
+    }
+  }});
 })();
 
 function renderChatMath(el) {

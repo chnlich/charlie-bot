@@ -13,11 +13,10 @@ deployment name.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
-from conftest import mock_session_callbacks
+from conftest import make_work_item
 
 from src.agents import master_cc
 from src.agents.backends import base as backend_base
@@ -60,21 +59,6 @@ def _overlay_dir(cfg: core_config.CharlieBotConfig) -> Path:
   return cfg.charlie_bot_repo / "prompts" / "model_overlays"
 
 
-def _item(cfg, session_meta: SessionMetadata, backend_option: BackendOption) -> master_cc._WorkItem:
-  return master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="hello",
-      callbacks=mock_session_callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=backend_option,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
-
-
 def _rendered_overlay_alert(event: dict) -> list[dict]:
   """Feed a persisted event through the aggregator; return visible message deltas."""
   return [
@@ -113,7 +97,7 @@ async def test_wake_path_overlay_four_states(
       registry, "build_backend",
       lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or _FakeBackend())
 
-  item = _item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
+  item = make_work_item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
   cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
 
   assert cc_session_id is None
@@ -156,7 +140,7 @@ async def test_declared_overlay_missing_file_degrades(tmp_path: Path, monkeypatc
       registry, "build_backend",
       lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or _FakeBackend())
 
-  item = _item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
+  item = make_work_item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
   _cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
 
   assert exit_code == 0
@@ -206,7 +190,7 @@ async def test_model_string_has_zero_impact_on_wake_path(tmp_path: Path, monkeyp
 
   for model in ("vendor/one", "vendor/two"):
     option = BackendOption(id="opt", label="Opt", type="codex", model=model, prompt_overlay="shared")
-    await master_cc._run_cc(_item(cfg, SessionMetadata(id="s", name="S"), option))
+    await master_cc._run_cc(make_work_item(cfg, SessionMetadata(id="s", name="S"), option))
 
   assert products[0] is not None
   assert products[0] == products[1] == "BASE PROMPT\n\nOVERLAY BODY"

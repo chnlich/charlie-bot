@@ -1,3 +1,4 @@
+import asyncio
 import json
 import shutil
 import subprocess
@@ -14,9 +15,11 @@ if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
 # Imports must follow the sys.path bootstrap above.
+from src.agents import master_cc_state  # noqa: E402,I001
 from src.core import models  # noqa: E402,I001
 
 if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
   from src.core.sessions import SessionManager
 
 
@@ -29,6 +32,24 @@ def mock_session_callbacks() -> models.SessionCallbacks:
       persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
       has_completed_round=AsyncMock(return_value=False),
       persist_master_run=AsyncMock(),
+  )
+
+
+def make_work_item(
+    cfg: "CharlieBotConfig", session_meta: models.SessionMetadata, backend_option: models.BackendOption | None
+) -> master_cc_state._WorkItem:
+  """_WorkItem with the field values the run-path tests share; a test needing any other value builds its own."""
+  return master_cc_state._WorkItem(
+      cfg=cfg,
+      session_meta=session_meta,
+      user_content="hello",
+      callbacks=mock_session_callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=backend_option,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
   )
 
 

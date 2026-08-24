@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import append_events as _append_events
 
 from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
@@ -583,13 +584,6 @@ def test_page_latency_does_not_grow_with_session_size() -> None:
 # ---------------------------------------------------------------------------
 # 5. Archive fallback
 # ---------------------------------------------------------------------------
-
-
-def _append_events(path: Path, events: list[dict]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with open(path, "a", encoding="utf-8") as f:
-    for ev in events:
-      f.write(json.dumps(ev) + "\n")
 
 
 @pytest.mark.asyncio

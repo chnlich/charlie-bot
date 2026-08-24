@@ -9,40 +9,21 @@ writing into itself with no origin stamp.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import make_parent as _make_parent
 
 from src.core import event_types as ET
 from src.core import improve_command, review
 from src.core.config import CharlieBotConfig
 from src.core.improve_command import run_improve_loop
 from src.core.init import _report_recovery_event
-from src.core.models import CreateSessionRequest, ThreadMetadata
+from src.core.models import ThreadMetadata
 from src.core.sessions import SessionManager
 from src.core.spawner_events import _thread_worker_event
 from src.core.spawner_finalize import _persist_worker_summary_once
-
-
-def _append_events(path: Path, events: list[dict]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with open(path, "a", encoding="utf-8") as f:
-    for event in events:
-      f.write(json.dumps(event) + "\n")
-
-
-async def _make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
-  parent = await mgr.create_session(CreateSessionRequest(name=name), backend="claude-opus-4.6")
-  _append_events(
-      mgr.get_chat_events_path(parent.id),
-      [
-          {"type": "user", "content": "e0"},
-          {"type": "assistant", "content": "e1"},
-      ],
-  )
-  return parent.id
 
 
 def _make_cfg(tmp_path: Path) -> CharlieBotConfig:

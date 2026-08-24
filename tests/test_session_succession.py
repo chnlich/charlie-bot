@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
+from conftest import append_events as _append_events
+from conftest import make_parent as _make_parent
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -45,30 +47,11 @@ from src.core.triggers import TriggerManager
 _CADENCE_CRON = "* * * * *"
 
 
-def _append_events(path: Path, events: list[dict]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with open(path, "a", encoding="utf-8") as f:
-    for event in events:
-      f.write(json.dumps(event) + "\n")
-
-
 def _session_dir_names(cfg: CharlieBotConfig) -> set[str]:
   """Snapshot the names of session directories on disk (existence, not content)."""
   if not cfg.sessions_dir.exists():
     return set()
   return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
-
-
-async def _make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
-  parent = await mgr.create_session(CreateSessionRequest(name=name), backend="claude-opus-4.6")
-  _append_events(
-      mgr.get_chat_events_path(parent.id),
-      [
-          {"type": "user", "content": "e0"},
-          {"type": "assistant", "content": "e1"},
-      ],
-  )
-  return parent.id
 
 
 def _build_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:

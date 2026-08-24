@@ -256,6 +256,21 @@ class SessionManager:
       self._metadata_cache[session_id] = (meta, time.monotonic())
     return _stamp_thinking_since(meta.model_copy())
 
+  async def _get_session_bypassing_cache(self, session_id: str) -> SessionMetadata | None:
+    """get_session forced past the TTL cache, so the read lands on disk.
+
+    The single-field mutators (``persist_cc_session_id``, ``persist_master_run``,
+    ``update_thinking_state``) and ``persist_cc_session_id``'s post-save
+    read-back must act on the latest on-disk state, not a TTL-cached view: a
+    stale view would clobber a concurrent writer's save. Unlike
+    ``read_metadata_fresh`` this stays a ``get_session`` call — the rating-key
+    migration still runs and the cache is re-populated from the read. Hold
+    ``self._lock_for(session_id)`` around the whole mutate-save; without the
+    lock the fresh view races other writers.
+    """
+    self._invalidate_cache(session_id)
+    return await self.get_session(session_id)
+
   async def read_metadata_fresh(self, session_id: str) -> SessionMetadata | None:
     """Read metadata.json directly from disk, bypassing ``_metadata_cache``.
 
@@ -861,16 +876,14 @@ class SessionManager:
     reference pattern.
     """
     async with self._lock_for(session_id):
-      self._invalidate_cache(session_id)
-      fresh = await self.get_session(session_id)
+      fresh = await self._get_session_bypassing_cache(session_id)
       if fresh is None:
         return None
       if fresh.cc_session_id != cc_session_id:
         fresh.cc_session_id = cc_session_id
         fresh.cc_session_started_at = utc_now()
       await self.save_metadata(fresh)
-      self._invalidate_cache(session_id)
-      read_back = await self.get_session(session_id)
+      read_back = await self._get_session_bypassing_cache(session_id)
     return read_back.cc_session_id if read_back is not None else None
 
   async def has_completed_round(self, session_id: str) -> bool:
@@ -889,13 +902,11 @@ class SessionManager:
     whole-object save would clobber concurrent single-field writes.
     """
     async with self._lock_for(session_id):
-      self._invalidate_cache(session_id)
-      fresh = await self.get_session(session_id)
+      fresh = await self._get_session_bypassing_cache(session_id)
       if fresh is None:
         return
       fresh.master_run = record
       await self.save_metadata(fresh)
-      self._invalidate_cache(session_id)
 
   async def update_thinking_state(
       self,
@@ -908,8 +919,7 @@ class SessionManager:
     to fields like 'group' are preserved.
     """
     async with self._lock_for(session_id):
-      self._invalidate_cache(session_id)
-      fresh = await self.get_session(session_id)
+      fresh = await self._get_session_bypassing_cache(session_id)
       if fresh:
         fresh.updated_at = updated_at
         await self.save_metadata(fresh)

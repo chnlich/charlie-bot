@@ -53,7 +53,8 @@ async def make_parent(mgr: "SessionManager", *, name: str = "Parent") -> str:
 
 
 def run_node_js_test(node_test: Path, skip_reason: str) -> None:
-  """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset loads working."""
+  """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset
+  loads working."""
   node = shutil.which('node')
   if node is None:
     pytest.skip(skip_reason)
@@ -64,6 +65,8 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
       capture_output=True,
       text=True,
       check=False,
+      # The suites finish in ~1s; the bound turns a hung node child into a test failure instead of a CI hang.
+      timeout=300,
   )
   if result.returncode != 0:
     pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')

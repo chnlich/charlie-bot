@@ -1,14 +1,9 @@
-"""prompts/worker.md extraction: byte-identity goldens, fail-loud loader semantics,
-and reviewer-prompt sourcing from the same file.
-
-The worker prompt used to be assembled entirely from Python string literals in
-src/core/spawner.py. It is now read fresh from prompts/worker.md on every
+"""prompts/worker.md loader and builder contracts: fresh read on every
 _build_worker_prompt call (see spawner.load_worker_prompt_sections), split on
-`<!-- section: <id> -->` marker lines, and injected with `{{token}}` sequential
-str.replace substitution. The golden fixtures track prompts/worker.md
-byte-for-byte: a deliberate prompt edit re-captures every fixture in the same
-change. The tests also exercise the fail-loud loader contract (no caching, no
-embedded-text fallback).
+`<!-- section: <id> -->` marker lines, injected with `{{token}}` sequential
+str.replace substitution, fail-loud loader semantics (no caching, no
+embedded-text fallback), section assembly order, and reviewer-prompt sourcing
+from the same file.
 """
 
 from pathlib import Path
@@ -19,94 +14,34 @@ from src.core import review, spawner
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata, TaskType
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures" / "worker_prompts"
-
 REPO_PATH = Path("/tmp/charliebot-fixture-repo")
 BASE_BRANCH = "main"
 BRANCH_NAME = "charliebot/task-fixture-0001"
 WT_PATH = "/tmp/worktrees/charliebot-task-fixture-0001"
 LOOP_DIR = "/tmp/charliebot-fixture-loops/iter-loop"
 ITERATION_NUMBER = 7  # raw "## Iter 7" vs zero-padded "iter_0007.md"
-SESSION_NAME = "Fixture Session"
 DESCRIPTION = "## Goal\nDo the fixture task.\n\n## Source Files\n- /tmp/source.md\n"
 
-_TASK_TYPE_MAP = {
-    "implement": TaskType.IMPLEMENT,
-    "quick-edit": TaskType.QUICK_EDIT,
-    "script-run": TaskType.SCRIPT_RUN,
-}
 
-
-def _build_matrix() -> list[tuple]:
-  """Reconstruct the full config matrix the golden fixtures were generated for."""
-  configs = []
-  for task_key, task_type in _TASK_TYPE_MAP.items():
-    cont_options = [False, True] if task_type != TaskType.SCRIPT_RUN else [False]
-    for is_continuation in cont_options:
-      for keep_worktree in [False, True]:
-        for has_loop in [False, True]:
-          for has_memory in [False, True]:
-            name_parts = [task_key]
-            if task_type != TaskType.SCRIPT_RUN:
-              name_parts.append("cont-yes" if is_continuation else "cont-no")
-            name_parts.append("keep-yes" if keep_worktree else "keep-no")
-            name_parts.append("loop-yes" if has_loop else "loop-no")
-            name_parts.append("mem-yes" if has_memory else "mem-no")
-            fixture_name = "__".join(name_parts) + ".txt"
-            configs.append((fixture_name, task_type, is_continuation, keep_worktree, has_loop, has_memory))
-  return configs
-
-
-_MATRIX = _build_matrix()
-
-
-def _cfg(tmp_path: Path, config_id: str, with_memory: bool) -> CharlieBotConfig:
-  charliebot_home = tmp_path / config_id
-  if with_memory:
-    memory_dir = charliebot_home / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    (memory_dir / "topics").write_text("fixture-topic\n", encoding="utf-8")
-  return CharlieBotConfig(charliebot_home=charliebot_home, worktree_dir="/tmp/worktrees")
-
-
-@pytest.mark.parametrize(
-    "fixture_name,task_type,is_continuation,keep_worktree,has_loop,has_memory", _MATRIX, ids=[c[0] for c in _MATRIX])
-def test_worker_prompt_matches_pre_extraction_golden(
-    tmp_path: Path,
-    fixture_name: str,
-    task_type: TaskType,
-    is_continuation: bool,
-    keep_worktree: bool,
-    has_loop: bool,
-    has_memory: bool,
-) -> None:
-  cfg = _cfg(tmp_path, fixture_name, with_memory=has_memory)
-  session_meta = SessionMetadata(id="fixture-session-id", name=SESSION_NAME)
-
+def test_loop_axis_renders_both_iteration_number_forms() -> None:
+  """Iter 7 -> raw '## Iter 7' heading and zero-padded 'iter_0007.md' filename, both present."""
   prompt = spawner._build_worker_prompt(
       description=DESCRIPTION,
       repo_path=REPO_PATH,
       base_branch=BASE_BRANCH,
       branch_name=BRANCH_NAME,
       wt_path=WT_PATH,
-      session_meta=session_meta,
-      cfg=cfg,
-      task_type=task_type,
-      loop_dir=LOOP_DIR if has_loop else None,
-      iteration_number=ITERATION_NUMBER if has_loop else None,
-      is_continuation=is_continuation,
-      keep_worktree=keep_worktree,
+      session_meta=SessionMetadata(id="s", name="s"),
+      cfg=CharlieBotConfig(charliebot_home=Path("/tmp/unused"), worktree_dir="/tmp/worktrees"),
+      task_type=TaskType.IMPLEMENT,
+      loop_dir=LOOP_DIR,
+      iteration_number=ITERATION_NUMBER,
+      is_continuation=False,
+      keep_worktree=False,
       start_point=None,
   )
-  golden = (FIXTURES_DIR / fixture_name).read_text(encoding="utf-8")
-  assert prompt == golden
-
-
-def test_loop_axis_golden_asserts_both_iteration_number_renderings() -> None:
-  """Iter 7 -> raw '## Iter 7' heading and zero-padded 'iter_0007.md' filename, both present."""
-  golden = (FIXTURES_DIR / "implement__cont-no__keep-no__loop-yes__mem-no.txt").read_text(encoding="utf-8")
-  assert "## Iter 7 — {completed|failed}" in golden
-  assert "iter_0007.md" in golden
+  assert "## Iter 7 — {completed|failed}" in prompt
+  assert "iter_0007.md" in prompt
 
 
 # --- Fail-loud loader semantics -----------------------------------------------

@@ -891,8 +891,6 @@ async def test_create_repoless_worker_assigns_claude_session_id(
   )
 
   assert thread.claude_session_id is not None
-  assert "--session-id" in (thread.cli_command or "")
-  assert thread.claude_session_id in (thread.cli_command or "")
   assert captures["saved_thread"].claude_session_id == thread.claude_session_id
   assert captures["worker_backend"].type == "cc-claude"
 

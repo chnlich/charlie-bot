@@ -42,6 +42,9 @@ topic was not previously rejected.
 When no symbol in the target meets the Step 3 evidence bar, the run may instead land a
 behavior-preserving cleanup in the target file (deduplication, stale comment or annotation
 hygiene) within the same 300-line budget, labeled refactor or style rather than deletion.
+For a deduplicated literal or cloned fragment, the shared definition may live outside the target file
+(e.g. models.py, threads.py) when that module is the natural owner, provided the target file's own
+copy is the anchor being merged into it and the diff stays focused on that one unification.
 Open no PR only when the run finds neither.
 
 A rejected topic is a closed `code-health/*` pull request carrying a comment that starts

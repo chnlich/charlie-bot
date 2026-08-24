@@ -310,7 +310,7 @@ async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_p
   # The 3 events aggregate into a single still-unflushed assistant draft. The
   # draft belongs to the streaming-preview surface, not to the bubble list, so
   # the committed-message ordinal domain is empty and the page is empty.
-  page = await get_session_events_page(session.id, before=3, limit=3, session_mgr=mgr)
+  page = await get_session_events_page(session.id, before=3, limit=3, meta=session, session_mgr=mgr)
 
   assert page["next_before"] == 0
   assert page["messages"] == []

@@ -655,7 +655,8 @@ async def test_archive_fallback_serves_from_old_path(tmp_path: Path) -> None:
   # The events endpoint should use the fallback path (event-index cursor).
   # archive_offset=5, live has 3 events at global indices 5,6,7.
   # before=8 (global event index), limit=3 → events [5,8) = 3 messages.
-  page = await get_session_events_page(session.id, before=8, limit=3, session_mgr=mgr)
+  meta = await mgr.get_session(session.id)
+  page = await get_session_events_page(session.id, before=8, limit=3, meta=meta, session_mgr=mgr)
   assert page["next_before"] == 5
   assert len(page["messages"]) == 3
   assert [m["content"] for m in page["messages"]] == ["f0", "f1", "f2"]

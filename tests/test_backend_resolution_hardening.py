@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import mock_session_callbacks
+from conftest import make_work_item
 
 from src.agents import master_cc, master_cc_run
 from src.agents.backends import base as backend_base
@@ -28,21 +27,6 @@ class _FakeBackend:
 
   async def run(self, prompt: str, cwd: str, env: dict):
     yield backend_base.make_result_event()
-
-
-def _item(cfg, session_meta, backend_option):
-  return master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="hello",
-      callbacks=mock_session_callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=backend_option,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
 
 
 def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
@@ -217,7 +201,7 @@ async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: 
                       lambda *a, **k: spawned.append(1) or _FakeBackend())
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
-  item = _item(cfg, session_meta, None)
+  item = make_work_item(cfg, session_meta, None)
   cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
 
   assert spawned == []
@@ -243,7 +227,7 @@ async def test_run_cc_refuses_no_option_and_no_pin(tmp_path: Path, monkeypatch) 
                       lambda *a, **k: spawned.append(1) or _FakeBackend())
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
-  item = _item(cfg, session_meta, None)
+  item = make_work_item(cfg, session_meta, None)
   cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
 
   assert spawned == []
@@ -316,7 +300,7 @@ async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
                       lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
-  item = _item(cfg, session_meta, cfg.backend_options[0])
+  item = make_work_item(cfg, session_meta, cfg.backend_options[0])
   _cc, exit_code, error_msg, _extras = await master_cc._run_cc(item)
 
   assert exit_code == 0 and error_msg is None
@@ -343,7 +327,7 @@ async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, mo
                       lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
-  item = _item(cfg, session_meta, cfg.backend_options[0])
+  item = make_work_item(cfg, session_meta, cfg.backend_options[0])
   await master_cc._run_cc(item)
 
   extra_flags = captures["kwargs"]["extra_flags"] or []

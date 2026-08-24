@@ -1,10 +1,9 @@
-import asyncio
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import mock_session_callbacks
+from conftest import make_work_item
 from structlog.testing import capture_logs
 
 from src.agents import master_cc, master_cc_run
@@ -78,18 +77,7 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="hello",
-      callbacks=mock_session_callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=backend_option,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(cfg, session_meta, backend_option)
 
   cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
 
@@ -126,18 +114,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
 
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="hello",
-      callbacks=mock_session_callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=backend_option,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(cfg, session_meta, backend_option)
 
   await master_cc._run_cc(item)
 
@@ -175,18 +152,7 @@ async def _run_cc_starting_entry(
       lambda option, cfg, **kw: _FakeBackend())
   monkeypatch.setattr(
       master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="hello",
-      callbacks=mock_session_callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=backend_option,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(cfg, session_meta, backend_option)
   with capture_logs() as logs:
     await master_cc._run_cc(item)
   return _starting_entry(logs)

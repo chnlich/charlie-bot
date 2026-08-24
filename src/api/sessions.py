@@ -394,6 +394,7 @@ async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get
 @router.get('/{session_id}/view')
 async def get_session_view(
     session_id: str,
+    meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
@@ -404,9 +405,6 @@ async def get_session_view(
   The response includes has_more and oldest_message_ordinal so the frontend
   can paginate backwards.
   """
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   await session_mgr.populate_sidebar_state(
       [meta],
       include_running_status=True,
@@ -436,13 +434,11 @@ async def get_session_view(
 @router.get('/{session_id}/bootstrap')
 async def get_session_bootstrap(
     session_id: str,
+    _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Return the minimal data needed to make one chat session usable."""
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
   payload = {
       "session": bootstrap.session.model_dump(mode="json"),
@@ -459,13 +455,11 @@ async def get_session_bootstrap(
 @router.get('/{session_id}/usage')
 async def get_session_usage(
     session_id: str,
+    meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Return lazy session status and usage data for the active header."""
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   usage = await session_mgr.resolve_session_usage(session_id, meta)
   payload = {
       "session": meta.model_dump(mode="json"),
@@ -480,6 +474,7 @@ async def get_session_events_page(
     session_id: str,
     before: int,
     limit: int = 40,
+    meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
   """Paginate backwards through session messages by message ordinal.
@@ -495,9 +490,6 @@ async def get_session_events_page(
   event-index cursor path (``load_chat_events_range`` + ``events_to_messages``)
   and never mix the two cursor domains.
   """
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   limit = max(1, min(limit, 200))
   if meta.archive_offset == 0:
     projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
@@ -514,6 +506,7 @@ async def get_session_events_page(
 async def get_session_recap(
     session_id: str,
     upto: int | None = None,
+    _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
   """Pure-extraction recap (no LLM) plus any cached Haiku summary for a divider.
@@ -522,9 +515,6 @@ async def get_session_recap(
   last exchange, the cached summary (or null), and whether that summary is stale.
   """
   from src.core import recap
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   if upto is None:
     count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id)
     upto = max(0, count - 1)
@@ -537,14 +527,12 @@ async def get_session_recap(
 async def summarize_session_recap(
     session_id: str,
     upto: int,
+    _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Generate (via a light backend), cache, and return the recap summary for a divider."""
   from src.core import recap
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   summary = await recap.generate_and_cache_summary(session_mgr, session_id, upto, cfg)
   return {"summary": summary}
 
@@ -764,11 +752,9 @@ async def rate_round(
     session_id: str,
     round_id: str,
     req: RateRoundRequest,
+    meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   if req.rating is None:
     meta.round_ratings.pop(round_id, None)
   else:
@@ -830,7 +816,7 @@ async def list_threads(session_id: str, thread_mgr: ThreadManager = Depends(get_
 @router.get("/{session_id}/plans")
 async def list_plans(
     session_id: str,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    _meta: SessionMetadata = Depends(require_session),
     plan_mgr=Depends(get_plan_manager),
 ):
   """Return the plan registry for a session with derived states and read errors.
@@ -838,7 +824,4 @@ async def list_plans(
   Unknown session → 404. Known session → always 200 with ``{"plans": [...], "errors": [...]}``;
   a corrupt registry produces 200 with empty plans and one error entry, never 5xx.
   """
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
   return await plan_mgr.list_plans(session_id)

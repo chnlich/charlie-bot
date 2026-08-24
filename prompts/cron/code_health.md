@@ -78,6 +78,11 @@ body's `## Evidence` section (each as command plus output):
 3. The full test suite is green after removal.
 In this first phase, delete only when the symbol name has exactly zero whole-repo matches.
 
+Second phase (user-approved 2026-08-23): a symbol whose name still has matches may be deleted when
+every remaining match is itself dead — unused-import leftovers, orphaned fixtures, comment-only
+references. Quote every such match in the PR body's `## Evidence` with the reason it is itself
+dead. When any match cannot be shown dead, the phase-1 zero-match bar stands.
+
 `vulture` is a probe you may run to surface candidates. It is never a gate and must not be added
 to CI.
 

@@ -7,19 +7,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from conftest import append_events as _append_events
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionStatus
 from src.core.recap import extract_recap
 from src.core.sessions import SessionManager
-
-
-def _append_events(path: Path, events: list[dict]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with open(path, "a", encoding="utf-8") as f:
-    for event in events:
-      f.write(json.dumps(event) + "\n")
 
 
 def _read_events(path: Path) -> list[dict]:

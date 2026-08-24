@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import append_events as _append_events
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
@@ -61,13 +62,6 @@ def _write_artifact(cfg: CharlieBotConfig, session_id: str, file: str, content: 
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(content, encoding="utf-8")
   return path
-
-
-def _append_events(path: Path, events: list[dict]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  with open(path, "a", encoding="utf-8") as f:
-    for event in events:
-      f.write(json.dumps(event) + "\n")
 
 
 # ---------------------------------------------------------------------------

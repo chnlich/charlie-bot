@@ -781,7 +781,7 @@ class SessionManager:
 
   def _gc_old_threads_sync(self, session_id: str, cutoff_utc: datetime) -> int:
     """Remove thread dirs whose status is terminal and completed_at < cutoff."""
-    threads_dir = self._session_dir(session_id) / "threads"
+    threads_dir = self._threads_dir(session_id)
     if not threads_dir.exists():
       return 0
     deleted = 0
@@ -1265,7 +1265,7 @@ class SessionManager:
     """
 
     def _check() -> bool:
-      threads_dir = self._session_dir(session_id) / "threads"
+      threads_dir = self._threads_dir(session_id)
       now = utc_now()
       for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, now, "thread_meta_read_failed"):
         if meta.get("status") == "running":
@@ -1465,6 +1465,10 @@ class SessionManager:
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id
+
+  def _threads_dir(self, session_id: str) -> Path:
+    """Return the absolute path to a session's threads dir."""
+    return self._session_dir(session_id) / "threads"
 
   def _metadata_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / "metadata.json"

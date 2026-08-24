@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import mock_session_callbacks
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import config as core_config
@@ -15,17 +16,6 @@ from src.core import models
 from src.core.models import SendMessageRequest
 
 DISCLAIMER = master_cc_run._VOICE_DISCLAIMER
-
-
-def _make_callbacks() -> models.SessionCallbacks:
-  return models.SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
-      persist_master_run=AsyncMock(),
-  )
 
 
 def _make_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
@@ -80,7 +70,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
       cfg=cfg,
       session_meta=meta,
       user_content="transcribed hello",
-      callbacks=_make_callbacks(),
+      callbacks=mock_session_callbacks(),
       is_voice=True,
       auto_trigger=False,
       backend_option=cfg.backend_options[0],
@@ -109,7 +99,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
       cfg=cfg,
       session_meta=meta,
       user_content="plain hello",
-      callbacks=_make_callbacks(),
+      callbacks=mock_session_callbacks(),
       is_voice=False,
       auto_trigger=False,
       backend_option=cfg.backend_options[0],
@@ -132,7 +122,7 @@ async def _run_message_with_capturing_backend(
 ):
   cfg = _make_cfg(tmp_path)
   meta = models.SessionMetadata(id="voice-msg-session", name="Voice", backend="fake")
-  callbacks = _make_callbacks()
+  callbacks = mock_session_callbacks()
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
+from conftest import mock_session_callbacks
 
 from src.agents import master_cc
 from src.agents.backends import base as backend_base
@@ -22,7 +22,7 @@ from src.agents.backends import registry
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
+from src.core.models import BackendOption, SessionMetadata
 
 
 class _FakeBackend:
@@ -35,17 +35,6 @@ class _FakeBackend:
 
   async def run(self, prompt: str, cwd: str, env: dict):
     yield backend_base.make_result_event()
-
-
-def _callbacks() -> SessionCallbacks:
-  return SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
-      persist_master_run=AsyncMock(),
-  )
 
 
 def _wake_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> core_config.CharlieBotConfig:
@@ -73,7 +62,7 @@ def _item(cfg, session_meta: SessionMetadata, backend_option: BackendOption) -> 
       cfg=cfg,
       session_meta=session_meta,
       user_content="hello",
-      callbacks=_callbacks(),
+      callbacks=mock_session_callbacks(),
       is_voice=False,
       auto_trigger=False,
       backend_option=backend_option,

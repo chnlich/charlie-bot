@@ -19,6 +19,7 @@ from src.api.deps import (
   require_session,
 )
 from src.api.message_utils import (
+  SessionBootstrapData,
   build_session_bootstrap_data,
   build_session_view_data,
   events_to_messages,
@@ -79,6 +80,19 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
       "switchable_backends": switchable,
       "backend_switch_rotates": rotates,
   }
+
+
+def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -> dict:
+  payload = {
+      "session": bootstrap.session.model_dump(mode="json"),
+      "messages": bootstrap.messages,
+      "pending_draft": bootstrap.pending_draft,
+      "event_count": bootstrap.total_event_count,
+      "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
+      "has_more": bootstrap.has_more,
+  }
+  payload.update(_active_backend_payload(bootstrap.session, cfg))
+  return payload
 
 
 def _backend_domain(option: BackendOption) -> str | None:
@@ -440,16 +454,7 @@ async def get_session_bootstrap(
 ):
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
-  payload = {
-      "session": bootstrap.session.model_dump(mode="json"),
-      "messages": bootstrap.messages,
-      "pending_draft": bootstrap.pending_draft,
-      "event_count": bootstrap.total_event_count,
-      "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
-      "has_more": bootstrap.has_more,
-  }
-  payload.update(_active_backend_payload(bootstrap.session, cfg))
-  return payload
+  return _bootstrap_payload(bootstrap, cfg)
 
 
 @router.get('/{session_id}/usage')

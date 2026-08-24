@@ -198,7 +198,6 @@ async def start_improve_loop(
     state = await reserve_loop_state(
         req.session_id,
         req.goal,
-        req.iterations,
         work_branch,
         req.repo_path,
         cfg,

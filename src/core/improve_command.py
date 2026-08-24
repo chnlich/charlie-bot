@@ -69,7 +69,6 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
 class ImproveState(BaseModel):
   loop_id: int
   goal: str
-  max_iterations: int = 5
   status: str = "running"  # running | stopped | completed | failed
   work_branch: str
   base_branch: Optional[str] = None
@@ -386,7 +385,6 @@ def _build_summary_payload(payload_type: str, goal: str, summaries: list[str]) -
 async def reserve_loop_state(
     session_id: str,
     goal: str,
-    iterations: int,
     work_branch: str,
     repo_path: str,
     cfg: CharlieBotConfig,
@@ -418,7 +416,6 @@ async def reserve_loop_state(
     state = ImproveState(
         loop_id=loop_id,
         goal=goal,
-        max_iterations=iterations,
         status="running",
         work_branch=work_branch,
         base_branch=base_branch,
@@ -758,7 +755,6 @@ async def run_improve_loop(
     state = await reserve_loop_state(
         session_id,
         goal,
-        iterations,
         work_branch,
         str(resolved_repo),
         cfg,

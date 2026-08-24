@@ -10,6 +10,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import mock_session_callbacks
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -33,17 +34,6 @@ from src.core.sessions import SessionManager
 
 def _make_meta(session_id: str) -> SessionMetadata:
   return SessionMetadata(id=session_id, name="t", backend="fake", cc_session_id=None)
-
-
-def _make_callbacks() -> SessionCallbacks:
-  return SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
-      persist_master_run=AsyncMock(),
-  )
 
 
 def _make_item(session_meta: SessionMetadata, callbacks: SessionCallbacks) -> master_cc._WorkItem:
@@ -73,7 +63,7 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 
   meta_bootstrap = _make_meta(session_id)
   meta_user_message = _make_meta(session_id)  # distinct instance, freshly loaded from disk
-  cb = _make_callbacks()
+  cb = mock_session_callbacks()
   item_bootstrap = _make_item(meta_bootstrap, cb)
   item_user = _make_item(meta_user_message, cb)
 
@@ -276,7 +266,7 @@ async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pyte
 
   workers_mock = MagicMock()
   workers_mock._has_running_tasks = AsyncMock(return_value=False)
-  callbacks = _make_callbacks()
+  callbacks = mock_session_callbacks()
 
   monkeypatch.setattr(master_cc_run, "_run_cc", exploding_run_cc)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
@@ -621,7 +611,7 @@ async def test_resume_reattach_uses_persisted_interval_start(
 
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)
-  callbacks = _make_callbacks()
+  callbacks = mock_session_callbacks()
 
   _reset_master_state(session_id)
   try:
@@ -696,7 +686,7 @@ async def _run_stream_consumer(
   """Run a simulated event stream through the production consumer path."""
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)
-  cb = _make_callbacks()
+  cb = mock_session_callbacks()
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **k: backend)
@@ -774,7 +764,7 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
 
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)
-  cb = _make_callbacks()
+  cb = mock_session_callbacks()
 
   async def fake_resume_cc(item: master_cc._WorkItem) -> tuple:
     return "cc-resumed-id", 0, None, {"zero_output": True}
@@ -885,7 +875,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
 
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)
-  cb = _make_callbacks()
+  cb = mock_session_callbacks()
 
   monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())

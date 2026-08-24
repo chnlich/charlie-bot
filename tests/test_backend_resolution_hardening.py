@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import mock_session_callbacks
 
 from src.agents import master_cc, master_cc_run
 from src.agents.backends import base as backend_base
@@ -19,17 +20,6 @@ from src.core.models import CreateSessionRequest, PendingTrigger
 from src.core.sessions import SessionManager
 from src.core.spawner import _resolve_session_default_backend_model
 from src.core.triggers import TriggerManager
-
-
-def _make_callbacks() -> models.SessionCallbacks:
-  return models.SessionCallbacks(
-      persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
-      persist_master_run=AsyncMock(),
-  )
 
 
 class _FakeBackend:
@@ -45,7 +35,7 @@ def _item(cfg, session_meta, backend_option):
       cfg=cfg,
       session_meta=session_meta,
       user_content="hello",
-      callbacks=_make_callbacks(),
+      callbacks=mock_session_callbacks(),
       is_voice=False,
       auto_trigger=False,
       backend_option=backend_option,

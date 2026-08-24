@@ -78,6 +78,18 @@ def resolve_binary(name: str, fallback_dir: str) -> str:
   raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
 
 
+def prepend_path_dir(env: dict[str, str], dir_path: str) -> None:
+  """Prepend dir_path to env's PATH, unless it is already one of the entries.
+
+  The split(":") membership check is exact-entry: a host PATH that already
+  lists the dir (the common case for a user bin dir) must not gain a duplicate
+  or have the existing entry re-ordered to the front.
+  """
+  current_path = env.get("PATH", "")
+  if dir_path not in current_path.split(":"):
+    env["PATH"] = f"{dir_path}:{current_path}"
+
+
 def make_text_event(text: str) -> dict:
   """Build a CC-compatible assistant-text event."""
   return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}

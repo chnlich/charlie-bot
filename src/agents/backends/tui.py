@@ -9,8 +9,6 @@ terminal. Multiple browsers attaching the same session is tmux-native.
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import json
 import os
 import time
@@ -18,18 +16,15 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 
 from src.agents.backends.pty_common import (
   _HISTORY_LIMIT,
   _INITIAL_COLS,
   _INITIAL_ROWS,
-  _WS_RECV_TIMEOUT,
   PTY_EXIT,
-  PTY_INPUT,
-  PTY_RESIZE,
   PtyAttachment,
-  _pump_pty_to_ws,
+  _run_pty_relay,
   _run_tmux,
   _tmux_binary,
   kill_tmux_session,  # noqa: F401  # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py and monkeypatched here by tests
@@ -204,52 +199,9 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
       pass
     return
 
-  pump_task = asyncio.create_task(
-      _pump_pty_to_ws(attachment, websocket),
-      name=f"tui-pump-{session_id[:8]}",
-  )
   try:
-    while True:
-      try:
-        raw = await asyncio.wait_for(websocket.receive_text(), timeout=_WS_RECV_TIMEOUT)
-      except asyncio.TimeoutError:
-        try:
-          await websocket.send_json({"type": "ping"})
-        except Exception:
-          break
-        continue
-      except WebSocketDisconnect:
-        break
-      try:
-        msg = json.loads(raw)
-      except json.JSONDecodeError:
-        continue
-      t = msg.get("type")
-      if t == PTY_INPUT:
-        payload = msg.get("data") or ""
-        try:
-          chunk = base64.b64decode(payload, validate=False)
-        except Exception as e:  # malformed input from client
-          log.debug("tui_pty_input_decode_failed", session_id=session_id, error=str(e))
-          continue
-        attachment.write(chunk)
-      elif t == PTY_RESIZE:
-        try:
-          cols = int(msg.get("cols") or 80)
-          rows = int(msg.get("rows") or 24)
-        except (TypeError, ValueError):
-          continue
-        attachment.resize(cols, rows)
-      # Other types (legacy `cursor`, future events) are ignored.
+    await _run_pty_relay(websocket, attachment, pump_name=f"tui-pump-{session_id[:8]}")
   finally:
-    pump_task.cancel()
-    try:
-      await pump_task
-    except asyncio.CancelledError:
-      pass
-    except Exception as e:
-      log.debug("tui_pump_task_exit", session_id=session_id, error=str(e))
-    attachment.close()
     try:
       from src.api.deps import get_session_manager
       from src.core.autonamer import maybe_auto_name_from_claude_ai_title

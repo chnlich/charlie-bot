@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import fcntl
+import json
 import os
 import pty
 import shutil
@@ -14,7 +15,7 @@ import tempfile
 import termios
 
 import structlog
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 log = structlog.get_logger()
 
@@ -216,3 +217,60 @@ async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> No
     await websocket.send_json({"type": PTY_EXIT})
   except Exception as e:
     log.debug("tui_pty_exit_send_failed", session_id=attachment.session_id, error=str(e))
+
+
+async def _run_pty_relay(websocket: WebSocket, attachment: PtyAttachment, *, pump_name: str) -> None:
+  """Run the bidirectional PTY↔WebSocket relay until the WebSocket drops.
+
+  Starts the PTY→WS pump, forwards browser `pty_input`/`pty_resize` messages to
+  the PTY, then on exit cancels the pump and closes the attachment.
+  """
+  pump_task = asyncio.create_task(
+      _pump_pty_to_ws(attachment, websocket),
+      name=pump_name,
+  )
+  try:
+    while True:
+      try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=_WS_RECV_TIMEOUT)
+      except asyncio.TimeoutError:
+        try:
+          await websocket.send_json({"type": "ping"})
+        except Exception as e:
+          log.debug("tui_pty_ping_send_failed", session_id=attachment.session_id, error=str(e))
+          break
+        continue
+      except WebSocketDisconnect:
+        break
+      try:
+        msg = json.loads(raw)
+      except json.JSONDecodeError as e:
+        log.debug("tui_pty_ws_json_decode_failed", session_id=attachment.session_id, error=str(e))
+        continue
+      t = msg.get("type")
+      if t == PTY_INPUT:
+        payload = msg.get("data") or ""
+        try:
+          chunk = base64.b64decode(payload, validate=False)
+        except Exception as e:  # malformed input from client
+          log.debug("tui_pty_input_decode_failed", session_id=attachment.session_id, error=str(e))
+          continue
+        attachment.write(chunk)
+      elif t == PTY_RESIZE:
+        try:
+          cols = int(msg.get("cols") or _INITIAL_COLS)
+          rows = int(msg.get("rows") or _INITIAL_ROWS)
+        except (TypeError, ValueError) as e:
+          log.debug("tui_pty_resize_parse_failed", session_id=attachment.session_id, error=str(e))
+          continue
+        attachment.resize(cols, rows)
+      # Other types (legacy `cursor`, future events) are ignored.
+  finally:
+    pump_task.cancel()
+    try:
+      await pump_task
+    except asyncio.CancelledError:
+      pass
+    except Exception as e:
+      log.debug("tui_pump_task_exit", session_id=attachment.session_id, error=str(e))
+    attachment.close()

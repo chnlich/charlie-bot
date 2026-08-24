@@ -221,7 +221,7 @@ async def test_run_terminal_attachment_attaches_and_handles_input(
 
   monkeypatch.setattr(terminal, "ensure_terminal_session", fake_ensure_terminal_session)
   monkeypatch.setattr(terminal, "PtyAttachment", _FakeAttachment)
-  monkeypatch.setattr(terminal, "_pump_pty_to_ws", fake_pump)
+  monkeypatch.setattr(pty_common, "_pump_pty_to_ws", fake_pump)
 
   await terminal.run_terminal_attachment(ws)
 
@@ -258,7 +258,7 @@ async def test_tui_attachment_still_uses_shared_pty_path(
 
   monkeypatch.setattr(tui, "ensure_tmux_session", fake_ensure_tmux_session)
   monkeypatch.setattr(tui, "PtyAttachment", _FakeAttachment)
-  monkeypatch.setattr(tui, "_pump_pty_to_ws", fake_pump)
+  monkeypatch.setattr(pty_common, "_pump_pty_to_ws", fake_pump)
   monkeypatch.setattr("src.api.deps.get_session_manager", lambda: FakeSessionManager())
 
   await tui.run_tui_attachment(ws, "session-id", tmp_path / "sessions")

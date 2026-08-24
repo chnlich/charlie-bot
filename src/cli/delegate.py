@@ -17,6 +17,7 @@ import json
 import sys
 
 from src.cli.common import (
+    add_session_arg,
     find_local_thread,
     post_internal_api,
     read_required_text_file,
@@ -64,7 +65,7 @@ def main() -> None:
       epilog=DELEGATE_EPILOG,
       formatter_class=argparse.RawDescriptionHelpFormatter,
   )
-  parser.add_argument("--session", required=False, default=None, help="Session ID (optional; auto-derived from cwd)")
+  add_session_arg(parser)
   parser.add_argument(
       "--repo",
       required=False,

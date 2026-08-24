@@ -29,7 +29,7 @@ freely in one trigger.
 import argparse
 import json
 
-from src.cli.common import post_internal_api, resolve_session_id
+from src.cli.common import add_session_arg, post_internal_api, resolve_session_id
 from src.core.config import get_config
 from src.core.models import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
 
@@ -90,11 +90,7 @@ def _validate_message(value: str) -> str:
 
 def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(description="Schedule a delayed trigger for a CharlieBot session")
-  parser.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Session ID (optional; auto-derived from cwd)")
+  add_session_arg(parser)
   parser.add_argument(
       "--max-wait",
       required=True,

@@ -1,8 +1,12 @@
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -46,6 +50,23 @@ async def make_parent(mgr: "SessionManager", *, name: str = "Parent") -> str:
       ],
   )
   return parent.id
+
+
+def run_node_js_test(node_test: Path, skip_reason: str) -> None:
+  """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset loads working."""
+  node = shutil.which('node')
+  if node is None:
+    pytest.skip(skip_reason)
+
+  result = subprocess.run(
+      [node, '--test', str(node_test)],
+      cwd=ROOT,
+      capture_output=True,
+      text=True,
+      check=False,
+  )
+  if result.returncode != 0:
+    pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
 
 
 class JudgmentShim:

@@ -536,6 +536,19 @@ class TriggerManager:
     task = create_logged_task(self._wait_and_fire(trigger), name=f"trigger-{trigger.id[:8]}")
     self._tasks[trigger.id] = task
 
+  async def _cancel_undeliverable(self, fresh: PendingTrigger, reason: str) -> None:
+    """Every _wait_and_fire exit where the event cannot be delivered ends the same
+    way: stamp CANCELLED, persist, drop the in-memory task handle, log the path's reason."""
+    fresh.status = TriggerStatus.CANCELLED
+    await self._save_trigger(fresh)
+    self._tasks.pop(fresh.id, None)
+    log.info(
+        "trigger_cancelled_archived_session",
+        trigger_id=fresh.id,
+        session=fresh.session_id,
+        reason=reason,
+    )
+
   async def _wait_and_fire(self, trigger: PendingTrigger) -> None:
     """Wait until every watch group finishes (or fire_at), then trigger the master agent.
 
@@ -584,15 +597,7 @@ class TriggerManager:
 
     session_meta = await self._session_mgr.get_session(fresh.session_id)
     if session_meta is None:
-      fresh.status = TriggerStatus.CANCELLED
-      await self._save_trigger(fresh)
-      self._tasks.pop(trigger.id, None)
-      log.info(
-          "trigger_cancelled_archived_session",
-          trigger_id=fresh.id,
-          session=fresh.session_id,
-          reason="metadata_unavailable",
-      )
+      await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
       return
 
     if fresh.watch_targets:
@@ -606,27 +611,11 @@ class TriggerManager:
     # explicit "no more wakes" signal and cancels, as today.
     resolved_tail = await self._session_mgr.resolve_successor_chain(fresh.session_id)
     if resolved_tail is None:
-      fresh.status = TriggerStatus.CANCELLED
-      await self._save_trigger(fresh)
-      self._tasks.pop(trigger.id, None)
-      log.info(
-          "trigger_cancelled_archived_session",
-          trigger_id=fresh.id,
-          session=fresh.session_id,
-          reason="metadata_unavailable",
-      )
+      await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
       return
 
     if resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None:
-      fresh.status = TriggerStatus.CANCELLED
-      await self._save_trigger(fresh)
-      self._tasks.pop(trigger.id, None)
-      log.info(
-          "trigger_cancelled_archived_session",
-          trigger_id=fresh.id,
-          session=fresh.session_id,
-          reason="archived",
-      )
+      await self._cancel_undeliverable(fresh, reason="archived")
       return
 
     # Deliver the scheduled-trigger event through the succession-aware primitive:
@@ -637,15 +626,7 @@ class TriggerManager:
         build_scheduled_trigger_event(trigger_message),
     )
     if delivered is None:
-      fresh.status = TriggerStatus.CANCELLED
-      await self._save_trigger(fresh)
-      self._tasks.pop(trigger.id, None)
-      log.info(
-          "trigger_cancelled_archived_session",
-          trigger_id=fresh.id,
-          session=fresh.session_id,
-          reason="chain_end_missing",
-      )
+      await self._cancel_undeliverable(fresh, reason="chain_end_missing")
       return
 
     # Wake the master CC. Re-read the config here rather than using the snapshot

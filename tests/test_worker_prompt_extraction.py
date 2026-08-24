@@ -44,6 +44,56 @@ def test_loop_axis_renders_both_iteration_number_forms() -> None:
   assert "iter_0007.md" in prompt
 
 
+def test_continuation_intro_selected_over_new_session_intro() -> None:
+  cfg = CharlieBotConfig(charliebot_home=Path("/tmp/unused"), worktree_dir="/tmp/worktrees")
+  sections = spawner.load_worker_prompt_sections(cfg)
+
+  prompt = spawner._build_worker_prompt(
+      description=DESCRIPTION,
+      repo_path=REPO_PATH,
+      base_branch=BASE_BRANCH,
+      branch_name=BRANCH_NAME,
+      wt_path=WT_PATH,
+      session_meta=SessionMetadata(id="s", name="s"),
+      cfg=cfg,
+      task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=True,
+      keep_worktree=False,
+      start_point=None,
+  )
+  assert sections["intro_continuation"] in prompt
+  assert sections["intro_new"] not in prompt
+
+
+def test_memory_block_renders_into_prompt(tmp_path: Path) -> None:
+  charliebot_home = tmp_path / "with-memory"
+  memory_dir = charliebot_home / "memory"
+  memory_dir.mkdir(parents=True)
+  (memory_dir / "topics").write_text("fixture-topic\n", encoding="utf-8")
+
+  prompt = spawner._build_worker_prompt(
+      description=DESCRIPTION,
+      repo_path=REPO_PATH,
+      base_branch=BASE_BRANCH,
+      branch_name=BRANCH_NAME,
+      wt_path=WT_PATH,
+      session_meta=SessionMetadata(id="s", name="s"),
+      cfg=CharlieBotConfig(charliebot_home=charliebot_home, worktree_dir="/tmp/worktrees"),
+      task_type=TaskType.IMPLEMENT,
+      loop_dir=None,
+      iteration_number=None,
+      is_continuation=False,
+      keep_worktree=False,
+      start_point=None,
+  )
+  # A broken {{memory_block}} token fails the unresolved-token sweep instead of
+  # reaching the assertions, and an inverted memory gate drops the heading.
+  assert "## Memory" in prompt
+  assert "{{" not in prompt
+
+
 # --- Fail-loud loader semantics -----------------------------------------------
 
 

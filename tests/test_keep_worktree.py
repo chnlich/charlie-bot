@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, JudgmentShim
+from conftest import CODEX_BACKEND_OPTION, JudgmentShim, recording_notify_completion
 
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
@@ -116,22 +116,10 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notified"] = True
-
   async def fail_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
     raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
 
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
   monkeypatch.setattr(spawner_finalize, "git_worktree_remove", fail_git_worktree_remove)
 
   await spawner._finalize_worker(
@@ -303,23 +291,10 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     async def terminate(self) -> None:
       return None
 
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notify_thread_keep_worktree"] = thread_meta.keep_worktree
-    captures["notify_thread_worktree_path"] = thread_meta.worktree_path
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner_launch, "Worker", FakeWorker)
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", fake_notify_completion)
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",
@@ -342,4 +317,4 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
   assert "This worktree will persist after the reviewer merges." in captures["prompt"]
   wt_path = Path(thread.worktree_path)
   assert wt_path.exists()
-  assert captures["notify_thread_keep_worktree"] is True
+  assert captures["notify_thread"].keep_worktree is True

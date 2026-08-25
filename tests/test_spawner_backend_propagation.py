@@ -1,9 +1,9 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, JudgmentShim
+from conftest import CODEX_BACKEND_OPTION, JudgmentShim, recording_notify_completion
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
@@ -76,30 +76,6 @@ def _capturing_worker(captures: dict[str, Any]) -> type:
       return None
 
   return CapturingWorker
-
-
-def _recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
-  """A spawner._notify_completion stand-in recording the finalized outcome and thread.
-
-  The signature mirrors the production call in spawner._run_finalize_effects; each
-  monkeypatching test reads back only the captured fields it asserts on.
-  """
-
-  async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
-      verify_report: str | None = None,
-  ) -> None:
-    captures["notified"] = True
-    captures["notify_exit_code"] = outcome.exit_code
-    captures["notify_thread"] = thread_meta
-
-  return fake_notify_completion
 
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
@@ -509,7 +485,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
   monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", _recording_notify_completion(captures))
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",
@@ -641,7 +617,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       captures["status"] = status
       captures["exit_code"] = exit_code
 
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", _recording_notify_completion(captures))
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner._finalize_worker(
       session_id="session-id",
@@ -1037,7 +1013,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
 
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", _recording_notify_completion(captures))
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner.spawn_worker(
       session_id="session-id",

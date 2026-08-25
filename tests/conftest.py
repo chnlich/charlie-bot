@@ -374,6 +374,26 @@ class FakeAsyncProcess:
     return self.returncode
 
 
+class FakeStdout:
+  """proc.stdout double: async iterator over canned NDJSON byte lines.
+
+  Callers assign an instance to a mocked process's stdout and rely on
+  __anext__ replaying the constructor's lines in order before raising
+  StopAsyncIteration (backend one-shot subprocess tests).
+  """
+
+  def __init__(self, lines: list[bytes]) -> None:
+    self._lines = list(lines)
+
+  def __aiter__(self) -> "FakeStdout":
+    return self
+
+  async def __anext__(self) -> bytes:
+    if not self._lines:
+      raise StopAsyncIteration
+    return self._lines.pop(0)
+
+
 class FakeBackend:
   """AgentBackend double whose run() yields one canned result event.
 

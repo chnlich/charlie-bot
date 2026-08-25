@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import FakeStdout
 
 from src.core import autonamer
 from src.core.autonamer import (
@@ -37,21 +38,6 @@ def _mock_backend(one_shot: AsyncMock) -> MagicMock:
   backend = MagicMock()
   backend.one_shot_text = one_shot
   return backend
-
-
-class _FakeStdout:
-  """Async iterator over canned NDJSON byte lines, mimicking proc.stdout."""
-
-  def __init__(self, lines: list[bytes]) -> None:
-    self._lines = list(lines)
-
-  def __aiter__(self) -> "_FakeStdout":
-    return self
-
-  async def __anext__(self) -> bytes:
-    if not self._lines:
-      raise StopAsyncIteration
-    return self._lines.pop(0)
 
 
 # ---------------------------------------------------------------------------
@@ -650,7 +636,7 @@ async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> Non
       b'{"type":"turn.completed","usage":{}}\n',
   ]
   proc = MagicMock()
-  proc.stdout = _FakeStdout(lines)
+  proc.stdout = FakeStdout(lines)
   proc.stderr = MagicMock()
   proc.stderr.read = AsyncMock(return_value=b"")
   proc.wait = AsyncMock(return_value=0)
@@ -684,7 +670,7 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypat
       b'{"type":"turn.completed","usage":{}}\n',
   ]
   proc = MagicMock()
-  proc.stdout = _FakeStdout(lines)
+  proc.stdout = FakeStdout(lines)
   proc.stderr = MagicMock()
   proc.stderr.read = AsyncMock(return_value=b"")
   proc.wait = AsyncMock(return_value=0)
@@ -713,7 +699,7 @@ async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeyp
       b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop","messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n',
   ]
   proc = MagicMock()
-  proc.stdout = _FakeStdout(lines)
+  proc.stdout = FakeStdout(lines)
   proc.stderr = MagicMock()
   proc.stderr.read = AsyncMock(return_value=b"")
   proc.wait = AsyncMock(return_value=0)
@@ -746,7 +732,7 @@ async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatc
       b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop","messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n',
   ]
   proc = MagicMock()
-  proc.stdout = _FakeStdout(lines)
+  proc.stdout = FakeStdout(lines)
   proc.stderr = MagicMock()
   proc.stderr.read = AsyncMock(return_value=b"")
   proc.wait = AsyncMock(return_value=0)

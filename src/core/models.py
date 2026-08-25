@@ -269,7 +269,9 @@ class SessionMetadata(BaseModel):
   # Parent session for clone/elone-derived sessions
   parent_session_id: Optional[str] = None
   # Elone successor pointer: id of the session that took over from this one via
-  # elone. Set once by elone_session; ordinary fork/archive/delete leave it None.
+  # elone. Latest-wins for ordinary sessions — each elone overwrites the pointer
+  # to name the parent's most recent elone child. Scheduler-owned sessions keep
+  # a single succession. Ordinary fork/archive/delete leave it None.
   successor_session_id: Optional[str] = None
   # Slack thread this session was summoned from; set at creation, never mutated.
   slack_origin: Optional[SlackOrigin] = None

@@ -5,7 +5,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -82,25 +82,25 @@ class ScheduledTaskConfig(BaseModel):
 
   name: str
   cron: str
-  prompt: Optional[str] = None
+  prompt: str | None = None
   # Pre-resolution path string a host cron.d file declared. It is an in-process
   # field for transport to the API and UI only; no write path persists it.
-  prompt_file: Optional[str] = None
-  handler: Optional[str] = None
-  loop: Optional[ImprovementLoopConfig] = None
-  repo: Optional[str] = None
-  backend: Optional[str] = None
+  prompt_file: str | None = None
+  handler: str | None = None
+  loop: ImprovementLoopConfig | None = None
+  repo: str | None = None
+  backend: str | None = None
   timezone: str = DEFAULT_TIMEZONE
   enabled: bool = True
-  project: Optional[str] = None
+  project: str | None = None
   # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);
   # 'master' wakes the dedicated session's master with the task's prompt: the
   # pointed file owns the body, the host cron file carries only its path, and
   # the loader reads the file on every load. An appended Group line follows the
   # prompt.
-  mode: Optional[Literal['worker', 'master']] = None
+  mode: Literal['worker', 'master'] | None = None
   allow_failure: bool = False
-  notify: Optional[str] = None  # 'telegram' or None
+  notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')
   def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
@@ -133,7 +133,7 @@ class ScheduledTaskError(BaseModel):
   name: str
   path: str
   error: str
-  enabled: Optional[bool] = None
+  enabled: bool | None = None
 
 
 class _CronSnapshot:
@@ -165,7 +165,7 @@ class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
 
   # Kimi (Moonshot) — optional, not wired in by default
-  moonshot_api_key: Optional[str] = None
+  moonshot_api_key: str | None = None
 
   # Authentication — shared secret; empty string disables auth
   charliebot_access_key: str = ""
@@ -176,7 +176,7 @@ class CharlieBotConfig(BaseModel):
   # Externally reachable base URL of this server (e.g. "https://bot.example.com"),
   # used to build file links for readers outside the host. Host-local: unset by
   # default, and ``server_base_url`` (localhost) is no substitute for a remote reader.
-  public_base_url: Optional[str] = None
+  public_base_url: str | None = None
 
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
   charliebot_home: Path = Field(default_factory=charliebot_home_dir)
@@ -189,7 +189,7 @@ class CharlieBotConfig(BaseModel):
 
   # code-server integration
   code_server_config: str = "configs/code-server.yaml"
-  code_server_bin: Optional[str] = None
+  code_server_bin: str | None = None
 
   # Plan registration page-height gate — absolute path of a headless-chromium-compatible
   # binary on the host running the server. The value stays host-local in config.yaml;
@@ -200,7 +200,7 @@ class CharlieBotConfig(BaseModel):
   backlog_repos: list[BacklogRepoConfig] = []
   # Home page — externally-hosted services probed for reachability; default empty
   home_services: list[HomeService] = []
-  backlog_repo: Optional[str] = None  # deprecated, migrated to backlog_repos
+  backlog_repo: str | None = None  # deprecated, migrated to backlog_repos
   backlog_label: str = 'Project Backlog'  # deprecated, used during migration
 
   # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
@@ -233,12 +233,12 @@ class CharlieBotConfig(BaseModel):
   model_preference: list[str] = []
 
   # Telegram notifications
-  telegram_bot_token: Optional[str] = None
-  telegram_chat_id: Optional[str] = None
+  telegram_bot_token: str | None = None
+  telegram_chat_id: str | None = None
 
   # Slack summon entrypoint
-  slack_bot_token: Optional[str] = None       # xoxb-…, chat:write + history scopes
-  slack_app_token: Optional[str] = None       # xapp-…, connections:write, Socket Mode only
+  slack_bot_token: str | None = None       # xoxb-…, chat:write + history scopes
+  slack_app_token: str | None = None       # xapp-…, connections:write, Socket Mode only
   slack_allowed_user_ids: list[str] = []      # Slack user ids allowed to summon; empty = nobody
 
   @model_validator(mode="before")
@@ -327,7 +327,7 @@ class CharlieBotConfig(BaseModel):
   def config_d_dir(self) -> Path:
     return self.charliebot_home / "config.d"
 
-  def get_backend_option(self, backend_id: str) -> Optional[BackendOption]:
+  def get_backend_option(self, backend_id: str) -> BackendOption | None:
     """Look up a backend option by id."""
     return next((opt for opt in self.backend_options if opt.id == backend_id), None)
 
@@ -344,7 +344,7 @@ class CharlieBotConfig(BaseModel):
     return repos
 
 
-_config: Optional[CharlieBotConfig] = None
+_config: CharlieBotConfig | None = None
 # The last fingerprint _config_fingerprint() returned for the cached config; tests
 # assign a sentinel (e.g. 0.0) to force a reload.
 _config_mtime: object = None
@@ -459,7 +459,7 @@ def get_config() -> CharlieBotConfig:
 _cron_snapshot = _CronSnapshot()
 
 
-def _resolve_prompt_file(entry: dict, repo_root: Path) -> Optional[Path]:
+def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
   """Resolve a cron entry's ``prompt_file`` into ``prompt`` in place.
 
   Reads the referenced file, sets ``entry['prompt']`` to its contents, and
@@ -548,7 +548,7 @@ def _resolve_local_timezone(entry: dict) -> None:
   entry["timezone"] = _detect_local_timezone()
 
 
-def _stat_prompt_files(paths: dict[Path, float]) -> Optional[dict[Path, float]]:
+def _stat_prompt_files(paths: dict[Path, float]) -> dict[Path, float] | None:
   """Return current mtimes for *paths*, or ``None`` if any is missing.
 
   Returning ``None`` forces a reload so a missing ``prompt_file`` surfaces as a
@@ -659,7 +659,7 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
   return _validate_cron_body(body, repo, stem)
 
 
-def _read_cron_file_enabled(path: Path) -> Optional[bool]:
+def _read_cron_file_enabled(path: Path) -> bool | None:
   """Best-effort raw ``enabled`` read of a cron file the loader failed on.
 
   Returns the file's own ``enabled`` when the body parses as a mapping with a

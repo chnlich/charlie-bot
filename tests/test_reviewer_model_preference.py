@@ -4,18 +4,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
 from conftest import JudgmentShim
 
 from src.core import review, spawner
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata
-
-BACKEND_OPTIONS = [
-    BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-    BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-    BackendOption(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5"),
-]
-
 
 _WORKTREE_DIR: str = ""
 _WORKTREE_PATH: str = ""

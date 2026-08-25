@@ -6,13 +6,13 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
 
 from src.api import internal
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
   DelegateRequest,
   SessionMetadata,
   SpawnRequest,
@@ -569,12 +569,6 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
 
 
 # --- verify default backend via model_preference ---
-
-VERIFY_BACKEND_OPTIONS = [
-    BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-    BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
-    BackendOption(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5"),
-]
 
 
 def _build_verify_cfg(model_preference: list[str]) -> CharlieBotConfig:

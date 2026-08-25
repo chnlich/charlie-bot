@@ -145,6 +145,12 @@ def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> 
   return TestClient(app)
 
 
+THREE_BACKEND_OPTIONS = [
+    models.BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+    models.BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+    models.BackendOption(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5"),
+]
+
 PLAN_TEST_BACKEND_OPTIONS = [
     models.BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
 ]

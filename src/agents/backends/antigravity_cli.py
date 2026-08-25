@@ -62,7 +62,7 @@ class AntigravityCliBackend(AgentBackend):
       data = json.loads(stdout_text)
     except (json.JSONDecodeError, ValueError):
       return None
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or not isinstance(data.get("status"), str):
       return None
     return data
 

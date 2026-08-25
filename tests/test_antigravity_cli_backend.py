@@ -30,17 +30,9 @@ async def _consume(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
   return events
 
 
-async def _consume_raising(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
-  """Consume events until the generator raises; re-raise, leaving collected events inspectable."""
-  events: list[dict] = []
-  gen = backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"})
-  while True:
-    try:
-      event = await gen.__anext__()
-    except StopAsyncIteration:
-      return events
-    except BaseException:
-      raise
+async def _consume_raising(backend: AntigravityCliBackend, cwd: Path, events: list[dict]) -> None:
+  """Consume events until the generator raises, retaining events yielded before the raise."""
+  async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"}):
     events.append(event)
 
 
@@ -135,7 +127,15 @@ JSON
   events = await _consume(backend, tmp_path)
 
   assert [e.get("type") for e in events] == [None, "assistant", "result"]
-  assert events[0] == {"session_id": "conv-abc"}
+  from src.agents.master_cc_run import _handle_event
+
+  adopted_events: list[dict] = []
+
+  async def fake_persist(session_id: str, event: dict) -> None:
+    adopted_events.append(event)
+
+  assert await _handle_event(events[0], "session-id", None, fake_persist) == "conv-abc"
+  assert adopted_events == [events[0]]
   assert events[1] == {
       "type": "assistant",
       "message": {
@@ -255,10 +255,12 @@ printf '%s' '{"status":"SUCCESS","response":"hi"}'
   )
   backend = AntigravityCliBackend()
 
+  events: list[dict] = []
   with pytest.raises(ValueError, match="missing conversation_id"):
-    events = await _consume_raising(backend, tmp_path)
-    assert len(events) == 1 and events[0]["type"] == "error"
-    assert "session_id" not in events[0]
+    await _consume_raising(backend, tmp_path, events)
+  assert [event.get("type") for event in events] == ["error"]
+  assert not any("session_id" in event for event in events)
+  assert not any(event.get("type") == "assistant" for event in events)
 
 
 @pytest.mark.asyncio
@@ -275,10 +277,12 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"fresh-id","response":"hi","u
   )
   backend = AntigravityCliBackend(resume_session_id="anchor-id")
 
+  events: list[dict] = []
   with pytest.raises(ValueError, match="does not match anchor anchor-id"):
-    events = await _consume_raising(backend, tmp_path)
-    assert len(events) == 1 and events[0]["type"] == "error"
-    assert "session_id" not in events[0]
+    await _consume_raising(backend, tmp_path, events)
+  assert [event.get("type") for event in events] == ["error"]
+  assert not any("session_id" in event for event in events)
+  assert not any(event.get("type") == "assistant" for event in events)
 
 
 @pytest.mark.asyncio
@@ -295,10 +299,34 @@ printf 'plain text, not json'
   )
   backend = AntigravityCliBackend()
 
+  events: list[dict] = []
   with pytest.raises(ValueError, match="non-json stdout"):
-    events = await _consume_raising(backend, tmp_path)
-    assert len(events) == 1 and events[0]["type"] == "error"
-    assert "session_id" not in events[0]
+    await _consume_raising(backend, tmp_path, events)
+  assert [event.get("type") for event in events] == ["error"]
+  assert not any("session_id" in event for event in events)
+  assert not any(event.get("type") == "assistant" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_json_object_without_status_exit_zero_triggers_guard(monkeypatch, tmp_path: Path) -> None:
+  fake_agy = _write_fake_agy(
+      tmp_path,
+      """
+printf '%s' '{"response":"not an envelope"}'
+""",
+  )
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: str(fake_agy),
+  )
+  backend = AntigravityCliBackend()
+
+  events: list[dict] = []
+  with pytest.raises(ValueError, match="non-json stdout"):
+    await _consume_raising(backend, tmp_path, events)
+  assert [event.get("type") for event in events] == ["error"]
+  assert not any("session_id" in event for event in events)
+  assert not any(event.get("type") == "assistant" for event in events)
 
 
 @pytest.mark.asyncio
@@ -320,7 +348,6 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","u
   from src.agents.master_cc_run import _handle_event
 
   events = await _consume(backend, tmp_path)
-  assert events[0] == {"session_id": "conv-abc"}
 
   captured: list[dict] = []
 
@@ -330,3 +357,4 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","u
   cc_session_id = await _handle_event(events[0], "session-id", None, fake_persist)
 
   assert cc_session_id == "conv-abc"
+  assert captured == [events[0]]

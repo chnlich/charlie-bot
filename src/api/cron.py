@@ -4,7 +4,7 @@ import asyncio
 import copy
 import re
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -53,7 +53,7 @@ def _write_cron_yaml(name: str, data: dict):
   save_yaml(cron_path(name), data)
 
 
-def _validate_backend_id(backend: Optional[str], cfg: CharlieBotConfig) -> None:
+def _validate_backend_id(backend: str | None, cfg: CharlieBotConfig) -> None:
   if backend and cfg.get_backend_option(backend) is None:
     raise HTTPException(status_code=400, detail=f"backend '{backend}' is not in backend_options")
 
@@ -88,12 +88,12 @@ async def _ensure_backend_update_session(
     req: "TaskUpdate",
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-) -> Optional[SessionMetadata]:
+) -> SessionMetadata | None:
   if 'backend' not in req.model_fields_set:
     return None
   backend = effective_scheduled_task_backend(cand_model, cfg)
-  role: Optional[str] = None
-  group: Optional[str] = None
+  role: str | None = None
+  group: str | None = None
   if cand_model.mode == 'master':
     role = PROJECT_ROLE
     group = cand_model.project
@@ -103,7 +103,7 @@ async def _ensure_backend_update_session(
     raise HTTPException(status_code=409, detail=str(e)) from e
 
 
-def _check_master_project_unique(name: str, mode: Optional[str], project: Optional[str]) -> None:
+def _check_master_project_unique(name: str, mode: str | None, project: str | None) -> None:
   """Reject when another mode: master task already carries the same project (group).
 
   At most one active mode: master task per group, so at most one live
@@ -121,26 +121,26 @@ def _check_master_project_unique(name: str, mode: Optional[str], project: Option
 
 
 class TaskUpdate(BaseModel):
-  cron: Optional[str] = None
-  prompt_file: Optional[str] = None
-  repo: Optional[str] = None
-  backend: Optional[str] = None
-  timezone: Optional[str] = None
-  enabled: Optional[bool] = None
-  project: Optional[str] = None
-  allow_failure: Optional[bool] = None
+  cron: str | None = None
+  prompt_file: str | None = None
+  repo: str | None = None
+  backend: str | None = None
+  timezone: str | None = None
+  enabled: bool | None = None
+  project: str | None = None
+  allow_failure: bool | None = None
 
 
 class TaskCreate(BaseModel):
   name: str
   cron: str
-  prompt_file: Optional[str] = None
-  repo: Optional[str] = None
-  backend: Optional[str] = None
+  prompt_file: str | None = None
+  repo: str | None = None
+  backend: str | None = None
   timezone: str = DEFAULT_TIMEZONE
   enabled: bool = True
-  project: Optional[str] = None
-  mode: Optional[Literal['worker', 'master']] = None
+  project: str | None = None
+  mode: Literal['worker', 'master'] | None = None
   allow_failure: bool = False
 
 
@@ -166,7 +166,7 @@ async def apply_task_yaml_update(
     req: TaskUpdate,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-) -> tuple[dict, Optional[SessionMetadata]]:
+) -> tuple[dict, SessionMetadata | None]:
   """Apply a ``TaskUpdate`` to one job's yaml: load, validate, rotate, write.
 
   Shared by the cron PUT route and the sessions write-through switch. Returns
@@ -205,7 +205,7 @@ async def apply_task_yaml_update(
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
 
-  rotated: Optional[SessionMetadata] = None
+  rotated: SessionMetadata | None = None
   if cand_model.enabled:
     _check_master_project_unique(name, cand_model.mode, cand_model.project)
   rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)

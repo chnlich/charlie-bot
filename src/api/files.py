@@ -6,7 +6,6 @@ import json
 import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 from urllib.parse import quote
 
 import structlog
@@ -22,7 +21,7 @@ router = APIRouter()
 _ARTIFACT_SCRIPT_TAG = "<script src=/static/js/artifact-comments.js></script>"
 
 
-def _artifact_session_id(fs_path: Path) -> Optional[str]:
+def _artifact_session_id(fs_path: Path) -> str | None:
   """Return the session id owning an artifact page, or None when it belongs to no session.
 
   Anchored on the configured sessions root, not on the path's shape: a page counts only

@@ -13,25 +13,17 @@ import pytest
 from conftest import (
   CODEX_BACKEND_OPTION,
   OPUS_BACKEND_OPTION,
+  FakeBackend,
   patch_instructions_content,
 )
 
 from src.agents import master_cc
-from src.agents.backends import base as backend_base
 from src.api.chat import run_and_finalize
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
 from src.core.models import BackendOption, CreateSessionRequest
 from src.core.sessions import SessionManager
-
-
-class _FakeBackend:
-  exit_code = 0
-  stderr_text = ""
-
-  async def run(self, prompt: str, cwd: str, env: dict):
-    yield backend_base.make_result_event()
 
 
 def _assistant_errors(session_mgr: SessionManager, session_id: str) -> list[dict]:
@@ -55,7 +47,7 @@ async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, mo
 
   spawned: list[object] = []
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or _FakeBackend())
+                      lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
@@ -80,7 +72,7 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
 
   spawned: list[object] = []
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or _FakeBackend())
+                      lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await trigger_master(session.id, "worker summary", cfg, session_mgr)
@@ -111,7 +103,7 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
   spawned_option_ids: list[str] = []
   monkeypatch.setattr(
       "src.agents.backends.registry.build_backend",
-      lambda option, cfg, **k: spawned_option_ids.append(option.id) or _FakeBackend())
+      lambda option, cfg, **k: spawned_option_ids.append(option.id) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
@@ -145,7 +137,7 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
   captured: dict[str, object] = {}
   monkeypatch.setattr(
       "src.agents.backends.registry.build_backend",
-      lambda option, cfg, **k: captured.update(option=option) or _FakeBackend())
+      lambda option, cfg, **k: captured.update(option=option) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   user_event = {"id": "u1", "type": "user", "content": "unanswered message"}
@@ -170,7 +162,7 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
 
   spawned: list[object] = []
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or _FakeBackend())
+                      lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   user_event = {"id": "u1", "type": "user", "content": "unanswered message"}
@@ -202,7 +194,7 @@ async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Pa
   spawned: list[object] = []
   monkeypatch.setattr(
       "src.agents.backends.registry.build_backend",
-      lambda *a, **k: spawned.append(1) or _FakeBackend())
+      lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await run_and_finalize(cfg, session, "hello", session_mgr)

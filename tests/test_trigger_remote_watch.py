@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import requests
 from conftest import make_trigger_setup as _make_mgr
+from conftest import no_sleep as _no_sleep
+from conftest import patch_trigger_fire
 from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
@@ -159,16 +161,7 @@ async def test_remote_multi_host_all_die_fires(tmp_path: Path) -> None:
       ("noire", 3): ["ALIVE", "ALIVE", "DEAD"],
   }
 
-  # Make sleeps instant so the test runs fast.
-  async def _no_sleep(_seconds: float) -> None:
-    return None
-
-  with (
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=_mk_subprocess_mock(scripted)),
-      patch("src.core.triggers.asyncio.sleep", new=_no_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_fire(_mk_subprocess_mock(scripted), sacct_available=None, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=600,
@@ -198,15 +191,7 @@ async def test_remote_timeout_with_alive_pids(tmp_path: Path) -> None:
   # Verify says ALIVE; subsequent probes also ALIVE → must timeout.
   scripted = {("neptune", 1): ["ALIVE"]}
 
-  async def _no_sleep(_seconds: float) -> None:
-    return None
-
-  with (
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=_mk_subprocess_mock(scripted)),
-      patch("src.core.triggers.asyncio.sleep", new=_no_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_fire(_mk_subprocess_mock(scripted), sacct_available=None, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=0,  # fire_at already in the past after verify
@@ -247,12 +232,7 @@ async def test_backoff_intervals_and_plateau(tmp_path: Path) -> None:
 
   scripted = {("neptune", 1): ["ALIVE"]}  # always alive — never exits
 
-  with (
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=_mk_subprocess_mock(scripted)),
-      patch("src.core.triggers.asyncio.sleep", new=_record_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()),
-  ):
+  with patch_trigger_fire(_mk_subprocess_mock(scripted), sacct_available=None, sleep_mock=_record_sleep):
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=10_000,

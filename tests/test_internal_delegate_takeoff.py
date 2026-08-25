@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
+from conftest import FakeSessionManager
 from fastapi import HTTPException
 
 from src.api import internal
@@ -50,19 +51,6 @@ def _scheduled_trigger_event(content: str, timestamp: Optional[str] = None) -> d
   if timestamp is not None:
     event["timestamp"] = timestamp
   return event
-
-
-class FakeSessionManager:
-
-  def __init__(self, events: list[dict[str, Any]]) -> None:
-    self.events = events
-    self.persist_and_broadcast = AsyncMock()
-
-  async def get_session(self, session_id: str) -> SessionMetadata:
-    return SessionMetadata(id=session_id, name="Test")
-
-  def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
-    return self.events
 
 
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:

@@ -267,6 +267,26 @@ class FakeWebSocket:
     self.sent.append(payload)
 
 
+class FakeSessionManager:
+  """SessionManager double replaying a canned chat-event list.
+
+  Callers rely on load_chat_events_sync returning the constructor's events
+  (takeoff-gate probes) and on persist_and_broadcast being an AsyncMock
+  (delegate/agent-message route tests); get_session answers a bare
+  SessionMetadata for any id.
+  """
+
+  def __init__(self, events: list[dict[str, Any]]) -> None:
+    self.events = events
+    self.persist_and_broadcast = AsyncMock()
+
+  async def get_session(self, session_id: str) -> models.SessionMetadata:
+    return models.SessionMetadata(id=session_id, name="Test")
+
+  def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
+    return self.events
+
+
 def _instructions_content_stub(session_meta: models.SessionMetadata, cfg: CharlieBotConfig,
                                prompt_overlay: str | None) -> str:
   return "instructions"

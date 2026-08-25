@@ -10,6 +10,10 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const NAMESPACE_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'chat', 'namespace.js'),
+  'utf8'
+);
 const ARTIFACTS_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'chat', 'artifacts.js'),
   'utf8'
@@ -62,14 +66,7 @@ function loadArtifactsScript(opts) {
   };
   if (o.planPanel) context.planPanel = o.planPanel;
   vm.createContext(context);
-  vm.runInContext(
-    'globalThis.Chat = globalThis.Chat || {};' +
-    'globalThis.Chat.expose = function expose(names) {' +
-    '  for (var i = 0; i < names.length; i++) globalThis[names[i]] = globalThis.Chat[names[i]];' +
-    '};',
-    context,
-    {filename: 'chat-namespace-stub.js'}
-  );
+  vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
   vm.runInContext(ARTIFACTS_JS, context, {filename: 'artifacts.js'});
   return {context, fetches};
 }

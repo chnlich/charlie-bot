@@ -7,10 +7,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from src.api.chat import run_and_finalize
+from src.api.chat import launch_prompt_dispatch
 from src.api.deps import get_session_manager, require_session
 from src.api.message_utils import (
-  build_agent_input_content,
   build_user_event,
   serialize_uploaded_files,
 )
@@ -19,7 +18,6 @@ from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata, UploadedFileRef
 from src.core.sessions import SessionManager
 from src.core.slash_commands import dispatch_slash_command, load_slash_commands
-from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
 
@@ -185,16 +183,7 @@ async def execute_command(
 
   if dispatch.kind == 'prompt':
     await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
-    create_logged_task(
-        run_and_finalize(
-            cfg,
-            meta,
-            build_agent_input_content(dispatch.substituted_prompt, uploaded_files),
-            session_mgr,
-            extra_claude_flags=dispatch.claude_code_flags,
-            skip_user_event=True,
-            display_content=display_text,
-            uploaded_files=uploaded_files))
+    launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, display_text, uploaded_files)
     return JSONResponse(status_code=202, content={'type': ET.PROMPT_DISPATCHED, 'command': name})
 
   return {'error': f'Unexpected dispatch result for /{name}'}

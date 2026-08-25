@@ -152,8 +152,8 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
 
   with (
       patch("src.api.slash.dispatch_slash_command", new=AsyncMock(return_value=dispatch)),
-      patch("src.api.slash.run_and_finalize", new=AsyncMock()) as mock_run,
-      patch("src.api.slash.create_logged_task", side_effect=_close_scheduled_task),
+      patch("src.api.chat.run_and_finalize", new=AsyncMock()) as mock_run,
+      patch("src.api.chat.create_logged_task", side_effect=_close_scheduled_task),
   ):
     response = await execute_command(
         request=request,

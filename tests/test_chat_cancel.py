@@ -1,10 +1,9 @@
 """Regression tests for master cancel endpoint behavior."""
 
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import mock_session_callbacks, patch_instructions_content
+from conftest import make_work_item, mock_session_callbacks, patch_instructions_content
 from fastapi import HTTPException
 
 from src.agents import master_cc, master_cc_run
@@ -59,18 +58,7 @@ async def _run_cc_with_stderr_backend(
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
   patch_instructions_content(monkeypatch)
 
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="stop",
-      callbacks=callbacks,
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=cfg.backend_options[0],
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content="stop", callbacks=callbacks)
 
   result = await master_cc._run_cc(item)
   return callbacks, result
@@ -182,18 +170,7 @@ async def _run_cc_with_scripted_events(
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
   patch_instructions_content(monkeypatch)
 
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="hi",
-      callbacks=callbacks,
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=cfg.backend_options[0],
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content="hi", callbacks=callbacks)
 
   await master_cc._run_cc(item)
   return callbacks

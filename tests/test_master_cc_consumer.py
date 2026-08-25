@@ -10,7 +10,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import mock_session_callbacks, patch_instructions_content
+from conftest import make_work_item, mock_session_callbacks, patch_instructions_content
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -36,22 +36,6 @@ def _make_meta(session_id: str) -> SessionMetadata:
   return SessionMetadata(id=session_id, name="t", backend="fake", cc_session_id=None)
 
 
-def _make_item(session_meta: SessionMetadata, callbacks: SessionCallbacks) -> master_cc._WorkItem:
-  loop = asyncio.get_running_loop()
-  return master_cc._WorkItem(
-      cfg=MagicMock(),
-      session_meta=session_meta,
-      user_content="hi",
-      callbacks=callbacks,
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=None,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=loop.create_future(),
-  )
-
-
 @pytest.mark.asyncio
 async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None:
   """Two queued _WorkItems with distinct SessionMetadata objects must share cc_session_id.
@@ -64,8 +48,8 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
   meta_bootstrap = _make_meta(session_id)
   meta_user_message = _make_meta(session_id)  # distinct instance, freshly loaded from disk
   cb = mock_session_callbacks()
-  item_bootstrap = _make_item(meta_bootstrap, cb)
-  item_user = _make_item(meta_user_message, cb)
+  item_bootstrap = make_work_item(MagicMock(), meta_bootstrap, None, user_content="hi", callbacks=cb)
+  item_user = make_work_item(MagicMock(), meta_user_message, None, user_content="hi", callbacks=cb)
 
   master_cc_state._session_queues.pop(session_id, None)
   master_cc_state._session_queues[session_id] = asyncio.Queue()
@@ -529,18 +513,8 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
   patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=meta,
-      user_content="next round",
-      callbacks=session_mgr.callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=cfg.backend_options[0],
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(
+      cfg, meta, cfg.backend_options[0], user_content="next round", callbacks=session_mgr.callbacks())
   await master_cc._run_cc(item)
 
   events = session_mgr.load_chat_events_sync(session.id)

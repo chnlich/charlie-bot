@@ -16,27 +16,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import make_work_item
+from conftest import FakeBackend, make_work_item
 
 from src.agents import master_cc
-from src.agents.backends import base as backend_base
 from src.agents.backends import registry
 from src.core import config as core_config
 from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import BackendOption, SessionMetadata
-
-
-class _FakeBackend:
-  exit_code = 0
-  stderr_text = ""
-  terminated = False
-
-  async def terminate(self) -> None:
-    self.terminated = True
-
-  async def run(self, prompt: str, cwd: str, env: dict):
-    yield backend_base.make_result_event()
 
 
 def _wake_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> core_config.CharlieBotConfig:
@@ -95,7 +82,7 @@ async def test_wake_path_overlay_four_states(
   captured: dict[str, object] = {}
   monkeypatch.setattr(
       registry, "build_backend",
-      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or _FakeBackend())
+      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or FakeBackend())
 
   item = make_work_item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
   cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
@@ -138,7 +125,7 @@ async def test_declared_overlay_missing_file_degrades(tmp_path: Path, monkeypatc
   captured: dict[str, object] = {}
   monkeypatch.setattr(
       registry, "build_backend",
-      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or _FakeBackend())
+      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or FakeBackend())
 
   item = make_work_item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
   _cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
@@ -186,7 +173,7 @@ async def test_model_string_has_zero_impact_on_wake_path(tmp_path: Path, monkeyp
   products: list[str | None] = []
   monkeypatch.setattr(
       registry, "build_backend",
-      lambda *a, **kw: products.append(kw.get("instructions_content")) or _FakeBackend())
+      lambda *a, **kw: products.append(kw.get("instructions_content")) or FakeBackend())
 
   for model in ("vendor/one", "vendor/two"):
     option = BackendOption(id="opt", label="Opt", type="codex", model=model, prompt_overlay="shared")

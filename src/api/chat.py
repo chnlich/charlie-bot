@@ -21,7 +21,7 @@ from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SendMessageRequest, SessionMetadata
 from src.core.sessions import SessionManager
-from src.core.slash_commands import dispatch_slash_command
+from src.core.slash_commands import SlashDispatchResult, dispatch_slash_command
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
@@ -95,16 +95,7 @@ async def send_message(
       await session_mgr.persist_and_broadcast(session_id, build_user_event(req.content, uploaded_files))
 
       if dispatch.kind == 'prompt':
-        create_logged_task(
-            run_and_finalize(
-                cfg,
-                meta,
-                build_agent_input_content(dispatch.substituted_prompt, uploaded_files),
-                session_mgr,
-                extra_claude_flags=dispatch.claude_code_flags,
-                skip_user_event=True,
-                display_content=req.content,
-                uploaded_files=uploaded_files))
+        launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, req.content, uploaded_files)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
       elif dispatch.kind == 'error':
@@ -203,6 +194,31 @@ async def run_and_finalize(
     done_event = {"type": ET.MASTER_DONE, "exit_code": 1, "still_thinking": False}
     await session_mgr.persist_and_broadcast(meta.id, error_event)
     await session_mgr.persist_and_broadcast(meta.id, done_event)
+
+
+def launch_prompt_dispatch(
+    cfg: CharlieBotConfig,
+    meta: SessionMetadata,
+    dispatch: SlashDispatchResult,
+    session_mgr: SessionManager,
+    display_content: str,
+    uploaded_files: list[dict],
+) -> None:
+  """Fire a prompt-scope slash dispatch as a background master-CC run.
+
+  The caller persists the user's slash-form message first; the run carries the
+  substituted prompt and skips its own user event, displaying display_content instead.
+  """
+  create_logged_task(
+      run_and_finalize(
+          cfg,
+          meta,
+          build_agent_input_content(dispatch.substituted_prompt, uploaded_files),
+          session_mgr,
+          extra_claude_flags=dispatch.claude_code_flags,
+          skip_user_event=True,
+          display_content=display_content,
+          uploaded_files=uploaded_files))
 
 
 async def _auto_name(

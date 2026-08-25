@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, NoReturn, Optional
+from typing import Any, Callable, NoReturn
 
 import requests
 
@@ -223,7 +223,7 @@ def _exit_with_error(error_obj: dict[str, Any], exit_code: int = 1) -> NoReturn:
 def _exit_server_rejection(
     cfg: CharlieBotConfig,
     exc: requests.RequestException,
-    rejection_exit_codes: Optional[dict[int, int]],
+    rejection_exit_codes: dict[int, int] | None,
 ) -> NoReturn:
   """Handle a server that explicitly answered with an error status."""
   msg = str(exc)
@@ -245,10 +245,10 @@ def _request_with_contract(
     method: str,
     endpoint: str,
     *,
-    payload: Optional[dict[str, Any]] = None,
-    params: Optional[dict[str, Any]] = None,
-    readback: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
-    rejection_exit_codes: Optional[dict[int, int]] = None,
+    payload: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    readback: Callable[[], dict[str, Any] | None] | None = None,
+    rejection_exit_codes: dict[int, int] | None = None,
     unknown_effect: str,
 ) -> dict[str, Any]:
   """Issue one internal-API call under the restart-crossing contract."""
@@ -292,8 +292,8 @@ def post_internal_api(
     endpoint: str,
     payload: dict[str, Any],
     *,
-    readback: Optional[Callable[[], Optional[dict[str, Any]]]] = None,
-    rejection_exit_codes: Optional[dict[int, int]] = None,
+    readback: Callable[[], dict[str, Any] | None] | None = None,
+    rejection_exit_codes: dict[int, int] | None = None,
 ) -> dict[str, Any]:
   """POST to an internal CharlieBot API endpoint and return the parsed JSON response.
 
@@ -328,9 +328,9 @@ def find_local_thread(
     session_id: str,
     *,
     description: str,
-    task_type: Optional[str],
+    task_type: str | None,
     description_match: str = "exact",
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
   """Readback scan: the newest thread metadata matching description + task_type.
 
   Pure local-disk judgment used when an internal-API POST's response was lost:
@@ -341,7 +341,7 @@ def find_local_thread(
   threads_dir = get_config().sessions_dir / session_id / "threads"
   if not threads_dir.is_dir():
     return None
-  best: Optional[dict[str, Any]] = None
+  best: dict[str, Any] | None = None
   for thread_dir in threads_dir.iterdir():
     meta_path = thread_dir / "metadata.json"
     try:

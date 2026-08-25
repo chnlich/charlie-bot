@@ -1,6 +1,8 @@
 """Tests for src/cli/delegate.py."""
 
+import contextlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +11,16 @@ import requests
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.delegate import main
+
+
+@contextlib.contextmanager
+def _patched_main(cfg: MagicMock, argv: list[str]) -> Iterator[MagicMock]:
+  """Patch the externals a delegate main() call touches: sys.argv becomes argv, get_config returns
+  cfg, and requests.post is a MagicMock (yielded, so tests set the response or assert no call)."""
+  with patch("sys.argv", argv), \
+       patch("src.cli.common.get_config", return_value=cfg), \
+       patch("src.cli.common.requests.post") as post_mock:
+    yield post_mock
 
 
 def _mock_config(tmp_path: Path):
@@ -46,12 +58,9 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
   task_spec = task_spec_file.read_text()
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t1", "description": "do work"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -66,9 +75,8 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -95,12 +103,9 @@ def test_main_prints_async_wake_up_hint_to_stderr(
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t1", "description": "do work"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -113,9 +118,8 @@ def test_main_prints_async_wake_up_hint_to_stderr(
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock):
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
     main()
 
   captured = capsys.readouterr()
@@ -128,12 +132,9 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t2", "description": "task"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -148,9 +149,8 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
           "0",
           "--task-type",
           task_type,
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -165,12 +165,9 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t2", "description": "task"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -181,9 +178,8 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
           "0",
           "--task-type",
           "verify",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -283,8 +279,8 @@ def test_main_rejects_relative_repo_path(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -297,9 +293,7 @@ def test_main_rejects_relative_repo_path(
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -316,8 +310,8 @@ def test_main_rejects_nonexistent_repo_path(
   task_spec_file = _write_task_spec(tmp_path)
   nonexistent = str(tmp_path / "nonexistent")
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -330,9 +324,7 @@ def test_main_rejects_nonexistent_repo_path(
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -371,12 +363,9 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
   task_spec_file = _write_task_spec(tmp_path)
   reviewer_context_file = tmp_path / "reviewer_context.md"
   reviewer_context_file.write_text("review these state-machine edges")
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t3"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -391,9 +380,8 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
           str(reviewer_context_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t3"}
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -428,8 +416,8 @@ def test_main_rejects_legacy_description_argparse(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -444,9 +432,7 @@ def test_main_rejects_legacy_description_argparse(
           "task",
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -462,8 +448,8 @@ def test_main_rejects_legacy_context_argparse(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -478,9 +464,7 @@ def test_main_rejects_legacy_context_argparse(
           "review hint",
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -496,8 +480,8 @@ def test_main_rejects_invalid_task_type(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -512,8 +496,7 @@ def test_main_rejects_invalid_task_type(
           "0",
           "--task-type",
           "bogus",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg):
+      ]):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -528,8 +511,8 @@ def test_main_rejects_legacy_require_review_flag(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -544,8 +527,7 @@ def test_main_rejects_legacy_require_review_flag(
           "0",
           "--require-review",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg):
+      ]):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -566,8 +548,8 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
       self.response = MagicMock()
       self.response.json.return_value = {"detail": "requested backend 'missing' is not in backend_options"}
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -582,9 +564,8 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", side_effect=FakeRequestException()):
+      ]) as post_mock:
+    post_mock.side_effect = FakeRequestException()
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -618,12 +599,10 @@ def test_main_rejects_missing_task_spec_file(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   missing = tmp_path / "missing.md"
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       ["delegate", "--repo", str(tmp_path), "--base-branch", "main", "--task-spec-file", str(missing),
-       "--keep-worktree", "0"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       "--keep-worktree", "0"]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -639,12 +618,10 @@ def test_main_rejects_empty_task_spec_file(
   empty = tmp_path / "empty.md"
   empty.write_text("  \n")
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       ["delegate", "--repo", str(tmp_path), "--base-branch", "main", "--task-spec-file", str(empty),
-       "--keep-worktree", "0"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       "--keep-worktree", "0"]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -660,8 +637,8 @@ def test_main_rejects_missing_reviewer_context_file(
   task_spec_file = _write_task_spec(tmp_path)
   missing = tmp_path / "missing_context.md"
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -674,9 +651,7 @@ def test_main_rejects_missing_reviewer_context_file(
           str(missing),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -693,8 +668,8 @@ def test_main_rejects_empty_reviewer_context_file(
   empty = tmp_path / "empty_context.md"
   empty.write_text("  \n")
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -707,9 +682,7 @@ def test_main_rejects_empty_reviewer_context_file(
           str(empty),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -724,8 +697,8 @@ def test_main_rejects_task_spec_missing_required_heading(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec().replace("## Required Behavior\n", ""))
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -736,9 +709,7 @@ def test_main_rejects_task_spec_missing_required_heading(
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -753,8 +724,8 @@ def test_main_rejects_nonexistent_absolute_source_file(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- /definitely/not/there/task-source.md"))
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -765,9 +736,7 @@ def test_main_rejects_nonexistent_absolute_source_file(
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -782,8 +751,8 @@ def test_main_rejects_relative_source_file_entry(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- relative/source.md"))
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -794,9 +763,7 @@ def test_main_rejects_relative_source_file_entry(
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -811,8 +778,8 @@ def test_main_rejects_empty_source_files_section(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec(""))
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -823,9 +790,7 @@ def test_main_rejects_empty_source_files_section(
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+      ]) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -838,12 +803,9 @@ def test_main_rejects_empty_source_files_section(
 def test_main_allows_source_files_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- (none)"))
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t1"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -854,9 +816,8 @@ def test_main_allows_source_files_none(tmp_path: Path, monkeypatch: pytest.Monke
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 
   post_mock.assert_called_once()
@@ -867,12 +828,9 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
   source_file = tmp_path / "source.md"
   source_file.write_text("reference")
   task_spec_file = _write_task_spec(tmp_path, _task_spec(f"- {source_file}"))
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t1"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -883,9 +841,8 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 
   post_mock.assert_called_once()
@@ -894,12 +851,9 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
 def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t1"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--repo",
@@ -910,9 +864,8 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -922,12 +875,9 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
 def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"thread_id": "t1"}
-  resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
+  with _patched_main(
+      cfg,
       [
           "delegate",
           "--session",
@@ -940,9 +890,8 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
           str(task_spec_file),
           "--keep-worktree",
           "0",
-      ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+      ]) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 
   payload = post_mock.call_args.kwargs["json"]

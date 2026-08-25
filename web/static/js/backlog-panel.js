@@ -286,40 +286,14 @@ const backlogPanel = (() => {
 })();
 
 // ---------------------------------------------------------------------------
-// Backlog panel resize (mirrors initLatexResize pattern)
+// Backlog panel resize
 // ---------------------------------------------------------------------------
 function initBacklogResize() {
-  const handle = document.getElementById('backlog-resize-handle');
-  const panel  = document.getElementById('backlog-panel');
-  if (!handle || !panel) return;
-  const container = panel.parentElement;
-  const saved = localStorage.getItem('backlog-panel-pct');
-  if (saved) panel.style.width = saved + '%';
-
-  let startX, startW, containerW;
-  handle.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    startX = e.clientX;
-    containerW = container.offsetWidth;
-    startW = panel.offsetWidth;
-    handle.classList.add('active');
-    document.body.classList.add('resizing');
-
-    function onMove(e) {
-      const delta = startX - e.clientX;
-      const w = Math.min(Math.max(startW + delta, containerW * 0.2), containerW * 0.8);
-      panel.style.width = w + 'px';
-    }
-    function onUp() {
-      handle.classList.remove('active');
-      document.body.classList.remove('resizing');
-      const pct = (panel.offsetWidth / container.offsetWidth * 100).toFixed(1);
-      localStorage.setItem('backlog-panel-pct', pct);
-      panel.style.width = pct + '%';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+  initPanelResize({
+    handleId: 'backlog-resize-handle',
+    panelId: 'backlog-panel',
+    storageKey: 'backlog-panel-pct',
+    onDragStart: () => {},
+    onDragEnd: () => {},
   });
 }

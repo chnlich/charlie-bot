@@ -10,16 +10,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import make_trigger_setup as _make_mgr
 
-from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
   LocalPid,
   PendingTrigger,
   TriggerStatus,
 )
-from src.core.sessions import SessionManager
-from src.core.triggers import TriggerManager, _format_suffix
+from src.core.triggers import _format_suffix
 
 
 def _local(*pids: int) -> list[LocalPid]:
@@ -44,14 +42,6 @@ def _find_unused_pid() -> int:
     except PermissionError:
       continue
   raise RuntimeError("could not find an unused PID")
-
-
-async def _make_mgr(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Watch PIDs"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  return cfg, session_mgr, trigger_mgr, session.id
 
 
 @pytest.mark.asyncio

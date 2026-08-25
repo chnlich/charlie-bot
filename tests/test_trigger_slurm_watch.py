@@ -10,16 +10,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import make_trigger_setup as _make_mgr
 
-from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
   LocalPid,
   PendingTrigger,
   SlurmJob,
   TriggerStatus,
 )
-from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
 
 # ---------------------------------------------------------------------------
@@ -63,14 +61,6 @@ def pidfd_open_available() -> None:
   from src.core.triggers import _PIDFD_SUPPORTED
   if not _PIDFD_SUPPORTED:
     pytest.skip("pidfd not supported on this host")
-
-
-async def _make_mgr(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Slurm watch"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  return cfg, session_mgr, trigger_mgr, session.id
 
 
 # ---------------------------------------------------------------------------

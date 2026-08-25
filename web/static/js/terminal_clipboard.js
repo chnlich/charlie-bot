@@ -48,10 +48,7 @@ globalThis.wireTerminalClipboard = function(term) {
     const payload = separator === -1 ? data : data.substring(separator + 1);
     if (!payload || payload === '?') return true;
     try {
-      const binary = atob(payload);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      copyText(new TextDecoder('utf-8').decode(bytes));
+      copyText(new TextDecoder('utf-8').decode(decodeB64ToBytes(payload)));
     } catch (err) {
       console.warn('terminal OSC 52 decode failed', err);
     }

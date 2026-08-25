@@ -15,28 +15,6 @@
     return document.getElementById('tab-terminal');
   }
 
-  function encodeBytesB64(strOrBytes) {
-    let bytes;
-    if (typeof strOrBytes === 'string') {
-      bytes = new TextEncoder().encode(strOrBytes);
-    } else {
-      bytes = strOrBytes;
-    }
-    let binary = '';
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-    }
-    return btoa(binary);
-  }
-
-  function decodeB64ToBytes(b64) {
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-
   function sendJson(obj) {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     try {

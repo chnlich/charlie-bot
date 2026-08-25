@@ -121,3 +121,11 @@ Known-alive symbols:
   writes as unused attributes. The same two names also appear as
   `AsyncMock(return_value=...)`/`patch(..., side_effect=...)` keyword arguments, which vulture
   does not flag.
+- `speedup` (`tests/test_ncu_page.py`, attribute of the `_Speedup` stub in
+  `test_extract_rules_reads_swig_attribute_objects`) — stand-in for ncu_report's SWIG
+  speedup object, read by string: `_object_field(obj, name)` in `src/core/ncu_parsing.py`
+  does `getattr(obj, name)` with the literal `"speedup"`
+  (line building `entry["speedup_pct"]`). No `.speedup` attribute read exists anywhere in
+  the repo, so vulture flags the stub's attribute write as an unused variable; the sibling
+  stub attributes (`title`, `message`, `type`) go unflagged only because those names are
+  attribute-read elsewhere.

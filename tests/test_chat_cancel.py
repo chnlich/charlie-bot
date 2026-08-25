@@ -4,7 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import mock_session_callbacks
+from conftest import mock_session_callbacks, patch_instructions_content
 from fastapi import HTTPException
 
 from src.agents import master_cc, master_cc_run
@@ -57,7 +57,7 @@ async def _run_cc_with_stderr_backend(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -180,7 +180,7 @@ async def _run_cc_with_scripted_events(
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   item = master_cc._WorkItem(
       cfg=cfg,

@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import make_work_item
+from conftest import make_work_item, patch_instructions_content
 from structlog.testing import capture_logs
 
 from src.agents import master_cc, master_cc_run
@@ -86,7 +86,7 @@ async def test_run_cc_routes_antigravity_native_resume_id(
     return _FakeBackend()
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, backend_option)
 
@@ -130,7 +130,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
           models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
       ],
   )
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   # Run 1: a fresh antigravity backend emits a bare session_id event, which the
   # master adopts as the anchor.
@@ -179,8 +179,7 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
   monkeypatch.setattr(
       "src.agents.backends.registry.build_backend",
       lambda option, cfg, **kw: _AnchorMismatchBackend())
-  monkeypatch.setattr(
-      master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0])
 
@@ -211,7 +210,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
     return _FakeBackend()
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, backend_option)
 
@@ -249,8 +248,7 @@ async def _run_cc_starting_entry(
   monkeypatch.setattr(
       "src.agents.backends.registry.build_backend",
       lambda option, cfg, **kw: _FakeBackend())
-  monkeypatch.setattr(
-      master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
   item = make_work_item(cfg, session_meta, backend_option)
   with capture_logs() as logs:
     await master_cc._run_cc(item)

@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
 # Imports must follow the sys.path bootstrap above.
-from src.agents import master_cc_state  # noqa: E402,I001
+from src.agents import master_cc_run, master_cc_state  # noqa: E402,I001
 from src.api.deps import get_session_manager  # noqa: E402,I001
 from src.api.sessions import router as sessions_router  # noqa: E402,I001
 from src.core import event_types as ET  # noqa: E402,I001
@@ -243,6 +243,16 @@ async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionM
 async def no_sleep(_seconds: float) -> None:
   """asyncio.sleep stand-in for watch-loop tests: returns immediately so poll iterations skip wall-clock waits."""
   return None
+
+
+def _instructions_content_stub(session_meta: models.SessionMetadata, cfg: CharlieBotConfig,
+                               prompt_overlay: str | None) -> str:
+  return "instructions"
+
+
+def patch_instructions_content(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Patch the master-cc instructions builder to return the fixed string "instructions"."""
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", _instructions_content_stub)
 
 
 @contextlib.contextmanager

@@ -15,6 +15,7 @@ function readStatic(...parts) {
 }
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
+const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
 const SIDEBAR_JS = readStatic('sidebar.js');
 const APP_JS = readStatic('app.js');
@@ -185,6 +186,7 @@ function buildSidebarContext() {
   context.CSS = {escape: (v) => String(v)};
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
+  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
   return {context, document, timers};

@@ -1,12 +1,9 @@
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from conftest import make_sessions_client as _build_client
 
-from src.api.deps import get_session_manager
-from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
@@ -19,14 +16,6 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
           BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
       ],
   )
-
-
-def _build_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
 
 
 @pytest.mark.asyncio

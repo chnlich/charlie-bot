@@ -444,6 +444,30 @@ class AgentBackend(ABC):
     """
     return [event]
 
+  async def _spawn_piped_and_pin_identity(self, cmd: list[str], cwd: str, final_env: dict) -> None:
+    """Spawn the child with piped stdio, pin (pid, pid_start), then fire on_spawn.
+
+    Pipe-transport counterpart to run()'s raw-log spawn, for backends that read
+    the child's stdout/stderr directly instead of tail-following log files.
+    """
+    self._proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=cwd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=final_env,
+        limit=self._buffer_limit,
+        start_new_session=True,
+    )
+    # Pin the process identity BEFORE on_spawn so the callback can persist
+    # (pid, pid_start) together; a proc that exited before we could read its
+    # stat simply yields None and can never be judged alive later.
+    stat_pair = runs.read_pid_stat(self._proc.pid)
+    self.pid_start = stat_pair[0] if stat_pair else None
+    if self._on_spawn is not None:
+      await self._on_spawn(self._proc.pid)
+
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
     """Spawn the agent subprocess and yield parsed NDJSON event dicts.
 

@@ -421,6 +421,22 @@ class PlanRegistryManager:
           return plan["id"], ver["v"]
     return None
 
+  def _validate_new_version_file(self, session_id: str, file: str, data: dict) -> str:
+    """Validate *file* as a new plan version's binding and return its session-relative path.
+
+    The file must live inside the session directory, pass the goal-budget and page-height
+    gates, and not already back an existing plan version. Callers hold the session lock and
+    pass the freshly loaded registry *data*.
+    """
+    file = posixpath.normpath(file)
+    file_relative = self._validate_file_in_session_dir(session_id, file)
+    _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
+    _check_page_height(self._cfg, self._cfg.sessions_dir / session_id / file_relative)
+    existing_file = self._find_binding_by_file(session_id, data, file_relative)
+    if existing_file is not None:
+      raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
+    return file_relative
+
   def _get_plan(self, data: dict, plan_id: int) -> Optional[dict]:
     for plan in data["plans"]:
       if plan["id"] == plan_id:
@@ -436,15 +452,9 @@ class PlanRegistryManager:
       title: str,
       base: Optional[dict] = None,
   ) -> dict:
-    file = posixpath.normpath(file)
     async with self._lock_for(session_id):
       data = await self._load(session_id)
-      file_relative = self._validate_file_in_session_dir(session_id, file)
-      _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
-      _check_page_height(self._cfg, self._cfg.sessions_dir / session_id / file_relative)
-      existing_file = self._find_binding_by_file(session_id, data, file_relative)
-      if existing_file is not None:
-        raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
+      file_relative = self._validate_new_version_file(session_id, file, data)
       next_id = max((p["id"] for p in data["plans"]), default=0) + 1
       plan = {
           "id": next_id,
@@ -475,15 +485,9 @@ class PlanRegistryManager:
   ) -> dict:
     if trigger not in ("auto_amend", "feedback"):
       raise ValueError(f"trigger must be one of auto_amend|feedback, got {trigger!r}")
-    file = posixpath.normpath(file)
     async with self._lock_for(session_id):
       data = await self._load(session_id)
-      file_relative = self._validate_file_in_session_dir(session_id, file)
-      _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
-      _check_page_height(self._cfg, self._cfg.sessions_dir / session_id / file_relative)
-      existing_file = self._find_binding_by_file(session_id, data, file_relative)
-      if existing_file is not None:
-        raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
+      file_relative = self._validate_new_version_file(session_id, file, data)
       plan = self._resolve_target_plan_for_amend(data, plan_id)
       new_v = max(ver["v"] for ver in plan["versions"]) + 1
       plan["versions"].append(

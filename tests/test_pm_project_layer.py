@@ -16,13 +16,12 @@ from typing import Any, Optional
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, make_cron_client
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src.agents import master_cc
-from src.api import cron as cron_api
 from src.api import sessions as sessions_api
 from src.api.deps import get_session_manager
 from src.core.config import (
@@ -239,14 +238,6 @@ async def test_master_task_backend_rotation_carries_role_and_group(
 # ---------------------------------------------------------------------------
 
 
-def _build_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(cron_api.router, prefix="/api/cron")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
-
-
 def _master_task_payload(name: str, project: str = "bp-eval", **overrides: Any) -> dict[str, Any]:
   payload: dict[str, Any] = {
       "name": name,
@@ -272,7 +263,7 @@ def cron_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_cron_create_master_task_without_project_is_400(cron_dir: Path, tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     payload = _master_task_payload("pm_orphan")
     payload.pop("project")
     resp = client.post("/api/cron/tasks", json=payload)
@@ -289,7 +280,7 @@ def test_cron_create_master_task_with_prompt_file_persists_pointer(
   md_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     payload = _master_task_payload("pm_bp_eval", prompt_file=str(md_path))
     resp = client.post("/api/cron/tasks", json=payload)
 
@@ -306,7 +297,7 @@ def test_cron_create_master_task_with_unreadable_prompt_file_is_409(
   missing = tmp_path / "no_such_contract.md"
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     payload = _master_task_payload("pm_bp_eval", prompt_file=str(missing))
     resp = client.post("/api/cron/tasks", json=payload)
 
@@ -320,7 +311,7 @@ def test_cron_create_second_master_task_for_project_is_409(cron_dir: Path, tmp_p
   session_mgr = SessionManager(cfg)
   prompt_path = tmp_path / "pm_contract.md"
   prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     first = client.post(
         "/api/cron/tasks", json=_master_task_payload("pm_bp_eval", prompt_file=str(prompt_path)))
     assert first.status_code == 200
@@ -362,7 +353,7 @@ def test_cron_update_enabling_conflicting_master_task_is_409(cron_dir: Path, tmp
       encoding="utf-8")
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     resp = client.put("/api/cron/tasks/pm_b", json={"enabled": True})
 
   assert resp.status_code == 409

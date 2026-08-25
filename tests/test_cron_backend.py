@@ -9,17 +9,13 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, make_cron_client
 
 from src.api import cron as cron_api
-from src.api.deps import get_session_manager
 from src.core.config import (
   CharlieBotConfig,
   ScheduledTaskConfig,
   _load_cron_file,
-  get_config,
 )
 from src.core.models import (
   CreateSessionRequest,
@@ -43,14 +39,6 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
           CODEX_BACKEND_OPTION,
       ],
   )
-
-
-def _build_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(cron_api.router, prefix="/api/cron")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
 
 
 async def _noop() -> None:
@@ -302,7 +290,7 @@ def test_cron_api_persists_and_clears_backend(
   def _read_backend() -> str:
     return yaml.safe_load(nightly_path.read_text(encoding="utf-8")).get("backend")
 
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     create_response = client.post(
         "/api/cron/tasks",
         json={
@@ -343,7 +331,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text("run nightly", encoding="utf-8")
 
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     response = client.post(
         "/api/cron/tasks",
         json={
@@ -375,7 +363,7 @@ def test_cron_api_rejects_invalid_backend_on_update(
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "missing-backend"})
 
   assert response.status_code == 400
@@ -408,7 +396,7 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
   # A busy session blocks the backend switch with 409.
   mark_busy(session.id)
   try:
-    with _build_cron_client(cfg, session_mgr) as client:
+    with make_cron_client(cfg, session_mgr) as client:
       response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
     assert response.status_code == 409
@@ -472,7 +460,7 @@ def test_cron_api_put_updates_backend_on_prompt_file_host_file(
   yaml_path, _md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)
   original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
 
-  with _build_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_mgr) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
   assert response.status_code == 200

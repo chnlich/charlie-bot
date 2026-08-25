@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from conftest import make_page_request
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -52,19 +53,6 @@ def _navigation(path: str) -> Request:
       "path": path,
       "headers": [(b"accept", b"text/html")],
       "query_string": b"",
-  })
-
-
-def _perfetto_request() -> Request:
-  return Request({
-      "type": "http",
-      "method": "GET",
-      "path": "/perfetto",
-      "headers": [],
-      "query_string": b"",
-      "scheme": "http",
-      "server": ("testserver", 80),
-      "client": ("127.0.0.1", 12345),
   })
 
 
@@ -171,7 +159,7 @@ async def test_the_viewer_resolves_a_trace_under_either_prefix_to_the_same_url(
   trace = tmp_path / "rank0.json"
   trace.write_text(json.dumps({"traceEvents": []}), encoding="utf-8")
   response = await pages.perfetto_viewer(
-      _perfetto_request(), trace=[f"{prefix}{trace}"], dir=None, pattern="*.json", title=None, slim=None)
+      make_page_request("/perfetto"), trace=[f"{prefix}{trace}"], dir=None, pattern="*.json", title=None, slim=None)
 
   merged_url = response.context["trace_url"]
   assert urlsplit(merged_url).path == "/perfetto/merged"

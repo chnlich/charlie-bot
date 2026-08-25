@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from starlette.requests import Request
+from conftest import make_page_request
 
 from src.api import pages
 from src.core.config import CharlieBotConfig
@@ -33,20 +33,6 @@ class FakeSessionManager:
       include_pending_trigger_status=False,
   ) -> list[object]:
     return []
-
-
-def _build_request() -> Request:
-  scope = {
-      "type": "http",
-      "method": "GET",
-      "path": "/",
-      "headers": [],
-      "query_string": b"",
-      "scheme": "http",
-      "server": ("testserver", 80),
-      "client": ("127.0.0.1", 12345),
-  }
-  return Request(scope)
 
 
 def _inline_scripts(body: str) -> list[str]:
@@ -87,7 +73,7 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -
 
   monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
 
-  response = await pages.token_usage_viewer(_build_request())
+  response = await pages.token_usage_viewer(make_page_request("/"))
   assert response.status_code == 200
   body = response.body.decode("utf-8")
   # The per-model table (the accessible equivalent of the charts) is present, carrying the
@@ -112,8 +98,8 @@ async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatc
 
   monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
 
-  request_one = _build_request()
-  request_two = _build_request()
+  request_one = make_page_request("/")
+  request_two = make_page_request("/")
   first, second = await asyncio.gather(
       pages.token_usage_viewer(request_one), pages.token_usage_viewer(request_two))
   assert first.status_code == 200
@@ -134,9 +120,9 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(
     return TokenTally(rows=[], notes=[], elapsed_s=0.01, scanned_bytes=0)
 
   monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
-  await pages.token_usage_viewer(_build_request())
+  await pages.token_usage_viewer(make_page_request("/"))
   assert calls == 1
-  await pages.token_usage_viewer(_build_request())
+  await pages.token_usage_viewer(make_page_request("/"))
   assert calls == 2
 
 
@@ -165,7 +151,7 @@ async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch,
 
   monkeypatch.setattr(pages, "collect_token_usage", lambda: tally)
 
-  response = await pages.token_usage_viewer(_build_request())
+  response = await pages.token_usage_viewer(make_page_request("/"))
   assert response.status_code == 200
   body = response.body.decode("utf-8")
 
@@ -194,14 +180,14 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
   monkeypatch.setattr(pages, "_get_git_version", fail_git_lookup)
 
   response_one = await pages.index(
-      request=_build_request(),
+      request=make_page_request("/"),
       session=None,
       session_mgr=FakeSessionManager(),
       thread_mgr=object(),
       cfg=cfg,
   )
   response_two = await pages.index(
-      request=_build_request(),
+      request=make_page_request("/"),
       session=None,
       session_mgr=FakeSessionManager(),
       thread_mgr=object(),
@@ -219,7 +205,7 @@ async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatc
   monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
 
   response = await pages.index(
-      request=_build_request(),
+      request=make_page_request("/"),
       session=None,
       session_mgr=FakeSessionManager(),
       thread_mgr=object(),
@@ -276,7 +262,7 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
   monkeypatch.setattr(pages, "build_session_bootstrap_data", fake_build_session_bootstrap_data)
 
   response = await pages.index(
-      request=_build_request(),
+      request=make_page_request("/"),
       session=session.id,
       session_mgr=PendingTriggerSessionManager(session),
       thread_mgr=object(),

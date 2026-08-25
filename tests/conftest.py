@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -179,6 +180,22 @@ def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> Test
   app.dependency_overrides[get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
+
+
+def make_page_request(path: str) -> Request:
+  """Starlette Request for a GET against path with the full test-server scope (scheme/server/client);
+  a test needing headers, cookies, or a non-GET method builds its own scope."""
+  scope = {
+      "type": "http",
+      "method": "GET",
+      "path": path,
+      "headers": [],
+      "query_string": b"",
+      "scheme": "http",
+      "server": ("testserver", 80),
+      "client": ("127.0.0.1", 12345),
+  }
+  return Request(scope)
 
 
 OPUS_BACKEND_OPTION = models.BackendOption(

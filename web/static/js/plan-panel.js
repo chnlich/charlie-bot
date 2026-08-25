@@ -118,25 +118,27 @@ const planPanel = (() => {
     return plan.state || '';
   }
 
-  function buildIframeUrl(file, sessionId, sessionsRoot) {
+  // urlKind must name the caller: it is all a missing SESSIONS_ROOT error has
+  // to say which of the panel's surfaces hit the misconfiguration.
+  function _filesUrl(file, sessionId, sessionsRoot, urlKind) {
     var root = sessionsRoot;
     if (typeof window !== 'undefined' && window.SESSIONS_ROOT && !root) {
       root = window.SESSIONS_ROOT;
     }
     if (!root) {
-      throw new Error('SESSIONS_ROOT not available for plan panel iframe URL');
+      throw new Error('SESSIONS_ROOT not available for ' + urlKind);
     }
-    var absPath = root + '/' + sessionId + '/' + file;
-    return '/files' + absPath + '#cbsession=' + encodeURIComponent(sessionId) +
+    return '/files' + root + '/' + sessionId + '/' + file;
+  }
+
+  function buildIframeUrl(file, sessionId, sessionsRoot) {
+    return _filesUrl(file, sessionId, sessionsRoot, 'plan panel iframe URL') +
+      '#cbsession=' + encodeURIComponent(sessionId) +
       '&' + PLAN_PANEL_MARKER + '=1';
   }
 
   function buildIframeUrlFromVersion(plan, version, sessionId, sessionsRoot) {
-    if (!plan || !plan.versions) return null;
-    var ver = null;
-    for (var i = 0; i < plan.versions.length; i++) {
-      if (plan.versions[i].v === version) { ver = plan.versions[i]; break; }
-    }
+    var ver = _findVersion(plan, version);
     if (!ver) return null;
     return buildIframeUrl(ver.file, sessionId, sessionsRoot);
   }
@@ -146,37 +148,18 @@ const planPanel = (() => {
   // activates via the top-level-page branch of artifact-comments.js (the
   // framed guard is skipped because the page is not in an iframe).
   function buildStandaloneUrl(file, sessionId, sessionsRoot) {
-    var root = sessionsRoot;
-    if (typeof window !== 'undefined' && window.SESSIONS_ROOT && !root) {
-      root = window.SESSIONS_ROOT;
-    }
-    if (!root) {
-      throw new Error('SESSIONS_ROOT not available for plan standalone URL');
-    }
-    var absPath = root + '/' + sessionId + '/' + file;
-    return '/files' + absPath + '#cbsession=' + encodeURIComponent(sessionId);
+    return _filesUrl(file, sessionId, sessionsRoot, 'plan standalone URL') +
+      '#cbsession=' + encodeURIComponent(sessionId);
   }
 
   function buildStandaloneUrlFromVersion(plan, version, sessionId, sessionsRoot) {
-    if (!plan || !plan.versions) return null;
-    var ver = null;
-    for (var i = 0; i < plan.versions.length; i++) {
-      if (plan.versions[i].v === version) { ver = plan.versions[i]; break; }
-    }
+    var ver = _findVersion(plan, version);
     if (!ver) return null;
     return buildStandaloneUrl(ver.file, sessionId, sessionsRoot);
   }
 
   function _buildFilesFetchUrl(file, sessionId, sessionsRoot) {
-    var root = sessionsRoot;
-    if (typeof window !== 'undefined' && window.SESSIONS_ROOT && !root) {
-      root = window.SESSIONS_ROOT;
-    }
-    if (!root) {
-      throw new Error('SESSIONS_ROOT not available for plan panel files fetch');
-    }
-    var absPath = root + '/' + sessionId + '/' + file;
-    return '/files' + absPath;
+    return _filesUrl(file, sessionId, sessionsRoot, 'plan panel files fetch');
   }
 
   function stateBadgeClass(stateStr) {

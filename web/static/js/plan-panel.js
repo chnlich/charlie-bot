@@ -172,14 +172,6 @@ const planPanel = (() => {
     return 'bg-gray-700 text-gray-400';
   }
 
-  function _esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
   // -- DOM helpers --------------------------------------------------------
 
   function _getEl(id) {
@@ -213,9 +205,9 @@ const planPanel = (() => {
       return;
     }
     sel.innerHTML = plans.map(function(p) {
-      var label = '#' + p.id + ' ' + _esc(p.title || '(untitled)') +
-        ' [' + _esc(formatPlanStateLabel(p)) + ']';
-      return '<option value="' + _esc(p.id) + '"' +
+      var label = '#' + p.id + ' ' + escapeHtmlAttr(p.title || '(untitled)') +
+        ' [' + escapeHtmlAttr(formatPlanStateLabel(p)) + ']';
+      return '<option value="' + escapeHtmlAttr(p.id) + '"' +
         (String(p.id) === String(_selectedPlanId) ? ' selected' : '') +
         '>' + label + '</option>';
     }).join('');
@@ -232,9 +224,9 @@ const planPanel = (() => {
     }
     sel.style.display = '';
     sel.innerHTML = plan.versions.map(function(v) {
-      return '<option value="' + _esc(v.v) + '"' +
+      return '<option value="' + escapeHtmlAttr(v.v) + '"' +
         (v.v === _selectedVersion ? ' selected' : '') +
-        '>v' + _esc(v.v) + '</option>';
+        '>v' + escapeHtmlAttr(v.v) + '</option>';
     }).join('');
   }
 

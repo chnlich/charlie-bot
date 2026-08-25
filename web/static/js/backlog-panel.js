@@ -113,7 +113,7 @@ const backlogPanel = (() => {
     }
 
     const modBadge = modLabel
-      ? `<span class="px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-900 text-indigo-300">${_esc(modLabel)}</span>`
+      ? `<span class="px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-900 text-indigo-300">${escapeHtmlAttr(modLabel)}</span>`
       : '';
 
     const descId = `backlog-desc-${item.id}`;
@@ -125,24 +125,16 @@ const backlogPanel = (() => {
           ${item.status ? `<span class="px-1.5 py-0.5 rounded text-xs font-medium ${statusCls}">${item.status}</span>` : ''}
           ${modBadge}
         </div>
-        <p class="text-sm font-semibold text-gray-100 mb-1"><span class="text-gray-500 font-mono">#${_esc(item.id)}</span> ${_esc(item.title || '')}</p>
+        <p class="text-sm font-semibold text-gray-100 mb-1"><span class="text-gray-500 font-mono">#${escapeHtmlAttr(item.id)}</span> ${escapeHtmlAttr(item.title || '')}</p>
         <p id="${descId}" class="text-xs text-gray-400 line-clamp-2 cursor-pointer select-none"
-           onclick="this.classList.toggle('line-clamp-2')">${_esc(item.description || '')}</p>
-        ${item.rejected_reason ? `<p class="text-xs text-red-400 mt-1">Rejected${item.rejected_at ? ' ' + _fmtDate(item.rejected_at) : ''}: ${_esc(item.rejected_reason)}</p>` : ''}
-        ${item.failed_reason ? `<p class="text-xs text-orange-400 mt-1">Failed${item.failed_at ? ' ' + _fmtDate(item.failed_at) : ''}${item.failed_count > 1 ? ' (' + item.failed_count + 'x)' : ''}: ${_esc(item.failed_reason)}</p>` : ''}
-        ${item.revision_feedback ? `<p class="text-xs text-yellow-400 mt-1">Revision requested${item.revision_requested_at ? ' ' + _fmtDate(item.revision_requested_at) : ''}: ${_esc(item.revision_feedback)}</p>` : ''}
+           onclick="this.classList.toggle('line-clamp-2')">${escapeHtmlAttr(item.description || '')}</p>
+        ${item.rejected_reason ? `<p class="text-xs text-red-400 mt-1">Rejected${item.rejected_at ? ' ' + _fmtDate(item.rejected_at) : ''}: ${escapeHtmlAttr(item.rejected_reason)}</p>` : ''}
+        ${item.failed_reason ? `<p class="text-xs text-orange-400 mt-1">Failed${item.failed_at ? ' ' + _fmtDate(item.failed_at) : ''}${item.failed_count > 1 ? ' (' + item.failed_count + 'x)' : ''}: ${escapeHtmlAttr(item.failed_reason)}</p>` : ''}
+        ${item.revision_feedback ? `<p class="text-xs text-yellow-400 mt-1">Revision requested${item.revision_requested_at ? ' ' + _fmtDate(item.revision_requested_at) : ''}: ${escapeHtmlAttr(item.revision_feedback)}</p>` : ''}
         <p class="text-xs text-gray-600 mt-1">${_fmtDate(item.created)}</p>
         ${backtestHtml}
         ${actions ? `<div class="flex gap-2 mt-2">${actions}</div>` : ''}
       </div>`;
-  }
-
-  function _esc(s) {
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
   }
 
   function _populateModuleFilter() {
@@ -151,7 +143,7 @@ const backlogPanel = (() => {
     const sources = [...new Set(_items.map(i => i._source).filter(Boolean))].sort();
     const prev = sel.value;
     sel.innerHTML = '<option value="all">All modules</option>' +
-      sources.map(s => `<option value="${_esc(s)}">${_esc(_moduleLabel(s))}</option>`).join('');
+      sources.map(s => `<option value="${escapeHtmlAttr(s)}">${escapeHtmlAttr(_moduleLabel(s))}</option>`).join('');
     if (sources.includes(prev)) sel.value = prev;
   }
 
@@ -163,7 +155,7 @@ const backlogPanel = (() => {
     const sel = document.getElementById('backlog-repo-selector');
     if (!sel || !_repos.length) return;
     sel.innerHTML = _repos.map(r =>
-      `<option value="${_esc(r.path)}">${_esc(r.label)}</option>`
+      `<option value="${escapeHtmlAttr(r.path)}">${escapeHtmlAttr(r.label)}</option>`
     ).join('');
     if (_currentRepo) sel.value = _currentRepo;
     else sel.value = _repos[0].path;
@@ -201,7 +193,7 @@ const backlogPanel = (() => {
       error = `Failed to load backlog: ${e.message || e}`;
     }
     if (error) {
-      if (list) list.innerHTML = `<p class="text-xs text-red-400">${_esc(error)}</p>`;
+      if (list) list.innerHTML = `<p class="text-xs text-red-400">${escapeHtmlAttr(error)}</p>`;
       return;
     }
     _populateModuleFilter();

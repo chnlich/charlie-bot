@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from conftest import assistant_event as _assistant_event
+
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
@@ -619,19 +621,6 @@ def test_thinking_event_alone_creates_assistant_draft() -> None:
   assert deltas[0]["message"]["role"] == "assistant"
   assert deltas[0]["message"]["content"] == ""
   assert deltas[0]["message"]["thinking"] == "reasoning"
-
-
-def _assistant_event(content: str, event_id: str = "assistant") -> dict:
-  return {
-      "id": event_id,
-      "type": ET.ASSISTANT,
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": content
-          }]
-      },
-  }
 
 
 def test_stable_history_orders_queued_user_between_completed_runs() -> None:

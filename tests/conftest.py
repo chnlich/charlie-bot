@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 from src.agents import master_cc_state  # noqa: E402,I001
 from src.api.deps import get_session_manager  # noqa: E402,I001
 from src.api.sessions import router as sessions_router  # noqa: E402,I001
+from src.core import event_types as ET  # noqa: E402,I001
 from src.core import models  # noqa: E402,I001
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402,I001
 from src.core.plans import PlanRegistryManager  # noqa: E402,I001
@@ -66,6 +67,21 @@ def append_events(path: Path, events: list[dict]) -> None:
   with open(path, "a", encoding="utf-8") as f:
     for event in events:
       f.write(json.dumps(event) + "\n")
+
+
+def assistant_event(content: str, event_id: str = "assistant") -> dict:
+  """An ASSISTANT event whose message is a single text block; projection and aggregator tests build on this
+  shape, and a test needing extra fields (timestamp, token usage) builds its own or merges them in."""
+  return {
+      "id": event_id,
+      "type": ET.ASSISTANT,
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": content
+          }]
+      },
+  }
 
 
 def archive_cutoff_events() -> tuple[datetime, list[dict]]:

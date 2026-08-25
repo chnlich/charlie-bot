@@ -4,64 +4,22 @@ import json
 from pathlib import Path
 
 import pytest
-
-from src.core.config import CharlieBotConfig
-from src.core.models import (
-    BackendOption,
-    CreateSessionRequest,
-    SessionMetadata,
+from conftest import (
+  make_plan_setup as _setup,
 )
+from conftest import (
+  write_plan_artifact as _write_artifact,
+)
+from conftest import (
+  write_stub_chrome as _write_stub_chrome,
+)
+
 from src.core.plans import (
-    PlanRegistryManager,
-    _DerivedState,
-    derive_state_str,
-    read_plans_tolerant,
+  PlanRegistryManager,
+  _DerivedState,
+  derive_state_str,
+  read_plans_tolerant,
 )
-from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
-
-BACKEND_OPTIONS = [
-    BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-]
-
-
-def _write_stub_chrome(tmp_path: Path, height: int) -> str:
-  """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
-  stub = tmp_path / f"stub-chrome-{height}.sh"
-  stub.write_text(f"#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n", encoding="utf-8")
-  stub.chmod(0o755)
-  return str(stub)
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=BACKEND_OPTIONS,
-      headless_chrome_bin=_write_stub_chrome(tmp_path, 800),
-  )
-
-
-_GOAL_OK_HTML = "<html><section><h2>1 Problem / Goal</h2><p>Ship the fix.</p></section></html>"
-
-
-def _write_artifact(
-    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str = _GOAL_OK_HTML) -> str:
-  artifacts_dir = cfg.sessions_dir / session_id / "artifacts"
-  artifacts_dir.mkdir(parents=True, exist_ok=True)
-  (artifacts_dir / name).write_text(content, encoding="utf-8")
-  return f"artifacts/{name}"
-
-
-async def _setup(
-    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, PlanRegistryManager, SessionMetadata]:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  plan_mgr = PlanRegistryManager(cfg, session_mgr)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="Test"), backend="claude-opus-4.6")
-  return cfg, session_mgr, thread_mgr, plan_mgr, meta
-
 
 # ---------------------------------------------------------------------------
 # Derived-state truth table (pure function of closed, takeoff)

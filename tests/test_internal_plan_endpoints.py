@@ -4,6 +4,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import (
+  build_plan_cfg as _build_cfg,
+)
+from conftest import (
+  make_plan_setup as _setup,
+)
+from conftest import (
+  write_plan_artifact as _write_artifact,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -12,35 +21,12 @@ from src.api.internal import router as internal_router
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    BackendOption,
-    CreateSessionRequest,
-    SessionMetadata,
-    TaskType,
+  CreateSessionRequest,
+  TaskType,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
-
-BACKEND_OPTIONS = [
-    BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-]
-
-
-def _write_stub_chrome(tmp_path: Path, height: int) -> str:
-  """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
-  stub = tmp_path / f"stub-chrome-{height}.sh"
-  stub.write_text(f"#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n", encoding="utf-8")
-  stub.chmod(0o755)
-  return str(stub)
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=BACKEND_OPTIONS,
-      headless_chrome_bin=_write_stub_chrome(tmp_path, 800),
-  )
 
 
 def _build_app(
@@ -53,24 +39,6 @@ def _build_app(
   app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
   app.dependency_overrides[get_plan_manager] = lambda: plan_mgr
   return app
-
-
-def _write_artifact(cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html") -> str:
-  artifacts_dir = cfg.sessions_dir / session_id / "artifacts"
-  artifacts_dir.mkdir(parents=True, exist_ok=True)
-  (artifacts_dir / name).write_text(
-      "<html><section><h2>1 Problem / Goal</h2><p>Ship the fix.</p></section></html>", encoding="utf-8")
-  return f"artifacts/{name}"
-
-
-async def _setup(
-    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, PlanRegistryManager, SessionMetadata]:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  plan_mgr = PlanRegistryManager(cfg, session_mgr)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="Test"), backend="claude-opus-4.6")
-  return cfg, session_mgr, thread_mgr, plan_mgr, meta
 
 
 # ---------------------------------------------------------------------------

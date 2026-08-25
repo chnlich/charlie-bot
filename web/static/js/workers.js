@@ -150,15 +150,6 @@ function renderThreadEvents(threadId, events) {
     return;
   }
 
-  function fmtTime(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    return d.toLocaleString(undefined, {
-      month: 'short', day: 'numeric',
-      hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short'
-    });
-  }
-
   function toolSummary(e) {
     const input = e.input || {};
     if (e.tool_name === 'Bash' || e.tool_name === 'bash') {
@@ -183,7 +174,7 @@ function renderThreadEvents(threadId, events) {
   }
 
   const parts = filtered.map(e => {
-    const ts = fmtTime(e.timestamp);
+    const ts = Chat.formatBubbleTime(e.timestamp);
     const tsHtml = ts ? `<span class="text-slate-600 ml-2 text-xs">${ts}</span>` : '';
 
     if (e.type === 'assistant') {

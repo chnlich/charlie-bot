@@ -42,6 +42,7 @@ from src.core.message_aggregator import extract_text_from_message
 from src.core.models import CreateSessionRequest, SessionStatus, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
+from src.core.verify_trailer import _normalize_line
 
 logger = structlog.get_logger()
 
@@ -417,20 +418,6 @@ def _round_text(events: list[dict], done_idx: int) -> str:
   return ""
 
 
-# Mirrors verify_trailer._normalize_line; keep this private instead of importing its private helper.
-def _normalize_marker_line(line: str) -> str:
-  """Strip whitespace and repeated markdown wrappers (backticks, asterisks) to a fixed point.
-
-  Dashes are left in place.
-  """
-  normalized = line.strip()
-  while True:
-    stripped = normalized.strip("`*").strip()
-    if stripped == normalized:
-      return normalized
-    normalized = stripped
-
-
 def _extract_marker_reply(text: str) -> tuple[str, int | None]:
   """The text after the marker line, or a failure count when it is not unique.
 
@@ -444,7 +431,7 @@ def _extract_marker_reply(text: str) -> tuple[str, int | None]:
   marker_end = 0
   offset = 0
   for raw_line in text.splitlines(keepends=True):
-    if _normalize_marker_line(raw_line) == SLACK_REPLY_MARKER:
+    if _normalize_line(raw_line) == SLACK_REPLY_MARKER:
       count += 1
       marker_end = offset + len(raw_line)
     offset += len(raw_line)

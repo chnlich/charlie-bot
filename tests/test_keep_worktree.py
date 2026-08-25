@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import JudgmentShim
+from conftest import CODEX_BACKEND_OPTION, JudgmentShim
 
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
@@ -30,7 +30,7 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          CODEX_BACKEND_OPTION,
       ],
   )
 

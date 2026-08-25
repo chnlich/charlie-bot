@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
+from conftest import CODEX_BACKEND_OPTION
 
 from src.core import spawner, spawner_launch
 from src.core.config import CharlieBotConfig
@@ -37,7 +38,7 @@ from src.core.git import (
     git_current_branch,
     git_remote_default_branch,
 )
-from src.core.models import BackendOption, SessionMetadata, SpawnRequest, ThreadMetadata
+from src.core.models import SessionMetadata, SpawnRequest, ThreadMetadata
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -396,7 +397,7 @@ def _spawn_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=[
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          CODEX_BACKEND_OPTION,
       ],
   )
 

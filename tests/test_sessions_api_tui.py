@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from conftest import OPUS_BACKEND_OPTION
 from conftest import make_sessions_client as _build_client
 
 from src.core.config import CharlieBotConfig
@@ -12,7 +13,7 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+          OPUS_BACKEND_OPTION,
           BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
       ],
   )

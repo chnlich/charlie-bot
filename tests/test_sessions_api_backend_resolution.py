@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
 from conftest import make_sessions_client as _build_client
 
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest
+from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 
 
@@ -16,8 +17,8 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
       ],
   )
 

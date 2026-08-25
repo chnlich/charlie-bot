@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
 from conftest import make_sessions_client as _build_client
@@ -21,7 +22,6 @@ from src.core.config import (
 )
 from src.core.models import (
   PROJECT_ROLE,
-  BackendOption,
   CreateSessionRequest,
   SessionMetadata,
   SessionStatus,
@@ -54,7 +54,7 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+          OPUS_BACKEND_OPTION,
       ],
   )
 
@@ -64,8 +64,8 @@ def _build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
       ],
   )
 

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
 
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import is_resume_not_found_error, trigger_master
@@ -15,8 +16,8 @@ def _build_cfg() -> CharlieBotConfig:
       charliebot_home=Path("/tmp/charliebot-test"),
       worktree_dir="/tmp/worktrees",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
       ],
   )
 

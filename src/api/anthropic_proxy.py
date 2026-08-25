@@ -4,7 +4,7 @@ import json
 import os
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 import structlog
@@ -473,7 +473,7 @@ async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIter
     await upstream.aclose()
 
 
-def _upstream_headers(api_key_env: Optional[str], backend_id: str) -> dict[str, str]:
+def _upstream_headers(api_key_env: str | None, backend_id: str) -> dict[str, str]:
   headers = {"Content-Type": "application/json"}
   if not api_key_env:
     return headers

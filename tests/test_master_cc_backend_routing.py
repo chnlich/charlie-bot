@@ -49,8 +49,19 @@ def test_route_resume_session_uses_native_resume_id_for_charlie_code() -> None:
   )
 
 
+def test_route_resume_session_uses_native_resume_id_for_antigravity() -> None:
+  assert master_cc._route_resume_session("antigravity", "existing-session-id") == (
+      [],
+      "existing-session-id",
+  )
+
+
+def test_antigravity_is_resume_capable() -> None:
+  assert "antigravity" in master_cc_run._RESUME_CAPABLE_BACKEND_TYPES
+
+
 @pytest.mark.asyncio
-async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
+async def test_run_cc_routes_antigravity_native_resume_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -86,10 +97,98 @@ async def test_run_cc_does_not_route_claude_resume_flags_to_antigravity(
   backend_kwargs = captures["kwargs"]
   assert isinstance(backend_kwargs, dict)
   assert backend_kwargs["extra_flags"] is None
-  assert backend_kwargs["resume_session_id"] is None
+  assert backend_kwargs["resume_session_id"] == "existing-session-id"
   assert cc_session_id == "existing-session-id"
   assert exit_code == 0
   assert error_msg is None
+
+
+class _SessionIdBackend(_FakeBackend):
+
+  def __init__(self, session_id: str):
+    self._session_id = session_id
+
+  async def run(self, prompt: str, cwd: str, env: dict):
+    yield {"session_id": self._session_id}
+    yield backend_base.make_result_event()
+
+
+class _AnchorMismatchBackend(_FakeBackend):
+  async def run(self, prompt: str, cwd: str, env: dict):
+    yield backend_base.make_error_event("agy resume envelope id fresh-id does not match anchor anchor-id")
+    raise ValueError("antigravity envelope guard: resume envelope id fresh-id does not match anchor anchor-id")
+
+
+@pytest.mark.asyncio
+async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
+      ],
+  )
+  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+
+  # Run 1: a fresh antigravity backend emits a bare session_id event, which the
+  # master adopts as the anchor.
+  captures: dict[str, object] = {}
+  backend_instances: list[object] = []
+
+  def fake_build_backend(option, cfg, **kwargs):
+    captures["kwargs"] = kwargs
+    instance = _SessionIdBackend("conv-abc")
+    backend_instances.append(instance)
+    return instance
+
+  monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
+
+  fresh_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy")
+  item1 = make_work_item(cfg, fresh_meta, cfg.backend_options[0])
+  cc_session_id, exit_code, error_msg, _ = await master_cc._run_cc(item1)
+
+  assert cc_session_id == "conv-abc"
+  assert exit_code == 0
+  assert error_msg is None
+
+  # Run 2: the anchored session passes the anchor through as the resume id.
+  anchored_meta = models.SessionMetadata(
+      id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
+  item2 = make_work_item(cfg, anchored_meta, cfg.backend_options[0])
+  await master_cc._run_cc(item2)
+
+  assert captures["kwargs"]["resume_session_id"] == "conv-abc"
+
+
+@pytest.mark.asyncio
+async def test_run_cc_guard_round_fails_with_guard_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
+      ],
+  )
+  session_meta = models.SessionMetadata(
+      id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
+
+  monkeypatch.setattr(
+      "src.agents.backends.registry.build_backend",
+      lambda option, cfg, **kw: _AnchorMismatchBackend())
+  monkeypatch.setattr(
+      master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+
+  item = make_work_item(cfg, session_meta, cfg.backend_options[0])
+
+  cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
+
+  assert exit_code != 0
+  assert error_msg is not None
+  assert "does not match anchor anchor-id" in error_msg
 
 
 @pytest.mark.asyncio

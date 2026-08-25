@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Optional
@@ -21,12 +22,14 @@ from src.core import runs
 _PRINT_TIMEOUT = "24h"
 
 
+class AgentGuard(ValueError):
+  """Raised to fail the round loudly when the agy envelope violates the resume contract."""
+
+
 class AntigravityCliBackend(AgentBackend):
-  """Runs `agy --print` and emits the completed stdout as one assistant event."""
+  """Runs `agy --print` and translates the JSON envelope into CC events."""
 
   def __init__(self, *, model: Optional[str] = None, **kwargs):
-    if kwargs.get("resume_session_id"):
-      raise ValueError("antigravity backend does not support stable session resume")
     super().__init__(model=model, **kwargs)
     self._agy_bin = resolve_binary("agy", str(Path.home() / ".local" / "bin"))
 
@@ -38,7 +41,11 @@ class AntigravityCliBackend(AgentBackend):
         "--print-timeout",
         _PRINT_TIMEOUT,
         "--dangerously-skip-permissions",
+        "--output-format",
+        "json",
     ]
+    if self._resume_session_id:
+      cmd.extend(["--conversation", self._resume_session_id])
     cmd.extend(self._extra_flags)
     return cmd
 
@@ -49,8 +56,18 @@ class AntigravityCliBackend(AgentBackend):
     prepend_path_dir(antigravity_env, str(Path.home() / ".local" / "bin"))
     return antigravity_env
 
+  def _parse_envelope(self, stdout_text: str) -> Optional[dict]:
+    """Parse stdout as a JSON envelope dict, or None when it is not one."""
+    try:
+      data = json.loads(stdout_text)
+    except (json.JSONDecodeError, ValueError):
+      return None
+    if not isinstance(data, dict):
+      return None
+    return data
+
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
-    """Run the final-only CLI mode and yield stdout after the process exits."""
+    """Run the final-only CLI mode and translate the JSON envelope into CC events."""
     await asyncio.to_thread(self._prepare_cwd, cwd)
     cmd = self._build_command(prompt)
     final_env = self._prepare_env(env)
@@ -99,11 +116,43 @@ class AntigravityCliBackend(AgentBackend):
     await self._drain_and_cleanup(self._CLEANUP_TIMEOUT)
 
     stdout_text = bytes(stdout_bytes).decode("utf-8", errors="replace").strip()
-    if self.exit_code == 0:
-      if stdout_text:
-        yield make_text_event(stdout_text)
-      yield make_result_event()
+    if self.exit_code != 0:
+      message = stdout_text or f"Antigravity CLI exited with code {self.exit_code}"
+      yield make_error_event(message)
       return
 
-    message = stdout_text or f"Antigravity CLI exited with code {self.exit_code}"
-    yield make_error_event(message)
+    # exit 0: the JSON envelope is the only machine-readable source of the
+    # conversation id and usage, so a non-envelope stdout is a contract breach.
+    envelope = self._parse_envelope(stdout_text)
+    if envelope is None:
+      yield make_error_event(f"agy exited 0 with non-envelope stdout: {stdout_text[:200]}")
+      raise AgentGuard(f"antigravity envelope guard: non-json stdout (exit 0): {stdout_text[:200]}")
+
+    status = envelope.get("status")
+    if status != "SUCCESS":
+      message = envelope.get("error") or envelope.get("response") or f"Antigravity status {status}"
+      yield make_error_event(str(message))
+      return
+
+    conversation_id = envelope.get("conversation_id")
+    if not conversation_id:
+      yield make_error_event("agy SUCCESS envelope missing conversation_id")
+      raise AgentGuard("antigravity envelope guard: SUCCESS envelope missing conversation_id")
+
+    if self._resume_session_id and conversation_id != self._resume_session_id:
+      yield make_error_event(
+          f"agy resume envelope id {conversation_id} does not match anchor {self._resume_session_id}")
+      raise AgentGuard(
+          f"antigravity envelope guard: resume envelope id {conversation_id} does not match "
+          f"anchor {self._resume_session_id}")
+
+    # Bare session_id event first so the master adopts it as the frozen anchor,
+    # then assistant text, then usage.
+    yield {"session_id": conversation_id}
+    yield make_text_event(envelope.get("response", ""))
+    usage = envelope.get("usage", {}) or {}
+    yield make_result_event(
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0) + usage.get("thinking_tokens", 0),
+        cache_read=usage.get("cache_read_tokens", 0),
+    )

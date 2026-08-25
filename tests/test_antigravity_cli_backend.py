@@ -30,6 +30,20 @@ async def _consume(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
   return events
 
 
+async def _consume_raising(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
+  """Consume events until the generator raises; re-raise, leaving collected events inspectable."""
+  events: list[dict] = []
+  gen = backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"})
+  while True:
+    try:
+      event = await gen.__anext__()
+    except StopAsyncIteration:
+      return events
+    except BaseException:
+      raise
+    events.append(event)
+
+
 def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, extra_flags=["--sandbox"])
 
@@ -41,6 +55,8 @@ def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
       "--print-timeout",
       "24h",
       "--dangerously-skip-permissions",
+      "--output-format",
+      "json",
       "--sandbox",
   ]
   assert "--model" not in cmd
@@ -72,30 +88,41 @@ def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path:
   assert not (tmp_path / "AGENTS.md").exists()
 
 
-def test_resume_session_id_fails_fast(monkeypatch) -> None:
+def test_build_command_append_conversation_flag_exactly_once_when_resuming(monkeypatch) -> None:
   monkeypatch.setattr(
       "src.agents.backends.antigravity_cli.resolve_binary",
       lambda name, fallback: "/usr/bin/agy",
   )
 
-  with pytest.raises(ValueError, match="does not support stable session resume"):
-    AntigravityCliBackend(resume_session_id="session-123")
+  backend = AntigravityCliBackend(resume_session_id="session-123")
+
+  cmd = backend._build_command("hello")
+
+  assert cmd.count("--conversation") == 1
+  assert cmd[cmd.index("--conversation") + 1] == "session-123"
+
+
+def test_build_command_never_uses_continue_flag(monkeypatch) -> None:
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: "/usr/bin/agy",
+  )
+
+  fresh = AntigravityCliBackend()
+  resumed = AntigravityCliBackend(resume_session_id="session-123")
+
+  assert "--continue" not in fresh._build_command("hello")
+  assert "--continue" not in resumed._build_command("hello")
 
 
 @pytest.mark.asyncio
-async def test_run_emits_final_stdout_as_assistant_text(monkeypatch, tmp_path: Path) -> None:
+async def test_run_translates_envelope_into_session_text_and_result_events(monkeypatch, tmp_path: Path) -> None:
   fake_agy = _write_fake_agy(
       tmp_path,
       """
-for arg in "$@"; do
-  case "$arg" in
-    --print=*)
-      prompt="${arg#*=}"
-      break
-      ;;
-  esac
-done
-printf 'final answer: %s\\n' "$prompt"
+cat <<'JSON'
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"the answer","usage":{"input_tokens":10,"output_tokens":12,"thinking_tokens":11,"cache_read_tokens":3}}
+JSON
 """,
   )
   monkeypatch.setattr(
@@ -107,31 +134,23 @@ printf 'final answer: %s\\n' "$prompt"
 
   events = await _consume(backend, tmp_path)
 
-  assert events == [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "final answer: hello from CharlieBot",
-              }]
-          },
+  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert events[0] == {"session_id": "conv-abc"}
+  assert events[1] == {
+      "type": "assistant",
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": "the answer",
+          }]
       },
-      {
-          "type": "result",
-          "result": "",
-          "usage":
-              {
-                  "input_tokens": 0,
-                  "output_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "cache_creation_input_tokens": 0,
-              },
-          "total_cost_usd": 0,
-      },
-  ]
+  }
+  assert events[2]["type"] == "result"
+  assert events[2]["usage"]["input_tokens"] == 10
+  assert events[2]["usage"]["output_tokens"] == 23
+  assert events[2]["usage"]["cache_read_input_tokens"] == 3
   assert backend.exit_code == 0
-  assert (log_dir / "stdout.log").read_text(encoding="utf-8") == "final answer: hello from CharlieBot\n"
+  assert (log_dir / "stdout.log").read_text(encoding="utf-8") != ""
   assert (log_dir / "stderr.log").exists()
 
 
@@ -193,5 +212,121 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
       "--print-timeout",
       "24h",
       "--dangerously-skip-permissions",
+      "--output-format",
+      "json",
       "--sandbox",
   ]
+
+
+@pytest.mark.asyncio
+async def test_envelope_error_status_yields_error_event(monkeypatch, tmp_path: Path) -> None:
+  fake_agy = _write_fake_agy(
+      tmp_path,
+      """
+printf '%s' '{"status":"ERROR","error":"rate limited"}'
+""",
+  )
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: str(fake_agy),
+  )
+  backend = AntigravityCliBackend()
+
+  events = await _consume(backend, tmp_path)
+
+  assert events == [{
+      "type": "error",
+      "message": "rate limited",
+      "content": "rate limited",
+  }]
+
+
+@pytest.mark.asyncio
+async def test_success_envelope_missing_conversation_id_triggers_guard(monkeypatch, tmp_path: Path) -> None:
+  fake_agy = _write_fake_agy(
+      tmp_path,
+      """
+printf '%s' '{"status":"SUCCESS","response":"hi"}'
+""",
+  )
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: str(fake_agy),
+  )
+  backend = AntigravityCliBackend()
+
+  with pytest.raises(ValueError, match="missing conversation_id"):
+    events = await _consume_raising(backend, tmp_path)
+    assert len(events) == 1 and events[0]["type"] == "error"
+    assert "session_id" not in events[0]
+
+
+@pytest.mark.asyncio
+async def test_resume_envelope_id_mismatch_triggers_guard(monkeypatch, tmp_path: Path) -> None:
+  fake_agy = _write_fake_agy(
+      tmp_path,
+      """
+printf '%s' '{"status":"SUCCESS","conversation_id":"fresh-id","response":"hi","usage":{}}'
+""",
+  )
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: str(fake_agy),
+  )
+  backend = AntigravityCliBackend(resume_session_id="anchor-id")
+
+  with pytest.raises(ValueError, match="does not match anchor anchor-id"):
+    events = await _consume_raising(backend, tmp_path)
+    assert len(events) == 1 and events[0]["type"] == "error"
+    assert "session_id" not in events[0]
+
+
+@pytest.mark.asyncio
+async def test_non_envelope_stdout_exit_zero_triggers_guard(monkeypatch, tmp_path: Path) -> None:
+  fake_agy = _write_fake_agy(
+      tmp_path,
+      """
+printf 'plain text, not json'
+""",
+  )
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: str(fake_agy),
+  )
+  backend = AntigravityCliBackend()
+
+  with pytest.raises(ValueError, match="non-json stdout"):
+    events = await _consume_raising(backend, tmp_path)
+    assert len(events) == 1 and events[0]["type"] == "error"
+    assert "session_id" not in events[0]
+
+
+@pytest.mark.asyncio
+async def test_bare_session_id_event_is_adopted_as_anchor_by_handle_event(
+    monkeypatch, tmp_path: Path
+) -> None:
+  fake_agy = _write_fake_agy(
+      tmp_path,
+      """
+printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","usage":{}}'
+""",
+  )
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: str(fake_agy),
+  )
+  backend = AntigravityCliBackend()
+
+  from src.agents.master_cc_run import _handle_event
+
+  events = await _consume(backend, tmp_path)
+  assert events[0] == {"session_id": "conv-abc"}
+
+  captured: list[dict] = []
+
+  async def fake_persist(session_id: str, ev: dict) -> None:
+    captured.append(ev)
+
+  cc_session_id = await _handle_event(events[0], "session-id", None, fake_persist)
+
+  assert cc_session_id == "conv-abc"

@@ -16,21 +16,14 @@ import asyncio
 import os
 import threading
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from conftest import make_session_mgr as _make_session_mgr
 
 from src.core.models import SessionMetadata
-from src.core.sessions import SessionManager
 
 _REAL_REPLACE = os.replace
-
-
-def _make_session_mgr(tmp_path: Path) -> SessionManager:
-  cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
-  cfg.sessions_dir.mkdir(parents=True)
-  return SessionManager(cfg)
 
 
 @pytest.mark.asyncio

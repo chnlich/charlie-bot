@@ -6,20 +6,14 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from conftest import make_session_mgr as _make_session_mgr
 from structlog.testing import capture_logs
 
 from src.core import sessions as sessions_module
 from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
-
-
-def _make_session_mgr(tmp_path: Path) -> SessionManager:
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    return SessionManager(SimpleNamespace(sessions_dir=sessions_dir))
 
 
 def _write_metadata(

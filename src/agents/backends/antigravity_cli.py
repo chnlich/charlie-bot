@@ -15,7 +15,7 @@ from src.agents.backends.base import (
   make_result_event,
   make_text_event,
   prepend_path_dir,
-    resolve_binary,
+  resolve_binary,
 )
 
 _PRINT_TIMEOUT = "24h"

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from src.api.deps import get_session_manager
 from src.core.config import (
+  DEFAULT_TIMEZONE,
   CharlieBotConfig,
   ScheduledTaskConfig,
   _load_cron_file,
@@ -136,7 +137,7 @@ class TaskCreate(BaseModel):
   prompt_file: Optional[str] = None
   repo: Optional[str] = None
   backend: Optional[str] = None
-  timezone: str = 'America/Los_Angeles'
+  timezone: str = DEFAULT_TIMEZONE
   enabled: bool = True
   project: Optional[str] = None
   mode: Optional[Literal['worker', 'master']] = None

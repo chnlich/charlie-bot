@@ -114,13 +114,7 @@ function loadArtifactsScript() {
     URL: globalThis.URL,
   };
   vm.createContext(context);
-  vm.runInContext(
-      'globalThis.Chat = globalThis.Chat || {};' +
-      'globalThis.Chat.expose = function expose(names) {' +
-      '  for (var i = 0; i < names.length; i++) globalThis[names[i]] = globalThis.Chat[names[i]];' +
-      '};',
-      context,
-      { filename: 'chat-namespace-stub.js' });
+  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
   vm.runInContext(readStatic('chat/artifacts.js'), context, { filename: 'artifacts.js' });
   return context;
 }

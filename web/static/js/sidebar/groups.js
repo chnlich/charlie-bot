@@ -752,7 +752,6 @@ function renderSessionList(sessions, filter) {
 
 
 Object.assign(Sidebar, {
-  escapeHtmlAttr,
   loadGroupLimitState,
   isGroupLimitExpanded,
   setGroupLimitExpanded,
@@ -781,7 +780,6 @@ Object.assign(Sidebar, {
   renderSessionList,
 });
 Sidebar.expose([
-  'escapeHtmlAttr',
   'resetGroupLimitState',
   'toggleSessionGroupLimit',
   'toggleCronGroupLimit',

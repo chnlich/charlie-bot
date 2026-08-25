@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import Counter
 
 import pytest
+from conftest import FakeWebSocket
 
 from server import _replay_aggregated_catchup
 from src.api.message_utils import events_to_messages
@@ -25,15 +26,6 @@ from src.core import event_types as ET
 from src.core.message_projection import MessageProjection
 
 _UNLIMITED = 10**9
-
-
-class _FakeWebSocket:
-
-  def __init__(self) -> None:
-    self.sent: list[dict] = []
-
-  async def send_json(self, payload: dict) -> None:
-    self.sent.append(payload)
 
 
 def _assistant(text: str, event_id: str, extra_blocks: tuple = ()) -> dict:
@@ -152,7 +144,7 @@ async def _screen_contents(events: list[dict], cutoff: int) -> Counter:
   bubbles = list(bubbles)
   preview = (projection.pending_draft or {}).get("content") or None
 
-  websocket = _FakeWebSocket()
+  websocket = FakeWebSocket()
   await _replay_aggregated_catchup(websocket, events, projection.event_count, "s")
   for frame in websocket.sent:
     if frame.get("type") == "message":

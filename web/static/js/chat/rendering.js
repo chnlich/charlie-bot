@@ -307,10 +307,6 @@ function turnRowTitleFromText(role, text) {
   return turnFirstLine(text);
 }
 
-function turnRowTitle(head) {
-  return turnRowTitleFromText(renderedMessageRole(head), messageSourceText(head));
-}
-
 function formatTurnDuration(seconds) {
   if (!seconds) return '';
   const total = Number(seconds);

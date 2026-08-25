@@ -41,14 +41,25 @@ implementing; master includes them as constraints in task specs.
   neither add a default that lets a site omit what it passes, nor drop an explicit argument to lean on a default;
   when all sites pass the same value, the repetition is what keeps that value visible, and it stays.
 
-## Comments
+## Comments and docstrings
 
 - A comment tells the next editor what to keep true, since the code already states what it does: the constraint
   that rules out the simpler form, the outside fact the code is pinned to, the invariant the code cannot show.
 - Name that outside fact concretely enough for a reader to re-check whether it still holds: the library behavior,
   the version boundary, the measured cost.
+- A docstring states what the thing is and what a caller relies on, in that order; the shape of the data
+  (what each count, vector, or field is) comes before any rule about it.
+- A private vocabulary (a coined term, a symbol, a fitted quantity) has one home: the module docstring states the
+  notation, the equations, and a glossary once, and every other comment uses those names and points there.
+  A term that appears nowhere in that home is replaced by the ordinary word.
+- Write for a reader who is not a native speaker and did not attend the design discussion: one idea per
+  sentence, ordinary words over metaphor, and a formula in place of a paragraph that paraphrases one.
+  As a working ceiling, a sentence stays under thirty words and a docstring under fifteen lines; a
+  configuration key's comment says what the operator changes and what they will see, in five lines.
 - Everything about the change, its motive included, lives in the commit message and the PR, which blame reaches
   from any line; a comment that narrates a change duplicates them and goes stale at the next one.
+- Examples in code name a shape, never a run: job numbers, ticket codenames, and hostnames date the comment
+  and mean nothing to the next reader.
 
 ## Error Handling
 

@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from src.agents.backends.claude_code import headless_claude_env
 from src.agents.backends.pty_common import (
@@ -88,10 +88,10 @@ class SessionMarkerState(str, Enum):
 class ClaudeSubArgs:
   output_format: str
   prompt: str = ""
-  model: Optional[str] = None
-  effort: Optional[str] = None
-  session_id: Optional[str] = None
-  resume: Optional[str] = None
+  model: str | None = None
+  effort: str | None = None
+  session_id: str | None = None
+  resume: str | None = None
   disallowed_tools: list[str] = field(default_factory=list)
   settings: list[str] = field(default_factory=list)
 
@@ -118,11 +118,11 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
   else:
     option_tokens = argv
 
-  output_format: Optional[str] = None
-  model: Optional[str] = None
-  effort: Optional[str] = None
-  session_id: Optional[str] = None
-  resume: Optional[str] = None
+  output_format: str | None = None
+  model: str | None = None
+  effort: str | None = None
+  session_id: str | None = None
+  resume: str | None = None
   disallowed_tools: list[str] = []
   settings: list[str] = []
 
@@ -192,7 +192,7 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
   )
 
 
-def _split_value_flag(token: str) -> Optional[tuple[str, str]]:
+def _split_value_flag(token: str) -> tuple[str, str] | None:
   for name in (
       "--output-format",
       "--model",
@@ -823,7 +823,7 @@ async def _run(args: ClaudeSubArgs) -> None:
   await _stream_turn(args, stop_event)
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
   try:
     args = parse_argv(sys.argv[1:] if argv is None else argv)
     args = ClaudeSubArgs(**{**args.__dict__, "prompt": sys.stdin.read()})

@@ -117,7 +117,8 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Said once, in one
-language, lines 120 columns or fewer. Entry prose follows the Writing Style section of
+language, lines 120 columns or fewer; surpass entries may be written in Chinese (user ruling
+2026-08-24). Entry prose follows the Writing Style section of
 prompts/master.md. Apply the
 admission test line by line as well as entry by entry: a line that changes no future action
 leaves.
@@ -134,8 +135,7 @@ Machines go by hostname; a role phrase like "the CharlieBot host" re-points when
 moves. When context changes, revise the entry in place (a capture whose body states the change
 stages the proposed new text).
 A retired or archived system's content leaves the store outright, entries and lines alike: the
-store states standing reality, and `LESSONS.md` holds the retirement event when it matters
-(ruling: `rulings/retired-systems-leave-the-store`).
+store states standing reality, and `LESSONS.md` holds the retirement event when it matters.
 
 ## Commit message prefixes
 

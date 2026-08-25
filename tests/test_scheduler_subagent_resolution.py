@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import CODEX_BACKEND_OPTION
 
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
@@ -42,7 +43,7 @@ async def test_session_default_raises_for_stale_backend() -> None:
   """A session pinned to an id config no longer defines must fail loudly, never substitute."""
   cfg = _build_cfg([
       BackendOption(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
-      BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+      CODEX_BACKEND_OPTION,
   ])
   # Stored id no longer exists (e.g. renamed from claude-opus-4.6 to claude-opus-4.7).
   session = SessionMetadata(name="s", backend="claude-opus-4.6")

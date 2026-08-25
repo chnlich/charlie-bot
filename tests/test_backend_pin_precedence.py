@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
 
 from src.agents import master_cc, master_cc_run
 from src.agents.backends import base as backend_base
@@ -43,7 +44,7 @@ async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, mo
   substituted onto anything."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6")],
+      backend_options=[OPUS_BACKEND_OPTION],
   )
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
@@ -68,7 +69,7 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
   schedule triggers / review wakes, which all funnel through trigger_master."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6")],
+      backend_options=[OPUS_BACKEND_OPTION],
   )
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
@@ -95,7 +96,7 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+          OPUS_BACKEND_OPTION,
           BackendOption(id="codex-alpha", label="Codex Alpha", type="codex", model="alpha"),
           BackendOption(id="codex-beta", label="Codex Beta", type="codex", model="beta"),
       ],
@@ -129,8 +130,8 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
       ],
   )
   session_mgr = SessionManager(cfg)
@@ -156,8 +157,8 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
       ],
   )
   session_mgr = SessionManager(cfg)
@@ -186,8 +187,8 @@ async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Pa
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
       ],
   )
   session_mgr = SessionManager(cfg)

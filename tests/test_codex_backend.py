@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import CODEX_BACKEND_OPTION
 from pydantic import ValidationError
 
 from src.agents.backends.codex import CodexBackend
@@ -520,7 +521,7 @@ def test_build_command_resume_emits_auto_compact_once_when_configured(monkeypatc
 
 
 def test_backend_option_defaults_auto_compact_limit_to_none() -> None:
-  option = BackendOption(id="codex-o3", label="Codex", type="codex", model="o3")
+  option = CODEX_BACKEND_OPTION
   assert option.model_auto_compact_token_limit is None
 
 

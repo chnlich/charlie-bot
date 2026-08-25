@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import JudgmentShim
+from conftest import CODEX_BACKEND_OPTION, JudgmentShim
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
@@ -31,7 +31,7 @@ def _build_cfg() -> CharlieBotConfig:
               effort="max",
               cli_binary="claude-sub",
           ),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          CODEX_BACKEND_OPTION,
       ],
   )
 
@@ -452,8 +452,7 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
 
 @pytest.mark.asyncio
 async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Path) -> None:
-  cfg = _build_tmp_cfg(
-      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
+  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   events_log = tmp_path / "events.jsonl"
@@ -573,8 +572,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_tmp_cfg(
-      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
+  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   thread = ThreadMetadata(
@@ -900,8 +898,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_tmp_cfg(
-      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
+  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",
@@ -991,8 +988,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
 
 @pytest.mark.asyncio
 async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_path: Path) -> None:
-  cfg = _build_tmp_cfg(
-      tmp_path, BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"))
+  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
   events_log = tmp_path / "events.jsonl"
   thread = ThreadMetadata(
       id="thread-1",

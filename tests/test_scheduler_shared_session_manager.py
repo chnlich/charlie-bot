@@ -11,11 +11,11 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import OPUS_BACKEND_OPTION
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
 from src.core.models import (
-  BackendOption,
   CreateSessionRequest,
   SessionMetadata,
   ThreadMetadata,
@@ -29,7 +29,7 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+          OPUS_BACKEND_OPTION,
       ],
   )
 

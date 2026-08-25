@@ -154,7 +154,9 @@ async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
 async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """antigravity custom run() harness (test_antigravity_cli_backend.py's real-script shape)."""
   fake_agy = tmp_path / "agy"
-  fake_agy.write_text("#!/bin/sh\nprintf 'contract answer\\n'\n", encoding="utf-8")
+  fake_agy.write_text(
+      "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"SUCCESS\",\"conversation_id\":\"conv-abc\",\"response\":\"contract answer\",\"usage\":{}}'\n",
+      encoding="utf-8")
   fake_agy.chmod(0o755)
   monkeypatch.setattr(
       "src.agents.backends.antigravity_cli.resolve_binary", lambda name, fallback: str(fake_agy))

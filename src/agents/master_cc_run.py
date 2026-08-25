@@ -247,7 +247,7 @@ async def _salvage_silent_turn(
 
 
 _CLAUDE_RESUME_FLAG_BACKEND_TYPES = {"cc-claude", "cc-kimi", "cc-openai-compatible"}
-_NATIVE_RESUME_SESSION_BACKEND_TYPES = {"codex", "gemini", "opencode", "charlie-code"}
+_NATIVE_RESUME_SESSION_BACKEND_TYPES = {"codex", "gemini", "opencode", "charlie-code", "antigravity"}
 # Every backend that can resume a prior session (via --resume or a native id).
 # The pre-flight anchor-missing alarm fires only for these.
 _RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESUME_SESSION_BACKEND_TYPES

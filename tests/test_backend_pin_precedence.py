@@ -10,7 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, patch_instructions_content
+from conftest import (
+  CODEX_BACKEND_OPTION,
+  OPUS_BACKEND_OPTION,
+  patch_instructions_content,
+)
 
 from src.agents import master_cc
 from src.agents.backends import base as backend_base

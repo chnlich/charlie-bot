@@ -19,6 +19,15 @@ def _mock_config(tmp_path: Path):
   return cfg
 
 
+def _improve_argv(session_id: str | None, repo: str, goal_file: Path, *extra: str) -> list[str]:
+  """sys.argv stand-in for improve main(): the session/repo/goal-file wiring every test shares."""
+  argv = ["improve"]
+  if session_id is not None:
+    argv += ["--session", session_id]
+  argv += ["--repo", repo, "--base-branch", "main", "--goal-file", str(goal_file)]
+  return argv + list(extra)
+
+
 def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   """main() reads --goal-file and posts its content to /api/internal/improve."""
   cfg = _mock_config(tmp_path)
@@ -35,21 +44,7 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
 
   with patch(
       "sys.argv",
-      [
-          "improve",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--backend",
-          "codex-o3",
-          "--iterations",
-          "2",
-          "--goal-file",
-          str(goal_file),
-      ]), \
+      _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3", "--iterations", "2")), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
     main()
@@ -86,21 +81,7 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
 
   with patch(
       "sys.argv",
-      [
-          "improve",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--iterations",
-          "2",
-          "--goal-file",
-          str(goal_file),
-          "--plan-file",
-          str(plan_file),
-      ]), \
+      _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file", str(plan_file))), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
     main()
@@ -123,7 +104,7 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
   import requests as req_lib
   with patch(
       "sys.argv",
-      ["improve", "--session", "s1", "--repo", str(tmp_path), "--base-branch", "main", "--goal-file", str(goal_file)]), \
+      _improve_argv("s1", str(tmp_path), goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", side_effect=req_lib.RequestException("conn error")):
     with pytest.raises(SystemExit) as exc_info:
@@ -139,17 +120,7 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
   resp_mock.json.return_value = {"status": "started"}
   resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-      ]), \
+  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
     main()
@@ -166,19 +137,7 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
   resp_mock.json.return_value = {"status": "started"}
   resp_mock.raise_for_status = MagicMock()
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--session",
-          "abc",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-      ]), \
+  with patch("sys.argv", _improve_argv("abc", str(tmp_path), goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
     main()
@@ -193,19 +152,7 @@ def test_session_mismatch_with_cwd_rejected(
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("fix")
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--session",
-          "xyz",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-      ]), \
+  with patch("sys.argv", _improve_argv("xyz", str(tmp_path), goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
@@ -228,17 +175,7 @@ def test_no_session_outside_session_dir(
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("fix")
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-      ]), \
+  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
@@ -254,9 +191,7 @@ def test_main_rejects_missing_goal_file(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   missing = tmp_path / "nope.md"
 
-  with patch(
-      "sys.argv",
-      ["improve", "--repo", str(tmp_path), "--base-branch", "main", "--goal-file", str(missing)]), \
+  with patch("sys.argv", _improve_argv(None, str(tmp_path), missing)), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:
@@ -275,9 +210,7 @@ def test_main_rejects_empty_goal_file(
   empty = tmp_path / "empty.md"
   empty.write_text("   \n")
 
-  with patch(
-      "sys.argv",
-      ["improve", "--repo", str(tmp_path), "--base-branch", "main", "--goal-file", str(empty)]), \
+  with patch("sys.argv", _improve_argv(None, str(tmp_path), empty)), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:
@@ -297,19 +230,7 @@ def test_main_rejects_missing_plan_file(
   goal_file.write_text("fix")
   missing = tmp_path / "nope-plan.md"
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-          "--plan-file",
-          str(missing),
-      ]), \
+  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(missing))), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:
@@ -330,19 +251,7 @@ def test_main_rejects_empty_plan_file(
   empty = tmp_path / "empty-plan.md"
   empty.write_text("   \n")
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-          "--plan-file",
-          str(empty),
-      ]), \
+  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(empty))), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:
@@ -361,19 +270,7 @@ def test_main_rejects_relative_repo_path(
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("fix")
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--session",
-          "s1",
-          "--repo",
-          "meshy-research",
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-      ]), \
+  with patch("sys.argv", _improve_argv("s1", "meshy-research", goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:
@@ -394,19 +291,7 @@ def test_main_rejects_nonexistent_repo_path(
   goal_file.write_text("fix")
   nonexistent = str(tmp_path / "nonexistent")
 
-  with patch(
-      "sys.argv",
-      [
-          "improve",
-          "--session",
-          "s1",
-          "--repo",
-          nonexistent,
-          "--base-branch",
-          "main",
-          "--goal-file",
-          str(goal_file),
-      ]), \
+  with patch("sys.argv", _improve_argv("s1", nonexistent, goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     with pytest.raises(SystemExit) as exc_info:

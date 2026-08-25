@@ -9,10 +9,6 @@ const groupLimitState = {
   [CRON_GROUP_LIMIT_STORAGE_KEY]: {},
 };
 
-function escapeHtmlAttr(str) {
-  return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
 function loadGroupLimitState(storageKey) {
   return groupLimitState[storageKey];
 }

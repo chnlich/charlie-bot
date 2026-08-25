@@ -106,6 +106,7 @@ function loadSidebarWorkers(elements) {
       querySelectorAll: () => [],
     },
     escapeHtml,
+    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     fetch: () => Promise.resolve({ok: true}),
     loadedThreads: {delete() {}},
     stopThreadPoll: () => {},

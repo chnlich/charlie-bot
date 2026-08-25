@@ -99,10 +99,12 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
 
 
 class SuccessionRefused(ValueError):
-  """An elone was refused because the parent cannot take a new successor.
+  """An elone was refused because a scheduler-owned parent cannot take a new successor.
 
-  Carries the successor-already-set rejection so the API can answer 409 while
-  other ValueErrors keep answering 400.
+  Only a scheduler-owned parent (``scheduled_task`` set) that already has a
+  successor refuses; ordinary parents re-elone freely. Carries the
+  successor-already-set rejection so the API can answer 409 while other
+  ValueErrors keep answering 400.
   """
 
 
@@ -466,7 +468,12 @@ class SessionManager:
     """Create an Elon-e session: reference handoff, archive + thumbs-down parent.
 
     Runs the succession rejection BEFORE any child session is created, so a
-    refused call mutates nothing on disk. A scheduler-owned parent takes an
+    refused call mutates nothing on disk. The per-parent invariant: each elone
+    overwrites ``successor_session_id`` so the pointer names the parent's most
+    recent elone child. Ordinary parents re-elone freely; scheduler-owned
+    parents refuse once they already have a successor. Consumers (chain
+    resolution, delivery, trigger redirect) follow the pointer and therefore
+    land at the most recent takeover. A scheduler-owned parent takes an
     inheriting succession: the child carries the scheduling identity and
     bookkeeping, and the task yaml's backend is written back before the parent
     is archived, so the alignment scan never has rotation work to do.
@@ -474,7 +481,7 @@ class SessionManager:
     fresh_parent = await self.read_metadata_fresh(parent_id)
     if fresh_parent is None:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
-    if fresh_parent.successor_session_id is not None:
+    if fresh_parent.successor_session_id is not None and fresh_parent.scheduled_task is not None:
       raise SuccessionRefused(
           f"session {parent_id} already has a successor "
           f"({fresh_parent.successor_session_id}); elone that successor or fork for a separate branch")
@@ -485,7 +492,9 @@ class SessionManager:
 
     # Auto-archive and thumbs-down the parent, and record the elone successor
     # pointer (re-read under lock so concurrent mutations to the parent aren't
-    # clobbered). Write-once is enforced by the succession check above.
+    # clobbered). Latest-wins: an ordinary parent's pointer is overwritten to
+    # name each new child, so the pointer always names the most recent elone.
+    # Scheduler-owned parents refuse re-elone, so their pointer stays write-once.
     async with self._lock_for(parent_id):
       fresh_parent = await self.get_session(parent_id)
       if fresh_parent:

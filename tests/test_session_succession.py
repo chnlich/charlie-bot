@@ -156,21 +156,49 @@ async def test_elone_writes_successor_pointer_and_archives_thumbs_down_parent(tm
 
 
 @pytest.mark.asyncio
-async def test_second_elone_of_same_parent_raises_and_creates_no_child(tmp_path: Path) -> None:
+async def test_second_elone_of_ordinary_parent_overwrites_successor_and_leaves_first_child_untouched(
+    tmp_path: Path,
+) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   parent_id = await _make_parent(mgr)
 
-  await mgr.elone_session(parent_id, event_index=0)
-  before = _session_dir_names(cfg)
+  first_child = await mgr.elone_session(parent_id, event_index=0)
+  second_child = await mgr.elone_session(parent_id, event_index=0)
 
-  with pytest.raises(SuccessionRefused):
-    await mgr.elone_session(parent_id, event_index=0)
-  assert _session_dir_names(cfg) == before
+  assert first_child.id != second_child.id
 
+  # Both children carry the parent reference handoff.
+  first_ref = mgr.parent_reference_path(first_child.id)
+  second_ref = mgr.parent_reference_path(second_child.id)
+  assert first_ref.exists()
+  assert second_ref.exists()
+
+  # The parent is archived with thumbs_down and the pointer names the newest child.
   fresh_parent = await mgr.read_metadata_fresh(parent_id)
   assert fresh_parent is not None
-  assert fresh_parent.successor_session_id is not None
+  assert fresh_parent.status == SessionStatus.ARCHIVED
+  assert fresh_parent.rating == "thumbs_down"
+  assert fresh_parent.successor_session_id == second_child.id
+
+  # The first child's metadata is untouched by the second elone.
+  first_meta = await mgr.read_metadata_fresh(first_child.id)
+  assert first_meta is not None
+  assert first_meta.status == SessionStatus.ACTIVE
+  assert first_meta.successor_session_id is None
+
+  # Chain resolution and delivery both land at the newest (second) child.
+  resolved = await mgr.resolve_successor_chain(parent_id)
+  assert resolved is not None
+  assert resolved.id == second_child.id
+
+  event = {"type": "user", "content": "delivered to newest"}
+  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    delivered = await mgr.deliver_to_successor(parent_id, event)
+
+  assert delivered == second_child.id
+  assert event.get("origin_session_id") == parent_id
+  assert any(ev.get("content") == "delivered to newest" for ev in mgr.load_chat_events_sync(second_child.id))
 
 
 @pytest.mark.asyncio
@@ -215,6 +243,34 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
   # The write-back touched only the backend key of the task yaml.
   yaml_after = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
   assert yaml_after == {**yaml_before, "backend": "codex-o3"}
+
+
+@pytest.mark.asyncio
+async def test_second_elone_of_scheduler_owned_parent_refuses_and_mutates_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  cfg = _build_two_backend_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  _seed_scheduled_task(tmp_path, monkeypatch)
+  parent = await _make_scheduled_parent(mgr)
+
+  first_child = await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
+  before = _session_dir_names(cfg)
+
+  with pytest.raises(SuccessionRefused):
+    await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
+
+  # No new session directory appears.
+  assert _session_dir_names(cfg) == before
+
+  # The parent's metadata is unchanged: successor still the first child,
+  # archived, thumbs_down.
+  fresh_parent = await mgr.read_metadata_fresh(parent.id)
+  assert fresh_parent is not None
+  assert fresh_parent.successor_session_id == first_child.id
+  assert fresh_parent.status == SessionStatus.ARCHIVED
+  assert fresh_parent.rating == "thumbs_down"
 
 
 @pytest.mark.asyncio
@@ -280,6 +336,28 @@ async def test_resolve_successor_chain_stops_at_last_existing_when_mid_chain_del
 
 
 @pytest.mark.asyncio
+async def test_elone_after_successor_permanently_deleted_repairs_pointer(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent_id = await _make_parent(mgr, name="G0")
+
+  first_child = await mgr.elone_session(parent_id, event_index=0)
+  await mgr.delete_session_permanently(first_child.id)
+
+  # The parent's successor was deleted, so it re-elones freely; the call
+  # succeeds and the pointer is repaired to the new child.
+  new_child = await mgr.elone_session(parent_id, event_index=0)
+
+  fresh_parent = await mgr.read_metadata_fresh(parent_id)
+  assert fresh_parent is not None
+  assert fresh_parent.successor_session_id == new_child.id
+
+  resolved = await mgr.resolve_successor_chain(parent_id)
+  assert resolved is not None
+  assert resolved.id == new_child.id
+
+
+@pytest.mark.asyncio
 async def test_resolve_successor_chain_returns_none_for_missing_session(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
@@ -330,20 +408,34 @@ async def test_read_metadata_fresh_sees_successor_written_after_get_session_cach
 
 
 @pytest.mark.asyncio
-async def test_api_succession_refused_maps_to_409_and_bad_event_index_to_400(tmp_path: Path) -> None:
+async def test_api_succession_refused_maps_to_409_and_bad_event_index_to_400(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
   cfg = _build_cfg(tmp_path)
   mgr = SessionManager(cfg)
   client = _build_client(cfg, mgr)
 
   parent_id = await _make_parent(mgr)
 
-  # First elone succeeds.
+  # Both elones of an ordinary parent succeed (200).
   with client:
     resp = client.post(f"/api/sessions/{parent_id}/elone", json={"event_index": 0})
     assert resp.status_code == 200
-
-    # Second elone of the same parent: SuccessionRefused -> 409.
     resp = client.post(f"/api/sessions/{parent_id}/elone", json={"event_index": 0})
+    assert resp.status_code == 200
+
+  # A scheduler-owned parent refuses its second elone -> 409 (quiet parent).
+  scheduled_mgr = SessionManager(cfg)
+  scheduled_client = _build_client(cfg, scheduled_mgr)
+  _seed_scheduled_task(tmp_path, monkeypatch)
+  scheduled_parent = await _make_scheduled_parent(scheduled_mgr)
+  with scheduled_client:
+    resp = scheduled_client.post(
+        f"/api/sessions/{scheduled_parent.id}/elone", json={"event_index": 0})
+    assert resp.status_code == 200
+    resp = scheduled_client.post(
+        f"/api/sessions/{scheduled_parent.id}/elone", json={"event_index": 0})
     assert resp.status_code == 409
     assert "already has a successor" in resp.json()["detail"]
 

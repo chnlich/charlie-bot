@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import mock_session_callbacks
+from conftest import mock_session_callbacks, patch_instructions_content
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import config as core_config
@@ -64,7 +64,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
   meta = models.SessionMetadata(id="voice-cc", name="Voice")
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -93,7 +93,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
   meta = models.SessionMetadata(id="plain-cc", name="Plain")
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
   item = master_cc._WorkItem(
       cfg=cfg,
@@ -125,7 +125,7 @@ async def _run_message_with_capturing_backend(
   callbacks = mock_session_callbacks()
   backend = _PromptCapturingBackend()
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
   master_cc_state._session_queues.pop(meta.id, None)
   master_cc_state._session_consumers.pop(meta.id, None)
   try:

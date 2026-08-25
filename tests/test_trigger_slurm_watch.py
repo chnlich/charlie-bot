@@ -10,9 +10,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import FakeAsyncProcess, patch_trigger_fire
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
-from conftest import patch_trigger_fire
 
 from src.core.models import (
   LocalPid,
@@ -27,18 +27,6 @@ from src.core.triggers import TriggerManager
 # ---------------------------------------------------------------------------
 
 
-class _FakeProc:
-  """Stand-in for asyncio.subprocess.Process running sacct."""
-
-  def __init__(self, stdout: bytes, stderr: bytes = b"", returncode: int = 0) -> None:
-    self._stdout = stdout
-    self._stderr = stderr
-    self.returncode = returncode
-
-  async def communicate(self) -> tuple[bytes, bytes]:
-    return self._stdout, self._stderr
-
-
 def _mk_sacct_mock(outputs: list[str]) -> AsyncMock:
   """Mock ``asyncio.create_subprocess_exec`` returning successive sacct stdouts.
 
@@ -48,7 +36,7 @@ def _mk_sacct_mock(outputs: list[str]) -> AsyncMock:
 
   async def _factory(*args, **kwargs):
     out = queue[0] if len(queue) == 1 else queue.pop(0)
-    return _FakeProc(stdout=out.encode())
+    return FakeAsyncProcess(stdout=out.encode())
 
   return AsyncMock(side_effect=_factory)
 

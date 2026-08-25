@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import FakeAsyncProcess, patch_trigger_fire
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
-from conftest import patch_trigger_fire
 
 from src.core.models import SlurmJob, TriggerStatus
 from src.core.triggers import RemoteVerifyError, _probe_sacct
@@ -16,24 +16,6 @@ from src.core.triggers import RemoteVerifyError, _probe_sacct
 # ---------------------------------------------------------------------------
 # Mock helpers
 # ---------------------------------------------------------------------------
-
-
-class _FakeProc:
-  """Stand-in for asyncio.subprocess.Process."""
-
-  def __init__(self, stdout: bytes, stderr: bytes = b"", returncode: int = 0) -> None:
-    self._stdout = stdout
-    self._stderr = stderr
-    self.returncode = returncode
-
-  async def communicate(self) -> tuple[bytes, bytes]:
-    return self._stdout, self._stderr
-
-  def kill(self) -> None:
-    pass
-
-  async def wait(self) -> int:
-    return self.returncode
 
 
 def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMock:
@@ -59,7 +41,7 @@ def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMo
       job_id = int(args[2])
     queue = queues[(host, job_id)]
     out = queue[0] if len(queue) == 1 else queue.pop(0)
-    return _FakeProc(stdout=out.encode())
+    return FakeAsyncProcess(stdout=out.encode())
 
   return AsyncMock(side_effect=_factory)
 
@@ -137,7 +119,7 @@ async def test_probe_sacct_skips_array_task_rows() -> None:
 
 async def _failing_sacct_factory(*args, **kwargs):
   """Always return a failed remote sacct probe (ssh non-zero exit)."""
-  return _FakeProc(
+  return FakeAsyncProcess(
       stdout=b"",
       stderr=b"ssh: connect to host host2 port 22: Connection refused",
       returncode=255,
@@ -216,9 +198,9 @@ async def test_unreachable_host_fires_early_with_note(tmp_path: Path) -> None:
     calls[0] += 1
     if calls[0] == 1:
       # verify-on-create succeeds so the trigger is persisted and the wait task starts
-      return _FakeProc(stdout=b"122111|RUNNING|0:0\n")
+      return FakeAsyncProcess(stdout=b"122111|RUNNING|0:0\n")
     # every subsequent wait probe fails -> the host goes dark and is escalated
-    return _FakeProc(stdout=b"", stderr=b"ssh: Connection timed out", returncode=255)
+    return FakeAsyncProcess(stdout=b"", stderr=b"ssh: Connection timed out", returncode=255)
 
   with (
       patch_trigger_fire(AsyncMock(side_effect=_factory), sacct_available=False, sleep_mock=_no_sleep) as mock_master,

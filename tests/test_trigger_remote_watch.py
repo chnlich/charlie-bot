@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import requests
+from conftest import FakeAsyncProcess, patch_trigger_fire
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
-from conftest import patch_trigger_fire
 from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
@@ -33,24 +33,6 @@ from src.core.triggers import (
 # ---------------------------------------------------------------------------
 
 
-class _FakeProc:
-  """Stand-in for asyncio.subprocess.Process."""
-
-  def __init__(self, stdout: bytes, stderr: bytes = b"", returncode: int = 0) -> None:
-    self._stdout = stdout
-    self._stderr = stderr
-    self.returncode = returncode
-
-  async def communicate(self) -> tuple[bytes, bytes]:
-    return self._stdout, self._stderr
-
-  def kill(self) -> None:
-    pass
-
-  async def wait(self) -> int:
-    return self.returncode
-
-
 def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock:
   """Build a mock for ``asyncio.create_subprocess_exec``.
 
@@ -66,7 +48,7 @@ def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock
     pid = int(payload.split()[2])
     queue = scripted[(host, pid)]
     status = queue[0] if len(queue) == 1 else queue.pop(0)
-    return _FakeProc(stdout=(status + "\n").encode())
+    return FakeAsyncProcess(stdout=(status + "\n").encode())
 
   return AsyncMock(side_effect=_factory)
 

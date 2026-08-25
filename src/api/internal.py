@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-from typing import Union
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -84,7 +83,7 @@ def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
 
 
 async def _authorize_spawn_request(
-    req: Union[DelegateRequest, ImproveRequest],
+    req: DelegateRequest | ImproveRequest,
     session_mgr: SessionManager,
 ) -> tuple[SessionMetadata, CharlieBotConfig, str | None, str | None]:
   """Validate session, enforce takeoff gate, and resolve backend/model for spawn-style endpoints."""

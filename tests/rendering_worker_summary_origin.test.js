@@ -15,37 +15,7 @@ function readStatic(relativePath) {
   return fs.readFileSync(path.join(ROOT, 'web', 'static', 'js', relativePath), 'utf8');
 }
 
-function escapeForFakeDom(str) {
-  return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-}
-
-class FakeElement {
-  constructor(tag = 'DIV') {
-    this.tagName = String(tag).toUpperCase();
-    this.children = [];
-    this.dataset = {};
-    this._html = '';
-    this._text = '';
-  }
-
-  get innerHTML() { return this._html + this.children.map((c) => c.innerHTML).join(''); }
-
-  set innerHTML(html) {
-    this._html = html;
-    this.children = [];
-  }
-
-  get textContent() { return this._text; }
-
-  set textContent(value) {
-    this._text = String(value || '');
-    this.innerHTML = escapeForFakeDom(this._text);
-  }
-
-  appendChild(child) { this.children.push(child); return child; }
-  querySelector() { return null; }
-  querySelectorAll() { return []; }
-}
+const { FakeElement } = require('./fake_dom');
 
 function makeDocument() {
   return {

@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable
 
 import aiofiles
 import structlog
@@ -163,11 +163,11 @@ async def tail_follow_events(
     *,
     translate: Callable[[dict], list[dict]],
     is_alive: Callable[[], bool],
-    cursor: Optional[Path] = None,
+    cursor: Path | None = None,
     start_offset: int = 0,
     post_result_timeout: float,
     poll_interval: float = _TAIL_POLL_INTERVAL,
-    on_silence: Optional[Callable[[], Awaitable[None]]] = None,
+    on_silence: Callable[[], Awaitable[None]] | None = None,
 ) -> AsyncIterator[dict]:
   """Tail-follow a raw NDJSON log from *start_offset*, yielding translated events.
 
@@ -369,13 +369,13 @@ class AgentBackend(ABC):
   def __init__(
       self,
       *,
-      model: Optional[str] = None,
-      extra_flags: Optional[list[str]] = None,
-      buffer_limit: Optional[int] = None,
-      on_spawn: Optional[Callable[[int], Awaitable[None]]] = None,
-      instructions_content: Optional[str] = None,
-      resume_session_id: Optional[str] = None,
-      log_dir: Optional[Path] = None,
+      model: str | None = None,
+      extra_flags: list[str] | None = None,
+      buffer_limit: int | None = None,
+      on_spawn: Callable[[int], Awaitable[None]] | None = None,
+      instructions_content: str | None = None,
+      resume_session_id: str | None = None,
+      log_dir: Path | None = None,
       **_extra,
   ):
     self._model = model
@@ -385,18 +385,18 @@ class AgentBackend(ABC):
     self._instructions_content = instructions_content
     self._resume_session_id = resume_session_id
     self._log_dir = log_dir
-    self._proc: Optional[asyncio.subprocess.Process] = None
-    self._stderr_task: Optional[asyncio.Task] = None
-    self._stdin_task: Optional[asyncio.Task] = None
+    self._proc: asyncio.subprocess.Process | None = None
+    self._stderr_task: asyncio.Task | None = None
+    self._stdin_task: asyncio.Task | None = None
     self._stderr_tail = bytearray()
     self.exit_code: int = -1
     self.stderr_text: str = ""
     # /proc/<pid>/stat field 22 captured right after spawn; Worker persists it
     # as ThreadMetadata.pid_start via the on_spawn callback.
-    self.pid_start: Optional[str] = None
+    self.pid_start: str | None = None
     # Set when terminate() is called — deliberate user stop or shutdown.
     self.terminated: bool = False
-    self.hang_diagnostics: Optional[dict] = None
+    self.hang_diagnostics: dict | None = None
 
   def _effective_prompt(self, prompt: str) -> str:
     """Return prompt with instructions prepended, if any are configured."""
@@ -486,7 +486,7 @@ class AgentBackend(ABC):
     # The raw log files are the run's transport. When the caller gave no log
     # dir (one-shot use), use a throwaway dir so every covered backend shares
     # exactly one transport.
-    temp_log_dir: Optional[Path] = None
+    temp_log_dir: Path | None = None
     if self._log_dir is not None:
       log_dir = self._log_dir
     else:
@@ -578,7 +578,7 @@ class AgentBackend(ABC):
       log.warning(timeout_log_event, pid=self._proc.pid)
       kill_process_group(self._proc.pid, signal.SIGKILL)
 
-  async def _stream_stderr(self, stderr_log_path: Optional[Path]) -> None:
+  async def _stream_stderr(self, stderr_log_path: Path | None) -> None:
     """Continuously read subprocess stderr; tee to <log_dir>/stderr.log and a 64 KB tail buffer.
 
     Streams live so `tail -f stderr.log` works during long runs and the in-memory

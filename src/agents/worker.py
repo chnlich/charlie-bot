@@ -8,7 +8,6 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import aiofiles
 import structlog
@@ -44,7 +43,7 @@ class QuotaExhaustedException(Exception):
   pass
 
 
-def _clamp_ts(clamp_to: Optional[datetime]) -> str:
+def _clamp_ts(clamp_to: datetime | None) -> str:
   """Timestamp for synthesized (non-raw) events: now, capped at the run's end.
 
   All events of a run must satisfy timestamp <= completed_at, and completed_at
@@ -67,10 +66,10 @@ class Worker:
       events_log_path: Path,
       task_description: str,
       cfg: CharlieBotConfig,
-      backend_option: Optional[BackendOption] = None,
-      extra_env: Optional[dict[str, str]] = None,
-      on_spawned: Optional[callable] = None,
-      instructions_content: Optional[str] = None,
+      backend_option: BackendOption | None = None,
+      extra_env: dict[str, str] | None = None,
+      on_spawned: Callable | None = None,
+      instructions_content: str | None = None,
   ):
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -81,9 +80,9 @@ class Worker:
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
     self._instructions_content = instructions_content
-    self._backend: Optional[AgentBackend] = None
+    self._backend: AgentBackend | None = None
 
-  def _build_backend(self, on_spawn: Optional[Callable[[int], Awaitable[None]]]) -> AgentBackend:
+  def _build_backend(self, on_spawn: Callable[[int], Awaitable[None]] | None) -> AgentBackend:
     """Build the backend for this task; *on_spawn* is None for translate-only instances.
 
     Launcher builds (on_spawn set) fail loudly: a missing CLI binary raises in
@@ -162,7 +161,7 @@ class Worker:
       self,
       *,
       is_alive: Callable[[], bool],
-      on_silence: Optional[Callable[[], Awaitable[None]]] = None,
+      on_silence: Callable[[], Awaitable[None]] | None = None,
   ) -> int:
     """Re-attach to an interrupted run and stream its remaining output.
 
@@ -249,9 +248,9 @@ class Worker:
       self,
       exit_code: int,
       stderr_text: str,
-      hang_diagnostics: Optional[dict],
+      hang_diagnostics: dict | None,
       *,
-      clamp_to: Optional[datetime],
+      clamp_to: datetime | None,
   ) -> None:
     """Persist/broadcast the synthesized post-run events shared by run() and resume()."""
     if hang_diagnostics:

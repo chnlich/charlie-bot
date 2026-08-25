@@ -13,7 +13,6 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 import structlog
 from fastapi import WebSocket
@@ -38,7 +37,7 @@ _CLAUDE_TUI_SETTINGS = json.dumps({"skipDangerousModePermissionPrompt": True}, s
 _BUSY_THRESHOLD_SECONDS = 3.0
 
 
-def _find_existing_claude_jsonl(session_id: str) -> Optional[Path]:
+def _find_existing_claude_jsonl(session_id: str) -> Path | None:
   """Glob ~/.claude/projects/*/<session_id>.jsonl and return first match (or None)."""
   matches = list(Path.home().glob(f".claude/projects/*/{session_id}.jsonl"))
   return matches[0] if matches else None
@@ -58,9 +57,9 @@ def _build_claude_argv(
     session_id: str,
     resume: bool,
     *,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    disallowed_tools: Optional[list[str]] = None,
+    model: str | None = None,
+    effort: str | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> list[str]:
   session_arg = "--resume" if resume else "--session-id"
   argv = [
@@ -112,10 +111,10 @@ async def ensure_tmux_session(
     session_id: str,
     working_dir: Path,
     *,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    disallowed_tools: Optional[list[str]] = None,
-    inject_env: Optional[dict[str, str]] = None,
+    model: str | None = None,
+    effort: str | None = None,
+    disallowed_tools: list[str] | None = None,
+    inject_env: dict[str, str] | None = None,
 ) -> None:
   """Idempotently create the tmux session running Claude TUI in *working_dir*."""
   name = tmux_session_name(session_id)

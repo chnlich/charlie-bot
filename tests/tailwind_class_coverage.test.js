@@ -84,6 +84,7 @@ function loadBacklogContext(elements, fetchImpl) {
     document: makeDocument(elements),
     console: { error: () => {} },
     fetch: fetchImpl,
+    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
   };
   vm.createContext(context);
   // backlog-panel.js declares `const backlogPanel = (() => {...})();` at top

@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { escapeHtml } = require('./escape_html_stub');
 
 const PLAN_PANEL_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'plan-panel.js'),
@@ -194,6 +195,7 @@ function loadPlanPanelScript(opts = {}) {
       throw new Error('fetch should not run during script load');
     }),
     DOMParser,
+    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
   };
   vm.createContext(context);
   vm.runInContext(PLAN_PANEL_JS, context, {filename: 'plan-panel.js'});

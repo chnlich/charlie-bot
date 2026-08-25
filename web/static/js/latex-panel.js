@@ -208,49 +208,27 @@ async function rejectTexEdit() {
 }
 
 // ---------------------------------------------------------------------------
-// LaTeX panel resize
+// LaTeX panel resize: the shared right-edge resize plus PDF interaction — the
+// pdf.js canvas swallows mousemove during a drag; the PDF re-renders on release.
 // ---------------------------------------------------------------------------
 function initLatexResize() {
-  const handle = document.getElementById('latex-resize-handle');
-  const panel = document.getElementById('latex-panel');
-  if (!handle || !panel) return;
-  const container = panel.parentElement;
-  const saved = localStorage.getItem('latex-panel-pct');
-  if (saved) panel.style.width = saved + '%';
-
-  let startX, startW, containerW;
-  handle.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    startX = e.clientX;
-    containerW = container.offsetWidth;
-    startW = panel.offsetWidth;
-    handle.classList.add('active');
-    document.body.classList.add('resizing');
-    const pdfContainer = document.getElementById('latex-pdf-canvas-container');
-    if (pdfContainer) pdfContainer.style.pointerEvents = 'none';
-
-    function onMove(e) {
-      // Panel is on the RIGHT, so dragging left = bigger panel
-      const delta = startX - e.clientX;
-      const w = Math.min(Math.max(startW + delta, containerW * 0.2), containerW * 0.8);
-      panel.style.width = w + 'px';
-    }
-    function onUp() {
+  let pdfContainer = null;
+  initPanelResize({
+    handleId: 'latex-resize-handle',
+    panelId: 'latex-panel',
+    storageKey: 'latex-panel-pct',
+    onDragStart: () => {
+      pdfContainer = document.getElementById('latex-pdf-canvas-container');
+      if (pdfContainer) pdfContainer.style.pointerEvents = 'none';
+    },
+    onDragEnd: () => {
       if (pdfContainer) pdfContainer.style.pointerEvents = '';
-      handle.classList.remove('active');
-      document.body.classList.remove('resizing');
-      const pct = (panel.offsetWidth / container.offsetWidth * 100).toFixed(1);
-      localStorage.setItem('latex-panel-pct', pct);
-      panel.style.width = pct + '%';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      pdfContainer = null;
       if (latexView === 'pdf') {
         loadLatexPdf(true);
       } else {
         pdfNeedsReload = true;
       }
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    },
   });
 }

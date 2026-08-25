@@ -59,38 +59,12 @@
       return true;
     }
 
-    term = new Terminal({
-      cursorBlink: true,
-      fontSize: 13,
-      fontFamily: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      theme: {background: '#000000', foreground: '#e2e8f0'},
-      scrollback: 50000,
-      convertEol: false,
-      allowProposedApi: true,
-    });
-    fitAddon = new FitAddon.FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(container);
-    wireTerminalClipboard(term);
-    term.focus();
+    const mounted = createTerminal(container);
+    term = mounted.term;
+    fitAddon = mounted.fitAddon;
     term.onData(sendInput);
 
-    let lastTouchY = null;
-    container.addEventListener('touchstart', e => {
-      if (e.touches && e.touches.length > 0) lastTouchY = e.touches[0].screenY;
-    }, {passive: true});
-    container.addEventListener('touchmove', e => {
-      if (lastTouchY == null) return;
-      if (!e.changedTouches || e.changedTouches.length === 0) return;
-      const y = e.changedTouches[0].screenY;
-      const deltaY = y - lastTouchY;
-      lastTouchY = y;
-      if (term && typeof term.scrollLines === 'function') {
-        term.scrollLines(-Math.round(deltaY / 10));
-      }
-    }, {passive: true});
-    container.addEventListener('touchend', () => { lastTouchY = null; }, {passive: true});
-    container.addEventListener('touchcancel', () => { lastTouchY = null; }, {passive: true});
+    wireTerminalTouchScroll(container, term);
 
     scheduleFitAndSendResize();
     if (document.fonts && document.fonts.ready) {

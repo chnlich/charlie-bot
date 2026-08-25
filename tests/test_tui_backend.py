@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import pytest
+from conftest import make_fake_run_tmux
 
 from src.agents.backends import pty_common, tui
 
@@ -52,11 +53,7 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
   monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
-  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
-    calls.append(args)
-    if args[0] == "has-session":
-      return 1, ""
-    return 0, ""
+  fake_run_tmux = make_fake_run_tmux(calls)
 
   # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
   # an unpatched pty_common global would reach the real tmux binary.
@@ -94,11 +91,7 @@ async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
   monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
-  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
-    calls.append(args)
-    if args[0] == "has-session":
-      return 1, ""
-    return 0, ""
+  fake_run_tmux = make_fake_run_tmux(calls)
 
   # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
   # an unpatched pty_common global would reach the real tmux binary.
@@ -125,11 +118,7 @@ async def test_ensure_tmux_session_passes_optional_claude_args(
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
   monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
-  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
-    calls.append(args)
-    if args[0] == "has-session":
-      return 1, ""
-    return 0, ""
+  fake_run_tmux = make_fake_run_tmux(calls)
 
   # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
   # an unpatched pty_common global would reach the real tmux binary.
@@ -167,11 +156,7 @@ async def test_ensure_tmux_session_injects_new_session_env(
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
   monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
-  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
-    calls.append(args)
-    if args[0] == "has-session":
-      return 1, ""
-    return 0, ""
+  fake_run_tmux = make_fake_run_tmux(calls)
 
   # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
   # an unpatched pty_common global would reach the real tmux binary.

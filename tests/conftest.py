@@ -474,6 +474,23 @@ def patch_trigger_fire(
     yield stack.enter_context(master_patch)
 
 
+def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[tuple[int, str]]]:
+  """A `_run_tmux` stand-in that answers "has-session" as missing and records every call.
+
+  "has-session" exits rc 1 so the patched session-setup path takes its create branch;
+  every other tmux invocation exits rc 0 with empty stderr. The signature mirrors
+  src.agents.backends.pty_common._run_tmux, whose callers pass ``check=`` through.
+  """
+
+  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
+    calls.append(args)
+    if args[0] == "has-session":
+      return 1, ""
+    return 0, ""
+
+  return fake_run_tmux
+
+
 def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
   """A spawner._notify_completion stand-in recording the finalized outcome and thread.
 

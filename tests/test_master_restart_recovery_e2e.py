@@ -52,6 +52,7 @@ from pathlib import Path
 import pytest
 from conftest import patch_instructions_content
 from structlog.testing import capture_logs
+from test_restart_recovery_e2e import _wait_for
 
 from src.agents import master_cc, master_cc_queue
 from src.core import init as init_module
@@ -252,15 +253,6 @@ def _cfg(home: Path, shim: Path) -> CharlieBotConfig:
       backend_options=[
           BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim), prompt_overlay="none")],
   )
-
-
-def _wait_for(predicate, timeout: float, what: str) -> None:
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    if predicate():
-      return
-    time.sleep(0.05)
-  raise TimeoutError(what)
 
 
 def _session_meta(home: Path, session_id: str) -> dict:

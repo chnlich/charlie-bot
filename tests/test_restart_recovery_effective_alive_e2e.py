@@ -14,8 +14,8 @@ Plan "boot recovery 误杀判定保守化", acceptance legs (a), (e), (f-mount):
 Same two-process A/B protocol as test_restart_recovery_e2e.py: a driver
 subprocess spawns a worker with a fake `claude` shim and is SIGKILLed; this
 test process then runs startup crash recovery against the truth on disk. The
-protocol's scaffolding (shim, driver template, launcher, killer, waits) is
-shared by import from that module — edit it there.
+protocol's scaffolding (shim, driver template, launcher, killer, waits,
+chat-event readers) is shared by import from that module — edit it there.
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ from test_restart_recovery_e2e import (
   _kill_driver_mid_run,
   _launch_driver,
   _read_meta,
+  _recovery_reports,
+  _terminal_summaries,
 )
 
 from src.agents.backends.base import AgentBackend
@@ -74,23 +76,6 @@ async def _recover(
   recovered = await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
   await _await_recovery_tasks()
   return recovered, alive_at_reattach, master_wakes, outcomes
-
-
-def _terminal_summaries(home: Path, ids: dict) -> list[dict]:
-  chat_path = home / "sessions" / ids["session"] / "data" / "chat_events.jsonl"
-  events = [json.loads(line) for line in chat_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-  return [
-      e for e in events
-      if e.get("type") == "worker_summary" and e.get("thread_id") == ids["thread"] and e.get("status") != "running"
-  ]
-
-
-def _recovery_reports(home: Path, session_id: str) -> list[dict]:
-  chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  if not chat_path.exists():
-    return []
-  events = [json.loads(line) for line in chat_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-  return [e for e in events if e.get("source") == "crash_recovery"]
 
 
 @pytest.mark.asyncio

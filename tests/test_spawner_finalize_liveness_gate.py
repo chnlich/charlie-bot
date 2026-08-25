@@ -21,22 +21,14 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
+from test_restart_recovery_e2e import _cfg, _recovery_reports
 
 from src.agents.worker import Worker
 from src.core import spawner
-from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, ThreadStatus
+from src.core.models import CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager
 from src.core.spawner_lifecycle import RESUME_EXCEPTION_ALIVE_REASON
 from src.core.threads import ThreadManager
-
-
-def _cfg(home: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
-  )
 
 
 async def _make_running_thread(home: Path):
@@ -68,14 +60,6 @@ def _hang_resume(entered: asyncio.Event) -> Callable[..., Awaitable[int]]:
 def _thread_status(home: Path, session_id: str, thread_id: str) -> str:
   meta_path = home / "sessions" / session_id / "threads" / thread_id / "metadata.json"
   return json.loads(meta_path.read_text(encoding="utf-8"))["status"]
-
-
-def _recovery_reports(home: Path, session_id: str) -> list[dict]:
-  chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  if not chat_path.exists():
-    return []
-  events = [json.loads(line) for line in chat_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-  return [e for e in events if e.get("source") == "crash_recovery"]
 
 
 @pytest.fixture()

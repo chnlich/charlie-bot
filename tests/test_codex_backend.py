@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import FakeStdout
 from pydantic import ValidationError
 
 from src.agents.backends.codex import CodexBackend
@@ -13,24 +14,9 @@ from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
 
 
-class _FakeStdout:
-  """Async iterator over canned NDJSON byte lines."""
-
-  def __init__(self, lines: list[bytes]) -> None:
-    self._lines = list(lines)
-
-  def __aiter__(self) -> "_FakeStdout":
-    return self
-
-  async def __anext__(self) -> bytes:
-    if not self._lines:
-      raise StopAsyncIteration
-    return self._lines.pop(0)
-
-
 def _fake_one_shot_proc(lines: list[bytes], *, stderr: bytes = b"", returncode: int = 0) -> MagicMock:
   proc = MagicMock()
-  proc.stdout = _FakeStdout(lines)
+  proc.stdout = FakeStdout(lines)
   proc.stderr = MagicMock()
   proc.stderr.read = AsyncMock(side_effect=[stderr, b""])
   proc.wait = AsyncMock(return_value=returncode)

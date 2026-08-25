@@ -304,6 +304,29 @@ class FakeSessionManager:
     return self.events
 
 
+class FakeThreadManager:
+  """ThreadManager double for scheduler tests: hands back one fixed thread.
+
+  Callers patch src.core.scheduler.ThreadManager to return an instance; they
+  rely on create_thread overwriting that thread's session_id, description,
+  and require_review from the call arguments.
+  """
+
+  def __init__(self) -> None:
+    self.thread = models.ThreadMetadata(id="thread-1", session_id="session-1", description="nightly prompt")
+
+  async def create_thread(
+      self,
+      session: models.SessionMetadata,
+      description: str,
+      require_review: bool = True,
+  ) -> models.ThreadMetadata:
+    self.thread.session_id = session.id
+    self.thread.description = description
+    self.thread.require_review = require_review
+    return self.thread
+
+
 def _instructions_content_stub(session_meta: models.SessionMetadata, cfg: CharlieBotConfig,
                                prompt_overlay: str | None) -> str:
   return "instructions"

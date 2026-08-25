@@ -11,14 +11,12 @@ from typing import Any, Optional
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION
+from conftest import OPUS_BACKEND_OPTION, FakeThreadManager
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
 from src.core.models import (
   CreateSessionRequest,
-  SessionMetadata,
-  ThreadMetadata,
 )
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
@@ -32,24 +30,6 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
           OPUS_BACKEND_OPTION,
       ],
   )
-
-
-class FakeThreadManager:
-  """Minimal ThreadManager double: hands back one fixed thread."""
-
-  def __init__(self) -> None:
-    self.thread = ThreadMetadata(id="thread-1", session_id="session-1", description="nightly prompt")
-
-  async def create_thread(
-      self,
-      session: SessionMetadata,
-      description: str,
-      require_review: bool = True,
-  ) -> ThreadMetadata:
-    self.thread.session_id = session.id
-    self.thread.description = description
-    self.thread.require_review = require_review
-    return self.thread
 
 
 def _count_event_lines(path: Path) -> int:

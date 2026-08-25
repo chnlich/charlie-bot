@@ -9,7 +9,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, make_cron_client
+from conftest import (
+  CODEX_BACKEND_OPTION,
+  OPUS_BACKEND_OPTION,
+  FakeThreadManager,
+  make_cron_client,
+)
 
 from src.api import cron as cron_api
 from src.core.config import (
@@ -22,7 +27,6 @@ from src.core.models import (
   SessionMetadata,
   SessionStatus,
   SpawnRequest,
-  ThreadMetadata,
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
@@ -43,24 +47,6 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
 
 async def _noop() -> None:
   return None
-
-
-class FakeThreadManager:
-  """Minimal ThreadManager double for scheduler backend tests."""
-
-  def __init__(self) -> None:
-    self.thread = ThreadMetadata(id="thread-1", session_id="session-1", description="nightly prompt")
-
-  async def create_thread(
-      self,
-      session: SessionMetadata,
-      description: str,
-      require_review: bool = True,
-  ) -> ThreadMetadata:
-    self.thread.session_id = session.id
-    self.thread.description = description
-    self.thread.require_review = require_review
-    return self.thread
 
 
 @pytest.mark.asyncio

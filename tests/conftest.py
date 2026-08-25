@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -272,6 +273,27 @@ async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionM
 async def no_sleep(_seconds: float) -> None:
   """asyncio.sleep stand-in for watch-loop tests: returns immediately so poll iterations skip wall-clock waits."""
   return None
+
+
+def dump_yaml(body: Any) -> str:
+  """Block-style ``yaml.safe_dump`` with the dict's insertion key order kept; callers write the result
+  into cron host files whose key order should read like a hand-written file."""
+  return yaml.safe_dump(body, default_flow_style=False, sort_keys=False)
+
+
+def cron_d_dir(home: Path) -> Path:
+  """The per-job cron dir under a HOME-rooted test dir; once the temp_home fixture points HOME at
+  ``home``, this is the dir ``get_scheduled_tasks`` scans for per-job host files."""
+  return Path(home) / ".charliebot" / "config.d" / "cron.d"
+
+
+def write_cron_task(home: Path, name: str, text: str) -> Path:
+  """Write one per-job cron host file ``<name>.yaml`` under ``cron_d_dir(home)`` verbatim (dump_yaml
+  output, or raw text for a loader-rejection case); the returned path is what assertions read back."""
+  p = cron_d_dir(home) / f"{name}.yaml"
+  p.parent.mkdir(parents=True, exist_ok=True)
+  p.write_text(text, encoding="utf-8")
+  return p
 
 
 class FakeWebSocket:

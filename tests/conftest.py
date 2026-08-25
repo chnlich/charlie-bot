@@ -25,6 +25,7 @@ from src.core.config import CharlieBotConfig, get_config  # noqa: E402,I001
 from src.core.plans import PlanRegistryManager  # noqa: E402,I001
 from src.core.sessions import SessionManager  # noqa: E402,I001
 from src.core.threads import ThreadManager  # noqa: E402,I001
+from src.core.triggers import TriggerManager  # noqa: E402,I001
 
 
 def mock_session_callbacks() -> models.SessionCallbacks:
@@ -190,6 +191,15 @@ async def make_plan_setup(
   plan_mgr = PlanRegistryManager(cfg, session_mgr)
   meta = await session_mgr.create_session(models.CreateSessionRequest(name="Test"), backend="claude-opus-4.6")
   return cfg, session_mgr, thread_mgr, plan_mgr, meta
+
+
+async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
+  """Real cfg/session_mgr/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(models.CreateSessionRequest(name="Trigger watch"))
+  trigger_mgr = TriggerManager(cfg, session_mgr)
+  return cfg, session_mgr, trigger_mgr, session.id
 
 
 class JudgmentShim:

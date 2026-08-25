@@ -10,18 +10,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import requests
+from conftest import make_trigger_setup as _make_mgr
 from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
-from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
   LocalPid,
   RemotePid,
   ScheduleTriggerRequest,
   TriggerStatus,
 )
-from src.core.sessions import SessionManager
 from src.core.triggers import (
   RemoteVerifyError,
   TriggerManager,
@@ -69,14 +67,6 @@ def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock
     return _FakeProc(stdout=(status + "\n").encode())
 
   return AsyncMock(side_effect=_factory)
-
-
-async def _make_mgr(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Remote watch"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  return cfg, session_mgr, trigger_mgr, session.id
 
 
 # ---------------------------------------------------------------------------

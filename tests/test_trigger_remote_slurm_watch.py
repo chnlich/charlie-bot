@@ -6,11 +6,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import make_trigger_setup as _make_mgr
 
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, SlurmJob, TriggerStatus
-from src.core.sessions import SessionManager
-from src.core.triggers import RemoteVerifyError, TriggerManager, _probe_sacct
+from src.core.models import SlurmJob, TriggerStatus
+from src.core.triggers import RemoteVerifyError, _probe_sacct
 
 # ---------------------------------------------------------------------------
 # Mock helpers
@@ -65,14 +64,6 @@ def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMo
 
 async def _no_sleep(_seconds: float) -> None:
   return None
-
-
-async def _make_mgr(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Remote watch"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  return cfg, session_mgr, trigger_mgr, session.id
 
 
 # ---------------------------------------------------------------------------

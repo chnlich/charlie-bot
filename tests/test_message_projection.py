@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
+from conftest import assistant_event as _assistant_event
 
 from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
@@ -26,19 +27,6 @@ from src.core.sessions import SessionManager
 # ---------------------------------------------------------------------------
 # Fixture event builders
 # ---------------------------------------------------------------------------
-
-
-def _assistant_event(content: str, event_id: str = "assistant") -> dict:
-  return {
-      "id": event_id,
-      "type": ET.ASSISTANT,
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": content
-          }]
-      },
-  }
 
 
 def _reorder_events() -> list[dict]:

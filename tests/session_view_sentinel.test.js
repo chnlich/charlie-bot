@@ -4,6 +4,10 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const COMPAT_LOADER_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'compat-loader.js'),
+  'utf8'
+);
 const CHAT_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'chat.js'),
   'utf8'
@@ -235,6 +239,7 @@ function buildContext(overrides = {}) {
 
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
+  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
   return {context, fetchCalls, elements};

@@ -431,6 +431,10 @@ def _session_chat_events(home: Path, session_id: str) -> list[dict]:
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _recovery_reports(home: Path, session_id: str) -> list[dict]:
+  return [e for e in _session_chat_events(home, session_id) if e.get("source") == "crash_recovery"]
+
+
 async def _settle_finalize_window(home: Path, session_id: str, original_id: str) -> None:
   """Drain the named recovery tasks, then wait for the (idempotently, at most
   once) spawned reviewer thread's own completion. The reviewer's own spawn_worker

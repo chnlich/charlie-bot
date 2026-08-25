@@ -201,7 +201,13 @@ async def test_perfetto_page_multiple_local_json_uses_one_merged_url(tmp_path: P
   for trace in traces:
     _write_trace(trace)
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[str(path) for path in traces], dir=None, pattern="*.json", title="Ranks", slim=1)
+      make_page_request("/perfetto"),
+      trace=[str(path) for path in traces],
+      dir=None,
+      pattern="*.json",
+      title="Ranks",
+      slim=1,
+  )
 
   merged_url = response.context["trace_url"]
   query = parse_qs(urlsplit(merged_url).query)
@@ -245,7 +251,8 @@ async def test_perfetto_page_mixed_inputs_warns_and_uses_first(tmp_path: Path) -
 @pytest.mark.asyncio
 async def test_perfetto_page_rejects_empty_input() -> None:
   with pytest.raises(HTTPException) as error:
-    await pages.perfetto_viewer(make_page_request("/perfetto"), trace=[], dir=None, pattern="*.json", title=None, slim=None)
+    await pages.perfetto_viewer(
+        make_page_request("/perfetto"), trace=[], dir=None, pattern="*.json", title=None, slim=None)
   assert error.value.status_code == 400
 
 
@@ -320,7 +327,13 @@ async def test_two_phase_status_strings_are_present(tmp_path: Path) -> None:
   for trace in traces:
     _write_trace(trace)
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"), trace=[str(trace) for trace in traces], dir=None, pattern="*.json", title=None, slim=None)
+      make_page_request("/perfetto"),
+      trace=[str(trace) for trace in traces],
+      dir=None,
+      pattern="*.json",
+      title=None,
+      slim=None,
+  )
   body = response.body.decode("utf-8")
   # Merge phase: a seconds counter is ticking while the server merges.
   assert "Merging" in body and "on the server" in body

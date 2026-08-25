@@ -204,6 +204,19 @@ class SessionViewData:
   has_more: bool = False
 
 
+async def _mark_read_best_effort(session_mgr: 'SessionManager', session_id: str) -> 'SessionMetadata | None':
+  """mark_read whose failure degrades to a logged warning.
+
+  These readers must keep serving on a bookkeeping-write failure, so the
+  exception is swallowed here; callers treat ``None`` as "metadata unchanged".
+  """
+  try:
+    return await session_mgr.mark_read(session_id)
+  except Exception:
+    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+    return None
+
+
 async def build_session_bootstrap_data(
     session_id: str,
     session_mgr: 'SessionManager',
@@ -235,12 +248,9 @@ async def build_session_bootstrap_data(
     result = await asyncio.to_thread(_from_projection)
     if result is not None:
       messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
-      try:
-        read_meta = await session_mgr.mark_read(session_id)
-        if read_meta is not None:
-          session_meta = read_meta
-      except Exception:
-        log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+      read_meta = await _mark_read_best_effort(session_mgr, session_id)
+      if read_meta is not None:
+        session_meta = read_meta
       return SessionBootstrapData(
           session=session_meta,
           messages=messages,
@@ -255,12 +265,9 @@ async def build_session_bootstrap_data(
   offset = session_meta.archive_offset + total_count - len(tail_events)
   messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
 
-  try:
-    read_meta = await session_mgr.mark_read(session_id)
-    if read_meta is not None:
-      session_meta = read_meta
-  except Exception:
-    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+  read_meta = await _mark_read_best_effort(session_mgr, session_id)
+  if read_meta is not None:
+    session_meta = read_meta
 
   return SessionBootstrapData(
       session=session_meta,
@@ -313,10 +320,7 @@ async def build_session_view_data(
     if result is not None:
       messages, pending_draft, total_event_count, oldest_ordinal, has_more, events = result
       usage = await session_mgr.resolve_session_usage(session_id, session_meta)
-      try:
-        await session_mgr.mark_read(session_id)
-      except Exception:
-        log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+      await _mark_read_best_effort(session_mgr, session_id)
       return SessionViewData(
           raw_events=events,
           messages=messages,
@@ -351,10 +355,7 @@ async def build_session_view_data(
     messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta)
 
-  try:
-    await session_mgr.mark_read(session_id)
-  except Exception:
-    log.warning("mark_read_failed", session_id=session_id, exc_info=True)
+  await _mark_read_best_effort(session_mgr, session_id)
 
   return SessionViewData(
       raw_events=raw_events,

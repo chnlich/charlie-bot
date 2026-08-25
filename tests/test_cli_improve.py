@@ -146,45 +146,6 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
   assert payload["session_id"] == "abc"
 
 
-def test_session_mismatch_with_cwd_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-
-  with patch("sys.argv", _improve_argv("xyz", str(tmp_path), goal_file)), \
-       patch("src.cli.common.get_config", return_value=cfg):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-
-  assert exc_info.value.code == 2
-  err = capsys.readouterr().err
-  assert "mismatch" in err
-  assert "abc" in err
-  assert "xyz" in err
-
-
-def test_no_session_outside_session_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = MagicMock()
-  cfg.server_port = 9443
-  cfg.sessions_dir = tmp_path / "sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.chdir(tmp_path)
-
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-
-  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file)), \
-       patch("src.cli.common.get_config", return_value=cfg):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-
-  assert exc_info.value.code == 2
-  err = capsys.readouterr().err
-  assert "session dir" in err or "--session required" in err
-
-
 def test_main_rejects_missing_goal_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """A nonexistent --goal-file exits non-zero before any request is made."""

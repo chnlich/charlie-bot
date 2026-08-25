@@ -19,6 +19,11 @@ log = structlog.get_logger()
 
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
+# The API request model TaskCreate (src/api/cron.py) shares this default; the web UI
+# pins its own copy in templates/index.html + sidebar/modals.js, which cannot import
+# from Python, so a change moves all four sites together.
+DEFAULT_TIMEZONE = "America/Los_Angeles"
+
 
 def default_charliebot_home() -> Path:
   """The state directory used when ``CHARLIEBOT_HOME`` is unset."""
@@ -85,7 +90,7 @@ class ScheduledTaskConfig(BaseModel):
   loop: Optional[ImprovementLoopConfig] = None
   repo: Optional[str] = None
   backend: Optional[str] = None
-  timezone: str = "America/Los_Angeles"
+  timezone: str = DEFAULT_TIMEZONE
   enabled: bool = True
   project: Optional[str] = None
   # Fire mode: absent or 'worker' spawns a worker per fire (existing behavior);

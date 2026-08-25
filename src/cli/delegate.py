@@ -42,6 +42,17 @@ Task spec format (--task-spec-file):
   ## Out of Scope
   Things the worker must not change.
 
+  Spec precision follows the task kind. An exploratory or
+  judgment-heavy task (a cleanup whose extent is a judgment call, a
+  review, a comment or doc rewrite) states the goal, the reason it
+  matters in the requester's own words, the standard the result is
+  judged against, the invariants to keep, and what is out of scope,
+  and stops there: an enumerated change list becomes the worker's
+  whole scope and caps the result at what the master already found.
+  A task with a fixed mechanical contract keeps its executable
+  contract and acceptance assertions: there the precision is the
+  deliverable.
+
   Source Files entries: absolute paths or `- (none)`.
   Task specs must not forbid test edits: updating affected tests is
   part of the change — tests asserting removed behavior get updated

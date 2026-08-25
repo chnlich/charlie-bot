@@ -12,6 +12,8 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const { escapeHtml } = require('./escape_html_stub');
+
 const NAMESPACE_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'chat', 'namespace.js'),
   'utf8'
@@ -221,15 +223,6 @@ function makeMessage(children) {
   children.forEach((child) => prose.appendChild(child));
   container.appendChild(prose);
   return {root: container, prose};
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
 }
 
 // The card markup the renderer builds, read back as an element: its classes, its data-*

@@ -327,6 +327,29 @@ class FakeThreadManager:
     return self.thread
 
 
+class FakeAsyncProcess:
+  """asyncio.subprocess.Process double replaying canned stdout/stderr.
+
+  Callers rely on communicate answering the constructor's streams, on kill
+  being a no-op, and on wait answering returncode (trigger watch-loop
+  subprocess factories).
+  """
+
+  def __init__(self, stdout: bytes, stderr: bytes = b"", returncode: int = 0) -> None:
+    self._stdout = stdout
+    self._stderr = stderr
+    self.returncode = returncode
+
+  async def communicate(self) -> tuple[bytes, bytes]:
+    return self._stdout, self._stderr
+
+  def kill(self) -> None:
+    pass
+
+  async def wait(self) -> int:
+    return self.returncode
+
+
 def _instructions_content_stub(session_meta: models.SessionMetadata, cfg: CharlieBotConfig,
                                prompt_overlay: str | None) -> str:
   return "instructions"

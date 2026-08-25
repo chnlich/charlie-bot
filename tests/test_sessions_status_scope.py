@@ -8,22 +8,11 @@ never enumerate the whole directory.
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION
+from conftest import build_tui_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
-from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, SessionMetadata
+from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
-      ],
-  )
 
 
 def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,7 +29,7 @@ async def test_status_returns_exactly_the_requested_ids(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   wanted = await session_mgr.create_session(CreateSessionRequest(name="Sidebar"))
   other = await session_mgr.create_session(CreateSessionRequest(name="Off screen"))
@@ -69,7 +58,7 @@ async def test_status_omits_unknown_ids_without_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   known = await session_mgr.create_session(CreateSessionRequest(name="Known"))
   _forbid_list_sessions(monkeypatch)
@@ -83,7 +72,7 @@ async def test_status_omits_unknown_ids_without_error(
 
 @pytest.mark.asyncio
 async def test_status_ids_is_required(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   await session_mgr.create_session(CreateSessionRequest(name="Sidebar"))
 
@@ -98,7 +87,7 @@ async def test_tui_status_returns_only_requested_tui_sessions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   requested = SessionMetadata(name="TUI on screen", backend="claude-tui")
   off_screen = SessionMetadata(name="TUI off screen", backend="claude-tui")
@@ -128,7 +117,7 @@ async def test_tui_status_returns_only_requested_tui_sessions(
 
 @pytest.mark.asyncio
 async def test_tui_status_ids_is_required(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   await session_mgr.save_metadata(SessionMetadata(name="TUI", backend="claude-tui"))
 

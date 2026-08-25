@@ -5,7 +5,6 @@ import contextlib
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Optional
 
 import aiofiles
 
@@ -28,7 +27,7 @@ class AgentGuard(ValueError):
 class AntigravityCliBackend(AgentBackend):
   """Runs `agy --print` and translates the JSON envelope into CC events."""
 
-  def __init__(self, *, model: Optional[str] = None, **kwargs):
+  def __init__(self, *, model: str | None = None, **kwargs):
     super().__init__(model=model, **kwargs)
     self._agy_bin = resolve_binary("agy", str(Path.home() / ".local" / "bin"))
 
@@ -55,7 +54,7 @@ class AntigravityCliBackend(AgentBackend):
     prepend_path_dir(antigravity_env, str(Path.home() / ".local" / "bin"))
     return antigravity_env
 
-  def _parse_envelope(self, stdout_text: str) -> Optional[dict]:
+  def _parse_envelope(self, stdout_text: str) -> dict | None:
     """Parse stdout as a JSON envelope dict, or None when it is not one."""
     try:
       data = json.loads(stdout_text)
@@ -79,7 +78,7 @@ class AntigravityCliBackend(AgentBackend):
     if self._log_dir is not None:
       self._log_dir.mkdir(parents=True, exist_ok=True)
       stdout_log_cm = aiofiles.open(self._log_dir / "stdout.log", "wb")
-      stderr_log_path: Optional[Path] = self._log_dir / "stderr.log"
+      stderr_log_path: Path | None = self._log_dir / "stderr.log"
     else:
       stdout_log_cm = contextlib.nullcontext(None)
       stderr_log_path = None

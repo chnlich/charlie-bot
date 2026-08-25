@@ -6,18 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.plan import _PLAN_REMINDER, main
-
-
-def _setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
-  cfg = MagicMock()
-  cfg.server_port = 9443
-  cfg.sessions_dir = tmp_path / "sessions"
-  session_dir = cfg.sessions_dir / sid
-  session_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.chdir(session_dir)
-  return cfg
 
 
 def _mock_response(payload: dict) -> MagicMock:

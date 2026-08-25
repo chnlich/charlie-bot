@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.delegate import main
 
@@ -888,17 +889,6 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
     main()
 
   post_mock.assert_called_once()
-
-
-def _setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
-  """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it."""
-  cfg = MagicMock()
-  cfg.server_port = 9443
-  cfg.sessions_dir = tmp_path / "sessions"
-  session_dir = cfg.sessions_dir / sid
-  session_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.chdir(session_dir)
-  return cfg
 
 
 def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

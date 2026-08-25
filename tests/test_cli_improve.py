@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
 
 from src.cli.improve import main
@@ -128,17 +129,6 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
     with pytest.raises(SystemExit) as exc_info:
       main()
     assert exc_info.value.code == 1
-
-
-def _setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
-  """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it."""
-  cfg = MagicMock()
-  cfg.server_port = 9443
-  cfg.sessions_dir = tmp_path / "sessions"
-  session_dir = cfg.sessions_dir / sid
-  session_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.chdir(session_dir)
-  return cfg
 
 
 def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

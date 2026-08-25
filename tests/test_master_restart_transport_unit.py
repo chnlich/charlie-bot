@@ -28,7 +28,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import patch_instructions_content
+from conftest import make_work_item, patch_instructions_content
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import init as init_module
@@ -173,18 +173,8 @@ async def test_consumer_clears_master_run_after_master_done(monkeypatch: pytest.
   workers_mock = MagicMock()
   workers_mock._has_running_tasks = AsyncMock(return_value=False)
 
-  item = master_cc._WorkItem(
-      cfg=_cfg(Path("/tmp/charliebot-unit")),
-      session_meta=session_meta,
-      user_content="hi",
-      callbacks=callbacks,
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=None,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(
+      _cfg(Path("/tmp/charliebot-unit")), session_meta, None, user_content="hi", callbacks=callbacks)
   master_cc_state._session_queues.pop(session_meta.id, None)
   master_cc_state._session_queues[session_meta.id] = asyncio.Queue()
   master_cc_state._session_queues[session_meta.id].put_nowait(item)
@@ -260,19 +250,8 @@ def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread=None) -> S
 
 def _cancel_item(cfg: CharlieBotConfig, session_meta: SessionMetadata, callbacks: SessionCallbacks,
                  option: BackendOption, *, should_check_tex: bool = False) -> master_cc._WorkItem:
-  return master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=session_meta,
-      user_content="hi",
-      callbacks=callbacks,
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=option,
-      extra_claude_flags=None,
-      should_check_tex=should_check_tex,
-      future=asyncio.get_running_loop().create_future(),
-      user_event_id="evt-1",
-  )
+  return make_work_item(cfg, session_meta, option, user_content="hi", callbacks=callbacks,
+                        should_check_tex=should_check_tex, user_event_id="evt-1")
 
 
 async def _cancel_run(item: master_cc._WorkItem, ready: asyncio.Event) -> None:
@@ -566,19 +545,8 @@ async def test_queued_user_event_ids_covers_running_and_queued_items() -> None:
   session_meta = SessionMetadata(id="session-queued", name="t")
 
   def item(event_id: str) -> master_cc._WorkItem:
-    return master_cc._WorkItem(
-        cfg=cfg,
-        session_meta=session_meta,
-        user_content="x",
-        callbacks=callbacks,
-        is_voice=False,
-        auto_trigger=False,
-        backend_option=None,
-        extra_claude_flags=None,
-        should_check_tex=False,
-        future=asyncio.get_running_loop().create_future(),
-        user_event_id=event_id,
-    )
+    return make_work_item(cfg, session_meta, None, user_content="x", callbacks=callbacks,
+                          user_event_id=event_id)
 
   running = item("evt-running")
   queued = item("evt-queued")

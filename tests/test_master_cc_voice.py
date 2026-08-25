@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import mock_session_callbacks, patch_instructions_content
+from conftest import make_work_item, mock_session_callbacks, patch_instructions_content
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import config as core_config
@@ -66,18 +66,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=meta,
-      user_content="transcribed hello",
-      callbacks=mock_session_callbacks(),
-      is_voice=True,
-      auto_trigger=False,
-      backend_option=cfg.backend_options[0],
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="transcribed hello", is_voice=True)
 
   await master_cc._run_cc(item)
 
@@ -95,18 +84,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
-  item = master_cc._WorkItem(
-      cfg=cfg,
-      session_meta=meta,
-      user_content="plain hello",
-      callbacks=mock_session_callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=cfg.backend_options[0],
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
-  )
+  item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="plain hello")
 
   await master_cc._run_cc(item)
 

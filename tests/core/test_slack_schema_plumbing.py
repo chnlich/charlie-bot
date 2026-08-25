@@ -9,7 +9,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import mock_session_callbacks
+from conftest import make_work_item, mock_session_callbacks
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import event_types as ET
@@ -68,17 +68,12 @@ async def _run_one_round(user_event_id: Optional[str]) -> dict:
   """Run one synthetic work item through _session_consumer; return its MASTER_DONE payload."""
   session_id = f"slack-plumbing-{user_event_id or 'none'}"
   callbacks = mock_session_callbacks()
-  item = master_cc._WorkItem(
-      cfg=MagicMock(),
-      session_meta=SessionMetadata(id=session_id, name="t"),
+  item = make_work_item(
+      MagicMock(),
+      SessionMetadata(id=session_id, name="t"),
+      None,
       user_content="hi",
       callbacks=callbacks,
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=None,
-      extra_claude_flags=None,
-      should_check_tex=False,
-      future=asyncio.get_running_loop().create_future(),
       user_event_id=user_event_id,
   )
   master_cc_state._session_queues.pop(session_id, None)

@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 # Imports must follow the sys.path bootstrap above.
 from src.agents import master_cc_run, master_cc_state  # noqa: E402,I001
+from src.api.cron import router as cron_router  # noqa: E402,I001
 from src.api.deps import get_session_manager  # noqa: E402,I001
 from src.api.sessions import router as sessions_router  # noqa: E402,I001
 from src.core import event_types as ET  # noqa: E402,I001
@@ -165,6 +166,16 @@ def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> 
   extra routers or overrides builds its own FastAPI app."""
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  return TestClient(app)
+
+
+def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
+  """TestClient mounting the cron router with cfg/session_mgr as dependency overrides; a test needing
+  extra routers or overrides builds its own FastAPI app."""
+  app = FastAPI()
+  app.include_router(cron_router, prefix="/api/cron")
   app.dependency_overrides[get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)

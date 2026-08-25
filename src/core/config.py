@@ -20,8 +20,8 @@ log = structlog.get_logger()
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
 # The API request model TaskCreate (src/api/cron.py) shares this default; the web UI
-# pins its own copy in templates/index.html + sidebar/modals.js, which cannot import
-# from Python, so a change moves all four sites together.
+# re-pins the value in three literals (templates/index.html, two fallbacks in
+# sidebar/modals.js) that cannot import from Python — a change moves all four sites.
 DEFAULT_TIMEZONE = "America/Los_Angeles"
 
 

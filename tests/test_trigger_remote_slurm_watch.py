@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import make_trigger_setup as _make_mgr
+from conftest import no_sleep as _no_sleep
+from conftest import patch_trigger_fire
 
 from src.core.models import SlurmJob, TriggerStatus
 from src.core.triggers import RemoteVerifyError, _probe_sacct
@@ -62,10 +64,6 @@ def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMo
   return AsyncMock(side_effect=_factory)
 
 
-async def _no_sleep(_seconds: float) -> None:
-  return None
-
-
 # ---------------------------------------------------------------------------
 # Remote SLURM watch: completion and timeout
 # ---------------------------------------------------------------------------
@@ -76,13 +74,7 @@ async def test_remote_slurm_completes(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   sacct = _mk_sacct_mock({("host2", 122111): ["122111|COMPLETED|0:0\n"]})
 
-  with (
-      patch("src.core.triggers._SACCT_AVAILABLE", False),
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=sacct),
-      patch("src.core.triggers.asyncio.sleep", new=_no_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=600,
@@ -104,13 +96,7 @@ async def test_remote_slurm_timeout_while_running(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   sacct = _mk_sacct_mock({("host2", 122111): ["122111|RUNNING|0:0\n"]})
 
-  with (
-      patch("src.core.triggers._SACCT_AVAILABLE", False),
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=sacct),
-      patch("src.core.triggers.asyncio.sleep", new=_no_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep) as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=0,  # fire_at already due — one probe, then timeout
@@ -184,13 +170,7 @@ async def test_verify_on_create_reports_observed_state(tmp_path: Path) -> None:
   sacct = _mk_sacct_mock({("host2", 122111): ["122111|RUNNING|0:0\n"]})
   probe_out: dict[str, str] = {}
 
-  with (
-      patch("src.core.triggers._SACCT_AVAILABLE", False),
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=sacct),
-      patch("src.core.triggers.asyncio.sleep", new=_no_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()),
-  ):
+  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep):
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=0,
@@ -209,13 +189,7 @@ async def test_verify_on_create_reports_not_yet_registered(tmp_path: Path) -> No
   sacct = _mk_sacct_mock({("host2", 122111): [""]})
   probe_out: dict[str, str] = {}
 
-  with (
-      patch("src.core.triggers._SACCT_AVAILABLE", False),
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=sacct),
-      patch("src.core.triggers.asyncio.sleep", new=_no_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()),
-  ):
+  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep):
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=0,
@@ -247,12 +221,8 @@ async def test_unreachable_host_fires_early_with_note(tmp_path: Path) -> None:
     return _FakeProc(stdout=b"", stderr=b"ssh: Connection timed out", returncode=255)
 
   with (
-      patch("src.core.triggers._SACCT_AVAILABLE", False),
+      patch_trigger_fire(AsyncMock(side_effect=_factory), sacct_available=False, sleep_mock=_no_sleep) as mock_master,
       patch("src.core.triggers._REMOTE_SACCT_UNREACHABLE_GRACE", 0),
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=_factory)),
-      patch("src.core.triggers.asyncio.sleep", new=_no_sleep),
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
   ):
     trigger = await trigger_mgr.create_trigger(
         session_id,

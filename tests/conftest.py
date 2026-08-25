@@ -1,12 +1,14 @@
 import asyncio
+import contextlib
 import json
 import shutil
 import subprocess
 import sys
+from collections.abc import Awaitable, Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -200,6 +202,35 @@ async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionM
   session = await session_mgr.create_session(models.CreateSessionRequest(name="Trigger watch"))
   trigger_mgr = TriggerManager(cfg, session_mgr)
   return cfg, session_mgr, trigger_mgr, session.id
+
+
+async def no_sleep(_seconds: float) -> None:
+  """asyncio.sleep stand-in for watch-loop tests: returns immediately so poll iterations skip wall-clock waits."""
+  return None
+
+
+@contextlib.contextmanager
+def patch_trigger_fire(
+    subprocess_mock: AsyncMock, sacct_available: bool | None, sleep_mock: Callable[[float], Awaitable[None]] | None
+) -> Iterator[AsyncMock]:
+  """Patch the externals a trigger-watch fire run reads; yields the trigger_master mock.
+
+  broadcast and trigger_master are always patched. sacct_available=None leaves
+  _SACCT_AVAILABLE untouched, for probes that never read it (remote PID);
+  sleep_mock=None keeps real sleeps, for runs that assert on elapsed time.
+  """
+  patches = []
+  if sacct_available is not None:
+    patches.append(patch("src.core.triggers._SACCT_AVAILABLE", sacct_available))
+  patches.append(patch("src.core.triggers.asyncio.create_subprocess_exec", new=subprocess_mock))
+  if sleep_mock is not None:
+    patches.append(patch("src.core.triggers.asyncio.sleep", new=sleep_mock))
+  patches.append(patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()))
+  master_patch = patch("src.core.triggers.trigger_master", new=AsyncMock())
+  with contextlib.ExitStack() as stack:
+    for p in patches:
+      stack.enter_context(p)
+    yield stack.enter_context(master_patch)
 
 
 class JudgmentShim:

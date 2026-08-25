@@ -479,7 +479,8 @@ def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[
 
   "has-session" exits rc 1 so the patched session-setup path takes its create branch;
   every other tmux invocation exits rc 0 with empty stderr. The signature mirrors
-  src.agents.backends.pty_common._run_tmux, whose callers pass ``check=`` through.
+  src.agents.backends.pty_common._run_tmux so the monkeypatched attribute stays a
+  drop-in replacement.
   """
 
   async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:

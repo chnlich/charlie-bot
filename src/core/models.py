@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Awaitable, Callable, Dict, Literal, Optional, Union
+from typing import Annotated, Awaitable, Callable, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -91,29 +91,29 @@ class ThreadMetadata(BaseModel):
   description: str
   status: ThreadStatus = ThreadStatus.IDLE
   created_at: UtcDatetime = Field(default_factory=utc_now)
-  started_at: Optional[UtcDatetime] = None
-  completed_at: Optional[UtcDatetime] = None
-  pid: Optional[int] = None
+  started_at: UtcDatetime | None = None
+  completed_at: UtcDatetime | None = None
+  pid: int | None = None
   # Field 22 of /proc/<pid>/stat (process start time in clock ticks since host
   # boot). Together with pid it pins a run to one process instance, so pid
   # reuse after a crash never fakes liveness. None for threads recorded by
   # older builds — such threads can never be judged alive.
-  pid_start: Optional[str] = None
-  exit_code: Optional[int] = None
-  claude_session_id: Optional[str] = None
-  branch_name: Optional[str] = None
-  base_branch: Optional[str] = None
-  repo_path: Optional[str] = None
-  worktree_path: Optional[str] = None
-  review_of: Optional[str] = None
-  context: Optional[str] = None
-  backend: Optional[str] = None
-  model: Optional[str] = None
+  pid_start: str | None = None
+  exit_code: int | None = None
+  claude_session_id: str | None = None
+  branch_name: str | None = None
+  base_branch: str | None = None
+  repo_path: str | None = None
+  worktree_path: str | None = None
+  review_of: str | None = None
+  context: str | None = None
+  backend: str | None = None
+  model: str | None = None
   require_review: bool = True
   skip_cleanup: bool = False
   keep_worktree: bool = False
   tried_backends: list[str] = Field(default_factory=list)
-  task_type: Optional[TaskType] = None
+  task_type: TaskType | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -141,14 +141,14 @@ class SlurmJob(BaseModel):
   runs it over `ssh <host>` against that cluster's login node.
   """
   kind: Literal[WatchKind.SLURM_JOB] = WatchKind.SLURM_JOB
-  host: Optional[str] = None
+  host: str | None = None
   job_id: int
 
 
 # Discriminated union on `kind`: each variant carries only its own fields, so
 # illegal combinations (a local pid with a host, a slurm job with a pid) are
 # unconstructable.
-WatchTarget = Annotated[Union[LocalPid, RemotePid, SlurmJob], Field(discriminator="kind")]
+WatchTarget = Annotated[LocalPid | RemotePid | SlurmJob, Field(discriminator="kind")]
 
 
 class PendingTrigger(BaseModel):
@@ -158,9 +158,9 @@ class PendingTrigger(BaseModel):
   message: str
   created_at: UtcDatetime = Field(default_factory=utc_now)
   status: TriggerStatus = TriggerStatus.PENDING
-  fired_at: Optional[UtcDatetime] = None
+  fired_at: UtcDatetime | None = None
   watch_targets: list[WatchTarget] = Field(default_factory=list)
-  fire_reason: Optional[str] = None  # one of 'completed', 'timeout', populated when fired
+  fire_reason: str | None = None  # one of 'completed', 'timeout', populated when fired
 
 
 # ---------------------------------------------------------------------------
@@ -172,24 +172,24 @@ class BackendOption(BaseModel):
   id: str
   label: str
   type: str  # 'cc-claude' | 'cc-kimi' | 'cc-openai-compatible' | 'codex' | 'charlie-code' | 'gemini' | 'opencode' | 'antigravity' | 'tui-cli'
-  model: Optional[str] = None
-  effort: Optional[str] = None
-  cli_binary: Optional[str] = None
-  codex_home: Optional[str] = None  # codex backend only: per-account $CODEX_HOME
-  claude_config_dir: Optional[str] = None  # cc-claude backend only: per-account CLAUDE_CONFIG_DIR
-  model_reasoning_effort: Optional[str] = None  # codex backend only: per-backend reasoning effort override
-  model_auto_compact_token_limit: Optional[int] = Field(
+  model: str | None = None
+  effort: str | None = None
+  cli_binary: str | None = None
+  codex_home: str | None = None  # codex backend only: per-account $CODEX_HOME
+  claude_config_dir: str | None = None  # cc-claude backend only: per-account CLAUDE_CONFIG_DIR
+  model_reasoning_effort: str | None = None  # codex backend only: per-backend reasoning effort override
+  model_auto_compact_token_limit: int | None = Field(
       default=None, gt=0)  # codex backend only: per-backend auto-compact token limit
   # Overlay filename (no .md) under prompts/model_overlays/. Literal "none" =
   # explicitly fenceless (silent); None = undeclared; a declared-but-unreadable
   # file degrades the wake to a fenceless run. The two latter cases emit one
   # unified backend_overlay_inactive alert, told apart by its reason field —
   # the read failure never raises.
-  prompt_overlay: Optional[str] = None
-  api_base: Optional[str] = None  # OpenAI-compatible base URL (charlie-code, cc-openai-compatible)
-  api_key_env: Optional[str] = None  # cc-openai-compatible: env var holding the upstream API key
+  prompt_overlay: str | None = None
+  api_base: str | None = None  # OpenAI-compatible base URL (charlie-code, cc-openai-compatible)
+  api_key_env: str | None = None  # cc-openai-compatible: env var holding the upstream API key
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
-  opencode_proxy_url: Optional[str] = None  # opencode only: per-backend HTTP/HTTPS proxy URL
+  opencode_proxy_url: str | None = None  # opencode only: per-backend HTTP/HTTPS proxy URL
 
 
 MODEL_OPTIONAL_ROUTING_BACKEND_TYPES = frozenset({"antigravity"})
@@ -219,11 +219,11 @@ class MasterRunRecord(BaseModel):
   cleared record keeps the turn's user message (user_event_id) eligible for
   replay.
   """
-  pid: Optional[int] = None
-  pid_start: Optional[str] = None  # /proc/<pid>/stat field 22 at spawn time
+  pid: int | None = None
+  pid_start: str | None = None  # /proc/<pid>/stat field 22 at spawn time
   started_at: UtcDatetime
   raw_log: str  # absolute path to this turn's raw NDJSON transport file
-  user_event_id: Optional[str] = None  # chat event this turn answers
+  user_event_id: str | None = None  # chat event this turn answers
 
 
 class SlackOrigin(BaseModel):
@@ -241,47 +241,47 @@ class SessionMetadata(BaseModel):
   has_running_tasks: bool = False
   has_pending_trigger: bool = False
   pending_trigger_count: int = 0
-  next_trigger_at: Optional[datetime] = None
+  next_trigger_at: datetime | None = None
   has_pending_plan_approval: bool = False
   starred: bool = False
   # Transient runtime fact derived from src.core.thinking_state at read time;
   # never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
-  thinking_since: Optional[UtcDatetime] = None
+  thinking_since: UtcDatetime | None = None
   created_at: UtcDatetime = Field(default_factory=utc_now)
   updated_at: UtcDatetime = Field(default_factory=utc_now)
-  cc_session_id: Optional[str] = None
-  cc_session_started_at: Optional[UtcDatetime] = None
+  cc_session_id: str | None = None
+  cc_session_started_at: UtcDatetime | None = None
   # In-flight master turn identity for restart reconcile; None when idle.
-  master_run: Optional[MasterRunRecord] = None
+  master_run: MasterRunRecord | None = None
   backend: str = ""  # empty default; create_session always provides the real value
-  scheduled_task: Optional[str] = None  # task name; None = regular session
-  role: Optional[str] = None  # role ("project" from the scheduler; arbitrary via create API); None = regular session
-  last_scheduled_run: Optional[str] = None  # ISO datetime of last scheduler execution
-  last_run_status: Optional[str] = None  # "running" / "success" / "failed" / "skipped"
-  last_scheduled_cron: Optional[str] = None  # cron expr at last run; detects changes
+  scheduled_task: str | None = None  # task name; None = regular session
+  role: str | None = None  # role ("project" from the scheduler; arbitrary via create API); None = regular session
+  last_scheduled_run: str | None = None  # ISO datetime of last scheduler execution
+  last_run_status: str | None = None  # "running" / "success" / "failed" / "skipped"
+  last_scheduled_cron: str | None = None  # cron expr at last run; detects changes
   # Transient fields, populated by API layer for scheduled sessions only
-  schedule_cron: Optional[str] = None
-  schedule_enabled: Optional[bool] = None
-  schedule_next_run: Optional[str] = None
-  schedule_timezone: Optional[str] = None
-  schedule_project: Optional[str] = None
-  schedule_allow_failure: Optional[bool] = None
+  schedule_cron: str | None = None
+  schedule_enabled: bool | None = None
+  schedule_next_run: str | None = None
+  schedule_timezone: str | None = None
+  schedule_project: str | None = None
+  schedule_allow_failure: bool | None = None
   # Parent session for clone/elone-derived sessions
-  parent_session_id: Optional[str] = None
+  parent_session_id: str | None = None
   # Elone successor pointer: id of the session that took over from this one via
   # elone. Latest-wins for ordinary sessions — each elone overwrites the pointer
   # to name the parent's most recent elone child. Scheduler-owned sessions keep
   # a single succession. Ordinary fork/archive/delete leave it None.
-  successor_session_id: Optional[str] = None
+  successor_session_id: str | None = None
   # Slack thread this session was summoned from; set at creation, never mutated.
-  slack_origin: Optional[SlackOrigin] = None
+  slack_origin: SlackOrigin | None = None
   # Rating
-  rating: Optional[SessionRating] = None
+  rating: SessionRating | None = None
   # Key is the round event id (UUID generated at event write time, or
   # "legacy:<event_index>" for events predating the UUID migration).
-  round_ratings: Dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)
+  round_ratings: dict[str, Literal['thumbs_up', 'thumbs_down']] = Field(default_factory=dict)
   # Grouping
-  group: Optional[str] = None
+  group: str | None = None
   # Number of chat events that have been moved out of the live chat_events.jsonl
   # into archive files. All event_index values seen by the UI/API are GLOBAL =
   # archive_offset + line_number_in_live_file.
@@ -299,13 +299,13 @@ class SessionMetadata(BaseModel):
 
 class WorkerEvent(BaseModel):
   type: str
-  content: Optional[str] = None
-  path: Optional[str] = None
-  lines_added: Optional[int] = None
-  message: Optional[str] = None
-  status: Optional[str] = None
-  tool_name: Optional[str] = None
-  input: Optional[dict] = None
+  content: str | None = None
+  path: str | None = None
+  lines_added: int | None = None
+  message: str | None = None
+  status: str | None = None
+  tool_name: str | None = None
+  input: dict | None = None
   timestamp: UtcDatetime = Field(default_factory=utc_now)
 
 
@@ -315,28 +315,28 @@ class WorkerEvent(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
-  name: Optional[str] = None
-  scheduled_task: Optional[str] = None
-  backend: Optional[str] = None
-  role: Optional[str] = None
-  session_id: Optional[str] = None
-  slack_origin: Optional[SlackOrigin] = None
+  name: str | None = None
+  scheduled_task: str | None = None
+  backend: str | None = None
+  role: str | None = None
+  session_id: str | None = None
+  slack_origin: SlackOrigin | None = None
 
 
 class ForkSessionRequest(BaseModel):
-  event_index: Optional[int] = None
-  backend: Optional[str] = None
+  event_index: int | None = None
+  backend: str | None = None
 
 
 class EloneSessionRequest(BaseModel):
   event_index: int
-  backend: Optional[str] = None
+  backend: str | None = None
 
 
 class UploadedFileRef(BaseModel):
   filename: str
   path: str
-  size: Optional[int] = None
+  size: int | None = None
 
 
 class SendMessageRequest(BaseModel):
@@ -354,11 +354,11 @@ class SwitchBackendRequest(BaseModel):
 
 
 class RateRoundRequest(BaseModel):
-  rating: Optional[Literal['thumbs_up', 'thumbs_down']]
+  rating: Literal['thumbs_up', 'thumbs_down'] | None
 
 
 class SetGroupRequest(BaseModel):
-  group: Optional[str] = None
+  group: str | None = None
 
 
 class RenameGroupRequest(BaseModel):
@@ -375,25 +375,25 @@ class DelegateInvocationMetadata(BaseModel):
   model_config = ConfigDict(extra="forbid")
 
   task_type: TaskType
-  repo_path: Optional[str] = None
-  base_branch: Optional[str] = None
-  task_spec_file: Optional[str] = None
-  reviewer_context_file: Optional[str] = None
+  repo_path: str | None = None
+  base_branch: str | None = None
+  task_spec_file: str | None = None
+  reviewer_context_file: str | None = None
   keep_worktree: bool
-  backend: Optional[str] = None
+  backend: str | None = None
 
 
 class DelegateRequest(BaseModel):
   """Request body for the internal delegation endpoint."""
   session_id: str
   description: str
-  base_branch: Optional[str] = None
-  backend: Optional[str] = None
-  repo_path: Optional[str] = None
-  context: Optional[str] = None
+  base_branch: str | None = None
+  backend: str | None = None
+  repo_path: str | None = None
+  context: str | None = None
   task_type: TaskType = TaskType.IMPLEMENT
   keep_worktree: bool = False
-  delegate_invocation: Optional[DelegateInvocationMetadata] = None
+  delegate_invocation: DelegateInvocationMetadata | None = None
 
 
 class ImproveRequest(BaseModel):
@@ -403,11 +403,11 @@ class ImproveRequest(BaseModel):
   session_id: str
   repo_path: str
   base_branch: str
-  backend: Optional[str] = None
+  backend: str | None = None
   iterations: int = 3
   goal: str
-  plan: Optional[str] = None
-  work_branch: Optional[str] = None
+  plan: str | None = None
+  work_branch: str | None = None
   merge_back: bool = False
 
 
@@ -424,7 +424,7 @@ class ScheduleTriggerRequest(BaseModel):
   session_id: str
   delay_seconds: int
   message: str = Field(max_length=MAX_TRIGGER_MESSAGE_CHARS)
-  watch_targets: Optional[list[WatchTarget]] = None
+  watch_targets: list[WatchTarget] | None = None
 
 
 class SessionMessageRequest(BaseModel):
@@ -448,9 +448,9 @@ class PlanPresentRequest(BaseModel):
   session_id: str
   file: str
   title: str
-  base_repo: Optional[str] = None
-  base_branch: Optional[str] = None
-  base_sha: Optional[str] = None
+  base_repo: str | None = None
+  base_branch: str | None = None
+  base_sha: str | None = None
 
 
 class PlanAmendRequest(BaseModel):
@@ -459,11 +459,11 @@ class PlanAmendRequest(BaseModel):
 
   session_id: str
   file: str
-  plan_id: Optional[int] = None
+  plan_id: int | None = None
   trigger: Literal["auto_amend", "feedback"] = "feedback"
-  base_repo: Optional[str] = None
-  base_branch: Optional[str] = None
-  base_sha: Optional[str] = None
+  base_repo: str | None = None
+  base_branch: str | None = None
+  base_sha: str | None = None
 
 
 class PlanApproveRequest(BaseModel):
@@ -471,7 +471,7 @@ class PlanApproveRequest(BaseModel):
   model_config = ConfigDict(extra="forbid")
 
   session_id: str
-  plan_id: Optional[int] = None
+  plan_id: int | None = None
 
 
 class PlanCloseRequest(BaseModel):
@@ -495,10 +495,10 @@ class SessionCallbacks:
   update_thinking_state: Callable[..., Awaitable[None]]
   mark_unread: Callable[[str], Awaitable[None]]
   # Returns the cc_session_id read back from disk after persisting.
-  persist_cc_session_id: Callable[[str, str], Awaitable[Optional[str]]]
+  persist_cc_session_id: Callable[[str, str], Awaitable[str | None]]
   has_completed_round: Callable[[str], Awaitable[bool]]
   # Sets (or clears, on None) the session's in-flight master-turn record.
-  persist_master_run: Callable[[str, Optional[MasterRunRecord]], Awaitable[None]]
+  persist_master_run: Callable[[str, MasterRunRecord | None], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -509,16 +509,16 @@ class SessionCallbacks:
 @dataclass
 class SpawnRequest:
   """Worker configuration parameters that travel as a unit through spawn_worker."""
-  repo_path: Optional[str] = None
-  context: Optional[str] = None
-  prompt_override: Optional[str] = None
+  repo_path: str | None = None
+  context: str | None = None
+  prompt_override: str | None = None
   resolved_backend: str = ""
-  resolved_model: Optional[str] = None
-  base_branch: Optional[str] = None
-  branch_name_override: Optional[str] = None
-  loop_dir: Optional[str] = None
-  iteration_number: Optional[int] = None
-  worktree_path_override: Optional[str] = None
+  resolved_model: str | None = None
+  base_branch: str | None = None
+  branch_name_override: str | None = None
+  loop_dir: str | None = None
+  iteration_number: int | None = None
+  worktree_path_override: str | None = None
   skip_cleanup: bool = False
   skip_notify: bool = False
   is_continuation: bool = False

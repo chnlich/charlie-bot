@@ -15,8 +15,10 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
-function escapeChatAttr(str) {
-  return escapeHtml(String(str)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+// Missing values must render empty: the DOM textContent coercion would turn undefined
+// into the literal string "undefined", and worker descriptions may be missing.
+function escapeHtmlAttr(str) {
+  return escapeHtml(str == null ? '' : String(str)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function escapeJsSingleQuoted(str) {
@@ -43,11 +45,11 @@ function messageRenderId(msg) {
 
 function messageIdentityAttrs(msg) {
   const id = messageRenderId(msg);
-  let attrs = id ? ' data-message-id="' + escapeChatAttr(id) + '"' : '';
-  if (msg && msg.role) attrs += ' data-message-role="' + escapeChatAttr(msg.role) + '"';
+  let attrs = id ? ' data-message-id="' + escapeHtmlAttr(id) + '"' : '';
+  if (msg && msg.role) attrs += ' data-message-role="' + escapeHtmlAttr(msg.role) + '"';
   // The turn fold row reads its time field from here — a message without a
   // timestamp emits no attribute and the row's time field stays empty.
-  if (msg && msg.timestamp) attrs += ' data-message-ts="' + escapeChatAttr(msg.timestamp) + '"';
+  if (msg && msg.timestamp) attrs += ' data-message-ts="' + escapeHtmlAttr(msg.timestamp) + '"';
   return attrs;
 }
 
@@ -59,7 +61,8 @@ function isRenderedMessage(msg) {
 
 Chat.shouldAutoScroll = shouldAutoScroll;
 Chat.escapeHtml = escapeHtml;
-Chat.escapeChatAttr = escapeChatAttr;
+Chat.escapeChatAttr = escapeHtmlAttr;
+Chat.escapeHtmlAttr = escapeHtmlAttr;
 Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
 Chat.formatBubbleTime = formatBubbleTime;
 Chat.messageIdentityAttrs = messageIdentityAttrs;
@@ -67,6 +70,7 @@ Chat.isRenderedMessage = isRenderedMessage;
 Chat.expose([
   'shouldAutoScroll',
   'escapeHtml',
+  'escapeHtmlAttr',
   'isRenderedMessage',
 ]);
 

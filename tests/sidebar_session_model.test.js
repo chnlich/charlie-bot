@@ -28,6 +28,9 @@ function loadGroups() {
     localStorage: {getItem: () => null, setItem: () => {}},
     escapeHtml: (str) => String(str)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+    escapeHtmlAttr: (str) => String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
     relativeTime: () => 'Jul 29, 5:12 PM',
     formatNextRun: () => '',
     formatLastRun: () => '',

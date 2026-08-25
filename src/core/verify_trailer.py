@@ -46,7 +46,10 @@ async def read_verify_final_report(session_id: str, thread_id: str, thread_mgr: 
 
 
 def _normalize_line(line: str) -> str:
-  """Strip whitespace and repeated markdown wrappers (backticks, asterisks) to a fixed point."""
+  """Strip whitespace and repeated markdown wrappers (backticks, asterisks) to a fixed point.
+
+  Dashes are left in place; Slack marker matching depends on them surviving.
+  """
   normalized = line.strip()
   while True:
     stripped = normalized.strip("`*").strip()

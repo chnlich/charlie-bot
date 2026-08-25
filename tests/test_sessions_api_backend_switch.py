@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
+from conftest import CODEX_BACKEND_OPTION
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -44,7 +45,7 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path, Path]:
           BackendOption(
               id="invite-opus", label="Invite Opus", type="cc-claude", model="claude-opus-4-6",
               claude_config_dir=str(config_b)),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          CODEX_BACKEND_OPTION,
       ],
   )
   return cfg, config_a, config_b

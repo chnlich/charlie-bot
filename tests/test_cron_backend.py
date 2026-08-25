@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -21,7 +22,6 @@ from src.core.config import (
   get_config,
 )
 from src.core.models import (
-  BackendOption,
   CreateSessionRequest,
   SessionMetadata,
   SessionStatus,
@@ -39,8 +39,8 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
       ],
   )
 

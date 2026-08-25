@@ -19,7 +19,6 @@ import subprocess
 import uuid
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional
 
 import structlog
 
@@ -209,7 +208,7 @@ _DERIVED_STATE_STR: dict[_DerivedState, str] = {
 }
 
 
-def _derive_state(closed: Optional[dict], takeoff: Optional[dict]) -> _DerivedState:
+def _derive_state(closed: dict | None, takeoff: dict | None) -> _DerivedState:
   """Pure function of (closed, takeoff) -> _DerivedState. Fail-loud.
 
   Wrong types (non-dict closed/takeoff) raise ValueError so the tolerant read's
@@ -409,7 +408,7 @@ class PlanRegistryManager:
       raise ValueError(f"file {file!r} not found inside the session directory")
     return relative.as_posix()
 
-  def _find_binding_by_file(self, session_id: str, data: dict, file: str) -> Optional[tuple[int, int]]:
+  def _find_binding_by_file(self, session_id: str, data: dict, file: str) -> tuple[int, int] | None:
     """Return (plan_id, v) for the first version whose normalized file path equals ``file``.
 
     Both sides are normalized via ``posixpath.normpath`` so legacy rows with non-canonical
@@ -437,7 +436,7 @@ class PlanRegistryManager:
       raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
     return file_relative
 
-  def _get_plan(self, data: dict, plan_id: int) -> Optional[dict]:
+  def _get_plan(self, data: dict, plan_id: int) -> dict | None:
     for plan in data["plans"]:
       if plan["id"] == plan_id:
         return plan
@@ -450,7 +449,7 @@ class PlanRegistryManager:
       session_id: str,
       file: str,
       title: str,
-      base: Optional[dict] = None,
+      base: dict | None = None,
   ) -> dict:
     async with self._lock_for(session_id):
       data = await self._load(session_id)
@@ -479,9 +478,9 @@ class PlanRegistryManager:
       self,
       session_id: str,
       file: str,
-      plan_id: Optional[int] = None,
+      plan_id: int | None = None,
       trigger: str = "feedback",
-      base: Optional[dict] = None,
+      base: dict | None = None,
   ) -> dict:
     if trigger not in ("auto_amend", "feedback"):
       raise ValueError(f"trigger must be one of auto_amend|feedback, got {trigger!r}")
@@ -503,7 +502,7 @@ class PlanRegistryManager:
     await self._broadcast(session_id, plan["id"])
     return {"plan": plan["id"], "v": new_v, "state": derive_state_str(plan)}
 
-  def _resolve_target_plan_for_amend(self, data: dict, plan_id: Optional[int]) -> dict:
+  def _resolve_target_plan_for_amend(self, data: dict, plan_id: int | None) -> dict:
     if plan_id is not None:
       plan = self._get_plan(data, plan_id)
       if plan is None:
@@ -519,7 +518,7 @@ class PlanRegistryManager:
       raise ValueError(f"amend requires --plan (multiple open lineages: {ids})")
     return open_candidates[0]
 
-  async def approve(self, session_id: str, plan_id: Optional[int] = None) -> dict:
+  async def approve(self, session_id: str, plan_id: int | None = None) -> dict:
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       plan = self._resolve_target_plan_for_approve(data, plan_id)
@@ -529,7 +528,7 @@ class PlanRegistryManager:
     await self._broadcast(session_id, plan["id"])
     return {"plan": plan["id"], "v": latest["v"], "state": derive_state_str(plan)}
 
-  def _resolve_target_plan_for_approve(self, data: dict, plan_id: Optional[int]) -> dict:
+  def _resolve_target_plan_for_approve(self, data: dict, plan_id: int | None) -> dict:
     if plan_id is not None:
       plan = self._get_plan(data, plan_id)
       if plan is None:

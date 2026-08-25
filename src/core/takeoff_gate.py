@@ -8,7 +8,6 @@ extracted from src.core.spawner, which consumes none of it.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import structlog
 
@@ -38,7 +37,7 @@ def _normalize_takeoff_content(content: str) -> str:
   return " ".join(content.casefold().split())
 
 
-def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> Optional[datetime]:
+def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime | None:
   """Parse a pre-takeoff event timestamp as UTC, failing closed when it is invalid."""
   timestamp = event.get("timestamp")
   if not isinstance(timestamp, str) or not timestamp:
@@ -72,7 +71,7 @@ def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> Optional[datet
 def check_takeoff_gate(
     session_id: str,
     session_mgr: SessionManager,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> None:
   """Verify an active pre-takeoff or ordinary takeoff authorization window."""
   effective_now = now if now is not None else datetime.now(timezone.utc)
@@ -82,7 +81,7 @@ def check_takeoff_gate(
 
   events = session_mgr.load_chat_events_sync(session_id)
   latest_user_has_takeoff = False
-  latest_pre_takeoff_at: Optional[datetime] = None
+  latest_pre_takeoff_at: datetime | None = None
   for event in events:
     if not _is_real_user_message(event):
       continue

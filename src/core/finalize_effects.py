@@ -19,7 +19,6 @@ All predicates are pure functions over already-loaded chat/thread data so both
 the live finalize path and the startup reconcile pass apply identical rules.
 """
 
-from typing import Optional
 
 from src.core import event_types as ET
 from src.core.models import ThreadMetadata
@@ -45,7 +44,7 @@ def terminal_summary_present(chat_events: list[dict], thread_id: str) -> bool:
 
 def master_woke_after_summary(chat_events: list[dict], thread_id: str) -> bool:
   """Whether any master output followed this thread's LAST terminal summary."""
-  last_summary_idx: Optional[int] = None
+  last_summary_idx: int | None = None
   for idx, ev in enumerate(chat_events):
     if _is_terminal_worker_summary(ev, thread_id):
       last_summary_idx = idx
@@ -58,7 +57,7 @@ def reviewer_thread_exists(
     threads: list[ThreadMetadata],
     original_thread_id: str,
     *,
-    exclude_thread_id: Optional[str] = None,
+    exclude_thread_id: str | None = None,
 ) -> bool:
   """Whether a reviewer thread for *original_thread_id* already exists.
 

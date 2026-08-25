@@ -3,7 +3,6 @@
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import structlog
 
@@ -77,7 +76,7 @@ def _extra_rules_text(extra_rules: list[str]) -> str:
   return ' '.join(extra_rules)
 
 
-def _check_revision(items: list[dict], backlog_path: Path) -> Optional[str]:
+def _check_revision(items: list[dict], backlog_path: Path) -> str | None:
   """Step 0: address revision feedback."""
   for item in items:
     if item.get('status') == 'revision_requested' and item.get('revision_feedback'):
@@ -199,7 +198,7 @@ def _build_scan_prompt(cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
 
 
 async def determine_action(backlog_path: Path, loop_cfg: ImprovementLoopConfig,
-                           repo_path: Path) -> tuple[str, Optional[str]]:
+                           repo_path: Path) -> tuple[str, str | None]:
   """Determine the next improvement-loop action.
 
   Returns (action_type, prompt_text). action_type is one of:

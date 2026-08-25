@@ -3,7 +3,6 @@
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import aiofiles
 import structlog
@@ -31,11 +30,11 @@ class ThreadManager:
       self,
       session_meta: SessionMetadata,
       description: str,
-      branch_name: Optional[str] = None,
-      review_of: Optional[str] = None,
-      context: Optional[str] = None,
+      branch_name: str | None = None,
+      review_of: str | None = None,
+      context: str | None = None,
       require_review: bool = True,
-      task_type: Optional[TaskType] = None,
+      task_type: TaskType | None = None,
   ) -> ThreadMetadata:
     """Create a new thread directory and metadata."""
     thread = ThreadMetadata(
@@ -55,7 +54,7 @@ class ThreadManager:
     log.info("thread_created", thread_id=thread.id)
     return thread
 
-  async def get_thread(self, session_id: str, thread_id: str) -> Optional[ThreadMetadata]:
+  async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
     path = self._metadata_path(session_id, thread_id)
     if not path.exists():
       return None
@@ -77,9 +76,9 @@ class ThreadManager:
       session_id: str,
       thread_id: str,
       status: ThreadStatus,
-      pid: Optional[int] = None,
-      exit_code: Optional[int] = None,
-      completed_at: Optional[datetime] = None,
+      pid: int | None = None,
+      exit_code: int | None = None,
+      completed_at: datetime | None = None,
   ) -> None:
     meta = await self.get_thread(session_id, thread_id)
     if not meta:

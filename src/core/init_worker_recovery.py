@@ -7,7 +7,6 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 import structlog
 
@@ -317,7 +316,7 @@ async def _reconcile_one(
   return True
 
 
-def _parse_started_at(meta: dict) -> Optional[datetime]:
+def _parse_started_at(meta: dict) -> datetime | None:
   started_at = meta.get("started_at")
   if not started_at:
     return None

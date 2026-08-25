@@ -10,15 +10,13 @@ from zoneinfo import ZoneInfo
 import pytest
 import yaml
 from conftest import (
-  CODEX_BACKEND_OPTION,
-  OPUS_BACKEND_OPTION,
   FakeThreadManager,
+  build_scheduler_cfg,
   make_cron_client,
 )
 
 from src.api import cron as cron_api
 from src.core.config import (
-  CharlieBotConfig,
   ScheduledTaskConfig,
   _load_cron_file,
 )
@@ -34,17 +32,6 @@ from src.core.thinking_state import clear_busy, mark_busy
 from src.core.threads import ThreadManager
 
 
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
-  )
-
-
 async def _noop() -> None:
   return None
 
@@ -54,7 +41,7 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = AsyncMock()
   scheduler = Scheduler(cfg, session_mgr)
   session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend="claude-opus-4.6")
@@ -107,7 +94,7 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = AsyncMock()
   scheduler = Scheduler(cfg, session_mgr)
   session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend="claude-opus-4.6")
@@ -141,7 +128,7 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
 
 @pytest.mark.asyncio
 async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeeping(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
@@ -187,7 +174,7 @@ async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
@@ -223,7 +210,7 @@ async def test_scheduler_skips_backend_rotation_while_old_session_is_running(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
@@ -266,7 +253,7 @@ def test_cron_api_persists_and_clears_backend(
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   nightly_path = cron_dir / "nightly.yaml"
   prompt_path = tmp_path / "prompts" / "nightly.md"
@@ -311,7 +298,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   prompt_path = tmp_path / "prompts" / "nightly.md"
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -346,7 +333,7 @@ def test_cron_api_rejects_invalid_backend_on_update(
       yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "codex-o3"}),
       encoding="utf-8")
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
   with make_cron_client(cfg, session_mgr) as client:
@@ -373,7 +360,7 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
       yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "claude-opus-4.6"}),
       encoding="utf-8")
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
@@ -424,7 +411,7 @@ def test_load_cron_file_loads_prompt_file(
 ) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   yaml_path, md_path, md_content = _seed_prompt_file_task(cron_dir, tmp_path)
 
   task, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
@@ -441,7 +428,7 @@ def test_cron_api_put_updates_backend_on_prompt_file_host_file(
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   yaml_path, _md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)
   original = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))

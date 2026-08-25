@@ -1,22 +1,11 @@
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION
+from conftest import build_tui_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
-from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, SessionMetadata
+from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
-      ],
-  )
 
 
 @pytest.mark.asyncio
@@ -24,7 +13,7 @@ async def test_stop_tui_kills_tmux_for_tui_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(name="TUI", backend="claude-tui")
   await session_mgr.save_metadata(meta)
@@ -45,7 +34,7 @@ async def test_stop_tui_kills_tmux_for_tui_session(
 
 @pytest.mark.asyncio
 async def test_stop_tui_rejects_non_tui_session(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="SDK"), backend="claude-opus-4.6")
 
@@ -61,7 +50,7 @@ async def test_archive_tui_session_does_not_kill_tmux(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(name="TUI", backend="claude-tui")
   await session_mgr.save_metadata(meta)
@@ -86,7 +75,7 @@ async def test_tui_status_returns_running_busy_dict_for_tui_sessions_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   cc_meta = await session_mgr.create_session(CreateSessionRequest(name="SDK"), backend="claude-opus-4.6")
   running_tui_meta = SessionMetadata(name="TUI running", backend="claude-tui")

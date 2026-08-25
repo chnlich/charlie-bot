@@ -5,7 +5,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,10 +17,10 @@ if str(ROOT) not in sys.path:
 # Imports must follow the sys.path bootstrap above.
 from src.agents import master_cc_state  # noqa: E402,I001
 from src.core import models  # noqa: E402,I001
-
-if TYPE_CHECKING:
-  from src.core.config import CharlieBotConfig
-  from src.core.sessions import SessionManager
+from src.core.config import CharlieBotConfig  # noqa: E402,I001
+from src.core.plans import PlanRegistryManager  # noqa: E402,I001
+from src.core.sessions import SessionManager  # noqa: E402,I001
+from src.core.threads import ThreadManager  # noqa: E402,I001
 
 
 def mock_session_callbacks() -> models.SessionCallbacks:
@@ -114,6 +114,56 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
   )
   if result.returncode != 0:
     pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
+
+
+PLAN_TEST_BACKEND_OPTIONS = [
+    models.BackendOption(id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"),
+]
+
+PLAN_GOAL_OK_HTML = "<html><section><h2>1 Problem / Goal</h2><p>Ship the fix.</p></section></html>"
+
+
+def write_stub_chrome(tmp_path: Path, height: int) -> str:
+  """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
+  stub = tmp_path / f"stub-chrome-{height}.sh"
+  stub.write_text(f"#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n", encoding="utf-8")
+  stub.chmod(0o755)
+  return str(stub)
+
+
+def build_plan_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for plan tests: the 800px stub chrome sits under the 1-page height limit, and the
+  sessions/worktrees dirs live under tmp_path so each test owns its own tree."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=PLAN_TEST_BACKEND_OPTIONS,
+      headless_chrome_bin=write_stub_chrome(tmp_path, 800),
+  )
+
+
+def write_plan_artifact(
+    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str = PLAN_GOAL_OK_HTML
+) -> str:
+  """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content
+  satisfies the page gate's required section so tests can present/approve directly."""
+  artifacts_dir = cfg.sessions_dir / session_id / "artifacts"
+  artifacts_dir.mkdir(parents=True, exist_ok=True)
+  (artifacts_dir / name).write_text(content, encoding="utf-8")
+  return f"artifacts/{name}"
+
+
+async def make_plan_setup(
+    tmp_path: Path,
+) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, PlanRegistryManager, models.SessionMetadata]:
+  """Real manager trio plus one created session under a plan-shaped config, for plan tests that talk to the
+  registry or the plan endpoints."""
+  cfg = build_plan_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  plan_mgr = PlanRegistryManager(cfg, session_mgr)
+  meta = await session_mgr.create_session(models.CreateSessionRequest(name="Test"), backend="claude-opus-4.6")
+  return cfg, session_mgr, thread_mgr, plan_mgr, meta
 
 
 class JudgmentShim:

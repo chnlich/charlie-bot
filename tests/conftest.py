@@ -357,7 +357,8 @@ class FakeBackend:
   Callers install it through a patched build_backend on the master-cc run path
   and rely on the exit_code/stderr_text attributes that path reads after the
   event stream ends; terminated and terminate() mirror AgentBackend's surface
-  so cancel and failure paths run against the double unchanged.
+  so the terminate-on-failure path runs against the double unchanged. The
+  cancel let-go path is not covered: detach() and pid_start are absent.
   """
 
   exit_code = 0

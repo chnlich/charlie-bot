@@ -209,6 +209,7 @@ function buildContext(overrides = {}) {
     relativeTime: (txt) => txt,
     updateRelativeTimes: () => {},
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
+    formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
     formatNextRun: (txt) => txt,
     formatLastRun: (txt) => txt,
     escapeHtml: (v) => v,

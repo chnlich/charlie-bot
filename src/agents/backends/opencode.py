@@ -22,7 +22,6 @@ from src.agents.backends.base import (
   resolve_binary,
 )
 from src.core import event_types as ET
-from src.core import runs
 from src.core.process import kill_process_group
 from src.core.timeouts import OPENCODE_SSE_PROGRESS_TIMEOUT
 
@@ -145,23 +144,7 @@ class OpenCodeBackend(AgentBackend):
       final_env = self._prepare_env(env)
       stdout_log_path, stderr_log_path = self._log_paths()
 
-      self._proc = await asyncio.create_subprocess_exec(
-          *cmd,
-          cwd=cwd,
-          stdin=asyncio.subprocess.DEVNULL,
-          stdout=asyncio.subprocess.PIPE,
-          stderr=asyncio.subprocess.PIPE,
-          env=final_env,
-          limit=self._buffer_limit,
-          start_new_session=True,
-      )
-      # Pin the process identity BEFORE on_spawn so the callback can persist
-      # (pid, pid_start) together; a proc that exited before we could read its
-      # stat simply yields None and can never be judged alive later.
-      stat_pair = runs.read_pid_stat(self._proc.pid)
-      self.pid_start = stat_pair[0] if stat_pair else None
-      if self._on_spawn is not None:
-        await self._on_spawn(self._proc.pid)
+      await self._spawn_piped_and_pin_identity(cmd, cwd, final_env)
 
       self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
       self._server_url = await self._read_server_url(stdout_log_path)

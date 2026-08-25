@@ -17,7 +17,6 @@ from src.agents.backends.base import (
   prepend_path_dir,
   resolve_binary,
 )
-from src.core import runs
 
 _PRINT_TIMEOUT = "24h"
 
@@ -72,23 +71,7 @@ class AntigravityCliBackend(AgentBackend):
     cmd = self._build_command(prompt)
     final_env = self._prepare_env(env)
 
-    self._proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=cwd,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=final_env,
-        limit=self._buffer_limit,
-        start_new_session=True,
-    )
-    # Pin the process identity BEFORE on_spawn so the callback can persist
-    # (pid, pid_start) together; a proc that exited before we could read its
-    # stat simply yields None and can never be judged alive later.
-    stat_pair = runs.read_pid_stat(self._proc.pid)
-    self.pid_start = stat_pair[0] if stat_pair else None
-    if self._on_spawn is not None:
-      await self._on_spawn(self._proc.pid)
+    await self._spawn_piped_and_pin_identity(cmd, cwd, final_env)
 
     assert self._proc.stdout is not None
     stdout_bytes = bytearray()

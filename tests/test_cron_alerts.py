@@ -16,7 +16,6 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import cron_d_dir as _cron_d_dir
 from conftest import dump_yaml as _dump
 from conftest import write_cron_task as _write_task_text
 

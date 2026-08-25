@@ -25,64 +25,7 @@ function readStatic(relativePath) {
   return fs.readFileSync(path.join(ROOT, 'web', 'static', 'js', relativePath), 'utf8');
 }
 
-// ---------------------------------------------------------------------------
-// Minimal fake DOM (same shape as tests/compact_button.test.js).
-// ---------------------------------------------------------------------------
-function escapeForFakeDom(str) {
-  return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-}
-
-class FakeElement {
-  constructor(tag = 'DIV') {
-    this.tagName = String(tag).toUpperCase();
-    this.children = [];
-    this.parentElement = null;
-    this.dataset = {};
-    const classSet = new Set();
-    this.classList = {
-      add(...c) { c.forEach((x) => classSet.add(x)); },
-      remove(...c) { c.forEach((x) => classSet.delete(x)); },
-      toggle(c, force) {
-        if (force === undefined) {
-          if (classSet.has(c)) { classSet.delete(c); return false; }
-          classSet.add(c);
-          return true;
-        }
-        if (force) classSet.add(c); else classSet.delete(c);
-        return !!force;
-      },
-      contains(c) { return classSet.has(c); },
-    };
-    this._html = '';
-    this._text = '';
-  }
-
-  get innerHTML() {
-    return this._html + this.children.map((c) => c.innerHTML).join('');
-  }
-
-  set innerHTML(html) {
-    this._html = html;
-    this.children = [];
-  }
-
-  get textContent() { return this._text; }
-
-  set textContent(value) {
-    this._text = String(value || '');
-    this.innerHTML = escapeForFakeDom(this._text);
-  }
-
-  appendChild(child) {
-    child.parentElement = this;
-    this.children.push(child);
-    return child;
-  }
-
-  querySelector() { return null; }
-
-  querySelectorAll() { return []; }
-}
+const { FakeElement } = require('./fake_dom');
 
 function makeDocument(elements) {
   return {

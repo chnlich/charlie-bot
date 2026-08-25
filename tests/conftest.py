@@ -226,11 +226,11 @@ def patch_trigger_fire(
   if sleep_mock is not None:
     patches.append(patch("src.core.triggers.asyncio.sleep", new=sleep_mock))
   patches.append(patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()))
-  patches.append(patch("src.core.triggers.trigger_master", new=AsyncMock()))
+  master_patch = patch("src.core.triggers.trigger_master", new=AsyncMock())
   with contextlib.ExitStack() as stack:
-    for p in patches[:-1]:
+    for p in patches:
       stack.enter_context(p)
-    yield stack.enter_context(patches[-1])
+    yield stack.enter_context(master_patch)
 
 
 class JudgmentShim:

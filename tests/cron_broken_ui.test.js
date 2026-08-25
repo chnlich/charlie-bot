@@ -58,6 +58,7 @@ function loadGroups(cronTasksPayload) {
       return Promise.resolve({ok: true, json: () => Promise.resolve(payload)});
     },
     escapeHtml,
+    escapeHtmlAttr: (str) => escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
     SESSION_ID: 'other-session',
     currentFilter: 'scheduled',
     sessionUnread: {},

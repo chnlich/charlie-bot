@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable
 
 import structlog
 
@@ -67,7 +67,7 @@ IMPROVE_ITERATION_PREFIX = "Iterative improvement — iteration"
 _NEVER_KILL_PIDS = frozenset({0, 1})
 
 
-def backend_type(cfg, backend_id: Optional[str]) -> Optional[str]:
+def backend_type(cfg, backend_id: str | None) -> str | None:
   """The configured transport type of ``backend_id``; None when unset or unknown."""
   if not backend_id:
     return None
@@ -97,10 +97,10 @@ class RunResolution:
   outcome: RunOutcome
   reason: str = ""
   # COMPLETED only: success per the trailing result event.
-  success: Optional[bool] = None
+  success: bool | None = None
   # Raw log's final mtime — the run's true completion time, independent of
   # downtime. Present whenever the raw log exists.
-  completed_at: Optional[datetime] = None
+  completed_at: datetime | None = None
   # Descendants that outlived the run while holding its raw-log fd (row 5).
   leftover_holders: tuple[HolderProcess, ...] = ()
 
@@ -136,7 +136,7 @@ def read_host_boot_time() -> datetime:
   raise RuntimeError("/proc/stat missing btime line")
 
 
-def read_pid_stat(pid: int) -> Optional[tuple[str, str]]:
+def read_pid_stat(pid: int) -> tuple[str, str] | None:
   """Return (start_time_field, state) from /proc/<pid>/stat, or None when gone.
 
   Field 22 (process start time) is a u64 in kernel clock ticks; keep it as the
@@ -156,9 +156,9 @@ def read_pid_stat(pid: int) -> Optional[tuple[str, str]]:
 
 
 def is_run_alive(
-    pid: Optional[int],
-    pid_start: Optional[str],
-    started_at: Optional[datetime],
+    pid: int | None,
+    pid_start: str | None,
+    started_at: datetime | None,
     host_boot_time: datetime,
 ) -> bool:
   """Whether the recorded (pid, pid_start) pair still points at a live process.
@@ -221,7 +221,7 @@ def leftover_holders_for(
     raw_path: Path,
     holders_scan: dict[tuple[int, int], list[HolderProcess]],
     *,
-    run_pid: Optional[int],
+    run_pid: int | None,
 ) -> tuple[HolderProcess, ...]:
   """Descendants still holding *raw_path*'s inode, excluding the run itself.
 
@@ -282,9 +282,9 @@ def project_raw_events(
   return out
 
 
-def summarize_result(events: Iterable[dict]) -> Optional[dict]:
+def summarize_result(events: Iterable[dict]) -> dict | None:
   """The last ``result`` event in a projected event stream, if any."""
-  last: Optional[dict] = None
+  last: dict | None = None
   for event in events:
     if event.get("type") == ET.RESULT:
       last = event
@@ -301,7 +301,7 @@ def result_success(result: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def raw_completion_time(raw_path: Path) -> Optional[datetime]:
+def raw_completion_time(raw_path: Path) -> datetime | None:
   """The raw log's final mtime as a tz-aware UTC datetime (None when missing).
 
   Backend- and content-agnostic: how long the server was down does not affect
@@ -333,9 +333,9 @@ def write_raw_cursor(cursor: Path, offset: int) -> None:
 
 
 def _missing_liveness_fields(
-    pid: Optional[int],
-    pid_start: Optional[str],
-    started_at: Optional[datetime],
+    pid: int | None,
+    pid_start: str | None,
+    started_at: datetime | None,
 ) -> list[str]:
   """Names of the liveness inputs that are absent, in fixed order."""
   missing = []
@@ -351,14 +351,14 @@ def _missing_liveness_fields(
 def resolve_run(
     *,
     raw_path: Path,
-    pid: Optional[int],
-    pid_start: Optional[str],
-    started_at: Optional[datetime],
-    backend_type: Optional[str],
+    pid: int | None,
+    pid_start: str | None,
+    started_at: datetime | None,
+    backend_type: str | None,
     translate: Callable[[dict], list[dict]],
     host_boot_time: datetime,
-    holders_scan: Optional[dict[tuple[int, int], list[HolderProcess]]] = None,
-    now: Optional[datetime] = None,
+    holders_scan: dict[tuple[int, int], list[HolderProcess]] | None = None,
+    now: datetime | None = None,
 ) -> RunResolution:
   """Resolve an interrupted run's outcome purely from on-disk facts.
 
@@ -390,8 +390,8 @@ def resolve_run(
   # unverifiable because a liveness input is missing. Both mean "treat as alive".
   effectively_alive = alive or bool(missing)
 
-  completed_at: Optional[datetime] = None
-  result: Optional[dict] = None
+  completed_at: datetime | None = None
+  result: dict | None = None
   if raw_exists:
     completed_at = raw_completion_time(raw_path)
     events = project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)

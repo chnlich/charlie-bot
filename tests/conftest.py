@@ -32,6 +32,7 @@ from src.core import models  # noqa: E402,I001
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402,I001
 from src.core.plans import PlanRegistryManager  # noqa: E402,I001
 from src.core.sessions import SessionManager  # noqa: E402,I001
+from src.core import spawner  # noqa: E402,I001
 from src.core.threads import ThreadManager  # noqa: E402,I001
 from src.core.triggers import TriggerManager  # noqa: E402,I001
 
@@ -426,6 +427,30 @@ def patch_trigger_fire(
     for p in patches:
       stack.enter_context(p)
     yield stack.enter_context(master_patch)
+
+
+def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
+  """A spawner._notify_completion stand-in recording the finalized outcome and thread.
+
+  The signature mirrors the production call in spawner._run_finalize_effects; each
+  monkeypatching test reads back only the captured fields it asserts on.
+  """
+
+  async def fake_notify_completion(
+      session_id: str,
+      description: str,
+      thread_meta: models.ThreadMetadata,
+      outcome: spawner._WorkerRunOutcome,
+      thread_mgr: Any,
+      session_mgr: Any,
+      _notify_cfg: CharlieBotConfig,
+      verify_report: str | None = None,
+  ) -> None:
+    captures["notified"] = True
+    captures["notify_exit_code"] = outcome.exit_code
+    captures["notify_thread"] = thread_meta
+
+  return fake_notify_completion
 
 
 class JudgmentShim:

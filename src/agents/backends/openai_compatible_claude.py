@@ -1,6 +1,6 @@
 """OpenAICompatibleClaudeBackend — Claude Code via CharlieBot's Anthropic proxy."""
 
-from src.agents.backends.claude_code import ClaudeCodeBackend
+from src.agents.backends.claude_code import ClaudeCodeBackend, claude_model_env
 
 
 class OpenAICompatibleClaudeBackend(ClaudeCodeBackend):
@@ -28,9 +28,5 @@ class OpenAICompatibleClaudeBackend(ClaudeCodeBackend):
         **super()._prepare_env(env),
         "ANTHROPIC_BASE_URL": self._proxy_base_url,
         "ANTHROPIC_AUTH_TOKEN": self._auth_token,
-        "ANTHROPIC_MODEL": self._env_model,
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": self._env_model,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": self._env_model,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": self._env_model,
-        "CLAUDE_CODE_SUBAGENT_MODEL": self._env_model,
+        **claude_model_env(self._env_model),
     }

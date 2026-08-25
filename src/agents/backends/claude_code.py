@@ -72,6 +72,22 @@ def headless_claude_env() -> dict[str, str]:
   return env
 
 
+def claude_model_env(model: str) -> dict[str, str]:
+  """Every Claude Code model-selection variable pinned to one model.
+
+  Claude Code reads the main model, the opus/sonnet/haiku slot defaults, and the
+  subagent model from separate variables. A backend that selects the model by env
+  (no --model flag) sets them all, or an unset slot falls back to a CLI default.
+  """
+  return {
+      "ANTHROPIC_MODEL": model,
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+      "CLAUDE_CODE_SUBAGENT_MODEL": model,
+  }
+
+
 def headless_claude_declared_window() -> tuple[int, int | None]:
   """Return ``(declared_window, compact_point | None)`` for a headless Claude Code run.
 

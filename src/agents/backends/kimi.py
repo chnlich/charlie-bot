@@ -1,6 +1,6 @@
 """KimiBackend — ClaudeCodeBackend configured to use Kimi's Anthropic-compatible endpoint."""
 
-from src.agents.backends.claude_code import ClaudeCodeBackend
+from src.agents.backends.claude_code import ClaudeCodeBackend, claude_model_env
 
 _MOONSHOT_BASE_URL = "https://api.moonshot.cn/anthropic"
 
@@ -26,9 +26,5 @@ class KimiBackend(ClaudeCodeBackend):
         **super()._prepare_env(env),
         "ANTHROPIC_BASE_URL": _MOONSHOT_BASE_URL,
         "ANTHROPIC_AUTH_TOKEN": self._api_key,
-        "ANTHROPIC_MODEL": self._env_model,
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": self._env_model,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": self._env_model,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": self._env_model,
-        "CLAUDE_CODE_SUBAGENT_MODEL": self._env_model,
+        **claude_model_env(self._env_model),
     }

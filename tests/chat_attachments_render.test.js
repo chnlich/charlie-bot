@@ -4,6 +4,10 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const COMPAT_LOADER_JS = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'js', 'compat-loader.js'),
+  'utf8'
+);
 const CHAT_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'chat.js'),
   'utf8'
@@ -121,6 +125,7 @@ function loadChatScript() {
   };
 
   vm.createContext(context);
+  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
   vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
   return context;
 }

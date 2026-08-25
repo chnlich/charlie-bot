@@ -7,10 +7,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import make_work_item, patch_instructions_content
+from conftest import FakeBackend, make_work_item, patch_instructions_content
 
 from src.agents import master_cc
-from src.agents.backends import base as backend_base
 from src.agents.backends import registry
 from src.core import config as core_config
 from src.core import event_types as ET
@@ -19,14 +18,6 @@ from src.core.models import CreateSessionRequest, PendingTrigger
 from src.core.sessions import SessionManager
 from src.core.spawner import _resolve_session_default_backend_model
 from src.core.triggers import TriggerManager
-
-
-class _FakeBackend:
-  exit_code = 0
-  stderr_text = ""
-
-  async def run(self, prompt: str, cwd: str, env: dict):
-    yield backend_base.make_result_event()
 
 
 def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
@@ -198,7 +189,7 @@ async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: 
                                         cc_session_id="conv-1")
   spawned: list[object] = []
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or _FakeBackend())
+                      lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, None)
@@ -224,7 +215,7 @@ async def test_run_cc_refuses_no_option_and_no_pin(tmp_path: Path, monkeypatch) 
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="")
   spawned: list[object] = []
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or _FakeBackend())
+                      lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, None)
@@ -297,7 +288,7 @@ async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
+                      lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0])
@@ -324,7 +315,7 @@ async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, mo
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda option, cfg, **k: captures.update(kwargs=k) or _FakeBackend())
+                      lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0])

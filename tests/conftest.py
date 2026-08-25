@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 # Imports must follow the sys.path bootstrap above.
 from src.agents import master_cc_run, master_cc_state  # noqa: E402,I001
+from src.agents.backends import base as backend_base  # noqa: E402,I001
 from src.api.cron import router as cron_router  # noqa: E402,I001
 from src.api.deps import get_session_manager  # noqa: E402,I001
 from src.api.sessions import router as sessions_router  # noqa: E402,I001
@@ -348,6 +349,27 @@ class FakeAsyncProcess:
 
   async def wait(self) -> int:
     return self.returncode
+
+
+class FakeBackend:
+  """AgentBackend double whose run() yields one canned result event.
+
+  Callers install it through a patched build_backend on the master-cc run path
+  and rely on the exit_code/stderr_text attributes that path reads after the
+  event stream ends; terminated and terminate() mirror AgentBackend's surface
+  so the terminate-on-failure path runs against the double unchanged. The
+  cancel let-go path is not covered: detach() and pid_start are absent.
+  """
+
+  exit_code = 0
+  stderr_text = ""
+  terminated = False
+
+  async def terminate(self) -> None:
+    self.terminated = True
+
+  async def run(self, prompt: str, cwd: str, env: dict):
+    yield backend_base.make_result_event()
 
 
 def _instructions_content_stub(session_meta: models.SessionMetadata, cfg: CharlieBotConfig,

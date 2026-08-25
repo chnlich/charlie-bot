@@ -28,6 +28,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import patch_instructions_content
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import init as init_module
@@ -242,7 +243,7 @@ def _install_backend(monkeypatch: pytest.MonkeyPatch, backend: _HungBackend) -> 
     return backend
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", _build)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
 
 
 def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread=None) -> SessionCallbacks:

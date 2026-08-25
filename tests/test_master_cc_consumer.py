@@ -10,7 +10,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import mock_session_callbacks
+from conftest import mock_session_callbacks, patch_instructions_content
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -526,8 +526,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend",
                       lambda *a, **k: _NoopBackend())
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content",
-                      lambda session_meta, cfg, prompt_overlay: "instructions")
+  patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
   item = master_cc._WorkItem(
@@ -690,7 +689,7 @@ async def _run_stream_consumer(
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
   monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **k: backend)
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", lambda *a, **k: "instructions")
+  patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 

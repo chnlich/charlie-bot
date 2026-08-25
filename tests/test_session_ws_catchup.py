@@ -1,19 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from conftest import FakeWebSocket
 
 from server import _replay_aggregated_catchup, _send_session_catchup
 
 VOICE_KEY = "is_" + "voice"
-
-
-class _FakeWebSocket:
-
-  def __init__(self) -> None:
-    self.sent: list[dict] = []
-
-  async def send_json(self, payload: dict) -> None:
-    self.sent.append(payload)
 
 
 class _CountOnlySessionManager:
@@ -39,7 +31,7 @@ async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> 
       {"type": "master_done", "thinking_seconds": 2, "timestamp": "t2"},
       {"type": "user", "content": "again", "timestamp": "t3"},
   ]
-  ws = _FakeWebSocket()
+  ws = FakeWebSocket()
   sent_count = await _replay_aggregated_catchup(ws, events, cursor=2, session_id="s")
   assert sent_count == len(ws.sent)
 
@@ -64,7 +56,7 @@ async def test_replay_emits_only_latest_stream_when_draft_is_dangling() -> None:
       {"type": "assistant", "message": {"content": [{"type": "text", "text": "A"}]}, "timestamp": "t0"},
       {"type": "assistant", "message": {"content": [{"type": "text", "text": "B"}]}, "timestamp": "t1"},
   ]
-  ws = _FakeWebSocket()
+  ws = FakeWebSocket()
   await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
 
   # Two assistant text events split the buffer:
@@ -84,7 +76,7 @@ async def test_replay_with_cursor_at_end_sends_nothing() -> None:
       {"type": "user", "content": "hi", "timestamp": "t0"},
       {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}, "timestamp": "t1"},
   ]
-  ws = _FakeWebSocket()
+  ws = FakeWebSocket()
   sent = await _replay_aggregated_catchup(ws, events, cursor=len(events), session_id="s")
   # Pending draft is shown by SSR via pending_draft; catchup sends nothing.
   assert sent == 0
@@ -97,7 +89,7 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
       {"type": "user", "content": "old-live", "timestamp": "t0"},
       {"type": "user", "content": "missed", "timestamp": "t1"},
   ]
-  ws = _FakeWebSocket()
+  ws = FakeWebSocket()
 
   sent = await _replay_aggregated_catchup(ws, events, cursor=6, session_id="s", event_index_offset=5)
 
@@ -121,7 +113,7 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
 
 @pytest.mark.asyncio
 async def test_session_catchup_fast_skips_when_cursor_is_current() -> None:
-  ws = _FakeWebSocket()
+  ws = FakeWebSocket()
   mgr = _CountOnlySessionManager(count=7)
   meta = type("Meta", (), {"archive_offset": 5})()
 

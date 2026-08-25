@@ -256,6 +256,17 @@ async def no_sleep(_seconds: float) -> None:
   return None
 
 
+class FakeWebSocket:
+  """WebSocket double recording every send_json payload in .sent, for tests that pass it to server
+  catchup/replay producers duck-typing the FastAPI WebSocket."""
+
+  def __init__(self) -> None:
+    self.sent: list[dict] = []
+
+  async def send_json(self, payload: dict) -> None:
+    self.sent.append(payload)
+
+
 def _instructions_content_stub(session_meta: models.SessionMetadata, cfg: CharlieBotConfig,
                                prompt_overlay: str | None) -> str:
   return "instructions"

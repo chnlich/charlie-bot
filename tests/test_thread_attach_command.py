@@ -26,6 +26,21 @@ def _thread(**overrides) -> ThreadMetadata:
   return ThreadMetadata(**base)
 
 
+def _claude_sub_cfg(tmp_path: Path) -> CharlieBotConfig:
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      backend_options=[
+          BackendOption(
+              id="claude-sub",
+              label="Claude Sub",
+              type="cc-claude",
+              model="claude-opus-4-8",
+              cli_binary="claude-sub",
+          ),
+      ],
+  )
+
+
 @pytest.mark.parametrize(
     ("backend_type", "expected_kind"),
     [
@@ -53,18 +68,7 @@ def test_build_attach_command_dispatches_known_backends(backend_type: str, expec
 
 
 def test_build_attach_command_uses_tmux_for_claude_sub_config(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      backend_options=[
-          BackendOption(
-              id="claude-sub",
-              label="Claude Sub",
-              type="cc-claude",
-              model="claude-opus-4-8",
-              cli_binary="claude-sub",
-          ),
-      ],
-  )
+  cfg = _claude_sub_cfg(tmp_path)
 
   command = build_attach_command(_thread(backend="claude-sub"), cfg)
 
@@ -76,18 +80,7 @@ async def test_attach_available_uses_tmux_for_claude_sub_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      backend_options=[
-          BackendOption(
-              id="claude-sub",
-              label="Claude Sub",
-              type="cc-claude",
-              model="claude-opus-4-8",
-              cli_binary="claude-sub",
-          ),
-      ],
-  )
+  cfg = _claude_sub_cfg(tmp_path)
   seen: list[str] = []
 
   async def fake_tmux_session_exists(session_id: str) -> bool:

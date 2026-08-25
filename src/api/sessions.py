@@ -16,6 +16,7 @@ from src.api.deps import (
   get_session_manager,
   get_thread_manager,
   get_trigger_manager,
+  require_found,
   require_session,
 )
 from src.api.message_utils import (
@@ -682,9 +683,7 @@ async def switch_session_backend(
     )
 
   previous = effective_current
-  meta = await session_mgr.switch_backend(session_id, body.backend)
-  if meta is None:
-    raise HTTPException(status_code=404, detail="Session not found")
+  meta = require_found(await session_mgr.switch_backend(session_id, body.backend))
 
   audit_event = {
       "type": BACKEND_SWITCHED,
@@ -711,10 +710,7 @@ async def archive_session(
     await session_mgr.delete_session_permanently(session_id)
     return meta
 
-  meta = await session_mgr.archive_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-  return meta
+  return require_found(await session_mgr.archive_session(session_id))
 
 
 @router.delete("/{session_id}/permanent", status_code=204)
@@ -738,18 +734,12 @@ async def unarchive_session(
 
 @router.post("/{session_id}/star", response_model=SessionMetadata)
 async def star_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
-  meta = await session_mgr.star_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-  return meta
+  return require_found(await session_mgr.star_session(session_id))
 
 
 @router.post("/{session_id}/unstar", response_model=SessionMetadata)
 async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
-  meta = await session_mgr.unstar_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-  return meta
+  return require_found(await session_mgr.unstar_session(session_id))
 
 
 @router.post("/{session_id}/rounds/{round_id}/rate", response_model=SessionMetadata)
@@ -776,10 +766,7 @@ async def rename_session(
     req: RenameSessionRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
-  meta = await session_mgr.rename_session(session_id, req.name)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-  return meta
+  return require_found(await session_mgr.rename_session(session_id, req.name))
 
 
 @router.post("/{session_id}/group", response_model=SessionMetadata)
@@ -788,17 +775,12 @@ async def set_session_group(
     req: SetGroupRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
-  meta = await session_mgr.set_group(session_id, req.group)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-  return meta
+  return require_found(await session_mgr.set_group(session_id, req.group))
 
 
 @router.post("/{session_id}/read")
 async def mark_session_read(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
-  meta = await session_mgr.mark_read(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
+  require_found(await session_mgr.mark_read(session_id))
   return {"ok": True}
 
 

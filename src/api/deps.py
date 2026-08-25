@@ -50,12 +50,16 @@ def get_plan_manager() -> PlanRegistryManager:
   return _plan_manager
 
 
+def require_found(meta: SessionMetadata | None) -> SessionMetadata:
+  """Return non-None session metadata, or raise 404 when the manager found no session."""
+  if not meta:
+    raise HTTPException(status_code=404, detail="Session not found")
+  return meta
+
+
 async def require_session(
     session_id: str,
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> SessionMetadata:
   """Fetch a session or raise 404. Use as a FastAPI dependency."""
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
-  return meta
+  return require_found(await session_mgr.get_session(session_id))

@@ -589,11 +589,6 @@ function renderUsageFromData(usage) {
   if (cost) cost.textContent = formatUsageCostValue(usage.total_cost_usd);
 }
 
-function formatUsageCostValue(cost) {
-  return cost == null ? 'N/A' : '$' + cost.toFixed(2);
-}
-
-
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
@@ -724,7 +719,6 @@ Object.assign(Sidebar, {
   initScrollPagination,
   loadOlderIfNeeded,
   renderUsageFromData,
-  formatUsageCostValue,
   createSession,
   renderNoActiveSessionView,
 });
@@ -747,7 +741,6 @@ Sidebar.expose([
   'initScrollPagination',
   'loadOlderIfNeeded',
   'renderUsageFromData',
-  'formatUsageCostValue',
   'createSession',
   'renderNoActiveSessionView',
 ]);

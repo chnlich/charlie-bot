@@ -9,9 +9,10 @@ spawner gate code itself stays untouched (the exclusion is by type, like
 
 from pathlib import Path
 from typing import Any, Coroutine, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import FakeSessionManager
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -47,19 +48,6 @@ def _user_event(content: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Gate: agent_message can neither mint nor revoke a takeoff window
 # ---------------------------------------------------------------------------
-
-
-class FakeSessionManager:
-
-  def __init__(self, events: list[dict[str, Any]]) -> None:
-    self.events = events
-    self.persist_and_broadcast = AsyncMock()
-
-  async def get_session(self, session_id: str) -> SessionMetadata:
-    return SessionMetadata(id=session_id, name="Test")
-
-  def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
-    return self.events
 
 
 def test_takeoff_gate_agent_message_does_not_mint_takeoff() -> None:

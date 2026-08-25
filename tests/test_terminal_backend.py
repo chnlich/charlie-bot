@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from conftest import make_fake_run_tmux
 from fastapi import WebSocketDisconnect
 
 from src.agents.backends import pty_common, terminal, tui
@@ -157,11 +158,7 @@ async def test_ensure_terminal_session_starts_global_login_shell(
   calls = []
   monkeypatch.setattr(terminal.Path, "home", staticmethod(lambda: home_dir))
 
-  async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
-    calls.append(args)
-    if args[0] == "has-session":
-      return 1, ""
-    return 0, ""
+  fake_run_tmux = make_fake_run_tmux(calls)
 
   monkeypatch.setattr(terminal, "_run_tmux", fake_run_tmux)
 

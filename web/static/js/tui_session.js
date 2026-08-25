@@ -46,30 +46,6 @@
     if (streaming) streaming.classList.toggle('hidden', hidden);
   }
 
-  function encodeBytesB64(strOrBytes) {
-    // term.onData passes a string of utf-8-ish characters; encode as UTF-8
-    // bytes and then base64.
-    let bytes;
-    if (typeof strOrBytes === 'string') {
-      bytes = new TextEncoder().encode(strOrBytes);
-    } else {
-      bytes = strOrBytes;
-    }
-    let binary = '';
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-    }
-    return btoa(binary);
-  }
-
-  function decodeB64ToBytes(b64) {
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-
   function wsSendJson(obj) {
     if (typeof ws !== 'undefined' && ws && ws.readyState === WebSocket.OPEN) {
       try {

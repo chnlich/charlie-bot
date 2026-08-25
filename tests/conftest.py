@@ -9,6 +9,8 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -16,8 +18,10 @@ if str(ROOT) not in sys.path:
 
 # Imports must follow the sys.path bootstrap above.
 from src.agents import master_cc_state  # noqa: E402,I001
+from src.api.deps import get_session_manager  # noqa: E402,I001
+from src.api.sessions import router as sessions_router  # noqa: E402,I001
 from src.core import models  # noqa: E402,I001
-from src.core.config import CharlieBotConfig  # noqa: E402,I001
+from src.core.config import CharlieBotConfig, get_config  # noqa: E402,I001
 from src.core.plans import PlanRegistryManager  # noqa: E402,I001
 from src.core.sessions import SessionManager  # noqa: E402,I001
 from src.core.threads import ThreadManager  # noqa: E402,I001
@@ -114,6 +118,16 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
   )
   if result.returncode != 0:
     pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
+
+
+def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
+  """TestClient mounting the sessions router with cfg/session_mgr as dependency overrides; a test needing
+  extra routers or overrides builds its own FastAPI app."""
+  app = FastAPI()
+  app.include_router(sessions_router, prefix="/api/sessions")
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  return TestClient(app)
 
 
 PLAN_TEST_BACKEND_OPTIONS = [

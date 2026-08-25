@@ -12,16 +12,12 @@ import pytest
 import yaml
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from conftest import make_sessions_client as _build_client
 
-from src.api.deps import get_session_manager
-from src.api.sessions import router as sessions_router
 from src.core.config import (
   CharlieBotConfig,
   ScheduledTaskConfig,
   _load_cron_file,
-  get_config,
 )
 from src.core.models import (
   PROJECT_ROLE,
@@ -52,14 +48,6 @@ def _session_dir_names(cfg: CharlieBotConfig) -> set[str]:
   if not cfg.sessions_dir.exists():
     return set()
   return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
-
-
-def _build_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:

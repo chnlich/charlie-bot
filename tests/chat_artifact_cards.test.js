@@ -10,6 +10,8 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const { escapeHtml } = require('./escape_html_stub');
+
 const NAMESPACE_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'chat', 'namespace.js'),
   'utf8'
@@ -22,15 +24,6 @@ const ARTIFACTS_JS = fs.readFileSync(
 const SESSIONS_ROOT = '/home/user/.charliebot/sessions';
 const SESSION_ID = 'sess-42';
 const SESSION_DIR = SESSIONS_ROOT + '/' + SESSION_ID;
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
 
 function loadArtifactsScript(opts) {
   const o = opts || {};

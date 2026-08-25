@@ -4,6 +4,8 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const { escapeHtml } = require('./escape_html_stub');
+
 const COMPAT_LOADER_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'compat-loader.js'),
   'utf8'
@@ -20,15 +22,6 @@ const SLASH_COMMANDS_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'slash-commands.js'),
   'utf8'
 );
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
 
 class FakeClassList {
   constructor() {

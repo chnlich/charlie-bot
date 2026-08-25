@@ -26,6 +26,7 @@ function readStatic(relativePath) {
 }
 
 const { FakeElement } = require('./fake_dom');
+const { escapeHtml } = require('./escape_html_stub');
 
 function makeDocument(elements) {
   return {
@@ -96,14 +97,6 @@ function loadBacklogContext(elements, fetchImpl) {
 }
 
 function loadArtifactsScript() {
-  function escapeHtml(value) {
-    return String(value)
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
-  }
   const context = {
     SESSION_ID: 'sess-1',
     escapeHtml,

@@ -238,6 +238,31 @@ def build_plan_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def build_scheduler_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for scheduler cron tests: the home and worktrees dirs live under tmp_path so each test
+  owns its own tree, and both the opus and codex backends are registered for backend-override cases."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
+      ],
+  )
+
+
+def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for sessions-API TUI tests: the .charliebot home lives under tmp_path and the backend list
+  registers opus plus the claude-tui terminal backend the TUI handlers resolve a session against."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          OPUS_BACKEND_OPTION,
+          models.BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
+      ],
+  )
+
+
 def write_plan_artifact(
     cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str = PLAN_GOAL_OK_HTML
 ) -> str:

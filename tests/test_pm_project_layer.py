@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, make_cron_client
+from conftest import build_scheduler_cfg, make_cron_client
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -45,17 +45,6 @@ from src.core.sessions import SessionManager
 # Group line.
 PM_TASK_PROMPT = "# Project Manager\n\nDo the PM things."
 PM_WAKE_PROMPT = f"{PM_TASK_PROMPT}\n\nGroup: bp-eval"
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
-  )
 
 
 def _master_task(**overrides: Any) -> ScheduledTaskConfig:
@@ -115,7 +104,7 @@ def test_master_task_with_prompt_file_loads(tmp_path: Path) -> None:
   """prompt_file resolves into prompt before model validation, so mode master accepts it."""
   md_path = tmp_path / "pm_contract.md"
   md_path.write_text("# Project Manager\n\nThe contract.\n", encoding="utf-8")
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   task, _ = _validate_cron_body(
       {
           "cron": "30 8 * * *",
@@ -142,7 +131,7 @@ async def test_master_task_fire_wakes_master_with_prompt_plus_group_line(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   scheduler = Scheduler(cfg, session_mgr)
   task_cfg = _master_task()
@@ -191,7 +180,7 @@ async def test_master_task_fire_reuses_live_session_across_fires(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   scheduler = Scheduler(cfg, session_mgr)
   task_cfg = _master_task()
@@ -212,7 +201,7 @@ async def test_master_task_backend_rotation_carries_role_and_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """Generation rotation (backend change) archives the old PM and carries role/group forward."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   scheduler = Scheduler(cfg, session_mgr)
 
@@ -261,7 +250,7 @@ def cron_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_cron_create_master_task_without_project_is_400(cron_dir: Path, tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with make_cron_client(cfg, session_mgr) as client:
     payload = _master_task_payload("pm_orphan")
@@ -278,7 +267,7 @@ def test_cron_create_master_task_with_prompt_file_persists_pointer(
 ) -> None:
   md_path = tmp_path / "pm_contract.md"
   md_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with make_cron_client(cfg, session_mgr) as client:
     payload = _master_task_payload("pm_bp_eval", prompt_file=str(md_path))
@@ -295,7 +284,7 @@ def test_cron_create_master_task_with_unreadable_prompt_file_is_409(
     tmp_path: Path,
 ) -> None:
   missing = tmp_path / "no_such_contract.md"
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with make_cron_client(cfg, session_mgr) as client:
     payload = _master_task_payload("pm_bp_eval", prompt_file=str(missing))
@@ -307,7 +296,7 @@ def test_cron_create_master_task_with_unreadable_prompt_file_is_409(
 
 
 def test_cron_create_second_master_task_for_project_is_409(cron_dir: Path, tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   prompt_path = tmp_path / "pm_contract.md"
   prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
@@ -351,7 +340,7 @@ def test_cron_update_enabling_conflicting_master_task_is_409(cron_dir: Path, tmp
           "enabled": False,
       }),
       encoding="utf-8")
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with make_cron_client(cfg, session_mgr) as client:
     resp = client.put("/api/cron/tasks/pm_b", json={"enabled": True})
@@ -381,7 +370,7 @@ async def test_role_bound_scheduled_session_backend_switch_writes_through_and_ro
     tmp_path: Path,
 ) -> None:
   """A PM session's backend switch writes through to the task yaml and rotates."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   yaml_path = cron_dir / "pm_bp_eval.yaml"
   prompt_path = tmp_path / "pm_contract.md"
@@ -426,7 +415,7 @@ async def test_role_bound_scheduled_session_backend_switch_writes_through_and_ro
 @pytest.mark.asyncio
 async def test_regular_scheduled_session_without_role_keeps_clone_fork_guard(tmp_path: Path) -> None:
   """The PM guard must not overreach: role-less scheduled sessions keep existing semantics."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   worker = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),

@@ -7,6 +7,7 @@ import sys
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -149,6 +150,14 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
   )
   if result.returncode != 0:
     pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
+
+
+def make_session_mgr(tmp_path: Path) -> SessionManager:
+  """SessionManager over a SimpleNamespace cfg whose sessions_dir is tmp_path/"sessions"; a test
+  needing a richer cfg builds its own."""
+  cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
+  cfg.sessions_dir.mkdir()
+  return SessionManager(cfg)
 
 
 def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:

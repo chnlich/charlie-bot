@@ -8,17 +8,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import make_session_mgr as _make_session_mgr
 
 from src.core import event_types as ET
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
-
-
-def _make_session_mgr(tmp_path: Path) -> SessionManager:
-  """Create a SessionManager backed by a temporary directory."""
-  cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
-  cfg.sessions_dir.mkdir()
-  return SessionManager(cfg)
 
 
 async def _seed_parent(

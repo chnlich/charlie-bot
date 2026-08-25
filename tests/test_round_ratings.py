@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
 
 import pytest
+from conftest import make_session_mgr as _make_session_mgr
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -15,12 +15,6 @@ from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
-
-
-def _make_session_mgr(tmp_path: Path) -> SessionManager:
-  cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
-  cfg.sessions_dir.mkdir()
-  return SessionManager(cfg)
 
 
 @pytest.mark.asyncio

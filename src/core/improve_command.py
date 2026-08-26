@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -157,18 +158,24 @@ async def read_loop_plan(loop_dir: Path) -> str | None:
   return await asyncio.to_thread(plan_path.read_text)
 
 
+def _iter_numeric_loop_dirs(loops_dir: Path) -> Iterator[tuple[Path, int]]:
+  # Yields the child path itself, not loops_dir / str(loop_id): zero-padded
+  # names ("007") resolve to a different directory through str(int).
+  for child in loops_dir.iterdir():
+    if not child.is_dir():
+      continue
+    try:
+      yield child, int(child.name)
+    except ValueError:
+      continue
+
+
 def _next_loop_id_sync(loops_dir: Path) -> int:
   if not loops_dir.exists():
     return 1
 
   max_loop_id = 0
-  for child in loops_dir.iterdir():
-    if not child.is_dir():
-      continue
-    try:
-      loop_id = int(child.name)
-    except ValueError:
-      continue
+  for _, loop_id in _iter_numeric_loop_dirs(loops_dir):
     max_loop_id = max(max_loop_id, loop_id)
   return max_loop_id + 1 if max_loop_id else 1
 
@@ -177,17 +184,7 @@ def _find_state_loop_ids_sync(loops_dir: Path) -> list[int]:
   if not loops_dir.exists():
     return []
 
-  state_loop_ids: list[int] = []
-  for child in loops_dir.iterdir():
-    if not child.is_dir():
-      continue
-    try:
-      loop_id = int(child.name)
-    except ValueError:
-      continue
-    if (child / "state.json").exists():
-      state_loop_ids.append(loop_id)
-  return state_loop_ids
+  return [loop_id for child, loop_id in _iter_numeric_loop_dirs(loops_dir) if (child / "state.json").exists()]
 
 
 def _create_empty_file_exclusive(path: Path) -> None:

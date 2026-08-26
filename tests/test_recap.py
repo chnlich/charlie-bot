@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import make_one_shot_backend
 
 from src.core import recap
 from src.core.config import CharlieBotConfig
@@ -15,12 +16,6 @@ def _cc_cfg() -> CharlieBotConfig:
       backend_options=[BackendOption(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
       model_preference=["light-cc"],
   )
-
-
-def _mock_backend(one_shot: AsyncMock) -> MagicMock:
-  backend = MagicMock()
-  backend.one_shot_text = one_shot
-  return backend
 
 
 @pytest.mark.asyncio
@@ -73,7 +68,7 @@ async def test_recap_generates_and_caches_on_success() -> None:
   one_shot = AsyncMock(return_value="- discussed X\nLast: doing Y")
 
   with (
-      patch("src.core.recap.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.recap.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.recap.extract_recap", return_value={"asks": ["do X"], "last": {"user": "u", "assistant": "a"}}),
       patch("src.core.recap._write_cache_entry") as mock_write,
   ):
@@ -94,7 +89,7 @@ async def test_recap_uses_preferences_when_session_backend_is_empty() -> None:
   one_shot = AsyncMock(return_value="summary")
 
   with (
-      patch("src.core.recap.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.recap.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
       patch("src.core.recap._write_cache_entry") as mock_write,
   ):
@@ -122,7 +117,7 @@ async def test_recap_falls_back_after_first_candidate_failure() -> None:
   with (
       patch(
           "src.core.recap.build_backend",
-          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+          side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
       patch("src.core.recap.extract_recap", return_value={"asks": ["do X"], "last": None}),
       patch("src.core.recap._write_cache_entry") as mock_write,
@@ -153,7 +148,7 @@ async def test_recap_returns_empty_without_cache_when_all_candidates_are_empty()
   with (
       patch(
           "src.core.recap.build_backend",
-          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+          side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
       patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
       patch("src.core.recap._write_cache_entry") as mock_write,
@@ -186,7 +181,7 @@ async def test_recap_raises_last_exception_when_all_candidates_raise() -> None:
   with (
       patch(
           "src.core.recap.build_backend",
-          side_effect=[_mock_backend(first_one_shot), _mock_backend(last_one_shot)],
+          side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(last_one_shot)],
       ),
       patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
       patch("src.core.recap._write_cache_entry") as mock_write,
@@ -222,9 +217,9 @@ async def test_recap_raises_last_exception_after_error_and_empty_result() -> Non
       patch(
           "src.core.recap.build_backend",
           side_effect=[
-              _mock_backend(first_one_shot),
-              _mock_backend(empty_one_shot),
-              _mock_backend(last_one_shot),
+              make_one_shot_backend(first_one_shot),
+              make_one_shot_backend(empty_one_shot),
+              make_one_shot_backend(last_one_shot),
           ],
       ),
       patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),

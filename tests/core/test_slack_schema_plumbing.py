@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -63,7 +62,7 @@ async def test_create_session_defaults_still_generate_uuid4_and_no_origin(tmp_pa
   assert meta.slack_origin is None
 
 
-async def _run_one_round(user_event_id: Optional[str]) -> dict:
+async def _run_one_round(user_event_id: str | None) -> dict:
   """Run one synthetic work item through _session_consumer; return its MASTER_DONE payload."""
   session_id = f"slack-plumbing-{user_event_id or 'none'}"
   callbacks = mock_session_callbacks()

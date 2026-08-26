@@ -12,7 +12,7 @@ the bound session's backend and wake text.
 from collections.abc import Coroutine
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 import yaml
@@ -144,7 +144,7 @@ async def test_master_task_fire_wakes_master_with_prompt_plus_group_line(
     triggered.append(args)
     return _noop()
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: Optional[str] = None) -> None:
+  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: str | None = None) -> None:
     task_names.append(name or "")
     coro.close()
 

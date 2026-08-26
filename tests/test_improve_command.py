@@ -424,6 +424,34 @@ def _patch_git(monkeypatch: pytest.MonkeyPatch, *, count: str = "0", tip: str = 
   return calls
 
 
+async def _run_loop(
+    *,
+    session_id: str,
+    iterations: int,
+    goal: str,
+    cfg,
+    session_mgr,
+    thread_mgr,
+    plan: str | None = None,
+) -> None:
+  """run_improve_loop on the call tail the run-path tests share: /tmp/repo, improve/test off
+  main, backend codex-o3/o3; plan defaults to run_improve_loop's own None."""
+  await improve_command.run_improve_loop(
+      session_id=session_id,
+      repo_path="/tmp/repo",
+      iterations=iterations,
+      goal=goal,
+      plan=plan,
+      cfg=cfg,
+      session_mgr=session_mgr,
+      thread_mgr=thread_mgr,
+      base_branch="main",
+      work_branch="improve/test",
+      resolved_backend="codex-o3",
+      resolved_model="o3",
+  )
+
+
 @pytest.mark.asyncio
 async def test_run_improve_loop_stops_on_quota_blocker_without_incrementing_iteration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -445,18 +473,13 @@ async def test_run_improve_loop_stops_on_quota_blocker_without_incrementing_iter
   )
   spawn_requests, triggered_payloads = _patch_improve_loop_io(monkeypatch)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="quota-session",
-      repo_path="/tmp/repo",
       iterations=3,
       goal="optimize",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(spawn_requests) == 1
@@ -512,18 +535,13 @@ async def test_run_improve_loop_fails_when_session_missing(tmp_path: Path, monke
   )
   spawn_requests, triggered_payloads = _patch_improve_loop_io(monkeypatch)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id=session_id,
-      repo_path="/tmp/repo",
       iterations=3,
       goal="optimize",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(spawn_requests) == 1  # only iteration 1 was spawned before the miss
@@ -566,18 +584,13 @@ async def test_run_improve_loop_keeps_non_quota_worker_failures_unchanged(
   )
   spawn_requests, triggered_payloads = _patch_improve_loop_io(monkeypatch)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="ordinary-failure-session",
-      repo_path="/tmp/repo",
       iterations=2,
       goal="optimize",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(spawn_requests) == 2
@@ -678,18 +691,13 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
   monkeypatch.setattr("src.core.ndjson.parse_ndjson_file", lambda path: [{"type": "result", "result": "ok"}])
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id=session_id,
-      repo_path="/tmp/repo",
       iterations=2,
       goal="optimize",
       cfg=cfg,
       session_mgr=FakeSessionManager(),
       thread_mgr=FakeThreadManager(),
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert [(req.resolved_backend, req.resolved_model) for req in spawn_requests] == [
@@ -803,18 +811,13 @@ async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeyp
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="edit-session",
-      repo_path="/tmp/repo",
       iterations=2,
       goal="original goal",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(descriptions) == 2
@@ -867,18 +870,13 @@ async def test_run_improve_loop_injects_previous_summaries_in_next_description(
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="summary-session",
-      repo_path="/tmp/repo",
       iterations=2,
       goal="original goal",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(descriptions) == 2
@@ -910,19 +908,14 @@ async def test_run_improve_loop_injects_plan_when_provided(tmp_path: Path, monke
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="plan-injection-session",
-      repo_path="/tmp/repo",
       iterations=1,
       goal="original goal",
       plan="1. fix largest measured bottleneck",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(descriptions) == 1
@@ -952,18 +945,13 @@ async def test_run_improve_loop_works_without_plan_file(tmp_path: Path, monkeypa
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="no-plan-session",
-      repo_path="/tmp/repo",
       iterations=1,
       goal="original goal",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(descriptions) == 1
@@ -1007,19 +995,14 @@ async def test_run_improve_loop_rereads_edited_plan_file(tmp_path: Path, monkeyp
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="edit-plan-session",
-      repo_path="/tmp/repo",
       iterations=2,
       goal="original goal",
       plan="1. initial lever",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   assert len(descriptions) == 2
@@ -1052,18 +1035,13 @@ async def test_run_improve_loop_fails_when_goal_file_missing_mid_loop(
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", deleting_spawn_worker)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="missing-goal-session",
-      repo_path="/tmp/repo",
       iterations=2,
       goal="original goal",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
 
   state = await load_loop_state("missing-goal-session", 1, cfg)
@@ -1130,18 +1108,13 @@ async def _gate_loop(
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", writing_spawn_worker)
 
-  await improve_command.run_improve_loop(
+  await _run_loop(
       session_id="gate-session",
-      repo_path="/tmp/repo",
       iterations=iterations,
       goal="original goal",
       cfg=cfg,
       session_mgr=session_mgr,
       thread_mgr=thread_mgr,
-      base_branch="main",
-      work_branch="improve/test",
-      resolved_backend="codex-o3",
-      resolved_model="o3",
   )
   await _pump_event_loop()
   return cfg, session_mgr, triggered_payloads, descriptions

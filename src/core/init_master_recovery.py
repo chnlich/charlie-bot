@@ -3,7 +3,6 @@
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import structlog
 
@@ -27,7 +26,7 @@ async def run_crash_recovery(
     session_mgr=None,
     thread_mgr=None,
     *,
-    master_identity: Optional[asyncio.Task] = None,
+    master_identity: asyncio.Task | None = None,
 ) -> int:
   """Reconcile interrupted runs and quarantine stale worktrees.
 

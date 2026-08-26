@@ -1,7 +1,7 @@
 """Scheduled-session backend rotation, succession bookkeeping, and task-yaml backend persistence."""
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 import structlog
 
@@ -46,11 +46,11 @@ class ScheduledSessionStore:
       self,
       task_name: str,
       backend: str,
-      session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
+      session_cache: dict[str, list[SessionMetadata]] | None = None,
       skip_if_busy: bool = False,
-      role: Optional[str] = None,
-      group: Optional[str] = None,
-  ) -> Optional[SessionMetadata]:
+      role: str | None = None,
+      group: str | None = None,
+  ) -> SessionMetadata | None:
     """Return the active scheduled session for task_name/backend, rotating history if needed.
 
     Backend changes are generation changes: the old active session is archived and a new
@@ -120,7 +120,7 @@ class ScheduledSessionStore:
   async def _active_scheduled_sessions(
       self,
       task_name: str,
-      session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
+      session_cache: dict[str, list[SessionMetadata]] | None = None,
   ) -> list[SessionMetadata]:
     """Return active scheduled sessions for task_name, newest first."""
     if session_cache is not None:

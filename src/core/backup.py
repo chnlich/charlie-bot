@@ -4,7 +4,6 @@ import sys
 import tarfile
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import structlog
 
@@ -64,7 +63,7 @@ def _should_exclude(arcname: str) -> bool:
   return False
 
 
-def _parse_backup_date(name: str) -> Optional[datetime]:
+def _parse_backup_date(name: str) -> datetime | None:
   """Parse datetime from a backup filename like charliebot-20260101-120000.tar.gz."""
   try:
     ts_part = name.removeprefix(_BACKUP_PREFIX).removesuffix(_BACKUP_SUFFIX)
@@ -118,7 +117,7 @@ def create_backup() -> Path:
   return archive_path
 
 
-def apply_retention(target_dir: Optional[Path] = None) -> None:
+def apply_retention(target_dir: Path | None = None) -> None:
   """Apply tiered retention policy to backups in target_dir (default: this profile's).
 
   - Keep all backups from the last 7 days.
@@ -174,7 +173,7 @@ def restore_backup(archive_path: Path, target: Path = None) -> None:
   log.info('backup_restored', archive=str(archive_path), target=str(target))
 
 
-def list_backups(scan_dir: Optional[Path] = None) -> list:
+def list_backups(scan_dir: Path | None = None) -> list:
   """Return sorted list of backup files with size and date info.
 
   Args:

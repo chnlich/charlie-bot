@@ -3,7 +3,6 @@
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import structlog
 
@@ -60,7 +59,7 @@ async def finalize_review_chain(
     original_thread: ThreadMetadata,
     thread_mgr: ThreadManager,
     worktree_parent: Path,
-) -> Optional[str]:
+) -> str | None:
   """Idempotently remove the worktree shared by the original worker + its reviewer(s).
 
   Runs only on the review success path. Returns an error message when the cleanup
@@ -108,9 +107,9 @@ def build_review_prompt(
     session_id: str,
     original_thread_id: str,
     sessions_dir: Path,
-    context: Optional[str] = None,
-    user_request: Optional[str] = None,
-    worker_summary: Optional[str] = None,
+    context: str | None = None,
+    user_request: str | None = None,
+    worker_summary: str | None = None,
 ) -> str:
   """Build the prompt for a review worker."""
   from src.core.spawner import load_worker_prompt_sections
@@ -172,14 +171,14 @@ async def extract_review_context(
     session_id: str,
     thread_id: str,
     sessions_dir: Path,
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
   """Extract user request and worker summary from JSONL logs for review context.
 
   Returns (user_request, worker_summary); each may independently be None when extraction fails.
   The caller's prompt builder handles partial context.
   """
-  user_request: Optional[str] = None
-  worker_summary: Optional[str] = None
+  user_request: str | None = None
+  worker_summary: str | None = None
   has_user_request = False
   has_worker_summary = False
 
@@ -203,8 +202,8 @@ async def extract_review_context(
   try:
     worker_log = sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
     events = await asyncio.to_thread(parse_ndjson_file, worker_log)
-    result_text: Optional[str] = None
-    assistant_text: Optional[str] = None
+    result_text: str | None = None
+    assistant_text: str | None = None
     for ev in reversed(events):
       ev_type = ev.get("type")
       if result_text is None and ev_type == ET.RESULT:
@@ -237,7 +236,7 @@ async def extract_review_context(
 def validate_review_prerequisites(
     original_thread: ThreadMetadata,
     session_id: str,
-) -> Optional[tuple[Path, str, str]]:
+) -> tuple[Path, str, str] | None:
   """Validate that original_thread has repo_path, branch_name, and worktree_path.
 
   Returns (repo_path, branch_name, worktree_path) or None if validation fails.
@@ -291,9 +290,9 @@ def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> Backend
 def select_reviewer_backend(
     cfg: CharlieBotConfig,
     worker_backend: str,
-    worker_model: Optional[str],
+    worker_model: str | None,
     tried_backends: list[str],
-) -> Optional[tuple[str, Optional[str], list[str]]]:
+) -> tuple[str, str | None, list[str]] | None:
   """Select a checking-role backend (reviewer, verify default) via model_preference, skipping already-tried backends.
 
   Returns (resolved_backend, resolved_model, updated_tried_backends) or None if exhausted.
@@ -340,7 +339,7 @@ class ReviewSpawnContext:
   wt_path: str
   base_branch: str
   resolved_backend: str
-  resolved_model: Optional[str]
+  resolved_model: str | None
   tried_backends: list[str]
 
 
@@ -348,8 +347,8 @@ async def _resolve_review_spawn_context(
     original_thread,
     cfg: CharlieBotConfig,
     session_id: str,
-    tried_backends: Optional[list[str]],
-) -> Optional[ReviewSpawnContext]:
+    tried_backends: list[str] | None,
+) -> ReviewSpawnContext | None:
   """Decide whether a reviewer can be spawned and resolve every input the spawn-side needs.
 
   Returns a `ReviewSpawnContext` on success, or None to short-circuit (retries
@@ -402,8 +401,8 @@ async def spawn_review_worker(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-    tried_backends: Optional[list[str]] = None,
-    exclude_thread_id: Optional[str] = None,
+    tried_backends: list[str] | None = None,
+    exclude_thread_id: str | None = None,
 ) -> bool:
   """Spawn a review worker for a completed worker's branch.
 
@@ -477,7 +476,7 @@ async def spawn_review_worker(
 async def _retry_failed_reviewer(
     session_id: str,
     thread_meta: ThreadMetadata,
-    original_thread: Optional[ThreadMetadata],
+    original_thread: ThreadMetadata | None,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,

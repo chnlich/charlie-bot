@@ -7,7 +7,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel
@@ -71,11 +71,11 @@ class ImproveState(BaseModel):
   goal: str
   status: str = "running"  # running | stopped | completed | failed
   work_branch: str
-  base_branch: Optional[str] = None
+  base_branch: str | None = None
   repo_path: str
   merge_back: bool = False
-  backend: Optional[str] = None
-  model: Optional[str] = None
+  backend: str | None = None
+  model: str | None = None
   created_at: str
   iterations_completed: int = 0
 
@@ -83,7 +83,7 @@ class ImproveState(BaseModel):
 class ImproveLoopAlreadyRunningError(RuntimeError):
   """Raised when a session already has an active improve loop."""
 
-  def __init__(self, loop_id: Optional[int]) -> None:
+  def __init__(self, loop_id: int | None) -> None:
     self.loop_id = loop_id
     if loop_id is None:
       super().__init__("An improve loop is already running for this session. Use /stop-improve first.")
@@ -149,7 +149,7 @@ async def read_loop_goal(loop_dir: Path) -> str:
   return await asyncio.to_thread(goal_path.read_text)
 
 
-async def read_loop_plan(loop_dir: Path) -> Optional[str]:
+async def read_loop_plan(loop_dir: Path) -> str | None:
   """Read the optional live plan for a loop, returning None when absent."""
   plan_path = _plan_file_path(loop_dir)
   if not await asyncio.to_thread(plan_path.exists):
@@ -195,7 +195,7 @@ def _create_empty_file_exclusive(path: Path) -> None:
     pass
 
 
-async def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Optional[ImproveState]:
+async def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> ImproveState | None:
   """Read the loop state file, returning None if it is missing."""
   path = _loop_state_path(session_id, loop_id, cfg)
   if not await asyncio.to_thread(path.exists):
@@ -246,7 +246,7 @@ async def _reserve_loop_dir(session_id: str, cfg: CharlieBotConfig) -> tuple[int
     return loop_id, loop_dir
 
 
-async def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> Optional[ImproveState]:
+async def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> ImproveState | None:
   """Return the running loop for a session, if any."""
   loops_dir = _loops_dir(session_id, cfg)
   state_loop_ids = await asyncio.to_thread(_find_state_loop_ids_sync, loops_dir)
@@ -297,7 +297,7 @@ async def _iter_report_validity(
     report_path: Path,
     iteration: int,
     commits_added: int,
-) -> tuple[bool, Optional[str]]:
+) -> tuple[bool, str | None]:
   """Mechanically judge an iteration's report validity.
 
   Valid ⇔ the report exists, contains a `## Iter <n>` heading (em dash or
@@ -389,8 +389,8 @@ async def reserve_loop_state(
     repo_path: str,
     cfg: CharlieBotConfig,
     *,
-    plan: Optional[str] = None,
-    base_branch: Optional[str] = None,
+    plan: str | None = None,
+    base_branch: str | None = None,
     merge_back: bool = False,
     resolved_backend: str = "",
     resolved_model: str = "",
@@ -457,7 +457,7 @@ def _event_text(event: dict) -> str:
   return "\n".join(parts)
 
 
-def _quota_blocker_reason(events: list[dict]) -> Optional[str]:
+def _quota_blocker_reason(events: list[dict]) -> str | None:
   for ev in reversed(events):
     event_type = ev.get('type')
     if event_type == ET.RATE_LIMIT_EVENT:
@@ -501,8 +501,8 @@ async def _run_single_iteration(
     resolved_backend: str,
     resolved_model: str,
     previous_summaries: list[str],
-    base_branch: Optional[str],
-) -> Optional[str]:
+    base_branch: str | None,
+) -> str | None:
   """Run a single iteration of the improve loop.
 
   Returns the iteration summary on success, None if stopped by user.
@@ -673,12 +673,12 @@ async def _run_single_iteration(
 async def _land_work_branch_after_loop(
     resolved_repo: Path,
     work_branch: str,
-    base_branch: Optional[str],
+    base_branch: str | None,
     merge_back: bool,
     stopped_by_user: bool,
     previous_summaries: list[str],
     session_id: str,
-) -> Optional[dict]:
+) -> dict | None:
   """Decide how to land the work branch after the iteration loop finishes.
 
   Fast-forwards work_branch onto base_branch when merge_back is set and the loop
@@ -721,13 +721,13 @@ async def run_improve_loop(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
-    base_branch: Optional[str] = None,
-    work_branch: Optional[str] = None,
+    base_branch: str | None = None,
+    work_branch: str | None = None,
     merge_back: bool = False,
     resolved_backend: str = "",
     resolved_model: str = "",
-    loop_id: Optional[int] = None,
-    plan: Optional[str] = None,
+    loop_id: int | None = None,
+    plan: str | None = None,
 ) -> None:
   """Run the iterative improvement loop as a server-side async task.
 
@@ -803,7 +803,7 @@ async def run_improve_loop(
     await trigger_master(session_id, json.dumps(failure_payload, indent=2), cfg, session_mgr)
     return
 
-  blocked_error: Optional[_ImproveLoopBlockedError] = None
+  blocked_error: _ImproveLoopBlockedError | None = None
   failure_iteration = 0
 
   try:

@@ -4,7 +4,6 @@ import asyncio
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -70,7 +69,7 @@ class Scheduler:
     chat-event cache, so scheduled rounds would never reach the HTTP/WS read paths."""
     self._cfg = cfg
     self._session_mgr = session_mgr
-    self._task: Optional[asyncio.Task] = None
+    self._task: asyncio.Task | None = None
     # Process-local registry of the background task each task's most recent
     # *scheduled* fire spawned (keyed by task name). Empty after a restart, so
     # the first fire after a restart is judged idle by design. Manual /run
@@ -146,7 +145,7 @@ class Scheduler:
       task_cfg: ScheduledTaskConfig,
       session_mgr: SessionManager,
       session_cache: dict[str, list[SessionMetadata]],
-      cfg: Optional[CharlieBotConfig] = None,
+      cfg: CharlieBotConfig | None = None,
   ) -> None:
     cfg = cfg or self._cfg
     tz = ZoneInfo(task_cfg.timezone)
@@ -207,7 +206,7 @@ class Scheduler:
   async def _prepare_task_execution(
       self,
       task_cfg: ScheduledTaskConfig,
-      initial_status: Optional[str] = None,
+      initial_status: str | None = None,
   ) -> tuple[CharlieBotConfig, SessionManager, SessionMetadata]:
     """Shared preamble: reload config, get/create session, persist bookkeeping fields."""
     cfg = self._reload_config()
@@ -406,8 +405,8 @@ class Scheduler:
       task_cfg: ScheduledTaskConfig,
       cfg: CharlieBotConfig,
       session_mgr: SessionManager,
-      session_cache: Optional[dict[str, list[SessionMetadata]]] = None,
-  ) -> Optional[SessionMetadata]:
+      session_cache: dict[str, list[SessionMetadata]] | None = None,
+  ) -> SessionMetadata | None:
     """Return the active dedicated session for task/backend, rotating if needed.
 
     When session_cache is provided, uses it instead of scanning the sessions
@@ -416,8 +415,8 @@ class Scheduler:
     group=<project value> ride onto both creation paths downstream.
     """
     effective_backend = effective_scheduled_task_backend(task_cfg, cfg)
-    role: Optional[str] = None
-    group: Optional[str] = None
+    role: str | None = None
+    group: str | None = None
     if task_cfg.mode == 'master':
       role = PROJECT_ROLE
       group = task_cfg.project

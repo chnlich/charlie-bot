@@ -32,7 +32,7 @@ spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import structlog
 
@@ -84,14 +84,14 @@ class Topic:
 @dataclass
 class Entry:
   path: Path
-  topic: Optional[str]
+  topic: str | None
   slug: str
-  scope: Optional[str]
-  audience: Optional[list[str]]  # comma list parsed out; legacy ``both`` -> ["master", "worker"]
-  audience_raw: Optional[str]  # raw frontmatter value, kept for lint diagnostics (literal ``both``)
-  created: Optional[str]
-  source: Optional[str]
-  revises: Optional[str]
+  scope: str | None
+  audience: list[str] | None  # comma list parsed out; legacy ``both`` -> ["master", "worker"]
+  audience_raw: str | None  # raw frontmatter value, kept for lint diagnostics (literal ``both``)
+  created: str | None
+  source: str | None
+  revises: str | None
   title: str  # frontmatter ``title`` preferred; legacy fallback is the body ``# <title>`` first line
   title_in_header: bool  # True when the title came from frontmatter (v2) rather than the body (legacy)
   body: str
@@ -402,7 +402,7 @@ def _format_block(full_body_entries: list[Entry], index_entries: list[Entry]) ->
   return "\n\n".join(chunks)
 
 
-def assemble_master(memory_dir: Path) -> Optional[str]:
+def assemble_master(memory_dir: Path) -> str | None:
   """Assemble the master spawn memory block.
 
   Full bodies of entries in resident topics whose audience contains
@@ -435,7 +435,7 @@ def assemble_master(memory_dir: Path) -> Optional[str]:
   return _format_block(full_body_entries, index_entries)
 
 
-def assemble_worker(memory_dir: Path, repo_basename: str) -> Optional[str]:
+def assemble_worker(memory_dir: Path, repo_basename: str) -> str | None:
   """Assemble the worker spawn memory block for *repo_basename*.
 
   Full bodies of entries whose topic equals *repo_basename* and whose audience

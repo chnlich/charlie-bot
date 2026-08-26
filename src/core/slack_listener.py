@@ -26,7 +26,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -113,7 +113,7 @@ class SlackClient:
       raise RuntimeError(f"apps.connections.open failed: {payload}")
     return payload["url"]
 
-  async def post_message(self, channel: str, text: str, thread_ts: Optional[str] = None) -> dict:
+  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
     """POST chat.postMessage; returns the API payload."""
     body: dict[str, Any] = {"channel": channel, "text": text}
     if thread_ts is not None:
@@ -256,7 +256,7 @@ async def ensure_slack_group(session_mgr: SessionManager, sid: str, label: str) 
     logger.warning("slack_group_assignment_failed", session=sid, label=label, error=str(e))
 
 
-async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient) -> Optional[str]:
+async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient) -> str | None:
   """Accept or drop one app_mention. Returns the session id when accepted, else None.
 
   The summon's channel label is resolved exactly once here, before
@@ -370,7 +370,7 @@ def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
       name=f"slack-ack-clear-{session_id}")
 
 
-def _slack_target(events: list[dict], input_event_id: str) -> Optional[dict]:
+def _slack_target(events: list[dict], input_event_id: str) -> dict | None:
   """The ``slack`` block of the event this round answers, or None when it has none.
 
   None covers both "no such event" and "a message the user typed into this same
@@ -562,7 +562,7 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
 # ---------------------------------------------------------------------------
 
 
-def _lost_summons(events: list[dict], *, owned: set[str], running: Optional[str]) -> list[dict]:
+def _lost_summons(events: list[dict], *, owned: set[str], running: str | None) -> list[dict]:
   """The Slack injections in one session's log that nothing will ever answer.
 
   A summon is lost when no master_done names it, this process does not already

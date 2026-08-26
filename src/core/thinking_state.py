@@ -10,7 +10,6 @@ setting and clearing.
 """
 
 from datetime import datetime, timezone
-from typing import Optional
 
 import structlog
 
@@ -20,7 +19,7 @@ log = structlog.get_logger()
 _busy_since: dict[str, datetime] = {}
 
 
-def mark_busy(session_id: str, since: Optional[datetime] = None) -> tuple[datetime, bool]:
+def mark_busy(session_id: str, since: datetime | None = None) -> tuple[datetime, bool]:
   """Record the busy interval start for *session_id*.
 
   setdefault semantics: an already-busy session keeps its existing interval
@@ -49,6 +48,6 @@ def clear_busy(session_id: str) -> None:
     log.debug("thinking_state_idle", session=session_id, busy_since=started_at.isoformat())
 
 
-def busy_since(session_id: str) -> Optional[datetime]:
+def busy_since(session_id: str) -> datetime | None:
   """Current busy interval start for *session_id*, or None."""
   return _busy_since.get(session_id)

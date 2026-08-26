@@ -2,7 +2,6 @@
 
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -22,8 +21,8 @@ async def run_message_with_resume_recovery(
     summary: str,
     session_mgr: SessionManager,
     expect_fresh_session: bool = False,
-    user_event_id: Optional[str] = None,
-) -> Optional[str]:
+    user_event_id: str | None = None,
+) -> str | None:
   """Call run_message, retrying once with cc_session_id cleared on stale-resume errors.
 
   ``expect_fresh_session`` and ``user_event_id`` are forwarded to the first
@@ -89,7 +88,7 @@ async def trigger_master(
     summary: str,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
-    user_event_id: Optional[str] = None,
+    user_event_id: str | None = None,
 ) -> None:
   """Best-effort trigger of the master agent to process a worker result."""
   target_session_id = session_id

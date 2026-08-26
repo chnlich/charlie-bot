@@ -4,7 +4,6 @@ import asyncio
 import signal
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import structlog
 import yaml
@@ -26,7 +25,7 @@ class SlashCommandParam(BaseModel):
   name: str
   label: str = ''
   type: str = 'text'  # text, number, select, checkbox
-  default: Optional[str] = None
+  default: str | None = None
   placeholder: str = ''
   required: bool = False
   options: list[str] = []  # for type=select
@@ -36,11 +35,11 @@ class SlashCommand(BaseModel):
   name: str
   scope: str  # 'shell' or 'prompt'
   description: str
-  command: Optional[str] = None
-  prompt: Optional[str] = None
+  command: str | None = None
+  prompt: str | None = None
   timeout: int = SLASH_COMMAND_DEFAULT_TIMEOUT
-  args: Optional[str] = None  # Description string for help text
-  cwd: Optional[str] = None
+  args: str | None = None  # Description string for help text
+  cwd: str | None = None
   claude_code_flags: list[str] = []  # Extra CLI flags passed to Claude Code subprocess (scope=prompt only)
   params: list[SlashCommandParam] = []
 
@@ -75,7 +74,7 @@ async def execute_shell_command(
     args: str = '',
     session_dir: str = '',
     timeout: int = SLASH_COMMAND_DEFAULT_TIMEOUT,
-    cwd: Optional[str] = None,
+    cwd: str | None = None,
 ) -> dict:
   """Run a shell command template and return {stdout, stderr, exit_code}.
 
@@ -115,11 +114,11 @@ async def execute_shell_command(
 class SlashDispatchResult:
   """Result of dispatching a slash command."""
   kind: str  # 'not_found', 'shell_result', 'prompt', 'error'
-  command: Optional[SlashCommand] = None
-  shell_result: Optional[dict] = None  # {stdout, stderr, exit_code}
-  substituted_prompt: Optional[str] = None
-  claude_code_flags: Optional[list[str]] = None
-  error: Optional[str] = None
+  command: SlashCommand | None = None
+  shell_result: dict | None = None  # {stdout, stderr, exit_code}
+  substituted_prompt: str | None = None
+  claude_code_flags: list[str] | None = None
+  error: str | None = None
 
 
 async def dispatch_slash_command(

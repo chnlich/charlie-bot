@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import FakeStdout
+from conftest import FakeStdout, make_one_shot_backend
 
 from src.core import autonamer
 from src.core.autonamer import (
@@ -44,13 +44,6 @@ def _fallback_chain_cfg() -> CharlieBotConfig:
   )
 
 
-def _mock_backend(one_shot: AsyncMock) -> MagicMock:
-  """A stand-in backend whose one_shot_text is the given AsyncMock."""
-  backend = MagicMock()
-  backend.one_shot_text = one_shot
-  return backend
-
-
 # ---------------------------------------------------------------------------
 # maybe_auto_name — light-backend one-shot path
 # ---------------------------------------------------------------------------
@@ -68,7 +61,7 @@ async def test_maybe_auto_name_passes_existing_groups_to_backend() -> None:
   one_shot = AsyncMock(return_value='{"name":"Test Name","group":"work"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(
@@ -98,7 +91,7 @@ async def test_maybe_auto_name_does_not_overwrite_existing_manual_group() -> Non
   one_shot = AsyncMock(return_value='{"name":"Test Name","group":"Work"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
   ):
     await maybe_auto_name(
@@ -124,7 +117,7 @@ async def test_maybe_auto_name_preserves_default_session_number() -> None:
   one_shot = AsyncMock(return_value='{"name":"Refactor Config Loader"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(
@@ -149,7 +142,7 @@ async def test_maybe_auto_name_rechecks_current_name_before_renaming() -> None:
   one_shot = AsyncMock(return_value='{"name":"Generated Name","group":"Work"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
   ):
     await maybe_auto_name(
@@ -176,7 +169,7 @@ async def test_maybe_auto_name_keeps_snake_case_identifier_verbatim() -> None:
   one_shot = AsyncMock(return_value=raw)
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(
@@ -196,7 +189,7 @@ async def test_maybe_auto_name_keeps_chinese_title_verbatim() -> None:
   one_shot = AsyncMock(return_value=raw)
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)),
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(
@@ -217,7 +210,7 @@ async def test_maybe_auto_name_falls_back_after_first_backend_failure() -> None:
   with (
       patch(
           "src.core.autonamer.build_backend",
-          side_effect=[RuntimeError("unsupported reasoning effort"), _mock_backend(one_shot)],
+          side_effect=[RuntimeError("unsupported reasoning effort"), make_one_shot_backend(one_shot)],
       ) as mock_build,
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
       patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
@@ -247,7 +240,7 @@ async def test_maybe_auto_name_keeps_default_name_when_all_first_responses_are_u
   with (
       patch(
           "src.core.autonamer.build_backend",
-          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+          side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
       patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
@@ -277,7 +270,7 @@ async def test_maybe_auto_name_falls_back_to_next_backend_on_non_json_response()
   with (
       patch(
           "src.core.autonamer.build_backend",
-          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+          side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
@@ -303,7 +296,7 @@ async def test_maybe_auto_name_falls_back_to_next_backend_when_name_too_long() -
   with (
       patch(
           "src.core.autonamer.build_backend",
-          side_effect=[_mock_backend(first_one_shot), _mock_backend(second_one_shot)],
+          side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
@@ -359,7 +352,7 @@ async def test_maybe_auto_name_builds_codex_backend_for_claude_session() -> None
   one_shot = AsyncMock(return_value='{"name":"Codex Title"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)) as mock_build,
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)) as mock_build,
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(cfg, session_meta, "Do the codex thing", "Done.", session_mgr, [])
@@ -383,7 +376,7 @@ async def test_maybe_auto_name_builds_same_id_opencode_backend() -> None:
   one_shot = AsyncMock(return_value='{"name":"Open Code Task"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=_mock_backend(one_shot)) as mock_build,
+      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)) as mock_build,
       patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
   ):
     await maybe_auto_name(cfg, session_meta, "Use opencode", "Done.", session_mgr, [])

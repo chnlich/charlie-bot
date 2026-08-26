@@ -10,6 +10,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import build_slack_cfg
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
@@ -91,15 +92,6 @@ def _make_event(**overrides: object) -> dict:
   return base
 
 
-def _cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      slack_bot_token="test-bot-token",
-      slack_app_token="test-app-token",
-      slack_allowed_user_ids=["U_ALLOWED"],
-  )
-
-
 def _cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
   """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
   charlie_bot_repo is a derived property tied to the installed package location, so a plain
@@ -126,7 +118,7 @@ def _origin(event: dict) -> SlackOrigin:
 
 @pytest.mark.asyncio
 async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event()
@@ -188,7 +180,7 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
 
 def test_build_summon_prompt_appends_both_notices_after_the_citation_boundary(tmp_path: Path) -> None:
   """Every Slack prompt ends citation boundary, then the red line, then the reply format."""
-  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", _cfg(tmp_path))
+  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", build_slack_cfg(tmp_path))
   assert _REPLY_FORMAT in prompt
   assert prompt.index(CITATION_BOUNDARY) < prompt.index(_RED_LINE) < prompt.index(_REPLY_FORMAT)
   assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
@@ -202,7 +194,7 @@ def test_marker_round_trip_between_prompt_and_parser(tmp_path: Path) -> None:
   parser edit stops recognizing the token the contract states.
   """
   prompt = _build_summon_prompt(
-      "https://fake.slack.test/archives/C_TEST/p1700000000.000100", _cfg(tmp_path))
+      "https://fake.slack.test/archives/C_TEST/p1700000000.000100", build_slack_cfg(tmp_path))
   marker_match = re.search(r"line that reads exactly `([^`]+)`", prompt)
   assert marker_match is not None
   marker_line = marker_match.group(1)
@@ -259,7 +251,7 @@ def test_build_summon_prompt_missing_reply_format_doc_raises_with_path_and_cause
 
 @pytest.mark.asyncio
 async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event()
@@ -276,7 +268,7 @@ async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_disallowed_user_drops_with_no_side_effects(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event(user="U_OTHER")
@@ -291,7 +283,7 @@ async def test_disallowed_user_drops_with_no_side_effects(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_non_app_mention_message_drops_with_no_side_effects(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event(type="message")
@@ -306,7 +298,7 @@ async def test_non_app_mention_message_drops_with_no_side_effects(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event()  # no thread_ts, so the mention's own ts is the thread
@@ -334,7 +326,7 @@ async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> None:
   """A failing reactions.add costs only the eyes: the round still spawns and persists."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   event = _make_event()
 
@@ -372,7 +364,7 @@ async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   event = _make_event()
   sid = _sid(event)
@@ -396,7 +388,7 @@ async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> 
 async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> None:
   """A fresh summon session (slack_origin set, group empty) lands in `Slack #<name>`,
   and its session name carries the same resolved label."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event()
@@ -415,7 +407,7 @@ async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> 
 async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) -> None:
   """A missing_scope-style resolution failure still groups, as `Slack #<channel_id>`,
   and the mention is still accepted and answered."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   event = _make_event()
 
@@ -453,7 +445,7 @@ async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_existing_group_is_never_overwritten(tmp_path: Path) -> None:
   """A repeat mention on a session with a non-empty group does not call set_group."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   event = _make_event()
   sid = _sid(event)
@@ -476,7 +468,7 @@ async def test_existing_group_is_never_overwritten(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_unarchived_session_with_empty_group_is_grouped(tmp_path: Path) -> None:
   """The unarchive path groups an empty-group session exactly like the create path."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   event = _make_event()
   sid = _sid(event)
@@ -498,7 +490,7 @@ async def test_unarchived_session_with_empty_group_is_grouped(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Path) -> None:
   """A set_group failure is logged and swallowed: the mention is still accepted and answered."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event()
@@ -520,7 +512,7 @@ async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_ensure_slack_group_skips_sessions_without_slack_origin(tmp_path: Path) -> None:
   """The label form of ensure_slack_group writes nothing when the session has no slack_origin."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="web-session"))
 
@@ -581,7 +573,7 @@ async def test_get_channel_name_missing_scope_caches_none(tmp_path: Path) -> Non
 async def test_trigger_master_forwards_user_event_id(tmp_path: Path) -> None:
   from src.core import master_trigger
 
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
 

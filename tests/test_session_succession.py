@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, build_sessions_cfg
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
 from conftest import make_sessions_client as _build_client
@@ -42,15 +42,6 @@ from src.core.triggers import TriggerManager
 # window suppresses the tick, while a missing one makes the never-run branch
 # reach back over that same window and fire immediately.
 _CADENCE_CRON = "* * * * *"
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-      ],
-  )
 
 
 def _build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -394,7 +385,7 @@ async def test_api_succession_refused_maps_to_409_and_bad_event_index_to_400(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_sessions_cfg(tmp_path)
   mgr = SessionManager(cfg)
   client = _build_client(cfg, mgr)
 

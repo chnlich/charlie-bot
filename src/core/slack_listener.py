@@ -35,7 +35,7 @@ import websockets
 
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
+from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.http import get_http_client
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
@@ -59,7 +59,7 @@ CITATION_BOUNDARY = (
 
 _ACCEPTANCE_REACTION = "eyes"
 
-_LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+_LOCAL_TZ = ZoneInfo(HOUSE_TIMEZONE)
 
 # Slack's hard per-message text limit. 40000 is the ceiling, so a long single
 # message is left for the client to collapse; splitting is the above-limit

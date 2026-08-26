@@ -8,7 +8,7 @@ import structlog
 
 from src.agents.master_cc import run_message
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
+from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
@@ -133,7 +133,7 @@ async def trigger_master(
     # NOT set this flag (an alarm there is correct).
     expect_fresh_session = False
     if (session_meta.scheduled_task and session_meta.cc_session_id and session_meta.cc_session_started_at):
-      pt = ZoneInfo('America/Los_Angeles')
+      pt = ZoneInfo(HOUSE_TIMEZONE)
       now_pt = datetime.now(pt)
       # Most recent Saturday 1:00 AM PT
       days_since_sat = (now_pt.weekday() - 5) % 7

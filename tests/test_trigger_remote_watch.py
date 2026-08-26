@@ -10,7 +10,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import requests
-from conftest import FakeAsyncProcess, patch_trigger_fire
+from conftest import (
+  FakeAsyncProcess,
+  assert_trigger_fired_completed,
+  patch_trigger_fire,
+)
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 from pydantic import ValidationError
@@ -20,7 +24,6 @@ from src.core.models import (
   LocalPid,
   RemotePid,
   ScheduleTriggerRequest,
-  TriggerStatus,
 )
 from src.core.triggers import (
   RemoteVerifyError,
@@ -157,11 +160,7 @@ async def test_remote_multi_host_all_die_fires(tmp_path: Path) -> None:
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "completed"
-  msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | completed]" in msg
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
   assert "neptune:1" in msg
   assert "neptune:2" in msg
   assert "noire:3" in msg

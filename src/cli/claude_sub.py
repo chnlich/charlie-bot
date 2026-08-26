@@ -378,7 +378,7 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
   # Seed folder trust for this turn's cwd so the interactive TUI does not park on
   # the trust dialog (which would stall hooks until the submission-confirmation
   # timeout).  Mirror the shape of _ensure_claude_project_trusted in
-  # src/agents/backends/tui.py:102-113, but write only this overlay file through
+  # src/agents/backends/tui.py, but write only this overlay file through
   # _write_json_atomically (never the user's ~/.claude.json).
   project = global_settings.setdefault("projects", {}).setdefault(str(cwd), {})
   trust_changed = (

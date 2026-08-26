@@ -9,6 +9,7 @@ from conftest import (
   JudgmentShim,
   ReviewSpawnSessionManager,
   ReviewSpawnThreadManager,
+  build_worker_prompt,
   patch_review_spawn_path,
   recording_notify_completion,
 )
@@ -135,21 +136,7 @@ def test_resolve_backend_option_rejects_missing_model_for_model_required_backend
 
 
 def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
-  prompt = spawner._build_worker_prompt(
-      description="Improve the CLI",
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="improve/test/iter2",
-      wt_path="/tmp/worktrees/improve-test-iter2",
-      session_meta=SessionMetadata(id="session-id", name="Improve Session"),
-      cfg=_build_cfg(),
-      task_type=TaskType.IMPLEMENT,
-      loop_dir="/tmp/loops/2",
-      iteration_number=2,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt("Improve the CLI", cfg=_build_cfg(), loop_dir="/tmp/loops/2", iteration_number=2)
 
   assert "Treat them as advisory evidence and hints only." in prompt
   assert "must not dictate your plan for this iteration" not in prompt
@@ -160,21 +147,7 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
 
 
 def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None:
-  prompt = spawner._build_worker_prompt(
-      description="Implement X",
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="charliebot/task-xyz",
-      wt_path="/tmp/worktrees/charliebot-task-xyz",
-      session_meta=SessionMetadata(id="session-id", name="impl"),
-      cfg=_build_cfg(),
-      task_type=TaskType.IMPLEMENT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt("Implement X", cfg=_build_cfg())
   assert "Commit your changes with descriptive messages." in prompt
   assert "A reviewer will handle that." in prompt
   assert "Do NOT modify tracked files." not in prompt
@@ -182,21 +155,7 @@ def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None
 
 
 def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
-  prompt = spawner._build_worker_prompt(
-      description="## Goal\nImplement X\n\n## Source Files\n- /tmp/source.md",
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="charliebot/task-xyz",
-      wt_path="/tmp/worktrees/charliebot-task-xyz",
-      session_meta=SessionMetadata(id="session-id", name="impl"),
-      cfg=_build_cfg(),
-      task_type=TaskType.IMPLEMENT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt("## Goal\nImplement X\n\n## Source Files\n- /tmp/source.md", cfg=_build_cfg())
 
   assert "contains a `## Source Files` section" in prompt
   assert "read every listed source file before editing" in prompt
@@ -205,42 +164,14 @@ def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
 
 
 def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> None:
-  prompt = spawner._build_worker_prompt(
-      description="Cherry-pick fix",
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="charliebot/task-xyz",
-      wt_path="/tmp/worktrees/charliebot-task-xyz",
-      session_meta=SessionMetadata(id="session-id", name="quick"),
-      cfg=_build_cfg(),
-      task_type=TaskType.QUICK_EDIT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt("Cherry-pick fix", cfg=_build_cfg(), task_type=TaskType.QUICK_EDIT)
   assert "Commit your changes with descriptive messages." in prompt
   assert "No reviewer will run" in prompt
   assert "A reviewer will handle that." not in prompt
 
 
 def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() -> None:
-  prompt = spawner._build_worker_prompt(
-      description="Run SLURM benchmark",
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="charliebot/task-xyz",
-      wt_path="/tmp/worktrees/charliebot-task-xyz",
-      session_meta=SessionMetadata(id="session-id", name="script"),
-      cfg=_build_cfg(),
-      task_type=TaskType.SCRIPT_RUN,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt("Run SLURM benchmark", cfg=_build_cfg(), task_type=TaskType.SCRIPT_RUN)
   assert "Do NOT modify tracked files" in prompt
   assert "Do NOT commit" in prompt
   assert "Commit your changes with descriptive messages." not in prompt
@@ -249,21 +180,7 @@ def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() ->
 
 def test_build_worker_prompt_rejects_verify_task_type() -> None:
   with pytest.raises(ValueError, match="unsupported task_type"):
-    spawner._build_worker_prompt(
-        description="Verify plan",
-        repo_path=Path("/tmp/repo"),
-        base_branch="main",
-        branch_name="charliebot/task-xyz",
-        wt_path="/tmp/worktrees/charliebot-task-xyz",
-        session_meta=SessionMetadata(id="session-id", name="verify"),
-        cfg=_build_cfg(),
-        task_type=TaskType.VERIFY,
-        loop_dir=None,
-        iteration_number=None,
-        is_continuation=False,
-        keep_worktree=False,
-        start_point=None,
-    )
+    build_worker_prompt("Verify plan", cfg=_build_cfg(), task_type=TaskType.VERIFY)
 
 
 @pytest.mark.asyncio

@@ -582,6 +582,37 @@ def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[
   return fake_run_tmux
 
 
+def build_worker_prompt(
+    description: str,
+    cfg: CharlieBotConfig,
+    *,
+    task_type: models.TaskType = models.TaskType.IMPLEMENT,
+    loop_dir: str | None = None,
+    iteration_number: int | None = None,
+    is_continuation: bool = False,
+    keep_worktree: bool = False,
+) -> str:
+  """spawner._build_worker_prompt with the arguments the prompt-content tests share: /tmp/repo
+  as the repo, charliebot/task-xyz branched off main, a one-field SessionMetadata, no
+  start_point. The keyword fields are the knobs the prompt tests vary; a test needing any
+  other field (repo_path, branch_name, wt_path, session_meta, start_point) builds its own."""
+  return spawner._build_worker_prompt(
+      description=description,
+      repo_path=Path("/tmp/repo"),
+      base_branch="main",
+      branch_name="charliebot/task-xyz",
+      wt_path="/tmp/worktrees/charliebot-task-xyz",
+      session_meta=models.SessionMetadata(id="session-id", name="test"),
+      cfg=cfg,
+      task_type=task_type,
+      loop_dir=loop_dir,
+      iteration_number=iteration_number,
+      is_continuation=is_continuation,
+      keep_worktree=keep_worktree,
+      start_point=None,
+  )
+
+
 def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
   """A spawner._notify_completion stand-in recording the finalized outcome and thread.
 

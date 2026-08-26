@@ -14,6 +14,7 @@ from conftest import (
   CODEX_BACKEND_OPTION,
   CapturingThreadManager,
   JudgmentShim,
+  build_worker_prompt,
   recording_notify_completion,
 )
 
@@ -41,41 +42,13 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
 
 
 def test_build_worker_prompt_includes_keep_worktree_note(tmp_path: Path) -> None:
-  prompt = spawner._build_worker_prompt(
-      description="Run SLURM benchmark",
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="charliebot/task-xyz",
-      wt_path="/tmp/worktrees/charliebot-task-xyz",
-      session_meta=SessionMetadata(id="session-id", name="bench"),
-      cfg=_build_cfg(tmp_path),
-      task_type=TaskType.IMPLEMENT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=True,
-      start_point=None,
-  )
+  prompt = build_worker_prompt("Run SLURM benchmark", cfg=_build_cfg(tmp_path), keep_worktree=True)
   assert "This worktree will persist after the reviewer merges." in prompt
   assert "SLURM" in prompt
 
 
 def test_build_worker_prompt_omits_keep_worktree_note_by_default(tmp_path: Path) -> None:
-  prompt = spawner._build_worker_prompt(
-      description="Run SLURM benchmark",
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="charliebot/task-xyz",
-      wt_path="/tmp/worktrees/charliebot-task-xyz",
-      session_meta=SessionMetadata(id="session-id", name="bench"),
-      cfg=_build_cfg(tmp_path),
-      task_type=TaskType.IMPLEMENT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt("Run SLURM benchmark", cfg=_build_cfg(tmp_path), keep_worktree=False)
   assert "This worktree will persist after the reviewer merges." not in prompt
 
 

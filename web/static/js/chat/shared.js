@@ -29,6 +29,15 @@ function escapeJsSingleQuoted(str) {
     .replace(/\r/g, '\\r');
 }
 
+// Show-more toggle for over-limit text: the click swaps the short span for
+// the full one, so the id base must be page-unique (callers randomize it).
+// Every caller's host renders its text at text-xs, except the workers.js
+// assistant bubble (text-sm); the pinned class holds the button at text-xs
+// there too.
+function showMoreToggleHtml(id, restHtml) {
+  return `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline text-xs">Show more</button></span><span id="${id}-full" style="display:none">${restHtml}</span>`;
+}
+
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
@@ -64,6 +73,7 @@ Chat.escapeHtml = escapeHtml;
 Chat.escapeChatAttr = escapeHtmlAttr;
 Chat.escapeHtmlAttr = escapeHtmlAttr;
 Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
+Chat.showMoreToggleHtml = showMoreToggleHtml;
 Chat.formatBubbleTime = formatBubbleTime;
 Chat.messageIdentityAttrs = messageIdentityAttrs;
 Chat.isRenderedMessage = isRenderedMessage;
@@ -72,6 +82,7 @@ Chat.expose([
   'escapeHtml',
   'escapeHtmlAttr',
   'isRenderedMessage',
+  'showMoreToggleHtml',
 ]);
 
 })();

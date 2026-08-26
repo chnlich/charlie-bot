@@ -120,7 +120,8 @@ async def test_spawn_review_worker_skips_when_reviewer_already_exists(monkeypatc
 
   monkeypatch.setattr(review, "create_logged_task", capture_create_logged_task(captured))
 
-  spawned = await review.spawn_review_worker("session-id", original, cfg, ReviewSpawnSessionManager("Test"), ThreadMgrWithReviewer())
+  spawned = await review.spawn_review_worker(
+      "session-id", original, cfg, ReviewSpawnSessionManager("Test"), ThreadMgrWithReviewer())
 
   assert spawned is True
   assert captured == {}  # no spawn task was scheduled
@@ -261,7 +262,8 @@ async def test_antigravity_worker_missing_model_falls_back_to_same_backend(monke
   patch_review_spawn_path(monkeypatch, captured)
 
   await review.spawn_review_worker(
-      "session-id", _make_original_thread(backend="agy", model=None), cfg, ReviewSpawnSessionManager("Test"), ReviewSpawnThreadManager())
+      "session-id", _make_original_thread(backend="agy", model=None), cfg, ReviewSpawnSessionManager("Test"),
+      ReviewSpawnThreadManager())
 
   assert captured["request"].resolved_backend == "agy"
   assert captured["request"].resolved_model is None

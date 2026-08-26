@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from conftest import build_recovery_cfg
 from test_restart_recovery_e2e import (
   _await_recovery_tasks,
   _cfg,
@@ -39,7 +40,7 @@ from src.agents.backends.base import AgentBackend
 from src.core import init as init_module
 from src.core import runs
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, ThreadStatus, utc_now
+from src.core.models import CreateSessionRequest, ThreadStatus, utc_now
 from src.core.sessions import SessionManager
 from src.core.spawner import resume_worker as _real_resume_worker
 from src.core.threads import ThreadManager
@@ -128,14 +129,7 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
   uncovered-alive; recovery emits exactly one report and mounts nothing —
   the thread is left running and untouched."""
   home = tmp_path / "home"
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
-      ],
-  )
+  cfg = build_recovery_cfg(home)
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered-alive"))
@@ -177,14 +171,7 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
   with the transport reason, drains the run's pending output, and finalizes
   the thread failed with that reason carried into the worker summary."""
   home = tmp_path / "home"
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
-      ],
-  )
+  cfg = build_recovery_cfg(home)
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered-dead"))

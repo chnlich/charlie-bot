@@ -27,15 +27,12 @@ def test_version_endpoint_returns_sha_and_started_at(tmp_path: Path, monkeypatch
 
 def test_init_build_info_populates_sha_and_started_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """init_build_info captures a real SHA and a non-empty started_at."""
-  captured: dict[str, str] = {}
-
   def fake_read_git_sha() -> str:
     return "deadbee"
 
   monkeypatch.setattr(buildinfo, "_read_git_sha", fake_read_git_sha)
   buildinfo.init_build_info()
-  captured["sha"] = buildinfo.get_sha()
-  captured["started_at"] = buildinfo.get_started_at()
+  captured = buildinfo.build_info()
   assert captured["sha"] == "deadbee"
   assert captured["started_at"]  # non-empty ISO string
 

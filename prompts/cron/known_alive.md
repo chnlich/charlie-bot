@@ -93,6 +93,17 @@ Known-alive symbols:
   `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting the parameter
   makes the stub raise TypeError when the gate calls it. Vulture flags each unused parameter
   at 100% confidence as an unused variable.
+- `dir_path` (ten `_create_provider` stubs in `tests/test_ext_usage.py`) — third parameter
+  of the stubs installed for `ext_usage._create_provider(provider, label, dir_path)` via
+  `monkeypatch.setattr`; the replaced signature fixes the arity (the poll loop calls it with
+  three positional arguments at `src/api/ext_usage.py:282`), so deleting the parameter makes
+  the stub raise TypeError when the loop calls it. Vulture flags each unused parameter at
+  100% confidence as an unused variable. Same arity-stub class as `art` above.
+- `scheduled`, `include_running_status`, `include_pending_trigger_status` (on the two
+  `FakeSessionManager.list_sessions` stubs in `tests/test_pages.py`) — keyword parameters
+  pinned by the replaced call in `pages.index` (`src/api/pages.py:634` passes all three by
+  keyword), so deleting one makes the stub raise TypeError when the route calls it. Vulture
+  flags each at 100% confidence as an unused variable. Same arity-stub class as `art` above.
 - The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
   `tests/test_master_cc_voice.py`, and `tests/test_worker_diagnostics.py` are flagged as
   100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake

@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +9,7 @@ from conftest import (
   ReviewSpawnSessionManager,
   ReviewSpawnThreadManager,
   build_worker_prompt,
+  capturing_worker,
   patch_review_spawn_path,
   recording_notify_completion,
 )
@@ -51,40 +51,6 @@ def _build_tmp_cfg(tmp_path: Path, backend_option: BackendOption) -> CharlieBotC
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=[backend_option],
   )
-
-
-def _capturing_worker(captures: dict[str, Any]) -> type:
-  """A spawner_launch.Worker stand-in recording its constructor args into ``captures``.
-
-  The signature mirrors the production call in spawner._construct_worker, and the
-  fixed worker_dir/worker_backend/task_description key set is the shared contract
-  the spawn-driving tests assert on; thread_metadata, events_log_path, worker_cfg,
-  and on_spawned go unrecorded because no backend-propagation test reads them.
-  """
-
-  class CapturingWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: BackendOption | None = None,
-        on_spawned: Callable | None = None,
-    ) -> None:
-      captures["worker_dir"] = working_dir
-      captures["worker_backend"] = backend_option
-      captures["task_description"] = task_description
-
-    async def run(self) -> int:
-      return 0
-
-    async def terminate(self) -> None:
-      return None
-
-  return CapturingWorker
 
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
@@ -386,7 +352,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
 
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
-  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner.spawn_worker(
@@ -606,7 +572,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
   )
   captures: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -638,7 +604,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
   )
   captures: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -668,7 +634,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   )
   captures: dict[str, Any] = {}
 
-  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
 
   await spawner._create_repoless_process(
       "session-id",
@@ -760,7 +726,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       captures["broadcast_event"] = event
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
+  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner.spawn_worker(

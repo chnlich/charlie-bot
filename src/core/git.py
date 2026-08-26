@@ -537,21 +537,8 @@ async def _run_git_cmd(
     timeout_label: str,
 ) -> tuple[bool, str]:
   """Run a git command with timeout. Returns (success, stderr)."""
-  proc = await asyncio.create_subprocess_exec(
-      "git",
-      *args,
-      cwd=str(repo_path),
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-  )
-  try:
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-  except asyncio.TimeoutError:
-    proc.kill()
-    return False, f"{timeout_label} timed out after {timeout}s"
-  if proc.returncode != 0:
-    return False, stderr.decode().strip()
-  return True, ""
+  ok, _, stderr = await _git_stdout(repo_path, *args, timeout=timeout, timeout_label=timeout_label)
+  return ok, stderr
 
 
 async def git_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:

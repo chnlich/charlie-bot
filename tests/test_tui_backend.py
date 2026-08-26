@@ -41,24 +41,31 @@ def test_ensure_claude_project_trusted_marks_session_dir(monkeypatch: pytest.Mon
   assert project["projectOnboardingSeenCount"] == 1
 
 
+def _patch_tmux_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> tuple[Path, Path, list[tuple[str, ...]]]:
+  """Redirect HOME and CLAUDE_CONFIG_DIR into tmp_path; return (config_dir, working_dir, tmux calls).
+
+  ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
+  probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
+  pty_common global would reach the real tmux binary.
+  """
+  config_dir = tmp_path / "claude-config"
+  working_dir = tmp_path / "session"
+  calls: list[tuple[str, ...]] = []
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: tmp_path / "home"))
+  monkeypatch.setattr(pty_common, "_run_tmux", make_fake_run_tmux(calls))
+  return config_dir, working_dir, calls
+
+
 @pytest.mark.asyncio
 async def test_ensure_tmux_session_uses_claude_tui_startup_args(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  config_dir = tmp_path / "claude-config"
-  home_dir = tmp_path / "home"
-  working_dir = tmp_path / "session"
-  calls = []
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
-
-  fake_run_tmux = make_fake_run_tmux(calls)
-
-  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
-  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
-  # pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
+  config_dir, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
 
   await tui.ensure_tmux_session("session-id", working_dir)
 
@@ -81,22 +88,10 @@ async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  config_dir = tmp_path / "claude-config"
-  home_dir = tmp_path / "home"
-  jsonl_path = home_dir / ".claude" / "projects" / "project-a" / "session-id.jsonl"
+  _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
+  jsonl_path = tui.Path.home() / ".claude" / "projects" / "project-a" / "session-id.jsonl"
   jsonl_path.parent.mkdir(parents=True)
   jsonl_path.write_text("", encoding="utf-8")
-  working_dir = tmp_path / "session"
-  calls = []
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
-
-  fake_run_tmux = make_fake_run_tmux(calls)
-
-  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
-  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
-  # pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session("session-id", working_dir)
 
@@ -111,19 +106,7 @@ async def test_ensure_tmux_session_passes_optional_claude_args(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  config_dir = tmp_path / "claude-config"
-  home_dir = tmp_path / "home"
-  working_dir = tmp_path / "session"
-  calls = []
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
-
-  fake_run_tmux = make_fake_run_tmux(calls)
-
-  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
-  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
-  # pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
+  _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
 
   await tui.ensure_tmux_session(
       "session-id",
@@ -149,19 +132,7 @@ async def test_ensure_tmux_session_injects_new_session_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  config_dir = tmp_path / "claude-config"
-  home_dir = tmp_path / "home"
-  working_dir = tmp_path / "session"
-  calls = []
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
-
-  fake_run_tmux = make_fake_run_tmux(calls)
-
-  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
-  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
-  # pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
+  _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
 
   await tui.ensure_tmux_session(
       "session-id",

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import assert_trigger_fired_completed
 from conftest import make_trigger_setup as _make_mgr
 
 from src.core.models import (
@@ -62,11 +63,7 @@ async def test_pid_gone_immediate_fire(tmp_path: Path, pidfd_open_available: Non
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=5)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "completed"
-  msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | completed]" in msg
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
   assert f"finished: {missing_pid} (gone at start)" in msg
 
 
@@ -94,11 +91,7 @@ async def test_pid_exit_before_timeout(tmp_path: Path, pidfd_open_available: Non
   proc.wait(timeout=2)
   assert elapsed < 5, f"trigger took {elapsed:.1f}s, expected <5s"
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "completed"
-  msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | completed]" in msg
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
   assert f"finished: {proc.pid}" in msg
 
 

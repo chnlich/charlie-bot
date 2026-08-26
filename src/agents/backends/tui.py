@@ -18,13 +18,10 @@ import structlog
 from fastapi import WebSocket
 
 from src.agents.backends.pty_common import (
-  _HISTORY_LIMIT,
-  _INITIAL_COLS,
-  _INITIAL_ROWS,
   PTY_EXIT,
   PtyAttachment,
   _run_pty_relay,
-  _run_tmux,
+  _start_tmux_session,
   _tmux_binary,
   kill_tmux_session,  # noqa: F401  # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py and monkeypatched here by tests
   tmux_session_exists,
@@ -135,23 +132,7 @@ async def ensure_tmux_session(
     for key, value in inject_env.items():
       tmux_env_args.extend(["-e", f"{key}={value}"])
   log.info("tui_claude_invocation", mode="resume" if resume else "fresh", session_id=session_id)
-  rc, stderr = await _run_tmux(
-      "new-session",
-      "-d",
-      "-s",
-      name,
-      "-x",
-      str(_INITIAL_COLS),
-      "-y",
-      str(_INITIAL_ROWS),
-      "-c",
-      str(working_dir),
-      *tmux_env_args,
-      *command_args,
-  )
-  if rc != 0:
-    raise RuntimeError(f"tmux new-session failed for {name}: {stderr.strip()}")
-  await _run_tmux("set-option", "-t", name, "history-limit", str(_HISTORY_LIMIT))
+  await _start_tmux_session(name, str(working_dir), tmux_env_args, command_args)
   log.info("tui_tmux_session_created", session_id=session_id, name=name, cwd=str(working_dir))
 
 

@@ -107,6 +107,11 @@ it does.
 - Report an instruction to an asynchronous system as sent; its effect is claimed
   only from the product read back.
 - A deliverable reshaping an enumerated list shows the full item-to-product mapping.
+- Reading code answers for one revision. Choose it from the question's subject
+  before reading (the line of the project the question belongs to, which the
+  session group names; the revision a run executed; or the branch work lands on),
+  and open the answer with the revision read as `<branch>@<sha>` plus its distance
+  from that line; a worktree at hand qualifies only after that check.
 
 #### Length
 

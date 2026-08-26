@@ -11,13 +11,11 @@ import structlog
 from fastapi import WebSocket
 
 from src.agents.backends.pty_common import (
-  _HISTORY_LIMIT,
-  _INITIAL_COLS,
-  _INITIAL_ROWS,
   PTY_EXIT,
   PtyAttachment,
   _run_pty_relay,
   _run_tmux,
+  _start_tmux_session,
   tmux_session_name,
 )
 from src.core.config import (
@@ -70,24 +68,7 @@ async def ensure_terminal_session() -> None:
     env_args: list[str] = []
     if os.environ.get(CHARLIEBOT_HOME_ENV, "").strip():
       env_args = ["-e", f"{CHARLIEBOT_HOME_ENV}={charliebot_home_dir()}"]
-    rc, stderr = await _run_tmux(
-        "new-session",
-        "-d",
-        "-s",
-        name,
-        "-x",
-        str(_INITIAL_COLS),
-        "-y",
-        str(_INITIAL_ROWS),
-        "-c",
-        str(home),
-        *env_args,
-        "bash",
-        "-l",
-    )
-    if rc != 0:
-      raise RuntimeError(f"tmux new-session failed for {name}: {stderr.strip()}")
-    await _run_tmux("set-option", "-t", name, "history-limit", str(_HISTORY_LIMIT))
+    await _start_tmux_session(name, str(home), env_args, ["bash", "-l"])
     log.info("terminal_tmux_session_created", name=name, cwd=str(home))
 
 

@@ -55,9 +55,9 @@ async def test_ensure_tmux_session_uses_claude_tui_startup_args(
 
   fake_run_tmux = make_fake_run_tmux(calls)
 
-  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
-  # an unpatched pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
+  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
+  # pty_common global would reach the real tmux binary.
   monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session("session-id", working_dir)
@@ -93,9 +93,9 @@ async def test_ensure_tmux_session_resumes_when_claude_jsonl_exists(
 
   fake_run_tmux = make_fake_run_tmux(calls)
 
-  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
-  # an unpatched pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
+  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
+  # pty_common global would reach the real tmux binary.
   monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session("session-id", working_dir)
@@ -120,9 +120,9 @@ async def test_ensure_tmux_session_passes_optional_claude_args(
 
   fake_run_tmux = make_fake_run_tmux(calls)
 
-  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
-  # an unpatched pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
+  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
+  # pty_common global would reach the real tmux binary.
   monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session(
@@ -158,9 +158,9 @@ async def test_ensure_tmux_session_injects_new_session_env(
 
   fake_run_tmux = make_fake_run_tmux(calls)
 
-  # ensure_tmux_session's has-session probe flows through pty_common.tmux_session_exists;
-  # an unpatched pty_common global would reach the real tmux binary.
-  monkeypatch.setattr(tui, "_run_tmux", fake_run_tmux)
+  # ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
+  # probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
+  # pty_common global would reach the real tmux binary.
   monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await tui.ensure_tmux_session(

@@ -160,7 +160,10 @@ async def test_ensure_terminal_session_starts_global_login_shell(
 
   fake_run_tmux = make_fake_run_tmux(calls)
 
+  # The has-session probe is a terminal-module global; the new-session spawn flows
+  # through pty_common._start_tmux_session.
   monkeypatch.setattr(terminal, "_run_tmux", fake_run_tmux)
+  monkeypatch.setattr(pty_common, "_run_tmux", fake_run_tmux)
 
   await terminal.ensure_terminal_session()
 

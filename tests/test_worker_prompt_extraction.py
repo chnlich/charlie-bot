@@ -9,15 +9,11 @@ from the same file.
 from pathlib import Path
 
 import pytest
+from conftest import build_worker_prompt
 
 from src.core import review, spawner
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata, TaskType
 
-REPO_PATH = Path("/tmp/charliebot-fixture-repo")
-BASE_BRANCH = "main"
-BRANCH_NAME = "charliebot/task-fixture-0001"
-WT_PATH = "/tmp/worktrees/charliebot-task-fixture-0001"
 LOOP_DIR = "/tmp/charliebot-fixture-loops/iter-loop"
 ITERATION_NUMBER = 7  # raw "## Iter 7" vs zero-padded "iter_0007.md"
 DESCRIPTION = "## Goal\nDo the fixture task.\n\n## Source Files\n- /tmp/source.md\n"
@@ -25,20 +21,11 @@ DESCRIPTION = "## Goal\nDo the fixture task.\n\n## Source Files\n- /tmp/source.m
 
 def test_loop_axis_renders_both_iteration_number_forms() -> None:
   """Iter 7 -> raw '## Iter 7' heading and zero-padded 'iter_0007.md' filename, both present."""
-  prompt = spawner._build_worker_prompt(
-      description=DESCRIPTION,
-      repo_path=REPO_PATH,
-      base_branch=BASE_BRANCH,
-      branch_name=BRANCH_NAME,
-      wt_path=WT_PATH,
-      session_meta=SessionMetadata(id="s", name="s"),
+  prompt = build_worker_prompt(
+      DESCRIPTION,
       cfg=CharlieBotConfig(charliebot_home=Path("/tmp/unused"), worktree_dir="/tmp/worktrees"),
-      task_type=TaskType.IMPLEMENT,
       loop_dir=LOOP_DIR,
       iteration_number=ITERATION_NUMBER,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
   )
   assert "## Iter 7 — {completed|failed}" in prompt
   assert "iter_0007.md" in prompt
@@ -48,21 +35,7 @@ def test_continuation_intro_selected_over_new_session_intro() -> None:
   cfg = CharlieBotConfig(charliebot_home=Path("/tmp/unused"), worktree_dir="/tmp/worktrees")
   sections = spawner.load_worker_prompt_sections(cfg)
 
-  prompt = spawner._build_worker_prompt(
-      description=DESCRIPTION,
-      repo_path=REPO_PATH,
-      base_branch=BASE_BRANCH,
-      branch_name=BRANCH_NAME,
-      wt_path=WT_PATH,
-      session_meta=SessionMetadata(id="s", name="s"),
-      cfg=cfg,
-      task_type=TaskType.IMPLEMENT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=True,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt(DESCRIPTION, cfg=cfg, is_continuation=True)
   assert sections["intro_continuation"] in prompt
   assert sections["intro_new"] not in prompt
 
@@ -73,21 +46,8 @@ def test_memory_block_renders_into_prompt(tmp_path: Path) -> None:
   memory_dir.mkdir(parents=True)
   (memory_dir / "topics").write_text("fixture-topic\n", encoding="utf-8")
 
-  prompt = spawner._build_worker_prompt(
-      description=DESCRIPTION,
-      repo_path=REPO_PATH,
-      base_branch=BASE_BRANCH,
-      branch_name=BRANCH_NAME,
-      wt_path=WT_PATH,
-      session_meta=SessionMetadata(id="s", name="s"),
-      cfg=CharlieBotConfig(charliebot_home=charliebot_home, worktree_dir="/tmp/worktrees"),
-      task_type=TaskType.IMPLEMENT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt(
+      DESCRIPTION, cfg=CharlieBotConfig(charliebot_home=charliebot_home, worktree_dir="/tmp/worktrees"))
   # A broken {{memory_block}} token fails the unresolved-token sweep instead of
   # reaching the assertions, and an inverted memory gate drops the heading.
   assert "## Memory" in prompt
@@ -160,21 +120,7 @@ def test_remote_scratch_assembled_directly_after_skills_discovery() -> None:
   cfg = CharlieBotConfig(charliebot_home=Path("/tmp/unused"), worktree_dir="/tmp/worktrees")
   sections = spawner.load_worker_prompt_sections(cfg)
 
-  prompt = spawner._build_worker_prompt(
-      description=DESCRIPTION,
-      repo_path=REPO_PATH,
-      base_branch=BASE_BRANCH,
-      branch_name=BRANCH_NAME,
-      wt_path=WT_PATH,
-      session_meta=SessionMetadata(id="s", name="s"),
-      cfg=cfg,
-      task_type=TaskType.IMPLEMENT,
-      loop_dir=None,
-      iteration_number=None,
-      is_continuation=False,
-      keep_worktree=False,
-      start_point=None,
-  )
+  prompt = build_worker_prompt(DESCRIPTION, cfg=cfg)
   assert sections["skills_discovery"] + "\n" + sections["remote_scratch"] in prompt
   assert sections["remote_scratch"] + "\n" + sections["role"] in prompt
 
@@ -196,21 +142,7 @@ def test_unresolved_token_in_assembled_output_raises(tmp_path: Path) -> None:
     memory_dir = tmp_path / "memory"  # missing -> memory_section empty, irrelevant here
 
   with pytest.raises(ValueError, match="unresolved"):
-    spawner._build_worker_prompt(
-        description="desc",
-        repo_path=Path("/tmp/repo"),
-        base_branch="main",
-        branch_name="branch",
-        wt_path="/tmp/wt",
-        session_meta=SessionMetadata(id="s", name="s"),
-        cfg=_Cfg(),  # type: ignore[arg-type]
-        task_type=TaskType.IMPLEMENT,
-        loop_dir=None,
-        iteration_number=None,
-        is_continuation=False,
-        keep_worktree=False,
-        start_point=None,
-    )
+    build_worker_prompt("desc", cfg=_Cfg())  # type: ignore[arg-type]
 
 
 # --- Reviewer-prompt sourcing --------------------------------------------------

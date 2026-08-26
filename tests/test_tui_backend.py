@@ -45,7 +45,7 @@ def _patch_tmux_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> tuple[Path, Path, list[tuple[str, ...]]]:
-  """Redirect HOME and CLAUDE_CONFIG_DIR into tmp_path; return (config_dir, working_dir, tmux calls).
+  """Redirect Path.home and CLAUDE_CONFIG_DIR into tmp_path; return (config_dir, working_dir, tmux calls).
 
   ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
   probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched

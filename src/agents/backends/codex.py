@@ -63,6 +63,17 @@ class CodexBackend(AgentBackend):
       args.append(f"model_auto_compact_token_limit={self._model_auto_compact_token_limit}")
     return args
 
+  def _exec_args(self) -> list[str]:
+    """argv shared by streaming, resume, and one-shot `codex exec` runs."""
+    return [
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--model",
+        self._model,
+        *self._model_config_args(),
+    ]
+
   def _build_command(self, prompt: str) -> list[str]:
     effective_prompt = prompt
 
@@ -71,24 +82,14 @@ class CodexBackend(AgentBackend):
           self._codex_bin,
           "exec",
           "resume",
-          "--json",
-          "--skip-git-repo-check",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--model",
-          self._model,
-          *self._model_config_args(),
+          *self._exec_args(),
           self._resume_session_id,
       ]
     else:
       cmd = [
           self._codex_bin,
           "exec",
-          "--json",
-          "--skip-git-repo-check",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--model",
-          self._model,
-          *self._model_config_args(),
+          *self._exec_args(),
       ]
     cmd.extend(self._extra_flags)
     cmd.extend(["--", effective_prompt])
@@ -120,12 +121,7 @@ class CodexBackend(AgentBackend):
     cmd = [
         self._codex_bin,
         "exec",
-        "--json",
-        "--skip-git-repo-check",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--model",
-        self._model,
-        *self._model_config_args(),
+        *self._exec_args(),
         "--",
         framed,
     ]

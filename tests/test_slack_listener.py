@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import build_slack_cfg
+from conftest import cfg_with_repo as _cfg_with_repo
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
@@ -89,17 +89,6 @@ def _make_event(**overrides: object) -> dict:
   }
   base.update(overrides)
   return base
-
-
-def _cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
-  """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
-  charlie_bot_repo is a derived property tied to the installed package location, so a plain
-  namespace stand-in is used to redirect it for these isolated fail-loud tests)."""
-
-  class _Cfg:
-    charlie_bot_repo = repo_root
-
-  return _Cfg()  # type: ignore[return-value]
 
 
 def _thread_ts(event: dict) -> str:

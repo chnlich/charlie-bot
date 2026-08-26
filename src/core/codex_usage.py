@@ -1,8 +1,9 @@
 """Codex-specific context-window usage resolution from native rollout logs."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import structlog
 

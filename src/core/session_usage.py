@@ -19,7 +19,7 @@ bar). ``None`` for any context field means "unknown" — the bar is hidden.
 """
 
 import asyncio
-from typing import Callable
+from collections.abc import Callable
 
 from src.agents.backends.claude_code import (
     CLAUDE_COMPACT_CONTEXT_RESERVE,

@@ -2,7 +2,8 @@
 
 import asyncio
 from collections import defaultdict
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import structlog
 from fastapi import WebSocket

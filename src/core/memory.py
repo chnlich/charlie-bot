@@ -30,9 +30,9 @@ spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import structlog
 

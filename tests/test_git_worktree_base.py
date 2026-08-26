@@ -23,8 +23,9 @@ Plus the launch path's base-less fallback (spawner._create_worktree_and_process)
 """
 
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 from conftest import CODEX_BACKEND_OPTION

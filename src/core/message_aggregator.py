@@ -16,8 +16,7 @@ A subsequent flush-triggering event (user, master_done, etc.) emits a
 (or the absence of one) tells the client whether to keep or clear the preview.
 """
 
-from collections.abc import Iterator
-from typing import Callable
+from collections.abc import Callable, Iterator
 
 from src.core import event_types as ET
 

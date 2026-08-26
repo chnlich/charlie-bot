@@ -3,8 +3,9 @@ import json
 import os
 import time
 import types
+from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 

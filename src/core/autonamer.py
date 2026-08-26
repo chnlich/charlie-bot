@@ -24,8 +24,8 @@ a name the user has already set (matched via is_default_session_name).
 
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import structlog
 

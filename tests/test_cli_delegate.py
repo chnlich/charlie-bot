@@ -23,6 +23,26 @@ def _patched_main(cfg: MagicMock, argv: list[str]) -> Iterator[MagicMock]:
     yield post_mock
 
 
+def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None = None) -> list[str]:
+  """Argv for a repo-scoped delegate main() call: the required repo/base-branch/task-spec-file and
+  keep-worktree skeleton plus the flags this test adds (extra); session stays omitted when the test
+  lets cwd supply it."""
+  argv = ["delegate"]
+  if session is not None:
+    argv += ["--session", session]
+  return argv + [
+      "--repo",
+      repo,
+      "--base-branch",
+      "main",
+      "--task-spec-file",
+      str(task_spec_file),
+      *extra,
+      "--keep-worktree",
+      "0",
+  ]
+
+
 def _mock_config(tmp_path: Path):
   cfg = MagicMock()
   cfg.server_port = 9443
@@ -599,10 +619,7 @@ def test_main_rejects_missing_task_spec_file(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   missing = tmp_path / "missing.md"
 
-  with _patched_main(
-      cfg,
-      ["delegate", "--repo", str(tmp_path), "--base-branch", "main", "--task-spec-file", str(missing),
-       "--keep-worktree", "0"]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), missing)) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -618,10 +635,7 @@ def test_main_rejects_empty_task_spec_file(
   empty = tmp_path / "empty.md"
   empty.write_text("  \n")
 
-  with _patched_main(
-      cfg,
-      ["delegate", "--repo", str(tmp_path), "--base-branch", "main", "--task-spec-file", str(empty),
-       "--keep-worktree", "0"]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), empty)) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -638,20 +652,7 @@ def test_main_rejects_missing_reviewer_context_file(
   missing = tmp_path / "missing_context.md"
 
   with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--reviewer-context-file",
-          str(missing),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(missing))) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -669,20 +670,7 @@ def test_main_rejects_empty_reviewer_context_file(
   empty.write_text("  \n")
 
   with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--reviewer-context-file",
-          str(empty),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(empty))) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -697,19 +685,7 @@ def test_main_rejects_task_spec_missing_required_heading(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec().replace("## Required Behavior\n", ""))
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -724,19 +700,7 @@ def test_main_rejects_nonexistent_absolute_source_file(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- /definitely/not/there/task-source.md"))
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -751,19 +715,7 @@ def test_main_rejects_relative_source_file_entry(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- relative/source.md"))
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -778,19 +730,7 @@ def test_main_rejects_empty_source_files_section(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec(""))
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -804,19 +744,7 @@ def test_main_allows_source_files_none(tmp_path: Path, monkeypatch: pytest.Monke
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- (none)"))
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 
@@ -829,19 +757,7 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
   source_file.write_text("reference")
   task_spec_file = _write_task_spec(tmp_path, _task_spec(f"- {source_file}"))
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 
@@ -852,19 +768,7 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 
@@ -876,21 +780,7 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "abc",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, session="abc")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 

@@ -328,6 +328,18 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
+  """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
+  charlie_bot_repo is a derived property tied to the installed package location, so a plain
+  namespace stand-in is used to redirect it for these isolated fail-loud tests)."""
+
+  class _Cfg:
+    charlie_bot_repo = repo_root
+    memory_dir = repo_root / "memory"
+
+  return _Cfg()  # type: ignore[return-value]
+
+
 def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for cross-backend tests: the .charliebot home lives under tmp_path so each test owns its
   own tree, and the backend list registers the opus-then-codex pair that pin-resolution and fallback-ordering

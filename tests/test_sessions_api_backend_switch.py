@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 import yaml
 from conftest import CODEX_BACKEND_OPTION
+from conftest import make_transcript as _make_transcript
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -49,13 +50,6 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path, Path]:
       ],
   )
   return cfg, config_a, config_b
-
-
-def _make_transcript(config_dir: Path, cc_session_id: str) -> Path:
-  transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"
-  transcript.parent.mkdir(parents=True, exist_ok=True)
-  transcript.write_text("[]", encoding="utf-8")
-  return transcript
 
 
 def _build_client(

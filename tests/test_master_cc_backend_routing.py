@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import FakeBackend, make_work_item, patch_instructions_content
+from conftest import make_transcript as _make_transcript
 from structlog.testing import capture_logs
 
 from src.agents import master_cc, master_cc_run
@@ -222,13 +223,6 @@ def _starting_entry(logs: list[dict]) -> dict:
   matches = [e for e in logs if e.get("event") == "master_cc_starting"]
   assert len(matches) == 1, f"expected one master_cc_starting event, got {matches}"
   return matches[0]
-
-
-def _make_transcript(config_dir: Path, cc_session_id: str) -> Path:
-  transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"
-  transcript.parent.mkdir(parents=True, exist_ok=True)
-  transcript.write_text("[]", encoding="utf-8")
-  return transcript
 
 
 async def _run_cc_starting_entry(

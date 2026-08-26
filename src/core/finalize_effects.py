@@ -19,7 +19,6 @@ All predicates are pure functions over already-loaded chat/thread data so both
 the live finalize path and the startup reconcile pass apply identical rules.
 """
 
-
 from src.core import event_types as ET
 from src.core.models import ThreadMetadata
 

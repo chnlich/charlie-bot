@@ -775,14 +775,6 @@ async def test_present_rejects_artifact_without_goal_section(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_present_registers_artifact_within_page_budget(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
-  assert result == {"plan": 1, "v": 1, "state": "awaiting approval"}
-
-
-@pytest.mark.asyncio
 async def test_page_budget_rejects_over_budget_naming_measured_height_and_gates_amend(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   at_budget = _write_artifact(cfg, meta.id, "plan_01.html")

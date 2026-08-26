@@ -17,10 +17,9 @@ import signal
 import tempfile
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Awaitable, Callable
 
 import aiofiles
 import structlog

@@ -1,7 +1,7 @@
 """Helpers for fire-and-forget asyncio tasks with exception logging."""
 
 import asyncio
-from typing import Coroutine
+from collections.abc import Coroutine
 
 import structlog
 

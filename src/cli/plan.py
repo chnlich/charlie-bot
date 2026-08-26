@@ -19,8 +19,8 @@ import argparse
 import json
 import os.path
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from src.cli.common import (
   add_session_arg,
